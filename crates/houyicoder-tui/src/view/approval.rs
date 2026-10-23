@@ -48,7 +48,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         " Sandbox entitlement".to_string()
     } else {
         match &a.delegation {
-            Some(d) => format!(" {} · {title}", d.subagent_type),
+            // The marker has to be unmistakable: several children can be in
+            // flight, and a card that reads like the parent's own ask makes
+            // the user answer for the wrong agent.
+            Some(d) => format!(" \u{29c9} {} (subagent) \u{b7} {title}", d.subagent_type),
             None => format!(" {title}"),
         }
     };

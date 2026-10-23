@@ -1,6 +1,8 @@
 //! Tests for the approval card renderer, split from approval.rs so the
 //! production file stays under the file-size gate.
 
+use houyicoder_protocol::frontend::run::DelegationSource;
+
 use super::{cap_first, diff_preview};
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
@@ -710,5 +712,63 @@ fn test_no_destination_hides_remember() {
     assert!(
         !out.contains("3. No"),
         "a two-option card numbers No as 2:\n{out}"
+    );
+}
+
+/// A child's ask is labelled as one. Several delegations can be in flight, so
+/// a card that reads like the parent's own ask makes the user answer for the
+/// wrong agent.
+#[test]
+fn test_render_labels_subagent_ask() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"cargo test"}"#.into(),
+            reason: "this command reaches the network".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            delegation: Some(DelegationSource {
+                child_id: "child-1".into(),
+                subagent_type: "verify".into(),
+            }),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 90, 24);
+    assert!(
+        out.contains("verify (subagent)"),
+        "the card must name the child that is asking:\n{out}"
+    );
+    assert!(
+        out.contains('\u{29c9}'),
+        "the marker distinguishes a child ask at a glance:\n{out}"
+    );
+}
+
+/// A parent's own ask carries no subagent marker.
+#[test]
+fn test_render_parent_ask_unlabelled() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"cargo test"}"#.into(),
+            reason: "this command reaches the network".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 90, 24);
+    assert!(
+        !out.contains("(subagent)"),
+        "no marker for a parent ask:\n{out}"
     );
 }

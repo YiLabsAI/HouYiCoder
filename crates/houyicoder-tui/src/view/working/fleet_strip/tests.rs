@@ -172,7 +172,7 @@ fn test_completed_row_terse() {
         completed_at: None,
         started_at: None,
     };
-    let line = build_row(&e, false);
+    let line = build_row(&e, false, None);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(text.contains("done"), "completed shows done: {text}");
     assert!(text.contains("1.2k tok"), "completed shows tokens: {text}");
@@ -358,10 +358,47 @@ fn test_running_row_shows_elapsed() {
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
     };
-    let line = build_row(&e, false);
+    let line = build_row(&e, false, None);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(text.contains("7s"), "running row shows elapsed: {text}");
     assert!(!text.contains("done"), "running row is not terse: {text}");
+}
+
+/// The child whose ask is on screen says so instead of showing a verb. It is
+/// not working, it is stopped waiting for the user, and a row that keeps
+/// saying "building" hides why nothing is moving.
+#[test]
+fn test_row_shows_awaiting_approval() {
+    let e = FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "verify".into(),
+        turn: 2,
+        tokens: 100,
+        tool_uses: 3,
+        last_activity: Some("bash".into()),
+        completed: None,
+        completed_at: None,
+        started_at: Instant::now().checked_sub(Duration::from_secs(7)),
+    };
+    let line = build_row(&e, false, Some("c1"));
+    let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+    assert!(
+        text.contains("waiting for approval"),
+        "the waiting child says why it is idle: {text}"
+    );
+    assert!(
+        !text.contains("building"),
+        "the stale verb must not claim work that is not happening: {text}"
+    );
+    assert!(text.contains("7s"), "the wait is timed: {text}");
+
+    // Another child's ask does not relabel this row.
+    let line = build_row(&e, false, Some("other"));
+    let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+    assert!(
+        !text.contains("waiting for approval"),
+        "only the asking child is relabelled: {text}"
+    );
 }
 
 #[test]

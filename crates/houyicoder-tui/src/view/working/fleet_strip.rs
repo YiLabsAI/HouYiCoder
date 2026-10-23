@@ -126,12 +126,24 @@ fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
     let visible = visible_rows(len, granted);
     let start = window_start_idx(selected, len, visible);
     let end = (start + visible).min(len);
+    // The child whose ask is on screen. Its row says so instead of showing a
+    // verb: the child is not working, it is stopped waiting for the user, and
+    // a strip that keeps saying "building" hides why nothing is moving.
+    let awaiting = app
+        .sessions
+        .current
+        .prompt
+        .as_ref()
+        .and_then(|p| p.approval())
+        .and_then(|card| card.delegation.as_ref())
+        .map(|d| d.child_id.as_str());
     entries[start..end]
         .iter()
         .enumerate()
         .map(|(i, entry)| {
             let abs_idx = start + i;
-            build_row(entry, abs_idx == selected.unwrap_or(usize::MAX))
+            let selected = abs_idx == selected.unwrap_or(usize::MAX);
+            build_row(entry, selected, awaiting)
         })
         .collect()
 }
@@ -141,7 +153,7 @@ fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
 /// delegation reads "explore · done · 1.2k tok" instead of echoing the stale
 /// last verb. The running child keeps the verb and turn counter so the user
 /// sees live progress at a glance.
-fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
+fn build_row<'a>(entry: &'a FleetEntry, selected: bool, awaiting: Option<&str>) -> Line<'a> {
     let prefix = if selected { "> " } else { "  " };
     let (glyph, style) = if entry.completed.is_some() {
         ("✓ ", Style::default().fg(Color::DarkGray))
@@ -151,6 +163,15 @@ fn build_row(entry: &FleetEntry, selected: bool) -> Line<'_> {
     let tokens = format!("{} tok", format_tokens(entry.tokens));
     let body = if entry.completed.is_some() {
         format!("{} · done · {}", entry.subagent_type, tokens)
+    } else if awaiting == Some(entry.agent_id.as_str()) {
+        let elapsed = entry
+            .started_at
+            .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
+            .unwrap_or_default();
+        format!(
+            "{}: waiting for approval · {}{}",
+            entry.subagent_type, tokens, elapsed
+        )
     } else {
         let elapsed = entry
             .started_at
