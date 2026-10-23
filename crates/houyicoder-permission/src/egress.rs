@@ -174,9 +174,6 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
                     } else {
                         document_output = true;
                     }
-                    if program == "wget" && w == "--output" {
-                        return false;
-                    }
                     idx += 2;
                     continue;
                 }

@@ -5,7 +5,7 @@
 //! select arm routes through.
 
 use houyicoder_protocol::envelope::{
-    RequestEnvelope, ResponseEnvelope, ResponsePayload, ServerFrame,
+    RequestEnvelope, RequestId, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
@@ -41,19 +41,35 @@ impl Server {
         let req_id = req.req_id;
         match req.payload {
             FrontendRequest::PermissionCycleMode => {
-                let Ok(mode) = self.gate.tab_cycle() else {
-                    return;
+                let payload = match self.gate.tab_cycle() {
+                    Ok(mode) => ResponsePayload::PermissionMode(permission_mode_to_wire(mode)),
+                    // A cycle the gate refuses is still an answer. Returning
+                    // without one leaves the client waiting for a response it
+                    // will never get, which is the hazard this handler exists
+                    // to remove.
+                    Err(e) => ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
+                        format!("permission mode cycle refused: {e}"),
+                        true,
+                    )),
                 };
-                let frame = ServerFrame::Response(ResponseEnvelope::new(
+                reply(io, req_id, payload).await;
+            }
+            // A cancel is a request the run itself is waiting for, so it is
+            // handled rather than deferred: deferring it would refuse the verb
+            // exactly when the user needs it.
+            FrontendRequest::RunCancel { .. } => {
+                self.runner.abort();
+                reply(
+                    io,
                     req_id,
-                    ResponsePayload::PermissionMode(permission_mode_to_wire(mode)),
-                ));
-                // Encode failure is survivable: skip the frame and keep the
-                // serve loop alive rather than panicking the task, matching
-                // the between-run dispatch path's graceful error return.
-                if let Ok(encoded) = encode(&frame) {
-                    drop(io.send_frame(encoded).await);
-                }
+                    ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
+                        "run cancelled; the outcome arrives as the response to the run",
+                        false,
+                    )),
+                )
+                .await;
             }
             FrontendRequest::ChildTranscript { child_sid } => {
                 let frames = self.child_transcript_frames(&child_sid).await;
@@ -99,24 +115,25 @@ impl Server {
                 }
             }
             payload if reads_state_during_run(&payload) => {
-                drop(self.dispatch_query(io, req_id, payload).await);
+                if let Err(e) = self.dispatch_query(io, req_id, payload).await {
+                    reply(io, req_id, ResponsePayload::Error(e)).await;
+                }
             }
             // A request that must wait for the turn is answered, not dropped:
             // the client blocks on a response for every request it sends, so
             // dropping one leaves it waiting with no way to tell a slow server
             // from a refused command.
             _ => {
-                let frame = ServerFrame::Response(ResponseEnvelope::new(
+                reply(
+                    io,
                     req_id,
                     ResponsePayload::Error(ProtocolError::new(
                         ErrorCategory::InvalidRequest,
                         "this request waits for the running turn to finish",
                         true,
                     )),
-                ));
-                if let Ok(encoded) = encode(&frame) {
-                    drop(io.send_frame(encoded).await);
-                }
+                )
+                .await;
             }
         }
     }
@@ -232,9 +249,11 @@ mod tests;
 /// Whether a request only reads state, or writes state a running turn does not
 /// read, so answering it mid-run cannot race the turn.
 ///
-/// A request that mutates the conversation, the workspace, or the rule set the
-/// drive loop consults is deliberately absent: those wait for the turn and are
-/// answered with an error rather than applied underneath it.
+/// A request that mutates the conversation or the workspace is deliberately
+/// absent: those wait for the turn and are answered with an error rather than
+/// applied underneath it. The permission toggle is present: like the mode
+/// cycle, it writes state the drive loop reads at its next decision, so it
+/// takes effect without racing the turn.
 fn reads_state_during_run(payload: &FrontendRequest) -> bool {
     matches!(
         payload,
@@ -257,4 +276,14 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
             | FrontendRequest::PermissionRules
             | FrontendRequest::PermissionAskBeforeGit { .. }
     )
+}
+
+/// Send one response frame. An encode failure is survivable: the serve loop
+/// stays alive rather than panicking the task, matching the between-run
+/// dispatch path's graceful error return.
+async fn reply(io: &mut FrameCarrier, req_id: RequestId, payload: ResponsePayload) {
+    let frame = ServerFrame::Response(ResponseEnvelope::new(req_id, payload));
+    if let Ok(encoded) = encode(&frame) {
+        drop(io.send_frame(encoded).await);
+    }
 }

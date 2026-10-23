@@ -6,7 +6,7 @@ use houyicoder_protocol::frontend::session_update::{
 };
 use serde_json::Value;
 
-use crate::brief::result_summary;
+use crate::brief::{result_summary, tool_call_brief};
 use crate::result_body::{extract_body, output_has_diff};
 
 fn user_msg(text: &str) -> TranscriptFrame {
@@ -463,6 +463,16 @@ fn test_body_strips_colour() {
         &serde_json::json!({"stdout": "\u{1b}[1;31merror\u{1b}[0m: boom\n"}),
     );
     assert_eq!(chip.as_deref(), Some("error: boom"));
+}
+
+/// The call chip carries the same text the search index does, so a command
+/// string that arrived with colour in it must not leave the parameters on the
+/// chip.
+#[test]
+fn test_call_chip_strips_colour() {
+    let input = serde_json::json!({"command": "\u{1b}[0;32mmake check\u{1b}[0m"});
+    let chip = tool_call_brief("bash", &input);
+    assert_eq!(chip, "make check", "the chip shows the command alone");
 }
 
 #[test]

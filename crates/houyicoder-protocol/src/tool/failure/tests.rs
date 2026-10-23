@@ -72,6 +72,22 @@ fn test_git_diff_exit_code() {
         tool_result_failed(&out, "bash", &bash("git checkout --exit-code")),
         "the flag alone must not exempt an unrelated git subcommand"
     );
+    // Global options sit between git and the subcommand, and the ones that
+    // take a value must not be read as the subcommand name.
+    assert!(!tool_result_failed(
+        &out,
+        "bash",
+        &bash("git -C /work/repo diff --exit-code")
+    ));
+    assert!(!tool_result_failed(
+        &out,
+        "bash",
+        &bash("git --no-pager diff --quiet")
+    ));
+    assert!(
+        tool_result_failed(&out, "bash", &bash("git -C /work/repo status")),
+        "a global option does not make an unrelated subcommand a diff"
+    );
 }
 
 #[test]

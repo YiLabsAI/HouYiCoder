@@ -434,6 +434,39 @@ async fn test_rename_served_during_run() {
     );
 }
 
+/// A cancel request is handled, not deferred: refusing it would refuse the
+/// verb exactly when the user needs it.
+#[tokio::test]
+async fn test_cancel_request_served() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(10),
+                FrontendRequest::RunCancel {
+                    session_id: houyicoder_protocol::frontend::SessionId("s".into()),
+                    reason: "user asked".into(),
+                },
+            ),
+        )
+        .await;
+    let resp = client_rx.try_recv().expect("a cancel is answered");
+    assert!(
+        resp.contains("cancelled"),
+        "the answer says the cancel was taken: {resp}"
+    );
+    assert!(
+        !resp.contains("waits for the running turn"),
+        "a cancel must not be deferred: {resp}"
+    );
+}
+
 /// A request that must wait for the turn is refused with an error, not
 /// dropped. The client blocks on a response for every request it sends, so a
 /// dropped one is indistinguishable from a hung server.

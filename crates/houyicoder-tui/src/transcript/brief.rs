@@ -40,7 +40,7 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
     match tool {
         "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "save_memory"
         | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory"
-        | "search_memory" => truncate_call_arg(&tool_invocation(tool, input)),
+        | "search_memory" => truncate_call_arg(&strip_ansi_codes(&tool_invocation(tool, input))),
         "agent" => {
             let st = input
                 .get("subagent_type")
