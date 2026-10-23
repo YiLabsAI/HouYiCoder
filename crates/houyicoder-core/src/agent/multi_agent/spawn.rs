@@ -26,7 +26,7 @@ use tokio::sync::mpsc::unbounded_channel;
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
 /// A child cannot delegate further, so the topology is exactly two levels:
 /// one parent and its children. A child that could spawn would nest reports
-/// inside reports, and every surface that summarises a delegation would then
+/// inside reports, and every view that summarises a delegation would then
 /// have to decide how deep to summarise.
 const MAX_SPAWN_DEPTH: u32 = 1;
 
