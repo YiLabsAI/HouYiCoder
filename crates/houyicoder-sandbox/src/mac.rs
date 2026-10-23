@@ -563,11 +563,17 @@ impl SandboxSession for MacSeatbeltSession {
         command: &str,
         lines: Arc<AtomicI64>,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        self.exec_streaming_with_config(command, lines, ExecConfig::default())
+    }
+
+    fn exec_streaming_with_config(
+        &self,
+        command: &str,
+        lines: Arc<AtomicI64>,
+        config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         let command = command.to_string();
-        Box::pin(async move {
-            self.exec_inner(command, ExecConfig::default(), Some(lines))
-                .await
-        })
+        Box::pin(async move { self.exec_inner(command, config, Some(lines)).await })
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {

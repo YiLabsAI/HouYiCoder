@@ -57,6 +57,14 @@ fn exit_is_semantic_success(command: &str, exit_code: i64) -> bool {
         ("grep", 1) => true, // no matches — the command succeeded
         ("rg", 1) => true,   // ripgrep — same
         ("diff", 1) => true, // files differ — the command succeeded
+        // git diff only reports a difference through its exit status when
+        // asked to, and every other git failure also exits 1, so both the
+        // subcommand and the flag have to be there for the status to be an
+        // answer rather than an error.
+        ("git", 1) => {
+            let mut words = command.split_whitespace().skip(1);
+            words.next() == Some("diff") && words.any(|w| w == "--exit-code" || w == "--quiet")
+        }
         _ => false,
     }
 }

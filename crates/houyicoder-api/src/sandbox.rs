@@ -351,6 +351,19 @@ pub trait SandboxSession: Send + Sync {
         self.exec(command)
     }
 
+    /// Streaming exec under an explicit per-call fence. A caller that has its
+    /// own wall budget uses this rather than the session default, and a
+    /// backend without streaming still honours the config through the
+    /// non-streaming path.
+    fn exec_streaming_with_config(
+        &self,
+        command: &str,
+        _lines: Arc<AtomicI64>,
+        config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        self.exec_with_config(command, config)
+    }
+
     /// Emit an audit line when the kernel fence is not active, so the
     /// unfenced gap is visible per-operation. Bound to fence_status(),
     /// not to "remember to write the line in each impl" — any backend

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_async::PFut;
+use houyicoder_context::ExecConfig;
 use serde_json::{Value, json};
 
 use houyicoder_api::tool::{Tool, ToolCtx};
@@ -59,6 +60,21 @@ fn looks_like_sandbox_denial(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
     s.contains("not permitted") || s.contains("denied") || s.contains("sandbox")
 }
+
+/// The wall-clock budget this call declares, clamped into the range the
+/// schema advertises. A missing or malformed value keeps the session default,
+/// so a caller that does not think about the budget gets the ordinary one.
+fn wall_budget_ms(input: &Value) -> u64 {
+    match input.get("timeout_ms").and_then(|v| v.as_u64()) {
+        Some(ms) => ms.clamp(1, MAX_TIMEOUT_MS),
+        None => ExecConfig::default().wall_timeout_ms,
+    }
+}
+
+/// The largest wall-clock budget one call may declare. A build or test run
+/// that needs longer than this is a task the caller should split, not a call
+/// the host should wait out.
+const MAX_TIMEOUT_MS: u64 = 600_000;
 
 /// Run a shell command in the sandbox. When wired with undo, destructive
 /// commands snapshot the workspace before executing so /undo can revert.
@@ -120,13 +136,23 @@ impl Tool for BashTool {
          For temporary files and directories use $TMPDIR, which points to the \
          session's own writable temporary directory. /tmp is writable too but \
          shared with other processes on the host, so use it only where a tool \
-         hard-codes it."
+         hard-codes it. \
+         Each call has a wall-clock budget of 120 seconds by default. A build \
+         or test run that legitimately takes longer sets timeout_ms (up to \
+         600000) on that call; do not start work in the background and poll it \
+         with sleep."
     }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string"}
+                "command": {"type": "string"},
+                "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_TIMEOUT_MS,
+                    "description": "Wall-clock budget for this call in milliseconds. Omit for the default; a slow build or test run raises it instead of polling with sleep."
+                }
             },
             "required": ["command"]
         })
@@ -176,7 +202,12 @@ impl Tool for BashTool {
             // never completes on its own (infinite loop), so the unreachable
             // is a guard, not a path.
             let lines_counter = Arc::new(AtomicI64::new(-1));
-            let exec = session.exec_streaming(cmd, Arc::clone(&lines_counter));
+            let exec_config = ExecConfig {
+                wall_timeout_ms: wall_budget_ms(&input),
+                ..ExecConfig::default()
+            };
+            let exec =
+                session.exec_streaming_with_config(cmd, Arc::clone(&lines_counter), exec_config);
             // Cancel arm: an Esc aborts the run and must not wait out a
             // long command. Dropping the exec future triggers the sandbox's
             // RAII kill (process-group killpg on macOS; kill_on_drop on

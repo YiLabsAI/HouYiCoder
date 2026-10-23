@@ -257,8 +257,9 @@ struct AccTotals {
     /// counted nothing is complete (the identity is all-reported) while a turn
     /// written before the flags existed reads as unknown.
     usage_provenance: Option<UsageProvenance>,
-    /// The span between the log's first and last event. None when the log
-    /// carried no event to measure between.
+    /// The sum of each turn's own span, so it agrees with the turn rows and
+    /// leaves out the idle time between them. None when the log carried no
+    /// event to measure.
     duration_ms: Option<u64>,
     /// Whole-log counts, so a completeness check cannot be fooled by the page.
     usage_events: usize,
@@ -558,12 +559,39 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
         provenance: delegated.provenance,
     };
     acc.subagent_unmeasured = delegated.unmeasured_calls > 0;
-    // The session's wall time is the span of its own durable events, which is
-    // what the user waited, and it does not depend on which page is loaded.
-    acc.duration_ms = match (events.first(), events.last()) {
-        (Some(first), Some(last)) => Some(last.ts.saturating_sub(first.ts)),
-        _ => None,
-    };
+    // The session's own running time is the sum of what each turn took, which
+    // is the same figure the turn rows report. The span between the log's
+    // first and last event is a different question: it also covers the hours a
+    // session sat idle between two turns, and reporting that as running time
+    // overstates what the session spent.
+    acc.duration_ms = active_turn_ms(events);
+}
+
+/// The sum of each turn's own span, from the event that opened it to the last
+/// event it carried. A turn opened by anything other than a user input (a log
+/// that starts mid-run) is counted too, so the total covers every row the list
+/// draws. None when the log carried no event to measure.
+fn active_turn_ms(events: &[SessionLogEntry]) -> Option<u64> {
+    let mut total = 0u64;
+    let mut open: Option<(u64, u64, u64)> = None;
+    for ev in events {
+        if matches!(ev.event, SessionEvent::UserInput { .. }) {
+            if let Some((start, last, reported)) = open.take() {
+                total += last.saturating_sub(start).max(reported);
+            }
+            open = Some((ev.ts, ev.ts, 0));
+            continue;
+        }
+        let entry = open.get_or_insert((ev.ts, ev.ts, 0));
+        entry.1 = entry.1.max(ev.ts);
+        if let SessionEvent::RunCompleted { ms: Some(ms) } = ev.event {
+            entry.2 = ms;
+        }
+    }
+    if let Some((start, last, reported)) = open {
+        total += last.saturating_sub(start).max(reported);
+    }
+    (!events.is_empty()).then_some(total)
 }
 
 /// The newest turns of a log, and the number the first of them carries.

@@ -299,8 +299,9 @@ fn test_session_totals_cover_hidden() {
     assert_eq!(view.timing.tool_ms, 15);
     assert_eq!(
         view.duration_ms,
-        Some(2021),
-        "the session's wall time is its own event span, not the page's"
+        Some(63),
+        "the session total sums every turn's own span, hidden ones included, \
+         not the page's and not the gap between turns"
     );
     let first = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,

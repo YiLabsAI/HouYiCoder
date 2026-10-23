@@ -1800,3 +1800,60 @@ fn test_seam_survives_empty_page() {
         "both boundaries reach the turn after them, in the order they happened"
     );
 }
+
+/// The session total is the sum of what the turns took, so it agrees with the
+/// rows below it and does not absorb the idle time between two turns. A
+/// session left open overnight would otherwise report the night as running
+/// time.
+#[test]
+fn test_total_excludes_idle_gap() {
+    let user = |ts: u64, text: &str| {
+        ev(
+            ts,
+            SessionEvent::UserInput {
+                text: text.to_string(),
+            },
+        )
+    };
+    let timing = |turn: u32| SessionEvent::ModelStepTiming {
+        turn,
+        step: 0,
+        total_ms: 1_000,
+        ttft_ms: None,
+        decode_ms: None,
+        reasoning_ms: None,
+        response_ms: None,
+    };
+    let events = vec![
+        user(1_000, "first"),
+        ev(2_000, timing(1)),
+        user(57_601_000, "second"),
+        ev(57_602_000, timing(2)),
+    ];
+    let view = build_view(&events, "m", 0);
+    assert_eq!(
+        view.duration_ms,
+        Some(2_000),
+        "two one-second turns, not the sixteen hours between them"
+    );
+    let summed: u64 = view
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(t) => Some(t.duration_ms),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .sum();
+    assert_eq!(
+        Some(summed),
+        view.duration_ms,
+        "the header must equal the rows it summarises"
+    );
+}
+
+/// A log with no event has no running time to report, which is not the same
+/// as zero seconds of work.
+#[test]
+fn test_total_absent_without_events() {
+    assert_eq!(build_view(&[], "m", 0).duration_ms, None);
+}

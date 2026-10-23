@@ -183,20 +183,27 @@ async fn test_spawn_rejects_depth_cap() {
     );
 }
 
-/// A spawn immediately below the depth cap remains allowed.
+/// The topology is exactly two levels: a top-level agent may spawn, and its
+/// child may not spawn again.
 #[tokio::test]
-async fn test_spawn_depth_under_cap() {
+async fn test_spawn_topology_two_levels() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let req = req_at_depth(parent_sid, store.clone(), provider, 3);
-    let handle = spawn_child(req)
-        .await
-        .expect("depth MAX-1 must allow spawn");
+    let req = req_at_depth(parent_sid, store.clone(), provider, 0);
+    let handle = spawn_child(req).await.expect("a top-level agent may spawn");
     assert_eq!(
         handle.runner.agent_identity().depth,
-        4,
-        "child of a depth-3 parent is depth 4 (MAX) — the last allowed level"
+        1,
+        "the child is the last level"
+    );
+
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let nested = req_at_depth(SessionId::new(), store, provider, 1);
+    assert!(
+        matches!(spawn_child(nested).await, Err(SpawnError::SpawnRecursive)),
+        "a child may not spawn again"
     );
 }
 

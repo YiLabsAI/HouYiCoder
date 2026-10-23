@@ -24,10 +24,11 @@ use houyicoder_protocol::llm::Usage;
 use tokio::sync::mpsc::unbounded_channel;
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
-/// v0 limit per the multi-agent config (max_depth = 4): levels 0-3 spawn
-/// freely, a spawn at depth 4 (the 5th level) is rejected. Hardcoded here
-/// until the config wire reaches this module.
-const MAX_SPAWN_DEPTH: u32 = 4;
+/// A child cannot delegate further, so the topology is exactly two levels:
+/// one parent and its children. A child that could spawn would nest reports
+/// inside reports, and every surface that summarises a delegation would then
+/// have to decide how deep to summarise.
+const MAX_SPAWN_DEPTH: u32 = 1;
 
 /// What initiated a spawn: the model via the agent tool, or the system
 /// (a hook/gate/automated flow). A system trigger lets a service-layer

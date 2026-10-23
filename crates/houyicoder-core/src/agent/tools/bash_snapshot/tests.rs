@@ -198,9 +198,17 @@ fn test_bash_schema_no_workdir() {
     let props = schema["properties"]
         .as_object()
         .expect("properties is an object");
-    assert_eq!(props.len(), 1, "command is the sole field: {schema}");
+    assert_eq!(
+        props.len(),
+        2,
+        "the only fields are the command and its wall budget: {schema}"
+    );
     assert!(
         props.contains_key("command"),
-        "command is the sole field: {schema}"
+        "the command is required: {schema}"
+    );
+    assert!(
+        props.contains_key("timeout_ms"),
+        "the per-call wall budget is advertised: {schema}"
     );
 }

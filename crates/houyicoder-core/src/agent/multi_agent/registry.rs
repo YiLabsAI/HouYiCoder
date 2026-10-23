@@ -228,7 +228,7 @@ pub fn built_in_general_purpose() -> AgentDefinition {
         subagent_type: "general-purpose".to_string(),
         when_to_use: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. Delegate here when you are unsure where a keyword or file lives, or when no specialized agent fits.".to_string(),
         tools: None,
-        disallowed_tools: Vec::new(),
+        disallowed_tools: vec!["agent".to_string()],
         model: None,
         effort: None,
         permission_mode: None,
