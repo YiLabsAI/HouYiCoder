@@ -274,12 +274,12 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             let frect = app.ui.frame.layout.fleet_rect.get();
             if frect.width > 0 && frect.height > 0 && in_rect(frect, m.column, m.row) {
                 let entries = &app.sessions.current.capabilities.fleet.entries;
-                let selected = app.ui.fleet.selected;
+                let selected = app.ui.fleet.selected();
                 let route =
                     click_route(entries, selected, frect.height, (m.row - frect.y) as usize);
                 match route {
                     FleetClick::OpenAgentsPane => app.run_command(SlashCommand::Agents),
-                    FleetClick::Select(i) => app.ui.fleet.selected = Some(i),
+                    FleetClick::Select(i) => app.ui.fleet.set_selected(Some(i)),
                     FleetClick::Drill(sid) => {
                         app.enter_teammate_view_for_sid(&sid, true);
                     }
@@ -631,7 +631,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         }
         if k.code == KeyCode::Char('k')
             && running > 0
-            && let Some(i) = app.ui.fleet.selected
+            && let Some(i) = app.ui.fleet.selected()
             && let Some(e) = entries.get(i).filter(|e| e.completed.is_none())
         {
             if let Err(e) = app.enqueue(ClientCommand::KillChild {

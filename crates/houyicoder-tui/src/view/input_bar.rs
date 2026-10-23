@@ -50,8 +50,10 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
     let glyph_style = Style::new().fg(Color::Cyan);
     let body_style = Style::new().fg(Color::Reset);
-    // The painted caret hides when the terminal window is unfocused.
-    let cursor_style = if app.ui.terminal_focused {
+    // The painted caret hides when the terminal window is unfocused, and while
+    // the child strip holds the keyboard: two carets on screen would claim the
+    // keys reach both.
+    let cursor_style = if app.ui.terminal_focused && !app.ui.fleet.is_focused() {
         Style::new().bg(Color::White).fg(Color::Black)
     } else {
         body_style

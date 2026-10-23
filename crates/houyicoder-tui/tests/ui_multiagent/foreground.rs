@@ -92,11 +92,16 @@ fn test_multi_large_child_summary() {
     // check is whitespace-agnostic: under parallel PTY load, ratatui's
     // cell-diff rendering can collapse the spaces between words, so a
     // spaced marker flakes; the compacted form is stable.
+    // The standing screen, not the byte stream: a style run makes the cell
+    // diff emit cells at new positions, so concatenating the stream drops
+    // characters wherever the cursor jumped and a substring match there says
+    // nothing about the row.
     let deadline = Instant::now() + RENDER_TIMEOUT * 5;
     let mut ok = false;
     while Instant::now() < deadline {
         let compact: String = s
-            .output_plain()
+            .screen()
+            .contents()
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
@@ -114,7 +119,7 @@ fn test_multi_large_child_summary() {
     // The summary must be clean text, not JSON-escaped: no literal \n,
     // no escaped quotes. The summary is a short one-liner (first ~80
     // chars, newlines flattened to spaces).
-    let plain = s.output_plain();
+    let plain = s.screen().contents();
     assert!(
         !plain.contains("\\n"),
         "summary must not show literal backslash-n (JSON-escaped): {plain}"

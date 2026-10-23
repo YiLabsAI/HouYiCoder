@@ -102,8 +102,10 @@ impl App {
         // should show. Only a strip with no choice of its own is seeded: a
         // selection the user made in the strip is theirs to keep until an arrow
         // lands the cursor on a running child, which moves the strip there.
-        if self.ui.navigation.pane == Pane::Agents && self.ui.fleet.selected.is_none() {
-            self.ui.fleet.selected = self.running_child_index_at_cursor();
+        if self.ui.navigation.pane == Pane::Agents && self.ui.fleet.selected().is_none() {
+            self.ui
+                .fleet
+                .set_selected(self.running_child_index_at_cursor());
         }
     }
 
@@ -142,7 +144,7 @@ impl App {
             self.ui.agents_pane.move_cursor(delta, rows.len());
         }
         if let Some(index) = self.running_child_index_at_cursor() {
-            self.ui.fleet.selected = Some(index);
+            self.ui.fleet.set_selected(Some(index));
         }
     }
 

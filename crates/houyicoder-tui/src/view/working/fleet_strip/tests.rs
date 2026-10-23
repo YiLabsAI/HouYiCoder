@@ -102,7 +102,7 @@ fn test_window_follows_selection() {
         "no +N row: {head:?}"
     );
 
-    app.ui.fleet.selected = Some(4);
+    app.ui.fleet.set_selected(Some(4));
     let tail = text(&app);
     assert_eq!(tail.len(), 3);
     assert!(
@@ -116,7 +116,7 @@ fn test_window_follows_selection() {
         "no +N at tail: {tail:?}"
     );
 
-    app.ui.fleet.selected = Some(0);
+    app.ui.fleet.set_selected(Some(0));
     let back = text(&app);
     assert!(back[0].contains("t0"), "head window restored: {}", back[0]);
 }
@@ -172,7 +172,7 @@ fn test_completed_row_terse() {
         completed_at: None,
         started_at: None,
     };
-    let line = build_row(&e, false, None);
+    let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(text.contains("done"), "completed shows done: {text}");
     assert!(text.contains("1.2k tok"), "completed shows tokens: {text}");
@@ -246,10 +246,10 @@ fn test_drop_clamps_selected() {
         started_at: None,
     });
     entries_mut(&mut app.sessions.current).push(entry("c2", "plan", 1, 10, "read"));
-    app.ui.fleet.selected = Some(0);
+    app.ui.fleet.set_selected(Some(0));
     assert!(app.drop_completed_fleet(), "first entry dropped");
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(0),
         "selection clamped to the survivor"
     );
@@ -265,10 +265,10 @@ fn test_drop_clamps_selected() {
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
     });
-    app.ui.fleet.selected = Some(1);
+    app.ui.fleet.set_selected(Some(1));
     assert!(app.drop_completed_fleet(), "expired tail dropped");
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(0),
         "a selection past the survivor clamps back"
     );
@@ -358,7 +358,7 @@ fn test_running_row_shows_elapsed() {
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
     };
-    let line = build_row(&e, false, None);
+    let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(text.contains("7s"), "running row shows elapsed: {text}");
     assert!(!text.contains("done"), "running row is not terse: {text}");
@@ -380,7 +380,7 @@ fn test_row_shows_awaiting_approval() {
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
     };
-    let line = build_row(&e, false, Some("c1"));
+    let line = build_row(&e, false, Some("c1"), false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(
         text.contains("waiting for approval"),
@@ -393,7 +393,7 @@ fn test_row_shows_awaiting_approval() {
     assert!(text.contains("7s"), "the wait is timed: {text}");
 
     // Another child's ask does not relabel this row.
-    let line = build_row(&e, false, Some("other"));
+    let line = build_row(&e, false, Some("other"), false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(
         !text.contains("waiting for approval"),

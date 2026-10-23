@@ -1,3 +1,4 @@
+use crate::agent_message::FleetEntry;
 use crate::composition::app;
 use crate::records::TeammateView;
 use crate::records::TranscriptLine;
@@ -47,8 +48,8 @@ fn test_banner_type_fallback() {
 }
 
 /// The banner renders above the transcript when a teammate is in view,
-/// naming the agent plus the shift-arrow return hint. Pins draw_banner
-/// against a refactor that drops the line or the hint.
+/// naming the agent plus the gesture that leaves. Pins draw_banner against a
+/// refactor that drops the line or the hint.
 #[test]
 fn test_banner_renders_name_hint() {
     let mut app = app();
@@ -67,8 +68,8 @@ fn test_banner_renders_name_hint() {
         "banner names the agent, got:\n{out}"
     );
     assert!(
-        out.contains("shift+↑↓ return"),
-        "banner carries the shift-arrow return hint, got:\n{out}"
+        out.contains("Esc return"),
+        "banner states how to leave, got:\n{out}"
     );
     assert!(
         out.contains("find auth"),
@@ -118,5 +119,74 @@ fn test_banner_carries_badge_color() {
     assert!(
         hit,
         "the @verify name carries the red badge color, got buffer with no red @ cell"
+    );
+}
+
+/// The hint states what Esc does here. An idle child has no turn to cancel,
+/// so Esc leaves; a running one is interrupted. The banner says which instead
+/// of advertising a key that does nothing.
+#[test]
+fn test_banner_hint_follows_state() {
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        subagent_type: "verify".into(),
+        prompt: "run the review".into(),
+        ..Default::default()
+    });
+    let idle = render_text(&app, 80, 24);
+    assert!(
+        idle.contains("Esc return"),
+        "an idle child is left with Esc, got:\n{idle}"
+    );
+    assert!(
+        !idle.contains("Esc interrupt"),
+        "nothing is running to interrupt, got:\n{idle}"
+    );
+
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "verify".into(),
+            turn: 1,
+            tokens: 0,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    let running = render_text(&app, 80, 24);
+    assert!(
+        running.contains("Esc interrupt"),
+        "a running child is interrupted, got:\n{running}"
+    );
+}
+
+/// A multi-line prompt with markdown headings stays one row: a heading drawn
+/// where the banner expects prose pushes the hint off the line.
+#[test]
+fn test_banner_prompt_flattened() {
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        subagent_type: "verify".into(),
+        prompt: "## First: look\nThen report".into(),
+        ..Default::default()
+    });
+    let out = render_text(&app, 90, 24);
+    assert!(
+        !out.contains("## First"),
+        "the heading marks are dropped, got:\n{out}"
+    );
+    assert!(
+        out.contains("First: look Then report"),
+        "the prompt reads as one line, got:\n{out}"
     );
 }

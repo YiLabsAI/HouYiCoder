@@ -2,16 +2,15 @@ use super::*;
 use std::thread::sleep;
 use std::time::Duration;
 
-/// Esc inside a teammate view does NOT exit it. Esc only interrupts the
-/// viewed child's current turn; exit is Shift+Up/Down, never Esc, so a
-/// misguessed Esc does not drop the user out of the view. On a completed
-/// child Esc is a no-op on the run, so the banner must stay. The old
-/// version asserted the empty-input placeholder, rendered in both the
-/// parent and the view, a false green that passed whether or not the exit
-/// happened. The real assertion is the state-specific banner.
+/// Esc inside a teammate view leaves it when the viewed child is idle.
+///
+/// A finished child has no turn to interrupt, so the key that returns from
+/// every other surface returns here too. The old contract kept the view and
+/// explained a different key, which made leaving a finished child harder than
+/// leaving a running one.
 #[test]
 #[ignore]
-fn test_teammate_esc_keeps_view() {
+fn test_esc_exits_idle_view() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -24,13 +23,20 @@ fn test_teammate_esc_keeps_view() {
     assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
     s.send_str("\r");
     assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
+    assert!(
+        s.screen().contents().contains("Viewing"),
+        "the view is open before Esc:\n{}",
+        s.screen().contents()
+    );
     s.send_key(&Key::Esc);
-    // Esc never exits the view; the banner must still render a frame later.
+    // The screen is the frame in view; the output stream still holds the
+    // banner text from earlier frames, so a negative match there would pass
+    // whether or not the view closed.
     sleep(Duration::from_millis(300));
     assert!(
-        s.output_plain().contains("Viewing"),
-        "Esc must not exit the teammate view (banner should stay):\n{}",
-        s.output()
+        !s.screen().contents().contains("Viewing"),
+        "Esc must leave an idle child's view:\n{}",
+        s.screen().contents()
     );
 }
 

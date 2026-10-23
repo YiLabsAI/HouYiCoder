@@ -5,23 +5,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::agent_message::FleetEntry;
 use crate::fleet::strip_state::FleetStripState;
 use crate::state::{App, ViewportMode};
-
-/// The selected child's session id, if a fleet row is highlighted. Resolves
-/// Enter-on-fleet: the strip selection takes priority over the cursor's
-/// Subagent line when both could drill in.
-pub(super) fn selected_fleet_sid(app: &App) -> Option<String> {
-    app.ui.fleet.selected.and_then(|i| {
-        app.sessions
-            .current
-            .capabilities
-            .fleet
-            .entries
-            .get(i)
-            .map(|e| e.agent_id.clone())
-    })
-}
 
 /// Shift+Up/Down move the fleet selection. Returns true when the key was
 /// consumed so handle_working returns early.
@@ -39,7 +25,7 @@ pub(super) fn fleet_shift_selected(
         KeyCode::Down => 1,
         _ => return false,
     };
-    strip.selected = Some(next_selection(strip.selected, len, delta));
+    strip.focus(next_selection(strip.selected(), len, delta));
     true
 }
 
@@ -57,3 +43,103 @@ fn next_selection(cur: Option<usize>, len: usize, delta: i32) -> usize {
 
 #[cfg(test)]
 mod tests;
+
+/// What the strip decided to do with a key while it holds the keyboard.
+///
+/// The decision is a value rather than an effect so the strip's key handling
+/// stays a pure function of the strip state and the child list: the caller
+/// that owns the App performs the one action that needs it.
+pub(super) enum FleetKey {
+    /// The key belongs to the draft: a printable character is the user
+    /// changing their mind about where they are.
+    PassThrough,
+    /// The strip took the key and keeps the keyboard. Arrow navigation stays
+    /// here, so a second press moves again instead of falling back into the
+    /// draft's history recall.
+    Stay,
+    /// The strip took the key and gives the keyboard back: Esc, or Up on the
+    /// first row.
+    Leave,
+    /// Open this child.
+    Open(String),
+}
+
+/// Handle a key while the strip holds the keyboard.
+///
+/// The strip is a list of children, so it follows the list grammar every other
+/// pane uses: Up/Down move, Enter opens, Esc returns one level. Returning to
+/// the input box keeps the highlighted child, so the user can come back.
+/// A printable character leaves the strip and lands in the draft, because
+/// typing is the user changing their mind about where they are.
+pub(super) fn handle_focused(
+    strip: &mut FleetStripState,
+    entries: &[FleetEntry],
+    k: KeyEvent,
+) -> FleetKey {
+    let len = entries.len();
+    if len == 0 {
+        return FleetKey::PassThrough;
+    }
+    let current = strip.selected().unwrap_or(0).min(len - 1);
+    match k.code {
+        // At the top there is nothing above to select, and the input box is
+        // the surface above: Up is the way back, symmetric with Down being
+        // the way in.
+        KeyCode::Up if current == 0 => FleetKey::Leave,
+        KeyCode::Up => {
+            strip.set_selected(Some(current - 1));
+            FleetKey::Stay
+        }
+        KeyCode::Down => {
+            strip.set_selected(Some((current + 1).min(len - 1)));
+            FleetKey::Stay
+        }
+        KeyCode::Enter => FleetKey::Open(entries[current].agent_id.clone()),
+        KeyCode::Esc => FleetKey::Leave,
+        // A printable character belongs to the draft. Leaving the strip here
+        // is what makes typing a correction feel like typing, not like
+        // fighting a widget that swallowed the first character.
+        KeyCode::Char(_) => FleetKey::PassThrough,
+        // A navigation key the strip has no meaning for (Left, Home, Tab)
+        // stays put: it is not typing, and it is not a way out.
+        _ => FleetKey::Stay,
+    }
+}
+
+/// Move the keyboard into the child strip, if it has a row to land on. The
+/// selection snaps to the first running child so the user lands on something
+/// rather than on a stale index.
+pub(super) fn focus_strip(strip: &mut FleetStripState, len: usize) -> bool {
+    if len == 0 {
+        return false;
+    }
+    strip.focus(strip.selected().unwrap_or(0).min(len - 1));
+    true
+}
+
+impl App {
+    /// Run the strip's key decision and apply the one action that needs the
+    /// whole shell. The decision itself stays a pure function of the strip
+    /// state and the child list; only opening a child reaches across owners,
+    /// which is why that half is a method on the owner rather than a free
+    /// function taking the shell.
+    pub(crate) fn dispatch_fleet_key(&mut self, k: KeyEvent) -> bool {
+        let decision = handle_focused(
+            &mut self.ui.fleet,
+            &self.sessions.current.capabilities.fleet.entries,
+            k,
+        );
+        match decision {
+            FleetKey::Stay => true,
+            FleetKey::PassThrough | FleetKey::Leave => {
+                self.ui.fleet.unfocus();
+                !matches!(decision, FleetKey::PassThrough)
+            }
+            FleetKey::Open(sid) => {
+                self.ui.fleet.unfocus();
+                self.enter_teammate_view_for_sid(&sid, true);
+                true
+            }
+        }
+    }
+}

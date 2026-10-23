@@ -510,7 +510,7 @@ fn running_fleet_app() -> App {
             completed_at: None,
             started_at: None,
         });
-    app.ui.fleet.selected = Some(0);
+    app.ui.fleet.set_selected(Some(0));
     app
 }
 
@@ -560,7 +560,7 @@ fn test_single_kill_selected() {
 #[test]
 fn test_single_kill_without_selection() {
     let mut app = running_fleet_app();
-    app.ui.fleet.selected = None;
+    app.ui.fleet.set_selected(None);
     handle_key(&mut app, key(KeyCode::Char('k')));
     assert!(
         !app.ui.input.editor.is_empty(),

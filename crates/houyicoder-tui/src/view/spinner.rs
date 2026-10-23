@@ -221,7 +221,10 @@ pub fn spinner_line(
     if !after.is_empty() {
         spans.push(Span::styled(after, body_style));
     }
-    spans.push(Span::styled(tail.to_string(), body_style));
+    // The elapsed time and token count stay static. They are read every
+    // frame, and a figure that breathes with the verb is harder to read the
+    // moment the user actually wants it.
+    spans.push(Span::styled(tail.to_string(), dim));
     Line::from(spans)
 }
 

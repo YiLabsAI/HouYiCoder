@@ -405,13 +405,14 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // via the generic Char(c) arm below. Free-form @skill:name typing
         // works because the next char closes the picker and appends.
         KeyCode::Enter if !pane_replaces_input(app.ui.navigation.pane) => {
-            // Empty-input Enter drills into a teammate view: the strip
-            // selection takes priority, then the Subagent line at cursor.
-            if app.ui.input.editor.is_empty() && app.ui.teammate_view.is_none() {
-                if let Some(sid) = fleet::selected_fleet_sid(app) {
-                    app.enter_teammate_view_for_sid(&sid, true);
-                    return;
-                }
+            // Drilling into a child is the strip's Enter, not this one. Here
+            // Enter always sends what is in the box: a user who pressed Enter
+            // while writing meant to send, and guessing otherwise from the
+            // draft being empty sent the wrong thing the moment a draft
+            // existed.
+            if app.ui.teammate_view.is_none() && app.ui.input.editor.is_empty() {
+                // The transcript's own Subagent line stays reachable from an
+                // empty box, which is where the user reads it.
                 if app.enter_teammate_view() {
                     return;
                 }
@@ -466,13 +467,26 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Down => {
-            if !app
+            if app
                 .ui
                 .input
                 .editor
                 .move_down(app.ui.frame.feedback.terminal_cols.get())
-                && !editing
             {
+                return;
+            }
+            // The caret is on the last line: the next surface down is the
+            // child strip, when there is one to move into. Without a strip the
+            // key keeps its history meaning.
+            if !editing
+                && fleet::focus_strip(
+                    &mut app.ui.fleet,
+                    app.sessions.current.capabilities.fleet.entries.len(),
+                )
+            {
+                return;
+            }
+            if !editing {
                 app.ui.input.history.down(&mut app.ui.input.editor);
             }
         }

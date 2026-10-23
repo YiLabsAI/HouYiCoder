@@ -1599,22 +1599,22 @@ fn fleet_app(n: usize) -> App {
 #[test]
 fn test_shift_arrow_moves_fleet() {
     let mut app = fleet_app(3);
-    assert!(app.ui.fleet.selected.is_none());
+    assert!(app.ui.fleet.selected().is_none());
     handle_working(&mut app, shift_key(KeyCode::Down));
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(0),
         "first press snaps to the top row"
     );
     handle_working(&mut app, shift_key(KeyCode::Down));
-    assert_eq!(app.ui.fleet.selected, Some(1));
+    assert_eq!(app.ui.fleet.selected(), Some(1));
     handle_working(&mut app, shift_key(KeyCode::Up));
-    assert_eq!(app.ui.fleet.selected, Some(0));
+    assert_eq!(app.ui.fleet.selected(), Some(0));
     handle_working(&mut app, shift_key(KeyCode::Up));
-    assert_eq!(app.ui.fleet.selected, Some(0), "clamps at top, no wrap");
+    assert_eq!(app.ui.fleet.selected(), Some(0), "clamps at top, no wrap");
     // A Shift+non-arrow key is not consumed: selection stays put.
     handle_working(&mut app, shift_key(KeyCode::Char('x')));
-    assert_eq!(app.ui.fleet.selected, Some(0));
+    assert_eq!(app.ui.fleet.selected(), Some(0));
 }
 
 /// Shift+Up/Down exits a drilled-in teammate view back to the fleet,
@@ -1747,7 +1747,7 @@ fn test_enter_fleet_drills_teammate() {
             completed_at: None,
             started_at: None,
         });
-    app.ui.fleet.selected = Some(0);
+    app.ui.fleet.set_selected(Some(0));
     handle_working(&mut app, key(KeyCode::Enter));
     assert!(
         app.ui.teammate_view.is_some(),
@@ -1961,4 +1961,34 @@ fn test_focus_trajectory_esc_levels() {
         ViewportMode::Focus,
         "the viewport is untouched"
     );
+}
+
+/// Down at the last input line moves the keyboard into the child strip; with
+/// no strip the key keeps its history meaning.
+#[test]
+fn test_down_enters_strip() {
+    let mut app = working_app();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "verify".into(),
+            turn: 1,
+            tokens: 0,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.input.editor.set("a".into());
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert!(
+        app.ui.fleet.is_focused(),
+        "the strip below the input takes the keyboard"
+    );
+    assert_eq!(app.ui.input.editor.value(), "a", "the draft is untouched");
 }

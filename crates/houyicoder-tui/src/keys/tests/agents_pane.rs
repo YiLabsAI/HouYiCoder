@@ -214,18 +214,18 @@ fn test_cursor_mirrors_running_row() {
     push_returned(&mut app, "returned", true);
     push_running(&mut app, "live");
     install_type(&mut app, "explore");
-    assert!(app.ui.fleet.selected.is_none(), "no strip choice yet");
+    assert!(app.ui.fleet.selected().is_none(), "no strip choice yet");
     handle_working(&mut app, key(KeyCode::Up));
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(0),
         "the running row writes the strip's selection"
     );
-    app.ui.fleet.selected = Some(2);
+    app.ui.fleet.set_selected(Some(2));
     handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(app.ui.agents_pane.cursor(), 1, "the cursor reached row two");
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(2),
         "a row with no child leaves the strip's own choice alone"
     );
@@ -239,10 +239,10 @@ fn test_open_seeds_strip_selection() {
     let mut app = working_app();
     push_running(&mut app, "live");
     app.ui.navigation.pane = Pane::Agents;
-    assert!(app.ui.fleet.selected.is_none(), "no strip choice yet");
+    assert!(app.ui.fleet.selected().is_none(), "no strip choice yet");
     app.refresh_agents();
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(0),
         "the running row the pane opens on writes the strip's selection"
     );
@@ -256,10 +256,10 @@ fn test_open_keeps_strip_choice() {
     push_running(&mut app, "a");
     push_running(&mut app, "b");
     app.ui.navigation.pane = Pane::Agents;
-    app.ui.fleet.selected = Some(1);
+    app.ui.fleet.set_selected(Some(1));
     app.refresh_agents();
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(1),
         "the strip's own choice is not overwritten"
     );

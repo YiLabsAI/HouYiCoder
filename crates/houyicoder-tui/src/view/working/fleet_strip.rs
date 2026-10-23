@@ -118,7 +118,7 @@ fn visible_rows(len: usize, granted: usize) -> usize {
 /// overflow indicator (see visible_rows for why that line is dropped).
 fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
     let entries = &app.sessions.current.capabilities.fleet.entries;
-    let selected = app.ui.fleet.selected;
+    let selected = app.ui.fleet.selected();
     let len = entries.len();
     if len == 0 || granted == 0 {
         return Vec::new();
@@ -143,7 +143,7 @@ fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
         .map(|(i, entry)| {
             let abs_idx = start + i;
             let selected = abs_idx == selected.unwrap_or(usize::MAX);
-            build_row(entry, selected, awaiting)
+            build_row(entry, selected, awaiting, app.ui.fleet.is_focused())
         })
         .collect()
 }
@@ -153,8 +153,22 @@ fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
 /// delegation reads "explore · done · 1.2k tok" instead of echoing the stale
 /// last verb. The running child keeps the verb and turn counter so the user
 /// sees live progress at a glance.
-fn build_row<'a>(entry: &'a FleetEntry, selected: bool, awaiting: Option<&str>) -> Line<'a> {
-    let prefix = if selected { "> " } else { "  " };
+fn build_row<'a>(
+    entry: &'a FleetEntry,
+    selected: bool,
+    awaiting: Option<&str>,
+    focused: bool,
+) -> Line<'a> {
+    // The strip holds the keyboard, so its selected row carries the caret the
+    // input box gave up. A highlight that looks the same whether or not the
+    // keys reach it is how a user types into a widget that is not listening.
+    let prefix = if focused && selected {
+        "> "
+    } else if selected {
+        "\u{b7} "
+    } else {
+        "  "
+    };
     let (glyph, style) = if entry.completed.is_some() {
         ("✓ ", Style::default().fg(Color::DarkGray))
     } else {

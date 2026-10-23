@@ -106,16 +106,24 @@ fn test_fold_summary_truncates() {
     s.send_str("find auth");
     s.send_str("\r");
     assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
-    let pc = s.output_compact();
+    // The standing screen, not the byte stream: the stream writes cells at
+    // absolute positions, so concatenating it drops characters wherever the
+    // cursor jumped and a substring match there proves nothing about the row.
+    let pc: String = s
+        .screen()
+        .contents()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     assert!(
         pc.contains("longchildanalysis"),
         "summary head should show the start:\n{}",
-        s.output()
+        s.screen().contents()
     );
     assert!(
         !pc.contains("trailingsentinel"),
         "collapsed summary should not show the tail:\n{}",
-        s.output()
+        s.screen().contents()
     );
 }
 

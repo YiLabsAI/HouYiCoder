@@ -10,11 +10,9 @@ use crate::test_harness::attach_connection;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
-/// Esc on a viewed child only interrupts its current turn; it never exits
-/// the view. A running child gets a per-turn cancel and the view stays; an
-/// idle child is a no-op on the run that pops a toast reminding the exit
-/// gesture (shift+↑↓). Exit is on Shift+Up/Down, which ignores the running
-/// state — tested at the key layer.
+/// Esc on a viewed child: a running child gets a per-turn cancel and the
+/// view stays, so the user can watch the interrupt land. An idle child has no
+/// turn to cancel, so Esc leaves the view.
 #[test]
 fn test_abort_viewed_child_turn() {
     let mut app = app();
@@ -47,18 +45,18 @@ fn test_abort_viewed_child_turn() {
         app.ui.notifications.current().is_none(),
         "a running child sends a cancel, not the exit-hint toast"
     );
+    // An idle child has no turn to cancel, so Esc is the way back out: it
+    // returns to wherever the view was entered from, the gesture every other
+    // surface uses.
     app.sessions.current.capabilities.fleet.entries[0].completed = Some("completed".into());
     app.abort_viewed_child_turn();
     assert!(
-        app.ui.teammate_view.is_some(),
-        "Esc on an idle child keeps the view — exit is on Shift+Up/Down"
+        app.ui.teammate_view.is_none(),
+        "Esc on an idle child leaves the view"
     );
     assert!(
-        app.ui
-            .notifications
-            .current()
-            .is_some_and(|n| n.key == "teammate-exit-hint"),
-        "an idle Esc pops the exit-gesture toast instead of staying silent"
+        app.ui.notifications.current().is_none(),
+        "leaving needs no gesture hint"
     );
 }
 

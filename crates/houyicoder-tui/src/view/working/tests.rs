@@ -1051,7 +1051,7 @@ fn test_fleet_click_selects() {
     };
     click(&mut app, rect.y + 1);
     assert_eq!(
-        app.ui.fleet.selected,
+        app.ui.fleet.selected(),
         Some(1),
         "first click selects the row"
     );

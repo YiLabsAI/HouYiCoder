@@ -3,14 +3,11 @@
 //! Shift+Up/Down. Esc only interrupts the viewed child's current turn.
 
 use crate::agent_message::FleetEntry;
-use crate::notifications::NotifKind;
-use crate::notifications::Notification;
 use crate::records::{TeammateView, TranscriptLine};
 use crate::run_control::ClientCommand;
 use crate::state::App;
 use crate::state::parked_view_states::ParkedViewState;
 use houyicoder_protocol::frontend::SessionId;
-use std::time::Duration;
 
 impl App {
     /// Look up a child's live fleet entry by session id. Shared by the
@@ -160,14 +157,16 @@ impl App {
         self.bump_transcript_version();
     }
 
-    /// Esc while viewing a teammate only interrupts the viewed child's
-    /// current turn; it never exits the view. A running child gets a per-turn
-    /// cancel (the drive loop cancels the in-flight model fetch, appends an
-    /// interrupt marker, starts the next turn — non-terminal). A non-running
-    /// child is a no-op on the run; a transient toast reminds the exit
-    /// gesture (shift+↑↓) so a misguessed Esc is not silent. Exit is on
-    /// Shift+Up/Down, which ignores the running state, so a child that never
-    /// idles (a per-turn cancel does not stop the run) cannot trap the user.
+    /// Esc while viewing a teammate.
+    ///
+    /// A running child gets a per-turn cancel: the drive loop cancels the
+    /// in-flight model fetch, appends an interrupt marker, and starts the next
+    /// turn, which is what the user asked for when they pressed Esc on work in
+    /// progress. An idle child has no turn to cancel, so Esc is the way back
+    /// out: it returns to wherever the view was entered from, which is the
+    /// gesture the user already expects from every other surface. Explaining a
+    /// different key instead made leaving a finished child harder than leaving
+    /// a running one.
     pub(crate) fn abort_viewed_child_turn(&mut self) {
         let Some(view) = self.ui.teammate_view.as_ref() else {
             return;
@@ -177,22 +176,17 @@ impl App {
             .fleet_entry(&child_sid)
             .map(|e| e.completed.is_none())
             .unwrap_or(false);
-        if running {
-            if let Err(e) = self.enqueue(ClientCommand::CancelChildTurn { child_sid }) {
-                self.system_line(Self::enqueue_failure_line("cancel", e));
+        if !running {
+            // A draft in the box is a steering message being written, not an
+            // empty box the user pressed Esc on. Leaving would throw away the
+            // place they were typing into.
+            if self.ui.input.editor.is_empty() {
+                self.exit_teammate_view();
             }
-        } else {
-            // Idle: Esc is a no-op on the run, so teach the exit gesture
-            // instead of leaving the press silent. The banner advertises
-            // shift+↑↓, but a misguessed Esc is the moment to remind.
-            self.ui.notifications.add(Notification::immediate(
-                "teammate-exit-hint",
-                NotifKind::Text {
-                    text: "shift+↑↓ to exit".to_string(),
-                    color: None,
-                },
-                Duration::from_millis(2000),
-            ));
+            return;
+        }
+        if let Err(e) = self.enqueue(ClientCommand::CancelChildTurn { child_sid }) {
+            self.system_line(Self::enqueue_failure_line("cancel", e));
         }
     }
 }

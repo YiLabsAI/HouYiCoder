@@ -60,6 +60,12 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         app.exit_teammate_view();
         return;
     }
+    // The strip holds the keyboard once the user has moved into it: Enter
+    // there opens the highlighted child instead of sending the draft, and Up
+    // at the top hands the keyboard back to the input box.
+    if app.ui.fleet.is_focused() && app.dispatch_fleet_key(k) {
+        return;
+    }
     // Shift+Up/Down move the footer-strip fleet selection before input
     // handling so it works even while the input box has focus.
     let fleet_len = app.sessions.current.capabilities.fleet.entries.len();
