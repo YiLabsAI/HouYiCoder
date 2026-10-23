@@ -29,10 +29,16 @@ pub(crate) enum AlwaysGrant {
 /// None-reason asks resolve to Once: without the gate's reason the caller
 /// cannot tell what the user is being asked about, so it must not promise a
 /// durable grant.
+///
+/// The fenced flag reports whether the session's execution fence is active. A
+/// command whose file output is only safe because the fence bounds it cannot
+/// be remembered when the fence is absent: the gate would ask again, so the
+/// card must not offer the choice.
 pub(crate) fn always_grant(
     tool_name: &str,
     input: &serde_json::Value,
     reason: Option<&houyicoder_permission::AskReason>,
+    fenced: bool,
 ) -> AlwaysGrant {
     let Some(reason) = reason else {
         return AlwaysGrant::Once;
@@ -48,10 +54,10 @@ pub(crate) fn always_grant(
         // A destination is not a command rule: the network check recognizes
         // programs, not hosts, so a remembered destination is its own entry.
         let command = houyicoder_permission::input_content(tool_name, Some(input));
-        if !egress_outputs_safe(&command) {
+        if !egress_outputs_safe(&command, fenced) {
             return AlwaysGrant::Once;
         }
-        return match houyicoder_permission::egress_scope_list(&command) {
+        return match houyicoder_permission::egress_scope_list(&command, fenced) {
             Some(scopes) if !scopes.is_empty() => AlwaysGrant::Network(scopes),
             _ => AlwaysGrant::Once,
         };
@@ -106,6 +112,7 @@ pub(crate) fn approval_options(
     tool_name: &str,
     input: &serde_json::Value,
     reason: Option<&houyicoder_permission::AskReason>,
+    fenced: bool,
 ) -> Vec<PermissionOption> {
     let mut options = vec![PermissionOption {
         option_id: "allow_once".into(),
@@ -113,7 +120,7 @@ pub(crate) fn approval_options(
         kind: PermissionOptionKind::AllowOnce,
         meta: None,
     }];
-    if let Some(label) = always_label(&always_grant(tool_name, input, reason)) {
+    if let Some(label) = always_label(&always_grant(tool_name, input, reason, fenced)) {
         options.push(PermissionOption {
             option_id: "allow_always".into(),
             name: label,

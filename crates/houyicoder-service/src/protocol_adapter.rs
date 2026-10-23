@@ -115,12 +115,13 @@ pub(crate) fn build_approval_request(
     req: &houyicoder_core::agent::ApprovalRequest,
     reason: Option<&houyicoder_permission::AskReason>,
     delegation: Option<&DelegationSource>,
+    fenced: bool,
 ) -> ApprovalRequest {
     ApprovalRequest {
         call_id: req.call_id.clone(),
         tool_name: req.tool_name.clone(),
         input: req.input.clone(),
-        options: approval_options(&req.tool_name, &req.input, reason),
+        options: approval_options(&req.tool_name, &req.input, reason, fenced),
         reason: reason.map(AskReason::from),
         delegation: delegation.cloned(),
     }

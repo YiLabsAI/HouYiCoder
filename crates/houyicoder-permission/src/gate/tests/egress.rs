@@ -244,4 +244,36 @@ fn test_real_session_metrics() {
         "origin consent cannot approve file output"
     );
     assert_eq!(prompts, 5, "all five file-writing requests need approval");
+
+    // With the fence active, the same session costs one prompt: the scratch
+    // download is inside the session's own scratch space, so remembering the
+    // origin answers every later request.
+    struct FencedScratch;
+    impl Containment for FencedScratch {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![PathBuf::from("/ws")],
+            }
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+    }
+    let fenced =
+        DefaultModeGate::with_mode(PermissionMode::Auto).with_containment(Arc::new(FencedScratch));
+    let mut fenced_prompts = 0usize;
+    let mut fenced_repeat = 0usize;
+    for (idx, cmd) in session_calls.iter().enumerate() {
+        if fenced.decide(&bash_req(cmd)).outcome() == Outcome::Ask {
+            fenced_prompts += 1;
+            if idx > 0 {
+                fenced_repeat += 1;
+            }
+            if let Some(s) = egress_destination(cmd) {
+                fenced.add_egress_allow(&s);
+            }
+        }
+    }
+    assert_eq!(fenced_prompts, 1, "M4 fenced prompts across 5 calls = 1");
+    assert_eq!(fenced_repeat, 0, "M1 fenced repeat-ask rate = 0/4");
 }

@@ -31,10 +31,10 @@ fn test_file_output_once() {
         other => panic!("expected file output approval: {other:?}"),
     };
     assert!(matches!(
-        always_grant("bash", &input, Some(&reason)),
+        always_grant("bash", &input, Some(&reason), false),
         AlwaysGrant::Once
     ));
-    let options = approval_options("bash", &input, Some(&reason));
+    let options = approval_options("bash", &input, Some(&reason), false);
     let ids: Vec<&str> = options.iter().map(|o| o.option_id.as_str()).collect();
     assert_eq!(ids, ["allow_once", "reject_once"]);
     gate.add_egress_allow("curl https://example.test");
@@ -58,7 +58,7 @@ fn test_read_scope_remember() {
         Decision::Ask(reason) => reason,
         other => panic!("expected origin approval: {other:?}"),
     };
-    let scopes = match always_grant("bash", &input, Some(&reason)) {
+    let scopes = match always_grant("bash", &input, Some(&reason), false) {
         AlwaysGrant::Network(scopes) => scopes,
         _ => panic!("expected origin scopes"),
     };
@@ -66,7 +66,7 @@ fn test_read_scope_remember() {
         scopes,
         ["curl https://one.example", "curl https://two.example"]
     );
-    let options = approval_options("bash", &input, Some(&reason));
+    let options = approval_options("bash", &input, Some(&reason), false);
     assert!(options.iter().any(|o| o.option_id == "allow_always"));
     for scope in scopes {
         gate.add_egress_allow(&scope);

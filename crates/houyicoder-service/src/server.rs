@@ -265,7 +265,7 @@ impl Server {
         input: &serde_json::Value,
         reason: Option<&AskReason>,
     ) {
-        match always_grant(tool_name, input, reason) {
+        match always_grant(tool_name, input, reason, self.gate.fence_active()) {
             AlwaysGrant::Once => {}
             AlwaysGrant::Network(scopes) => {
                 for scope in scopes {

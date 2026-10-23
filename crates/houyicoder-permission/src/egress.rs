@@ -18,6 +18,7 @@ use std::mem::take;
 use crate::compound::is_attestable;
 use crate::compound::is_effect_safe;
 use crate::compound::is_readonly_compound;
+use crate::compound::is_temp_output_target;
 use crate::compound::normalize_shell_command;
 use crate::compound::split_compound;
 use crate::pipeline::detection::should_ask_egress;
@@ -112,7 +113,7 @@ enum Segment {
 /// https://api.github.com, and is used both as the durable scope key and as the
 /// text the approval card shows for its remember option.
 pub fn egress_destination(command: &str) -> Option<String> {
-    let list = collect_egress_scopes(command, false)?;
+    let list = collect_egress_scopes(command, false, false)?;
     if list.len() == 1 {
         list.into_iter().next()
     } else {
@@ -124,14 +125,16 @@ pub fn egress_destination(command: &str) -> Option<String> {
 /// non-network clause in the command is effect-safe. Used by the egress
 /// validator to check whether every destination in a multi-step command has
 /// already been approved or trusted.
-pub fn egress_scope_list(command: &str) -> Option<Vec<String>> {
-    collect_egress_scopes(command, true)
+pub fn egress_scope_list(command: &str, fenced: bool) -> Option<Vec<String>> {
+    collect_egress_scopes(command, true, fenced)
 }
 
-/// Whether supported output arguments name only stdout or /dev/null.
-/// This classifies arguments, not client startup configuration. Origin consent
-/// never grants permission to open a local output file.
-pub fn egress_outputs_safe(command: &str) -> bool {
+/// Whether supported output arguments name only stdout, /dev/null, or (with an
+/// active fence) one child of the session temporary directory. This classifies
+/// arguments, not client startup configuration. Origin consent never grants
+/// permission to open a local output file outside the session's own scratch
+/// space, because the fence is what keeps that write inside the session.
+pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
     let normalized = normalize_shell_command(command);
     for clause in split_clauses(&normalized) {
         for stage in split_compound(&clause) {
@@ -152,7 +155,7 @@ pub fn egress_outputs_safe(command: &str) -> bool {
                     .or_else(|| w.strip_prefix("--output-document="))
                 {
                     let v = strip_quotes(val);
-                    if v != "/dev/null" && v != "-" {
+                    if !output_target_safe(v, fenced) {
                         return false;
                     }
                     document_output = true;
@@ -161,7 +164,7 @@ pub fn egress_outputs_safe(command: &str) -> bool {
                         return false;
                     }
                     let v = words.get(idx + 1).map(|s| strip_quotes(s)).unwrap_or("");
-                    if v != "/dev/null" && v != "-" {
+                    if !output_target_safe(v, fenced) {
                         return false;
                     }
                     if program == "wget" && w == "-o" {
@@ -187,7 +190,20 @@ pub fn egress_outputs_safe(command: &str) -> bool {
     true
 }
 
-fn collect_egress_scopes(command: &str, allow_effect_safe: bool) -> Option<Vec<String>> {
+/// Whether one output argument names stdout, /dev/null, or a fenced session
+/// temporary child.
+fn output_target_safe(value: &str, fenced: bool) -> bool {
+    if value == "/dev/null" || value == "-" {
+        return true;
+    }
+    fenced && is_temp_output_target(value)
+}
+
+fn collect_egress_scopes(
+    command: &str,
+    allow_effect_safe: bool,
+    fenced: bool,
+) -> Option<Vec<String>> {
     let normalized = normalize_shell_command(command);
     let mut scopes: Vec<String> = Vec::new();
     for clause in split_clauses(&normalized) {
@@ -200,7 +216,7 @@ fn collect_egress_scopes(command: &str, allow_effect_safe: bool) -> Option<Vec<S
                 continue;
             }
             let stage_ok = if allow_effect_safe {
-                is_attestable(trimmed) || is_effect_safe(trimmed)
+                is_attestable(trimmed) || is_effect_safe(trimmed, fenced)
             } else {
                 is_attestable(trimmed)
             };

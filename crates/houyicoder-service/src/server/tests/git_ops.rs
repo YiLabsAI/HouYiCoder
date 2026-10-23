@@ -156,6 +156,7 @@ fn test_card_offers_destination() {
         "bash",
         &serde_json::json!({"command": command}),
         Some(&network_reason()),
+        false,
     );
     let always = options
         .iter()
@@ -169,14 +170,33 @@ fn test_card_offers_destination() {
             "command": "curl https://api.github.com/x -o \"$TMPDIR/result.json\""
         }),
         Some(&network_reason()),
+        false,
     );
-    assert!(options.iter().all(|o| o.option_id != "allow_always"));
+    assert!(
+        options.iter().all(|o| o.option_id != "allow_always"),
+        "an unfenced session cannot promise the scratch download"
+    );
+
+    // The same command with the fence active is a promise the gate keeps.
+    let options = approval_options(
+        "bash",
+        &serde_json::json!({
+            "command": "curl https://api.github.com/x -o \"$TMPDIR/result.json\""
+        }),
+        Some(&network_reason()),
+        true,
+    );
+    assert!(
+        options.iter().any(|o| o.option_id == "allow_always"),
+        "a fenced session can remember the scratch download"
+    );
 
     // A command whose destination cannot be named offers no remember option.
     let options = approval_options(
         "bash",
         &serde_json::json!({"command": "curl \"$URL\""}),
         Some(&network_reason()),
+        true,
     );
     assert!(
         options.iter().all(|o| o.option_id != "allow_always"),
@@ -198,6 +218,7 @@ fn test_card_safety_hides_remember() {
         "write",
         &serde_json::json!({"path": ".git/config", "content": "x"}),
         Some(&reason),
+        true,
     );
     assert!(
         options.iter().all(|o| o.option_id != "allow_always"),

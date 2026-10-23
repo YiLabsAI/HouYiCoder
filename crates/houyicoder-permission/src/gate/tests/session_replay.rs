@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::Scope;
-use crate::compound::{is_effect_safe, reads_only_protected};
+use crate::compound::{is_effect_safe, reads_only_protected, removes_only_temp};
 use crate::decision::{Decision, Outcome};
 use crate::egress::{egress_destination, egress_scope_list, trusted_hosts};
 use crate::rule::{Effect, Rule, RuleContent};
@@ -95,10 +95,11 @@ const SESSION_CORPUS: &[&str] = &[
 
 #[test]
 fn test_session_corpus_decisions() {
+    // The prompts that remain are the ones the fence cannot answer for: a
+    // write outside the session scratch space, a history or discard operation,
+    // a protected marker, and a construct the text check cannot resolve.
     const EXPECTED_ASK_CALLS: &[usize] = &[
-        2, 3, 4, 5, 6, 7, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32,
-        33, 34, 36, 37, 38, 39, 40, 41, 42, 44, 45, 46, 47, 48, 49, 50, 52, 53, 54, 55, 56, 58, 59,
-        60, 61,
+        2, 10, 14, 15, 17, 18, 23, 24, 26, 27, 37, 38, 39, 40, 44, 45, 46, 49, 55, 56, 58, 59,
     ];
 
     let scratch = temp_dir().join(format!("hy-replay-scratch-{}", id()));
@@ -151,9 +152,9 @@ fn test_session_corpus_decisions() {
     assert_eq!(SESSION_CORPUS.len(), 61, "full 61-command denominator");
     assert_eq!(
         actual_asks, EXPECTED_ASK_CALLS,
-        "all 61 requests retain their expected decision"
+        "39 of 61 auto-allow; the 22 remaining prompts are policy or unprovable"
     );
-    assert_eq!(allow_count, 12, "12 Allow, 49 Ask, 0 Deny");
+    assert_eq!(allow_count, 39, "39 Allow, 22 Ask, 0 Deny");
 }
 
 #[test]
@@ -279,7 +280,10 @@ fn test_trusted_egress_scopes() {
         Some("curl https://api.github.com")
     );
     assert_eq!(
-        egress_scope_list("curl https://docs.rs/a; curl https://arxiv.org/abs/2401.00001"),
+        egress_scope_list(
+            "curl https://docs.rs/a; curl https://arxiv.org/abs/2401.00001",
+            true
+        ),
         Some(vec![
             "curl https://docs.rs".to_string(),
             "curl https://arxiv.org".to_string()
@@ -316,21 +320,49 @@ fn test_trusted_egress_scopes() {
 
 #[test]
 fn test_effect_boundary_checks() {
-    assert!(is_effect_safe("make check 2>&1 | tail -20"));
-    assert!(!is_effect_safe("make check > \"$TMPDIR/out.log\" 2>&1"));
+    assert!(is_effect_safe("make check 2>&1 | tail -20", false));
     assert!(!is_effect_safe(
-        "printf changed > \"$TMPDIR/audit-output.log\""
+        "make check > \"$TMPDIR/out.log\" 2>&1",
+        false
     ));
+    assert!(!is_effect_safe(
+        "printf changed > \"$TMPDIR/audit-output.log\"",
+        false
+    ));
+    assert!(is_effect_safe(
+        "make check > \"$TMPDIR/out.log\" 2>&1",
+        true
+    ));
+    assert!(removes_only_temp("rm -rf \"$TMPDIR/fresh\"", true));
+    assert!(!removes_only_temp("rm -rf \"$TMPDIR/fresh\"", false));
 }
 
 #[test]
 fn test_dangerous_variants_ask() {
-    assert!(!is_effect_safe("eval \"$(echo hi)\""));
-    assert!(!is_effect_safe("cat <<EOF\n$HOME\nEOF"));
-    assert!(!is_effect_safe("echo x > \"$TMPDIR/../escape\""));
-    assert!(!is_effect_safe("echo x > \"$TMPDIR/.git/config\""));
+    assert!(!is_effect_safe("eval \"$(echo hi)\"", false));
+    assert!(!is_effect_safe("cat <<EOF\n$HOME\nEOF", false));
+    assert!(!is_effect_safe("echo x > \"$TMPDIR/../escape\"", false));
+    assert!(!is_effect_safe("echo x > \"$TMPDIR/.git/config\"", false));
     assert!(!is_effect_safe(
-        "TMPDIR=/work/repo; echo x > \"$TMPDIR/file\""
+        "TMPDIR=/work/repo; echo x > \"$TMPDIR/file\"",
+        false
+    ));
+    // A fence does not rescue a traversal, a protected marker, or a rebound
+    // temporary directory: each of those changes what the kernel is asked to
+    // open, which is exactly what the text check has to exclude.
+    assert!(!is_effect_safe("echo x > \"$TMPDIR/../escape\"", true));
+    assert!(!is_effect_safe("echo x > \"$TMPDIR/.git/config\"", true));
+    assert!(!is_effect_safe(
+        "TMPDIR=/work/repo; echo x > \"$TMPDIR/file\"",
+        true
+    ));
+    assert!(!removes_only_temp(
+        "COV_DIR=TMP; COV_DIR=$COV_DIR'DIR'; getopts a \"$COV_DIR\" -a; rm -rf \"$TMPDIR/src\"",
+        true
+    ));
+    assert!(!is_effect_safe(
+        "python3 -c 'import os;os.symlink(\"a\",\"b\")'; printf changed > \"$TMPDIR/created.log\"",
+        true
     ));
 
     assert!(reads_only_protected("cat .claude/settings.json"));

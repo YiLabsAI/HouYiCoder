@@ -151,10 +151,10 @@ impl Pipeline {
         let validators: Vec<Box<dyn Validator>> = vec![
             Box::new(rule_stage::RuleDenyValidator),
             Box::new(ProtectedPathValidator::new(None)),
-            Box::new(DestructiveCommandValidator),
+            Box::new(DestructiveCommandValidator::new(None)),
             Box::new(GitCheckpointValidator),
-            Box::new(NetworkEgressValidator),
-            Box::new(CompoundCommandValidator),
+            Box::new(NetworkEgressValidator::new(None)),
+            Box::new(CompoundCommandValidator::new(None)),
             Box::new(PathBoundsValidator::new(None)),
             Box::new(rule_stage::RuleAllowValidator),
             Box::new(rule_stage::RuleAskValidator),
@@ -172,15 +172,38 @@ impl Pipeline {
     /// containment field (the design keeps GateCtx fence-free; the validators
     /// hold the handle directly).
     ///
-    /// Two stages take it. Path-bounds uses the root to tell an
+    /// Four stages take it. Path-bounds uses the root to tell an
     /// out-of-workspace read from an inside one. Protected-path uses it to
     /// resolve a write target, so a symlink cannot spell its way around the
     /// markers; that stage keeps its supplied-string check either way, so a
-    /// ladder built without a fence loses no coverage.
+    /// ladder built without a fence loses no coverage. The destructive,
+    /// network, and compound stages read only the coverage verdict, which
+    /// decides whether a temporary-path write or removal is already bounded by
+    /// the kernel.
     pub fn with_containment(containment: Arc<dyn Containment>) -> Self {
         let mut p = Self::standard();
+        p.validators.retain(|v| {
+            !matches!(
+                v.name(),
+                "path-bounds"
+                    | "protected_path"
+                    | "destructive_command"
+                    | "network_egress"
+                    | "compound_command"
+            )
+        });
         p.validators
-            .retain(|v| v.name() != "path-bounds" && v.name() != "protected_path");
+            .push(Box::new(DestructiveCommandValidator::new(Some(
+                Arc::clone(&containment),
+            ))));
+        p.validators
+            .push(Box::new(NetworkEgressValidator::new(Some(Arc::clone(
+                &containment,
+            )))));
+        p.validators
+            .push(Box::new(CompoundCommandValidator::new(Some(Arc::clone(
+                &containment,
+            )))));
         p.validators
             .push(Box::new(PathBoundsValidator::new(Some(Arc::clone(
                 &containment,

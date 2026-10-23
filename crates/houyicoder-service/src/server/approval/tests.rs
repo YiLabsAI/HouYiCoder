@@ -50,7 +50,7 @@ fn test_build_request_carries_reason() {
         detail: "rm needs confirmation".into(),
         containment_note: None,
     };
-    let wired = build_approval_request(&req, Some(&reason), None);
+    let wired = build_approval_request(&req, Some(&reason), None, true);
     assert_eq!(wired.call_id, "call-1");
     assert_eq!(wired.tool_name, "bash");
     let carried = wired.reason.as_ref().expect("reason carried");
@@ -62,7 +62,7 @@ fn test_build_request_carries_reason() {
     assert_eq!(back.reason.unwrap().detail, "rm needs confirmation");
 
     // None reason: the card falls back to a generic prompt.
-    let no_reason = build_approval_request(&req, None, None);
+    let no_reason = build_approval_request(&req, None, None, true);
     assert!(no_reason.reason.is_none());
     let json = serde_json::to_string(&no_reason).unwrap();
     assert!(

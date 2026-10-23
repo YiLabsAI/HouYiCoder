@@ -35,8 +35,8 @@ use crate::side_effect::is_shell_tool;
 use crate::side_effect::side_effect_for;
 use crate::store::RuleStore;
 use crate::store::Scope;
-use houyicoder_api::sandbox::Containment;
 use houyicoder_api::sandbox::SideEffect;
+use houyicoder_api::sandbox::{Containment, Coverage};
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::field::Empty;
@@ -76,6 +76,13 @@ pub trait ModeGate: Send + Sync {
     fn set_git_checkpoint_enabled(&self, enabled: bool);
     /// Whether the git-checkpoint builtin rules are currently enabled.
     fn git_checkpoint_enabled(&self) -> bool;
+    /// Whether an execution fence is active for this gate's session. A caller
+    /// that is about to promise a reusable authorization reads this first: a
+    /// grant the fence cannot honour would be a promise the gate breaks on the
+    /// next call. Default false for gates built without a fence.
+    fn fence_active(&self) -> bool {
+        false
+    }
     /// A snapshot of the in-process decision counter, bucketed by (outcome,
     /// source, validator), for the inspect / status surface and the harvest
     /// sprint's prompt-rate baseline. The default returns empty for gates
@@ -548,6 +555,12 @@ impl ModeGate for DefaultModeGate {
         let ids: Vec<String> = builtin_rules().iter().filter_map(builtin_rule_id).collect();
         // Enabled when none of the git-checkpoint ids are disabled.
         !ids.iter().any(|id| disabled.contains(id))
+    }
+
+    fn fence_active(&self) -> bool {
+        self.containment
+            .as_ref()
+            .is_some_and(|c| matches!(c.coverage(), Coverage::Fenced { .. }))
     }
 
     fn decision_metrics(&self) -> Vec<DecisionBucket> {

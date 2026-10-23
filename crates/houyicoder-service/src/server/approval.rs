@@ -61,6 +61,7 @@ impl Server {
                 approval,
                 reason.as_ref(),
                 delegation.as_ref(),
+                self.gate.fence_active(),
             )),
         );
         Self::send_typed(io, &ServerFrame::Request(ask)).await?;

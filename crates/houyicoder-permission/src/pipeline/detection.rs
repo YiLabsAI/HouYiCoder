@@ -4,10 +4,10 @@
 //! preserved exactly; the validators are thin adapters over the shared
 //! context, not a re-derivation of the rules.
 
-use houyicoder_api::sandbox::{BoundaryAccess, Containment, boundary_grants_for};
+use houyicoder_api::sandbox::{BoundaryAccess, Containment, Coverage, boundary_grants_for};
 use std::sync::Arc;
 
-use crate::compound::{compound_safe, is_effect_safe, is_readonly_compound};
+use crate::compound::{compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp};
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::egress::{egress_outputs_safe, egress_scope_list};
 use crate::git_discard::{collect_git_ask_ops, decode_token, is_shell_control_keyword};
@@ -15,6 +15,16 @@ use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::{Effect, evaluate};
+
+/// Whether the session's execution fence is active. A fence that reports
+/// coverage over writable roots makes the kernel the authority over where a
+/// write lands, so the gate only has to reason about constructs that change
+/// what the kernel is asked to open.
+pub(crate) fn fence_active(containment: &Option<Arc<dyn Containment>>) -> bool {
+    containment
+        .as_ref()
+        .is_some_and(|c| matches!(c.coverage(), Coverage::Fenced { .. }))
+}
 
 /// Destructive verbs (rm, sudo, dd, …) escalate to Ask even when the mode
 /// default would Allow. Consent-overridable for an exact pre-approved call.
@@ -172,7 +182,15 @@ pub(crate) fn interpreter_inline_code(content: &str) -> Option<&str> {
 }
 
 /// rm / sudo / un-attestable redirects and substitution. Consent-overridable.
-pub struct DestructiveCommandValidator;
+pub struct DestructiveCommandValidator {
+    containment: Option<Arc<dyn Containment>>,
+}
+
+impl DestructiveCommandValidator {
+    pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
+        Self { containment }
+    }
+}
 
 impl Validator for DestructiveCommandValidator {
     fn name(&self) -> &'static str {
@@ -189,6 +207,12 @@ impl Validator for DestructiveCommandValidator {
     }
     fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
         if !should_ask_destructive(req.tool_name, ctx.content) {
+            return None;
+        }
+        if ctx.mode == PermissionMode::Auto
+            && interpreter_inline_code(ctx.content).is_none()
+            && removes_only_temp(ctx.content, fence_active(&self.containment))
+        {
             return None;
         }
         if consent_allows(req, ctx) {
@@ -271,7 +295,15 @@ impl Validator for GitCheckpointValidator {
 /// verdict (via would_block) as a containment_note so the user sees that
 /// approval will not help. The gate never denies on containment grounds — that
 /// would make it a second authority beside the fence.
-pub struct NetworkEgressValidator;
+pub struct NetworkEgressValidator {
+    containment: Option<Arc<dyn Containment>>,
+}
+
+impl NetworkEgressValidator {
+    pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
+        Self { containment }
+    }
+}
 
 /// The stable name of the network-egress validator. A metrics bucket key and
 /// the recognizer post_transform uses to query the fence at the network layer
@@ -296,9 +328,9 @@ impl Validator for NetworkEgressValidator {
         if !should_ask_egress(req.tool_name, ctx.content) {
             return None;
         }
-        let outputs_safe = egress_outputs_safe(ctx.content);
+        let outputs_safe = egress_outputs_safe(ctx.content, fence_active(&self.containment));
         if outputs_safe
-            && let Some(scopes) = egress_scope_list(ctx.content)
+            && let Some(scopes) = egress_scope_list(ctx.content, fence_active(&self.containment))
             && !scopes.is_empty()
             && scopes
                 .iter()
@@ -324,7 +356,15 @@ impl Validator for NetworkEgressValidator {
 }
 
 /// A compound shell command that is not statically attestable.
-pub struct CompoundCommandValidator;
+pub struct CompoundCommandValidator {
+    containment: Option<Arc<dyn Containment>>,
+}
+
+impl CompoundCommandValidator {
+    pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
+        Self { containment }
+    }
+}
 
 impl Validator for CompoundCommandValidator {
     fn name(&self) -> &'static str {
@@ -350,7 +390,8 @@ impl Validator for CompoundCommandValidator {
         }
         if compound_safe(&refs)
             || is_readonly_compound(&refs)
-            || (ctx.mode == PermissionMode::Auto && is_effect_safe(ctx.content))
+            || (ctx.mode == PermissionMode::Auto
+                && is_effect_safe(ctx.content, fence_active(&self.containment)))
         {
             return None;
         }

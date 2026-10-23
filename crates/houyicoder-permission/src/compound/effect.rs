@@ -1,12 +1,17 @@
 //! Conservative checks for shell constructs and protected-path reads.
-//! File output requires approval because command text cannot establish resource
-//! ownership or preserve a filesystem pre-check until execution.
+//!
+//! Two questions live here. Whether a compound command only writes or removes
+//! paths inside the session temporary directory, and whether a command that
+//! reads a protected marker only inspects it. The first question is answered
+//! against the execution fence: when the fence is active the kernel decides
+//! where a write lands, so the gate only has to exclude constructs that can
+//! change what the fence is asked to open.
 
 use super::readonly::{find_matching_paren, is_readonly_compound};
 use super::{is_env_assignment, split_compound, strip_safe_redirects};
 use crate::git_discard::{decode_token, is_shell_control_keyword, should_ask_before_git};
 use crate::heredoc::strip_quoted_heredoc_bodies;
-use crate::pipeline::detection::should_ask_egress;
+use crate::pipeline::detection::{should_ask_egress, strip_quotes};
 use crate::safety::marker_hit;
 
 const MAX_DEPTH: u8 = 4;
@@ -42,14 +47,34 @@ const READONLY_GIT_SUBCOMMANDS: &[&str] = &[
     "hash-object",
 ];
 
+/// Commands a fenced session can predict. A segment that writes or removes a
+/// session-temporary path is accepted only when every segment before it starts
+/// with one of these, because those preceding segments are the only chance the
+/// command has to plant a symbolic link the later write would follow.
+///
+/// Deliberately absent: anything that creates a link or runs arbitrary code
+/// (ln, cp, mv, tar, install, rsync, python, shell interpreters), anything that
+/// can rebind the temporary directory (getopts, printf -v, read, eval, export,
+/// declare, unset), and the network clients, which the egress check owns.
+const SUPPORTED_EFFECT_COMMANDS: &[&str] = &[
+    "basename", "cargo", "cat", "cd", "cut", "df", "diff", "dirname", "du", "echo", "false",
+    "file", "find", "git", "grep", "head", "jq", "ls", "make", "mkdir", "nohup", "pwd", "realpath",
+    "rg", "rm", "rmdir", "sed", "sleep", "sort", "stat", "strings", "tail", "touch", "tr", "true",
+    "uniq", "wc", "which",
+];
+
 /// Whether supported shell constructs avoid file output and nested risky
 /// commands. This does not prove the behavior of arbitrary executables.
-pub fn is_effect_safe(command: &str) -> bool {
+///
+/// With fenced set, a write redirect or removal that targets a session
+/// temporary child is accepted, because the fence decides where the open or
+/// unlink actually lands. Without it, any file output still needs approval.
+pub fn is_effect_safe(command: &str, fenced: bool) -> bool {
     let stripped = strip_quoted_heredoc_bodies(command);
     if sets_tmpdir(&stripped) {
         return false;
     }
-    check_compound_depth(&stripped, MAX_DEPTH)
+    check_compound_depth(&stripped, MAX_DEPTH, fenced)
 }
 
 fn sets_tmpdir(command: &str) -> bool {
@@ -127,7 +152,7 @@ fn sets_tmpdir(command: &str) -> bool {
     false
 }
 
-fn check_compound_depth(command: &str, depth: u8) -> bool {
+fn check_compound_depth(command: &str, depth: u8, fenced: bool) -> bool {
     if depth == 0 {
         return false;
     }
@@ -135,6 +160,7 @@ fn check_compound_depth(command: &str, depth: u8) -> bool {
     if segments.is_empty() {
         return false;
     }
+    let mut preceding_supported = true;
     for segment in &segments {
         if depth < MAX_DEPTH
             && (should_ask_egress("bash", segment)
@@ -142,14 +168,60 @@ fn check_compound_depth(command: &str, depth: u8) -> bool {
         {
             return false;
         }
-        if !segment_effect_safe(segment, depth) {
+        if !segment_effect_safe(segment, depth, fenced, preceding_supported) {
             return false;
         }
+        preceding_supported = preceding_supported && starts_with_supported_command(segment);
     }
     true
 }
 
-fn segment_effect_safe(segment: &str, depth: u8) -> bool {
+/// Whether a segment starts with a command whose effect a fenced session can
+/// predict. A segment whose first word is unknown is not proof of danger, but
+/// it is not proof of safety either, so it cannot precede a temporary write.
+fn starts_with_supported_command(segment: &str) -> bool {
+    command_word(segment).is_some_and(|w| SUPPORTED_EFFECT_COMMANDS.contains(&w.as_str()))
+}
+
+/// The command word of a segment. Leading NAME=value words are skipped by
+/// shape, not by the value they carry: an assignment's value does not change
+/// which program runs, and a value with an expansion in it is still an
+/// assignment. Any substitution inside that value is scanned separately.
+fn command_word(segment: &str) -> Option<String> {
+    segment
+        .split_whitespace()
+        .map(decode_token)
+        .find(|w| !w.is_empty() && !is_shell_control_keyword(w) && !is_assignment_word(w))
+}
+
+fn is_assignment_word(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether a redirect target names a single child of the session temporary
+/// directory. A nested path, a traversal, a glob, or an expansion cannot be
+/// resolved from text, so none of them qualify.
+pub(crate) fn is_temp_output_target(target: &str) -> bool {
+    if marker_hit(target) {
+        return false;
+    }
+    let rest = target
+        .strip_prefix("$TMPDIR/")
+        .or_else(|| target.strip_prefix("${TMPDIR}/"));
+    let Some(suffix) = rest else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix != "."
+        && suffix != ".."
+        && !suffix.contains(['/', '*', '?', '[', ']', '$', '`', '(', ')', '\\'])
+}
+
+fn segment_effect_safe(segment: &str, depth: u8, fenced: bool, preceding_supported: bool) -> bool {
     let cleaned = strip_safe_redirects(segment);
     if first_command_word(&cleaned).as_deref() == Some("eval") {
         return false;
@@ -211,7 +283,22 @@ fn segment_effect_safe(segment: &str, depth: u8) -> bool {
             continue;
         }
         if c == '>' {
-            return false;
+            if !(fenced && preceding_supported) {
+                return false;
+            }
+            let after_op = if chars.get(i + 1) == Some(&'>') {
+                i + 2
+            } else {
+                i + 1
+            };
+            let Some((target, next_i)) = read_redirect_token(&chars, after_op) else {
+                return false;
+            };
+            if !is_temp_output_target(&target) {
+                return false;
+            }
+            i = next_i;
+            continue;
         }
         if c == '<' {
             let Some(next_i) = scan_redirect_at(&chars, i) else {
@@ -224,7 +311,62 @@ fn segment_effect_safe(segment: &str, depth: u8) -> bool {
     }
     nested
         .iter()
-        .all(|body| check_compound_depth(body, depth - 1))
+        .all(|body| check_compound_depth(body, depth - 1, fenced))
+}
+
+/// Whether every destructive token in the command is an rm call whose targets
+/// are single children of the session temporary directory, with only
+/// predictable commands before it.
+pub fn removes_only_temp(command: &str, fenced: bool) -> bool {
+    if !fenced {
+        return false;
+    }
+    let stripped = strip_quoted_heredoc_bodies(command);
+    if sets_tmpdir(&stripped) {
+        return false;
+    }
+    let segments = split_compound(&stripped);
+    if segments.is_empty() {
+        return false;
+    }
+    let mut saw_rm = false;
+    let mut preceding_supported = true;
+    for segment in &segments {
+        if is_rm_segment(segment) {
+            saw_rm = true;
+            if !preceding_supported || !rm_targets_are_temp(segment) {
+                return false;
+            }
+        }
+        preceding_supported = preceding_supported && starts_with_supported_command(segment);
+    }
+    saw_rm
+}
+
+fn is_rm_segment(segment: &str) -> bool {
+    first_command_word(segment).as_deref() == Some("rm")
+}
+
+fn rm_targets_are_temp(segment: &str) -> bool {
+    let cleaned = strip_safe_redirects(segment);
+    let mut saw_target = false;
+    for token in cleaned.split_whitespace().skip(1) {
+        if is_env_assignment(token) {
+            return false;
+        }
+        let word = strip_quotes(token);
+        if word.is_empty() || word == "--" {
+            continue;
+        }
+        if word.starts_with('-') {
+            continue;
+        }
+        saw_target = true;
+        if !is_temp_output_target(word) {
+            return false;
+        }
+    }
+    saw_target
 }
 
 fn scan_redirect_at(chars: &[char], i: usize) -> Option<usize> {
