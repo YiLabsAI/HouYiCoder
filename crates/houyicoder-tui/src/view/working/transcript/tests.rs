@@ -10,6 +10,7 @@ use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
 use crate::transcript::TranscriptFrame;
+use crate::view::working::transcript::truncate_call_keeping_paren;
 
 use super::super::tail_rows::build_tail_rows;
 
@@ -307,3 +308,31 @@ fn test_view_hides_tail() {
 }
 
 mod scrollback;
+
+/// Cutting a running call to its column budget keeps the paren that closes
+/// the call's argument list, so the row does not read as an unclosed call.
+#[test]
+fn test_cut_keeps_paren() {
+    let row = "\u{25cf} Bash(cd /work/repo && cargo nextest run -p houyicoder-core)";
+    let cut = truncate_call_keeping_paren(row, 24);
+    assert!(
+        cut.ends_with(')'),
+        "the closing paren must survive the cut: [{cut}]"
+    );
+    assert!(
+        UnicodeWidthStr::width(cut.as_str()) <= 24,
+        "the cut must stay inside its budget: [{cut}]"
+    );
+}
+
+/// A row that is not a wrapped call, or that already ends before the budget,
+/// is left exactly as it was.
+#[test]
+fn test_cut_leaves_other_rows() {
+    assert_eq!(
+        truncate_call_keeping_paren("Working\u{2026} 12s", 40),
+        "Working\u{2026} 12s"
+    );
+    assert_eq!(truncate_call_keeping_paren("Bash(ls)", 40), "Bash(ls)");
+    assert_eq!(truncate_call_keeping_paren("Bash(ls)", 0), "");
+}

@@ -103,3 +103,31 @@ fn test_arg_hint_none() {
     assert_eq!(arg_hint_for("nope"), None);
     assert_eq!(arg_hint_for("status"), None);
 }
+
+/// A help longer than the column budget is cut with an ellipsis and never
+/// spills past the budget, so the row cannot overrun the pane border.
+#[test]
+fn test_help_truncated_to_budget() {
+    let line = format_one(SlashCommand::Export, 12);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        text.contains('\u{2026}'),
+        "a cut help must say it was cut: [{text}]"
+    );
+    let help = line.spans.last().expect("help span").content.to_string();
+    assert!(
+        UnicodeWidthStr::width(help.as_str()) <= 12,
+        "help must stay within its budget: [{help}]"
+    );
+}
+
+/// A help that fits is shown whole, with no ellipsis.
+#[test]
+fn test_short_help_uncut() {
+    let line = format_one(SlashCommand::Help, 200);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        !text.contains('\u{2026}'),
+        "must not cut a short help: [{text}]"
+    );
+}

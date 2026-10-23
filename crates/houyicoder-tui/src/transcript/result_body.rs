@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use crate::brief::{edit_diff_summary, result_summary, value_brief};
-use houyicoder_protocol::tool::simple_command_word;
+use houyicoder_protocol::tool::{simple_command_word, strip_ansi_codes};
 
 /// Build the Write tool result body: the "Wrote N lines to {path}" chip
 /// followed by the full written content. The content is pulled from the
@@ -37,6 +37,13 @@ pub(crate) fn write_result_body(output: &Value, call_input: Option<&Value>) -> S
 /// carry a byte count. Errors surface as an error: line. Anything else falls
 /// back to a brief JSON glimpse so nothing is silently dropped.
 pub fn extract_body(output: &str) -> String {
+    strip_ansi_codes(&raw_body(output))
+}
+
+/// The body before terminal control sequences are removed. Kept separate so
+/// the sanitiser is one wrapper over every return path rather than a call at
+/// each of them.
+fn raw_body(output: &str) -> String {
     let Ok(v) = serde_json::from_str::<Value>(output) else {
         // Not JSON (a plain-string result from a stub) — show it verbatim.
         return output.to_string();
@@ -181,7 +188,30 @@ pub(crate) fn output_has_diff(output: &str) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(output) else {
         return false;
     };
-    v.get("diff").and_then(|d| d.as_str()).is_some()
+    if v.get("diff").and_then(|d| d.as_str()).is_some() {
+        return true;
+    }
+    // A shell command can print a diff too. The header lines decide it, so a
+    // log that merely mentions a path with a dash is not coloured.
+    v.get("stdout")
+        .and_then(|s| s.as_str())
+        .is_some_and(looks_like_unified_diff)
+}
+
+/// Whether text carries the three header shapes a unified diff opens with.
+fn looks_like_unified_diff(text: &str) -> bool {
+    let mut saw_old = false;
+    let mut saw_new = false;
+    let mut saw_hunk = false;
+    for line in text.lines() {
+        if line.starts_with("diff --git ") {
+            return true;
+        }
+        saw_old |= line.starts_with("--- ");
+        saw_new |= line.starts_with("+++ ");
+        saw_hunk |= line.starts_with("@@ ");
+    }
+    saw_old && saw_new && saw_hunk
 }
 
 /// The set of bash commands that produce no output on success by design.

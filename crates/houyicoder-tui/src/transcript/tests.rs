@@ -6,6 +6,7 @@ use houyicoder_protocol::frontend::session_update::{
 };
 use serde_json::Value;
 
+use crate::brief::result_summary;
 use crate::result_body::{extract_body, output_has_diff};
 
 fn user_msg(text: &str) -> TranscriptFrame {
@@ -435,6 +436,58 @@ fn test_extract_body_edit_diff() {
     assert!(body.starts_with("Added 1 line, removed 1 line\n"));
     assert!(body.contains("-    1"));
     assert!(body.contains("+    2"));
+}
+
+#[test]
+fn test_body_strips_colour() {
+    let coloured = serde_json::json!({
+        "stdout": "\u{1b}[0;32m\u{2713} All checks passed!\u{1b}[0m\n",
+    });
+    assert_eq!(
+        extract_body(&coloured.to_string()),
+        "\u{2713} All checks passed!\n",
+        "a complete colour sequence leaves no visible characters"
+    );
+    // The escape byte can be lost upstream; the fragment that follows it is
+    // still not text the user should read.
+    let orphaned = serde_json::json!({
+        "stdout": "[0;32m\u{2713} All checks passed![0m\n",
+    });
+    assert_eq!(
+        extract_body(&orphaned.to_string()),
+        "\u{2713} All checks passed!\n"
+    );
+    // The same sanitiser guards the one-line chip.
+    let chip = result_summary(
+        "bash",
+        &serde_json::json!({"stdout": "\u{1b}[1;31merror\u{1b}[0m: boom\n"}),
+    );
+    assert_eq!(chip.as_deref(), Some("error: boom"));
+}
+
+#[test]
+fn test_body_keeps_brackets() {
+    // An array index and an attribute in quoted code are text, not colour.
+    let output = serde_json::json!({"stdout": "arr[0] = 1\n#[test] fn x() {}\n"});
+    assert_eq!(
+        extract_body(&output.to_string()),
+        "arr[0] = 1\n#[test] fn x() {}\n"
+    );
+}
+
+#[test]
+fn test_shell_diff_detected() {
+    let stdout = "diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-a\n+b\n";
+    assert!(output_has_diff(
+        &serde_json::json!({"stdout": stdout}).to_string()
+    ));
+    // A log that merely mentions dashed paths is not a diff.
+    let log = "checking --- old\nand +++ new\nbut no hunk header\n";
+    assert!(!output_has_diff(
+        &serde_json::json!({"stdout": log}).to_string()
+    ));
+    let unrelated = serde_json::json!({"stdout": "plain output\n"});
+    assert!(!output_has_diff(&unrelated.to_string()));
 }
 
 #[test]

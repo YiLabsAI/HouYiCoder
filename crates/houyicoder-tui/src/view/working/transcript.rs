@@ -299,11 +299,25 @@ fn rendered_tool_rows(
         let keep = (width as usize).saturating_sub(suffix_width);
         *last = format!(
             "{}{}",
-            truncate_width(last, keep),
+            truncate_call_keeping_paren(last, keep),
             truncate_width(&suffix, width as usize)
         );
     }
     Some(rows)
+}
+
+/// Truncate a call summary to a column budget while keeping the closing paren
+/// that closes the call's argument list. Cutting the line at the budget would
+/// otherwise leave the row reading as an unclosed call, which looks like a
+/// rendering fault rather than a shortened command.
+fn truncate_call_keeping_paren(line: &str, keep: usize) -> String {
+    let cut = truncate_width(line, keep);
+    if !line.ends_with(')') || cut.ends_with(')') || keep == 0 {
+        return cut;
+    }
+    let mut out = truncate_width(line, keep - 1);
+    out.push(')');
+    out
 }
 
 /// Emit the rendered rows for one transcript line (the row layer). Shared

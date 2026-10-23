@@ -369,7 +369,7 @@ fn test_help_text_visible() {
     app.run_command(SlashCommand::Help);
     let h = render(&app);
     println!("--- /help ---\n{h}\n--- end ---");
-    assert!(h.contains("show help"), "help missing");
+    assert!(h.contains("Show available commands"), "help missing");
     // /tips is TUI-local (not in SlashCommand); submit via input
     app.ui.input.editor.set("/tips".to_string());
     app.submit_input();

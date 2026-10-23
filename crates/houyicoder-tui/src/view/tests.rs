@@ -84,21 +84,15 @@ fn test_dump_palette_render() {
         "first list row must end at the right border: [{login_row}]"
     );
 
-    // 3. A long help is truncated with an ellipsis and stays inside the
-    //    border (no overflow into the border column).
-    let truncated_row = rows
-        .iter()
-        .find(|r| r.contains("/clear"))
-        .copied()
-        .expect("/clear row present");
-    assert!(
-        truncated_row.contains('\u{2026}'),
-        "long /clear help should be truncated with ellipsis: [{truncated_row}]"
-    );
-    assert!(
-        truncated_row.contains("│"),
-        "/clear row must end at the right border: [{truncated_row}]"
-    );
+    // 3. Every row stays inside the border: a help that does not fit is cut
+    //    rather than allowed to overrun the border column. The cut itself is
+    //    asserted where the column budget is applied.
+    for row in rows.iter().filter(|r| r.starts_with('│')) {
+        assert!(
+            row.ends_with('│'),
+            "every command row must end at the right border: [{row}]"
+        );
+    }
 }
 
 #[test]

@@ -186,7 +186,7 @@ const COMMANDS: &[CommandDescriptor] = &[
     CommandDescriptor {
         variant: SlashCommand::Clear,
         name: "/clear",
-        help: "start fresh; previous session archived (resumable with /resume)",
+        help: "Start a fresh session and archive the current one",
     },
     CommandDescriptor {
         variant: SlashCommand::Rewind,
@@ -196,7 +196,7 @@ const COMMANDS: &[CommandDescriptor] = &[
     CommandDescriptor {
         variant: SlashCommand::Resume,
         name: "/resume",
-        help: "resume an archived session (partial reload)",
+        help: "Browse and resume a previous session",
     },
     CommandDescriptor {
         variant: SlashCommand::Replay,
@@ -246,62 +246,62 @@ const COMMANDS: &[CommandDescriptor] = &[
     CommandDescriptor {
         variant: SlashCommand::Diff,
         name: "/diff",
-        help: "view / apply diff",
+        help: "View uncommitted changes and file diffs",
     },
     CommandDescriptor {
         variant: SlashCommand::Agents,
         name: "/agents",
-        help: "show A2A fleet status",
+        help: "View running subagents, history, and agent types",
     },
     CommandDescriptor {
         variant: SlashCommand::Memory,
         name: "/memory",
-        help: "recall / browse structured memory",
+        help: "Browse and manage session and project memories",
     },
     CommandDescriptor {
         variant: SlashCommand::Model,
         name: "/model",
-        help: "switch / inspect model",
+        help: "Switch model, reasoning effort, and speed mode",
     },
     CommandDescriptor {
         variant: SlashCommand::Sandbox,
         name: "/sandbox",
-        help: "sandbox / capability status",
+        help: "Inspect sandbox boundaries and recovery checkpoints",
     },
     CommandDescriptor {
         variant: SlashCommand::Permission,
         name: "/permissions",
-        help: "manage permission rules + ask-before-git toggle",
+        help: "Manage tool permission rules and workspace access",
     },
     CommandDescriptor {
         variant: SlashCommand::Context,
         name: "/context",
-        help: "visualize token budget and context usage",
+        help: "Visualize context window usage and token breakdown",
     },
     CommandDescriptor {
         variant: SlashCommand::Status,
         name: "/status",
-        help: "show version / model / sandbox / connectivity",
+        help: "Show session status, model, sandbox, and account info",
     },
     CommandDescriptor {
         variant: SlashCommand::Trajectory,
         name: "/trajectory",
-        help: "replay the event log: kind / ts / hash-chain",
+        help: "Inspect turn latency, token usage, and tool timeline",
     },
     CommandDescriptor {
         variant: SlashCommand::Tools,
         name: "/tools",
-        help: "list registered tools (capability discoverability)",
+        help: "List available built-in and MCP tools",
     },
     CommandDescriptor {
         variant: SlashCommand::Skills,
         name: "/skills",
-        help: "show loaded skills (name, description, source, token cost)",
+        help: "Browse loaded skills, sources, and token costs",
     },
     CommandDescriptor {
         variant: SlashCommand::Export,
         name: "/export",
-        help: "write the session trajectory to a JSON file (ExPeL data source)",
+        help: "Export the session transcript and trajectory to a file",
     },
     CommandDescriptor {
         variant: SlashCommand::ReleaseNotes,
@@ -311,17 +311,17 @@ const COMMANDS: &[CommandDescriptor] = &[
     CommandDescriptor {
         variant: SlashCommand::Help,
         name: "/help",
-        help: "show help",
+        help: "Show available commands and keyboard shortcuts",
     },
     CommandDescriptor {
         variant: SlashCommand::Worktree,
         name: "/worktrees",
-        help: "worktrees management",
+        help: "List, enter, or remove isolated git worktrees",
     },
     CommandDescriptor {
         variant: SlashCommand::Compact,
         name: "/compact",
-        help: "free up context by summarizing the conversation so far",
+        help: "Summarize earlier conversation to free up context",
     },
     CommandDescriptor {
         variant: SlashCommand::Undo,
@@ -331,12 +331,12 @@ const COMMANDS: &[CommandDescriptor] = &[
     CommandDescriptor {
         variant: SlashCommand::Search,
         name: "/search",
-        help: "search the transcript",
+        help: "Search messages and tool output in the transcript",
     },
     CommandDescriptor {
         variant: SlashCommand::Hooks,
         name: "/hooks",
-        help: "list registered hooks (read-only)",
+        help: "Inspect registered lifecycle hooks",
     },
     CommandDescriptor {
         variant: SlashCommand::Debug,
