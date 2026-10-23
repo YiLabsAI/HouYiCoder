@@ -206,7 +206,7 @@ async fn test_child_transcript_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     // Call the mid-run handler directly (the serve loop routes mid-run
     // requests here); no run is in flight, but the handler is the unit under
     // test — it must replay the child log, map it to frames, and respond.
@@ -244,7 +244,7 @@ async fn test_model_query_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     server
         .handle_request_during_run(
             &mut io,
@@ -273,7 +273,7 @@ async fn test_permission_cycle_during_run() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     server
         .handle_request_during_run(
             &mut io,
@@ -374,25 +374,94 @@ async fn test_child_fetch_during_run() {
     );
 }
 
-/// A request payload the mid-run handler does not serve hits the drop arm
-/// and sends no reply. Pins the drop arm so a refactor that accidentally
-/// serves a mutating verb mid-run reds here.
+/// A read-only request is answered while a turn is in flight: the client that
+/// asked for the pane must not be left waiting on a response the server never
+/// sends.
 #[tokio::test]
-async fn test_unserved_request_dropped() {
+async fn test_read_only_request_served() {
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
     server
         .handle_request_during_run(
             &mut io,
             RequestEnvelope::new(RequestId(7), FrontendRequest::Context),
         )
         .await;
+    let resp = client_rx
+        .try_recv()
+        .expect("a read-only mid-run request is answered");
     assert!(
-        client_rx.try_recv().is_err(),
-        "dropped mid-run verb sends no reply"
+        resp.contains("\"req_id\":7"),
+        "the answer carries the request id"
+    );
+    assert!(
+        resp.contains("\"type\":\"context\""),
+        "the answer is the payload the request asked for"
+    );
+}
+
+/// Renaming the session is a descriptor write, not a conversation change, so
+/// it lands while the turn is in flight. The pane that shows the name must not
+/// have to wait for the run to end.
+#[tokio::test]
+async fn test_rename_served_during_run() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(9),
+                FrontendRequest::RenameSession {
+                    session_id: houyicoder_protocol::frontend::SessionId(session.to_string()),
+                    name: "renamed mid-run".into(),
+                },
+            ),
+        )
+        .await;
+    let resp = client_rx.try_recv().expect("a rename is answered");
+    assert!(
+        !resp.contains("waits for the running turn"),
+        "a descriptor write is not refused mid-run: {resp}"
+    );
+}
+
+/// A request that must wait for the turn is refused with an error, not
+/// dropped. The client blocks on a response for every request it sends, so a
+/// dropped one is indistinguishable from a hung server.
+#[tokio::test]
+async fn test_mutating_request_refused() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(8),
+                FrontendRequest::DiffApply {
+                    path: "a.rs".into(),
+                    patch: "x".into(),
+                },
+            ),
+        )
+        .await;
+    let resp = client_rx
+        .try_recv()
+        .expect("a refused mid-run request is answered");
+    assert!(
+        resp.contains("waits for the running turn"),
+        "the refusal says why: {resp}"
     );
 }

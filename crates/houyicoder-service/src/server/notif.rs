@@ -7,6 +7,7 @@
 use houyicoder_protocol::envelope::{
     RequestEnvelope, ResponseEnvelope, ResponsePayload, ServerFrame,
 };
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::model::EffectiveFrom;
@@ -33,7 +34,7 @@ impl Server {
     /// because a mid-run client frame parses as a Request but most verbs
     /// mutate state that must wait.
     pub(super) async fn handle_request_during_run(
-        &self,
+        &mut self,
         io: &mut FrameCarrier,
         req: RequestEnvelope,
     ) {
@@ -97,7 +98,26 @@ impl Server {
                     drop(io.send_frame(encoded).await);
                 }
             }
-            _ => {}
+            payload if reads_state_during_run(&payload) => {
+                drop(self.dispatch_query(io, req_id, payload).await);
+            }
+            // A request that must wait for the turn is answered, not dropped:
+            // the client blocks on a response for every request it sends, so
+            // dropping one leaves it waiting with no way to tell a slow server
+            // from a refused command.
+            _ => {
+                let frame = ServerFrame::Response(ResponseEnvelope::new(
+                    req_id,
+                    ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
+                        "this request waits for the running turn to finish",
+                        true,
+                    )),
+                ));
+                if let Ok(encoded) = encode(&frame) {
+                    drop(io.send_frame(encoded).await);
+                }
+            }
         }
     }
 
@@ -208,3 +228,33 @@ impl Server {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether a request only reads state, or writes state a running turn does not
+/// read, so answering it mid-run cannot race the turn.
+///
+/// A request that mutates the conversation, the workspace, or the rule set the
+/// drive loop consults is deliberately absent: those wait for the turn and are
+/// answered with an error rather than applied underneath it.
+fn reads_state_during_run(payload: &FrontendRequest) -> bool {
+    matches!(
+        payload,
+        FrontendRequest::Status
+            | FrontendRequest::SandboxStatus
+            | FrontendRequest::Metrics
+            | FrontendRequest::Context
+            | FrontendRequest::Trajectory
+            | FrontendRequest::Agents
+            | FrontendRequest::Worktree
+            | FrontendRequest::ToolList
+            | FrontendRequest::Hooks
+            | FrontendRequest::Skills
+            | FrontendRequest::SkillBody { .. }
+            | FrontendRequest::MemoryList
+            | FrontendRequest::MemoryShow { .. }
+            | FrontendRequest::MemoryToggleState
+            | FrontendRequest::RenameSession { .. }
+            | FrontendRequest::PermissionMode
+            | FrontendRequest::PermissionRules
+            | FrontendRequest::PermissionAskBeforeGit { .. }
+    )
+}

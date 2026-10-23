@@ -80,7 +80,7 @@ impl Server {
     /// Route a read-only or state-scoped request: panes, catalog listings,
     /// model selection, memory, and permission management. Separated from the
     /// run verbs so each router stays a readable dispatch table.
-    async fn dispatch_query(
+    pub(super) async fn dispatch_query(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
