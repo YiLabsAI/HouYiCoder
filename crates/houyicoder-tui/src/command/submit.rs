@@ -8,7 +8,6 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::history::current_project;
 use crate::input::queue::{InputItem, is_state_changing};
 use crate::paste::PasteStore;
-use crate::permission_input::submit_permission_input;
 use crate::state::{App, Pane, Stage};
 
 impl App {
@@ -57,7 +56,7 @@ impl App {
         if self.ui.navigation.pane == Pane::Permission && self.ui.permission_pane.input.is_active()
         {
             let text = self.ui.input.editor.take();
-            submit_permission_input(self, text);
+            self.submit_permission_input(text);
             return;
         }
         // A fresh submission means the user re-engaged the conversation: jump

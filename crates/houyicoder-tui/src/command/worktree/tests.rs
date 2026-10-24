@@ -19,15 +19,15 @@ fn test_worktree_cursor_clamps() {
     let mut app = app();
     app.sessions.current.capabilities.worktree.entries = vec![row("/a"), row("/b"), row("/c")];
     app.move_worktree_cursor(1);
-    assert_eq!(app.ui.worktree_list.cursor, 1, "down one");
+    assert_eq!(app.ui.worktree_pane.list.cursor, 1, "down one");
     app.move_worktree_cursor(100);
     assert_eq!(
-        app.ui.worktree_list.cursor, 2,
+        app.ui.worktree_pane.list.cursor, 2,
         "past the end clamps to the last row"
     );
     app.move_worktree_cursor(-100);
     assert_eq!(
-        app.ui.worktree_list.cursor, 0,
+        app.ui.worktree_pane.list.cursor, 0,
         "past the start clamps to the first row"
     );
 }
@@ -40,7 +40,7 @@ fn test_worktree_cursor_noop_empty() {
     app.sessions.current.capabilities.worktree.entries = Vec::new();
     app.move_worktree_cursor(1);
     assert_eq!(
-        app.ui.worktree_list.cursor, 0,
+        app.ui.worktree_pane.list.cursor, 0,
         "empty list keeps cursor at zero"
     );
 }
@@ -52,7 +52,7 @@ fn test_worktree_cursor_noop_empty() {
 fn test_refresh_clears_without_dir() {
     let mut app = app();
     app.sessions.current.capabilities.worktree.entries = vec![row("/stale")];
-    app.ui.worktree_list.cursor = 0;
+    app.ui.worktree_pane.list.cursor = 0;
     app.sessions.current.identity.working_dir = String::new();
     app.refresh_worktrees();
     assert!(
@@ -78,11 +78,11 @@ fn test_cursor_search_skips_filtered() {
     let mut app = app();
     app.sessions.current.capabilities.worktree.entries =
         vec![row("/alpha"), row("/beta"), row("/gamma")];
-    app.ui.worktree_list.query = "beta".into();
+    app.ui.worktree_pane.list.query = "beta".into();
     app.move_worktree_cursor(1);
     // Filtered has 1 item; cursor jumps to it.
     assert_eq!(
-        app.ui.worktree_list.cursor, 1,
+        app.ui.worktree_pane.list.cursor, 1,
         "search cursor lands on the filtered item"
     );
 }
@@ -91,11 +91,11 @@ fn test_cursor_search_skips_filtered() {
 fn test_cursor_search_empty_noop() {
     let mut app = app();
     app.sessions.current.capabilities.worktree.entries = vec![row("/a"), row("/b")];
-    app.ui.worktree_list.query = "zzz".into();
+    app.ui.worktree_pane.list.query = "zzz".into();
     app.move_worktree_cursor(1);
     // No filtered items: cursor stays put.
     assert_eq!(
-        app.ui.worktree_list.cursor, 0,
+        app.ui.worktree_pane.list.cursor, 0,
         "empty search results keep cursor"
     );
 }
@@ -104,7 +104,7 @@ fn test_cursor_search_empty_noop() {
 fn test_enter_no_carrier() {
     let mut app = app();
     app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
-    app.ui.worktree_list.cursor = 0;
+    app.ui.worktree_pane.list.cursor = 0;
     // Disconnected: the enter path reports it and enters nothing.
     app.enter_worktree_at_cursor();
     assert!(

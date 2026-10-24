@@ -8,6 +8,21 @@ use crate::skill_picker_state::SkillPickerState;
 use crate::state::enums::{Pane, Screen, StatusTab, ViewportMode};
 use houyicoder_protocol::frontend::LoginMode;
 
+/// The /status pane's active sub-tab and inline session-name editor.
+#[derive(Default)]
+pub struct StatusPaneState {
+    /// The active /status sub-tab (Status / Config / Usage). Tab or
+    /// Left/Right cycles it; the pane header renders the three titles with
+    /// the active one highlighted.
+    pub tab: StatusTab,
+    /// In-place session-name edit buffer for the status Status tab. None
+    /// unless the user pressed e on the Status tab to rename; the pane
+    /// renders the name row as an editable input + the keys route char,
+    /// backspace, Left/Right to the buffer. Enter commits (sends a
+    /// RenameSession request), Esc cancels.
+    pub name_edit: Option<InputField>,
+}
+
 /// The user's position in the frontend: which screen and pane are showing,
 /// the viewport mode with its pre-Scroll partner, and the overlay pickers
 /// that cover the pane while open. A session switch resets these together;
@@ -33,16 +48,8 @@ pub struct Navigation {
     /// The @ skill-picker overlay state: the open flag and its list cursor.
     /// Opening resets the cursor to zero, so the two move as one value.
     pub(crate) skill_picker: SkillPickerState,
-    /// The active /status sub-tab (Status / Config / Usage). Tab or
-    /// Left/Right cycles it; the pane header renders the three titles with
-    /// the active one highlighted.
-    pub status_tab: StatusTab,
-    /// In-place session-name edit buffer for the status Status tab. None
-    /// unless the user pressed e on the Status tab to rename; the pane
-    /// renders the name row as an editable input + the keys route char,
-    /// backspace, Left/Right to the buffer. Enter commits (sends a
-    /// RenameSession request), Esc cancels.
-    pub status_name_edit: Option<InputField>,
+    /// The /status pane's tab selection and inline name editor.
+    pub status_pane: StatusPaneState,
 }
 
 impl Navigation {
@@ -58,7 +65,6 @@ impl Navigation {
         self.resume_picker = Default::default();
         self.palette = Default::default();
         self.skill_picker = Default::default();
-        self.status_tab = Default::default();
-        self.status_name_edit = None;
+        self.status_pane = Default::default();
     }
 }

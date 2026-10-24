@@ -19,14 +19,14 @@ impl App {
     pub fn refresh_worktrees(&mut self) {
         if self.sessions.current.identity.working_dir.is_empty() {
             self.sessions.current.capabilities.worktree.entries.clear();
-            self.ui.worktree_list.cursor = 0;
+            self.ui.worktree_pane.list.cursor = 0;
             return;
         }
         let entries = parse_worktrees(
             Some(&self.sessions.current.identity.working_dir),
             &self.sessions.current.identity.working_dir,
         );
-        self.ui.worktree_list.clamp(entries.len());
+        self.ui.worktree_pane.list.clamp(entries.len());
         self.sessions.current.capabilities.worktree.entries = entries;
     }
 
@@ -37,22 +37,22 @@ impl App {
     /// Enter/d act on the visible item the cursor points at.
     pub fn move_worktree_cursor(&mut self, delta: i32) {
         let entries = &self.sessions.current.capabilities.worktree.entries;
-        if !self.ui.worktree_list.searching() {
-            self.ui.worktree_list.move_cursor(delta, entries.len());
+        if !self.ui.worktree_pane.list.searching() {
+            self.ui.worktree_pane.list.move_cursor(delta, entries.len());
             return;
         }
         let filtered = filter_by_query(
             entries,
-            &self.ui.worktree_list.query,
+            &self.ui.worktree_pane.list.query,
             |e: &WorktreeEntry| vec![&e.path, &e.branch],
         );
         if filtered.is_empty() {
             return;
         }
-        let cur = self.ui.worktree_list.cursor.min(entries.len());
+        let cur = self.ui.worktree_pane.list.cursor.min(entries.len());
         let pos = filtered.iter().position(|&i| i == cur).unwrap_or(0) as i32;
         let next = (pos + delta).clamp(0, (filtered.len() - 1) as i32) as usize;
-        self.ui.worktree_list.cursor = filtered[next];
+        self.ui.worktree_pane.list.cursor = filtered[next];
     }
 
     /// Enter the worktree under the cursor (the Enter action). Composes a
@@ -61,7 +61,7 @@ impl App {
     /// carrier or the list is empty.
     pub fn enter_worktree_at_cursor(&mut self) {
         let entries = &self.sessions.current.capabilities.worktree.entries;
-        let Some(entry) = entries.get(self.ui.worktree_list.cursor).cloned() else {
+        let Some(entry) = entries.get(self.ui.worktree_pane.list.cursor).cloned() else {
             return;
         };
         if self.sessions.current.connection.is_none() {

@@ -22,11 +22,11 @@ ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/app/state.rs:App": {
         # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it.
         "fields": 3,
-        "mut_app": 38,
+        "mut_app": 27,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
         # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame.
-        "fields": 25,
+        "fields": 24,
     },
     "crates/houyicoder-tui/src/ui/renderer.rs:Renderer": {
         # The draw pass's reusable caches: the per-line parse cache and the
@@ -44,8 +44,8 @@ ACTIVE_OWNERS = {
         "fields": 3,
     },
     "crates/houyicoder-tui/src/ui/navigation.rs:Navigation": {
-        # Where the user is looking: screen, pane, viewport modes, login mode, status sub-tab, name buffer, and the overlays.
-        "fields": 10,
+        # Where the user is looking: screen, pane, viewport modes, login mode, the status pane state, and the overlays.
+        "fields": 9,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
         # The composed chat text and the context that edits it: editor, history, both paste halves, and the queued-input FIFO.

@@ -11,7 +11,6 @@ use crate::agents_state::AgentsPaneState;
 use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
-use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::permission_pane_state::PermissionPaneState;
@@ -25,7 +24,7 @@ use crate::sessions::Sessions;
 use crate::skill_picker_state::SkillPickerState;
 use crate::skills_state::SkillsPaneState;
 use crate::state::model_draft::ModelDraft;
-use crate::state::{ParkedViewStates, StatusTab, TrajectoryPaneState};
+use crate::state::{ParkedViewStates, TrajectoryPaneState};
 use crate::ui::{Navigation, Ui};
 use crate::workflow::Workflow;
 
@@ -41,8 +40,7 @@ pub fn app() -> App {
                 resume_picker: SessionPickerState::default(),
                 palette: PaletteState::default(),
                 skill_picker: SkillPickerState::default(),
-                status_tab: StatusTab::default(),
-                status_name_edit: None,
+                status_pane: Default::default(),
             },
             input: Input::default(),
             transcript_view: Default::default(),
@@ -57,8 +55,7 @@ pub fn app() -> App {
             fleet: FleetStripState::default(),
             model: ModelDraft::default(),
             trajectory: TrajectoryPaneState::default(),
-            worktree_list: ListPaneState::default(),
-            worktree_level: Cell::new(0),
+            worktree_pane: Default::default(),
             displayed_tokens: Cell::new(0),
             last_title: None,
             selection: Selections::default(),

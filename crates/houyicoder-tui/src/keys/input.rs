@@ -195,7 +195,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
         // instead of the whole pane (the pane owns its tab bar).
         KeyCode::Tab if app.ui.navigation.pane == Pane::Status => {
-            app.ui.navigation.status_tab = app.ui.navigation.status_tab.next()
+            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.next()
         }
         KeyCode::Tab
             if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
@@ -208,8 +208,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // the palette-style input path stays the fallback elsewhere.
         KeyCode::Char('e')
             if app.ui.navigation.pane == Pane::Status
-                && app.ui.navigation.status_tab == StatusTab::Status
-                && app.ui.navigation.status_name_edit.is_none()
+                && app.ui.navigation.status_pane.tab == StatusTab::Status
+                && app.ui.navigation.status_pane.name_edit.is_none()
                 && app.ui.input.editor.is_empty() =>
         {
             app.enter_status_name_edit();
@@ -281,10 +281,10 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // Config, Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.
         KeyCode::Left if app.ui.navigation.pane == Pane::Status => {
-            app.ui.navigation.status_tab = app.ui.navigation.status_tab.prev()
+            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.prev()
         }
         KeyCode::Right if app.ui.navigation.pane == Pane::Status => {
-            app.ui.navigation.status_tab = app.ui.navigation.status_tab.next()
+            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.next()
         }
         KeyCode::Esc if app.ui.navigation.pane == Pane::Status => {
             app.ui.navigation.pane = Pane::Transcript;

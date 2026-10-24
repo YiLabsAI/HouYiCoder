@@ -29,14 +29,14 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let entries = &app.sessions.current.capabilities.worktree.entries;
     let n = entries.len();
     // Level 1 detail (Enter on the list opens this).
-    if app.ui.worktree_level.get() == 1 && n > 0 {
-        let cur = app.ui.worktree_list.cursor.min(n.saturating_sub(1));
+    if app.ui.worktree_pane.level.get() == 1 && n > 0 {
+        let cur = app.ui.worktree_pane.list.cursor.min(n.saturating_sub(1));
         if let Some(e) = entries.get(cur) {
             draw_detail(f, area, e);
             return;
         }
     }
-    let searching = app.ui.worktree_list.searching();
+    let searching = app.ui.worktree_pane.list.searching();
     let search_h: u16 = if searching { 1 } else { 0 };
     // Header + optional search hint + scrollable list + fixed footer. The
     // list is a stateful List widget (not a Paragraph dump) so the cursor
@@ -60,16 +60,17 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     );
     if searching {
         f.render_widget(
-            Paragraph::new(search_hint_line(&app.ui.worktree_list.query))
+            Paragraph::new(search_hint_line(&app.ui.worktree_pane.list.query))
                 .style(Style::new().fg(Color::DarkGray)),
             chunks[1],
         );
     }
-    let filtered_idx: Vec<usize> =
-        filter_by_query(entries, &app.ui.worktree_list.query, |e: &WorktreeEntry| {
-            vec![&e.path, &e.branch]
-        });
-    let cur = app.ui.worktree_list.cursor.min(n.saturating_sub(1));
+    let filtered_idx: Vec<usize> = filter_by_query(
+        entries,
+        &app.ui.worktree_pane.list.query,
+        |e: &WorktreeEntry| vec![&e.path, &e.branch],
+    );
+    let cur = app.ui.worktree_pane.list.cursor.min(n.saturating_sub(1));
     if filtered_idx.is_empty() {
         let msg = if entries.is_empty() {
             "  (no worktrees; run from a git repo or add one with enter_worktree)"
@@ -97,7 +98,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             &mut state,
         );
     }
-    let footer = if app.ui.worktree_level.get() == 1 {
+    let footer = if app.ui.worktree_pane.level.get() == 1 {
         key_hint(&[("e", "enter"), ("Esc", "back")])
     } else {
         key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])

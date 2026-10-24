@@ -8,7 +8,6 @@ use houyicoder_protocol::frontend::permission::PermissionMode;
 use super::render::permission_effect_label;
 use super::render::render_permission_view;
 use crate::agent_message::ClientCommand;
-use crate::permission_input::{add_rule_from_command, remove_rule_at};
 use crate::state::{App, Pane};
 
 impl App {
@@ -90,13 +89,13 @@ impl App {
 
     /// Add a rule through the same parser used by the permission pane.
     fn add_permission_rule(&mut self, action: &str, effect: &str) {
-        add_rule_from_command(self, action, effect);
+        self.add_rule_from_command(action, effect);
     }
 
     /// Remove a rule through the same path used by the permission pane.
     fn remove_permission_rule(&mut self, idx: &str) {
         match idx.parse::<usize>() {
-            Ok(i) => remove_rule_at(self, i),
+            Ok(i) => self.remove_rule_at(i),
             Err(_) => self.system_line("permission: usage /permissions del <idx>".to_string()),
         }
     }

@@ -12,7 +12,7 @@ use crate::state::App;
 /// move the caret. Returns nothing; the caller returns after this (the
 /// editor is a focused input mode that swallows all keys).
 pub(super) fn handle_status_name_edit(app: &mut App, k: KeyEvent) {
-    let Some(field) = app.ui.navigation.status_name_edit.as_mut() else {
+    let Some(field) = app.ui.navigation.status_pane.name_edit.as_mut() else {
         return;
     };
     match k.code {

@@ -535,7 +535,7 @@ fn test_worktree_pane_scroll() {
         })
         .collect();
     app.sessions.current.capabilities.worktree.entries = entries;
-    app.ui.worktree_list.cursor = 19;
+    app.ui.worktree_pane.list.cursor = 19;
     let out = render(&app);
     assert!(
         out.contains("branch19"),
@@ -585,7 +585,7 @@ fn test_worktree_pane_detail() {
         is_current: true,
         ..Default::default()
     }];
-    app.ui.worktree_level.set(1);
+    app.ui.worktree_pane.level.set(1);
     let out = render(&app);
     assert!(out.contains("Worktree:"), "detail title: {out}");
     assert!(

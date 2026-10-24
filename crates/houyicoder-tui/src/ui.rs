@@ -46,7 +46,15 @@ use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
 use crate::state::{ParkedViewStates, Stage, TrajectoryPaneState, ViewportMode};
 
-pub use crate::ui::navigation::Navigation;
+pub use crate::ui::navigation::{Navigation, StatusPaneState};
+
+/// The /worktrees pane state: the list cursor and search query plus the
+/// drill-down level (0 = list, 1 = detail).
+#[derive(Default)]
+pub struct WorktreePaneState {
+    pub list: ListPaneState,
+    pub level: Cell<u8>,
+}
 
 /// Presentation and interaction state for the visible frontend: navigation,
 /// input, the transcript and pane view states, the verbose render flag, the
@@ -125,10 +133,8 @@ pub struct Ui {
     /// for the pane's position, because the selection and the cursor are kept
     /// consistent by the same transitions.
     pub trajectory: TrajectoryPaneState,
-    /// Cursor + search query for the /worktrees pane.
-    pub worktree_list: ListPaneState,
-    /// /worktrees pane drill-down: 0 = list, 1 = detail.
-    pub worktree_level: Cell<u8>,
+    /// The /worktrees pane list cursor, search query, and drill-down level.
+    pub worktree_pane: WorktreePaneState,
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,
@@ -201,8 +207,7 @@ impl Ui {
         self.navigation.reset_for_session_switch();
         self.transcript_view = Default::default();
         self.verbose = false;
-        self.worktree_list = Default::default();
-        self.worktree_level = Cell::new(0);
+        self.worktree_pane = Default::default();
         self.trajectory = Default::default();
         self.agents_pane = Default::default();
         self.notifications = Default::default();
