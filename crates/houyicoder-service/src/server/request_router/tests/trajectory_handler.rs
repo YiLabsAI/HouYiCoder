@@ -513,4 +513,26 @@ async fn test_write_request_refused() {
         resp.contains("waits for the running turn"),
         "the refusal says why: {resp}"
     );
+
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(12),
+                FrontendRequest::ModelSet {
+                    model: Some("gpt-5".into()),
+                    effort: None,
+                    effort_toggled: false,
+                    speed: None,
+                },
+            ),
+        )
+        .await;
+    let model_resp = client_rx
+        .try_recv()
+        .expect("a model selection mid-run is answered");
+    assert!(
+        model_resp.contains("model_result"),
+        "model selection returns a model result: {model_resp}"
+    );
 }

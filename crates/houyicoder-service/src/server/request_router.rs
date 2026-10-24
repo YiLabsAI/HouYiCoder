@@ -20,6 +20,7 @@ use houyicoder_protocol::frontend::trajectory::TrajectoryResponse;
 use houyicoder_protocol::llm::EffortLevel;
 use pa::hooks::declared_events;
 use pa::hooks::hook_entries;
+use pa::permission_mode_to_wire;
 use pa::redundancy::map_redundant_entries;
 use pa::skills::skill_entries;
 use std::collections::HashSet;
@@ -80,7 +81,7 @@ impl Server {
     /// Route a read-only or state-scoped request: panes, catalog listings,
     /// model selection, memory, and permission management. Separated from the
     /// run verbs so each router stays a readable dispatch table.
-    pub(super) async fn dispatch_query(
+    async fn dispatch_query(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
@@ -208,7 +209,7 @@ impl Server {
         self.handle_message_send(io, req_id, content).await
     }
 
-    pub(super) async fn dispatch_run_cancel(
+    async fn dispatch_run_cancel(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
@@ -380,6 +381,111 @@ impl Server {
         self.event_sequencer.reset_sequencer();
         self.send_response(io, req_id, ResponsePayload::Ack).await
     }
+
+    /// Route a request received while a turn is running.
+    ///
+    /// Payloads that read state or take effect at the next boundary are
+    /// answered directly; payloads that mutate the conversation or workspace
+    /// are answered with an error so the client never blocks waiting for a
+    /// dropped request.
+    pub(super) async fn handle_request_during_run(
+        &mut self,
+        io: &mut FrameCarrier,
+        req: RequestEnvelope,
+    ) {
+        let req_id = req.req_id;
+        match req.payload {
+            FrontendRequest::PermissionCycleMode => {
+                let payload = match self.gate.tab_cycle() {
+                    Ok(mode) => ResponsePayload::PermissionMode(permission_mode_to_wire(mode)),
+                    Err(e) => ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
+                        format!("permission mode cycle refused: {e}"),
+                        true,
+                    )),
+                };
+                drop(self.send_response(io, req_id, payload).await);
+            }
+            FrontendRequest::RunCancel { session_id, .. } => {
+                if let Err(e) = self.dispatch_run_cancel(io, req_id, session_id).await {
+                    drop(
+                        self.send_response(io, req_id, ResponsePayload::Error(e))
+                            .await,
+                    );
+                }
+            }
+            FrontendRequest::ModelSet {
+                model,
+                effort,
+                effort_toggled,
+                speed,
+            } => {
+                let result = self
+                    .apply_model_selection(ModelSelection {
+                        model,
+                        effort,
+                        effort_toggled,
+                        speed,
+                        effective_from: EffectiveFrom::NextRequest,
+                    })
+                    .await;
+                drop(
+                    self.send_response(io, req_id, ResponsePayload::ModelResult(result))
+                        .await,
+                );
+            }
+            payload if reads_state_during_run(&payload) => {
+                if let Err(e) = self.dispatch_query(io, req_id, payload).await {
+                    drop(
+                        self.send_response(io, req_id, ResponsePayload::Error(e))
+                            .await,
+                    );
+                }
+            }
+            _ => {
+                drop(
+                    self.send_response(
+                        io,
+                        req_id,
+                        ResponsePayload::Error(ProtocolError::new(
+                            ErrorCategory::InvalidRequest,
+                            "this request waits for the running turn to finish",
+                            true,
+                        )),
+                    )
+                    .await,
+                );
+            }
+        }
+    }
+}
+
+/// Whether a request only reads state, or writes state a running turn does not
+/// read, so answering it mid-run cannot race the turn.
+fn reads_state_during_run(payload: &FrontendRequest) -> bool {
+    matches!(
+        payload,
+        FrontendRequest::Status
+            | FrontendRequest::SandboxStatus
+            | FrontendRequest::Metrics
+            | FrontendRequest::Context
+            | FrontendRequest::Trajectory
+            | FrontendRequest::Agents
+            | FrontendRequest::Worktree
+            | FrontendRequest::ToolList
+            | FrontendRequest::Hooks
+            | FrontendRequest::Skills
+            | FrontendRequest::SkillBody { .. }
+            | FrontendRequest::MemoryList
+            | FrontendRequest::MemoryShow { .. }
+            | FrontendRequest::MemoryToggleState
+            | FrontendRequest::ModelInfo
+            | FrontendRequest::ChildTranscript { .. }
+            | FrontendRequest::RenameSession { .. }
+            | FrontendRequest::PermissionMode
+            | FrontendRequest::PermissionRules
+            | FrontendRequest::PermissionAskBeforeGit { .. }
+    )
 }
 
 #[cfg(test)]

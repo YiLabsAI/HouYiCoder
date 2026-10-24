@@ -59,10 +59,11 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast::error::RecvError;
 
-/// Request routing plus the per-domain request handlers.
+/// Request routing plus the per-domain request and notification handlers.
 mod capability_handler;
 mod context_handler;
 mod memory_handler;
+mod notification_handler;
 mod permission_handler;
 mod request_router;
 mod status_handler;
@@ -73,10 +74,6 @@ mod debug_dispatch;
 /// Status-snapshot descriptor attachers: env/config display fields + the
 /// per-model usage view.
 mod status_view;
-
-/// Mid-run + between-run session-notification + permission-mode-cycle
-/// helpers.
-mod notif;
 
 /// The one place a model pick is applied: the between-runs dispatch and the
 /// mid-run request handler both route through it, so a switch takes the same

@@ -1,4 +1,4 @@
-//! Tests for this module.
+//! Tests for in-flight turn control and session notifications.
 
 use super::*;
 use houyicoder_api::provider::ModelProvider;
@@ -43,8 +43,7 @@ async fn test_inject_child_no_runtime() {
 
 /// A session/cancel_child_turn notification routes to the runner's
 /// cancel_child. No spawn handle on a single-agent server, so the call
-/// is a no-op (no panic). Pins the wire-method routing so a rename
-/// makes the abort silently no-op (red).
+/// is a no-op (no panic).
 #[tokio::test]
 async fn test_cancel_child_routes() {
     let server = server_no_runtime();
@@ -92,6 +91,39 @@ async fn test_kill_all_routes() {
     let server = server_no_runtime();
     server.handle_session_notification(&AcpNotification::new(
         "session/kill_all",
+        serde_json::json!({}),
+    ));
+}
+
+#[tokio::test]
+async fn test_session_control_notifications() {
+    let server = server_no_runtime();
+    server.handle_session_notification(&AcpNotification::new(
+        "session/cancel",
+        serde_json::json!({}),
+    ));
+    server.handle_session_notification(&AcpNotification::new(
+        "session/inject",
+        serde_json::json!({ "text": "follow up" }),
+    ));
+    server.handle_session_notification(&AcpNotification::new(
+        "session/queue_remove",
+        serde_json::json!({ "text": "follow up" }),
+    ));
+    server.handle_session_notification(&AcpNotification::new(
+        "session/queue_remove",
+        serde_json::json!({}),
+    ));
+    server.handle_session_notification(&AcpNotification::new(
+        "session/inject_child",
+        serde_json::json!({}),
+    ));
+    server.handle_session_notification(&AcpNotification::new(
+        "session/inject_child",
+        serde_json::json!({ "childSid": "c1", "text": "" }),
+    ));
+    server.handle_session_notification(&AcpNotification::new(
+        "session/unknown",
         serde_json::json!({}),
     ));
 }
