@@ -22,7 +22,7 @@ ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/app/state.rs:App": {
         # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it.
         "fields": 3,
-        "mut_app": 44,
+        "mut_app": 38,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
         # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame.
