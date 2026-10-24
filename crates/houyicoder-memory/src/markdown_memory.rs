@@ -239,7 +239,7 @@ impl MarkdownMemoryProvider {
                     None => true,
                     Some(e) => {
                         let existing_rank = u8::from(!self.is_explicit_scope(e.root_index));
-                        (rank, t.mtime) < (existing_rank, e.mtime)
+                        (rank, Reverse(t.mtime)) < (existing_rank, Reverse(e.mtime))
                     }
                 };
                 if keep {

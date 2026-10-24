@@ -6,7 +6,9 @@
 use super::*;
 use crate::agent::context::AssemblyInput;
 use houyicoder_context::SessionEvent;
-use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
+use houyicoder_protocol::llm::{
+    CompletionResponse, ModelCapabilities, OutputItem, ProviderError, ToolDef,
+};
 use houyicoder_protocol::llm::{LlmEvent, Usage, UsageProvenance};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
@@ -743,39 +745,40 @@ async fn test_break_names_prefix_half() {
     write(a.join("AGENTS.md"), "# Rules A\n\nrules a.").expect("write a");
     write(b.join("AGENTS.md"), "# Rules B\n\nrules b.").expect("write b");
 
+    let prov = UsageProvenance {
+        input_reported: true,
+        cache_read_reported: true,
+        ..UsageProvenance::default()
+    };
     let high = Usage {
         cache_read_input_tokens: 8000,
         input_tokens: 8000,
-        provenance: UsageProvenance {
-            input_reported: true,
-            cache_read_reported: true,
-            ..UsageProvenance::default()
-        },
+        provenance: prov,
         ..Usage::default()
     };
     let zero = Usage {
-        provenance: UsageProvenance {
-            input_reported: true,
-            cache_read_reported: true,
-            ..UsageProvenance::default()
-        },
+        provenance: prov,
         ..Usage::default()
+    };
+
+    let build_tools = |tools: &[ToolDef]| {
+        runner.context_builder.build_for_turn(
+            &[],
+            None,
+            None,
+            &AssemblyInput {
+                tool_defs: tools,
+                memory_index: None,
+                announced_skills: &[],
+                discovered_skills: &[],
+            },
+        );
     };
 
     // First turn against prefix A.
     runner.context_builder.switch_cwd(a.clone());
     runner.context_builder.reset_frozen_prompt();
-    runner.context_builder.build_for_turn(
-        &[],
-        None,
-        None,
-        &AssemblyInput {
-            tool_defs: &[],
-            memory_index: None,
-            announced_skills: &[],
-            discovered_skills: &[],
-        },
-    );
+    build_tools(&[]);
     runner
         .append_turn_usage(session, "test", &high, false, None)
         .await
@@ -784,36 +787,60 @@ async fn test_break_names_prefix_half() {
     // Second turn: the system prompt half changed, the tools half did not.
     runner.context_builder.switch_cwd(b.clone());
     runner.context_builder.reset_frozen_prompt();
-    runner.context_builder.build_for_turn(
-        &[],
-        None,
-        None,
-        &AssemblyInput {
-            tool_defs: &[],
-            memory_index: None,
-            announced_skills: &[],
-            discovered_skills: &[],
-        },
-    );
+    build_tools(&[]);
+    runner
+        .append_turn_usage(session, "test", &zero, false, None)
+        .await
+        .unwrap();
+
+    // Third turn: restore high cache, then change tool definitions only.
+    runner
+        .append_turn_usage(session, "test", &high, false, None)
+        .await
+        .unwrap();
+    let tool = ToolDef {
+        name: "extra_tool".into(),
+        description: "desc".into(),
+        input_schema: serde_json::json!({"type": "object"}),
+    };
+    build_tools(&[tool]);
+    runner
+        .append_turn_usage(session, "test", &zero, false, None)
+        .await
+        .unwrap();
+
+    // Fourth turn: restore high cache with identical prefix, then age the
+    // previous timestamp past the 5-minute TTL window.
+    runner
+        .append_turn_usage(session, "test", &high, false, None)
+        .await
+        .unwrap();
+    if let Ok(mut slot) = runner.cache_prev_prefix.lock()
+        && let Some((_, ts)) = slot.as_mut()
+    {
+        *ts = ts.saturating_sub(301_000);
+    }
     runner
         .append_turn_usage(session, "test", &zero, false, None)
         .await
         .unwrap();
 
     let events = runner.store().replay(session).await.unwrap();
-    assert!(
-        events.iter().any(|e| matches!(
-            &e.event,
-            SessionEvent::CacheBreak { cause } if cause == "system-prompt-changed"
-        )),
-        "a changed system prompt is named as such: {:?}",
-        events
-            .iter()
-            .filter_map(|e| match &e.event {
-                SessionEvent::CacheBreak { cause } => Some(cause.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
+    let causes: Vec<String> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            SessionEvent::CacheBreak { cause } => Some(cause.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        causes,
+        vec![
+            "system-prompt-changed".to_string(),
+            "tools-changed".to_string(),
+            "ttl-expired".to_string(),
+        ],
+        "each prefix or TTL break is attributed to its specific cause"
     );
     remove_dir_all(&root).ok();
 }

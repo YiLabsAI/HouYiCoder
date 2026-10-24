@@ -445,4 +445,24 @@ fn test_scope_beats_newer_auto() {
         first.key, "rule-priority",
         "the explicit-scope row sorts ahead of the automatic one"
     );
+
+    // Within explicit scopes (User vs Project), the newer modification time
+    // wins: an older User copy must not shadow a newer Project copy.
+    let user_entry = fx.entry("rule-priority", "Older user sentence.\nWhy: older.\n");
+    fx.provider
+        .add_in_scope(user_entry, MemoryScope::User)
+        .expect("user seed");
+    let user_path = fx.user_root.join("rule-priority.md");
+    OpenOptions::new()
+        .write(true)
+        .open(&user_path)
+        .expect("open user copy")
+        .set_modified(older - Duration::from_secs(3600))
+        .expect("stamp user copy older than project copy");
+    let shown_explicit = fx.provider.show_memory("rule-priority").expect("body");
+    assert!(
+        shown_explicit.content.contains("Promoted rule sentence."),
+        "newer explicit Project copy beats older explicit User copy: {}",
+        shown_explicit.content
+    );
 }

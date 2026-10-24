@@ -10,7 +10,11 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use super::Runner;
-use crate::agent::cache_liveness::CACHE_TTL_MS;
+
+/// Ephemeral prompt-cache time-to-live (5 minutes in milliseconds). When the
+/// prefix is unchanged and the gap since the previous response is at least
+/// this long, a cache miss is explained by provider TTL expiry.
+const EPHEMERAL_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
 
 impl Runner {
     /// Name what broke the cached prefix.
@@ -39,7 +43,7 @@ impl Runner {
             }
             // The prefix is identical, so the miss is the provider letting
             // its cache expire while the session sat idle.
-            if now_millis().saturating_sub(previous_at) >= CACHE_TTL_MS {
+            if now_millis().saturating_sub(previous_at) >= EPHEMERAL_CACHE_TTL_MS {
                 return Some("ttl-expired");
             }
         }
