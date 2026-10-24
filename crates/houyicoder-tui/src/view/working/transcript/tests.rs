@@ -10,7 +10,7 @@ use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
 use crate::transcript::TranscriptFrame;
-use crate::view::working::transcript::truncate_call_keeping_paren;
+use crate::view::working::transcript::truncate_call_with_paren;
 
 use super::super::tail_rows::build_tail_rows;
 
@@ -314,7 +314,7 @@ mod scrollback;
 #[test]
 fn test_cut_keeps_paren() {
     let row = "\u{25cf} Bash(cd /work/repo && cargo nextest run -p houyicoder-core)";
-    let cut = truncate_call_keeping_paren(row, 24);
+    let cut = truncate_call_with_paren(row, 24);
     assert!(
         cut.ends_with(')'),
         "the closing paren must survive the cut: [{cut}]"
@@ -330,9 +330,9 @@ fn test_cut_keeps_paren() {
 #[test]
 fn test_cut_leaves_other_rows() {
     assert_eq!(
-        truncate_call_keeping_paren("Working\u{2026} 12s", 40),
+        truncate_call_with_paren("Working\u{2026} 12s", 40),
         "Working\u{2026} 12s"
     );
-    assert_eq!(truncate_call_keeping_paren("Bash(ls)", 40), "Bash(ls)");
-    assert_eq!(truncate_call_keeping_paren("Bash(ls)", 0), "");
+    assert_eq!(truncate_call_with_paren("Bash(ls)", 40), "Bash(ls)");
+    assert_eq!(truncate_call_with_paren("Bash(ls)", 0), "");
 }

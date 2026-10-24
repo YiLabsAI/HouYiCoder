@@ -20,7 +20,7 @@
 //! shared DRIFT_VECTOR duplicated in both crates' tests.
 
 use crate::compound::strip_safe_redirects;
-use crate::pipeline::detection::interpreter_inline_code;
+use crate::pipeline::detection::expand_inline_interpreter;
 
 /// The git subcommand word for a discard form, for session-scoped consent.
 /// Returns None for a non-discard (a branch switch, an unstage, a stash save,
@@ -110,8 +110,8 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
     if content.is_empty() {
         return Vec::new();
     }
-    let scan = interpreter_inline_code(content).unwrap_or(content);
-    let cleaned = strip_safe_redirects(scan);
+    let expanded = expand_inline_interpreter(content);
+    let cleaned = strip_safe_redirects(&expanded);
     let lower_scan = cleaned.to_ascii_lowercase();
     let mut ops = Vec::new();
     for segment in lower_scan.split(['&', ';', '|', '\n', '(', ')', '`']) {

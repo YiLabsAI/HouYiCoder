@@ -208,7 +208,7 @@ impl Server {
         self.handle_message_send(io, req_id, content).await
     }
 
-    async fn dispatch_run_cancel(
+    pub(super) async fn dispatch_run_cancel(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,

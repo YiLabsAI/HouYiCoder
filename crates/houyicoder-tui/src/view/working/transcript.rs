@@ -299,7 +299,7 @@ fn rendered_tool_rows(
         let keep = (width as usize).saturating_sub(suffix_width);
         *last = format!(
             "{}{}",
-            truncate_call_keeping_paren(last, keep),
+            truncate_call_with_paren(last, keep),
             truncate_width(&suffix, width as usize)
         );
     }
@@ -310,7 +310,7 @@ fn rendered_tool_rows(
 /// that closes the call's argument list. Cutting the line at the budget would
 /// otherwise leave the row reading as an unclosed call, which looks like a
 /// rendering fault rather than a shortened command.
-fn truncate_call_keeping_paren(line: &str, keep: usize) -> String {
+fn truncate_call_with_paren(line: &str, keep: usize) -> String {
     let cut = truncate_width(line, keep);
     if !line.ends_with(')') || cut.ends_with(')') || keep == 0 {
         return cut;

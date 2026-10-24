@@ -751,7 +751,7 @@ fn test_render_labels_subagent_ask() {
 
 /// A parent's own ask carries no subagent marker.
 #[test]
-fn test_render_parent_ask_unlabelled() {
+fn test_render_parent_ask_plain() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(

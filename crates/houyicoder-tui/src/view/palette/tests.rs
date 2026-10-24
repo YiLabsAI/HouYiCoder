@@ -123,7 +123,7 @@ fn test_help_truncated_to_budget() {
 
 /// A help that fits is shown whole, with no ellipsis.
 #[test]
-fn test_short_help_uncut() {
+fn test_short_help_whole() {
     let line = format_one(SlashCommand::Help, 200);
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(

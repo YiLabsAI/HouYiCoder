@@ -450,7 +450,7 @@ async fn test_cancel_request_served() {
             RequestEnvelope::new(
                 RequestId(10),
                 FrontendRequest::RunCancel {
-                    session_id: houyicoder_protocol::frontend::SessionId("s".into()),
+                    session_id: houyicoder_protocol::frontend::SessionId(session.to_string()),
                     reason: "user asked".into(),
                 },
             ),
@@ -458,12 +458,28 @@ async fn test_cancel_request_served() {
         .await;
     let resp = client_rx.try_recv().expect("a cancel is answered");
     assert!(
-        resp.contains("cancelled"),
-        "the answer says the cancel was taken: {resp}"
+        resp.contains("\"type\":\"ack\""),
+        "a matching session cancel returns ack: {resp}"
     );
+
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(11),
+                FrontendRequest::RunCancel {
+                    session_id: houyicoder_protocol::frontend::SessionId("wrong".into()),
+                    reason: "user asked".into(),
+                },
+            ),
+        )
+        .await;
+    let mismatch = client_rx
+        .try_recv()
+        .expect("a mismatched cancel is answered");
     assert!(
-        !resp.contains("waits for the running turn"),
-        "a cancel must not be deferred: {resp}"
+        mismatch.contains("session id mismatch"),
+        "a wrong session id is refused: {mismatch}"
     );
 }
 
@@ -471,7 +487,7 @@ async fn test_cancel_request_served() {
 /// dropped. The client blocks on a response for every request it sends, so a
 /// dropped one is indistinguishable from a hung server.
 #[tokio::test]
-async fn test_mutating_request_refused() {
+async fn test_write_request_refused() {
     let runner = stub_runner();
     let session = houyicoder_context::SessionId::new();
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);

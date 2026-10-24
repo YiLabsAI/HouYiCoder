@@ -171,7 +171,7 @@ fn test_banner_hint_follows_state() {
 /// A multi-line prompt with markdown headings stays one row: a heading drawn
 /// where the banner expects prose pushes the hint off the line.
 #[test]
-fn test_banner_prompt_flattened() {
+fn test_banner_prompt_single_line() {
     let mut app = app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.teammate_view = Some(TeammateView {

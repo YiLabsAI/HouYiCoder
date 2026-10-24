@@ -568,24 +568,30 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
 }
 
 /// The sum of each turn's own span, from the event that opened it to the last
-/// event it carried. A turn opened by anything other than a user input (a log
-/// that starts mid-run) is counted too, so the total covers every row the list
-/// draws. None when the log carried no event to measure.
+/// content event it carried. Between-turn boundaries (context clear and
+/// compaction) do not extend the finished turn before them, so an overnight
+/// gap followed by a clear or compaction never inflates the session total.
+/// None when the log carried no event to measure.
 fn active_turn_ms(events: &[SessionLogEntry]) -> Option<u64> {
     let mut total = 0u64;
     let mut open: Option<(u64, u64, u64)> = None;
     for ev in events {
-        if matches!(ev.event, SessionEvent::UserInput { .. }) {
-            if let Some((start, last, reported)) = open.take() {
-                total += last.saturating_sub(start).max(reported);
+        match &ev.event {
+            SessionEvent::UserInput { .. } => {
+                if let Some((start, last, reported)) = open.take() {
+                    total += last.saturating_sub(start).max(reported);
+                }
+                open = Some((ev.ts, ev.ts, 0));
             }
-            open = Some((ev.ts, ev.ts, 0));
-            continue;
-        }
-        let entry = open.get_or_insert((ev.ts, ev.ts, 0));
-        entry.1 = entry.1.max(ev.ts);
-        if let SessionEvent::RunCompleted { ms: Some(ms) } = ev.event {
-            entry.2 = ms;
+            SessionEvent::ContextCleared { .. } | SessionEvent::CompactionBoundary { .. } => {}
+            SessionEvent::RunCompleted { ms: Some(ms) } => {
+                let entry = open.get_or_insert((ev.ts, ev.ts, 0));
+                entry.2 = *ms;
+            }
+            _ => {
+                let entry = open.get_or_insert((ev.ts, ev.ts, 0));
+                entry.1 = entry.1.max(ev.ts);
+            }
         }
     }
     if let Some((start, last, reported)) = open {

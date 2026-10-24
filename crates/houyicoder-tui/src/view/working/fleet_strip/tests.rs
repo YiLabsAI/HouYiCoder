@@ -368,7 +368,7 @@ fn test_running_row_shows_elapsed() {
 /// not working, it is stopped waiting for the user, and a row that keeps
 /// saying "building" hides why nothing is moving.
 #[test]
-fn test_row_shows_awaiting_approval() {
+fn test_row_shows_waiting_approval() {
     let e = FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "verify".into(),

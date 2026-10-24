@@ -20,7 +20,9 @@ use crate::compound::is_effect_safe;
 use crate::compound::is_readonly_compound;
 use crate::compound::is_temp_output_target;
 use crate::compound::normalize_shell_command;
+use crate::compound::sets_tmpdir;
 use crate::compound::split_compound;
+use crate::compound::starts_with_supported_command;
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
 
@@ -135,7 +137,9 @@ pub fn egress_scope_list(command: &str, fenced: bool) -> Option<Vec<String>> {
 /// permission to open a local output file outside the session's own scratch
 /// space, because the fence is what keeps that write inside the session.
 pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
+    let can_use_temp = fenced && !sets_tmpdir(command);
     let normalized = normalize_shell_command(command);
+    let mut preceding_supported = true;
     for clause in split_clauses(&normalized) {
         for stage in split_compound(&clause) {
             let words = shell_words(stage.trim());
@@ -144,8 +148,10 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
             };
             let program = strip_quotes(first);
             if !EGRESS_TOOLS.contains(&program) {
+                preceding_supported = preceding_supported && starts_with_supported_command(&stage);
                 continue;
             }
+            let allow_temp = can_use_temp && preceding_supported;
             let mut document_output = program == "curl";
             let mut idx = 1;
             while idx < words.len() {
@@ -155,7 +161,7 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
                     .or_else(|| w.strip_prefix("--output-document="))
                 {
                     let v = strip_quotes(val);
-                    if !output_target_safe(v, fenced) {
+                    if !output_target_safe(v, allow_temp) {
                         return false;
                     }
                     document_output = true;
@@ -164,7 +170,7 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
                         return false;
                     }
                     let v = words.get(idx + 1).map(|s| strip_quotes(s)).unwrap_or("");
-                    if !output_target_safe(v, fenced) {
+                    if !output_target_safe(v, allow_temp) {
                         return false;
                     }
                     if program == "wget" && w == "-o" {

@@ -114,6 +114,11 @@ fn test_fenced_temp_escapes_ask() {
         "name=TMP; name=$name'DIR'; pri'ntf' -v \"$name\" /work/repo; rm -rf \"$TMPDIR/src\"",
         "python3 -c 'import os;os.symlink(\"a\",\"b\")'; printf changed > \"$TMPDIR/created.log\"",
         "ln -s /work/repo/src \"$TMPDIR/link\"; printf changed > \"$TMPDIR/link\"",
+        "python3 -c 'import os;os.symlink(\"a\",\"b\")'; curl -sS https://docs.rs/ -o \"$TMPDIR/created.log\"",
+        "python3 -c 'print(1)'; rm -rf /work/repo/src",
+        "python3 -c 'print(1)'; git reset --hard",
+        "ln -s /work/repo/src \"$TMPDIR/link\"; curl -sS https://docs.rs/ -o \"$TMPDIR/link\"",
+        "COV_DIR=TMP; COV_DIR=$COV_DIR'DIR'; getopts a \"$COV_DIR\" -a; curl -sS https://docs.rs/ -o \"$TMPDIR/out.log\"",
         "rm -rf \"$TMPDIR/../escape\"",
         "rm -rf /work/repo/src",
     ] {

@@ -13,7 +13,7 @@
 //! attribute in quoted code survives.
 
 /// Remove terminal control sequences from text headed for a character cell.
-pub fn strip_ansi_codes(text: &str) -> String {
+pub fn strip_ansi(text: &str) -> String {
     if !may_carry_control(text) {
         return text.to_string();
     }
@@ -26,7 +26,7 @@ pub fn strip_ansi_codes(text: &str) -> String {
             continue;
         }
         if bytes[i] == b'['
-            && let Some(end) = orphan_colour_fragment(bytes, i)
+            && let Some(end) = orphan_color_fragment(bytes, i)
         {
             i = end;
             continue;
@@ -78,11 +78,11 @@ fn skip_escape(bytes: &[u8], i: usize) -> usize {
     }
 }
 
-/// If a colour fragment without its escape byte starts at i, the index just
+/// If a color fragment without its escape byte starts at i, the index just
 /// past it. Only digits and semicolons are accepted between the brackets, and
-/// the run must end in the colour terminator, so an array index or an
+/// the run must end in the color terminator, so an array index or an
 /// attribute in quoted code is left alone.
-fn orphan_colour_fragment(bytes: &[u8], i: usize) -> Option<usize> {
+fn orphan_color_fragment(bytes: &[u8], i: usize) -> Option<usize> {
     let mut j = i + 1;
     let mut digits = 0usize;
     while j < bytes.len() {

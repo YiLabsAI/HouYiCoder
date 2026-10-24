@@ -96,12 +96,16 @@ pub(super) fn handle_focused(
         }
         KeyCode::Enter => FleetKey::Open(entries[current].agent_id.clone()),
         KeyCode::Esc => FleetKey::Leave,
-        // A printable character belongs to the draft. Leaving the strip here
-        // is what makes typing a correction feel like typing, not like
-        // fighting a widget that swallowed the first character.
-        KeyCode::Char(_) => FleetKey::PassThrough,
-        // A navigation key the strip has no meaning for (Left, Home, Tab)
-        // stays put: it is not typing, and it is not a way out.
+        // A printable character or an edit/cursor key belongs to the draft.
+        // Leaving the strip here is what makes typing or editing a draft feel
+        // natural rather than fighting a widget that swallowed the keystroke.
+        KeyCode::Char(_)
+        | KeyCode::Backspace
+        | KeyCode::Delete
+        | KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Home
+        | KeyCode::End => FleetKey::PassThrough,
         _ => FleetKey::Stay,
     }
 }
@@ -132,11 +136,11 @@ impl App {
         match decision {
             FleetKey::Stay => true,
             FleetKey::PassThrough | FleetKey::Leave => {
-                self.ui.fleet.unfocus();
+                self.ui.fleet.clear_focus();
                 !matches!(decision, FleetKey::PassThrough)
             }
             FleetKey::Open(sid) => {
-                self.ui.fleet.unfocus();
+                self.ui.fleet.clear_focus();
                 self.enter_teammate_view_for_sid(&sid, true);
                 true
             }

@@ -77,7 +77,7 @@ pub fn is_effect_safe(command: &str, fenced: bool) -> bool {
     check_compound_depth(&stripped, MAX_DEPTH, fenced)
 }
 
-fn sets_tmpdir(command: &str) -> bool {
+pub(crate) fn sets_tmpdir(command: &str) -> bool {
     if command.contains("+=") {
         return true;
     }
@@ -179,7 +179,7 @@ fn check_compound_depth(command: &str, depth: u8, fenced: bool) -> bool {
 /// Whether a segment starts with a command whose effect a fenced session can
 /// predict. A segment whose first word is unknown is not proof of danger, but
 /// it is not proof of safety either, so it cannot precede a temporary write.
-fn starts_with_supported_command(segment: &str) -> bool {
+pub(crate) fn starts_with_supported_command(segment: &str) -> bool {
     command_word(segment).is_some_and(|w| SUPPORTED_EFFECT_COMMANDS.contains(&w.as_str()))
 }
 

@@ -4,7 +4,7 @@
 //! shell one-liners so the row stays one-glance. Kept here so records.rs
 //! stays under the file-size gate.
 
-use houyicoder_protocol::tool::{strip_ansi_codes, tool_invocation};
+use houyicoder_protocol::tool::{strip_ansi, tool_invocation};
 use serde_json::Value;
 
 /// Truncate a JSON value to a short status string for the transcript. Tool
@@ -14,8 +14,8 @@ use serde_json::Value;
 /// not panic on the byte boundary.
 pub(crate) fn value_brief(v: &Value) -> String {
     let s = match v {
-        Value::String(s) => strip_ansi_codes(s),
-        _ => strip_ansi_codes(&v.to_string()),
+        Value::String(s) => strip_ansi(s),
+        _ => strip_ansi(&v.to_string()),
     };
     if s.chars().count() > 60 {
         let kept: String = s.chars().take(57).collect();
@@ -40,7 +40,7 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
     match tool {
         "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "save_memory"
         | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory"
-        | "search_memory" => truncate_call_arg(&strip_ansi_codes(&tool_invocation(tool, input))),
+        | "search_memory" => truncate_call_arg(&strip_ansi(&tool_invocation(tool, input))),
         "agent" => {
             let st = input
                 .get("subagent_type")
@@ -271,7 +271,7 @@ fn save_memory_label(output: &Value) -> &'static str {
 /// machine-readable key (and for show_memory, the full entry body); the
 /// transcript collapses to a human label via MEMORY_LABEL_TOOLS.
 pub(crate) fn result_summary(tool: &str, output: &Value) -> Option<String> {
-    raw_result_summary(tool, output).map(|s| strip_ansi_codes(&s))
+    raw_result_summary(tool, output).map(|s| strip_ansi(&s))
 }
 
 /// The summary before terminal control sequences are removed, so the chip and

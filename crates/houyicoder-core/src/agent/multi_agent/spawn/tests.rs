@@ -186,7 +186,7 @@ async fn test_spawn_rejects_depth_cap() {
 /// The topology is exactly two levels: a top-level agent may spawn, and its
 /// child may not spawn again.
 #[tokio::test]
-async fn test_spawn_topology_two_levels() {
+async fn test_spawn_depth_two_levels() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));

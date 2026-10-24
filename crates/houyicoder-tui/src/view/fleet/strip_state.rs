@@ -94,7 +94,7 @@ impl FleetStripState {
     }
 
     /// Give the keyboard back to the input box, keeping the highlight.
-    pub(crate) fn unfocus(&mut self) {
+    pub(crate) fn clear_focus(&mut self) {
         self.cursor = StripCursor::Idle(self.cursor.selected());
     }
 

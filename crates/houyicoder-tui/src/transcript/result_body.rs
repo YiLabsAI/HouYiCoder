@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use crate::brief::{edit_diff_summary, result_summary, value_brief};
-use houyicoder_protocol::tool::{simple_command_word, strip_ansi_codes};
+use houyicoder_protocol::tool::{simple_command_word, strip_ansi};
 
 /// Build the Write tool result body: the "Wrote N lines to {path}" chip
 /// followed by the full written content. The content is pulled from the
@@ -37,7 +37,7 @@ pub(crate) fn write_result_body(output: &Value, call_input: Option<&Value>) -> S
 /// carry a byte count. Errors surface as an error: line. Anything else falls
 /// back to a brief JSON glimpse so nothing is silently dropped.
 pub fn extract_body(output: &str) -> String {
-    strip_ansi_codes(&raw_body(output))
+    strip_ansi(&raw_body(output))
 }
 
 /// The body before terminal control sequences are removed. Kept separate so

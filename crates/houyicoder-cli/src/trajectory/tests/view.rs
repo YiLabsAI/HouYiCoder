@@ -1827,6 +1827,7 @@ fn test_total_excludes_idle_gap() {
     let events = vec![
         user(1_000, "first"),
         ev(2_000, timing(1)),
+        ev(30_000_000, SessionEvent::ContextCleared { prior_turn: 1 }),
         user(57_601_000, "second"),
         ev(57_602_000, timing(2)),
     ];

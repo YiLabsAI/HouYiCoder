@@ -61,7 +61,7 @@ fn test_wall_budget_clamped() {
 /// The schema has to advertise the parameter, or the model cannot discover
 /// the budget and falls back to polling with sleep.
 #[test]
-fn test_schema_advertises_timeout() {
+fn test_schema_includes_timeout() {
     let schema = BashTool::new(Arc::new(NoExec)).input_schema();
     let param = &schema["properties"]["timeout_ms"];
     assert_eq!(param["type"], "integer");

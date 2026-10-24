@@ -439,7 +439,7 @@ fn test_extract_body_edit_diff() {
 }
 
 #[test]
-fn test_body_strips_colour() {
+fn test_body_strips_color() {
     let coloured = serde_json::json!({
         "stdout": "\u{1b}[0;32m\u{2713} All checks passed!\u{1b}[0m\n",
     });
@@ -469,14 +469,14 @@ fn test_body_strips_colour() {
 /// string that arrived with colour in it must not leave the parameters on the
 /// chip.
 #[test]
-fn test_call_chip_strips_colour() {
+fn test_call_chip_strips_color() {
     let input = serde_json::json!({"command": "\u{1b}[0;32mmake check\u{1b}[0m"});
     let chip = tool_call_brief("bash", &input);
     assert_eq!(chip, "make check", "the chip shows the command alone");
 }
 
 #[test]
-fn test_body_keeps_brackets() {
+fn test_body_keeps_index_syntax() {
     // An array index and an attribute in quoted code are text, not colour.
     let output = serde_json::json!({"stdout": "arr[0] = 1\n#[test] fn x() {}\n"});
     assert_eq!(

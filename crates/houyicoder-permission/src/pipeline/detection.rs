@@ -7,7 +7,9 @@
 use houyicoder_api::sandbox::{BoundaryAccess, Containment, Coverage, boundary_grants_for};
 use std::sync::Arc;
 
-use crate::compound::{compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp};
+use crate::compound::{
+    compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp, split_compound,
+};
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::egress::{egress_outputs_safe, egress_scope_list};
 use crate::git_discard::{collect_git_ask_ops, decode_token, is_shell_control_keyword};
@@ -38,11 +40,11 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
     if content.is_empty() {
         return false;
     }
-    let scan = interpreter_inline_code(content).unwrap_or(content);
+    let expanded = expand_inline_interpreter(content);
     // Strip quoted heredoc bodies first: a cat <<'EOF' body is literal text,
     // so a rm line inside it must not trip the scan. Unquoted heredoc bodies
     // stay (bash expands them, so a real command could hide there).
-    let scan = strip_quoted_heredoc_bodies(scan);
+    let scan = strip_quoted_heredoc_bodies(&expanded);
     let unquoted: String = scan
         .chars()
         .filter(|&c| c != '\'' && c != '"' && c != '\\')
@@ -72,10 +74,11 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
     if content.is_empty() {
         return false;
     }
-    // Unwrap interpreter inline code (bash -c "curl x" -> scan "curl x") so
-    // an egress tool wrapped in an interpreter is still detected.
-    let scan = interpreter_inline_code(content).unwrap_or(content);
-    let lower_content = scan.to_ascii_lowercase();
+    // Include interpreter inline code alongside the outer command so neither a
+    // wrapped egress call nor a trailing command after an interpreter escapes
+    // the scan.
+    let expanded = expand_inline_interpreter(content);
+    let lower_content = expanded.to_ascii_lowercase();
     // Split into segments by shell separators and substitution delimiters,
     // then take the first non-assignment token of each segment.
     for segment in lower_content.split(['&', ';', '|', '\n', '(', ')', '`']) {
@@ -140,6 +143,21 @@ pub(crate) fn strip_quotes(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Append the inline code of any interpreter segment onto the command so the
+/// caller scans both the outer segments and the unwrapped script bodies.
+/// Replacing the outer command with the first interpreter's inline code would
+/// drop every segment that followed the interpreter.
+pub(crate) fn expand_inline_interpreter(content: &str) -> String {
+    let mut out = content.to_string();
+    for segment in split_compound(content) {
+        if let Some(inline) = interpreter_inline_code(segment.trim()) {
+            out.push_str("; ");
+            out.push_str(inline);
+        }
+    }
+    out
 }
 
 /// If the content is an interpreter invocation carrying inline code, return the

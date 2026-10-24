@@ -61,16 +61,16 @@ fn exit_is_semantic_success(command: &str, exit_code: i64) -> bool {
         // asked to, and every other git failure also exits 1, so both the
         // subcommand and the flag have to be there for the status to be an
         // answer rather than an error.
-        ("git", 1) => git_diff_reports_a_difference(command),
+        ("git", 1) => git_diff_reports_change(command),
         _ => false,
     }
 }
 
-/// Whether a git invocation is a diff that was asked to report a difference
+/// Whether a git invocation is a diff that was asked to report a change
 /// through its exit status. Global options sit between git and the
 /// subcommand, and the ones that take a value would otherwise be read as the
 /// subcommand name.
-fn git_diff_reports_a_difference(command: &str) -> bool {
+fn git_diff_reports_change(command: &str) -> bool {
     let mut words = command.split_whitespace().skip(1).peekable();
     let mut subcommand = None;
     while let Some(word) = words.next() {

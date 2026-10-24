@@ -58,37 +58,9 @@ impl Server {
             // A cancel is a request the run itself is waiting for, so it is
             // handled rather than deferred: deferring it would refuse the verb
             // exactly when the user needs it.
-            FrontendRequest::RunCancel { .. } => {
-                self.runner.abort();
-                reply(
-                    io,
-                    req_id,
-                    ResponsePayload::Error(ProtocolError::new(
-                        ErrorCategory::InvalidRequest,
-                        "run cancelled; the outcome arrives as the response to the run",
-                        false,
-                    )),
-                )
-                .await;
-            }
-            FrontendRequest::ChildTranscript { child_sid } => {
-                let frames = self.child_transcript_frames(&child_sid).await;
-                let frame = ServerFrame::Response(ResponseEnvelope::new(
-                    req_id,
-                    ResponsePayload::ChildTranscript { child_sid, frames },
-                ));
-                if let Ok(encoded) = encode(&frame) {
-                    drop(io.send_frame(encoded).await);
-                }
-            }
-            FrontendRequest::ModelInfo => {
-                let payload = match self.model_catalog_snapshot().await {
-                    Ok(catalog) => ResponsePayload::ModelInfo(catalog),
-                    Err(e) => ResponsePayload::Error(e),
-                };
-                let frame = ServerFrame::Response(ResponseEnvelope::new(req_id, payload));
-                if let Ok(encoded) = encode(&frame) {
-                    drop(io.send_frame(encoded).await);
+            FrontendRequest::RunCancel { session_id, .. } => {
+                if let Err(e) = self.dispatch_run_cancel(io, req_id, session_id).await {
+                    reply(io, req_id, ResponsePayload::Error(e)).await;
                 }
             }
             FrontendRequest::ModelSet {
@@ -106,13 +78,7 @@ impl Server {
                         effective_from: EffectiveFrom::NextRequest,
                     })
                     .await;
-                let frame = ServerFrame::Response(ResponseEnvelope::new(
-                    req_id,
-                    ResponsePayload::ModelResult(result),
-                ));
-                if let Ok(encoded) = encode(&frame) {
-                    drop(io.send_frame(encoded).await);
-                }
+                reply(io, req_id, ResponsePayload::ModelResult(result)).await;
             }
             payload if reads_state_during_run(&payload) => {
                 if let Err(e) = self.dispatch_query(io, req_id, payload).await {
@@ -271,6 +237,8 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
             | FrontendRequest::MemoryList
             | FrontendRequest::MemoryShow { .. }
             | FrontendRequest::MemoryToggleState
+            | FrontendRequest::ModelInfo
+            | FrontendRequest::ChildTranscript { .. }
             | FrontendRequest::RenameSession { .. }
             | FrontendRequest::PermissionMode
             | FrontendRequest::PermissionRules

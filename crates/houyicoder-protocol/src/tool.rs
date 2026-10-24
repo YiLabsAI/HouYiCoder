@@ -21,7 +21,7 @@ use serde_json::Value;
 mod ansi;
 mod bash_command;
 mod failure;
-pub use ansi::strip_ansi_codes;
+pub use ansi::strip_ansi;
 pub use bash_command::simple_command_word;
 pub use failure::tool_result_failed;
 
