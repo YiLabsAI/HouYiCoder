@@ -358,13 +358,9 @@ async fn test_cycle_during_resume() {
     notify.notify_one();
 }
 
-/// A request that mutates state, sent during a run, is silently dropped.
-/// The mid-run handler serves only read-safe verbs — PermissionCycleMode
-/// and ChildTranscript — because they do not race the parent run. A
-/// mutating verb like PermissionRules hits the drop arm; the frame is
-/// consumed without a reply so the client must resend it after the run.
-/// Pins the drop arm so a future change that accidentally serves a
-/// mutating verb mid-run is caught.
+/// A read query sent during a run is answered mid-run with its payload rather
+/// than dropped, so opening a read-only pane while a turn is in flight does
+/// not hang or leak the request id.
 #[tokio::test]
 async fn test_non_mode_request_dropped() {
     let notify = Arc::new(Notify::new());
@@ -388,8 +384,9 @@ async fn test_non_mode_request_dropped() {
     ));
     let (mut client_tx, mut client_rx) = handshake(Server::new(runner, session, gate)).await;
 
-    // Start the run (blocks on the provider). Send a non-mode control request
-    // (PermissionRules — a read query) during the run.
+    // Start the run (blocks on the provider). Send a read query
+    // (PermissionRules) during the run and wait for its mid-run reply before
+    // unblocking the provider.
     let req = RequestEnvelope::new(
         RequestId(1),
         FrontendRequest::MessageSend {
@@ -402,31 +399,32 @@ async fn test_non_mode_request_dropped() {
     let req = RequestEnvelope::new(RequestId(2), FrontendRequest::PermissionRules);
     send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
 
-    // Unblock the run + drain until the run's outcome response (req_id 1)
-    // arrives, counting any reply to the PermissionRules request (req_id 2).
-    notify.notify_one();
-    let mut rules_replies: u32 = 0;
     loop {
         match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env) if env.req_id == RequestId(2) => {
-                rules_replies += 1;
+                assert!(
+                    matches!(env.payload, ResponsePayload::PermissionRules { .. }),
+                    "PermissionRules is answered mid-run: {:?}",
+                    env.payload
+                );
+                break;
             }
+            _ => continue,
+        }
+    }
+    notify.notify_one();
+    loop {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env) if env.req_id == RequestId(1) => break,
             _ => continue,
         }
     }
-    assert_eq!(
-        rules_replies, 0,
-        "the PermissionRules request sent during the run must be dropped \
-         (handle_request_during_run serves only PermissionCycleMode + \
-         ChildTranscript mid-run, not PermissionRules)"
-    );
 }
 
-/// A /compact sent while a run is active is dropped, not dispatched: compact
-/// rewrites the session manifest, so firing it during the parallel-tool
-/// PostToolUse batch would race that batch's reference to the old manifest.
-/// /compact only dispatches between runs.
+/// A /compact sent while a run is active is refused with an Error response
+/// rather than dispatched: compact rewrites the session manifest, so firing it
+/// during a turn would race the turn, and answering with Error frees the
+/// client's request id instead of dropping it silently.
 #[tokio::test]
 async fn test_active_run_drops_compact() {
     let notify = Arc::new(Notify::new());
@@ -463,21 +461,24 @@ async fn test_active_run_drops_compact() {
     let compact_req = RequestEnvelope::new(RequestId(2), FrontendRequest::Compact);
     send_frame(&mut client_tx, &ClientFrame::Request(compact_req)).await;
 
-    // Unblock + drain to the run's outcome (req_id 1), counting /compact replies.
-    notify.notify_one();
-    let mut compact_replies: u32 = 0;
     loop {
         match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env) if env.req_id == RequestId(2) => {
-                compact_replies += 1;
+                assert!(
+                    matches!(env.payload, ResponsePayload::Error(_)),
+                    "/compact during an active run must be refused with Error, not dispatched: {:?}",
+                    env.payload
+                );
+                break;
             }
+            _ => continue,
+        }
+    }
+    notify.notify_one();
+    loop {
+        match recv_frame_within(&mut client_rx, Duration::from_secs(5)).await {
             ServerFrame::Response(env) if env.req_id == RequestId(1) => break,
             _ => continue,
         }
     }
-    assert_eq!(
-        compact_replies, 0,
-        "/compact sent during an active run must be dropped, not dispatched: \
-         a compact firing here races the parallel-tool PostToolUse batch"
-    );
 }
