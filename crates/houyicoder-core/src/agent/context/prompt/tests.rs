@@ -37,7 +37,8 @@ fn test_no_memory_file_identity() {
 fn test_agent_directory_injected() {
     let dir = scratch_dir("empty");
     let section = "## Available agents\n\n- explore: fast search";
-    let p = SystemPrompt::build_with_memory_index(&dir, None, Some(section));
+    let p =
+        SystemPrompt::build_with_memory_index(&dir, None, Some(section), &FrozenPrompt::read(&dir));
     assert!(p.text.contains("- explore: fast search"));
     assert!(
         p.memory_blocks.is_empty(),
@@ -86,52 +87,32 @@ fn test_agents_preferred_over_md() {
     );
 }
 
-/// agent.md is the primary name: when it and AGENTS.md sit in the same
-/// directory, agent.md loads first (the section header names it first)
-/// and both contents inject, so a project that migrated to the
-/// model-neutral name keeps its rules while the carrier rides along.
+/// The primary name loads first, and a second established spelling in the
+/// same directory loads alongside it rather than being shadowed.
 #[test]
-fn test_agent_md_primary_name() {
-    let dir = scratch_dir("agent-md");
-    fs::write(dir.join("agent.md"), "agent rules").expect("write");
+fn test_primary_name_loads_first() {
+    let dir = scratch_dir("agents-md");
     fs::write(dir.join("AGENTS.md"), "agents rules").expect("write");
+    fs::write(dir.join("CLAUDE.md"), "claude rules").expect("write");
     let found = find_memory_file_path(&dir).expect("found");
     assert!(
-        found.ends_with("agent.md"),
-        "agent.md preferred over AGENTS.md, got {found:?}"
+        found.ends_with("AGENTS.md"),
+        "AGENTS.md preferred over CLAUDE.md, got {found:?}"
     );
     let p = SystemPrompt::build(&dir);
-    assert!(p.text.contains("agent rules"), "agent.md content injected");
     assert!(
         p.text.contains("agents rules"),
-        "AGENTS.md content co-injected, not shadowed"
+        "AGENTS.md content injected"
     );
-    let carrier_pos = p.text.find("agent rules").expect("carrier text");
-    let agents_pos = p.text.find("agents rules").expect("rules text");
     assert!(
-        carrier_pos < agents_pos,
+        p.text.contains("claude rules"),
+        "CLAUDE.md content co-injected, not shadowed"
+    );
+    let primary_pos = p.text.find("agents rules").expect("primary text");
+    let second_pos = p.text.find("claude rules").expect("second text");
+    assert!(
+        primary_pos < second_pos,
         "the primary name's content precedes the co-loaded file"
-    );
-}
-
-/// A promoted memory file never shadows project engineering rules: when
-/// agent.md (the promotion carrier) and AGENTS.md (the engineering rules)
-/// sit in the same directory, both load — agent.md first, AGENTS.md after
-/// it — so creating the carrier cannot make the rules file disappear.
-#[test]
-fn test_carrier_never_shadows_rules() {
-    let dir = scratch_dir("agent-md-both");
-    fs::write(dir.join("agent.md"), "promoted memory rules").expect("write");
-    fs::write(dir.join("AGENTS.md"), "engineering rules").expect("write");
-    let p = SystemPrompt::build(&dir);
-    assert!(!p.memory_blocks.is_empty());
-    assert!(
-        p.text.contains("promoted memory rules"),
-        "the carrier content still loads"
-    );
-    assert!(
-        p.text.contains("engineering rules"),
-        "the engineering rules survive the carrier's presence"
     );
 }
 
@@ -157,14 +138,14 @@ fn test_case_fold_loads_once() {
     );
 }
 
-/// The local-private overlay (agent.local.md) is merged onto the project
-/// memory file so personal or machine-specific overrides layer on top of
-/// the shared, git-tracked memory.
+/// The local-private overlay is merged onto the project memory file so
+/// personal or machine-specific overrides layer on top of the shared,
+/// git-tracked memory.
 #[test]
 fn test_local_overlay_merged() {
     let dir = scratch_dir("local");
-    fs::write(dir.join("agent.md"), "shared rules").expect("write");
-    fs::write(dir.join("agent.local.md"), "personal overrides").expect("write");
+    fs::write(dir.join("AGENTS.md"), "shared rules").expect("write");
+    fs::write(dir.join("AGENTS.local.md"), "personal overrides").expect("write");
     let p = SystemPrompt::build(&dir);
     assert!(!p.memory_blocks.is_empty());
     assert!(p.text.contains("shared rules"), "shared memory injected");
@@ -174,17 +155,19 @@ fn test_local_overlay_merged() {
     );
 }
 
-/// claude.md (lowercase) is a compatibility alias: when no agent.md or
-/// AGENTS.md is present, claude.md is read so a project keyed to the
-/// legacy lowercase name still loads.
+/// The overlay follows the primary file's spelling: a project that keeps its
+/// rules in CLAUDE.md reads CLAUDE.local.md beside it.
 #[test]
-fn test_finds_lowercase_md_alias() {
-    let dir = scratch_dir("claude-lower");
-    fs::write(dir.join("claude.md"), "legacy lowercase rules").expect("write");
-    let found = find_memory_file_path(&dir).expect("found");
-    assert!(found.ends_with("claude.md"), "claude.md alias loaded");
+fn test_overlay_follows_spelling() {
+    let dir = scratch_dir("local-claude");
+    fs::write(dir.join("CLAUDE.md"), "claude rules").expect("write");
+    fs::write(dir.join("CLAUDE.local.md"), "claude personal").expect("write");
     let p = SystemPrompt::build(&dir);
-    assert!(p.text.contains("legacy lowercase rules"));
+    assert!(p.text.contains("claude rules"));
+    assert!(
+        p.text.contains("claude personal"),
+        "the second spelling's overlay is read too"
+    );
 }
 
 #[test]

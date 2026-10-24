@@ -25,6 +25,7 @@ pub mod worktree;
 
 pub(crate) use append::reducer;
 pub(crate) use compaction::{backbone, economy, manifest};
+pub(crate) use context::prompt::cache::PromptHash;
 pub(crate) use context::{cache_liveness, prompt, retention, selection, turn_group};
 pub use inference::{effort, model_window};
 pub use memory::{auto_dream, extract, extractor};
@@ -275,6 +276,10 @@ pub struct Runner {
     cache_compact_flag: AtomicBool,
     /// Flag: model switched since the previous provider response.
     cache_model_switch_flag: AtomicBool,
+    /// The cached prefix the previous response was served against, and when
+    /// that response landed. A break compares against it to name which half of
+    /// the prefix moved, and whether the gap alone explains the miss.
+    cache_prev_prefix: Mutex<Option<(PromptHash, u64)>>,
     /// The model id the previous request ran on. The request boundary
     /// compares it against the live config to decide whether a switch's
     /// cache side effects fire now — not when the pick arrived.

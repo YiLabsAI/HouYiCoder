@@ -4,6 +4,8 @@
 
 pub(crate) mod reducer;
 
+mod cache_break;
+use cache_break::now_millis;
 mod hook;
 pub(crate) mod timing;
 pub(crate) use hook::{emit_user_notice, record_hook_signals};
@@ -635,13 +637,7 @@ impl Runner {
                 Ok(mut prev) => {
                     let p = *prev;
                     let cause = if p.is_some_and(|v| v > 0 && current < v / 2) {
-                        if self.cache_compact_flag.load(Ordering::Relaxed) {
-                            Some("compact")
-                        } else if self.cache_model_switch_flag.load(Ordering::Relaxed) {
-                            Some("model-switch")
-                        } else {
-                            Some("unknown")
-                        }
+                        self.cache_break_cause()
                     } else {
                         None
                     };
@@ -664,6 +660,14 @@ impl Runner {
                     },
                 ))
                 .await?;
+        }
+        // Remember the prefix this response was served against, so the next
+        // break can tell which half of it moved.
+        if let Ok(mut slot) = self.cache_prev_prefix.lock() {
+            *slot = self
+                .context_builder
+                .prompt_hash()
+                .map(|fp| (fp, now_millis()));
         }
         Ok(())
     }

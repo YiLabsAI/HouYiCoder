@@ -8,18 +8,23 @@ use super::super::*;
 use houyicoder_context::{MemoryEntry, MemoryScope, MemorySource};
 use std::collections::HashMap;
 use std::env::temp_dir;
+use std::fs::OpenOptions;
 use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_dir;
 use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::rename;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 /// A three-root provider rooted at a temp workspace, mirroring the
 /// composition-root layout: user / project / auto roots under a workspace
-/// dir, plus the project memory file (agent.md) at the workspace root.
+/// dir. The workspace root itself holds no memory file: a promoted memory
+/// lives in the project root and reaches the prompt through the index.
 struct ThreeScopeFixture {
     user_root: PathBuf,
     project_root: PathBuf,
@@ -33,9 +38,8 @@ impl ThreeScopeFixture {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let workspace = temp_dir().join(format!("scope-flow-{seq}-{}", id(),));
-        // Layout matches the composition root: the project memory root sits
-        // two directories below the workspace root, so the project memory
-        // file at <workspace>/agent.md resolves via parent().parent().
+        // Layout matches the composition root: user / project / auto roots
+        // under one workspace dir, with the auto root as the write target.
         let user_root = workspace.join("user-memory");
         let project_root = workspace.join(".config").join("memory");
         let auto_root = workspace.join("auto-memory");
@@ -56,8 +60,10 @@ impl ThreeScopeFixture {
         }
     }
 
-    fn agent_md(&self) -> PathBuf {
-        self.workspace.join("agent.md")
+    /// The workspace root. A promote must leave it untouched: the user's
+    /// repository is not a memory store.
+    fn workspace_root(&self) -> &Path {
+        &self.workspace
     }
 
     fn entry(&self, key: &str, content: &str) -> MemoryEntry {
@@ -116,9 +122,9 @@ fn test_add_scope_auto_default() {
     assert!(fx.auto_root.join("k-default.md").is_file());
 }
 
-/// promote_memory moves a topic from auto into project and merges the rule
-/// sentence into the project memory file (agent.md). The topic is still
-/// recallable (now under the project scope), and the rule is always-on.
+/// promote_memory moves a topic from auto into project. The workspace root
+/// is left untouched, and the topic is still recallable under the project
+/// scope, which is what makes the promoted rule always-on.
 #[test]
 fn test_promote_moves_and_merges() {
     let fx = ThreeScopeFixture::new();
@@ -128,8 +134,6 @@ fn test_promote_moves_and_merges() {
         "Test names use verb-object.\nWhy: clarity.\nHow: foo_bar_baz.\n",
     );
     fx.provider.add(entry).expect("seed auto");
-    // Pre-condition: agent.md does not exist yet.
-    assert!(!fx.agent_md().exists());
     fx.provider
         .promote_memory("rule-test-naming")
         .expect("promote");
@@ -142,16 +146,17 @@ fn test_promote_moves_and_merges() {
         fx.project_root.join("rule-test-naming.md").is_file(),
         "project topic present"
     );
-    // agent.md created with the rule sentence as the first content line
-    // (after the header).
-    let carrier = read_to_string(fx.agent_md()).expect("read carrier");
+    // The workspace root stays clean: no memory file is written beside the
+    // user's sources.
+    let stray: Vec<_> = read_dir(fx.workspace_root())
+        .expect("read workspace")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".md"))
+        .collect();
     assert!(
-        carrier.contains("Test names use verb-object."),
-        "rule sentence in carrier: {carrier}"
-    );
-    assert!(
-        !carrier.contains("How: foo_bar_baz."),
-        "only the rule sentence (not the how-to-apply prose) merged: {carrier}"
+        stray.is_empty(),
+        "promote writes no markdown into the workspace root: {stray:?}"
     );
     // Recall still finds the topic (under the project scope now).
     let listed: Vec<_> = fx
@@ -165,7 +170,7 @@ fn test_promote_moves_and_merges() {
 }
 
 /// promote_memory is idempotent: a second call on an already-promoted topic
-/// does not duplicate the carrier line + does not error.
+/// does not error and leaves exactly one index pointer for the key.
 #[test]
 fn test_promote_idempotent_project_topic() {
     let fx = ThreeScopeFixture::new();
@@ -177,28 +182,32 @@ fn test_promote_idempotent_project_topic() {
     fx.provider
         .promote_memory("rule-idem")
         .expect("second promote (idempotent)");
-    let carrier = read_to_string(fx.agent_md()).expect("carrier");
-    let count = carrier
+    let index = read_to_string(fx.project_root.join("MEMORY.md")).expect("project index");
+    let count = index
         .lines()
-        .filter(|l| l.trim() == "Rule sentence here.")
+        .filter(|l| l.starts_with("- rule-idem "))
         .count();
     assert_eq!(
         count, 1,
-        "carrier has exactly one rule line after two promotes"
+        "exactly one index pointer after two promotes: {index}"
     );
 }
 
-/// demote_memory is the reverse: moves the topic project -> auto and strips
-/// the rule sentence from the agent.md carrier file. The rule leaves the
-/// always-on prefix, the topic is recall-on-demand only.
+/// demote_memory is the reverse: moves the topic project -> auto. The rule
+/// leaves the always-on project index, so the topic is recall-on-demand
+/// only.
 #[test]
 fn test_demote_reverses_promote() {
     let fx = ThreeScopeFixture::new();
     let entry = fx.entry("rule-rev", "Always-on rule.\nWhy: y.\n");
     fx.provider.add(entry).expect("seed auto");
     fx.provider.promote_memory("rule-rev").expect("promote");
-    let carrier_after_promote = read_to_string(fx.agent_md()).expect("carrier");
-    assert!(carrier_after_promote.contains("Always-on rule."));
+    let index_after_promote =
+        read_to_string(fx.project_root.join("MEMORY.md")).expect("project index");
+    assert!(
+        index_after_promote.contains("- rule-rev "),
+        "promote puts the key in the always-on index: {index_after_promote}"
+    );
     fx.provider.demote_memory("rule-rev").expect("demote");
     // Topic moved project -> auto.
     assert!(
@@ -209,11 +218,11 @@ fn test_demote_reverses_promote() {
         fx.auto_root.join("rule-rev.md").is_file(),
         "auto topic present"
     );
-    // Carrier line stripped.
-    let carrier = read_to_string(fx.agent_md()).expect("carrier post-demote");
+    // The always-on index no longer carries the key.
+    let index = read_to_string(fx.project_root.join("MEMORY.md")).expect("project index");
     assert!(
-        !carrier.contains("Always-on rule."),
-        "rule line stripped: {carrier}"
+        !index.contains("- rule-rev "),
+        "the key leaves the always-on index: {index}"
     );
     // Recall finds it under the auto scope now.
     let listed: Vec<_> = fx
@@ -226,9 +235,8 @@ fn test_demote_reverses_promote() {
     assert_eq!(listed[0].scope, MemoryScope::Auto);
 }
 
-/// demote_memory on a topic already in auto still strips the carrier line
-/// (idempotent on the scope side, but the carrier line is removed either way
-/// so the always-on prefix drops the rule).
+/// demote_memory on a topic already in auto is a no-op: the file stays put
+/// and the always-on index never gains the key.
 #[test]
 fn test_demote_strips_when_auto() {
     let fx = ThreeScopeFixture::new();
@@ -236,19 +244,21 @@ fn test_demote_strips_when_auto() {
     fx.provider.add(entry).expect("seed auto");
     fx.provider
         .promote_memory("rule-decay")
-        .expect("promote to add the carrier line");
+        .expect("promote into the project scope");
     // Simulate a manual topic move back to auto (e.g. user moved the file).
     rename(
         fx.project_root.join("rule-decay.md"),
         fx.auto_root.join("rule-decay.md"),
     )
     .expect("manual move");
-    // demote should still strip the carrier line.
     fx.provider.demote_memory("rule-decay").expect("demote");
-    let carrier = read_to_string(fx.agent_md()).expect("carrier");
     assert!(
-        !carrier.contains("Decayed rule."),
-        "carrier line stripped even when topic already in auto: {carrier}"
+        fx.auto_root.join("rule-decay.md").is_file(),
+        "the topic stays in auto"
+    );
+    assert!(
+        !fx.project_root.join("rule-decay.md").is_file(),
+        "no project copy is left behind"
     );
 }
 
@@ -351,14 +361,88 @@ fn test_promote_roots_keeps_project() {
         !fx.auto_root.join("rule-both.md").is_file(),
         "auto copy dropped so it cannot shadow the project copy"
     );
-    // The carrier line is the project rule (the explicit source).
-    let carrier = read_to_string(fx.agent_md()).expect("carrier");
+    // Recall resolves the key to the project copy, not the dropped one.
+    let listed: Vec<_> = fx
+        .provider
+        .list_memories()
+        .into_iter()
+        .filter(|m| m.key == "rule-both")
+        .collect();
+    assert_eq!(listed.len(), 1, "one surviving copy");
+    assert_eq!(listed[0].scope, MemoryScope::Project);
+}
+
+/// An explicit scope is the user's own statement, so a newer automatic write
+/// with the same key cannot replace it. The automatic writer runs on its own
+/// schedule and would otherwise win every merge by being the most recent
+/// edit, silently discarding what the user promoted.
+#[test]
+fn test_scope_beats_newer_auto() {
+    let fx = ThreeScopeFixture::new();
+    let project_entry = fx.entry("rule-priority", "Promoted rule sentence.\nWhy: explicit.\n");
+    fx.provider
+        .add_in_scope(project_entry, MemoryScope::Project)
+        .expect("project seed");
+    // An automatic copy of the same key, written afterwards so its mtime is
+    // strictly newer than the project copy's.
+    let auto_entry = fx.entry("rule-priority", "Automatic rewrite.\nWhy: newer.\n");
+    fx.provider.add(auto_entry).expect("auto seed");
+    let project_path = fx.project_root.join("rule-priority.md");
+    let auto_path = fx.auto_root.join("rule-priority.md");
+    // Stamp the project copy an hour into the past so the automatic copy is
+    // strictly newer. Without an explicit stamp the two writes land in the
+    // same second and the comparison would pass for the wrong reason.
+    let older = SystemTime::now() - Duration::from_secs(3600);
+    OpenOptions::new()
+        .write(true)
+        .open(&project_path)
+        .expect("open project copy")
+        .set_modified(older)
+        .expect("stamp project copy");
+    let project_mtime = metadata(&project_path)
+        .expect("project meta")
+        .modified()
+        .expect("project mtime");
+    let auto_mtime = metadata(&auto_path)
+        .expect("auto meta")
+        .modified()
+        .expect("auto mtime");
     assert!(
-        carrier.contains("Project rule sentence."),
-        "carrier carries the project rule: {carrier}"
+        auto_mtime > project_mtime,
+        "the automatic copy must be strictly newer for this to prove anything"
     );
+
+    let listed: Vec<_> = fx
+        .provider
+        .list_memories()
+        .into_iter()
+        .filter(|m| m.key == "rule-priority")
+        .collect();
+    assert_eq!(listed.len(), 1, "one merged row per key");
+    assert_eq!(
+        listed[0].scope,
+        MemoryScope::Project,
+        "the explicit scope wins even though the automatic copy is newer"
+    );
+
+    let shown = fx.provider.show_memory("rule-priority").expect("body");
     assert!(
-        !carrier.contains("Auto copy competing sentence."),
-        "carrier does not carry the auto copy: {carrier}"
+        shown.content.contains("Promoted rule sentence."),
+        "recall returns the promoted body, not the automatic rewrite: {}",
+        shown.content
+    );
+
+    // The prompt index is built from this same ordering, so the promoted
+    // rule keeps its place at the head instead of being pushed out by the
+    // automatic writer's churn.
+    let first = fx
+        .provider
+        .list_memories()
+        .into_iter()
+        .next()
+        .expect("a first row");
+    assert_eq!(
+        first.key, "rule-priority",
+        "the explicit-scope row sorts ahead of the automatic one"
     );
 }

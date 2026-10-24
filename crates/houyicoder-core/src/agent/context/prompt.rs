@@ -21,18 +21,17 @@ pub(crate) mod reward_lesson;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
-/// The candidate project-memory file names, in preference order. agent.md is
-/// the primary carrier for promoted memories; AGENTS.md is the engineering
-/// rules file and loads alongside the carrier rather than being shadowed by
-/// it. claude.md and CLAUDE.md are compatibility fallbacks so an existing
-/// project memory file is never silently dropped on rename. All names found
-/// in the same directory load together, primary first.
-const MEMORY_FILE_NAMES: &[&str] = &["agent.md", "AGENTS.md", "claude.md", "CLAUDE.md"];
+/// The candidate project-memory file names, in preference order. These are
+/// the established engineering-rules spellings; a lowercase variant is a
+/// different file that this project never reads or writes. All names found in
+/// the same directory load together, primary first.
+const MEMORY_FILE_NAMES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
 
 /// The local-private overlay file, read from the same directory as the found
 /// project memory file and merged onto it. Gitignored, personal or
 /// machine-specific overrides layered on top of the shared project memory.
-const LOCAL_MEMORY_FILE: &str = "agent.local.md";
+/// Both established spellings are accepted, primary first.
+const LOCAL_MEMORY_FILES: &[&str] = &["AGENTS.local.md", "CLAUDE.local.md"];
 
 /// One block of memory context the prompt carries. The label names it for the
 /// /context drill-down; the text is the bytes the prompt holds for it.
@@ -77,17 +76,20 @@ impl SystemPrompt {
     /// context from the first AGENTS.md walking up from cwd) is appended
     /// after the boundary so a cache policy can carve the prefix.
     pub fn build(cwd: &Path) -> SystemPrompt {
-        Self::build_with_memory_index(cwd, None, None)
+        Self::build_with_memory_index(cwd, None, None, &FrozenPrompt::read(cwd))
     }
 
-    /// Build the system prompt with an optional MEMORY.md index section.
-    /// MemoryRuntime freezes the supplied index until clear or compact, so it
-    /// remains byte-stable across ordinary turns.
+    /// Build the system prompt from the session's frozen inputs. MemoryRuntime
+    /// freezes the supplied index until clear or compact, and the caller
+    /// freezes the project memory and date the same way, so the prefix remains
+    /// byte-stable across ordinary turns.
     pub fn build_with_memory_index(
         cwd: &Path,
         index: Option<&str>,
         agent_directory: Option<&str>,
+        freeze: &FrozenPrompt,
     ) -> SystemPrompt {
+        let _ = cwd;
         let identity = identity_section();
         let system = system_section();
         let doing_tasks = doing_tasks_section();
@@ -95,7 +97,7 @@ impl SystemPrompt {
         let tone = tone_section();
         let efficiency = efficiency_section();
         let using_tools = using_tools_section();
-        let project_memory = read_project_memory(cwd);
+        let project_memory = freeze.project_memory();
         let tool_docs = tool_docs_section();
 
         let mut text = String::new();
@@ -151,7 +153,7 @@ impl SystemPrompt {
 
         // Dynamic suffix — not byte-stable across sessions, appended after the
         // boundary so the static prefix stays a clean cacheable prefix.
-        if let Some(project) = &project_memory {
+        if let Some(project) = project_memory {
             text.push_str("\n\n");
             text.push_str(&project_context_block(project));
         }
@@ -170,12 +172,12 @@ impl SystemPrompt {
         // body: a saved memory must quote text the session log holds, and
         // text injected into a message would be quotable but unverifiable.
         text.push_str("\n\n");
-        text.push_str(&date::utc_date_line());
+        text.push_str(freeze.date_line());
 
         // Report the memory blocks in reading order: the project files the
         // user maintains, then the frozen index of stored memories.
         let mut memory_blocks: Vec<MemoryBlock> = Vec::new();
-        if let Some(project) = &project_memory {
+        if let Some(project) = project_memory {
             for file in &project.files {
                 memory_blocks.push(block_for(file));
             }
@@ -412,13 +414,44 @@ pub(crate) struct ProjectMemory {
     pub content: String,
 }
 
+/// The parts of the system prompt that must not change between ordinary
+/// turns: the project memory files the cwd walk-up found, and the date line.
+///
+/// Both are read from outside the conversation (the filesystem and the
+/// clock), so re-reading them every turn would let an unrelated event — a
+/// worktree switch, a background memory write, midnight — rewrite the prompt
+/// prefix and invalidate the whole cached context. The session freezes them
+/// once and refreshes only at an explicit boundary.
+#[derive(Debug, Clone)]
+pub struct FrozenPrompt {
+    project_memory: Option<ProjectMemory>,
+    date_line: String,
+}
+
+impl FrozenPrompt {
+    /// Read the cwd walk-up and the clock once, for the session to hold.
+    /// Read the cwd walk-up and the clock once, for the session to hold.
+    pub fn read(cwd: &Path) -> Self {
+        Self {
+            project_memory: read_project_memory(cwd),
+            date_line: date::utc_date_line(),
+        }
+    }
+
+    pub(crate) fn project_memory(&self) -> Option<&ProjectMemory> {
+        self.project_memory.as_ref()
+    }
+
+    pub(crate) fn date_line(&self) -> &str {
+        &self.date_line
+    }
+}
+
 /// The project context section: the project memory files found walking up
-/// from the cwd argument — agent.md (the promoted-memory carrier) and AGENTS.md
-/// (the engineering rules) both load when present, primary name first — merged
-/// with the local-private overlay (agent.local.md) from the same directory.
-/// None when no project memory file is found; in that case the section is
-/// omitted entirely (not rendered empty) so the drill-down shows no Project
-/// context row.
+/// from the cwd argument, merged with the local-private overlay from the same
+/// directory. None when no project memory file is found; in that case the
+/// section is omitted entirely (not rendered empty) so the drill-down shows
+/// no Project context row.
 pub(crate) fn project_context_section(cwd: &Path) -> Option<String> {
     read_project_memory(cwd).map(|memory| project_context_block(&memory))
 }
@@ -455,8 +488,12 @@ pub(crate) fn read_project_memory(cwd: &Path) -> Option<ProjectMemory> {
     let overlay = files
         .first()
         .and_then(|f| f.path.parent())
-        .map(|parent| parent.join(LOCAL_MEMORY_FILE))
-        .filter(|local| local.is_file())
+        .and_then(|parent| {
+            LOCAL_MEMORY_FILES
+                .iter()
+                .map(|name| parent.join(name))
+                .find(|local| local.is_file())
+        })
         .and_then(|local| {
             read_to_string(&local)
                 .ok()
@@ -485,11 +522,11 @@ fn tool_docs_section() -> String {
 
 /// Walk up from the cwd argument looking for project memory files. Every
 /// name present in the first directory that holds any of them loads, primary
-/// name first, so the promoted-memory carrier and the engineering rules
-/// coexist instead of shadowing. Case-insensitive filesystems satisfy both
-/// spellings of a name with one file, so candidates dedupe by canonical path
-/// before joining — a lone CLAUDE.md loads once, never twice. Walk-up kept
-/// sync because the ContextBuilder is sync.
+/// name first, so both established spellings coexist instead of shadowing.
+/// Case-insensitive filesystems satisfy both spellings of a name with one
+/// file, so candidates dedupe by canonical path before joining — a lone
+/// CLAUDE.md loads once, never twice. Walk-up kept sync because the
+/// ContextBuilder is sync.
 fn find_memory_files(cwd: &Path) -> Option<Vec<MemoryFile>> {
     let mut dir = cwd;
     loop {
@@ -526,6 +563,8 @@ fn find_memory_files(cwd: &Path) -> Option<Vec<MemoryFile>> {
 pub fn find_memory_file_path(cwd: &Path) -> Option<PathBuf> {
     find_memory_files(cwd).map(|files| files[0].path.clone())
 }
+
+pub(crate) mod cache;
 
 #[cfg(test)]
 mod tests;

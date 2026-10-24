@@ -275,6 +275,45 @@ fn test_builder_injects_memory() {
     remove_dir_all(&scratch).ok();
 }
 
+/// A lowercase memory file is a different file this project never reads.
+/// Loading one would silently pick up an unrelated note the user happened to
+/// name that way, so the walk-up only accepts the established spellings.
+///
+/// The name under test differs by more than case on purpose: a
+/// case-insensitive filesystem resolves a case-only difference to the same
+/// file, so only a genuinely different spelling proves the rule.
+#[test]
+fn test_lowercase_memory_file_ignored() {
+    let mut scratch = temp_dir();
+    scratch.push(format!("ctx-test-lower-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    write(
+        scratch.join("agent.md"),
+        "# Lowercase Note\n\nnot a project rule.",
+    )
+    .expect("write");
+    write(
+        scratch.join("agent.local.md"),
+        "# Lowercase Overlay\n\nnot a private overlay.",
+    )
+    .expect("write");
+    let b = ContextBuilder::new().with_cwd(scratch.clone());
+    let v = b.build(&[]);
+    assert!(
+        !v.system.contains("Lowercase Note"),
+        "a lowercase agent.md is not a project memory file"
+    );
+    assert!(
+        !v.system.contains("Lowercase Overlay"),
+        "a lowercase agent.local.md is not a private overlay"
+    );
+    assert!(
+        v.measurement.memory_files.is_empty(),
+        "no memory row for a file the project does not read"
+    );
+    remove_dir_all(&scratch).ok();
+}
+
 /// The memory behavior guidance (what to save, when, how to treat a recalled
 /// memory) is always-on in the system prompt so the agent proactively saves
 /// rather than only on an explicit "remember" signal. Constant across turns.
@@ -1497,4 +1536,47 @@ fn test_measure_reports_declared_tools() {
         cb.last_measurement().is_none(),
         "measuring for /context must not populate the turn cache"
     );
+}
+
+/// A worktree switch must not rewrite the prompt prefix.
+///
+/// Entering a worktree changes the cwd, and the cwd drives the project-memory
+/// walk-up. Re-reading it mid-session would change the system prompt under a
+/// live cache and invalidate the whole cached context, so the session holds
+/// what it read first and refreshes only at an explicit boundary.
+#[test]
+fn test_cwd_switch_keeps_prompt() {
+    let mut root = temp_dir();
+    root.push(format!("ctx-test-freeze-{}", id()));
+    let worktree = root.join("worktree");
+    create_dir_all(&worktree).expect("mkdir worktree");
+    write(root.join("AGENTS.md"), "# Main Rules\n\nmain rules.").expect("write main");
+    write(
+        worktree.join("AGENTS.md"),
+        "# Worktree Rules\n\nworktree rules.",
+    )
+    .expect("write worktree");
+
+    let b = ContextBuilder::new().with_cwd(root.clone());
+    let first = b.build(&[]).system;
+    assert!(
+        first.contains("Main Rules"),
+        "the main rules are read first"
+    );
+
+    b.switch_cwd(worktree.clone());
+    let after_switch = b.build(&[]).system;
+    assert_eq!(
+        after_switch, first,
+        "a worktree switch must not rewrite the prompt prefix"
+    );
+
+    // The explicit boundary does refresh it.
+    b.reset_frozen_prompt();
+    let after_reset = b.build(&[]).system;
+    assert!(
+        after_reset.contains("Worktree Rules"),
+        "an explicit boundary re-reads the project memory:\n{after_reset}"
+    );
+    remove_dir_all(&root).ok();
 }

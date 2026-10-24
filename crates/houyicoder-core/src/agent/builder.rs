@@ -336,6 +336,10 @@ impl Runner {
     /// a failed extraction job retries off the durable log later.
     pub async fn before_clear(&self, session: SessionId) {
         self.memory.before_clear(session).await;
+        // A clear is the boundary the user chose to rebuild the prompt, so the
+        // project memory and date line are re-read here rather than on every
+        // turn.
+        self.context_builder.reset_frozen_prompt();
     }
 
     /// Override the default heuristic summarizer with an LLM-backed one. The

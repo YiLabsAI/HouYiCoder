@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -26,9 +27,8 @@ mod io;
 mod roots;
 use io::{
     Frontmatter, INDEX_BYTE_CAP, INDEX_FILE, ScannedTopic, StatRecord, cap_index_content,
-    count_new_since_impl, first_line, first_rule_sentence, list_memories_impl,
-    merge_rule_into_carrier, parse_topic_file, sanitize_key, scopes_for_key_impl,
-    serialize_topic_file, show_memory_in_scope_impl, strip_rule_from_carrier, write_bytes_atomic,
+    count_new_since_impl, first_line, list_memories_impl, parse_topic_file, sanitize_key,
+    scopes_for_key_impl, serialize_topic_file, show_memory_in_scope_impl, write_bytes_atomic,
 };
 use std::io::ErrorKind;
 use std::time::SystemTime;
@@ -46,11 +46,6 @@ const MAX_ENTRYPOINT_LINES: usize = 200;
 /// atomic write, no self-heal — a lost or corrupt sidecar is a cold
 /// restart (counters re-accumulate), never an invariant violation.
 const STATS_FILE: &str = ".stats.json";
-
-/// The project memory file (always-on carrier) basename, written into the
-/// workspace root by promote_memory and read at session start by the
-/// project-context section.
-const PROJECT_MEMORY_FILE: &str = "agent.md";
 
 /// Markdown directory memory provider with a derived index. Holds an
 /// ordered list of roots (user, project, auto); recall scans every root
@@ -229,16 +224,23 @@ impl MarkdownMemoryProvider {
         candidates
     }
 
-    /// Scan every root and merge. When the same key appears in multiple
-    /// scopes, the newest mtime wins so recall does not return duplicates.
+    /// Scan every root and merge. When the same key appears in more than one
+    /// scope, an explicit scope (user or project) wins over the automatic
+    /// write scope regardless of modification time: the user's own statement
+    /// is not something a later automatic write may quietly replace. Within
+    /// one rank the newest mtime wins, so recall does not return duplicates.
     fn scan_candidates(&self) -> Vec<ScannedTopic> {
         let mut by_key: HashMap<String, ScannedTopic> = HashMap::new();
         for (root_index, root) in self.roots.iter().enumerate() {
+            let rank = u8::from(!self.is_explicit_scope(root_index));
             for mut t in Self::scan_root(root) {
                 t.root_index = root_index;
                 let keep = match by_key.get(&t.key) {
                     None => true,
-                    Some(e) => t.mtime > e.mtime,
+                    Some(e) => {
+                        let existing_rank = u8::from(!self.is_explicit_scope(e.root_index));
+                        (rank, t.mtime) < (existing_rank, e.mtime)
+                    }
                 };
                 if keep {
                     by_key.insert(t.key.clone(), t);
@@ -246,9 +248,18 @@ impl MarkdownMemoryProvider {
             }
         }
         let mut merged: Vec<ScannedTopic> = by_key.into_values().collect();
-        // Key breaks mtime ties so the merged order depends only on the
-        // store contents, never on HashMap or read_dir iteration order.
-        merged.sort_by_key(|c| Reverse((c.mtime, c.key.clone())));
+        // Explicit scopes first, then newest, then key, so the merged order
+        // depends only on the store contents and never on HashMap or read_dir
+        // iteration order. The index cap truncates the tail, so the ordering
+        // is what keeps a promoted memory from being pushed out by the
+        // automatic writer's churn.
+        merged.sort_by_key(|c| {
+            (
+                !self.is_explicit_scope(c.root_index),
+                Reverse(c.mtime),
+                Reverse(c.key.clone()),
+            )
+        });
         merged
     }
 
@@ -343,17 +354,20 @@ impl MarkdownMemoryProvider {
         write_bytes_atomic(&index_path, existing.as_bytes()).map_err(|e| e.to_string())
     }
 
-    /// The path to the project memory file (always-on carrier). Derived
-    /// from the project scope root: the project root sits two directories
-    /// below the workspace root, so the workspace root is two parents up.
-    /// Returns None when there is no project root or the path cannot
-    /// resolve (a single-root provider has no project scope, so promote /
-    /// demote degrade to a no-op on the carrier file + a topic move within
-    /// the one root, which is a safe no-op).
-    fn project_memory_file_path(&self) -> Option<PathBuf> {
-        let project_root = self.roots.get(1)?;
-        let workspace = project_root.parent()?.parent()?;
-        Some(workspace.join(PROJECT_MEMORY_FILE))
+    /// Whether a root holds an explicit scope (user or project) rather than
+    /// the automatic write scope. An explicit scope is the user's own
+    /// statement, so it outranks anything the automatic writer produced.
+    fn is_explicit_scope(&self, root_index: usize) -> bool {
+        root_index + 1 < self.roots.len()
+    }
+}
+
+/// Stamp a file as freshly modified. Promotion is an edit of the record's
+/// standing, so the file it lands in carries the newest time; a failure is
+/// only a lost tie-break, never a lost write.
+fn touch_file(path: &Path) {
+    if let Ok(file) = OpenOptions::new().append(true).open(path) {
+        drop(file.set_modified(SystemTime::now()));
     }
 }
 
@@ -594,11 +608,11 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.add_if_changed_in_root(&root, &entry)
     }
 
-    /// Promote a topic into the project scope and always-on carrier, then
-    /// rebuild both derived indexes. Repeated promotion is idempotent.
+    /// Promote a topic into the project scope, then rebuild both derived
+    /// indexes. Repeated promotion is idempotent.
     fn promote_memory(&self, key: &str) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
-        // Keep carrier, topic, and index changes in one critical section.
+        // Keep topic and index changes in one critical section.
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let auto_root = self.write_root().to_path_buf();
         let project_root = self.root_for_scope(MemoryScope::Project).to_path_buf();
@@ -606,33 +620,14 @@ impl MemoryProvider for MarkdownMemoryProvider {
         let dst_topic = project_root.join(format!("{key}.md"));
         let exists_in_auto = src_topic.is_file();
         let exists_in_project = dst_topic.is_file();
-        // Read the rule sentence before any move so a missing topic is
-        // detected before any file is touched. Prefer the project copy
-        // when both exist (the explicit scope is the source of truth);
-        // the rule sentence is the first non-empty line of the body.
-        let rule_sentence = if exists_in_project {
-            let entry = self.read_topic(&dst_topic)?;
-            first_rule_sentence(&entry.content)
-        } else if exists_in_auto {
-            let entry = self.read_topic(&src_topic)?;
-            first_rule_sentence(&entry.content)
-        } else {
+        if !exists_in_auto && !exists_in_project {
             return Err(MemoryError::NotFound);
-        };
-        // Step one: merge the rule sentence into the project memory file.
-        // Best-effort: a write failure leaves the carrier file unchanged
-        // but the topic move still lands.
-        if let Some(carrier) = self.project_memory_file_path()
-            && let Err(e) = merge_rule_into_carrier(&carrier, &rule_sentence)
-        {
-            tracing::warn!("memory promote: carrier merge failed (continuing): {e}");
         }
-        // Step two: reconcile the topic files across the two roots. When
-        // both roots have a copy, the project copy is the explicit source
-        // of truth — remove the auto copy so it cannot shadow the project
-        // one by newest-mtime (the MED-1 divergence). When only the auto
-        // copy exists, move it auto -> project. When only the project copy
-        // exists, the move is a no-op (idempotent promote).
+        // Reconcile the topic files across the two roots. When both roots
+        // have a copy, the project copy is the explicit source of truth —
+        // remove the auto copy so the two cannot disagree. When only the
+        // auto copy exists, move it auto -> project. When only the project
+        // copy exists, the move is a no-op (idempotent promote).
         fs::create_dir_all(&project_root).map_err(|_| MemoryError::Io)?;
         if exists_in_auto && exists_in_project {
             // Both present: drop the auto copy, keep the project one.
@@ -646,17 +641,21 @@ impl MemoryProvider for MarkdownMemoryProvider {
                 drop(fs::remove_file(&src_topic));
             }
         }
-        // Step three: regenerate both indexes under the same lock so the
+        // A promoted topic is explicit from now on. Its modification time is
+        // stamped so the promotion itself is the newest edit, which keeps the
+        // project copy ahead of any auto copy a later dream would write.
+        touch_file(&dst_topic);
+        // Step two: regenerate both indexes under the same lock so the
         // auto root loses the pointer and the project root gains it.
         drop(self.rebuild_index_impl_locked());
         Ok(())
     }
 
-    /// Demote a topic into the auto scope, remove its carrier rule, and
-    /// rebuild both derived indexes. Repeated demotion is idempotent.
+    /// Demote a topic into the auto scope and rebuild both derived indexes.
+    /// Repeated demotion is idempotent.
     fn demote_memory(&self, key: &str) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
-        // Keep carrier, topic, and index changes in one critical section.
+        // Keep topic and index changes in one critical section.
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let auto_root = self.write_root().to_path_buf();
         let project_root = self.root_for_scope(MemoryScope::Project).to_path_buf();
@@ -664,28 +663,14 @@ impl MemoryProvider for MarkdownMemoryProvider {
         let dst_topic = auto_root.join(format!("{key}.md"));
         let exists_in_project = src_topic.is_file();
         let exists_in_auto = dst_topic.is_file();
-        // Read the rule sentence before any move. Prefer the project copy
-        // when both exist (it carries the rule sentence promote added).
-        let rule_sentence = if exists_in_project {
-            let entry = self.read_topic(&src_topic)?;
-            first_rule_sentence(&entry.content)
-        } else if exists_in_auto {
-            let entry = self.read_topic(&dst_topic)?;
-            first_rule_sentence(&entry.content)
-        } else {
+        if !exists_in_project && !exists_in_auto {
             return Err(MemoryError::NotFound);
-        };
-        // Step one: strip the rule sentence from the project memory file.
-        if let Some(carrier) = self.project_memory_file_path()
-            && let Err(e) = strip_rule_from_carrier(&carrier, &rule_sentence)
-        {
-            tracing::warn!("memory demote: carrier strip failed (continuing): {e}");
         }
-        // Step two: reconcile the topic files. When both roots have a copy,
-        // the auto copy is the recall-on-demand target — remove the project
-        // copy so the always-on scope no longer carries the topic. When only
-        // the project copy exists, move it project -> auto. When only the
-        // auto copy exists, the move is a no-op (idempotent demote).
+        // Reconcile the topic files. When both roots have a copy, the auto
+        // copy is the recall-on-demand target — remove the project copy so
+        // the always-on scope no longer carries the topic. When only the
+        // project copy exists, move it project -> auto. When only the auto
+        // copy exists, the move is a no-op (idempotent demote).
         fs::create_dir_all(&auto_root).map_err(|_| MemoryError::Io)?;
         if exists_in_project && exists_in_auto {
             drop(fs::remove_file(&src_topic));
@@ -697,7 +682,7 @@ impl MemoryProvider for MarkdownMemoryProvider {
             }
             drop(fs::remove_file(&src_topic));
         }
-        // Step three: regenerate both indexes under the same lock.
+        // Step two: regenerate both indexes under the same lock.
         drop(self.rebuild_index_impl_locked());
         Ok(())
     }

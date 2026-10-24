@@ -12,7 +12,6 @@ use std::path::Path;
 use super::MarkdownMemoryProvider;
 #[cfg(unix)]
 use std::fs::OpenOptions;
-use std::fs::read_to_string;
 use std::fs::rename;
 #[cfg(not(unix))]
 use std::fs::write;
@@ -247,74 +246,6 @@ pub(super) const INDEX_BYTE_CAP: usize = 25_000;
 
 /// Reserved index filename (excluded from the topic scan).
 pub(super) const INDEX_FILE: &str = "MEMORY.md";
-
-/// Extract the rule sentence from a topic body: the first non-empty line
-/// that is not a frontmatter fence or a Markdown heading marker. The rule
-/// sentence is the always-on carrier line — the rule itself, not the
-/// supporting Why / How-to-apply prose that follows.
-pub(super) fn first_rule_sentence(content: &str) -> String {
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed == "---" || trimmed.starts_with('#') {
-            continue;
-        }
-        return trimmed.to_string();
-    }
-    String::new()
-}
-
-/// Merge a rule sentence into the project memory file (the always-on
-/// carrier). Creates the file with a header + the rule line when missing.
-/// Idempotent: when the rule sentence is already present, the file is
-/// unchanged (no duplicate line). Returns an error only on a write fault
-/// the caller logs and continues.
-pub(super) fn merge_rule_into_carrier(path: &Path, rule: &str) -> Result<(), String> {
-    if rule.is_empty() {
-        return Ok(());
-    }
-    let existing = read_to_string(path).unwrap_or_default();
-    if existing.lines().any(|line| line.trim() == rule) {
-        return Ok(());
-    }
-    let mut out = if existing.is_empty() {
-        "# Project memory\n\n".to_string()
-    } else {
-        existing
-    };
-    // Append under a blank separator so the rule line stands alone (the
-    // carrier reads as a list of one-line rules).
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push('\n');
-    out.push_str(rule);
-    out.push('\n');
-    write_bytes_atomic(path, out.as_bytes()).map_err(|e| e.to_string())
-}
-
-/// Strip a rule sentence from the project memory file. Idempotent: when the
-/// line is absent the file is unchanged. Returns an error only on a read or
-/// write fault the caller logs and continues.
-pub(super) fn strip_rule_from_carrier(path: &Path, rule: &str) -> Result<(), String> {
-    if rule.is_empty() {
-        return Ok(());
-    }
-    let Ok(existing) = read_to_string(path) else {
-        return Ok(());
-    };
-    let filtered: Vec<&str> = existing
-        .lines()
-        .filter(|line| line.trim() != rule)
-        .collect();
-    let out = filtered.join("\n");
-    if out == existing {
-        return Ok(());
-    }
-    write_bytes_atomic(path, out.as_bytes()).map_err(|e| e.to_string())
-}
 
 /// List every topic across all roots as a summary (key + description +
 /// source + scope + mtime). The provider impl delegates here so the

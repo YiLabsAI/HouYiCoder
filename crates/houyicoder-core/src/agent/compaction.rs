@@ -227,9 +227,11 @@ impl Runner {
             ol.clear_last_turn_delta();
         }
         // The rebuilt transcript invalidates the prior cache baseline. Refresh
-        // the frozen memory index at the same natural cache break.
+        // the frozen memory index and the frozen prompt inputs at the same
+        // natural cache break.
         self.cached_prefix.invalidate();
         self.memory.invalidate_index_snapshot();
+        self.context_builder.reset_frozen_prompt();
 
         let compression_ratio = if pre_compact_tokens > 0 {
             post_compact_tokens as f64 / pre_compact_tokens as f64

@@ -336,6 +336,13 @@ pub struct ContextBuilder {
     /// reads the same list. Interior-mutable so the composition root installs
     /// them post-construction.
     agent_types: Mutex<Vec<AgentDefinition>>,
+    /// The project memory and date line the session froze on its first
+    /// assembly. Held so an unrelated filesystem or clock change cannot
+    /// rewrite the prompt prefix mid-session.
+    frozen_prompt: Mutex<Option<FrozenPrompt>>,
+    /// The prefix the last assembly produced. Declared here and owned by the
+    /// prompt cache module, which is the only reader and writer.
+    prompt_hash: Mutex<Option<PromptHash>>,
 }
 
 impl ContextBuilder {
@@ -347,6 +354,8 @@ impl ContextBuilder {
             last_measurement: Mutex::new(None),
             retention_policy: Mutex::new(None),
             agent_types: Mutex::new(Vec::new()),
+            frozen_prompt: Mutex::new(None),
+            prompt_hash: Mutex::new(None),
         }
     }
 
@@ -485,10 +494,12 @@ impl ContextBuilder {
             .lock()
             .ok()
             .and_then(|defs| agent_directory_section(&defs));
+        let freeze = self.frozen_prompt_of(&cwd);
         let prompt = SystemPrompt::build_with_memory_index(
             &cwd,
             input.memory_index,
             agent_directory.as_deref(),
+            &freeze,
         );
         let prompt_tokens = self.tokenizer.count(&prompt.text);
 
@@ -525,6 +536,7 @@ impl ContextBuilder {
         let memory_tokens = block_tokens + recall_tokens;
 
         let skills = self.skill_cost(&filtered, input.announced_skills, input.discovered_skills);
+        self.record_prompt_hash(&prompt.text, input.tool_defs);
 
         // Tool schemas consume context despite traveling outside messages.
         let tool_tokens: u32 = input
@@ -744,7 +756,9 @@ pub use houyicoder_protocol::frontend::context::{
     CategoryBreakdown, ContextBreakdown, ContextFileEntry, ContextSkillEntry, GridCell, build_grid,
 };
 use houyicoder_protocol::llm::ToolDef;
+use prompt::FrozenPrompt;
 use prompt::SystemPrompt;
+use prompt::cache::PromptHash;
 use std::env::current_dir;
 use std::env::var;
 use std::sync::OnceLock;

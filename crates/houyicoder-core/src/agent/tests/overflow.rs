@@ -4,9 +4,15 @@
 //! reach sibling tests that resolve the default "test" window.
 
 use super::*;
+use crate::agent::context::AssemblyInput;
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, ModelCapabilities, OutputItem, ProviderError};
 use houyicoder_protocol::llm::{LlmEvent, Usage, UsageProvenance};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::fs::write;
+use std::process::id;
 
 use super::compaction::CompactionSuppression;
 use super::{GuardedTool, runner_with};
@@ -716,4 +722,98 @@ async fn test_fake_stream_complete() {
         .await
         .unwrap();
     assert!(resp.output.is_empty(), "no prior response -> empty default");
+}
+
+/// A break caused by the prefix itself names which half moved. The prefix is
+/// two independent halves — the system prompt and the tool schemas — and a
+/// reader chasing a cache miss needs to know which one to look at.
+#[tokio::test]
+async fn test_break_names_prefix_half() {
+    let runner = runner_with_overflow(
+        Arc::new(OverflowThenSucceedProvider::new(0, "x")),
+        ToolRegistry::new(),
+    );
+    let session = SessionId::new();
+    let mut root = temp_dir();
+    root.push(format!("cache-half-{}", id()));
+    let a = root.join("a");
+    let b = root.join("b");
+    create_dir_all(&a).expect("mkdir a");
+    create_dir_all(&b).expect("mkdir b");
+    write(a.join("AGENTS.md"), "# Rules A\n\nrules a.").expect("write a");
+    write(b.join("AGENTS.md"), "# Rules B\n\nrules b.").expect("write b");
+
+    let high = Usage {
+        cache_read_input_tokens: 8000,
+        input_tokens: 8000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+    let zero = Usage {
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+
+    // First turn against prefix A.
+    runner.context_builder.switch_cwd(a.clone());
+    runner.context_builder.reset_frozen_prompt();
+    runner.context_builder.build_for_turn(
+        &[],
+        None,
+        None,
+        &AssemblyInput {
+            tool_defs: &[],
+            memory_index: None,
+            announced_skills: &[],
+            discovered_skills: &[],
+        },
+    );
+    runner
+        .append_turn_usage(session, "test", &high, false, None)
+        .await
+        .unwrap();
+
+    // Second turn: the system prompt half changed, the tools half did not.
+    runner.context_builder.switch_cwd(b.clone());
+    runner.context_builder.reset_frozen_prompt();
+    runner.context_builder.build_for_turn(
+        &[],
+        None,
+        None,
+        &AssemblyInput {
+            tool_defs: &[],
+            memory_index: None,
+            announced_skills: &[],
+            discovered_skills: &[],
+        },
+    );
+    runner
+        .append_turn_usage(session, "test", &zero, false, None)
+        .await
+        .unwrap();
+
+    let events = runner.store().replay(session).await.unwrap();
+    assert!(
+        events.iter().any(|e| matches!(
+            &e.event,
+            SessionEvent::CacheBreak { cause } if cause == "system-prompt-changed"
+        )),
+        "a changed system prompt is named as such: {:?}",
+        events
+            .iter()
+            .filter_map(|e| match &e.event {
+                SessionEvent::CacheBreak { cause } => Some(cause.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
+    remove_dir_all(&root).ok();
 }

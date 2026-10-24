@@ -266,7 +266,7 @@ public docs state contracts; inline comments explain non-obvious decisions.
 Delete narration that repeats names or control flow, split/file-size history,
 prior implementation stories, and claims that a test "pins" code. A comment
 must stand alone: no document path, milestone id, or external pointer. Runtime
-artifacts the product reads (agent.md, MEMORY.md, AGENTS.md) remain valid
+artifacts the product reads (MEMORY.md, AGENTS.md) remain valid
 domain objects. Missing rationale and excessive comment density are both
 review findings.
 

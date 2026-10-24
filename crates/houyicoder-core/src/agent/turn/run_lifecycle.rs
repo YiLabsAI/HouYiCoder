@@ -101,6 +101,7 @@ impl Runner {
             cache_prev_read: Mutex::new(None),
             cache_compact_flag: AtomicBool::new(false),
             cache_model_switch_flag: AtomicBool::new(false),
+            cache_prev_prefix: Mutex::new(None),
             last_request_model: Mutex::new(None),
             cached_prefix: Arc::new(CachedPrefixState::new()),
             reducer: None,
