@@ -1,16 +1,18 @@
 //! Tests for redirect following, proxy-to-direct fallback, and transient retry.
+//!
+//! The transport cases run against a loopback mock server, never the public
+//! network: the client maps the public-looking name onto that server, so the
+//! URL keeps the shape the follower screens while the socket stays local.
 
-use std::io::Read;
-use std::io::Write;
-use std::net::TcpListener;
-use std::thread::sleep;
-use std::thread::spawn;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use reqwest::Client;
 use reqwest::Proxy;
 use reqwest::redirect::Policy;
 use tokio::runtime::Builder;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::FetchError;
 use super::Hop;
@@ -19,6 +21,17 @@ use super::fetch_following;
 use super::redirect_hop;
 use crate::agent::tools::webfetch::RouteClient;
 use crate::agent::tools::webfetch::read_body;
+
+/// A client that sends the public-looking test name to the loopback server,
+/// with redirects left to the follower under test.
+fn test_client(addr: SocketAddr) -> Client {
+    Client::builder()
+        .resolve("example.test", addr)
+        .redirect(Policy::none())
+        .no_proxy()
+        .build()
+        .expect("client")
+}
 
 /// A hop is followed only while the count is under the cap and the target
 /// passes the literal rule; a malformed base or target is refused with a
@@ -55,31 +68,21 @@ fn test_redirect_hop_decides() {
 /// refused before it is sent.
 #[test]
 fn test_redirect_hop_refused() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let server = spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let _read = stream.read(&mut buf);
-        stream
-            .write_all(
-                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            )
-            .expect("write");
-        sleep(Duration::from_millis(50));
-    });
-    let client = Client::builder()
-        .resolve("example.test", addr)
-        .redirect(Policy::none())
-        .no_proxy()
-        .build()
-        .expect("client");
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let url = format!("http://example.test:{}/start", addr.port());
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1:1/private"),
+            )
+            .mount(&server)
+            .await;
+        let client = test_client(*server.address());
+        let url = format!("http://example.test:{}/start", server.address().port());
         let refused = fetch_following(&client, None, None, &url)
             .await
             .expect_err("the hop is refused");
@@ -90,46 +93,35 @@ fn test_redirect_hop_refused() {
             }
         }
     });
-    server.join().expect("server");
 }
 
 /// A relative redirect is followed to the answer.
 #[test]
 fn test_follows_relative_redirect() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let server = spawn(move || {
-        for hop in 0..2 {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let mut buf = [0u8; 1024];
-            let _read = stream.read(&mut buf);
-            let reply: &[u8] = if hop == 0 {
-                b"HTTP/1.1 302 Found\r\nLocation: /second\r\nContent-Length: 0\r\n\r\n"
-            } else {
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
-            };
-            stream.write_all(reply).expect("write");
-        }
-    });
-    let client = Client::builder()
-        .resolve("example.test", addr)
-        .redirect(Policy::none())
-        .no_proxy()
-        .build()
-        .expect("client");
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let url = format!("http://example.test:{}/start", addr.port());
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/second"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/second"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        let client = test_client(*server.address());
+        let url = format!("http://example.test:{}/start", server.address().port());
         let response = fetch_following(&client, None, None, &url)
             .await
             .expect("response");
         assert_eq!(response.status().as_u16(), 200);
         assert_eq!(read_body(response).await.expect("body"), "ok");
     });
-    server.join().expect("server");
 }
 
 /// A desktop system route (RouteClient::System) falls back to the direct
@@ -137,35 +129,26 @@ fn test_follows_relative_redirect() {
 /// (RouteClient::Env) refuses to bypass the configured proxy.
 #[test]
 fn test_fallback_to_direct() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let server = spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let _read = stream.read(&mut buf);
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\ndirect")
-            .expect("write");
-    });
-    let direct = Client::builder()
-        .resolve("example.test", addr)
-        .redirect(Policy::none())
-        .no_proxy()
-        .build()
-        .expect("direct client");
-    let unreachable_client = Client::builder()
-        .proxy(Proxy::all("http://127.0.0.1:1").expect("route"))
-        .connect_timeout(Duration::from_millis(100))
-        .build()
-        .expect("route client");
-    let env_route = RouteClient::Env(unreachable_client.clone());
-    let sys_route = RouteClient::System(unreachable_client);
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
     runtime.block_on(async {
-        let url = format!("http://example.test:{}/ok", addr.port());
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("direct"))
+            .mount(&server)
+            .await;
+        let direct = test_client(*server.address());
+        let unreachable_client = Client::builder()
+            .proxy(Proxy::all("http://127.0.0.1:1").expect("route"))
+            .connect_timeout(Duration::from_millis(100))
+            .build()
+            .expect("route client");
+        let env_route = RouteClient::Env(unreachable_client.clone());
+        let sys_route = RouteClient::System(unreachable_client);
+        let url = format!("http://example.test:{}/ok", server.address().port());
         assert!(
             fetch_following(&direct, Some(&env_route), None, &url)
                 .await
@@ -190,5 +173,4 @@ fn test_fallback_to_direct() {
             "direct connect failure retries once then returns error"
         );
     });
-    server.join().expect("server");
 }
