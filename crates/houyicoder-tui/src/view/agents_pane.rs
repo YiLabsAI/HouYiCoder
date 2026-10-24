@@ -23,6 +23,7 @@ use ratatui::{
 use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};
 use unicode_width::UnicodeWidthStr;
 
+use crate::agent_message::DelegationRow;
 use crate::command::render::format_tokens;
 use crate::state::App;
 use crate::view::agents_pane::rows::{AgentRow, pane_rows};
@@ -231,6 +232,13 @@ fn span_row(row: &AgentRow<'_>, spans: &mut Vec<Span<'static>>, type_width: usiz
                 pad_width(&done.subagent_type, type_width),
                 Style::new().fg(Color::Yellow),
             ));
+            let metrics = completed_metrics(done);
+            if !metrics.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {metrics}"),
+                    Style::new().fg(Color::DarkGray),
+                ));
+            }
             let single = done
                 .summary
                 .lines()
@@ -391,6 +399,10 @@ fn child_detail_lines(
         }
     }
     if let Some(done) = completed {
+        let metrics = completed_metrics(done);
+        if !metrics.is_empty() {
+            body.push(field_line("Metrics: ", &metrics));
+        }
         if !done.prompt.is_empty() {
             body.push(field_line("Prompt: ", &done.prompt));
             body.push(Line::from(""));
@@ -402,6 +414,28 @@ fn child_detail_lines(
         body.extend(done.summary.lines().map(|l| Line::from(l.to_string())));
     }
     (header, body)
+}
+
+/// Format the known metrics of a completed delegation (calls, tokens, and
+/// duration), omitting any field that was not recorded.
+fn completed_metrics(done: &DelegationRow) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if done.tool_uses > 0 {
+        parts.push(format!("{} calls", done.tool_uses));
+    }
+    if done.tokens > 0 {
+        parts.push(format!("{} tok", format_tokens(done.tokens)));
+    }
+    let secs = done.duration_ms / 1000;
+    if secs > 0 {
+        let dur = if secs >= 60 {
+            format!("{}m {}s", secs / 60, secs % 60)
+        } else {
+            format!("{secs}s")
+        };
+        parts.push(dur);
+    }
+    parts.join(" · ")
 }
 
 /// The identity row (type and tier) and the section row, matching what the

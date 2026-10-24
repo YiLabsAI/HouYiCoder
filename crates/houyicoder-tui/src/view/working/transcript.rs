@@ -24,7 +24,7 @@ use crate::selection::{
     TAG_SPINNER, TAG_SYSTEM, TAG_USER,
 };
 use crate::state::enums::LiveBlock;
-use crate::state::{App, ViewportMode};
+use crate::state::{App, Pane, ViewportMode};
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
 use crate::view::line_wrap::truncate_width;
@@ -233,6 +233,7 @@ fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
     // The hit rect is the label span, not the full row, so a click beside the
     // label falls through to the transcript surface and starts a drag-select.
     let label_visible = app.ui.navigation.viewport != ViewportMode::Scroll
+        && app.ui.navigation.pane == Pane::Transcript
         && !app.active_scroll().is_following_tail()
         && !app.ui.transcript_view.search_active();
     if label_visible {

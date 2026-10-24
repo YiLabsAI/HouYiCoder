@@ -95,8 +95,12 @@ fn draw_working(f: &mut Frame, app: &App) {
     // box, and the dim status row at the bottom.
     // Both pinned strips draw from one budget, in priority order, so their
     // sum cannot starve the transcript.
-    let queue_want = queue_overlay::strip_want(app);
-    let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_strip::want(app));
+    let (queue_want, fleet_want) = if pane_hides_input {
+        (0, 0)
+    } else {
+        (queue_overlay::strip_want(app), fleet_strip::want(app))
+    };
+    let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_want);
     app.ui.frame.layout.fleet_granted.set(footer.fleet);
     let layout = build_working_layout(app, f.area().width, input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
@@ -505,7 +509,7 @@ fn draw_command_pane<C>(f: &mut Frame, area: Rect, app: &App, pane_h: u16, conte
 where
     C: Fn(&mut Frame, Rect, &App),
 {
-    let pane_h = pane_h.min(area.height / 2).max(8);
+    let pane_h = pane_h.min(f.area().height / 2).max(8).min(area.height);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(pane_h)])

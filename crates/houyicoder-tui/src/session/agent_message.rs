@@ -65,6 +65,9 @@ pub struct DelegationRow {
     pub subagent_type: String,
     pub summary: String,
     pub prompt: String,
+    pub tokens: u64,
+    pub tool_uses: u32,
+    pub duration_ms: u64,
     /// Whether the child transcript is already loaded in the fold. False on
     /// first open fires the on-demand fetch, same as the inline fold.
     pub loaded: bool,
@@ -102,13 +105,24 @@ impl PaneAgents {
                     prompt,
                     folded_transcript,
                     ..
-                } => Some(DelegationRow {
-                    child_sid: child_sid.clone(),
-                    subagent_type: subagent_type.clone(),
-                    summary: summary.clone(),
-                    prompt: prompt.clone(),
-                    loaded: !folded_transcript.is_empty(),
-                }),
+                } => {
+                    let tool_uses = folded_transcript
+                        .iter()
+                        .filter(
+                            |l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"),
+                        )
+                        .count() as u32;
+                    Some(DelegationRow {
+                        child_sid: child_sid.clone(),
+                        subagent_type: subagent_type.clone(),
+                        summary: summary.clone(),
+                        prompt: prompt.clone(),
+                        tokens: 0,
+                        tool_uses,
+                        duration_ms: 0,
+                        loaded: !folded_transcript.is_empty(),
+                    })
+                }
                 _ => None,
             })
             .collect();

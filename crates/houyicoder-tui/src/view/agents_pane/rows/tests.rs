@@ -21,6 +21,9 @@ fn delegation(child_sid: &str) -> DelegationRow {
         subagent_type: "explore".into(),
         summary: format!("summary of {child_sid}"),
         prompt: String::new(),
+        tokens: 0,
+        tool_uses: 0,
+        duration_ms: 0,
         loaded: true,
     }
 }

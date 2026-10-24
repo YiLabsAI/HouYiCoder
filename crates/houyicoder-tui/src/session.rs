@@ -194,5 +194,26 @@ impl Session {
         let version = self.transcript.revision();
         let lines = self.transcript.lines();
         self.agents.refresh(lines, version);
+        for row in &mut self.agents.rows {
+            if let Some(fleet) = self
+                .capabilities
+                .fleet
+                .entries
+                .iter()
+                .find(|e| e.agent_id == row.child_sid)
+            {
+                if row.tokens == 0 {
+                    row.tokens = fleet.tokens;
+                }
+                if row.tool_uses == 0 {
+                    row.tool_uses = fleet.tool_uses;
+                }
+                if row.duration_ms == 0
+                    && let (Some(start), Some(end)) = (fleet.started_at, fleet.completed_at)
+                {
+                    row.duration_ms = end.saturating_duration_since(start).as_millis() as u64;
+                }
+            }
+        }
     }
 }

@@ -5,6 +5,7 @@ use crate::records::TranscriptLine;
 use houyicoder_protocol::frontend::agents::AgentPrompt;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use std::time::{Duration, Instant};
 
 fn render(app: &App, w: u16, h: u16) -> String {
     render_lines(app, w, h).join("")
@@ -315,4 +316,50 @@ fn test_short_description_no_shift() {
         "the cost cell starts at one column:\n{}",
         lines.join("\n")
     );
+}
+
+#[test]
+fn test_completed_metrics_render() {
+    let mut app = composition::app();
+    let start = Instant::now() - Duration::from_secs(125);
+    let end = Instant::now();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c-metrics".into(),
+            subagent_type: "verify".into(),
+            turn: 3,
+            tokens: 24_500,
+            tool_uses: 18,
+            last_activity: None,
+            completed: Some("all checks green".into()),
+            completed_at: Some(end),
+            started_at: Some(start),
+        });
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "c-metrics".into(),
+        subagent_type: "verify".into(),
+        summary: "all checks green".into(),
+        prompt: "run suite".into(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.sessions.current.refresh_agents();
+    let list_out = render(&app, 80, 14);
+    assert!(
+        list_out.contains("18 calls \u{00b7} 24.5k tok \u{00b7} 2m 5s"),
+        "completed L0 row shows calls, tokens, and duration:\n{list_out}"
+    );
+    app.ui
+        .agents_pane
+        .open_child_detail("verify".into(), "c-metrics".into());
+    let detail_out = render(&app, 80, 14);
+    assert!(
+        detail_out.contains("Metrics: 18 calls \u{00b7} 24.5k tok \u{00b7} 2m 5s"),
+        "completed L1 detail shows metrics:\n{detail_out}"
+    );
+    assert!(detail_out.contains("Prompt: run suite"), "{detail_out}");
 }
