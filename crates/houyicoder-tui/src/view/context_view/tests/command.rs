@@ -12,10 +12,10 @@ use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::records::TranscriptLine;
 use houyicoder_provider::FakeProvider;
 
-use crate::run_control::tests::app_with_provider;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::render_buffer;
+use crate::turn_driver::tests::app_with_provider;
 use std::thread::sleep;
 use std::time::Duration;
 

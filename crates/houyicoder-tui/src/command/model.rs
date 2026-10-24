@@ -6,8 +6,8 @@
 //! every operation spanning both is one method here: the read of the facts
 //! and the write of the draft cannot drift apart at separate call sites.
 
+use crate::agent_message::ClientCommand;
 use crate::model_receipt::receipt_line;
-use crate::run_control::ClientCommand;
 use crate::session::ConnectionStatus;
 use crate::session::capabilities::model::PendingCommit;
 use crate::state::model_draft::ModelSettingFocus;

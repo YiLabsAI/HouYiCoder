@@ -5,7 +5,7 @@
 //! freeze root cause.
 //!
 //! The transcript is rebuilt wholesale on each event batch
-//! (run_control::rebuild_transcript), so line indices are unstable and the
+//! (turn_driver::rebuild_transcript), so line indices are unstable and the
 //! cache cannot key on position. It keys on a 128-bit content hash + pane
 //! width + expand flag, which is stable across rebuilds AND across the future
 //! disk-backed search load (lines arrive by content, not in-memory index).

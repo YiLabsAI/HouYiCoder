@@ -10,9 +10,9 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 
+use crate::agent_message::ClientCommand;
 use crate::composition;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
-use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, Screen, Stage};
 use crate::view::export_log::write_atomic_0600;
 use crate::view::trajectory_pane;

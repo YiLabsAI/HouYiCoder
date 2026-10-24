@@ -9,8 +9,8 @@ use houyicoder_protocol::frontend::permission::{
     PermissionEffect, PermissionRule, PermissionRuleContent, RuleDestination,
 };
 
+use crate::agent_message::ClientCommand;
 use crate::command::render::permission_effect_label;
-use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, PermissionInput, PermissionTab};
 use ratatui::crossterm::event::KeyCode;
 use ratatui::crossterm::event::KeyEvent;

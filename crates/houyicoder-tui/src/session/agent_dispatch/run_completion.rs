@@ -5,8 +5,8 @@
 use houyicoder_protocol::frontend::run::{RunOutcome, RunResult};
 
 use crate::records::TranscriptLine;
-use crate::run_control::should_preserve_interrupted_turn;
 use crate::transcript::FrontendRow;
+use crate::turn_driver::should_preserve_interrupted_turn;
 
 impl super::App {
     /// Finalize a run. The error side is a display string, not the protocol

@@ -7,8 +7,8 @@ use houyicoder_protocol::frontend::permission::PermissionMode;
 
 use super::render::permission_effect_label;
 use super::render::render_permission_view;
+use crate::agent_message::ClientCommand;
 use crate::permission_input::{add_rule_from_command, remove_rule_at};
-use crate::run_control::ClientCommand;
 use crate::state::{App, Pane};
 
 impl App {

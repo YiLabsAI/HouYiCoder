@@ -6,7 +6,7 @@ use std::ops::Index;
 
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
 
-use crate::run_control::ClientCommand;
+use crate::agent_message::ClientCommand;
 use crate::state::App;
 use houyicoder_protocol::frontend::SlashCommand;
 use std::mem::take;
@@ -402,6 +402,126 @@ impl App {
             return self.resume_switch_message(label);
         }
         format!("{cmd}: will run when the run finishes")
+    }
+
+    /// Consume the pending queue head in first-in, first-out order. Clean
+    /// completion may start the next turn; other outcomes leave input parked.
+    /// At most one parked message is promoted to the server queue. Returns
+    /// false when no item is available or the enqueue was refused.
+    pub fn drain_pending_head(&mut self) -> bool {
+        let Some(item) = self.ui.input.queue.first().cloned() else {
+            return false;
+        };
+        match item {
+            InputItem::Command(text) => {
+                self.ui.input.queue.remove(0);
+                self.run_slash_text(&text);
+                true
+            }
+            InputItem::Message(head) => {
+                // Remove the stale server copy before starting a fresh run; a
+                // refused removal keeps the head queued so the local copy and
+                // the server mirror cannot diverge.
+                let session_id = self.sessions.current.identity.session_id.clone();
+                if let Err(e) = self.enqueue(ClientCommand::QueueRemove {
+                    session_id,
+                    id: head.id,
+                }) {
+                    self.system_line(Self::enqueue_failure_line("queue", e));
+                    return false;
+                }
+                self.ui.input.queue.remove(0);
+                let text = head.text.clone();
+                if !self.spawn_run(head.text) {
+                    // The mirror is gone but the run could not start: keep the
+                    // user content parked at the head so nothing is lost.
+                    let queue = &mut self.ui.input.queue;
+                    queue.insert(0, InputItem::ParkedMessage(text.into()));
+                    return false;
+                }
+                self.promote_next_pending();
+                true
+            }
+            InputItem::ParkedMessage(input) => {
+                self.ui.input.queue.remove(0);
+                let text = input.text.clone();
+                if !self.spawn_run(input.text) {
+                    let queue = &mut self.ui.input.queue;
+                    queue.insert(0, InputItem::ParkedMessage(text.into()));
+                    return false;
+                }
+                self.promote_next_pending();
+                true
+            }
+        }
+    }
+
+    /// Recall the queued item at the cursor position into the input box.
+    /// Sends QueueRemove for a live server copy. Leaves other items queued.
+    pub fn recall_queued_at_cursor(&mut self) {
+        let Some(idx) = self.ui.input.queue.selected_index() else {
+            return;
+        };
+        let Some(item) = self.remove_pending_at(idx) else {
+            return;
+        };
+        self.ui
+            .input
+            .merge_recalled_text(item.display().to_string());
+    }
+
+    /// Delete the queued item at the cursor position without recalling it.
+    /// Sends QueueRemove for a live server copy.
+    pub fn delete_queued_at_cursor(&mut self) {
+        let Some(idx) = self.ui.input.queue.selected_index() else {
+            return;
+        };
+        drop(self.remove_pending_at(idx));
+    }
+
+    /// Recall queued messages into the input box before the current draft.
+    /// Commands remain queued. A message leaves the queue only together with
+    /// its server mirror: a refused mirror removal keeps the entry queued so
+    /// the input cannot duplicate on the next drain.
+    pub fn pop_queued_to_input(&mut self) {
+        let queue = &self.ui.input.queue;
+        if queue.iter().all(|it| matches!(it, InputItem::Command(_))) {
+            return;
+        }
+        let mut keep: Vec<InputItem> = Vec::new();
+        let mut recalled: Vec<String> = Vec::new();
+        let mut refused = false;
+        for it in self.ui.input.queue.take_all() {
+            match it {
+                InputItem::Message(input) => {
+                    let session_id = self.sessions.current.identity.session_id.clone();
+                    if self
+                        .enqueue(ClientCommand::QueueRemove {
+                            session_id,
+                            id: input.id,
+                        })
+                        .is_ok()
+                    {
+                        recalled.push(input.text);
+                    } else {
+                        refused = true;
+                        keep.push(InputItem::Message(input));
+                    }
+                }
+                InputItem::ParkedMessage(input) => recalled.push(input.text),
+                other => keep.push(other),
+            }
+        }
+        self.ui.input.queue.replace_all(keep);
+        if refused {
+            self.system_line("queue: connection lost — some entries stayed queued");
+        }
+        if recalled.is_empty() {
+            return;
+        }
+        // Explicit recall supersedes automatic interrupted-turn restoration.
+        self.sessions.current.last_run_input = None;
+        self.ui.input.merge_recalled_text(recalled.join("\n"));
     }
 }
 

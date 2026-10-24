@@ -5,8 +5,8 @@
 //! Houyi makes the session name inline-editable + syncs the terminal tab
 //! title via OSC 0/2 on the reply (rather than a rename command).
 
+use crate::agent_message::ClientCommand;
 use crate::input::InputField;
-use crate::run_control::ClientCommand;
 use crate::state::App;
 
 impl App {

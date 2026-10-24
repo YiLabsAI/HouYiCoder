@@ -4,12 +4,12 @@
 //! (single responsibility), while this file owns per-pane approve/reject and
 //! the modal edit -> proposed change -> apply orchestration.
 
+use crate::agent_message::ClientCommand;
 use crate::artifact::{ArtifactMode, ChangeProposer};
 use crate::evidence::{Divergence, Verdict};
 use crate::fold::is_memory_notice;
 use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
 use crate::records::TranscriptLine;
-use crate::run_control::ClientCommand;
 use crate::state::{App, Pane, Stage};
 use houyicoder_protocol::frontend::SessionId;
 

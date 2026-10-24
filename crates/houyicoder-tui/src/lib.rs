@@ -29,7 +29,7 @@ pub(crate) use input::palette;
 pub use input::{history, paste};
 pub use session::{agent_message, pending_prompt};
 pub(crate) use session::{
-    ask_question_model, model_receipt, run_control, run_metrics, run_state, sessions, todo_view,
+    ask_question_model, model_receipt, run_metrics, run_state, sessions, todo_view, turn_driver,
 };
 pub(crate) use transcript::{brief, fold, git_op, markdown, scroll};
 pub use transcript::{records, redaction, result_body, row_id};

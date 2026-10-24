@@ -8,7 +8,7 @@ pub use login::{handle_console, handle_login};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::run_control::ClientCommand;
+use crate::agent_message::ClientCommand;
 #[cfg(test)]
 use crate::state::Stage;
 use crate::state::{App, Pane, TrustChoice, ViewportMode};

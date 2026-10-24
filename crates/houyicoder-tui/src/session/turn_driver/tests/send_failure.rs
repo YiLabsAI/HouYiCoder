@@ -13,12 +13,12 @@ use crate::pending_prompt::PendingPrompt;
 use crate::records::AskQuestion;
 use crate::records::TeammateView;
 use crate::records::{Approval, TranscriptLine};
-use crate::run_control::ApprovalDecision;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::connection_lost_app;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::run::ApprovalDecision;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 fn last_line(app: &App) -> String {

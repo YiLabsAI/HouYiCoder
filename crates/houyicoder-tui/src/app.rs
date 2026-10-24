@@ -18,10 +18,10 @@ use std::time::{Duration, Instant};
 
 use houyicoder_protocol::frontend::SlashCommand;
 
+use crate::agent_message::ClientCommand;
 use crate::composition::{FrontendStartup, RunnerBundle, build_app};
 use crate::keys;
 use crate::notifications::{NotifKind, Notification, copy_toast};
-use crate::run_control::ClientCommand;
 use crate::selection::get_clipboard_path;
 use crate::selection::region::{
     ApprovalSelection, PaneRegion, Region, RegionIntent, RegionView, StatusRegion,

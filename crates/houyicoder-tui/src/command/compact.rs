@@ -1,6 +1,6 @@
 //! Starts manual compaction when the session is idle and connected.
 
-use crate::run_control::ClientCommand;
+use crate::agent_message::ClientCommand;
 use crate::state::App;
 
 impl App {

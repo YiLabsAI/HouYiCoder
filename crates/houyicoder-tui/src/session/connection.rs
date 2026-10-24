@@ -12,6 +12,7 @@ use std::time::Duration;
 use houyicoder_protocol::envelope::RequestId;
 
 use crate::agent_message::{ClientCommand, SessionMessage};
+use crate::state::App;
 use mpsc::TryRecvError;
 use std::error::Error;
 use tokio::sync::mpsc::UnboundedSender;
@@ -242,6 +243,66 @@ impl SessionConnection {
     /// Block up to the timeout for the next inbound message during startup.
     pub fn poll_startup(&mut self, timeout: Duration) -> Option<SessionMessage> {
         self.agent_rx.recv_timeout(timeout).ok()
+    }
+}
+
+impl App {
+    /// Enqueue a command over the session's command channel. Ok means the
+    /// command entered the local connection queue, not that it reached the
+    /// transport or server. NotConnected when no active session exists; Closed
+    /// when the driver task is gone. In either Err case the command never
+    /// left this process, so no reply will come and the caller must not
+    /// leave state waiting on one. Request ids are issued by the connection
+    /// before this call.
+    pub fn enqueue(&self, cmd: ClientCommand) -> Result<(), EnqueueError> {
+        let connection = self.sessions.current.connection.as_ref();
+        connection
+            .ok_or(EnqueueError::NotConnected)
+            .and_then(|s| s.enqueue(cmd))
+    }
+
+    /// The user-facing line for an enqueue failure on a user-initiated action.
+    /// NotConnected and Closed stay distinct so the user sees the real cause
+    /// rather than a generic loss message. Presentation lives on the App
+    /// boundary, not on the connection error type.
+    pub(crate) fn enqueue_failure_line(subject: &str, error: EnqueueError) -> String {
+        match error {
+            EnqueueError::NotConnected => format!("{subject}: not connected"),
+            EnqueueError::Closed => format!("{subject}: connection lost"),
+        }
+    }
+
+    /// Enqueue an auto-refresh query and settle its result without writing a
+    /// transcript line. The driver's ConnectionLost event is the single
+    /// visible connection-failure notice; a second line here would race with
+    /// it. NotConnected means no session exists and there is nothing to
+    /// refresh. Callers with pending flags clear them at the enqueue site on
+    /// the Err path.
+    pub(crate) fn enqueue_refresh(&mut self, command: ClientCommand) {
+        if let Err(_error) = self.enqueue(command) {
+            // Acknowledged, not dropped: the ConnectionLost event announces
+            // the loss and sweeps state on the next poll.
+        }
+    }
+
+    /// The lifecycle of the current connection. Disconnected is the absent
+    /// session, so callers read one four-state view instead of folding an
+    /// Option over a three-state enum.
+    pub fn connection_status(&self) -> ConnectionStatus {
+        let connection = self.sessions.current.connection.as_ref();
+        connection.map_or(ConnectionStatus::Disconnected, |s| s.status().clone())
+    }
+
+    /// Record a single request-id exhaustion notice for an auto path. The
+    /// connection refuses further allocations until it ends, so each refresh
+    /// round that observes the failure would otherwise either spam the line or
+    /// lose it silently; the one-shot flag lets the first round announce and
+    /// later rounds stay quiet.
+    pub(crate) fn note_request_id_exhausted(&mut self) {
+        let connection = self.sessions.current.connection.as_ref();
+        if connection.is_some_and(|s| s.take_exhaustion_notice()) {
+            self.system_line("request ids exhausted");
+        }
     }
 }
 

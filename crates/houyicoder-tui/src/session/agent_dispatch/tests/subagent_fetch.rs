@@ -10,9 +10,9 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use crate::records::TranscriptLine;
 use houyicoder_provider::FakeProvider;
 
-use crate::run_control::tests::app_with_provider;
 use crate::state::Screen;
 use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::turn_driver::tests::app_with_provider;
 use std::thread::sleep;
 use std::time::Duration;
 

@@ -17,7 +17,7 @@ use std::time::Duration;
 use super::LOG_ROW_BUDGET;
 use crate::app::state::App;
 use crate::composition::shared_runtime;
-use crate::session::run_control::history_read::{LookbackFrom, OVERLAP_FRONT_ROWS, ReadJob};
+use crate::session::turn_driver::history_read::{LookbackFrom, OVERLAP_FRONT_ROWS, ReadJob};
 use crate::transcript::history_state::{
     HistoryReadOutcome, HistoryReadPoll, HistoryStamp, PendingHistoryRead,
 };

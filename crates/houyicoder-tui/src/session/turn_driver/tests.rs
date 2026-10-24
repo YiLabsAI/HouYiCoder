@@ -1,10 +1,5 @@
-//! Integration tests for the agent-loop wiring: spawn_run /
-//! resolve_current_approval / handle_agent_message, plus the
-//! GuardedTool-through-real-runner mode-gate coverage. Split out of
-//! run_control.rs so that file stays under the size gate.
-//! the wire: a paired in-memory server drives runner.run, the TUI ships
-//! MessageSend, and permission asks arrive as SessionMessage::Request
-//! reverse requests.
+//! Integration tests for user turn execution, message polling, and
+//! reverse-request approval handling against a paired in-memory server.
 use super::startup::StartupBatch;
 use super::*;
 use crate::agent_message::SessionMessage;
@@ -36,9 +31,9 @@ use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
 use houyicoder_protocol::frontend::run::DelegationSource;
 use houyicoder_protocol::frontend::run::StopReason;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest};
 use houyicoder_protocol::frontend::run::{ContentBlock, RunError, RunOutcome, RunResult};
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use houyicoder_protocol::frontend::trust::TrustPrompt;
