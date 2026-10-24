@@ -155,7 +155,7 @@ verify: check-full
 	if [ $$total -gt $$warn_budget ]; then \
 		printf "\033[1;33m⚠ verify ignored-suite %ds over %ds budget — prune slow tests (sleep→events, shared fixtures) or raise VERIFY_BUDGET_WARN\033[0m\n" $$total $$warn_budget; \
 	fi; \
-	exit $$status
+	[ $$status -eq 0 ] || exit $$status
 	@echo "▶ Checking the cfg-gated crates compile for their other targets..."
 	@python3 scripts/check_cross_target.py
 	@echo "▶ Running doc-stale detection..."
