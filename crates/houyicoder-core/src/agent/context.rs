@@ -494,7 +494,7 @@ impl ContextBuilder {
             .lock()
             .ok()
             .and_then(|defs| agent_directory_section(&defs));
-        let freeze = self.frozen_prompt_of(&cwd);
+        let freeze = self.frozen_prompt(&cwd);
         let prompt = SystemPrompt::build_with_memory_index(
             &cwd,
             input.memory_index,

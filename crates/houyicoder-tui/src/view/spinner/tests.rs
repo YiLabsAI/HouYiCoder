@@ -48,7 +48,29 @@ fn test_stall_gradient_red() {
     let line = spinner_line("✻ Thinking… (5s)", Duration::from_secs(4), 1.0, false);
     assert!(!line.spans.is_empty());
     let glyph_span = &line.spans[0];
-    assert!(matches!(glyph_span.style.fg, Some(Color::Rgb(_, _, _))));
+    let verb_span = &line.spans[2];
+    assert!(matches!(glyph_span.style.fg, Some(Color::Rgb(255, _, _))));
+    assert_eq!(verb_span.style.fg, glyph_span.style.fg);
+    assert!(
+        line.spans.iter().all(|s| s.style.fg != Some(Color::Cyan)),
+        "a stalled spinner suppresses the cyan shimmer"
+    );
+}
+
+#[test]
+fn test_tool_pulse_whole_verb() {
+    let line = spinner_line(
+        "✻ Working… (5s · ↓ 80 tokens)",
+        Duration::from_millis(300),
+        0.0,
+        true,
+    );
+    assert!(
+        line.spans.iter().all(|s| s.style.fg != Some(Color::Cyan)),
+        "tool-active breathing replaces the sliding shimmer window"
+    );
+    let tail = line.spans.last().expect("tail span");
+    assert_eq!(tail.style.fg, Some(Color::DarkGray));
 }
 
 #[test]

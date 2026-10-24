@@ -1,7 +1,6 @@
-//! Spinner row rendering extracted from working.rs so the working-surface
-//! draw file stays under the file-size gate. The live spinner row is rebuilt
-//! each draw from the run-start Instant so the animation needs no mutable
-//! tick state.
+//! Live activity spinner row: animated glyph, shimmer and tool-use breathing
+//! on the active verb, stall-gradient warning, and static duration and token
+//! counters.
 
 use crate::state::App;
 use crate::state::enums::LiveBlock;
@@ -194,32 +193,40 @@ pub fn spinner_line(
         return Line::from(spans);
     }
     spans.push(Span::raw(" ".to_string()));
-    // Shimmer: a ~3-char bright window slides across the verb; rest dim.
+    // Stall overrides shimmer: when the stream is stalled, both the glyph and
+    // the verb fade toward error red without a competing highlight sweep.
+    if intensity > 0.0 {
+        spans.push(Span::styled(verb.to_string(), glyph_style));
+        spans.push(Span::styled(tail.to_string(), dim));
+        return Line::from(spans);
+    }
+    // Tool-use breathing pulse: while a tool runs, the whole verb breathes as
+    // one word between dim and brighter gray without a sliding shimmer window.
+    let pulse = tool_pulse_opacity(elapsed, tool_active);
+    if pulse > 0.0 {
+        let body_style = Style::new().fg(lerp_color(DIM_GRAY, PULSE_GRAY, pulse / 0.3));
+        spans.push(Span::styled(verb.to_string(), body_style));
+        spans.push(Span::styled(tail.to_string(), dim));
+        return Line::from(spans);
+    }
+    // Streaming shimmer: a 3-char highlight sweeps across the verb, followed
+    // by a calm pause before the next sweep.
     let vchars: Vec<char> = verb.chars().collect();
     let n = vchars.len();
-    let pos = (elapsed.as_millis() / 100) as usize % (n + 4);
+    let pos = (elapsed.as_millis() / 100) as usize % (n + 12);
     let s_start = pos.min(n);
     let s_end = (s_start + 3).min(n);
     let before: String = vchars[..s_start].iter().collect();
     let mid: String = vchars[s_start..s_end].iter().collect();
     let after: String = vchars[s_end..].iter().collect();
-    // Tool-use breathing pulse: lerp the non-shimmer text color between the
-    // dim gray and a brighter gray, driven by the sine opacity (0.0 to 0.3
-    // normalized to 0..1). No pulse: plain dim.
-    let pulse = tool_pulse_opacity(elapsed, tool_active);
-    let body_style = if pulse > 0.0 {
-        Style::new().fg(lerp_color(DIM_GRAY, PULSE_GRAY, pulse / 0.3))
-    } else {
-        dim
-    };
     if !before.is_empty() {
-        spans.push(Span::styled(before, body_style));
+        spans.push(Span::styled(before, dim));
     }
     if !mid.is_empty() {
         spans.push(Span::styled(mid, bright));
     }
     if !after.is_empty() {
-        spans.push(Span::styled(after, body_style));
+        spans.push(Span::styled(after, dim));
     }
     // The elapsed time and token count stay static. They are read every
     // frame, and a figure that breathes with the verb is harder to read the

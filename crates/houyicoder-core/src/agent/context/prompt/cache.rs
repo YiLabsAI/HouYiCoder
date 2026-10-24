@@ -40,7 +40,7 @@ impl ContextBuilder {
     /// re-reading them every turn lets a worktree switch or midnight rewrite
     /// the prompt prefix and invalidate the whole cached context. They are
     /// frozen here and refreshed only by reset_frozen_prompt.
-    pub(crate) fn frozen_prompt_of(&self, cwd: &Path) -> FrozenPrompt {
+    pub(crate) fn frozen_prompt(&self, cwd: &Path) -> FrozenPrompt {
         let Ok(mut slot) = self.frozen_prompt.lock() else {
             return FrozenPrompt::read(cwd);
         };

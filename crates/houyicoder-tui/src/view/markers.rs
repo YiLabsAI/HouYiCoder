@@ -1,8 +1,7 @@
-//! Pure styling helpers for the transcript's glyph-led rows and result
-//! bodies, extracted from working.rs so the layout file stays under the size
-//! gate. styled_row colors a call or continuation row by outcome;
-//! result_body_rows lays out a multi-line result body with a gutter,
-//! continuation indent, and collapse + Ctrl+O expand. For an Edit/MultiEdit
+//! Styling and row-planning for the transcript's glyph-led tool call rows,
+//! result bodies, and unified diff blocks. styled_row colors a call or
+//! continuation row by outcome; result_body_rows lays out a multi-line result
+//! body with a gutter, continuation indent, and collapse + Ctrl+O expand. For an Edit/MultiEdit
 //! result body the renderer parses the unified diff into structured hunks
 //! (consuming the @@ header as metadata, never rendering it) and lays out a
 //! line-numbered green/red gutter with a dim "..." between hunks — a
@@ -117,6 +116,7 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
         // summary ("Added N lines, removed M lines") bolds the counts.
         let body_style = match outcome {
             Some(ToolOutcome::Error) => red,
+            _ if rest == "(no output)" => dim,
             _ => Style::new().fg(Color::Reset),
         };
         let body_spans = if rest.starts_with("Added ") || rest.starts_with("Removed ") {
@@ -127,6 +127,9 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
         let mut spans = vec![Span::styled("  ⎿  ", dim)];
         spans.extend(body_spans);
         return Some(Line::from(spans));
+    }
+    if row.starts_with("     … +") && row.ends_with(" lines") {
+        return Some(Line::from(Span::styled(row.to_string(), dim)));
     }
     None
 }

@@ -1,7 +1,6 @@
 //! Tool-result expand body: turn a tool's output JSON into the multi-line
 //! body shown below the one-line summary chip on Ctrl+O expand. Pairs with
-//! brief.rs (the one-line chip); this module is the multi-line detail. Split
-//! from transcript.rs so that file stays under the size gate.
+//! brief.rs, which formats the one-line call chip.
 
 use serde_json::Value;
 
