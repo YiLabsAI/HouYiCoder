@@ -297,8 +297,8 @@ impl Server {
             reason.is_some_and(|current| current.validator == "directory-capability");
         let is_system_safety =
             reason.is_some_and(|current| current.source == AskSource::SystemSafety);
-        if !is_path_bounds
-            && !is_directory_capability
+        let boundary_needs_gate = (is_path_bounds || is_directory_capability) && grants.is_empty();
+        if (!is_path_bounds && !is_directory_capability || boundary_needs_gate)
             && !is_system_safety
             && reason.is_some()
             && scope == "always"

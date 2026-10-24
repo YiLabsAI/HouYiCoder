@@ -6,6 +6,8 @@
 //! derived offers no remember option: a choice the gate would ignore is worse
 //! than no choice.
 
+use std::path::Path;
+
 use houyicoder_permission::{
     AskSource, Effect, NETWORK_EGRESS, Rule, RuleContent, Scope, egress_outputs_safe,
 };
@@ -19,6 +21,8 @@ use super::consent_rule_for;
 pub(crate) enum AlwaysGrant {
     /// Network destinations remembered for the session.
     Network(Vec<String>),
+    /// A directory authorized for path-bounds checks.
+    Directory(String),
     /// A durable rule.
     Rule(houyicoder_permission::Rule),
     /// Nothing durable: the call must be answered once.
@@ -45,6 +49,12 @@ pub(crate) fn always_grant(
     };
     if reason.source == AskSource::SystemSafety {
         return AlwaysGrant::Once;
+    }
+    if matches!(reason.validator, "path-bounds" | "directory-capability") {
+        return match extract_boundary_directory(&reason.detail, input) {
+            Some(dir) => AlwaysGrant::Directory(dir),
+            None => AlwaysGrant::Once,
+        };
     }
     if matches!(
         tool_name.to_ascii_lowercase().as_str(),
@@ -96,6 +106,7 @@ fn always_label(grant: &AlwaysGrant) -> Option<String> {
                 Some(format!("{first}, {second} (+{} more) *", rest.len()))
             }
         },
+        AlwaysGrant::Directory(dir) => Some(dir.clone()),
         AlwaysGrant::Rule(rule) => Some(match &rule.content {
             Some(RuleContent::Prefix(prefix)) => format!("{prefix} *"),
             Some(RuleContent::Exact(value)) => value.clone(),
@@ -135,4 +146,25 @@ pub(crate) fn approval_options(
         meta: None,
     });
     options
+}
+
+/// Extract the directory named by a path-bounds or directory-capability reason,
+/// falling back to the parent directory of the tool's path input.
+fn extract_boundary_directory(detail: &str, input: &serde_json::Value) -> Option<String> {
+    if let Some((_, after)) = detail.split_once("directory ") {
+        let dir = [" with ", "; choosing", " and ", " for this session"]
+            .iter()
+            .fold(after, |acc, sep| acc.split(sep).next().unwrap_or(acc))
+            .trim();
+        if !dir.is_empty() {
+            return Some(dir.to_string());
+        }
+    }
+    let raw = input.get("path").and_then(|v| v.as_str())?;
+    let path = Path::new(raw);
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(path);
+    Some(dir.to_string_lossy().into_owned())
 }

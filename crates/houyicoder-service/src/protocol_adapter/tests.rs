@@ -5,12 +5,15 @@ use houyicoder_context::{EventId, SessionId, SessionLogEntry};
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::RunError;
 use houyicoder_permission::PermissionMode as E;
-use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest};
+use houyicoder_permission::{
+    AskReason, AskSource, Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest,
+};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::RuleDestination;
 use houyicoder_protocol::llm::ProviderError;
 use serde_json::Value;
+use std::path::Path;
 use std::slice::from_ref;
 
 #[test]
@@ -72,6 +75,52 @@ fn test_read_scope_remember() {
         gate.add_egress_allow(&scope);
     }
     assert_eq!(gate.decide(&request).outcome(), Outcome::Allow);
+}
+
+#[test]
+fn test_path_bounds_grants_dir() {
+    let gate = DefaultModeGate::with_mode(E::Auto);
+    let input = serde_json::json!({
+        "path": "/work/repo/wiki/review/bug-log.md"
+    });
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds",
+        detail: "path outside the workspace; approval authorizes parent directory /work/repo/wiki/review with read-write access; choosing always persists it".into(),
+        containment_note: None,
+    };
+    let dir = match always_grant("write", &input, Some(&reason), true) {
+        AlwaysGrant::Directory(dir) => dir,
+        _ => panic!("expected directory grant for path-bounds ask"),
+    };
+    assert_eq!(dir, "/work/repo/wiki/review");
+    let options = approval_options("write", &input, Some(&reason), true);
+    let always = options
+        .iter()
+        .find(|o| o.option_id == "allow_always")
+        .expect("allow_always option present");
+    assert_eq!(always.name, "/work/repo/wiki/review");
+
+    // Fallback when the detail does not name the directory explicitly.
+    let bare_reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds",
+        detail: "outside workspace".into(),
+        containment_note: None,
+    };
+    let fallback_dir = match always_grant("write", &input, Some(&bare_reason), true) {
+        AlwaysGrant::Directory(dir) => dir,
+        _ => panic!("expected fallback directory grant"),
+    };
+    assert_eq!(fallback_dir, "/work/repo/wiki/review");
+    gate.add_directory(Path::new(&fallback_dir), Scope::Local);
+
+    // An ask with neither a directory in the detail nor a path input falls back
+    // to Once so the card never offers an empty directory grant.
+    assert!(matches!(
+        always_grant("write", &serde_json::json!({}), Some(&bare_reason), true),
+        AlwaysGrant::Once
+    ));
 }
 
 /// Every durable turn-event kind maps to a session update, an ACPX

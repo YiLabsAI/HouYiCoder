@@ -52,9 +52,9 @@ use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
     RunOutcome, RunResult,
 };
-use houyicoder_permission::AskReason;
+use houyicoder_permission::{AskReason, Scope};
 use houyicoder_protocol::acp_wire::AcpNotification;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast::error::RecvError;
@@ -268,6 +268,9 @@ impl Server {
                 for scope in scopes {
                     self.gate.add_egress_allow(&scope);
                 }
+            }
+            AlwaysGrant::Directory(dir) => {
+                self.gate.add_directory(Path::new(&dir), Scope::Local);
             }
             AlwaysGrant::Rule(rule) => self.gate.add_rule(rule),
         }
