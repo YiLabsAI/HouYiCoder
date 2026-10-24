@@ -3,12 +3,10 @@
 use super::*;
 use houyicoder_protocol::tool::tool_result_failed;
 use pollster::block_on;
-use std::io::Read;
-use std::io::Write;
-use std::net::TcpListener;
-use std::thread::spawn;
 use std::time::Duration;
 use tokio::runtime::Builder;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn test_schema_has_url_prompt() {
@@ -489,35 +487,28 @@ fn test_host_check_families() {
 /// The body reader takes a real response in chunks and decodes it as text.
 #[test]
 fn test_read_body_from_response() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let server = spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let _read = stream.read(&mut buf);
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: text/plain\r\n\r\nhello",
-            )
-            .expect("write");
-    });
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
     runtime.block_on(async {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+            .mount(&server)
+            .await;
         let resp = reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("client")
-            .get(format!("http://{addr}/"))
+            .get(format!("{}/", server.uri()))
             .send()
             .await
             .expect("request");
         let body = read_body(resp).await.expect("body");
         assert_eq!(body, "hello");
     });
-    server.join().expect("server");
 }
 
 /// A name whose answer is loopback is refused by the resolver the connection

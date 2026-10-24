@@ -17,15 +17,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 use houyicoder_api::launcher::ProcessLauncher;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 use houyicoder_api::launcher::SpawnPolicy;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 use houyicoder_api::launcher::SpawnRequest;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 use houyicoder_api::launcher::StdProcessLauncher;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 use pollster::block_on;
 use reqwest::Client;
 use reqwest::NoProxy;
@@ -135,7 +135,7 @@ fn cached_system_route() -> Option<SystemRoute> {
     queried
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 fn query_system_route() -> Option<Option<SystemRoute>> {
     let launcher = StdProcessLauncher::new();
     let req = SpawnRequest::new("/usr/sbin/scutil")
@@ -150,7 +150,7 @@ fn query_system_route() -> Option<Option<SystemRoute>> {
     Some(parse_system_route(&text))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), test))]
 fn query_system_route() -> Option<Option<SystemRoute>> {
     Some(None)
 }
