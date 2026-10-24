@@ -943,6 +943,9 @@ fn test_delegated_reports_return() {
         input_reported: true,
         cache_read_reported: true,
         cache_write_reported: true,
+        tool_calls: 0,
+        tool_failures: 0,
+        duration_ms: 0,
     })];
     let delegated = builder
         .delegated_context(&events)
@@ -978,6 +981,9 @@ fn test_delegated_unknown_total() {
         input_reported: false,
         cache_read_reported: false,
         cache_write_reported: false,
+        tool_calls: 0,
+        tool_failures: 0,
+        duration_ms: 0,
     })];
     let delegated = builder
         .delegated_context(&events)
@@ -1034,6 +1040,9 @@ fn test_turn_skips_conversation_cost() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: true,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         }),
     ];
     let turn = b.build_for_turn(&events, None, None, &AssemblyInput::default());

@@ -35,7 +35,7 @@ fn test_prefix_selects_agents() {
     session.send_key(&Key::Char('a'));
     session.send_key(&Key::Enter);
     assert!(
-        session.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        session.wait_for_screen("Available types", RENDER_TIMEOUT),
         "typing a must select /agents rather than /clear:\n{}",
         session.output()
     );

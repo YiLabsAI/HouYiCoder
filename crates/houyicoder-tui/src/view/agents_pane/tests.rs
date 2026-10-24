@@ -103,7 +103,7 @@ fn test_list_renders_three_sections() {
     push_running(&mut app, "c1");
     push_returned(&mut app, "c0", "found the auth path");
     let out = render(&app, 60, 16);
-    for heading in ["RUNNING", "COMPLETED", "AVAILABLE"] {
+    for heading in ["Running (1)", "Completed (1)", "Available types (1)"] {
         assert!(out.contains(heading), "{heading} should render: {out}");
     }
     assert!(out.contains("found the auth path"), "the row body: {out}");
@@ -192,7 +192,7 @@ fn test_detail_renders_fields() {
     assert!(out.contains("System prompt"), "{out}");
     assert!(out.contains("you search the tree"), "{out}");
     assert!(
-        !out.contains("AVAILABLE"),
+        !out.contains("Available types"),
         "the list is behind the detail: {out}"
     );
 }

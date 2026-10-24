@@ -507,6 +507,17 @@ pub enum SessionEvent {
         /// Whether the child's endpoint reported the cache-write count.
         #[serde(default)]
         cache_write_reported: bool,
+        /// Tool calls executed inside the child session across its full
+        /// trajectory, or 0 on logs that predate this field.
+        #[serde(default)]
+        tool_calls: u32,
+        /// Semantic tool failures inside the child session across its full
+        /// trajectory.
+        #[serde(default)]
+        tool_failures: u32,
+        /// Wall-clock span of the child session in milliseconds.
+        #[serde(default)]
+        duration_ms: u64,
     },
     /// This session was delegated to by the named parent: the child side of
     /// the delegation boundary, written as the child session's first durable

@@ -177,8 +177,9 @@ fn list_body(rows: &[AgentRow<'_>], cursor: usize) -> (Vec<Line<'static>>, usize
     for (index, row) in rows.iter().enumerate() {
         let section = row.section();
         if section != previous {
+            let count = rows.iter().filter(|r| r.section() == section).count();
             lines.push(Line::from(Span::styled(
-                format!("  {section}"),
+                format!("  {section} ({count})"),
                 Style::new().fg(Color::Cyan),
             )));
             previous = section;
@@ -230,8 +231,14 @@ fn span_row(row: &AgentRow<'_>, spans: &mut Vec<Span<'static>>, type_width: usiz
                 pad_width(&done.subagent_type, type_width),
                 Style::new().fg(Color::Yellow),
             ));
+            let single = done
+                .summary
+                .lines()
+                .map(|l| l.trim().trim_start_matches('#').trim())
+                .find(|l| !l.is_empty())
+                .unwrap_or(&done.summary);
             spans.push(Span::styled(
-                format!(" · {}", done.summary),
+                format!(" · {single}"),
                 Style::new().fg(Color::DarkGray),
             ));
         }
@@ -280,6 +287,28 @@ fn draw_detail(f: &mut Frame, inner: Rect, app: &App, detail: &AgentDetail) {
         ])
         .split(inner);
     let name = detail.subagent_type();
+    if let Some(child_sid) = detail.child_sid() {
+        let (header, body) = child_detail_lines(app, name, child_sid);
+        f.render_widget(Paragraph::new(header), chunks[0]);
+        let max_offset = max_scroll_offset(&body, chunks[1].width, chunks[1].height);
+        app.ui.agents_pane.set_detail_max_offset(max_offset);
+        f.render_widget(
+            Paragraph::new(body)
+                .wrap(Wrap { trim: false })
+                .scroll((app.ui.agents_pane.detail_offset().min(max_offset), 0)),
+            chunks[1],
+        );
+        f.render_widget(
+            Paragraph::new(key_hint(&[
+                ("Up/Down", "scroll"),
+                ("Enter/t", "transcript"),
+                ("Esc", "back"),
+            ]))
+            .style(Style::new().fg(Color::DarkGray)),
+            chunks[2],
+        );
+        return;
+    }
     let entry = app
         .sessions
         .current
@@ -304,6 +333,75 @@ fn draw_detail(f: &mut Frame, inner: Rect, app: &App, detail: &AgentDetail) {
             .style(Style::new().fg(Color::DarkGray)),
         chunks[2],
     );
+}
+
+/// Header and scrollable body for a running or completed child delegation in
+/// the L1 detail view.
+fn child_detail_lines(
+    app: &App,
+    name: &str,
+    child_sid: &str,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let running = app
+        .sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .iter()
+        .find(|e| e.agent_id == child_sid && e.completed.is_none());
+    let completed = app
+        .sessions
+        .current
+        .agents
+        .rows
+        .iter()
+        .find(|r| r.child_sid == child_sid);
+    let status_label = if running.is_some() {
+        "Running delegation"
+    } else {
+        "Completed delegation"
+    };
+    let header = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("@{name}"),
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  ·  {child_sid}"),
+                Style::new().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(Span::styled(status_label, Style::new().fg(Color::Cyan))),
+    ];
+    let mut body = vec![Line::from("")];
+    if let Some(entry) = running {
+        body.push(field_line(
+            "Progress: ",
+            &format!(
+                "turn {} · {} tok · {} calls",
+                entry.turn,
+                format_tokens(entry.tokens),
+                entry.tool_uses
+            ),
+        ));
+        if let Some(act) = &entry.last_activity {
+            body.push(field_line("Activity: ", act));
+        }
+    }
+    if let Some(done) = completed {
+        if !done.prompt.is_empty() {
+            body.push(field_line("Prompt: ", &done.prompt));
+            body.push(Line::from(""));
+        }
+        body.push(Line::from(Span::styled(
+            "Summary",
+            Style::new().fg(Color::Cyan),
+        )));
+        body.extend(done.summary.lines().map(|l| Line::from(l.to_string())));
+    }
+    (header, body)
 }
 
 /// The identity row (type and tier) and the section row, matching what the

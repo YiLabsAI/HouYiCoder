@@ -330,6 +330,9 @@ fn test_subagent_usage_summed() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         )
     };
@@ -424,6 +427,9 @@ fn test_subagent_usage_parent_unknown() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -485,6 +491,9 @@ fn test_subagent_usage_unmeasured_unknown() {
                 input_reported: false,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -538,6 +547,9 @@ fn test_subagent_usage_unknown() {
                 input_reported: false,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -579,6 +591,9 @@ fn test_delegated_cache_unknown() {
                 input_reported: true,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -722,6 +737,9 @@ fn test_disk_delegated_cache() {
             input_reported: true,
             cache_read_reported: false,
             cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     }))
     .expect("append");

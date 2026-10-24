@@ -64,6 +64,7 @@ pub struct DelegationRow {
     pub child_sid: String,
     pub subagent_type: String,
     pub summary: String,
+    pub prompt: String,
     /// Whether the child transcript is already loaded in the fold. False on
     /// first open fires the on-demand fetch, same as the inline fold.
     pub loaded: bool,
@@ -98,12 +99,14 @@ impl PaneAgents {
                     child_sid,
                     subagent_type,
                     summary,
+                    prompt,
                     folded_transcript,
                     ..
                 } => Some(DelegationRow {
                     child_sid: child_sid.clone(),
                     subagent_type: subagent_type.clone(),
                     summary: summary.clone(),
+                    prompt: prompt.clone(),
                     loaded: !folded_transcript.is_empty(),
                 }),
                 _ => None,

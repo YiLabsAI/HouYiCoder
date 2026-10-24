@@ -29,9 +29,9 @@ impl AgentRow<'_> {
     /// The heading this row is listed under.
     pub(crate) fn section(&self) -> &'static str {
         match self {
-            AgentRow::Running(_) => "RUNNING",
-            AgentRow::Completed(_) => "COMPLETED",
-            AgentRow::Available(_) => "AVAILABLE",
+            AgentRow::Running(_) => "Running",
+            AgentRow::Completed(_) => "Completed",
+            AgentRow::Available(_) => "Available types",
         }
     }
 

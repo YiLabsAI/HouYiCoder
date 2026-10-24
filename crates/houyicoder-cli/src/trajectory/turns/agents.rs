@@ -3,6 +3,14 @@
 
 use super::*;
 
+/// Child-side tool counts and span carried by a SubagentReturn event.
+pub(super) struct ChildReturnStats {
+    pub calls: u32,
+    pub failures: u32,
+    pub duration_ms: u64,
+    pub ts: u64,
+}
+
 impl TurnBuilder {
     /// Open a delegation record, completed by the matching return.
     pub(super) fn begin_agent(
@@ -35,8 +43,9 @@ impl TurnBuilder {
         summary: &str,
         usage: Option<EventUsage>,
         child_provenance: UsageProvenance,
-        ts: u64,
+        stats: ChildReturnStats,
     ) {
+        let ts = stats.ts;
         self.touch(ts);
         let index = match self.open_agents.remove(child_session_id) {
             Some(index) => index,
@@ -56,7 +65,14 @@ impl TurnBuilder {
         let record = &mut self.records[index];
         if record.start_ms < end_ms {
             record.duration_ms = end_ms - record.start_ms;
+        } else if record.duration_ms == 0 && stats.duration_ms > 0 {
+            record.duration_ms = stats.duration_ms;
         }
+        if stats.calls > 0 {
+            record.summary = format!("{} ({} calls)", record.summary, stats.calls);
+        }
+        self.tool_count = self.tool_count.saturating_add(stats.calls as usize);
+        self.tool_fail = self.tool_fail.saturating_add(stats.failures as usize);
         // An unrecognised status is unknown, not a success.
         record.outcome = match status {
             "completed" | "ok" => RecordOutcome::Ok,
@@ -112,6 +128,9 @@ impl TurnBuilder {
             input_reported,
             cache_read_reported,
             cache_write_reported,
+            tool_calls,
+            tool_failures,
+            duration_ms,
             ..
         } = &ev.event
         else {
@@ -139,6 +158,18 @@ impl TurnBuilder {
             reasoning: Some(*reasoning_tokens),
             provenance,
         });
-        self.finish_agent(child_session_id, status, summary, usage, provenance, ev.ts);
+        self.finish_agent(
+            child_session_id,
+            status,
+            summary,
+            usage,
+            provenance,
+            ChildReturnStats {
+                calls: *tool_calls,
+                failures: *tool_failures,
+                duration_ms: *duration_ms,
+                ts: ev.ts,
+            },
+        );
     }
 }

@@ -219,6 +219,9 @@ fn test_unmeasured_child_hides_share() {
                 input_reported: false,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -281,6 +284,9 @@ fn test_cache_only_child_folds() {
                 input_reported: false,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -342,6 +348,9 @@ fn test_child_report_hides_share() {
                 input_reported: false,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -390,6 +399,9 @@ fn test_child_report_gates_session() {
                 input_reported: false,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];

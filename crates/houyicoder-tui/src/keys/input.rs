@@ -174,6 +174,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             KeyCode::Down => app.ui.agents_pane.scroll_detail(1),
             KeyCode::PageUp => app.ui.agents_pane.scroll_detail(-10),
             KeyCode::PageDown => app.ui.agents_pane.scroll_detail(10),
+            KeyCode::Enter | KeyCode::Char('t') => app.open_agent_transcript(),
             _ => {}
         }
         return;
@@ -243,6 +244,11 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             if app.ui.navigation.pane == Pane::Agents && app.ui.input.editor.is_empty() =>
         {
             app.open_agent_row();
+        }
+        KeyCode::Char('t')
+            if app.ui.navigation.pane == Pane::Agents && app.ui.input.editor.is_empty() =>
+        {
+            app.open_agent_transcript();
         }
         // Shift+Tab moves the /model pane's setting focus (the pane owns Tab while
         // it is on top); everywhere else it cycles the permission mode:

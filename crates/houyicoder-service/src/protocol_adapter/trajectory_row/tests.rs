@@ -44,6 +44,9 @@ fn test_subagent_kinds_labeled() {
             input_reported: false,
             cache_read_reported: false,
             cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         }),
         "return"
     );

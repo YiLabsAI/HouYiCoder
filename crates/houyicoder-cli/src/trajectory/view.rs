@@ -545,6 +545,14 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 }
                 acc.tool_ms += *duration_ms;
             }
+            SessionEvent::SubagentReturn {
+                tool_calls,
+                tool_failures,
+                ..
+            } => {
+                acc.tool_calls += *tool_calls as usize;
+                acc.failures += *tool_failures as usize;
+            }
             _ => {}
         }
     }

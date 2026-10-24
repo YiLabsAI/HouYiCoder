@@ -75,6 +75,9 @@ fn test_subagent_return_round_trip() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: true,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -106,6 +109,9 @@ fn test_subagent_return_old_log() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: true,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");

@@ -261,7 +261,15 @@ impl TrajectorySummaryState {
                 output,
                 duration_ms,
             } => self.fold_tool_result(call_id, output, *duration_ms),
-            SessionEvent::SubagentReturn { .. } => self.subagent.record(event),
+            SessionEvent::SubagentReturn {
+                tool_calls,
+                tool_failures,
+                ..
+            } => {
+                self.tool_calls = self.tool_calls.saturating_add(*tool_calls as usize);
+                self.failures = self.failures.saturating_add(*tool_failures as usize);
+                self.subagent.record(event);
+            }
             SessionEvent::TurnAborted { .. }
             | SessionEvent::RunCompleted { .. }
             | SessionEvent::ContextCleared { .. } => self.close_turn(),

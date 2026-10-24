@@ -30,6 +30,9 @@ fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
         input_reported: true,
         cache_read_reported: true,
         cache_write_reported: true,
+        tool_calls: 0,
+        tool_failures: 0,
+        duration_ms: 0,
     }
 }
 

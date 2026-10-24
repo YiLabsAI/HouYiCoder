@@ -163,6 +163,9 @@ pub fn seed_session_with_context_cost(
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     ];
     write_session(root, sid_str, model, &cwd, &events);

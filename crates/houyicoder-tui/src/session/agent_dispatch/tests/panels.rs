@@ -394,7 +394,7 @@ fn test_agents_types_render_rows() {
         &[("explore", "fast search"), ("plan", "design a step")],
     );
     let out = render_text(&app, 80, 24);
-    let heading_row = out.lines().position(|l| l.contains("AVAILABLE"));
+    let heading_row = out.lines().position(|l| l.contains("Available types"));
     let explore_row = out.lines().position(|l| l.contains("explore"));
     assert!(heading_row.is_some(), "heading renders: {out}");
     assert!(explore_row.is_some(), "explore renders: {out}");

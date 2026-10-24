@@ -125,16 +125,40 @@ fn test_enter_opens_highlighted_row() {
     push_running(&mut app, "live");
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
-        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        app.ui.agents_pane.detail().and_then(|d| d.child_sid()),
         Some("live"),
-        "the running child leads the list and Enter opens it"
+        "the running child leads the list and Enter opens its L1 detail"
     );
-    handle_working(&mut app, key(KeyCode::Down));
+    let rendered = render_text(&app, 80, 16);
+    assert!(
+        rendered.contains("Running delegation"),
+        "the running child detail renders: {rendered}"
+    );
+    // Enter (or t) inside the L1 detail enters the full teammate view.
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("live"),
+        "Enter inside the child detail opens the teammate view"
+    );
+    app.exit_teammate_view();
+    handle_working(&mut app, key(KeyCode::Down));
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.ui.agents_pane.detail().and_then(|d| d.child_sid()),
         Some("returned"),
-        "the next row is the returned delegation"
+        "the next row is the returned delegation L1 detail"
+    );
+    let rendered = render_text(&app, 80, 16);
+    assert!(
+        rendered.contains("Completed delegation"),
+        "the completed child detail renders: {rendered}"
+    );
+    handle_working(&mut app, key(KeyCode::Char('t')));
+    assert_eq!(
+        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        Some("returned"),
+        "pressing t opens the returned delegation's teammate view"
     );
 }
 
@@ -283,7 +307,7 @@ fn test_cursor_clamps_both_ends() {
     assert_eq!(app.ui.agents_pane.cursor(), 1, "the last row is the bottom");
     handle_working(&mut app, key(KeyCode::Enter));
     assert_eq!(
-        app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
+        app.ui.agents_pane.detail().and_then(|d| d.child_sid()),
         Some("c1"),
         "the cursor stopped at the last row, so Enter opens that one"
     );
@@ -316,6 +340,11 @@ fn test_enter_fetches_unloaded_child() {
     push_returned(&mut app, "c1", false);
     assert!(!app.agents().rows[0].loaded, "the fold was never loaded");
     handle_working(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.ui.agents_pane.detail().and_then(|d| d.child_sid()),
+        Some("c1")
+    );
+    handle_working(&mut app, key(KeyCode::Char('t')));
     let view = app.ui.teammate_view.as_ref().expect("view opened");
     assert_eq!(view.child_sid, "c1");
     assert!(

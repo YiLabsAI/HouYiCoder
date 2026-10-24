@@ -358,7 +358,7 @@ fn test_agents_opens_pane() {
     );
     run_slash_command(&mut s, "agents");
     assert!(
-        s.wait_for_plain("AVAILABLE", RENDER_TIMEOUT),
+        s.wait_for_plain("Available types", RENDER_TIMEOUT),
         "/agents should render the delegatable types in a pane:\n{}",
         s.output_plain()
     );
@@ -382,7 +382,7 @@ fn test_pane_keeps_page_keys() {
     );
     run_slash_command(&mut s, "agents");
     assert!(
-        s.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        s.wait_for_screen("Available types", RENDER_TIMEOUT),
         "/agents should open the pane over the transcript:\n{}",
         s.output()
     );

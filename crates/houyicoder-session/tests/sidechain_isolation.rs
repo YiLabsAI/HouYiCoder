@@ -85,6 +85,9 @@ async fn test_sidechain_isolates_sessions() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ))
         .await

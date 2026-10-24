@@ -150,6 +150,9 @@ fn test_leading_partial_turn_unknown() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: true,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     )];
     let summary = fold(&events);
@@ -449,6 +452,9 @@ fn test_unmeasured_child_breaks_totals() {
                 input_reported: false,
                 cache_read_reported: false,
                 cache_write_reported: false,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
         entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
@@ -527,6 +533,9 @@ fn child_return(ts: u64, input: u64, output: u64, reported: bool) -> SessionLogE
             input_reported: reported,
             cache_read_reported: reported,
             cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     )
 }
@@ -548,6 +557,9 @@ fn test_delegated_usage_folds() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: true,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     )];
     let summary = fold(&events);
@@ -573,6 +585,9 @@ fn test_unmeasured_child_flagged() {
             input_reported: false,
             cache_read_reported: false,
             cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
         },
     )];
     assert!(fold(&events).usage.subagent_unmeasured);

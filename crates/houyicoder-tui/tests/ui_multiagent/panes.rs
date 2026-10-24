@@ -279,14 +279,20 @@ fn test_agents_enter_follows_cursor() {
     let v = app.transcript().revision();
     let rows = app.transcript().lines().to_vec();
     app.agents_mut().refresh(&rows, v);
-    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    );
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
         Some("c2"),
         "the newest delegation leads the list"
     );
     app.move_agents_cursor(1);
-    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    );
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
         Some("c1"),
@@ -294,7 +300,10 @@ fn test_agents_enter_follows_cursor() {
     );
     app.move_agents_cursor(1);
     app.move_agents_cursor(1);
-    handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    );
     assert_eq!(
         app.ui.teammate_view.as_ref().map(|v| v.child_sid.as_str()),
         Some("c1"),
@@ -410,7 +419,7 @@ fn test_agents_pane_journey() {
     );
     common::run_slash_command(&mut s, "agents");
     assert!(
-        s.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        s.wait_for_screen("Available types", RENDER_TIMEOUT),
         "/agents should open the pane over the transcript:\n{}",
         s.output()
     );
@@ -440,7 +449,7 @@ fn test_agents_pane_journey() {
     );
     let section = lines
         .iter()
-        .position(|line| line.contains("AVAILABLE"))
+        .position(|line| line.contains("Available types"))
         .expect("the section heading is on screen");
     assert_eq!(
         section,
@@ -480,7 +489,7 @@ fn test_agents_pane_journey() {
     }
     s.send_key(&Key::Esc);
     assert!(
-        s.wait_for_screen("AVAILABLE", RENDER_TIMEOUT),
+        s.wait_for_screen("Available types", RENDER_TIMEOUT),
         "esc should return to the list, not close the pane:\n{}",
         s.output()
     );

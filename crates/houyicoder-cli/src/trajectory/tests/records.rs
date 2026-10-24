@@ -99,6 +99,9 @@ fn test_agent_merges_spawn_return() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -299,6 +302,9 @@ fn test_delegation_hides_tool_call() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -496,6 +502,9 @@ fn test_delegation_legacy_hides_tool() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -549,6 +558,9 @@ fn test_agent_return_shown() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -603,6 +615,9 @@ fn test_agent_unknown_status() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         ),
     ];
@@ -619,6 +634,74 @@ fn test_agent_unknown_status() {
         agent.outcome,
         RecordOutcome::Failed,
         "a timeout is a failure"
+    );
+}
+
+/// A delegation that reports its child tool calls and failures folds them into
+/// the parent turn's counts and appends the call count to the agent record
+/// summary.
+#[test]
+fn test_subagent_return_folds_calls() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentSpawn {
+                child_session_id: "child-91".into(),
+                subagent_type: "verify".into(),
+                prompt_summary: "audit".into(),
+                isolation: "worktree".into(),
+                policy: "read-only".into(),
+                trigger_source: "model:c1".into(),
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-91".into(),
+                status: "completed".into(),
+                summary: "all checks green".into(),
+                result_ref: "child-91".into(),
+                input_tokens: 2_800_000,
+                output_tokens: 12_000,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: true,
+                tool_calls: 91,
+                tool_failures: 2,
+                duration_ms: 4200,
+            },
+        ),
+    ];
+    let view = build_view(&events, "test", 0);
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(turn.tool_count, 91, "child tool calls fold into the turn");
+    assert_eq!(turn.tool_fail, 2, "child failures fold into the turn");
+    let agent = records_of(&events, turn.n)
+        .into_iter()
+        .find(|r| r.kind == TrajectoryRecordKind::Agent)
+        .expect("the delegation is a record");
+    assert!(
+        agent.summary.contains("(91 calls)"),
+        "the agent record states the child call count: {}",
+        agent.summary
+    );
+    assert_eq!(
+        agent.duration_ms, 4200,
+        "child duration used when timestamps match"
     );
 }
 

@@ -265,6 +265,16 @@ pub async fn record_subagent_return(
     result_ref: &str,
     usage: &Usage,
 ) -> Result<(), SpawnError> {
+    let (tool_calls, tool_failures, duration_ms) = SessionId::from_display_string(child_session_id)
+        .map(|sid| {
+            let s = store.trajectory_head(sid).summary;
+            (
+                s.usage.tool_calls as u32,
+                s.usage.failures as u32,
+                s.duration_ms,
+            )
+        })
+        .unwrap_or((0, 0, 0));
     let event = new_event(
         parent_sid,
         SessionEvent::SubagentReturn {
@@ -280,6 +290,9 @@ pub async fn record_subagent_return(
             input_reported: usage.provenance.input_reported,
             cache_read_reported: usage.provenance.cache_read_reported,
             cache_write_reported: usage.provenance.cache_write_reported,
+            tool_calls,
+            tool_failures,
+            duration_ms,
         },
     );
     store

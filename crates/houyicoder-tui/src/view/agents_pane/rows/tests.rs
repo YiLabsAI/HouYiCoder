@@ -20,6 +20,7 @@ fn delegation(child_sid: &str) -> DelegationRow {
         child_sid: child_sid.into(),
         subagent_type: "explore".into(),
         summary: format!("summary of {child_sid}"),
+        prompt: String::new(),
         loaded: true,
     }
 }
@@ -45,7 +46,10 @@ fn test_three_sections_in_order() {
     let types = [agent_entry("explore")];
     let rows = agent_rows(&fleet, &completed, Some(&types));
     let sections: Vec<&str> = rows.iter().map(AgentRow::section).collect();
-    assert_eq!(sections, ["RUNNING", "COMPLETED", "COMPLETED", "AVAILABLE"]);
+    assert_eq!(
+        sections,
+        ["Running", "Completed", "Completed", "Available types"]
+    );
     let AgentRow::Running(first) = &rows[0] else {
         panic!("a child still out is listed first");
     };

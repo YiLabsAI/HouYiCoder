@@ -13,6 +13,7 @@ use std::cell::Cell;
 /// showing a stale copy.
 pub(crate) struct AgentDetail {
     subagent_type: String,
+    child_sid: Option<String>,
     offset: Cell<u16>,
     max_offset: Cell<u16>,
 }
@@ -20,6 +21,10 @@ pub(crate) struct AgentDetail {
 impl AgentDetail {
     pub(crate) fn subagent_type(&self) -> &str {
         &self.subagent_type
+    }
+
+    pub(crate) fn child_sid(&self) -> Option<&str> {
+        self.child_sid.as_deref()
     }
 }
 
@@ -77,6 +82,17 @@ impl AgentsPaneState {
     pub(crate) fn open_detail(&mut self, subagent_type: String) {
         self.detail = Some(AgentDetail {
             subagent_type,
+            child_sid: None,
+            offset: Cell::new(0),
+            max_offset: Cell::new(0),
+        });
+    }
+
+    /// Open the in-pane detail for a running or completed child delegation.
+    pub(crate) fn open_child_detail(&mut self, subagent_type: String, child_sid: String) {
+        self.detail = Some(AgentDetail {
+            subagent_type,
+            child_sid: Some(child_sid),
             offset: Cell::new(0),
             max_offset: Cell::new(0),
         });

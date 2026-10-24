@@ -1924,6 +1924,9 @@ async fn test_return_usage_covers_subtree() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: true,
+                tool_calls: 0,
+                tool_failures: 0,
+                duration_ms: 0,
             },
         })
         .await
