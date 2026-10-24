@@ -248,8 +248,12 @@ fn test_agents_pane_lists_returned() {
         "the returned delegation is listed"
     );
     assert!(app.agents().rows[0].loaded, "loaded fold detected");
-    // Enter on the selected row opens that delegation's view.
+    // Enter on the selected row opens the L1 detail; t opens the view.
     handle_working(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+    );
     let view = app.ui.teammate_view.as_ref().expect("view opened");
     assert_eq!(view.child_sid, "c1");
     assert!(

@@ -122,9 +122,18 @@ async fn test_injected_messages_no_pressure() {
         captured.len()
     );
 
-    // Constancy gate: the trailing User item per request (houyi-injected)
-    // must be constant across turns. Any per-turn variation = budget
-    // interpolation (turn count, %, remaining).
+    // Constancy gate: the convergence reminder this module guards must read
+    // the same on every turn it fires, with no turn count, percentage, or
+    // remaining budget interpolated into it.
+    //
+    // Other injected notes may legitimately precede it (a redundant-call
+    // nudge carries the tool name and so varies by turn), so the reminder is
+    // matched on its own text rather than by comparing whole items: a gate
+    // that required every injected item to be byte-identical would fail on
+    // an unrelated, correct injection and say nothing about interpolation.
+    const REMINDER: &str = "If you have gathered enough information to answer, \
+         synthesize your findings and produce the final answer now. Prioritize \
+         answering over further exploration.";
     //
     // Skip the first trailing item (turn 0's is the real user prompt).
     let trailing: Vec<String> = captured
@@ -135,15 +144,21 @@ async fn test_injected_messages_no_pressure() {
         })
         .skip(1)
         .collect();
-    if let Some(first) = trailing.first() {
-        for (i, t) in trailing.iter().enumerate() {
-            assert_eq!(
-                first,
-                t,
-                "trailing User item varies across turns (turn {}+) = \
-                 per-turn state interpolated into model input",
-                i + 1
-            );
-        }
+    assert!(
+        !trailing.is_empty(),
+        "the convergence reminder fires on later turns, so at least one \
+         request ends with an injected item"
+    );
+    for (i, t) in trailing.iter().enumerate() {
+        let at = t
+            .find(REMINDER)
+            .unwrap_or_else(|| panic!("turn {} is missing the convergence reminder: {t}", i + 1));
+        assert_eq!(
+            &t[at..],
+            REMINDER,
+            "the convergence reminder varies on turn {} = per-turn state \
+             interpolated into model input",
+            i + 1
+        );
     }
 }

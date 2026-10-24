@@ -17,10 +17,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 use houyicoder_api::launcher::ProcessLauncher;
+#[cfg(target_os = "macos")]
 use houyicoder_api::launcher::SpawnPolicy;
+#[cfg(target_os = "macos")]
 use houyicoder_api::launcher::SpawnRequest;
+#[cfg(target_os = "macos")]
 use houyicoder_api::launcher::StdProcessLauncher;
+#[cfg(target_os = "macos")]
 use pollster::block_on;
 use reqwest::Client;
 use reqwest::NoProxy;
@@ -151,6 +156,11 @@ fn query_system_route() -> Option<Option<SystemRoute>> {
 }
 
 /// Parse the dictionary output of scutil into a SystemRoute.
+///
+/// Only the macOS route query consumes the parsed route, but the parser is a
+/// pure function over its input and its tests run everywhere, so it is
+/// compiled for macOS and for any test build.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn parse_system_route(text: &str) -> Option<SystemRoute> {
     let mut http_enable = false;
     let mut http_host: Option<String> = None;

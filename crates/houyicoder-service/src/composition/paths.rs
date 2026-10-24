@@ -9,6 +9,7 @@
 
 use std::env::current_dir;
 use std::env::var;
+#[cfg(unix)]
 use std::fs::metadata;
 use std::fs::read_to_string;
 #[cfg(unix)]
