@@ -931,6 +931,17 @@ fn drawn(app: &App) -> String {
     render_text(app, 100, 20)
 }
 
+/// The screen row the transcript line whose text holds this needle occupies,
+/// measured over the rows the last draw built.
+fn row_of_line(app: &App, needle: &str) -> usize {
+    let idx = app
+        .active_transcript()
+        .iter()
+        .position(|l| l.render().contains(needle))
+        .unwrap_or_else(|| panic!("no transcript line holds {needle}"));
+    app.transcript_row_of_line(idx)
+}
+
 /// A switch carries the place the reader stood at, not only the rows they had
 /// open: leaving a session while rolled back and entering it again puts the
 /// same row on screen, and the row is named by the entry behind it, which the
@@ -946,7 +957,12 @@ fn test_swap_restores_place() {
     // A step names its row from the rows a draw built, and a frame precedes
     // every key in a running terminal.
     drop(drawn(&app));
-    app.park_scroll_at(2);
+    // The row is taken from the row the named line actually occupies, not a
+    // fixed index: the session's own leading content (a startup notice) is
+    // host-dependent, so a magic row number would name a different line, or
+    // a spacer with no name, on another platform.
+    let line_row = row_of_line(&app, "old line 2");
+    app.park_scroll_at(line_row);
     let out = drawn(&app);
     assert!(
         out.contains("old line 2"),
@@ -979,6 +995,10 @@ fn test_swap_restores_place() {
     app.switch_session(back);
     named_transcript(&mut app, "old", 40);
     let out = drawn(&app);
+    assert!(
+        !app.ui.transcript_view.whole_scroll().is_following_tail(),
+        "the returned session holds the place, rather than falling back to the tail"
+    );
     assert!(
         out.contains("old line 2"),
         "the returned session stands where the reader left it:\n{out}"

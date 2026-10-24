@@ -6,11 +6,14 @@ use crate::agent::BashTool;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use std::env::temp_dir;
+use std::fs::OpenOptions;
 use std::fs::create_dir_all;
 use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::io::ErrorKind;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::id;
@@ -561,7 +564,21 @@ fn test_relink_skips_expired_snapshot() {
         panic!("expected CoWSnapshot");
     };
     let aged = SystemTime::now() - std::time::Duration::from_secs(DEFAULT_SNAPSHOT_TTL_SECS + 60);
-    let handle = std::fs::File::open(&stale).expect("open snapshot dir");
+    // A directory handle needs backup semantics on Windows; opening it with
+    // File::open is refused there, and set_modified maps to SetFileTime, which
+    // needs write access. Asking for write plus that flag covers both.
+    let mut opts = OpenOptions::new();
+    #[cfg(unix)]
+    opts.read(true);
+    #[cfg(windows)]
+    {
+        // FILE_FLAG_BACKUP_SEMANTICS, the flag that permits a directory
+        // handle. Spelled as its literal value because the constant lives in
+        // a windows binding crate this workspace does not depend on.
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        opts.write(true).custom_flags(BACKUP_SEMANTICS);
+    }
+    let handle = opts.open(&stale).expect("open snapshot dir");
     handle.set_modified(aged).expect("age the snapshot");
     let resumed = SnapshotStore::new(&tmp).expect("resumed");
     let entries = resumed.relink_undo_entries();
