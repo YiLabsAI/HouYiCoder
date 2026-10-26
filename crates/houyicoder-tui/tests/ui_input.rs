@@ -201,18 +201,30 @@ fn test_ctrlu_clears_busy_draft() {
     );
 }
 
-/// Repeated Esc while a run and queued message are active remains an abort.
+/// Repeated Esc while a run and queued input are active remains an abort.
 /// Once interruption settles, the queue renders as held instead of moving its
 /// text into the input box through a timing-dependent second action.
+///
+/// The queue head is a deferred command. The host never injects a command into
+/// a running turn, and the parked head keeps the message behind it from being
+/// promoted either, so both entries stay local until the run ends. A message
+/// queued alone can reach the turn boundary that opens the first turn and be
+/// folded into that running turn, which leaves nothing queued to hold.
 #[test]
 #[ignore]
 fn test_esc_keeps_queue() {
     let mut s = pty_session_slow_in_repo(make_temp_repo(2), RUN_DELAY_MS);
     s.send_str("first task");
     s.send_key(&Key::Enter);
+    s.send_str("/clear");
+    s.send_key(&Key::Enter);
     s.send_str(QUEUED_TOKEN);
     s.send_key(&Key::Enter);
-    assert!(s.wait_for("→ next", RENDER_TIMEOUT));
+    assert!(
+        s.wait_for("· queued", RENDER_TIMEOUT),
+        "the run should hold both entries queued:\n{}",
+        s.output()
+    );
 
     s.send_key(&Key::Esc);
     s.send_key(&Key::Esc);
@@ -223,8 +235,13 @@ fn test_esc_keeps_queue() {
         s.output()
     );
     assert!(
-        s.wait_for("⏸", RENDER_TIMEOUT),
+        s.wait_for_screen("⏸ held", RENDER_TIMEOUT),
         "repeated Esc must leave the queue held:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_screen(QUEUED_TOKEN, RENDER_TIMEOUT),
+        "the queued message must stay in the strip, not move into the box:\n{}",
         s.output()
     );
 }
