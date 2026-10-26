@@ -1,7 +1,9 @@
 //! Tests for this module.
 
-use super::{apply_prompt, prompt_intent};
-use crate::descriptor::{PromptCoverage, PromptRecord, SessionDescriptor, SessionProvenance};
+use super::{TitleSource, apply_prompt, display_title, prompt_intent};
+use crate::descriptor::{
+    NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionProvenance,
+};
 use crate::ids::EventId;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -271,6 +273,56 @@ fn test_unread_log_skips_first() {
     apply_prompt(&mut d, record("a later task"));
     assert!(d.first_prompt.is_none(), "an unread log has no known first");
     assert_eq!(d.last_prompt.as_ref().unwrap().text, "a later task");
+}
+
+#[test]
+fn test_title_prefers_user_name() {
+    let mut d = fresh();
+    d.name = Some("login rework".into());
+    d.name_source = NameSource::User;
+    apply_prompt(&mut d, record("fix the flaky login test"));
+    let title = display_title(&d).expect("a named session has a title");
+    assert_eq!(title.text, "login rework");
+    assert_eq!(title.source, TitleSource::User);
+}
+
+#[test]
+fn test_title_uses_last_prompt() {
+    let mut d = fresh();
+    apply_prompt(&mut d, record("first task"));
+    apply_prompt(&mut d, record("second task"));
+    let title = display_title(&d).expect("a stated task is a title");
+    assert_eq!(
+        title.text, "second task",
+        "the newest statement names the work"
+    );
+    assert_eq!(title.source, TitleSource::LastPrompt);
+}
+
+#[test]
+fn test_title_uses_first_prompt() {
+    let mut d = fresh();
+    d.first_prompt = Some(record("opening task"));
+    let title = display_title(&d).expect("a lone first prompt is a title");
+    assert_eq!(title.text, "opening task");
+    assert_eq!(title.source, TitleSource::FirstPrompt);
+}
+
+/// A name no user chose is the opening subject at best, while the prompts say
+/// what the work is now, so the name loses.
+#[test]
+fn test_title_ignores_auto_name() {
+    let mut d = fresh();
+    d.name = Some("stale derived name".into());
+    apply_prompt(&mut d, record("real task"));
+    let title = display_title(&d).expect("the prompt is the title");
+    assert_eq!(title.text, "real task");
+    assert_eq!(title.source, TitleSource::LastPrompt);
+}
+
+#[test]
+fn test_title_absent() {
+    assert!(display_title(&fresh()).is_none());
 }
 
 #[test]

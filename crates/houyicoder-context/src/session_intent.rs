@@ -8,7 +8,7 @@
 //! input untitled, and a leading slash alone does not mark a command: a
 //! pasted path such as /Users/me/src/main.rs is a real subject and stays.
 
-use crate::descriptor::{PromptCoverage, PromptRecord, SessionDescriptor};
+use crate::descriptor::{NameSource, PromptCoverage, PromptRecord, SessionDescriptor};
 
 /// Longest prompt kept in the descriptor, in characters. A pasted document
 /// is a title only up to its opening statement.
@@ -129,6 +129,62 @@ pub fn apply_prompt(descriptor: &mut SessionDescriptor, prompt: PromptRecord) {
     if newest {
         descriptor.last_prompt = Some(prompt);
     }
+}
+
+/// Which record a session's title was taken from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleSource {
+    /// The name the session's user gave it.
+    User,
+    /// The newest user input that states the work.
+    LastPrompt,
+    /// The first user input that states the work.
+    FirstPrompt,
+}
+
+/// A session's title and the record it was taken from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionTitle<'a> {
+    /// The title text, as stored on the record.
+    pub text: &'a str,
+    /// Which record supplied the text.
+    pub source: TitleSource,
+}
+
+/// The title a session is shown by: the name its user gave it, else the
+/// newest prompt that states the work, else the first one. None when the
+/// descriptor records none of the three, which is what a descriptor written
+/// before prompts were recorded looks like.
+///
+/// The newest prompt outranks the first because a session's subject changes:
+/// the user reads the list to find what they were last doing. A name nobody
+/// chose outranks neither, since it can only restate the opening subject.
+pub fn display_title(descriptor: &SessionDescriptor) -> Option<SessionTitle<'_>> {
+    if descriptor.name_source == NameSource::User
+        && let Some(name) = descriptor
+            .name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+    {
+        return Some(SessionTitle {
+            text: name,
+            source: TitleSource::User,
+        });
+    }
+    if let Some(prompt) = stated(descriptor.last_prompt.as_ref()) {
+        return Some(SessionTitle {
+            text: &prompt.text,
+            source: TitleSource::LastPrompt,
+        });
+    }
+    stated(descriptor.first_prompt.as_ref()).map(|prompt| SessionTitle {
+        text: &prompt.text,
+        source: TitleSource::FirstPrompt,
+    })
+}
+
+fn stated(record: Option<&PromptRecord>) -> Option<&PromptRecord> {
+    record.filter(|record| !record.text.trim().is_empty())
 }
 
 /// Whether the input opens a frontend command. The first word after the
