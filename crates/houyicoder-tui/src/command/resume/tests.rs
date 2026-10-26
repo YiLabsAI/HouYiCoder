@@ -13,6 +13,7 @@ use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -120,6 +121,39 @@ fn test_opens_pane_with_rows() {
     assert!(app.ui.navigation.resume_picker.open);
     assert_eq!(app.ui.navigation.resume_picker.rows.len(), 2);
     assert_eq!(app.ui.navigation.pane, Pane::Resume);
+}
+
+/// Opening the picker does no detail reads: the per-row log read would stall
+/// the key that opened it, so the listing fills in from the poll loop instead.
+#[test]
+fn test_open_defers_resolution() {
+    struct CountingCatalog(AtomicUsize);
+    impl SessionCatalog for CountingCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            (0..3)
+                .map(|i| SessionRow {
+                    sid_str: format!("sid{i}"),
+                    title: format!("(session) 000{i}"),
+                    cwd_basename: "app".into(),
+                    ..Default::default()
+                })
+                .collect()
+        }
+        fn resolve_detail(&self, _row: &mut SessionRow) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let catalog = Arc::new(CountingCatalog(AtomicUsize::new(0)));
+    let mut app = connected_app();
+    app.sessions.catalog = Some(catalog.clone());
+    app.run_resume(None);
+    assert!(app.ui.navigation.resume_picker.open);
+    assert_eq!(
+        catalog.0.load(Ordering::Relaxed),
+        0,
+        "opening the picker reads no session detail"
+    );
 }
 
 /// /resume with a sid arg matches a row by sid and enqueues the switch.

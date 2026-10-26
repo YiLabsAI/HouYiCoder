@@ -1,11 +1,7 @@
-//! Session picker content for /resume. Renders into the shared Pane template
-//! (draw_command_pane) below the transcript tail: a header row with the live
-//! filter, a session list (relative time + title + cwd basename, no sid), and
-//! a dim footer. The state machine (SessionPickerState: open / sel / query /
-//! filtered) and the keys (Up / Down / Enter / Esc / char) live in
-//! resume_picker.rs + keys.rs; this module is pure presentation. A
-//! log-selector shape (a filtered list, not a modal) at a simplified
-//! density (sid OR title substring, no fuse / no preview / no cross-project).
+//! Session picker content for /resume: a header carrying the live filter, one
+//! line per session, and a dim topic line under the selection when the
+//! record says something the title does not. The state machine and the keys
+//! live in the picker state and key modules; this module is presentation.
 
 pub mod state;
 
@@ -18,8 +14,8 @@ use ratatui::{
 };
 
 use crate::resume_picker::SessionRow;
+use crate::resume_picker::age_column;
 use crate::resume_picker::format_size;
-use crate::resume_picker::relative_time;
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
@@ -66,26 +62,23 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let selected = app
+            .ui
+            .navigation
+            .resume_picker
+            .sel
+            .min(filtered.len().saturating_sub(1));
         let items: Vec<ListItem> = filtered
             .iter()
-            .map(|r| format_row(r, now, chunks[1].width))
+            .enumerate()
+            .map(|(i, r)| format_row(r, now, chunks[1].width, i == selected))
             .collect();
         let mut state = ListState::default();
-        state.select(Some(
-            app.ui
-                .navigation
-                .resume_picker
-                .sel
-                .min(filtered.len().saturating_sub(1)),
-        ));
-        let list = List::new(items)
-            .style(Style::default().fg(Color::White))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("> ");
+        state.select(Some(selected));
+        // The row draws its own marker and highlight: the list's highlight
+        // style paints an item's whole area, which would swallow the dim
+        // topic line the selected row carries.
+        let list = List::new(items).style(Style::default().fg(Color::White));
         f.render_stateful_widget(list, chunks[1], &mut state);
     }
     // Footer: the key hints.
@@ -98,41 +91,82 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
     f.render_widget(footer, chunks[2]);
 }
 
-/// One row: compact time, title (fixed-width column so the cwd column
-/// aligns across rows), cwd basename dim. The title is padded to its budget
-/// so the cwd starts at a stable column — a one-line layout that stays
-/// scannable where a two-line layout would spend the extra row.
-fn format_row(row: &SessionRow, now: u64, width: u16) -> ListItem<'static> {
-    ListItem::new(format_line(row, now, width))
+/// One row: selection marker, compact time, size, title in a fixed column,
+/// and the cwd basename dim. The title is padded to its budget so the cwd
+/// starts at a stable column across rows.
+///
+/// The selected row gains a dim topic line when its record says something
+/// the title does not. Only the selected row pays the extra line, so the
+/// list stays one line per session as the user scrolls.
+fn format_row(row: &SessionRow, now: u64, width: u16, selected: bool) -> ListItem<'static> {
+    let line = format_line(row, now, width, selected);
+    let topic = if selected { row.topic_line() } else { None };
+    match topic {
+        Some(text) => ListItem::new(vec![line, format_topic(&text, width)]),
+        None => ListItem::new(line),
+    }
 }
 
-fn format_line(row: &SessionRow, now: u64, width: u16) -> Line<'static> {
-    let time = relative_time(row.last_active, now);
+/// The topic line, indented under the title column and cut to the terminal
+/// width like the row above it. It stays dim on the selected row: it is the
+/// secondary fact, not part of the highlight.
+fn format_topic(text: &str, width: u16) -> Line<'static> {
+    let indent = " ".repeat(title_column_offset());
+    let room = (width as usize).saturating_sub(indent.chars().count());
+    Line::from(vec![
+        Span::raw(indent),
+        Span::styled(truncate_width(text, room), Style::new().fg(Color::DarkGray)),
+    ])
+}
+
+/// The column the title starts at inside a row: the marker gutter, the time
+/// column, the size column, and their gaps.
+fn title_column_offset() -> usize {
+    2 + 4 + 1 + 5 + 1
+}
+
+fn format_line(row: &SessionRow, now: u64, width: u16, selected: bool) -> Line<'static> {
+    let time = age_column(row.last_active, now);
     let size = format_size(row.log_size);
     let budget = title_budget(width);
     let title = truncate_width(&row.title, budget);
     let pad = budget.saturating_sub(UnicodeWidthStr::width(title.as_str()));
     let cwd = truncate_width(&row.cwd_basename, 24);
+    let (marker, row_style) = if selected {
+        (
+            "❯ ",
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        ("  ", Style::new().fg(Color::White))
+    };
+    let dim = if selected {
+        row_style
+    } else {
+        Style::new().fg(Color::DarkGray)
+    };
     Line::from(vec![
-        Span::styled(format!("{time:>4}"), Style::new().fg(Color::DarkGray)),
+        Span::styled(marker, row_style),
+        Span::styled(format!("{time:>4}"), dim),
         Span::raw(" "),
-        Span::styled(format!("{size:>5}"), Style::new().fg(Color::DarkGray)),
+        Span::styled(format!("{size:>5}"), dim),
         Span::raw(" "),
-        Span::styled(title, Style::new().fg(Color::White)),
+        Span::styled(title, row_style),
         Span::raw(" ".repeat(pad)),
         Span::raw("  "),
-        Span::styled(cwd, Style::new().fg(Color::DarkGray)),
+        Span::styled(cwd, dim),
     ])
 }
 
-/// The fixed title-column budget: terminal width minus the time column, the
-/// size column, the gaps, and the 24-char cwd column, capped at 40 so a long
-/// slug does not eat the whole row. Floor 8 so a narrow terminal still shows
-/// a sliver of title.
+/// The fixed title-column budget: terminal width minus the marker gutter, the
+/// time and size columns, the gaps, and the 24-char cwd column, capped at 40
+/// so a prompt does not eat the whole row. Floor 8 so a narrow terminal still
+/// shows a sliver of title.
 fn title_budget(width: u16) -> usize {
-    // time(4) + gap(1) + size(5) + gap(1) + title + gap(2) + cwd(24) + highlight(2)
+    let cwd_column = 24;
+    let gap_before_cwd = 2;
     (width as usize)
-        .saturating_sub(4 + 1 + 5 + 1 + 2 + 24 + 2)
+        .saturating_sub(title_column_offset() + gap_before_cwd + cwd_column)
         .clamp(8, 40)
 }
 

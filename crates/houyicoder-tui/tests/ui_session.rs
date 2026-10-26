@@ -355,8 +355,8 @@ fn test_resume_picker_swaps_process() {
         s.output()
     );
     assert!(
-        s.output_plain().contains("seeded-prompt-a"),
-        "picker should show session A's title:\n{}",
+        s.output_plain().contains("seeded prompt a"),
+        "picker should show session A's title in the user's own words:\n{}",
         s.output()
     );
     // Select A (the only row, already selected) + Enter to switch.

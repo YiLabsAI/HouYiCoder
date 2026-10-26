@@ -539,17 +539,26 @@ fn test_during_run_defers_swap() {
         "defer message should appear:\n{}",
         s.output_plain()
     );
-    // The session is NOT switched yet (session B's prompt absent).
+    // The session is NOT switched yet: the status bar still names this
+    // session's model, and no frame so far has drawn session B's. The picker
+    // row is not a usable marker here -- it titles the row with B's prompt.
     assert!(
-        !s.output_plain().contains("session B prompt"),
+        !s.output_plain().contains("defer-model-b"),
         "session must NOT switch while the run is live:\n{}",
         s.output_plain()
     );
     // The run ends after the delay -> "done" -> idle_drain dispatches the
-    // Command -> swap. The swap loads session B's history.
+    // Command -> swap. Clear the picker frames first, so what follows can
+    // only come from the swapped-in session.
+    s.clear_output();
+    assert!(
+        s.wait_for_plain("defer-model-b", RENDER_TIMEOUT),
+        "swap should restore session B's model after the run ends:\n{}",
+        s.output_plain()
+    );
     assert!(
         s.wait_for_plain("session B prompt", RENDER_TIMEOUT),
-        "swap should load session B after the run ends:\n{}",
+        "swap should load session B's history after the run ends:\n{}",
         s.output_plain()
     );
 }
@@ -794,6 +803,14 @@ fn test_launch_resume_chains_session() {
         s.output_plain()
     );
     s.send_key(&Key::Enter);
+    // The picker row already carried B's title, so clear those frames; the
+    // model + prompt below can then only come from the swapped-in session.
+    s.clear_output();
+    assert!(
+        s.wait_for_plain("chain-model-b", RENDER_TIMEOUT),
+        "in-session /resume must restore B's model:\n{}",
+        s.output_plain()
+    );
     // The swap loads B's history in-process; A's prompt is replaced by B's.
     assert!(
         s.wait_for_plain("session B prompt", RENDER_TIMEOUT),
@@ -1756,5 +1773,43 @@ fn test_trajectory_switch_visible_narrow() {
             && s.wait_for_plain("deepseek-v4-pro-0813", RENDER_TIMEOUT),
         "the record detail states what the call switched from:\n{}",
         s.output_plain()
+    );
+}
+
+/// User journey: a wide character typed into the resume picker reaches the
+/// filter. The terminal hands the key over as UTF-8 bytes, and the header
+/// can only echo the character back once those bytes decode to one.
+#[test]
+#[ignore]
+fn test_picker_echoes_wide_query() {
+    let sessions_dir = fresh_temp_dir("sessions-picker-wide");
+    common::seed_session_on_disk(
+        &sessions_dir,
+        "11111111-1111-1111-1111-111111111111",
+        "stub-model-a",
+        "整理缓存表",
+    );
+    let mut s =
+        PtySession::launch_with_sessions_dir(None, None, None, None, &[], sessions_dir.clone());
+    assert!(
+        s.wait_for("sign in to houyicoder", RENDER_TIMEOUT),
+        "login screen"
+    );
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen"
+    );
+    run_slash_command(&mut s, "resume");
+    assert!(
+        s.wait_for_plain("Resume a session", RENDER_TIMEOUT),
+        "picker opens:\n{}",
+        s.output_plain()
+    );
+    s.send_str("整");
+    assert!(
+        s.wait_for_screen("filter: 整", RENDER_TIMEOUT),
+        "the typed wide character reaches the filter:\n{}",
+        s.screen().contents()
     );
 }

@@ -1,7 +1,7 @@
 use super::*;
 use houyicoder_context::{
-    EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
-    SessionProvenance,
+    EventId, NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionDescriptorStore,
+    SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::SessionStore;
@@ -26,9 +26,9 @@ fn temp_root() -> PathBuf {
     p
 }
 
-fn descriptor(name: Option<&str>, cwd: &str, ts: u64) -> SessionDescriptor {
+fn base(cwd: &str, ts: u64) -> SessionDescriptor {
     SessionDescriptor {
-        name: name.map(str::to_string),
+        name: None,
         name_source: NameSource::Auto,
         cwd: cwd.into(),
         model: "test".into(),
@@ -38,8 +38,24 @@ fn descriptor(name: Option<&str>, cwd: &str, ts: u64) -> SessionDescriptor {
         child_session_ids: Vec::new(),
         first_prompt: None,
         last_prompt: None,
-        prompt_coverage: Default::default(),
+        prompt_coverage: PromptCoverage::Complete,
     }
+}
+
+fn named(mut descriptor: SessionDescriptor, name: &str, source: NameSource) -> SessionDescriptor {
+    descriptor.name = Some(name.into());
+    descriptor.name_source = source;
+    descriptor
+}
+
+fn says(mut descriptor: SessionDescriptor, first: &str, last: &str) -> SessionDescriptor {
+    let record = |text: &str| PromptRecord {
+        text: text.into(),
+        event_id: EventId::new(),
+    };
+    descriptor.first_prompt = Some(record(first));
+    descriptor.last_prompt = Some(record(last));
+    descriptor
 }
 
 /// Write a descriptor for a session at the root (real disk, one truth
@@ -86,19 +102,37 @@ async fn append_log(store: &SessionStore, sid: SessionId, text: &str) {
         .unwrap();
 }
 
+/// The title column takes the newest prompt the session states, and a name
+/// the user gave outranks both prompts. Rows arrive newest-first.
 #[tokio::test]
-async fn test_catalog_lists_derives_titles() {
+async fn test_catalog_titles_from_record() {
     let root = temp_root();
     let cur = SessionId::new();
     let older = SessionId::new();
     let newer = SessionId::new();
-    write_descriptor(&root, older, &descriptor(None, "/repo/a", 1));
+    write_descriptor(
+        &root,
+        older,
+        &says(
+            base("/repo/a", 1),
+            "hello world prompt",
+            "fix the cache table",
+        ),
+    );
     write_descriptor(
         &root,
         newer,
-        &descriptor(Some("named session"), "/repo/b", 1),
+        &named(
+            says(
+                base("/repo/b", 1),
+                "hello world prompt",
+                "fix the cache table",
+            ),
+            "named session",
+            NameSource::User,
+        ),
     );
-    write_descriptor(&root, cur, &descriptor(None, "/repo/c", 1));
+    write_descriptor(&root, cur, &base("/repo/c", 1));
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     append_log(&store, older, "hello world prompt").await;
     append_log(&store, newer, "named session prompt").await;
@@ -116,11 +150,11 @@ async fn test_catalog_lists_derives_titles() {
         older.to_string(),
         "newer log mtime sorts first"
     );
-    assert!(
-        rows[0].title.starts_with("(session) "),
-        "sessions returns a placeholder, not the slug: {}",
-        rows[0].title
+    assert_eq!(
+        rows[0].title, "fix the cache table",
+        "the newest prompt names the work, without a log read"
     );
+    assert_eq!(rows[0].cwd_basename, "a");
     assert_eq!(
         rows[1].sid_str,
         newer.to_string(),
@@ -128,69 +162,48 @@ async fn test_catalog_lists_derives_titles() {
     );
     assert_eq!(
         rows[1].title, "named session",
-        "descriptor name is the cheap title (no log read)"
+        "a name the user chose outranks the prompts"
     );
-    assert_eq!(rows[1].cwd_basename, "b");
     catalog.resolve_detail(&mut rows[0]);
     assert_eq!(
-        rows[0].title, "hello-world-prompt",
-        "resolve_detail fills the first-prompt slug"
-    );
-    catalog.resolve_detail(&mut rows[1]);
-    assert_eq!(
-        rows[1].title, "named session",
-        "resolve_detail leaves a descriptor name untouched"
+        rows[0].title, "fix the cache table",
+        "resolving a titled row changes nothing"
     );
     let _r = remove_dir_all(&root);
 }
 
-/// A prompt longer than the slug cap produces an ellipsis-terminated slug
-/// no wider than 40 display columns, with no trailing dash before the
-/// ellipsis.
+/// A prompt keeps its own spelling in the title column: spaces, capitals and
+/// punctuation are what the user wrote, and the column trims by display
+/// width at render time rather than rewriting the text.
 #[tokio::test]
-async fn test_long_prompt_slug_ellipsis() {
+async fn test_catalog_keeps_prompt_text() {
+    const PROMPT: &str = "Project Context from the Nearest AGENTS Memory, today";
     let root = temp_root();
     let sid = SessionId::new();
-    write_descriptor(&root, sid, &descriptor(None, "/repo", 1));
+    write_descriptor(&root, sid, &says(base("/repo", 1), PROMPT, PROMPT));
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    append_log(
-        &store,
-        sid,
-        "project context from the nearest agents memory hicoder today",
-    )
-    .await;
+    append_log(&store, sid, PROMPT).await;
     age(&root.join(sid.to_string()).join("log.jsonl"), 100);
     let log: Arc<dyn SessionLog> = Arc::new(store);
     let catalog = DescriptorSessionCatalog::new(log, root.clone());
-    let mut rows = catalog.sessions(&SessionId::new().to_string());
+    let rows = catalog.sessions(&SessionId::new().to_string());
     assert_eq!(rows.len(), 1);
-    catalog.resolve_detail(&mut rows[0]);
-    let title = &rows[0].title;
-    assert!(
-        title.ends_with('\u{2026}'),
-        "long slug should end with ellipsis: {title}"
-    );
-    assert!(
-        !title.ends_with("-\u{2026}"),
-        "no trailing dash before ellipsis: {title}"
-    );
-    assert!(
-        title.chars().count() <= 40,
-        "slug within 40 chars: {title} ({})",
-        title.chars().count()
+    assert_eq!(
+        rows[0].title, PROMPT,
+        "the prompt text is carried as written"
     );
     let _r = remove_dir_all(&root);
 }
 
 #[tokio::test]
-async fn test_catalog_placeholder_no_prompt() {
+async fn test_catalog_placeholder_without_prompt() {
     let root = temp_root();
     let sid = SessionId::new();
-    write_descriptor(&root, sid, &descriptor(None, "/repo", 1));
+    write_descriptor(&root, sid, &base("/repo", 1));
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     // Append an empty UserInput so the session has a log (resumable +
-    // listed) but slugifies to nothing -- the title stays the sid
-    // placeholder, the property under test.
+    // listed) but states no task -- the title stays the sid placeholder,
+    // the property under test.
     append_log(&store, sid, "").await;
     let log: Arc<dyn SessionLog> = Arc::new(store);
     let catalog = DescriptorSessionCatalog::new(log, root.clone());
@@ -215,41 +228,70 @@ async fn test_catalog_placeholder_no_prompt() {
     let _r = remove_dir_all(&root);
 }
 
+/// A descriptor written before prompts were recorded carries only a derived
+/// name. The row starts as the placeholder and the bounded log-head read
+/// names it in the user's own words, skipping the greeting that opened the
+/// session.
 #[tokio::test]
-async fn test_catalog_dedup_by_title() {
+async fn test_catalog_resolves_legacy_title() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    write_descriptor(
+        &root,
+        sid,
+        &named(base("/repo", 1), "hello-there", NameSource::Auto),
+    );
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    append_log(&store, sid, "你好").await;
+    append_log(&store, sid, "研究 ray 的 sandbox 用了什么技术").await;
+    age(&root.join(sid.to_string()).join("log.jsonl"), 100);
+    let log: Arc<dyn SessionLog> = Arc::new(store);
+    let catalog = DescriptorSessionCatalog::new(log, root.clone());
+    let mut rows = catalog.sessions(&SessionId::new().to_string());
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].title.starts_with("(session) "),
+        "no recorded prompt leaves the placeholder until detail resolution: {}",
+        rows[0].title
+    );
+    catalog.resolve_detail(&mut rows[0]);
+    assert_eq!(
+        rows[0].title, "研究 ray 的 sandbox 用了什么技术",
+        "the first task statement in the log head names the row"
+    );
+    let _r = remove_dir_all(&root);
+}
+
+/// Two sessions named alike are two sessions: the listing keeps both so the
+/// user can tell them apart by time and project instead of losing one.
+#[tokio::test]
+async fn test_catalog_keeps_duplicate_rows() {
     let root = temp_root();
     let a = SessionId::new();
     let b = SessionId::new();
     let c = SessionId::new();
-    write_descriptor(&root, a, &descriptor(Some("shared"), "/repo", 1));
-    write_descriptor(&root, b, &descriptor(Some("shared"), "/repo", 1));
-    write_descriptor(&root, c, &descriptor(Some("unique"), "/repo", 1));
+    let shared = |cwd: &str| named(base(cwd, 1), "shared", NameSource::User);
+    write_descriptor(&root, a, &shared("/repo/one"));
+    write_descriptor(&root, b, &shared("/repo/two"));
+    write_descriptor(
+        &root,
+        c,
+        &named(base("/repo", 1), "unique", NameSource::User),
+    );
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     append_log(&store, a, "a prompt").await;
     append_log(&store, b, "b prompt").await;
     append_log(&store, c, "c prompt").await;
-    // Pin distinct whole-second log mtimes: a newest (wins the "shared"
-    // dedup -- first occurrence kept), c middle (survives, unique
-    // title), b oldest (dropped). age() is the only ordering signal.
     age(&root.join(a.to_string()).join("log.jsonl"), 100);
     age(&root.join(b.to_string()).join("log.jsonl"), 300);
     age(&root.join(c.to_string()).join("log.jsonl"), 200);
     let log: Arc<dyn SessionLog> = Arc::new(store);
     let catalog = DescriptorSessionCatalog::new(log, root.clone());
     let rows = catalog.sessions(&SessionId::new().to_string());
-    assert_eq!(rows.len(), 2, "dedup drops one of the shared-title pair");
-    assert!(
-        rows.iter().any(|r| r.sid_str == a.to_string()),
-        "newer shared-title session wins the dedup"
-    );
-    assert!(
-        rows.iter().any(|r| r.sid_str == c.to_string()),
-        "unique title session survives dedup"
-    );
-    assert!(
-        !rows.iter().any(|r| r.sid_str == b.to_string()),
-        "older shared-title session is dropped"
-    );
+    assert_eq!(rows.len(), 3, "no row hides behind a matching title");
+    assert_eq!(rows[0].sid_str, a.to_string(), "newest first");
+    assert_eq!(rows[1].sid_str, c.to_string(), "middle by mtime");
+    assert_eq!(rows[2].sid_str, b.to_string(), "oldest last");
     let _r = remove_dir_all(&root);
 }
 
@@ -271,7 +313,7 @@ async fn test_catalog_reads_legacy_name() {
     );
     write(
         dir.join("session.json"),
-        serde_json::to_vec(&descriptor(Some("legacy session"), "/repo", 1)).unwrap(),
+        serde_json::to_vec(&named(base("/repo", 1), "legacy session", NameSource::User)).unwrap(),
     )
     .unwrap();
     let entry = SessionLogEntry {
@@ -301,4 +343,13 @@ async fn test_catalog_reads_legacy_name() {
         "the size is read from the directory the scan found"
     );
     let _r = remove_dir_all(&root);
+}
+
+/// A project directory names the row by its last segment, whether or not the
+/// record ends in a separator; a path with no segment reads as unknown.
+#[test]
+fn test_basename_takes_last_segment() {
+    assert_eq!(cwd_basename("/work/repo"), "repo");
+    assert_eq!(cwd_basename("/work/repo/"), "repo");
+    assert_eq!(cwd_basename("/"), "?");
 }

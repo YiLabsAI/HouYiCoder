@@ -36,14 +36,6 @@ impl App {
                 self.ui.navigation.resume_picker.rows = rows;
                 self.ui.navigation.resume_picker.open();
                 self.ui.navigation.pane = Pane::Resume;
-                // Resolve the first visible rows immediately so the picker
-                // shows real titles + last-active times on the first render,
-                // not placeholders. Subsequent rows resolve a few per frame
-                // in the poll loop.
-                self.ui
-                    .navigation
-                    .resume_picker
-                    .resolve_rows(catalog.as_ref(), 20);
             }
             Some(query) => {
                 if is_export_file_path(query) {
@@ -65,12 +57,7 @@ impl App {
                 }
                 let sid = rows
                     .into_iter()
-                    .find(|r| {
-                        r.sid_str == query
-                            || r.title
-                                .to_ascii_lowercase()
-                                .contains(&query.to_ascii_lowercase())
-                    })
+                    .find(|r| r.matches(query))
                     .map(|r| r.sid_str);
                 match sid {
                     Some(s) => {

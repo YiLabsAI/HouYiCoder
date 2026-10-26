@@ -97,18 +97,76 @@ fn test_poll_skips_resolution_closed() {
     );
 }
 
-/// Lazy slug-dedup: when resolve_detail fills real titles, an older row
-/// whose title duplicates a newer (already-resolved) row is hidden — the
-/// picker shows one row per title, newest wins. Rows are sorted newest-first
-/// and resolved top-to-bottom, so the first occurrence of each title stays
-/// visible and later duplicates hide as they resolve. Restores the
-/// pre-progressive same-title dedup under lazy loading.
+/// Progressive resolution renames rows in place, and the selection stays on
+/// the session the user picked: a row is chosen by identity, so a title
+/// arriving a few frames later must not move the choice to another session.
 #[test]
-fn test_poll_dedups_dup_titles() {
-    /// Two unnamed sessions whose resolve_detail yields the SAME title
-    /// ("dup-title") — equivalent to re-running the same first prompt. The
-    /// newer row (index 0, sorted first) stays; the older row (index 1)
-    /// hides after it resolves.
+fn test_late_match_keeps_selection() {
+    /// An earlier row that gains its title late, so it joins the filtered
+    /// list above the cursor after the user has already chosen.
+    struct LateMatchCatalog;
+    impl SessionCatalog for LateMatchCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            vec![
+                SessionRow {
+                    sid_str: "sid-late".into(),
+                    title: "(session) 0000".into(),
+                    cwd_basename: "repo".into(),
+                    ..Default::default()
+                },
+                SessionRow {
+                    sid_str: "sid-target".into(),
+                    title: "target service".into(),
+                    cwd_basename: "repo".into(),
+                    last_active: 1,
+                    ..Default::default()
+                },
+            ]
+        }
+        fn resolve_detail(&self, row: &mut SessionRow) {
+            if row.sid_str == "sid-late" {
+                row.title = "target rollout".into();
+            }
+        }
+    }
+
+    let mut app = composition::app();
+    app.sessions.catalog = Some(Arc::new(LateMatchCatalog));
+    app.ui.navigation.resume_picker.rows = app.sessions.catalog.clone().unwrap().sessions("");
+    app.ui.navigation.resume_picker.open();
+    app.ui.navigation.pane = Pane::Resume;
+    for letter in "target".chars() {
+        app.ui.navigation.resume_picker.push(letter);
+    }
+    assert_eq!(
+        app.ui
+            .navigation
+            .resume_picker
+            .selected()
+            .expect("one row matches before resolution")
+            .sid_str,
+        "sid-target"
+    );
+    app.poll_agent();
+    let picker = &app.ui.navigation.resume_picker;
+    assert_eq!(picker.len(), 2, "the late title joins the match set");
+    assert_eq!(
+        picker
+            .selected()
+            .expect("selection survives resolution")
+            .sid_str,
+        "sid-target",
+        "a match appearing above the cursor must not move the choice"
+    );
+}
+
+/// Two rows that resolve to the same title both stay in the list: identical
+/// prompts are a normal outcome of re-running the same work, and the time
+/// and project columns are what tell the two sessions apart.
+#[test]
+fn test_poll_keeps_duplicate_rows() {
+    /// Two unnamed sessions whose resolve_detail yields the same title, as
+    /// two runs of the same opening request would.
     struct DupCatalog;
     impl SessionCatalog for DupCatalog {
         fn sessions(&self, _current: &str) -> Vec<SessionRow> {
@@ -140,28 +198,15 @@ fn test_poll_dedups_dup_titles() {
     app.ui.navigation.resume_picker.rows = app.sessions.catalog.clone().unwrap().sessions("");
     app.ui.navigation.resume_picker.open();
     app.ui.navigation.pane = Pane::Resume;
-    // Both rows resolve in a single poll (2 rows < 3/frame cap). The newer
-    // (index 0) resolves first -> seen_titles gets "dup-title". The older
-    // (index 1) resolves second -> title already seen -> hidden.
+    // Both rows resolve in a single poll (2 rows < 3/frame cap).
     app.poll_agent();
-    assert!(
-        !app.ui.navigation.resume_picker.rows[0].hidden,
-        "newer row (first of the dup) stays visible"
-    );
-    assert!(
-        app.ui.navigation.resume_picker.rows[1].hidden,
-        "older duplicate row must be hidden, got hidden={}",
-        app.ui.navigation.resume_picker.rows[1].hidden
-    );
-    // The filtered list the render uses excludes the hidden row.
     assert_eq!(
         app.ui.navigation.resume_picker.filtered().len(),
-        1,
-        "picker shows one row per title after dedup"
+        2,
+        "both duplicates stay listed"
     );
     assert_eq!(
-        app.ui.navigation.resume_picker.filtered()[0].sid_str,
-        "newer",
-        "the newest of the duplicates is the one kept"
+        app.ui.navigation.resume_picker.rows[1].title, "dup-title",
+        "the older row keeps the title it resolved"
     );
 }

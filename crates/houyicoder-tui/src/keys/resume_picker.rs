@@ -1,8 +1,8 @@
 //! Session-picker keys (the /resume picker). Extracted from keys.rs to keep
 //! that module under the file-size gate. See keys::handle_working for the
-//! dispatch routing. Type to filter by sid or name, Up/Down navigate, Enter
-//! resumes the selection (in-process swap), Esc closes. Follows the palette
-//! key shape so muscle memory transfers.
+//! dispatch routing. Type to filter by title, prompt, project, or session
+//! id; Up/Down navigate, Enter resumes the selection (in-process swap), Esc
+//! closes. Follows the palette key shape so muscle memory transfers.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -66,9 +66,7 @@ pub(super) fn handle_resume_picker(app: &mut App, k: KeyEvent) {
                 app.ui.navigation.resume_picker.pop();
             }
         }
-        KeyCode::Char(c) if c.is_ascii_graphic() || c == ' ' => {
-            app.ui.navigation.resume_picker.push(c)
-        }
+        KeyCode::Char(c) if !c.is_control() => app.ui.navigation.resume_picker.push(c),
         _ => {}
     }
 }

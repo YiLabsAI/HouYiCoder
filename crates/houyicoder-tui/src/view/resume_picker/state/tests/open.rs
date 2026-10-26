@@ -7,7 +7,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 use crate::app::handle_key;
 use crate::input::queue::InputItem;
 use crate::input::queue::resume_command_target;
-use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow};
+use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow, TitleSource};
 use crate::state::App;
 use crate::test_harness::connected_app;
 use crate::test_harness::render_text;
@@ -57,14 +57,20 @@ fn stub_catalog_app() -> App {
         SessionRow {
             sid_str: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
             title: "login flow rework".into(),
+            title_source: TitleSource::LastPrompt,
             cwd_basename: "hicoder".into(),
+            first_prompt: Some("port the parser".into()),
+            last_prompt: Some("login flow rework".into()),
             last_active: 1000,
             ..Default::default()
         },
         SessionRow {
             sid_str: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".into(),
             title: "search pane".into(),
+            title_source: TitleSource::FirstPrompt,
             cwd_basename: "demo-app".into(),
+            first_prompt: Some("search pane".into()),
+            last_prompt: Some("close the loop".into()),
             last_active: 2000,
             ..Default::default()
         },
@@ -312,6 +318,22 @@ fn test_char_keys_reach_push() {
     );
 }
 
+/// Text outside ASCII still reaches the filter: sessions are named in the
+/// user's own language, so the acceptance rule is "not a control character".
+#[test]
+fn test_typed_character_filters() {
+    let mut app = stub_catalog_app();
+    app.run_command(SlashCommand::Resume);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('会'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.ui.navigation.resume_picker.query, "会",
+        "a wide character joins the filter"
+    );
+}
+
 /// /resume with no other sessions on disk shows a system line instead of
 /// opening an empty picker (no crash, no empty overlay). Guards against a
 /// regression where the picker opens with zero rows and Enter does nothing.
@@ -332,15 +354,16 @@ fn test_resume_picker_empty_list() {
     );
 }
 
-/// A catalog whose detail resolution rewrites an unnamed row's placeholder to
-/// the slug of its first prompt, so the lazy dedup has a collision to act on.
-struct SlugCatalog;
-impl SessionCatalog for SlugCatalog {
+/// A catalog whose detail resolution names an unnamed row, so two rows can
+/// carry the same title after resolution.
+struct SharedTitleCatalog;
+impl SessionCatalog for SharedTitleCatalog {
     fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
         vec![
             SessionRow {
                 sid_str: "newest".into(),
                 title: "fix login".into(),
+                title_source: TitleSource::User,
                 last_active: 3000,
                 ..Default::default()
             },
@@ -350,100 +373,151 @@ impl SessionCatalog for SlugCatalog {
                 last_active: 2000,
                 ..Default::default()
             },
-            SessionRow {
-                sid_str: "oldest".into(),
-                title: "(session) bbbbbbbb".into(),
-                last_active: 1000,
-                ..Default::default()
-            },
         ]
     }
 
     fn resolve_detail(&self, row: &mut SessionRow) {
         if row.sid_str == "older" {
             row.title = "fix login".into();
-        } else if row.sid_str == "oldest" {
-            row.title = "port tui".into();
+            row.title_source = TitleSource::FirstPrompt;
         }
     }
 }
 
-/// The lazy dedup hides an older row whose resolved slug repeats a newer
-/// row's title, and leaves the newer row and an unrelated slug listed.
+/// Two sessions can end up with the same title, and both stay listed: the
+/// time and project columns are what tells them apart.
 #[test]
-fn test_duplicate_title_hides_older() {
+fn test_duplicate_title_keeps_rows() {
     let mut p = SessionPickerState {
-        rows: SlugCatalog.sessions(""),
+        rows: SharedTitleCatalog.sessions(""),
         ..Default::default()
     };
     p.open();
-    p.resolve_rows(&SlugCatalog, 3);
-    assert!(!p.rows[0].hidden, "the newest row keeps its title");
-    assert!(p.rows[1].hidden, "the older row repeats the newest title");
-    assert!(!p.rows[2].hidden, "an unrelated slug stays listed");
-    assert_eq!(p.filtered().len(), 2, "the duplicate row is not listed");
+    p.resolve_rows(&SharedTitleCatalog, 2);
+    assert_eq!(p.rows[1].title, "fix login", "the older row resolves");
+    assert_eq!(p.filtered().len(), 2, "both rows are listed");
 }
 
-/// The same collision through the real open path + the picker render: the
-/// duplicated title reaches the screen once, so the hidden row is not drawn.
+/// The same pair through the picker render: the shared title is drawn on
+/// both rows rather than collapsing to one.
 #[test]
-fn test_duplicate_title_renders_once() {
+fn test_duplicate_title_renders_both() {
     let mut app = working();
-    app.sessions.catalog = Some(Arc::new(SlugCatalog));
+    app.sessions.catalog = Some(Arc::new(SharedTitleCatalog));
     app.run_command(SlashCommand::Resume);
+    // Detail resolves from the poll loop, so the listing needs one frame
+    // before the derived titles are on screen.
+    app.poll_agent();
     let out = render(&app);
     assert_eq!(
         out.matches("fix login").count(),
-        1,
-        "the duplicated title is drawn once:\n{out}"
-    );
-    assert!(
-        out.contains("port tui"),
-        "the unrelated slug is drawn:\n{out}"
+        2,
+        "both rows are drawn:\n{out}"
     );
 }
 
-/// A catalog where the collision runs the other way: the newer row is the
-/// unnamed one and the older row already carries the name.
-struct NamedBelowCatalog;
-impl SessionCatalog for NamedBelowCatalog {
+/// A catalog whose rows carry more than the title: the first and newest
+/// prompt each, and the project directory.
+struct TopicCatalog;
+impl SessionCatalog for TopicCatalog {
     fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
         vec![
             SessionRow {
-                sid_str: "newer-unnamed".into(),
-                title: "(session) cccccccc".into(),
+                sid_str: "aaaaaaaa".into(),
+                title: "wire the table".into(),
+                title_source: TitleSource::LastPrompt,
+                cwd_basename: "hicoder".into(),
+                first_prompt: Some("research the demo repo".into()),
+                last_prompt: Some("wire the table".into()),
                 last_active: 3000,
                 ..Default::default()
             },
             SessionRow {
-                sid_str: "older-named".into(),
-                title: "fix login".into(),
+                sid_str: "bbbbbbbb".into(),
+                title: "named run".into(),
+                title_source: TitleSource::User,
+                cwd_basename: "demo-app".into(),
+                first_prompt: Some("port the parser".into()),
+                last_prompt: Some("close the loop".into()),
                 last_active: 2000,
                 ..Default::default()
             },
         ]
     }
 
-    fn resolve_detail(&self, row: &mut SessionRow) {
-        if row.sid_str == "newer-unnamed" {
-            row.title = "fix login".into();
-        }
-    }
+    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
-/// The title goes to the row resolved first, not to the row carrying a
-/// descriptor name, so an older named row yields to a newer row whose slug
-/// matches. Pins the precedence the picker shares with the catalog's own
-/// cheap-title dedup.
+/// The selected row gains a second line saying what the work started as, and
+/// moving the selection moves that line: the other row keeps one line so the
+/// list stays scannable.
 #[test]
-fn test_older_named_row_hides() {
-    let mut p = SessionPickerState {
-        rows: NamedBelowCatalog.sessions(""),
-        ..Default::default()
+fn test_selected_row_shows_topic() {
+    let mut app = working();
+    app.sessions.catalog = Some(Arc::new(TopicCatalog));
+    app.run_command(SlashCommand::Resume);
+    let out = render(&app);
+    assert!(
+        out.contains("topic: research the demo repo"),
+        "the opening subject is shown under the selected row:\n{out}"
+    );
+    assert!(
+        !out.contains("close the loop"),
+        "an unselected row keeps one line:\n{out}"
+    );
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let out = render(&app);
+    assert!(
+        out.contains("topic: close the loop"),
+        "a user-named row shows the newest prompt instead:\n{out}"
+    );
+    assert!(
+        !out.contains("topic: research the demo repo"),
+        "the previously selected row loses its topic line:\n{out}"
+    );
+}
+
+/// The filter reaches every column the design names: the newest prompt, the
+/// first prompt, the project directory, and the session id.
+#[test]
+fn test_filter_matches_record_fields() {
+    let mut app = stub_catalog_app();
+    app.run_command(SlashCommand::Resume);
+    let filter_by = |app: &mut App, text: &str| {
+        let picker = &mut app.ui.navigation.resume_picker;
+        picker.query.clear();
+        for c in text.chars() {
+            picker.push(c);
+        }
+        picker
+            .filtered()
+            .iter()
+            .map(|r| r.sid_str.clone())
+            .collect::<Vec<_>>()
     };
-    p.open();
-    p.resolve_rows(&NamedBelowCatalog, 2);
-    assert!(!p.rows[0].hidden, "the newer row claims the title");
-    assert!(p.rows[1].hidden, "the older named row is the duplicate");
-    assert_eq!(p.filtered().len(), 1, "only the claiming row is listed");
+    assert_eq!(
+        filter_by(&mut app, "parser"),
+        vec!["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".to_string()],
+        "a word only the first prompt holds still finds the session"
+    );
+    assert_eq!(
+        filter_by(&mut app, "close the loop"),
+        vec!["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_string()],
+        "a word only the newest prompt holds still finds the session"
+    );
+    assert_eq!(
+        filter_by(&mut app, "demo-app"),
+        vec!["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_string()],
+        "the project directory is searchable"
+    );
+    assert_eq!(
+        filter_by(&mut app, "bbbb"),
+        vec!["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_string()],
+        "the session id remains searchable"
+    );
+    assert_eq!(
+        filter_by(&mut app, "SEARCH"),
+        vec!["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_string()],
+        "matching ignores case"
+    );
 }
