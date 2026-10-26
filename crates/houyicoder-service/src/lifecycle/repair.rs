@@ -9,7 +9,8 @@ use std::path::Path;
 
 use houyicoder_context::session_class::{ParentLink, scan_sessions};
 use houyicoder_context::{
-    SessionDescriptor, SessionDescriptorError, SessionDescriptorStore, SessionId, SessionProvenance,
+    PromptCoverage, SessionDescriptor, SessionDescriptorError, SessionDescriptorStore, SessionId,
+    SessionProvenance,
 };
 use houyicoder_memory::FileDescriptorStore;
 
@@ -73,6 +74,7 @@ fn write_child_descriptor_if_absent(
             task_id: session.to_string(),
         },
         link.created_at_secs,
+        PromptCoverage::Unknown,
     );
     store.write_descriptor_if_absent(session, &descriptor)
 }

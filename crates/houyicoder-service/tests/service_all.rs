@@ -37,6 +37,8 @@ mod model_switch_window;
 mod permission_contract;
 #[path = "server_contract.rs"]
 mod server_contract;
+#[path = "session_descriptor_contract.rs"]
+mod session_descriptor_contract;
 #[path = "session_reset_contract.rs"]
 mod session_reset_contract;
 #[path = "skill_contract.rs"]

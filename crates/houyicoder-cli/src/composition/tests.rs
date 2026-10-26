@@ -5,20 +5,27 @@ use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all};
 use std::path::{Path, PathBuf};
 use std::process::id as process_id;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_async::bus::MessageBus;
 use houyicoder_client::Client;
+use houyicoder_context::{
+    DescriptorUpdate, SessionDescriptor, SessionDescriptorError, SessionDescriptorStore, SessionId,
+};
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, ChildDescriptor, ChildRunMode, global_completed_topic,
     global_progress_topic, spawned_topic,
 };
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
-use houyicoder_protocol::envelope::{ClientResponsePayload, ServerFrame, ServerRequestPayload};
+use houyicoder_memory::InMemoryDescriptorStore;
+use houyicoder_protocol::envelope::{
+    ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
+};
+use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
@@ -60,7 +67,7 @@ fn start_host(
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
-    let (runner, client, _warnings, host) = start_local_server(bundle, None, Some(settings_path));
+    let (runner, client, _warnings, host) = start_local_server(bundle, Some(settings_path));
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
     (runner, client, weak, host, lock, bus)
@@ -351,5 +358,182 @@ fn test_repeated_switch_consumes() {
             "round {round} relay and drain ended"
         );
     }
+    remove_dir_all(&root).ok();
+}
+
+/// Counts descriptor writes so a test can tell which store instance the
+/// server used. Every method delegates to an in-memory store; only the
+/// counter is this test's own.
+struct RecordingDescriptorStore {
+    inner: InMemoryDescriptorStore,
+    writes: AtomicUsize,
+}
+
+impl RecordingDescriptorStore {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryDescriptorStore::new(),
+            writes: AtomicUsize::new(0),
+        }
+    }
+
+    fn writes(&self) -> usize {
+        self.writes.load(Ordering::SeqCst)
+    }
+}
+
+impl SessionDescriptorStore for RecordingDescriptorStore {
+    fn read_descriptor(&self, session: SessionId) -> Option<SessionDescriptor> {
+        self.inner.read_descriptor(session)
+    }
+
+    fn write_descriptor(
+        &self,
+        session: SessionId,
+        descriptor: &SessionDescriptor,
+    ) -> Result<(), SessionDescriptorError> {
+        let outcome = self.inner.write_descriptor(session, descriptor);
+        if outcome.is_ok() {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+        }
+        outcome
+    }
+
+    fn write_descriptor_if_absent(
+        &self,
+        session: SessionId,
+        descriptor: &SessionDescriptor,
+    ) -> Result<bool, SessionDescriptorError> {
+        let written = self.inner.write_descriptor_if_absent(session, descriptor)?;
+        if written {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(written)
+    }
+
+    fn update_descriptor(
+        &self,
+        session: SessionId,
+        edit: &mut dyn FnMut(&mut SessionDescriptor),
+    ) -> Result<DescriptorUpdate, SessionDescriptorError> {
+        let outcome = self.inner.update_descriptor(session, edit)?;
+        if matches!(outcome, DescriptorUpdate::Written) {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(outcome)
+    }
+
+    fn delete_descriptor(&self, session: SessionId) {
+        self.inner.delete_descriptor(session);
+    }
+}
+
+/// A rename and a recorded prompt write the same descriptor, so neither can
+/// revert the other. The server derives its store from the runner it serves;
+/// a second instance over the same root would leave the rename outside the
+/// lock the prompt write holds and lose one of the two fields.
+#[test]
+fn test_rename_preserves_prompt() {
+    let root = temp_root();
+    let settings_path = root.join("settings.json");
+    let descriptors: Arc<RecordingDescriptorStore> = Arc::new(RecordingDescriptorStore::new());
+    let mut options = BuildRunnerOptions::default();
+    options.descriptor_store = Some(Arc::clone(&descriptors) as Arc<dyn SessionDescriptorStore>);
+    options.provider = Some(ProviderResolution::stub());
+    let bundle = build_runner(options);
+    bundle.runner.set_auto_memory(false);
+    bundle.runner.set_auto_dream(false);
+    let session = bundle.session;
+    let (runner, mut client, _warnings, host) = start_local_server(bundle, Some(settings_path));
+    let wire_session = WireSessionId(session.to_string());
+    let rt = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    rt.block_on(async {
+        client.connect().await.expect("handshake completes");
+        // The serve loop holds its frame dispatch until the startup trust card
+        // is answered, so answer it before sending a request.
+        let prompt = timeout(Duration::from_secs(5), client.next_frame())
+            .await
+            .expect("trust prompt timed out")
+            .expect("frame read");
+        let ServerFrame::Request(req) = prompt else {
+            panic!("the first frame is the trust prompt");
+        };
+        let ServerRequestPayload::TrustPrompt(_) = req.payload else {
+            panic!("the first frame is the trust prompt");
+        };
+        client
+            .send_reverse_response(
+                req.req_id,
+                ClientResponsePayload::TrustAccept(TrustAccept { accepted: true }),
+            )
+            .await
+            .expect("trust answer sent");
+        runner
+            .run(session, "fix the login test".to_string())
+            .await
+            .expect("the turn runs");
+        // The prompt write runs detached from the turn; settle here so the
+        // rename below is ordered after it rather than racing it.
+        runner.settle_prompt_writes().await;
+        let rename = RequestId(1);
+        client
+            .send_request(
+                rename,
+                FrontendRequest::RenameSession {
+                    session_id: wire_session,
+                    name: "my session".to_string(),
+                },
+            )
+            .await
+            .expect("rename sent");
+        loop {
+            let frame = timeout(Duration::from_secs(5), client.next_frame())
+                .await
+                .expect("rename response timed out")
+                .expect("frame read");
+            match frame {
+                ServerFrame::Request(req) => {
+                    if matches!(req.payload, ServerRequestPayload::TrustPrompt(_)) {
+                        client
+                            .send_reverse_response(
+                                req.req_id,
+                                ClientResponsePayload::TrustAccept(TrustAccept { accepted: true }),
+                            )
+                            .await
+                            .expect("trust answer sent");
+                    }
+                }
+                ServerFrame::Response(env) if env.req_id == rename => {
+                    assert!(
+                        matches!(env.payload, ResponsePayload::Status(_)),
+                        "a rename replies with the applied status"
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+    });
+    let descriptor = descriptors
+        .read_descriptor(session)
+        .expect("descriptor exists");
+    assert_eq!(descriptor.name.as_deref(), Some("my session"));
+    assert_eq!(
+        descriptor
+            .first_prompt
+            .expect("the prompt is recorded")
+            .text,
+        "fix the login test"
+    );
+    assert!(
+        descriptors.writes() >= 2,
+        "prompt and rename both wrote through the runner's store"
+    );
+    drop(client);
+    drop(runner);
+    drop(host);
     remove_dir_all(&root).ok();
 }

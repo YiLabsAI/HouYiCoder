@@ -18,8 +18,8 @@ use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::{
-    DescriptorUpdate, HookEventKind, HookFirePayload, SessionDescriptor, SessionDescriptorStore,
-    SessionId, SessionProvenance,
+    DescriptorUpdate, HookEventKind, HookFirePayload, PromptCoverage, SessionDescriptor,
+    SessionDescriptorStore, SessionId, SessionProvenance,
 };
 use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
 use houyicoder_core::agent::multi_agent::bus_types::spawned_topic;
@@ -682,14 +682,15 @@ pub(super) fn stamp_spawned_by(
         // Written means there was a descriptor to edit; anything else -- a
         // store that materializes none on a first append, or an update that
         // failed -- leaves the provenance unrecorded, so create a descriptor
-        // here, in the same shape the repair pass writes for a child whose
-        // boundary write was lost.
+        // here. Complete is truthful at this point: the child has written
+        // nothing yet and its runner observes every later append.
         if !matches!(outcome, Ok(DescriptorUpdate::Written)) {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let descriptor = SessionDescriptor::delegated_child(prov, now);
+            let descriptor =
+                SessionDescriptor::delegated_child(prov, now, PromptCoverage::Complete);
             if let Err(e) = store.write_descriptor(child_sid, &descriptor) {
                 tracing::warn!("child provenance write failed: {e}");
             }

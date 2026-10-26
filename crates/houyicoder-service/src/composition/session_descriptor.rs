@@ -2,7 +2,7 @@
 
 use super::*;
 use houyicoder_context::{
-    NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
+    NameSource, PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
 };
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -23,8 +23,16 @@ pub(crate) fn build_initial_descriptor(model: &str, project: Option<&str>) -> Se
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: now,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        // A fresh session is observed from its first event, so the first
+        // prompt recorded later really is the first.
+        prompt_coverage: PromptCoverage::Complete,
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Materialize a fresh descriptor on the first durable append.
 pub(crate) fn materialize_hook(

@@ -52,6 +52,9 @@ fn seeded_store(session: houyicoder_context::SessionId) -> Arc<dyn SessionDescri
                 version: "test".into(),
                 created_at: 1000,
                 child_session_ids: Vec::new(),
+                first_prompt: None,
+                last_prompt: None,
+                prompt_coverage: Default::default(),
             },
         )
         .unwrap();
@@ -334,6 +337,9 @@ async fn test_rename_write_failure_errors() {
                 version: "test".into(),
                 created_at: 1000,
                 child_session_ids: Vec::new(),
+                first_prompt: None,
+                last_prompt: None,
+                prompt_coverage: Default::default(),
             },
         )
         .unwrap();

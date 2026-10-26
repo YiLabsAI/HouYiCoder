@@ -6,8 +6,9 @@
 
 use super::super::workspace_cwd;
 use houyicoder_context::{
-    EventId, NameSource, SessionDescriptor, SessionEvent, SessionId, SessionLogEntry,
-    SessionProvenance,
+    EventId, NameSource, PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionEvent,
+    SessionId, SessionLogEntry, SessionProvenance,
+    session_class::{SessionClass, scan_sessions, session_dir},
 };
 use houyicoder_memory::FileDescriptorStore;
 use houyicoder_provider::ProviderResolution;
@@ -408,7 +409,9 @@ fn test_resume_sid_proceeds_unverified() {
 /// landed, or the file was deleted) still resumes: the model falls back
 /// to the current config resolve_model, so /status shows the resolved
 /// model instead of the original. The log is the source of truth; the
-/// descriptor is advisory.
+/// descriptor is advisory. The resume writes one anyway so prompts from this
+/// run have a record to land in, marked unread so none is claimed as the
+/// session's first.
 #[test]
 fn test_resume_sid_missing_descriptor() {
     let sessions = temp_root();
@@ -452,6 +455,108 @@ fn test_resume_sid_missing_descriptor() {
         model,
         houyicoder_config::resolve_model(),
         "model falls back to the current config without the descriptor"
+    );
+    // The resume writes a descriptor so prompts from this run have a record
+    // to land in, and marks the log unread so this run's prompt cannot claim
+    // to be the session's first.
+    let written = FileDescriptorStore::new(sessions.clone())
+        .read_descriptor(existing_sid)
+        .expect("resume writes a descriptor for a session that had none");
+    assert_eq!(written.model, model, "the record carries the model in use");
+    assert_eq!(
+        written.prompt_coverage,
+        PromptCoverage::Unknown,
+        "the log was not read here, so its first prompt is unknown"
+    );
+    remove_dir_all(&sessions).ok();
+}
+
+/// A descriptor written for a session that already had a log states when that
+/// log began, not when the resume ran, so the record does not date the session
+/// to a later run.
+#[test]
+fn test_resume_records_log_start() {
+    let sessions = temp_root();
+    let sid = SessionId::new();
+    let dir = session_dir(&sessions, sid);
+    create_dir_all(&dir).expect("session dir");
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 1_700_000_000_500,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "an earlier task".into(),
+        },
+    };
+    write(
+        dir.join("log.jsonl"),
+        serde_json::to_string(&entry).unwrap() + "\n",
+    )
+    .expect("session log");
+
+    super::build_runner_for_resume_sid(sid, &sessions, None, None, ProviderResolution::stub())
+        .expect("a session with a log resumes by id");
+
+    let written = FileDescriptorStore::new(sessions.clone())
+        .read_descriptor(sid)
+        .expect("resume writes the missing descriptor");
+    assert_eq!(
+        written.created_at, 1_700_000_000,
+        "the record dates the session from its first log entry"
+    );
+    remove_dir_all(&sessions).ok();
+}
+
+/// A delegated child whose descriptor was lost stays a child when the user
+/// resumes it by id. The written record carries the lineage the log opens
+/// with, so the session is not counted or listed as one of the user's own.
+#[test]
+fn test_resume_keeps_child_class() {
+    let sessions = temp_root();
+    let sid = SessionId::new();
+    let parent = SessionId::new();
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 1_700_000_000_000,
+        prev_hash: None,
+        event: SessionEvent::ChildDelegated {
+            parent_session_id: parent.to_string(),
+            subagent_type: "explore".into(),
+        },
+    };
+    let dir = session_dir(&sessions, sid);
+    create_dir_all(&dir).expect("child session dir");
+    write(
+        dir.join("log.jsonl"),
+        serde_json::to_string(&entry).unwrap() + "\n",
+    )
+    .expect("child log");
+    assert!(
+        !dir.join("session.json").exists(),
+        "the fixture has no descriptor"
+    );
+
+    super::build_runner_for_resume_sid(sid, &sessions, None, None, ProviderResolution::stub())
+        .expect("a child log resumes by id");
+
+    let entry = scan_sessions(&sessions)
+        .into_iter()
+        .find(|entry| entry.sid == sid)
+        .expect("the child session is in the store");
+    assert_eq!(
+        entry.class,
+        SessionClass::SubAgent,
+        "the resume must not promote a child to a user session"
+    );
+    assert!(!entry.is_user_session());
+    let written = FileDescriptorStore::new(sessions.clone())
+        .read_descriptor(sid)
+        .expect("the child record lands");
+    assert_eq!(
+        written.created_at, 1_700_000_000,
+        "the record dates the child from the delegation"
     );
     remove_dir_all(&sessions).ok();
 }
@@ -752,6 +857,9 @@ fn test_latest_picks_active_cwd() {
             .unwrap()
             .as_secs(),
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: Default::default(),
     };
     descriptor_store
         .write_descriptor(sid_b, &b_descriptor)

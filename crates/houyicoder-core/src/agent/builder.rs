@@ -4,11 +4,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use houyicoder_context::SessionDescriptorStore;
 use houyicoder_context::SessionId;
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 
 use crate::agent::SkillHookRegistrar;
 use crate::agent::ToolRegistry;
+use crate::agent::append::PromptRecorder;
 use crate::agent::backbone::WorkspaceProbe;
 use crate::agent::conditional_activation::ConditionalSkillActivator;
 use crate::agent::context::AssemblyInput;
@@ -349,6 +351,15 @@ impl Runner {
     /// composition root installs the production implementation.
     pub fn with_summarizer(mut self, summarizer: Box<dyn Summarizer>) -> Self {
         self.summarizer = summarizer;
+        self
+    }
+
+    /// Record each durable user input as the session's latest task statement
+    /// on its descriptor, so a reader learns what the session is about
+    /// without opening its log. The composition root passes the same store
+    /// the descriptor was materialized through.
+    pub fn with_descriptor_store(mut self, store: Arc<dyn SessionDescriptorStore>) -> Self {
+        self.prompt_recorder = Some(PromptRecorder::new(store));
         self
     }
 

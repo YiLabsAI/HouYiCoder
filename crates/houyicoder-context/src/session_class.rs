@@ -254,6 +254,22 @@ pub fn recent_user_sessions(root: &Path, limit: usize) -> Vec<SessionEntry> {
     out
 }
 
+/// The parent one session's log names, read from its head. None when the
+/// session has no log, its head does not parse, or its first record is not a
+/// delegation. A caller holding one session id asks about that session
+/// without scanning the whole store.
+pub fn session_parent_link(root: &Path, session: SessionId) -> Option<ParentLink> {
+    read_parent_link(&session_dir(root, session).join(LOG_FILE))
+}
+
+/// When the session's log began, in seconds since the epoch. None when the
+/// log is missing or its head does not parse. A record written for a session
+/// that already has a log states when that session started, not when the
+/// record was written.
+pub fn session_started_at(root: &Path, session: SessionId) -> Option<u64> {
+    read_head_entry(&session_dir(root, session).join(LOG_FILE)).map(|entry| entry.ts / 1000)
+}
+
 /// Read and parse one session's descriptor. None when absent or unreadable.
 fn read_descriptor(dir: &Path) -> Option<SessionDescriptor> {
     let bytes = fs::read(descriptor_path(dir)).ok()?;
@@ -267,13 +283,7 @@ fn read_descriptor(dir: &Path) -> Option<SessionDescriptor> {
 /// head bound means no delegation is recorded: the class then rests on the
 /// descriptor alone.
 fn read_parent_link(log: &Path) -> Option<ParentLink> {
-    let file = File::open(log).ok()?;
-    let mut head = String::new();
-    BufReader::new(file)
-        .take(HEAD_BYTES)
-        .read_line(&mut head)
-        .ok()?;
-    let entry: SessionLogEntry = serde_json::from_str(&head).ok()?;
+    let entry = read_head_entry(log)?;
     match entry.event {
         SessionEvent::ChildDelegated {
             parent_session_id,
@@ -285,6 +295,18 @@ fn read_parent_link(log: &Path) -> Option<ParentLink> {
         }),
         _ => None,
     }
+}
+
+/// The first record of one session's log, or None when the log is missing,
+/// its first line does not parse, or that line runs past the head bound.
+fn read_head_entry(log: &Path) -> Option<SessionLogEntry> {
+    let file = File::open(log).ok()?;
+    let mut head = String::new();
+    BufReader::new(file)
+        .take(HEAD_BYTES)
+        .read_line(&mut head)
+        .ok()?;
+    serde_json::from_str(&head).ok()
 }
 
 fn descriptor_path(dir: &Path) -> PathBuf {

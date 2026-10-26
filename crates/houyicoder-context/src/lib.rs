@@ -41,9 +41,15 @@ pub use backend::{
 /// The session descriptor written alongside the event log.
 mod descriptor;
 pub use descriptor::{
-    DescriptorUpdate, NameSource, SessionDescriptor, SessionDescriptorError,
-    SessionDescriptorStore, SessionProvenance,
+    DescriptorUpdate, NameSource, PromptCoverage, PromptRecord, SessionDescriptor,
+    SessionDescriptorError, SessionDescriptorStore, SessionProvenance,
 };
+
+/// What a session is about: which user input states the work and how it is
+/// recorded on the descriptor. Public as a namespace for the same reason as
+/// session_class -- it is one domain subject with its own rule, not a
+/// mechanical file split.
+pub mod session_intent;
 
 /// What a directory in the sessions root is and where a session's files live,
 /// answered once for every reader of the store. Public as a namespace rather

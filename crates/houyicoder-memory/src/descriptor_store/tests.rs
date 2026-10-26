@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::{NameSource, SessionProvenance};
+use houyicoder_context::{NameSource, PromptCoverage, SessionProvenance};
 
 fn sample_descriptor(name: Option<&str>, ts: u64) -> SessionDescriptor {
     SessionDescriptor {
@@ -13,6 +13,9 @@ fn sample_descriptor(name: Option<&str>, ts: u64) -> SessionDescriptor {
         version: "test".into(),
         created_at: ts,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: PromptCoverage::Unknown,
     }
 }
 

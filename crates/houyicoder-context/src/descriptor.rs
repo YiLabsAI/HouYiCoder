@@ -11,6 +11,7 @@
 //! not a design target.
 
 use crate::SessionId;
+use crate::ids::EventId;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -41,10 +42,10 @@ pub enum SessionProvenance {
     },
 }
 
-/// How the session name was set. Auto = derived from the first prompt (the
-/// picker computes it on the fly, so it is NOT stored -- only the source is);
-/// User = set via /rename (stored, wins over auto). This lets /rename mark
-/// its write so a later auto-derivation does not clobber a user name.
+/// How the session name was set. Auto = derived from the session's first
+/// prompt (the prompt is stored, the display name is derived from it);
+/// User = set via /rename (stored, wins over auto). The source lets /rename
+/// mark its write so a later auto-derivation does not clobber a user name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NameSource {
@@ -52,10 +53,45 @@ pub enum NameSource {
     User,
 }
 
+/// One user input that states what the work is, together with the log event
+/// it was read out of. The event id keeps the copy attributable: a later
+/// reader can look the event up instead of trusting text with no origin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptRecord {
+    /// The prompt in display form: control sequences removed, whitespace
+    /// collapsed, capped to a title-sized length.
+    pub text: String,
+    /// The event this text was read from.
+    pub event_id: EventId,
+}
+
+/// How much of a session's log the first and last prompt were read from. A
+/// descriptor written before the fields existed has no coverage recorded, and
+/// one whose log was only partly scanned cannot claim the two are the whole
+/// history: a missing prompt looks absent when it was merely not read.
+///
+/// The claim covers observation, not capture: a prompt is written after its
+/// event landed, and that write can fail or be cut short by a shutdown. A
+/// reader that needs certainty about an absent prompt reads the log rather
+/// than trusting this field alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCoverage {
+    /// The log was never scanned end to end; an absent prompt means unknown,
+    /// not missing.
+    #[default]
+    Unknown,
+    /// Only the head and tail of the log were read.
+    Partial,
+    /// Every event was observed, either as it was appended or by a full scan.
+    Complete,
+}
+
 /// The per-session descriptor. Written at session creation; updated on
-/// /rename. Read by the resume path + /status. Fields the engine needs to
-/// restore a session across process restart: cwd (where to land), model
-/// (which provider config), provenance (lineage), name (display + search).
+/// /rename and on each prompt. The restore path and the status view read it.
+/// Fields the engine needs to restore a session across process restart: cwd
+/// (where to land), model (which provider config), provenance (lineage), name
+/// (display + search), and the first and last prompt that state the work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionDescriptor {
     /// User-set name. None = derive from the first prompt at display time.
@@ -79,21 +115,45 @@ pub struct SessionDescriptor {
     /// readable because an old descriptor simply has no children.
     #[serde(default)]
     pub child_session_ids: Vec<String>,
+    /// The first user input that states the work, recorded once the session
+    /// is observed from its start. None on a descriptor written before the
+    /// field existed, or before any task statement arrived.
+    #[serde(default)]
+    pub first_prompt: Option<PromptRecord>,
+    /// The newest user input that states the work, recorded so a reader learns
+    /// a session's current subject without opening its log.
+    #[serde(default)]
+    pub last_prompt: Option<PromptRecord>,
+    /// How much of the log the first and last prompt were read from.
+    #[serde(default)]
+    pub prompt_coverage: PromptCoverage,
 }
 
 impl SessionDescriptor {
     /// The descriptor a delegated child is recorded with: the delegation that
-    /// started it, and the second it was created. Nothing else about a child
-    /// is known where it is written -- its working directory and model stay
-    /// empty -- because no listing path offers one: the picker, the continue
-    /// fallback, and the counts all filter to user sessions. An explicit
-    /// resume by id still opens a child's log, with these fields empty. Both
-    /// writers of a child's descriptor come through here, the boundary that
-    /// starts it and the pass that repairs one whose write was lost, so the
-    /// two agree on the shape; what they know differs, since the boundary
-    /// reads its own clock and the pass reads the record the child opens
-    /// with.
-    pub fn delegated_child(provenance: SessionProvenance, created_at_secs: u64) -> Self {
+    /// started it, and the second it was created. The constructor leaves the
+    /// working directory and model empty because the caller knows only the
+    /// delegation. A store that materializes a descriptor on a session's first
+    /// append writes its own initial fields first, and the delegation boundary
+    /// then records the provenance on top, so a child in production carries
+    /// the assembly's working directory and model. When the store materializes
+    /// none, this shape is what a resume by id reads. No listing path offers a
+    /// child: the picker, the continue fallback, and the counts all filter to
+    /// user sessions.
+    ///
+    /// Three paths build a child's descriptor with this constructor: the
+    /// delegation boundary, when the store had no descriptor to edit; the
+    /// pass that repairs one whose boundary write was lost; and a resume that
+    /// finds a child log with no record. They know different amounts: the
+    /// boundary starts a child whose runner observes every later append, so a
+    /// coverage claim taken there stays true, while the repair pass and the
+    /// resume run after the child may have written, and a log neither reads
+    /// cannot be claimed as covered.
+    pub fn delegated_child(
+        provenance: SessionProvenance,
+        created_at_secs: u64,
+        coverage: PromptCoverage,
+    ) -> Self {
         Self {
             name: None,
             name_source: NameSource::Auto,
@@ -103,6 +163,9 @@ impl SessionDescriptor {
             version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: created_at_secs,
             child_session_ids: Vec::new(),
+            first_prompt: None,
+            last_prompt: None,
+            prompt_coverage: coverage,
         }
     }
 }

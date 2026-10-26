@@ -232,6 +232,9 @@ fn test_store_isolation() {
         version: "t".into(),
         created_at: 1,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: Default::default(),
     };
     store
         .write_descriptor(sid, &descriptor)

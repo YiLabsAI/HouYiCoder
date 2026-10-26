@@ -43,6 +43,9 @@ fn write_session_at(sessions: &Path, name: &str, provenance: SessionProvenance) 
         version: "t".into(),
         created_at: 1,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: Default::default(),
     };
     write(
         dir.join("session.json"),

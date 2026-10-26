@@ -22,7 +22,9 @@ use std::fs::{File, create_dir_all};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use houyicoder_context::{NameSource, PrevHash, SessionDescriptor, SessionId, SessionProvenance};
+use houyicoder_context::{
+    NameSource, PrevHash, PromptCoverage, SessionDescriptor, SessionId, SessionProvenance,
+};
 use sha2::{Digest, Sha256};
 use std::env::args;
 use std::env::current_dir;
@@ -172,6 +174,9 @@ fn write_descriptor(
         version: "houyi-load".to_string(),
         created_at: created_at_secs,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: PromptCoverage::Unknown,
     };
     let json = serde_json::to_string_pretty(&descriptor)?;
     write(session_dir.join("session.json"), json + "\n")?;

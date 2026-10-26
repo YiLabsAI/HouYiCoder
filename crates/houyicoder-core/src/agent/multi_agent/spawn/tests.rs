@@ -3,8 +3,11 @@
 use super::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::CancellationToken;
-use houyicoder_context::{SessionEvent, SessionId};
-use houyicoder_memory::InMemoryBackend;
+use houyicoder_context::{
+    PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionEvent, SessionId,
+    SessionProvenance,
+};
+use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
@@ -46,6 +49,7 @@ fn req_at_depth(
         run_mode: ChildRunMode::Foreground,
         child_cancel: CancellationToken::new(),
         bus: None,
+        descriptor_store: None,
     }
 }
 
@@ -125,6 +129,59 @@ async fn test_delegation_opens_child_log() {
         }
         other => panic!("the child log must open with its delegation, got {other:?}"),
     }
+}
+
+/// The child runner records its own prompt. The child's first durable append
+/// materializes a descriptor through the shared store, but only the child
+/// runner observes the prompt it runs on; without the parent's descriptor
+/// store the child's descriptor never learns what the child was asked.
+#[tokio::test]
+async fn test_child_records_prompt() {
+    let descriptors = Arc::new(InMemoryDescriptorStore::new());
+    let materialized = Arc::clone(&descriptors);
+    let store = Arc::new(
+        SessionStore::new(Box::new(InMemoryBackend::new())).with_first_durable(Arc::new(
+            move |sid| {
+                let descriptor = SessionDescriptor::delegated_child(
+                    SessionProvenance::Fresh,
+                    0,
+                    PromptCoverage::Complete,
+                );
+                materialized
+                    .write_descriptor(sid, &descriptor)
+                    .expect("materialize");
+            },
+        )),
+    );
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("done"));
+    let mut req = req_at_depth(parent_sid, store, provider, 0);
+    let descriptor_store: Arc<dyn SessionDescriptorStore> = descriptors.clone();
+    req.descriptor_store = Some(descriptor_store);
+    let handle = spawn_child(req).await.expect("spawn");
+    handle
+        .runner
+        .run(handle.session, "find the auth module".to_string())
+        .await
+        .expect("the child turn runs");
+    handle.runner.settle_prompt_writes().await;
+    let descriptor = descriptors
+        .read_descriptor(handle.session)
+        .expect("the child descriptor exists");
+    assert_eq!(
+        descriptor
+            .first_prompt
+            .expect("the child's first prompt is recorded")
+            .text,
+        "find the auth module"
+    );
+    assert_eq!(
+        descriptor
+            .last_prompt
+            .expect("the child's last prompt follows")
+            .text,
+        "find the auth module"
+    );
 }
 
 /// A system-triggered spawn records its origin on the durable boundary.

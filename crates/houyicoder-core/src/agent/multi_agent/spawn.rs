@@ -4,7 +4,7 @@ use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::CancellationToken;
-use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_context::{SessionDescriptorStore, SessionEvent, SessionId};
 use std::sync::Arc;
 
 use crate::agent::append::new_event;
@@ -94,6 +94,11 @@ pub struct SpawnRequest {
     pub child_cancel: CancellationToken,
     /// The shared in-process bus used for child status and steering.
     pub bus: Option<Arc<AgentBus>>,
+    /// The parent's descriptor store. The child runner records its own
+    /// prompt through it, so a child's descriptor says what that child was
+    /// asked to do. None leaves the child with whatever descriptor the
+    /// store materializes, which the child never updates.
+    pub descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
 }
 
 /// A handle to a spawned child. Carries the child session id + a cancel
@@ -193,6 +198,14 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
             depth: req.depth + 1,
             parent_session_id: Some(req.parent_sid.to_string()),
         });
+    // The child's prompt enters its own log through the child runner, so the
+    // recorder that turns a durable append into a descriptor prompt has to be
+    // installed here. Without it the child's descriptor claims whatever
+    // coverage the store materialized and never learns what the child was
+    // asked, which is the state a resume by id reads.
+    if let Some(descriptor_store) = req.descriptor_store.clone() {
+        runner = runner.with_descriptor_store(descriptor_store);
+    }
     if let Some(bus) = bus {
         let mut events = AgentEventHandlers::default();
         events.set_run_lifecycle(Arc::new(ChildStatusPublisher::new(bus.clone(), child)));

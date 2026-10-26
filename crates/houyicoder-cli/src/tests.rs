@@ -318,7 +318,7 @@ fn test_pair_completes_handshake() {
     options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
     let (runner_arc, mut client, _startup_warnings, host) =
-        start_local_server(bundle, None, Some(root.join("settings.json")));
+        start_local_server(bundle, Some(root.join("settings.json")));
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.
     assert!(Arc::ptr_eq(&runner_arc, &runner_arc));

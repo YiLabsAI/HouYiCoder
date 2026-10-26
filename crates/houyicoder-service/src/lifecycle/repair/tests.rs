@@ -11,7 +11,11 @@ use super::*;
 use houyicoder_context::session_class::{
     DESCRIPTOR_FILE, LOG_FILE, ParentLink, SessionClass, scan_sessions,
 };
-use houyicoder_context::{DescriptorUpdate, EventId, NameSource, SessionEvent, SessionLogEntry};
+use houyicoder_context::session_intent::apply_prompt;
+use houyicoder_context::{
+    DescriptorUpdate, EventId, NameSource, PromptCoverage, PromptRecord, SessionEvent,
+    SessionLogEntry,
+};
 use houyicoder_memory::FileDescriptorStore;
 use std::env::temp_dir;
 use std::process::id;
@@ -41,6 +45,24 @@ fn write_log(dir: &Path, event: SessionEvent, ts_ms: u64) {
     fs::write(dir.join(LOG_FILE), format!("{line}\n")).expect("log");
 }
 
+/// Append one record to a log the directory already holds, standing in for
+/// work that ran after the boundary write was lost.
+fn append_log(dir: &Path, event: SessionEvent, ts_ms: u64) {
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: ts_ms,
+        prev_hash: None,
+        event,
+    };
+    let line = serde_json::to_string(&entry).expect("serialize record");
+    let log = dir.join(LOG_FILE);
+    let mut text = fs::read_to_string(&log).expect("read log");
+    text.push_str(&line);
+    text.push('\n');
+    fs::write(&log, text).expect("append log");
+}
+
 /// A child whose descriptor never landed: the log opens with the delegation its
 /// boundary writes. Returns the directory and the id its name spells.
 fn child_log_only(root: &Path, parent: &str, ts_ms: u64) -> (PathBuf, SessionId) {
@@ -67,6 +89,9 @@ fn descriptor(provenance: SessionProvenance) -> SessionDescriptor {
         version: "0.0.0".to_string(),
         created_at: 1,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: Default::default(),
     }
 }
 
@@ -147,6 +172,44 @@ fn test_repair_writes_child_descriptor() {
     assert!(
         entry.parent.is_none(),
         "the descriptor answers now, so the log is not opened"
+    );
+    let _r = fs::remove_dir_all(&root);
+}
+
+/// The pass runs after the child may already have written, and it never reads
+/// that log. The descriptor it writes must therefore not claim the history
+/// was covered: a prompt that arrives later cannot be stored as the first.
+#[test]
+fn test_repair_claims_no_coverage() {
+    let root = temp_root();
+    let (dir, sid) = child_log_only(&root, "parent-1", 1_700_000_042_123);
+    append_log(
+        &dir,
+        SessionEvent::MidTurnInput {
+            text: "steer the child".to_string(),
+            pending_input_id: None,
+        },
+        1_700_000_043_000,
+    );
+    let store = FileDescriptorStore::new(root.clone());
+    repair_child_descriptors_in(&root, &store);
+
+    let mut descriptor = store.read_descriptor(sid).expect("descriptor repaired");
+    assert_eq!(
+        descriptor.prompt_coverage,
+        PromptCoverage::Unknown,
+        "a log the pass never read is not covered"
+    );
+    apply_prompt(
+        &mut descriptor,
+        PromptRecord {
+            text: "a later task".to_string(),
+            event_id: EventId::new(),
+        },
+    );
+    assert!(
+        descriptor.first_prompt.is_none(),
+        "a prompt seen after repair is not the session's first"
     );
     let _r = fs::remove_dir_all(&root);
 }

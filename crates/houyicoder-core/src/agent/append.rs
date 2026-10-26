@@ -8,6 +8,11 @@ mod cache_break;
 mod cache_decisions;
 use cache_break::now_millis;
 mod hook;
+mod input;
+mod prompt_recorder;
+mod prompt_writes;
+pub(crate) use prompt_recorder::PromptRecorder;
+pub(crate) use prompt_writes::PendingPromptWrites;
 pub(crate) mod timing;
 pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
@@ -24,7 +29,6 @@ use super::hook::{HookEvent, wire::HookOutcome};
 use super::reducer::ReduceCtx;
 use super::reducer::TrustLevel;
 use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
-use crate::agent::multi_agent::bus_types::BusMessage;
 use std::env::var;
 use std::sync::atomic::Ordering;
 
@@ -83,59 +87,6 @@ impl Runner {
         self.emit_system_line(format!(
             "{model} was rejected as too long but the provider did not report its limit; set model.catalog[{model}].context_window to this model's real window",
         ));
-    }
-
-    /// Append a user input event to the log.
-    pub(crate) async fn append_user_input(
-        &self,
-        session: SessionId,
-        text: String,
-    ) -> Result<(), RunError> {
-        self.store
-            .append(new_event(session, SessionEvent::UserInput { text }))
-            .await?;
-        Ok(())
-    }
-
-    /// Drain the bus inbox receiver (a spawned child's steering channel)
-    /// into the texts the drive loop appends as user messages this turn.
-    /// Empty for the top-level runner, which has no inbox. Non-blocking.
-    pub(crate) fn drain_inbox(&self) -> Vec<String> {
-        let mut guard = self.inbox.lock().expect("inbox lock");
-        let Some(rx) = guard.as_mut() else {
-            return Vec::new();
-        };
-        let mut acc = Vec::new();
-        while let Ok(msg) = rx.try_recv() {
-            if let BusMessage::Inbox { text } = msg {
-                acc.push(text);
-            }
-        }
-        acc
-    }
-
-    /// Append a queued interjection: a user message the human queued while a
-    /// run was in flight, drained + appended at the next turn boundary. The
-    /// model input assembly wraps it with a framing note so the model reads
-    /// it as a mid-work interjection (continue the task + address), not a
-    /// fresh instruction that drops the in-flight task. The durable text is
-    /// the bare user input (the transcript shows it verbatim).
-    pub(crate) async fn append_mid_turn_input(
-        &self,
-        session: SessionId,
-        text: String,
-        pending_input_id: Option<u64>,
-    ) -> Result<(), RunError> {
-        self.store
-            .append(new_event(
-                session,
-                SessionEvent::MidTurnInput {
-                    text,
-                    pending_input_id,
-                },
-            ))
-            .await?;
-        Ok(())
     }
 
     /// Append a child-completion notification: a background subagent finished

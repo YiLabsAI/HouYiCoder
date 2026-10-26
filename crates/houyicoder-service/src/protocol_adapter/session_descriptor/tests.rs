@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::{NameSource, SessionProvenance as ContextProvenance};
+use houyicoder_context::{NameSource, PromptCoverage, SessionProvenance as ContextProvenance};
 
 fn descriptor(
     name: Option<&str>,
@@ -16,6 +16,9 @@ fn descriptor(
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: 0,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: PromptCoverage::Unknown,
     }
 }
 

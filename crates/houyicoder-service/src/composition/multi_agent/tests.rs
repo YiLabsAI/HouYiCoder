@@ -1,5 +1,7 @@
 use super::*;
 use houyicoder_api::tool::Tool;
+
+mod descriptor;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;

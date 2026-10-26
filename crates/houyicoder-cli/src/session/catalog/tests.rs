@@ -36,6 +36,9 @@ fn descriptor(name: Option<&str>, cwd: &str, ts: u64) -> SessionDescriptor {
         version: "t".into(),
         created_at: ts,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: Default::default(),
     }
 }
 

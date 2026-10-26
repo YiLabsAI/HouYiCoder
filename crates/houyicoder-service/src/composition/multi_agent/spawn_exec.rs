@@ -639,6 +639,7 @@ fn child_spawn_request(
         run_mode,
         child_cancel,
         bus: this.bus.clone(),
+        descriptor_store: this.descriptor_store.clone(),
     }
 }
 

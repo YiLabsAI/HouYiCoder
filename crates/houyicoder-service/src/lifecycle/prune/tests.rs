@@ -96,6 +96,9 @@ fn descriptor_json(provenance: SessionProvenance) -> String {
         version: "0.0.0".to_string(),
         created_at: 1_700_000_000,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: Default::default(),
     };
     serde_json::to_string(&descriptor).expect("serialize descriptor")
 }

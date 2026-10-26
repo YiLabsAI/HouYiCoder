@@ -73,7 +73,7 @@ use tokio_util::sync::CancellationToken;
 
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
-use houyicoder_context::{EventId, SessionId};
+use houyicoder_context::{EventId, SessionDescriptorStore, SessionId};
 use houyicoder_protocol::frontend::model::{ModelChoice, SpeedMode};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, EffortLevel};
@@ -81,6 +81,7 @@ use houyicoder_resilience::resource_breaker::ResourceBreaker;
 
 use status::SharedUsage;
 
+use append::PromptRecorder;
 use append::new_event;
 use call::accumulate_usage;
 use fallback::FallbackToolOutcome;
@@ -201,6 +202,13 @@ pub struct Runner {
     /// memory query/mutation operations. Constructed by the composition root
     /// and installed via install_memory.
     memory: memory::MemoryRuntime,
+    /// Records each durable user input's task statement on the session
+    /// descriptor, where the append result is known: a queued input the user
+    /// withdraws never writes a prompt, and the rejection path that skips the
+    /// append writes none either. None until a caller installs one; the
+    /// composition root and the tests that exercise recording install the
+    /// store the descriptor was materialized through.
+    prompt_recorder: Option<PromptRecorder>,
     /// Optional skill registry. When configured, the turn-entry step appends a
     /// skill-discovery listing attachment (descriptions only — the Skill
     /// tool loads bodies on demand). None in tests and the pure-stub path
@@ -322,6 +330,25 @@ impl Runner {
     /// transcript view from real SessionLogEntries).
     pub fn store(&self) -> Arc<dyn SessionLog> {
         self.store.clone()
+    }
+
+    /// The descriptor store prompts are recorded through, when the composition
+    /// installed one. Every other writer of the same session's descriptor
+    /// must share this instance: the read-modify-write lock lives in the
+    /// store, so a second instance over the same root lets an interleaved
+    /// rename and prompt record revert each other's field.
+    pub fn descriptor_store(&self) -> Option<Arc<dyn SessionDescriptorStore>> {
+        self.prompt_recorder.as_ref().map(PromptRecorder::store)
+    }
+
+    /// Wait until the descriptor writes a user input started have finished.
+    /// Neither the turn nor the append waits for them, so a caller that reads
+    /// the descriptor right after appending, with no later ordering of its
+    /// own, waits here first.
+    pub async fn settle_prompt_writes(&self) {
+        if let Some(recorder) = self.prompt_recorder.as_ref() {
+            recorder.wait().await;
+        }
     }
 
     /// The skill registry, when configured. The approval path reads it to detect

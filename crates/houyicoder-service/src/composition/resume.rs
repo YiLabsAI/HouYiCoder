@@ -1,10 +1,14 @@
 //! Build resumed and forked runners from durable session data.
 
+use super::session_descriptor::build_initial_descriptor;
 use super::*;
-use houyicoder_context::SessionLogEntry;
 use houyicoder_context::{
-    NameSource, SessionDescriptor, SessionDescriptorStore, SessionProvenance,
-    session_class::{LOG_FILE, recent_user_sessions, scan_sessions, session_dir},
+    NameSource, PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionLogEntry,
+    SessionProvenance,
+    session_class::{
+        LOG_FILE, recent_user_sessions, scan_sessions, session_dir, session_parent_link,
+        session_started_at,
+    },
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::{ChainVerdict, SessionStore};
@@ -173,7 +177,8 @@ fn report_chain_verdict(sid: SessionId, consequence: &str, verdict: ChainVerdict
 /// seed -- the log
 /// is already there. The model is restored from the session.json descriptor
 /// (fallback to the current config when the descriptor is missing or its model
-/// is empty). Returns the 6-tuple the TUI wiring expects.
+/// is empty), and a missing descriptor is written so prompts from this run
+/// have a record. Returns the 6-tuple the TUI wiring expects.
 pub fn build_runner_for_resume_sid(
     sid: SessionId,
     sessions_root: &Path,
@@ -237,16 +242,64 @@ pub fn build_runner_for_resume_sid(
     // still resumes -- /status will show the resolved model instead.
     let descriptor_store: Arc<dyn SessionDescriptorStore> =
         Arc::new(FileDescriptorStore::new(sessions_root.to_path_buf()));
-    let model = descriptor_store
-        .read_descriptor(sid)
+    let stored = descriptor_store.read_descriptor(sid);
+    let model = stored
+        .as_ref()
         .and_then(|m| {
             if m.model.is_empty() {
                 None
             } else {
-                Some(m.model)
+                Some(m.model.clone())
             }
         })
         .unwrap_or_else(houyicoder_config::resolve_model);
+    // A session logged before descriptors existed has no record to edit, so a
+    // prompt recorded this run would be dropped for want of one. Write a
+    // descriptor now, marked Unknown: this run was not there when the log
+    // began, so its prompt becomes the newest but cannot be claimed as the
+    // first. A session with a log and no record was classified unowned; the
+    // record makes it the user's own, which is what resuming it by id means.
+    // A child's log opens with the delegation it was created from, and that
+    // lineage is recorded as it stands -- a fresh record would promote the
+    // child into the user's own listing.
+    if stored.is_none() {
+        let descriptor = match session_parent_link(sessions_root, sid) {
+            Some(link) => {
+                let mut descriptor = SessionDescriptor::delegated_child(
+                    SessionProvenance::SpawnedBy {
+                        parent_session_id: link.parent_session_id,
+                        subagent_type: link.subagent_type,
+                        task_id: sid.to_string(),
+                    },
+                    link.created_at_secs,
+                    PromptCoverage::Unknown,
+                );
+                // This resume resolved the model, and the project is where the
+                // child ran; a record without them sends the next resume back
+                // to the current config.
+                descriptor.model = model.clone();
+                if let Some(project) = project.as_deref() {
+                    descriptor.cwd = project.to_string();
+                }
+                descriptor
+            }
+            None => {
+                let mut descriptor = build_initial_descriptor(&model, project.as_deref());
+                descriptor.prompt_coverage = PromptCoverage::Unknown;
+                // This session already existed; the record states when its
+                // log began rather than when this resume ran.
+                if let Some(started) = session_started_at(sessions_root, sid) {
+                    descriptor.created_at = started;
+                }
+                descriptor
+            }
+        };
+        if let Err(e) = descriptor_store.write_descriptor_if_absent(sid, &descriptor) {
+            tracing::warn!(
+                "resume: descriptor write failed for {sid}: {e}; /status will show less"
+            );
+        }
+    }
     let model_for_return = model.clone();
     let assembled = assemble(
         store,
@@ -416,6 +469,11 @@ fn write_resume_descriptor(
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: now,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        // The imported history was not scanned here, so nothing is claimed
+        // about the prompt that opened it.
+        prompt_coverage: PromptCoverage::Unknown,
     };
     if let Err(e) = descriptor_store.write_descriptor(session, &descriptor) {
         tracing::warn!("session descriptor: resume write failed: {e}; /status will show less");
@@ -448,6 +506,11 @@ fn write_fork_descriptor(
         version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: now,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        // The copied history was not scanned here, so nothing is claimed
+        // about the prompt that opened it.
+        prompt_coverage: PromptCoverage::Unknown,
     };
     if let Err(e) = descriptor_store.write_descriptor(session, &descriptor) {
         tracing::warn!("session descriptor: fork write failed: {e}; /status will show less");

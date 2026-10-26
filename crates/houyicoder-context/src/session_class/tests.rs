@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::{EventId, NameSource};
+use crate::descriptor::{NameSource, PromptCoverage};
+use crate::ids::EventId;
 use fs::File;
 use std::cmp::Reverse;
 use std::env::temp_dir;
@@ -50,6 +51,9 @@ fn descriptor(provenance: SessionProvenance) -> SessionDescriptor {
         version: "0.0.0".to_string(),
         created_at: 1,
         child_session_ids: Vec::new(),
+        first_prompt: None,
+        last_prompt: None,
+        prompt_coverage: PromptCoverage::Unknown,
     }
 }
 
@@ -105,6 +109,32 @@ fn parent_link(parent: &str, created_at_secs: u64) -> ParentLink {
         subagent_type: "explore".to_string(),
         created_at_secs,
     }
+}
+
+/// The start is read from the log head whatever the first record is, and a
+/// session with no log has no start rather than a zero one.
+#[test]
+fn test_started_at_reads_head() {
+    let root = temp_root("started");
+    let sid = SessionId::new();
+    let dir = write_session(&root, sid, false, None);
+    let entry = SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts: 1_700_000_000_500,
+        prev_hash: None,
+        event: SessionEvent::UserInput {
+            text: "first task".to_string(),
+        },
+    };
+    let line = serde_json::to_string(&entry).unwrap();
+    fs::write(dir.join(LOG_FILE), format!("{line}\n")).unwrap();
+    assert_eq!(session_started_at(&root, sid), Some(1_700_000_000));
+    assert_eq!(
+        session_started_at(&root, SessionId::new()),
+        None,
+        "no log means no start"
+    );
 }
 
 #[test]

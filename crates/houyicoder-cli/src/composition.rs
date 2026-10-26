@@ -11,14 +11,13 @@ use std::sync::mpsc::channel;
 
 use houyicoder_client::{Client, InProcTransport};
 use houyicoder_config::{config_home, resolve_model};
-use houyicoder_context::SessionDescriptorStore;
 use houyicoder_core::agent::Runner;
 use houyicoder_permission::{FileRuleStore, ModeGate};
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
     AssembledRunner, ProviderResolution, build_runner, build_runner_for_resume_export,
-    disk_descriptor_store, fleet_status_relay, notification_drain, session_log_root,
+    fleet_status_relay, notification_drain, session_log_root,
 };
 use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
@@ -109,10 +108,6 @@ pub(crate) fn assemble_bundle(
     // trajectory view reads it for the /trajectory pane, and the session
     // picker reads other sessions' log heads to derive their titles.
     let session_log = runner.store();
-    // The descriptor reader for the session picker (lists sessions + reads each
-    // name/cwd/model). Built at the same sid-keyed sessions root the file
-    // backend uses.
-    let descriptor_store: Arc<dyn SessionDescriptorStore> = disk_descriptor_store();
     // The session-log snapshot loads the durable log into a TranscriptLine
     // snapshot for the search view (read-whole path under the threshold).
     // Shares the same SessionLog as the trajectory and export views (an Arc
@@ -146,7 +141,6 @@ pub(crate) fn assemble_bundle(
             bus,
             provider_facts,
         },
-        Some(descriptor_store.clone()),
         None,
     );
     // The server task owns the runner + the permission gate; the TUI holds
@@ -182,7 +176,6 @@ pub(crate) fn assemble_bundle(
 /// deltas, and fleet status. The server is the only carrier writer.
 pub(crate) fn start_local_server(
     assembled: AssembledRunner,
-    descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
     settings_path: Option<PathBuf>,
 ) -> (Arc<Runner>, Client, Vec<String>, HostLifecycle) {
     let AssembledRunner {
@@ -195,6 +188,12 @@ pub(crate) fn start_local_server(
         bus,
         provider_facts,
     } = assembled;
+    // The server's rename and model writes touch the same descriptor the
+    // runner records prompts through, so it takes the runner's own store
+    // rather than one handed in here. The read-modify-write lock lives in the
+    // store, and a second instance over the same root lets an interleaved
+    // rename and prompt record revert each other's field.
+    let descriptor_store = runner.descriptor_store();
     let mut host = HostLifecycle::new();
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);

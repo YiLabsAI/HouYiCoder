@@ -316,6 +316,7 @@ pub(crate) fn assemble(
         .with_denied_agents(Arc::clone(&denied_agents))
         .with_spawn_handle(spawn_handle)
         .with_sandbox_session(fences.sandbox_session.clone())
+        .with_descriptor_store(Arc::clone(&descriptor_store))
         .with_reducer(Arc::new(HotPathReducer));
     runner.seed_session_from_log(session);
     let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());

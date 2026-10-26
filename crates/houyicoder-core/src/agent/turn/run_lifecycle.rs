@@ -84,6 +84,7 @@ impl Runner {
             snapshot_size_cap_bytes: DEFAULT_SNAPSHOT_SIZE_CAP_BYTES,
             summarizer: Box::new(manifest::HeuristicSummarizer),
             memory,
+            prompt_recorder: None,
             skill_registry: None,
             sandbox_session: None,
             skill_grants: None,
