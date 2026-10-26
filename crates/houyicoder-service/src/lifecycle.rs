@@ -26,6 +26,7 @@
 
 pub mod prune;
 pub mod repair;
+pub mod session_title;
 
 use houyicoder_async::PFut;
 use houyicoder_context::{EventId, SessionId};

@@ -11,13 +11,13 @@ use crate::state::App;
 
 impl App {
     /// Enter the name-edit mode on the /status Status tab. The buffer starts
-    /// empty: the displayed name may be an Auto-derived slug (the server
-    /// derives it for display when name_source=Auto), and pre-filling it
-    /// would pin the slug as name_source=User the moment the user pressed
-    /// Enter without typing. An empty buffer + Enter clears to Auto (no
-    /// pin); typing a name + Enter sets User. Opens unconditionally; the
-    /// session check lives at commit (the editor is harmless while
-    /// disconnected -- Enter reports not connected then).
+    /// empty: the name on screen may be a title the server derived for
+    /// display (a prompt, or the session id), and pre-filling it would pin
+    /// that text as name_source=User the moment the user pressed Enter
+    /// without typing. An empty buffer + Enter clears to Auto (no pin);
+    /// typing a name + Enter sets User. Opens unconditionally; the session
+    /// check lives at commit (the editor is harmless while disconnected --
+    /// Enter reports not connected then).
     pub(crate) fn enter_status_name_edit(&mut self) {
         self.ui.navigation.status_pane.name_edit = Some(InputField::new());
     }

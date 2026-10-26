@@ -16,6 +16,7 @@
 #![allow(dead_code)] // pub server type consumed by other crates and tests; locally unused
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, permission_request_topic};
@@ -153,6 +154,13 @@ pub struct Server {
     /// Shared multi-agent bus; routes a child permission ask to the
     /// wire-approval flow. None on the single-agent path.
     bus: Option<Arc<AgentBus>>,
+    /// The title this session's log head supplies, read once for /status. A
+    /// descriptor written before prompts were recorded states no title of its
+    /// own, and the head of its log does; status is polled every second, so
+    /// the answer is kept rather than re-read. A prompt recorded after this
+    /// read outranks the fallback, so the kept answer only goes stale if
+    /// recording the prompt itself failed.
+    log_head_title: OnceLock<Option<String>>,
 }
 
 pub(crate) mod child_permission;
@@ -192,6 +200,7 @@ impl Server {
             descriptor_store: None,
             diagnostics: handle(),
             bus: None,
+            log_head_title: OnceLock::new(),
         }
     }
 

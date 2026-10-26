@@ -1,4 +1,4 @@
-//! Status snapshot assembly, session rename, and title derivation.
+//! Status snapshot assembly and session rename.
 
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
@@ -7,11 +7,11 @@ use houyicoder_protocol::frontend::SessionId;
 use super::status_view::build_model_usage_view;
 use super::status_view::setting_sources_label;
 use super::{Server, frame_carrier::FrameCarrier};
+use crate::lifecycle::session_title::log_head_title;
 use crate::protocol_adapter as pa;
-use houyicoder_api::session::SessionLog;
 use houyicoder_context::DescriptorUpdate;
 use houyicoder_context::NameSource;
-use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_context::session_intent::display_title;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_provider::ProviderFacts;
 
@@ -60,7 +60,7 @@ impl Server {
                 .await;
         };
         // An empty name clears back to Auto so the display reverts to the
-        // first-prompt title; a non-empty name marks User so a later
+        // title its prompts give; a non-empty name marks User so a later
         // auto-derivation does not clobber it. Applied through
         // update_descriptor so a model switch landing at the same moment does
         // not write back the pre-rename name.
@@ -99,8 +99,9 @@ impl Server {
             .await
     }
 
-    /// Build the current protocol status, deriving an unnamed session's display
-    /// name from the first prompt when its descriptor is available.
+    /// Build the current protocol status, titling an unnamed session from the
+    /// prompts its descriptor records, or from its log head when it records
+    /// none.
     pub(super) fn build_status_snapshot(&self) -> StatusSnapshot {
         let snap = self.runner.status_snapshot();
         let mut snapshot = pa::map_status_snapshot(&snap);
@@ -120,14 +121,13 @@ impl Server {
         if let Some(store) = self.descriptor_store.as_ref()
             && let Some(mut descriptor) = store.read_descriptor(self.session)
         {
-            if descriptor
-                .name
-                .as_ref()
-                .map(|s| s.trim().is_empty())
-                .unwrap_or(true)
-            {
-                descriptor.name = first_prompt_title(self.runner.store().as_ref(), self.session);
-            }
+            // One policy names the session everywhere: the name its user gave
+            // it, else its newest prompt, else the first one. A record written
+            // before prompts were recorded states none, and the head of its
+            // log still names the work.
+            descriptor.name = display_title(&descriptor)
+                .map(|title| title.text.to_string())
+                .or_else(|| self.title_from_log_head());
             snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         snapshot.version = env!("CARGO_PKG_VERSION").to_string();
@@ -156,55 +156,14 @@ impl Server {
         snapshot.by_model = build_model_usage_view(self.runner.by_model_usage());
         snapshot
     }
-}
 
-/// Derive a session title from the first user prompt in the log head, so an
-/// unnamed session (name_source=Auto) shows a title instead of blank. Reads
-/// only the bounded log head, not a full replay, so it stays cheap even for a
-/// large resumed session.
-pub(super) fn first_prompt_title(
-    log: &dyn SessionLog,
-    session: houyicoder_context::SessionId,
-) -> Option<String> {
-    let read = log.backend().read_log_range(session, 0, 64_000);
-    for (_, line) in &read.lines {
-        if let Ok(ev) = serde_json::from_str::<SessionLogEntry>(line)
-            && let SessionEvent::UserInput { text } = &ev.event
-        {
-            return Some(compact_session_title(text));
-        }
-    }
-    None
-}
-
-/// Convert a prompt into a compact session title: lowercase words joined by
-/// dashes, truncated with an ellipsis past the display budget.
-pub(super) fn compact_session_title(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut prev_dash = true;
-    for c in text.chars().take(50) {
-        if c.is_alphanumeric() {
-            for lc in c.to_lowercase() {
-                out.push(lc);
-            }
-            prev_dash = false;
-        } else if !prev_dash {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.chars().count() > 40 {
-        let mut truncated: String = out.chars().take(39).collect();
-        while truncated.ends_with('-') {
-            truncated.pop();
-        }
-        truncated.push('\u{2026}');
-        truncated
-    } else {
-        out
+    /// The title a legacy session's log head supplies, read once. Appending a
+    /// prompt from now on records it on the descriptor, which outranks this
+    /// fallback, so a later prompt reaches the screen through the record.
+    fn title_from_log_head(&self) -> Option<String> {
+        self.log_head_title
+            .get_or_init(|| log_head_title(self.runner.store().as_ref(), self.session))
+            .clone()
     }
 }
 
