@@ -152,6 +152,35 @@ async fn test_mid_turn_records_last() {
     );
 }
 
+/// A message another agent sent reaches the log by the interjection path, but
+/// it states that agent's words rather than the user's, so it leaves the
+/// recorded prompts alone.
+#[tokio::test]
+async fn test_agent_message_skips_prompt() {
+    let session = SessionId::new();
+    let descriptors = fresh(session);
+    let runner = runner(Arc::clone(&descriptors));
+
+    runner
+        .append_user_input(session, "start the refactor".to_string())
+        .await
+        .unwrap();
+    runner
+        .append_mid_turn_input(session, "child finished: tests pass".to_string(), None)
+        .await
+        .unwrap();
+    runner.settle_prompt_writes().await;
+
+    let descriptor = descriptors.read_descriptor(session).unwrap();
+    assert_eq!(
+        descriptor.last_prompt.as_ref().unwrap().text,
+        "start the refactor",
+        "another agent's message does not outrank the user's own words"
+    );
+    let events = runner.store.replay(session).await.unwrap();
+    assert_eq!(events.len(), 2, "the message still reaches the log");
+}
+
 /// A session with no descriptor (written before descriptors existed, or
 /// whose descriptor was removed) still keeps its log: the append stands and
 /// nothing invents a descriptor on this path.

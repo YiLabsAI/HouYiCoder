@@ -1,10 +1,12 @@
 //! How a user's words enter the log: a fresh instruction, or an interjection
 //! queued while a run was active and appended at the next turn boundary.
 //!
-//! Both writers record the task statement on the session descriptor after the
-//! durable append succeeded, so the recorded event id names an event that
-//! exists. Input withdrawn before it reached the log never passes here, which
-//! is why a cancelled interjection cannot become a session's subject.
+//! Both user-authored writes record the task statement on the session
+//! descriptor after the durable append succeeded, so the recorded event id
+//! names an event that exists. Input withdrawn before it reached the log never
+//! passes here, which is why a cancelled interjection cannot become a
+//! session's subject. A message another agent sent reaches the log by the
+//! interjection path but states that agent's words rather than the user's.
 
 use houyicoder_context::session_intent::prompt_intent;
 use houyicoder_context::{EventId, SessionEvent, SessionId};
@@ -58,13 +60,20 @@ impl Runner {
     /// it as a mid-work interjection (continue the task + address), not a
     /// fresh instruction that drops the task already underway. The durable
     /// text is the bare user input (the transcript shows it as sent).
+    ///
+    /// A message drained from the bus inbox arrives by this same path but
+    /// names another agent's words, so it joins the model input without
+    /// becoming the session's account of what its user asked for.
     pub(crate) async fn append_mid_turn_input(
         &self,
         session: SessionId,
         text: String,
         pending_input_id: Option<u64>,
     ) -> Result<(), RunError> {
-        let prompt = prompt_intent(&text);
+        let prompt = match pending_input_id {
+            Some(_) => prompt_intent(&text),
+            None => None,
+        };
         let entry = new_event(
             session,
             SessionEvent::MidTurnInput {
