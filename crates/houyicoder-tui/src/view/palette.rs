@@ -70,7 +70,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("❯ ");
     f.render_stateful_widget(list, inner, &mut state);
 
     // If the filtered list is empty, either the user is typing an argument
@@ -114,7 +114,7 @@ fn arg_command_name(query: &str) -> &str {
 
 /// Available width for the help text on one row. The list widget reserves
 /// NAME_COL for the padded name, 2 spaces of separator, and 2 columns for the
-/// highlight symbol ("> ") on the selected row. Anything left is help.
+/// highlight symbol ("❯ ") on the selected row. Anything left is help.
 fn help_max_width(inner_width: u16) -> usize {
     let reserved = NAME_COL + 2 + 2; // name + separator + highlight symbol
     (inner_width as usize).saturating_sub(reserved)

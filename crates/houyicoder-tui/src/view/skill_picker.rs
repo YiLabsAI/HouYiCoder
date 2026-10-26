@@ -93,7 +93,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("❯ ");
     f.render_stateful_widget(list, inner, &mut state);
 }
 

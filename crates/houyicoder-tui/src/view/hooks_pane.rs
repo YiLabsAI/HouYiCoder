@@ -135,7 +135,7 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> "),
+            .highlight_symbol("❯ "),
         area,
         &mut state,
     );
