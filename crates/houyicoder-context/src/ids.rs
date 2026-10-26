@@ -3,8 +3,15 @@
 use serde::de::Error as SerdeError;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use ulid::Ulid;
+use std::sync::Mutex;
+use ulid::{Generator, Ulid};
 use uuid::Uuid;
+
+/// The process-wide generator behind event ids. An id built straight from the
+/// clock sorts randomly against another id minted in the same millisecond, so
+/// the generator hands out the next value instead; the id orders a session's
+/// events, which is the contract the type publishes.
+static EVENT_IDS: Mutex<Generator> = Mutex::new(Generator::new());
 
 /// A session id. UUID v4 (hyphenated). Not monotonic (unlike EventId) -- the ordering
 /// invariant lives in the per-session event log, not the id, so a
@@ -72,15 +79,27 @@ impl<'de> Deserialize<'de> for SessionId {
     }
 }
 
-/// An event id. ULID-backed; monotonic within a session.
+/// An event id. ULID-backed; within one process, successive ids sort in the
+/// order they were created. Across processes the order follows the wall clock,
+/// so a clock that steps back gives an id below one created earlier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EventId(Ulid);
 
 impl EventId {
-    /// Mint a fresh event id.
+    /// Create a fresh event id. Successive ids from one process sort in
+    /// creation order, including two ids created inside one millisecond.
     pub fn new() -> Self {
-        Self(Ulid::generate())
+        let mut generator = EVENT_IDS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // The random field runs out only inside one millisecond; the crate
+        // rolls the generator into the next millisecond rather than letting
+        // this id sort behind the one before it.
+        Self(match generator.generate() {
+            Ok(id) => id,
+            Err(overflow) => overflow.commit_overflow_increment(),
+        })
     }
 }
 
@@ -178,10 +197,25 @@ impl CheckpointId {
 
 /// A content-addressed block hash (SHA-256, hex). CAS dedup keys large tool
 /// outputs / file blobs out of the in-context view while keeping them
-/// retrievable. The interface is defined here; v0 backends return Unsupported.
+/// retrievable. The file backend stores and verifies blocks; a backend with
+/// no block store returns Unsupported.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct BlockHash(pub String);
+
+impl BlockHash {
+    /// Whether the spelling is a lowercase SHA-256 digest and nothing else.
+    /// The hash becomes a path component, so any other text (a relative
+    /// path, an uppercase or truncated digest) is rejected before storage
+    /// resolves it against the file system.
+    pub fn is_canonical(&self) -> bool {
+        self.0.len() == 64
+            && self
+                .0
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    }
+}
 
 /// A 32-byte hash linking one event to the previous (tamper-evidence spine).
 /// None on the first event of a session. The caller (SessionStore) computes
