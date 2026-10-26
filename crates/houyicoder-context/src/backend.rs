@@ -90,9 +90,11 @@ pub enum ContextError {
     Io,
     /// Session, checkpoint, or block not found.
     NotFound,
-    /// Hash-chain break, tool_use/tool_result pair orphaned, or bad framing.
+    /// A hash-chain break, a tool call with no matching result, bad framing,
+    /// or a block whose bytes do not hash to its address.
     Corrupt(String),
-    /// This backend does not implement the method (e.g. CAS on v0 JSONL).
+    /// This backend does not implement the method, such as byte-anchored log
+    /// windows on an in-memory store.
     Unsupported,
 }
 
@@ -101,7 +103,7 @@ impl Display for ContextError {
         match self {
             Self::Io => write!(f, "context backend io error"),
             Self::NotFound => write!(f, "not found"),
-            Self::Corrupt(msg) => write!(f, "corrupt log: {msg}"),
+            Self::Corrupt(msg) => write!(f, "corrupt data: {msg}"),
             Self::Unsupported => write!(f, "unsupported by this backend"),
         }
     }
@@ -155,11 +157,20 @@ pub trait ContextBackend: Send + Sync {
     /// Store a large blob in the CAS and return its hash. Takes owned bytes so
     /// a real async backend moves them into the future without cloning the
     /// very blobs the CAS exists to dedup. Default Unsupported (v0 JSONL).
+    ///
+    /// The ceiling on a block is the caller's to keep: a file backend hashes,
+    /// writes, and syncs to disk on the task that calls this method, so a block
+    /// far larger than a tool output would hold that worker for the whole
+    /// write. A
+    /// caller that captures something the user does not bound must hand the
+    /// bytes to a blocking worker instead of awaiting this method with them.
     fn block_put(&self, _block: Vec<u8>) -> PFut<'_, Result<BlockHash, ContextError>> {
         Box::pin(async move { Err(ContextError::Unsupported) })
     }
 
-    /// Retrieve a blob by hash. Default Unsupported.
+    /// Retrieve a blob by hash. Default Unsupported. A backend may verify the
+    /// stored bytes against the hash before returning them, and the size
+    /// caveat on block_put applies here as well.
     fn block_get(&self, _hash: &BlockHash) -> PFut<'_, Result<Vec<u8>, ContextError>> {
         Box::pin(async move { Err(ContextError::Unsupported) })
     }

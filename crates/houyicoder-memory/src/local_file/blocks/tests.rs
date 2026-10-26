@@ -1,12 +1,17 @@
 //! Tests for this module.
 
 use crate::local_file::LocalFileBackend;
+
+use super::temp_block_path;
 use houyicoder_context::{
     BlockHash, ContextBackend, ContextError, EventId, SessionEvent, SessionId, SessionLogEntry,
 };
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread::spawn;
+use std::time::Duration;
 
 fn temp_root() -> PathBuf {
     let dir = env::temp_dir().join(format!("houyicoder_block_store_test_{}", SessionId::new()));
@@ -81,10 +86,12 @@ fn test_cas_crash_atomicity() {
         .join(&hash.0[..2])
         .join(format!("{}.bin", hash.0));
     assert!(block_path.exists(), "block file present");
-    assert!(
-        !block_path.with_extension("bin.tmp").exists(),
-        "no .tmp lingers after block_put"
-    );
+    let leftovers: Vec<_> = fs::read_dir(block_path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".bin.tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "no .tmp lingers after block_put");
     assert_eq!(
         pollster::block_on(b.block_get(&hash)).unwrap(),
         blob,
@@ -134,6 +141,140 @@ fn test_reclaim_blocks_removes_unreferenced() {
         referenced_blob,
         "referenced block still retrievable"
     );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// Reading verifies the bytes against the address. A block edited on disk
+/// after the write is corrupt, not a successful read: the stored bytes no
+/// longer hash to the name that found them.
+#[test]
+fn test_block_reads_verify_content() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let hash = pollster::block_on(b.block_put(b"original".to_vec())).unwrap();
+    let path = root
+        .join(".cas")
+        .join(&hash.0[..2])
+        .join(format!("{}.bin", hash.0));
+    fs::write(&path, b"tampered").unwrap();
+    let got = pollster::block_on(b.block_get(&hash));
+    assert!(
+        matches!(got, Err(ContextError::Corrupt(_))),
+        "mismatched bytes must not read as a valid block: {got:?}"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A damaged block heals on the next put of the same content. Reads verify
+/// the address, so a block edited on disk stays unreadable until something
+/// writes it again; the dedup path must not take the damaged file for a
+/// stored copy and report success.
+#[test]
+fn test_put_heals_corrupt_block() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let blob = b"heal me".to_vec();
+    let hash = pollster::block_on(b.block_put(blob.clone())).unwrap();
+    let path = root
+        .join(".cas")
+        .join(&hash.0[..2])
+        .join(format!("{}.bin", hash.0));
+    fs::write(&path, b"damaged").unwrap();
+    assert!(
+        matches!(
+            pollster::block_on(b.block_get(&hash)),
+            Err(ContextError::Corrupt(_))
+        ),
+        "the damaged bytes must not read as the block"
+    );
+    let again = pollster::block_on(b.block_put(blob.clone())).unwrap();
+    assert_eq!(again, hash, "the repaired block keeps its address");
+    assert_eq!(
+        pollster::block_on(b.block_get(&hash)).unwrap(),
+        blob,
+        "the block reads again after a write of the same content"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A block reference is used as a path component, so anything that is not
+/// a sha-256 digest is refused before it can name a file.
+#[test]
+fn test_bad_hash_rejected() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    for bad in [
+        "../../etc/passwd".to_string(),
+        "0".repeat(63),
+        "A".repeat(64),
+    ] {
+        let got = pollster::block_on(b.block_get(&BlockHash(bad.clone())));
+        assert!(
+            matches!(got, Err(ContextError::Corrupt(_))),
+            "hash {bad:?} must be refused: {got:?}"
+        );
+    }
+    fs::remove_dir_all(&root).ok();
+}
+
+/// Two writers of one block must not share a temporary file. A shared temp
+/// lets one writer publish the file while another is still filling it, so a
+/// reader of the published path sees a truncated block. Two writers in one
+/// process ask for the name twice and get two paths, with no scheduling
+/// involved.
+#[test]
+fn test_block_temp_names_differ() {
+    let hash = BlockHash("a".repeat(64));
+    let block = PathBuf::from("/sessions/.cas/aa").join(format!("{}.bin", hash.0));
+    let first = temp_block_path(&block, &hash);
+    let second = temp_block_path(&block, &hash);
+    assert_ne!(first, second, "writers must not fill one temp file");
+    assert!(
+        first.to_string_lossy().ends_with(".bin.tmp"),
+        "the temp name is what the reclaim pass recognizes"
+    );
+}
+
+/// Eight writers fill the same block at once while a reader polls it. Every
+/// read either misses or returns the whole block, because each writer fills
+/// its own temp file and the rename publishes a finished one. The final read
+/// covers the settled state.
+#[test]
+fn test_concurrent_put_same_block() {
+    let root = temp_root();
+    let blob = vec![0x5a; 64 * 1024];
+    let (tx, rx) = mpsc::channel();
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let root = root.clone();
+            let blob = blob.clone();
+            let tx = tx.clone();
+            spawn(move || {
+                let b = LocalFileBackend::new(root);
+                let hash = pollster::block_on(b.block_put(blob)).unwrap();
+                let _sent = tx.send(hash.clone());
+                hash
+            })
+        })
+        .collect();
+    drop(tx);
+    let hash = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("a writer reports its address");
+    while handles.iter().any(|h| !h.is_finished()) {
+        match pollster::block_on(LocalFileBackend::new(root.clone()).block_get(&hash)) {
+            Ok(got) => assert_eq!(got, blob, "a published block is never half written"),
+            Err(ContextError::NotFound) => {}
+            Err(e) => panic!("a read during a concurrent write failed: {e:?}"),
+        }
+    }
+    let hashes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(
+        hashes.windows(2).all(|w| w[0] == w[1]),
+        "every writer must report the one content address"
+    );
+    let back = pollster::block_on(LocalFileBackend::new(root.clone()).block_get(&hashes[0]));
+    assert_eq!(back.unwrap(), blob, "the published block is whole");
     fs::remove_dir_all(&root).ok();
 }
 

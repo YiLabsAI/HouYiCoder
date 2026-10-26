@@ -15,17 +15,33 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::{fs::File, os::unix::fs::OpenOptionsExt};
 
 use houyicoder_context::{BlockHash, ContextError, session_class::LOG_FILE};
 
+use crate::sha256_file;
 use crate::sha256_hex;
 
 use crate::local_file::LocalFileBackend;
-use fs::File;
+
+/// Makes each writer's temporary file name unique within its process. Two
+/// concurrent writers of the same block must not share a temp path: both
+/// would truncate the same file, and the first rename could publish a
+/// half-written block.
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The temp sibling one writer fills before renaming it onto the block's
+/// path. The process id separates writers in different processes and the
+/// counter separates writers within one.
+fn temp_block_path(block_path: &Path, hash: &BlockHash) -> PathBuf {
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    block_path.with_file_name(format!("{}.{}.{sequence}.bin.tmp", hash.0, id()))
+}
 
 impl LocalFileBackend {
     fn cas_dir(&self) -> PathBuf {
@@ -40,8 +56,12 @@ impl LocalFileBackend {
     pub(super) fn block_put_sync(&self, block: Vec<u8>) -> Result<BlockHash, ContextError> {
         let hash = sha256_hex(&block);
         let path = self.block_path(&hash);
-        // Dedup: same content already on disk; do not rewrite.
-        if path.exists() {
+        // Dedup: the same content is already on disk, so there is nothing to
+        // write -- unless the file there does not hold these bytes. A block
+        // damaged after its write must be rewritten here: reads verify the
+        // address, so stopping early would report success for a block every
+        // later read rejects.
+        if path.exists() && sha256_file(&path).is_ok_and(|stored| stored == hash) {
             return Ok(hash);
         }
         if let Some(parent) = path.parent() {
@@ -49,7 +69,9 @@ impl LocalFileBackend {
         }
         // Atomic write to a temp sibling + fsync + rename so a crash never
         // leaves a partial block (a reader gets the complete block or nothing).
-        let tmp = path.with_extension("bin.tmp");
+        // The temp name carries pid and a per-process sequence so concurrent
+        // writers of one block cannot truncate each other's file.
+        let tmp = temp_block_path(&path, &hash);
         let mut opts = OpenOptions::new();
         opts.create(true).write(true).truncate(true);
         #[cfg(unix)]
@@ -59,21 +81,43 @@ impl LocalFileBackend {
         f.sync_all().map_err(|_| ContextError::Io)?;
         drop(f);
         fs::rename(&tmp, &path).map_err(|_| ContextError::Io)?;
-        // Fsync the parent directory so the rename is durable across a
-        // crash; otherwise the block's data is fsynced but its directory
-        // entry is not, leaving a dangling block_ref on restart.
-        if let Some(dir) = path.parent()
-            && let Ok(dir_file) = File::open(dir)
-        {
-            drop(dir_file.sync_all());
+        // Fsync the parent directory so the rename survives a crash. This covers
+        // the entry inside the shard, not a newly created shard itself, which
+        // is the durability the rest of the store keeps. Windows cannot open
+        // a directory for fsync, so there the rename rests on the filesystem
+        // journal; a Unix failure is an error because the caller was told the
+        // block is stored.
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            File::open(dir)
+                .and_then(|handle| handle.sync_all())
+                .map_err(|_| ContextError::Io)?;
         }
         Ok(hash)
     }
 
     pub(super) fn block_get_sync(&self, hash: &BlockHash) -> Result<Vec<u8>, ContextError> {
+        if !hash.is_canonical() {
+            return Err(ContextError::Corrupt(format!(
+                "block reference is not a sha-256 digest: {}",
+                hash.0
+            )));
+        }
         let path = self.block_path(hash);
         match fs::read(&path) {
-            Ok(bytes) => Ok(bytes),
+            Ok(bytes) => {
+                // Content addressing is the storage contract: the bytes must
+                // hash to the address they were found at. A tampered or
+                // swapped block is corrupt, not a successful read.
+                let actual = sha256_hex(&bytes);
+                if actual != *hash {
+                    return Err(ContextError::Corrupt(format!(
+                        "block {} does not match its content hash {}",
+                        hash.0, actual.0
+                    )));
+                }
+                Ok(bytes)
+            }
             Err(e) if e.kind() == ErrorKind::NotFound => Err(ContextError::NotFound),
             Err(_) => Err(ContextError::Io),
         }

@@ -29,7 +29,7 @@
 
 use std::collections::HashSet;
 
-use houyicoder_context::{BlockHash, ContextBackend, SessionEvent, SessionLogEntry};
+use houyicoder_context::{BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry};
 use serde_json::Value;
 
 /// A resource key for supersession: a later tool call for the same resource
@@ -333,6 +333,13 @@ fn apply_tier(
                     // model knows the content is unreachable, not absent.
                     Err(_) => unavailable_marker(hash_str, "block content corrupt or unreadable"),
                 },
+                // A block whose bytes do not match its address is corrupt, not
+                // missing: re-invoking the tool would store the bytes again,
+                // not recover them, so the model is told the content is
+                // unreachable.
+                Err(ContextError::Corrupt(_)) => {
+                    unavailable_marker(hash_str, "block content corrupt or unreadable")
+                }
                 Err(_) => unavailable_marker(hash_str, "block_get failed; re-invoke the tool"),
             }
         }

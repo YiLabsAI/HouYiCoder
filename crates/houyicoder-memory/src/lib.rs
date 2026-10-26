@@ -33,6 +33,14 @@ pub use reranker::SemanticReranker;
 
 use houyicoder_context::BlockHash;
 use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+
+/// Bytes hashed per read when verifying a stored block. A block can be large,
+/// so the check reads it through one fixed buffer instead of loading a second
+/// copy into memory.
+const HASH_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Compute the SHA-256 content hash of a blob and return it as a lowercase
 /// hex BlockHash. Same bytes always yield the same hash; this is the CAS
@@ -40,10 +48,32 @@ use sha2::{Digest, Sha256};
 pub(crate) fn sha256_hex(bytes: &[u8]) -> BlockHash {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    let digest = hasher.finalize();
+    hex_digest(&hasher.finalize())
+}
+
+/// Compute the SHA-256 of a file's bytes without holding the file in memory,
+/// so verifying a block already on disk costs one buffer. The digest is the
+/// same one hashing the whole content returns.
+pub(crate) fn sha256_file(path: &Path) -> io::Result<BlockHash> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; HASH_BUFFER_BYTES];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex_digest(&hasher.finalize()))
+}
+
+fn hex_digest(digest: &[u8]) -> BlockHash {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut hex = String::with_capacity(digest.len() * 2);
     for b in digest {
-        hex.push_str(&format!("{b:02x}"));
+        hex.push(DIGITS[usize::from(b >> 4)] as char);
+        hex.push(DIGITS[usize::from(b & 0x0f)] as char);
     }
     BlockHash(hex)
 }
