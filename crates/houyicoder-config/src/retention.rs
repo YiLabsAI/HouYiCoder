@@ -41,7 +41,7 @@ pub struct RetentionConfig {
     pub prune_confirm_threshold: u32,
 }
 
-const DEFAULT_DAYS: u32 = 30;
+const DEFAULT_DAYS: u32 = 180;
 const DEFAULT_COUNT: u32 = 1000;
 const DEFAULT_THRESHOLD: u32 = 100;
 

@@ -30,6 +30,8 @@ fn test_load_defaults_on_missing() {
     let p = temp_settings(r#"{"auto_memory": true}"#);
     let (cfg, w) = load_retention_from(&p);
     assert_eq!(cfg, RetentionConfig::default());
+    assert_eq!(cfg.session_retention_days, 180);
+    assert_eq!(cfg.session_retention_count, 1000);
     assert!(w.is_empty(), "missing fields are not warnings");
     fs::remove_file(&p).ok();
 }
