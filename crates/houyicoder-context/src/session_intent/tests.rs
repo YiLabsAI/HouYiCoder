@@ -1,6 +1,6 @@
 //! Tests for this module.
 
-use super::{TitleSource, apply_prompt, display_title, prompt_intent};
+use super::{TitleSource, apply_prompt, apply_prompt_backfill, display_title, prompt_intent};
 use crate::descriptor::{
     NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionProvenance,
 };
@@ -332,4 +332,70 @@ fn test_partial_records_last() {
     apply_prompt(&mut d, record("a later task"));
     assert!(d.first_prompt.is_none());
     assert_eq!(d.last_prompt.as_ref().unwrap().text, "a later task");
+}
+
+/// A descriptor written before prompts were recorded gains both slots from a
+/// scan, and says afterwards that only part of the log was seen.
+#[test]
+fn test_backfill_records_both() {
+    let mut d = fresh();
+    d.prompt_coverage = PromptCoverage::Unknown;
+    let first = record("opening task");
+    let last = record("current task");
+    apply_prompt_backfill(
+        &mut d,
+        Some(first.clone()),
+        Some(last.clone()),
+        PromptCoverage::Partial,
+    );
+    assert_eq!(d.first_prompt, Some(first));
+    assert_eq!(d.last_prompt, Some(last));
+    assert_eq!(d.prompt_coverage, PromptCoverage::Partial);
+}
+
+/// A live write that already recorded a newer prompt outranks an older scan,
+/// so a background pass cannot move the session's subject backwards.
+#[test]
+fn test_backfill_keeps_newest() {
+    let mut d = fresh();
+    let older = record("older task");
+    let newest = record("newest task");
+    d.last_prompt = Some(newest.clone());
+    apply_prompt_backfill(&mut d, None, Some(older), PromptCoverage::Partial);
+    assert_eq!(d.last_prompt, Some(newest));
+}
+
+#[test]
+fn test_backfill_takes_earliest() {
+    let mut d = fresh();
+    d.prompt_coverage = PromptCoverage::Unknown;
+    let earlier = record("opening task");
+    d.first_prompt = Some(record("second task"));
+    apply_prompt_backfill(&mut d, Some(earlier.clone()), None, PromptCoverage::Partial);
+    assert_eq!(d.first_prompt, Some(earlier));
+}
+
+/// A record that observed every event keeps that claim; a head-and-tail scan
+/// cannot speak for the middle it never read. The reverse case raises a
+/// record that never saw the whole log once a scan does.
+#[test]
+fn test_backfill_keeps_coverage() {
+    let mut complete = fresh();
+    apply_prompt_backfill(&mut complete, None, None, PromptCoverage::Partial);
+    assert_eq!(complete.prompt_coverage, PromptCoverage::Complete);
+
+    let mut unknown = fresh();
+    unknown.prompt_coverage = PromptCoverage::Unknown;
+    apply_prompt_backfill(&mut unknown, None, None, PromptCoverage::Complete);
+    assert_eq!(unknown.prompt_coverage, PromptCoverage::Complete);
+}
+
+#[test]
+fn test_backfill_leaves_name() {
+    let mut d = fresh();
+    d.name = Some("my session".into());
+    d.name_source = NameSource::User;
+    apply_prompt_backfill(&mut d, Some(record("task")), None, PromptCoverage::Partial);
+    assert_eq!(d.name.as_deref(), Some("my session"));
+    assert_eq!(d.name_source, NameSource::User);
 }

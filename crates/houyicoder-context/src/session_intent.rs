@@ -131,6 +131,49 @@ pub fn apply_prompt(descriptor: &mut SessionDescriptor, prompt: PromptRecord) {
     }
 }
 
+/// Fold the prompts a bounded scan of a session's log found into its
+/// descriptor.
+///
+/// Both slots follow the order live recording applies, compared by event id,
+/// so a scan and a live write that land in either order leave one subject: the
+/// earliest statement fills the first slot and the newest fills the last.
+/// Coverage never falls back, because a scan cannot take back a claim that
+/// every event was observed; a scan of only the log's head and tail raises an
+/// unknown record no further than partial, since a prompt outside those
+/// windows looks absent when it was merely not read. The name is left alone:
+/// it belongs to whoever set it, and a scan states nothing about it.
+pub fn apply_prompt_backfill(
+    descriptor: &mut SessionDescriptor,
+    first: Option<PromptRecord>,
+    last: Option<PromptRecord>,
+    coverage: PromptCoverage,
+) {
+    if let Some(prompt) = first
+        && descriptor
+            .first_prompt
+            .as_ref()
+            .is_none_or(|stored| prompt.event_id < stored.event_id)
+    {
+        descriptor.first_prompt = Some(prompt);
+    }
+    if let Some(prompt) = last
+        && descriptor
+            .last_prompt
+            .as_ref()
+            .is_none_or(|stored| stored.event_id < prompt.event_id)
+    {
+        descriptor.last_prompt = Some(prompt);
+    }
+    descriptor.prompt_coverage = match coverage {
+        PromptCoverage::Complete => PromptCoverage::Complete,
+        PromptCoverage::Partial => match descriptor.prompt_coverage {
+            PromptCoverage::Complete => PromptCoverage::Complete,
+            PromptCoverage::Partial | PromptCoverage::Unknown => PromptCoverage::Partial,
+        },
+        PromptCoverage::Unknown => descriptor.prompt_coverage,
+    };
+}
+
 /// Which record a session's title was taken from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleSource {
