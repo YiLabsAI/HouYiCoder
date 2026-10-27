@@ -14,6 +14,7 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use crate::session::lock::SessionLock;
+use crate::session::lock::StoreIdentity;
 use std::mem::take;
 
 /// A host lifecycle owner holding the session's exclusive lock. The
@@ -70,6 +71,14 @@ impl HostLease {
         sid: String,
         children: Option<Arc<Runner>>,
     ) -> Self {
+        // The guard names the store this lease writes through, so the launch's
+        // background pass can tell the holder is its own writer.
+        if let Some(store) = children
+            .as_ref()
+            .and_then(|runner| runner.descriptor_store())
+        {
+            lock.bind(StoreIdentity::of(store.as_ref()));
+        }
         Self {
             host,
             lock: Some(lock),

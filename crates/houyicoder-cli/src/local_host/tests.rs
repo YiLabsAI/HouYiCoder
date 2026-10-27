@@ -88,10 +88,7 @@ fn test_fixture_roots_isolated() {
     remove_dir_all(&local).ok();
     assert!(other.exists(), "other module root survived cleanup");
     assert!(
-        matches!(
-            SessionLock::acquire(&sid, &other),
-            Err(LockError::HeldByOther(_))
-        ),
+        matches!(SessionLock::acquire(&sid, &other), Err(LockError::Held(_))),
         "held lock in other root remained valid"
     );
 
@@ -188,7 +185,7 @@ fn test_release_joins_children_first() {
 
         let parent_sid = bundle.session;
         let (runner, client, _warnings, host) =
-            start_local_server(bundle, Some(root.join("settings.json")));
+            start_local_server(bundle, Some(root.join("settings.json")), root.clone());
         let spawn_handle = runner.spawn_handle().expect("real spawn handle attached");
         let ctx = ToolCtx::new("probe-parent").with_session(parent_sid);
         let mut args = SpawnArgs::new("explore", "probe-task", "probe-task");
@@ -212,9 +209,10 @@ fn test_release_joins_children_first() {
         entered.notified().await;
         yield_now().await;
         match SessionLock::acquire(&sid_str, &root) {
-            Err(LockError::HeldByOther(_)) => {}
+            Err(LockError::Held(_)) => {}
             Ok(_) => panic!("lock released while the child finalize tail was pending"),
             Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+            Err(LockError::InvalidId(e)) => panic!("unexpected invalid id: {e}"),
         }
 
         // The SubagentReturn event is not committed yet while the latch holds.
@@ -363,7 +361,7 @@ fn test_release_waits_worktree_cleanup() {
 
         let parent_sid = bundle.session;
         let (runner, client, _warnings, host) =
-            start_local_server(bundle, Some(root.join("settings.json")));
+            start_local_server(bundle, Some(root.join("settings.json")), root.clone());
         let spawn_handle = runner.spawn_handle().expect("real spawn handle attached");
         let ctx = ToolCtx::new("probe-parent").with_session(parent_sid);
         let mut args = SpawnArgs::new("explore", "probe-task", "probe-task");
@@ -393,9 +391,10 @@ fn test_release_waits_worktree_cleanup() {
 
         yield_now().await;
         match SessionLock::acquire(&sid_str, &root) {
-            Err(LockError::HeldByOther(_)) => {}
+            Err(LockError::Held(_)) => {}
             Ok(_) => panic!("lock released while child worktree was still present"),
             Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+            Err(LockError::InvalidId(e)) => panic!("unexpected invalid id: {e}"),
         }
 
         // Release the child so it completes and cleans up the worktree.
@@ -466,9 +465,10 @@ fn test_lock_outlives_writer() {
         let _ = seen_rx.await;
         yield_now().await;
         match SessionLock::acquire(&sid_str, &root) {
-            Err(LockError::HeldByOther(_)) => {}
+            Err(LockError::Held(_)) => {}
             Ok(_) => panic!("lock released while writer still running"),
             Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+            Err(LockError::InvalidId(e)) => panic!("unexpected invalid id: {e}"),
         }
 
         // Let the writer finish; the release task joins it and drops the
@@ -542,7 +542,8 @@ fn start_host_for_test(
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
-    let (runner, client, _warnings, host) = start_local_server(bundle, Some(settings_path));
+    let (runner, client, _warnings, host) =
+        start_local_server(bundle, Some(settings_path), root.to_path_buf());
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
     (runner, client, weak, host, lock, bus)

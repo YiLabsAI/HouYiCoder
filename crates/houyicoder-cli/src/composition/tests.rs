@@ -67,16 +67,19 @@ fn start_host(
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
-    let (runner, client, _warnings, host) = start_local_server(bundle, Some(settings_path));
+    let (runner, client, _warnings, host) =
+        start_local_server(bundle, Some(settings_path), root.to_path_buf());
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
     (runner, client, weak, host, lock, bus)
 }
 
-/// The real bus means the host tracks four tasks -- serve, fleet relay,
-/// notification drain, and model refresh -- and shutdown joins all four
-/// cleanly. A bus-less fixture would track only the serve and refresh, so
-/// this asserts the relay and drain really ran, not a stub stand-in.
+/// The real bus means the host tracks five tasks -- serve, fleet relay,
+/// notification drain, model refresh, and the prompt backfill. Shutdown joins
+/// the ones that finish within its budget; the backfill is still on its first
+/// pass and takes the shutdown signal rather than running on. A bus-less
+/// fixture would track only the serve, refresh, and backfill, so the relay and
+/// drain rows prove they really ran, not that a stand-in exists.
 #[test]
 fn test_bus_tasks_joined() {
     let root = temp_root();
@@ -91,8 +94,8 @@ fn test_bus_tasks_joined() {
     assert_eq!(report.panic_count(), 0, "no task panicked during shutdown");
     assert_eq!(
         report.outcomes().len(),
-        4,
-        "serve, relay, drain, and refresh all tracked"
+        5,
+        "serve, relay, drain, refresh, and backfill all tracked"
     );
     remove_dir_all(&root).ok();
 }
@@ -252,8 +255,8 @@ fn test_bus_events_consumed() {
     assert_eq!(report.panic_count(), 0, "no task panicked");
     assert_eq!(
         report.outcomes().len(),
-        4,
-        "serve, relay, drain, and refresh all tracked"
+        5,
+        "serve, relay, drain, refresh, and backfill all tracked"
     );
     assert_eq!(bus.receiver_count(spawned_topic()), 0, "the relay ended");
     assert_eq!(
@@ -444,7 +447,8 @@ fn test_rename_preserves_prompt() {
     bundle.runner.set_auto_memory(false);
     bundle.runner.set_auto_dream(false);
     let session = bundle.session;
-    let (runner, mut client, _warnings, host) = start_local_server(bundle, Some(settings_path));
+    let (runner, mut client, _warnings, host) =
+        start_local_server(bundle, Some(settings_path), root.clone());
     let wire_session = WireSessionId(session.to_string());
     let rt = Builder::new_current_thread()
         .enable_all()

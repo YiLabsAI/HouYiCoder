@@ -9,6 +9,7 @@
 
 use std::fs::create_dir_all;
 use std::fs::read;
+use std::fs::remove_file;
 use std::fs::rename;
 use std::fs::write;
 use std::path::Path;
@@ -16,22 +17,30 @@ use std::path::PathBuf;
 use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::PromptCoverage;
+use houyicoder_context::SessionDescriptorError;
 use houyicoder_context::SessionDescriptorStore;
 use houyicoder_context::SessionId;
 use houyicoder_context::session_class::PageCursor;
 use houyicoder_context::session_class::SessionEntry;
+use houyicoder_context::session_class::session_dir;
 use houyicoder_context::session_class::session_page;
+use houyicoder_service::CancellationToken;
 use houyicoder_service::lifecycle::prompt_backfill::ScanOutcome;
 use houyicoder_service::lifecycle::prompt_backfill::backfill_session;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
+
+use crate::session::lock::LockError;
+use crate::session::lock::SessionLock;
+use crate::session::lock::StoreIdentity;
 
 /// Seconds to wait before the pass starts, so the first frame and the session
 /// load do not compete with the scan for the disk.
@@ -51,7 +60,7 @@ const SCAN_LIMIT: usize = 200;
 /// one launch's disk work small.
 const BYTE_BUDGET: u64 = 16 * 1024 * 1024;
 
-/// The file holding the cursor, under the config home.
+/// The file holding the cursor, under the sessions root.
 const CURSOR_FILE: &str = ".prompt-backfill-cursor";
 
 /// The three bounds one pass runs under. Each is a data field rather than a
@@ -95,8 +104,11 @@ pub struct BackfillReport {
 ///
 /// The pass stops at the first of three bounds: the page, the session limit,
 /// or the byte budget, and a cancelled pass stops where it is. Either way the
-/// cursor it returns points at the last session it examined, so the work it
-/// did not reach is the first thing the next pass does.
+/// cursor it returns points at the last session it examined, unless the pass
+/// consumed the whole page and the page was short: then the walk reached the
+/// oldest session and the next pass starts over from the newest. A pass that
+/// stopped before it examined any session returns the cursor it was given, so
+/// a launch that never joined the walk leaves it where the last one put it.
 pub fn run_pass(
     sessions_root: &Path,
     log: &dyn SessionLog,
@@ -105,31 +117,50 @@ pub fn run_pass(
     bounds: PassBounds,
     cancelled: &AtomicBool,
 ) -> BackfillReport {
+    // Cancelled before the page was even read: report the walk unchanged
+    // rather than claiming a position the pass never reached.
+    if cancelled.load(Ordering::Relaxed) {
+        return BackfillReport {
+            next_cursor: before,
+            ..BackfillReport::default()
+        };
+    }
     let page = session_page(sessions_root, before, bounds.page);
-    let mut report = BackfillReport::default();
+    let mut report = BackfillReport {
+        next_cursor: before,
+        ..BackfillReport::default()
+    };
+    let mut stopped = false;
     for entry in &page {
         if cancelled.load(Ordering::Relaxed)
             || report.scanned >= bounds.sessions
             || report.bytes_read >= bounds.bytes
         {
+            stopped = true;
             break;
         }
         report.examined += 1;
         if needs_backfill(entry) {
-            match backfill_session(log, store, entry.sid, cancelled) {
-                Ok(ScanOutcome::Scanned(scan)) => {
+            match scan_with_session_lock(sessions_root, log, store, entry.sid, cancelled) {
+                Some(Ok(ScanOutcome::Scanned(scan))) => {
                     report.scanned += 1;
                     report.bytes_read += scan.bytes_read;
                 }
                 // The scan stopped partway through this session's windows, so
                 // the cursor stays above it: the next pass retries the session
                 // the cancel interrupted rather than skipping it.
-                Ok(ScanOutcome::Cancelled) => break,
-                Ok(ScanOutcome::Unsupported) => {}
-                Err(error) => tracing::warn!(
+                Some(Ok(ScanOutcome::Cancelled)) => {
+                    stopped = true;
+                    break;
+                }
+                Some(Ok(ScanOutcome::Unsupported)) => {}
+                Some(Err(error)) => tracing::warn!(
                     session = %entry.sid,
                     "prompt backfill: could not write the record: {error}"
                 ),
+                // Another live process owns the session and keeps its record
+                // current, so this pass has nothing to fill.
+                None => {}
             }
         }
         // Advance only after the session is handled. A cursor moved before the
@@ -140,50 +171,134 @@ pub fn run_pass(
             sid: entry.sid,
         });
     }
-    if page.len() < bounds.page {
-        // The page was short, so the walk reached the oldest session and the
-        // next pass starts over from the newest.
+    if !stopped && page.len() < bounds.page {
+        // The pass ran off the end of a short page, so it reached the oldest
+        // session and the next one starts over. A pass that stopped did not
+        // reach the end, whether it stopped on the last entry or inside it,
+        // and the cursor it left keeps the unexamined sessions for the next
+        // launch.
         report.next_cursor = None;
     }
     report
 }
 
-/// Whether a session is one the pass scans: one of the user's own sessions,
-/// holding a log, whose record states no prompt.
+/// Scan one session while holding its lock, or answer None when another
+/// writer holds it.
 ///
-/// A record claiming unknown coverage was never read, so it is due. A record
-/// claiming whole-log coverage but stating no prompt is due on every walk
-/// because two histories produce that record and the record cannot tell them
-/// apart: the session's recorder judged that no input states a task, or its
-/// write of the first statement failed after the record was created, leaving
-/// the created record standing. Re-reading an empty session costs one bounded
-/// read of both windows and writes the same judgment back; missing a failed
-/// write would leave a titled session untitled for good.
+/// The lock is the single-writer guard a resume takes for the same session. A
+/// record written here while that process records its own prompts would revert
+/// the owner's newer write, and the record would then state a prompt and never
+/// be revisited. The holder is skipped rather than waited for, so one launch
+/// cannot stall on a session it does not own. A guard this launch holds for
+/// this store is not another writer: the store serializes the two writes. A
+/// guard bound to a different store is another writer all the same, because a
+/// store's write lock covers only its own instance, however both came to live
+/// in one process.
+fn scan_with_session_lock(
+    sessions_root: &Path,
+    log: &dyn SessionLog,
+    store: &dyn SessionDescriptorStore,
+    session: SessionId,
+    cancelled: &AtomicBool,
+) -> Option<Result<ScanOutcome, SessionDescriptorError>> {
+    let sid_str = session.to_string();
+    // Taking the lock creates the directory its guard lives in, so a session
+    // the sweep removed between the page read and now would come back as an
+    // empty directory holding nothing but that lock. The check narrows that
+    // window rather than closing it: a removal after the check still recreates
+    // the directory, which the next sweep finds empty and removes.
+    if !session_dir(sessions_root, session).is_dir() {
+        return None;
+    }
+    match SessionLock::acquire(&sid_str, sessions_root) {
+        Ok(_held) => Some(backfill_session(log, store, session, cancelled)),
+        Err(LockError::Held(_))
+            if SessionLock::held_by(StoreIdentity::of(store), &sid_str, sessions_root) =>
+        {
+            Some(backfill_session(log, store, session, cancelled))
+        }
+        Err(LockError::Held(_)) => {
+            // Distinct from a session that was never a candidate: the owner is
+            // live and keeps this record current, so a later pass after it
+            // exits fills what a legacy record still lacks.
+            tracing::debug!(
+                session = %session,
+                "prompt backfill: session owned by a live host, skipped"
+            );
+            None
+        }
+        Err(LockError::Io(message)) => {
+            tracing::warn!(
+                session = %session,
+                "prompt backfill: could not take the session lock: {message}"
+            );
+            None
+        }
+        // A session id that does not parse names no directory, so there is
+        // nothing this pass could fill.
+        Err(LockError::InvalidId(message)) => {
+            tracing::warn!(
+                session = %session,
+                "prompt backfill: {message}"
+            );
+            None
+        }
+    }
+}
+
+/// Whether a session is one the pass scans: one of the user's own sessions,
+/// holding a log, whose record still owes a prompt.
+///
+/// A record claiming unknown coverage was never read, so it is due. A partial
+/// record with no newest statement is due too: a window the scan could not
+/// account for may hold one, and the shapes it covers are a failed tail read,
+/// a statement older than both windows, and a log whose windows do not meet.
+/// Only a rescan can rule those out, and one walk pays a bounded read per
+/// session for it. A partial record that does state a newest statement is not
+/// due: nothing the bounded windows can find would change it.
+///
+/// A complete record stating no prompt is due on every walk because two
+/// histories produce that record and the record cannot tell them apart: the
+/// session's recorder judged that no input states a task, or its write of the
+/// first statement failed after the record was created. Re-reading an empty
+/// session costs one bounded read of both windows; missing a failed write
+/// would leave a titled session untitled for good.
 fn needs_backfill(entry: &SessionEntry) -> bool {
     entry.is_user_session()
-        && entry.descriptor.as_ref().is_some_and(|descriptor| {
-            matches!(
-                descriptor.prompt_coverage,
-                PromptCoverage::Unknown | PromptCoverage::Complete
-            ) && descriptor.first_prompt.is_none()
-                && descriptor.last_prompt.is_none()
-        })
+        && entry
+            .descriptor
+            .as_ref()
+            .is_some_and(|descriptor| match descriptor.prompt_coverage {
+                PromptCoverage::Unknown => true,
+                PromptCoverage::Partial => descriptor.last_prompt.is_none(),
+                PromptCoverage::Complete => {
+                    descriptor.first_prompt.is_none() && descriptor.last_prompt.is_none()
+                }
+            })
 }
 
 /// Run one pass and persist its cursor, then report what it did.
 ///
 /// Call from inside a spawned task so cancellation can stop it: the guard
 /// sets the flag when the task is dropped, and a scan reads the flag between
-/// records rather than finishing a page nobody is waiting for.
+/// records rather than finishing a page nobody is waiting for. The start
+/// delay waits on the host's shutdown signal as well, so a host that closes
+/// inside the delay ends at once instead of holding the previous host's store
+/// open for the rest of it.
 pub async fn run_background(
     sessions_root: PathBuf,
     log: Arc<dyn SessionLog>,
     store: Arc<dyn SessionDescriptorStore>,
+    shutdown: CancellationToken,
 ) {
-    sleep(Duration::from_secs(START_DELAY_SECS)).await;
+    tokio::select! {
+        () = shutdown.cancelled() => return,
+        () = sleep(Duration::from_secs(START_DELAY_SECS)) => {}
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let _stop = CancelOnDrop(cancelled.clone());
-    let handled = spawn_blocking(move || {
+    let scanned = Arc::clone(&cancelled);
+    let mut pass = spawn_blocking(move || {
         let before = read_cursor(&sessions_root);
         let report = run_pass(
             &sessions_root,
@@ -191,12 +306,20 @@ pub async fn run_background(
             store.as_ref(),
             before,
             PassBounds::default(),
-            &cancelled,
+            &scanned,
         );
         write_cursor(&sessions_root, report.next_cursor);
         report
-    })
-    .await;
+    });
+    let handled = tokio::select! {
+        () = shutdown.cancelled() => {
+            // The guard stops the scan between records; joining here releases
+            // the store this pass holds before the host finishes closing.
+            cancelled.store(true, Ordering::Relaxed);
+            pass.await
+        }
+        handled = &mut pass => handled,
+    };
     match handled {
         Ok(report) if report.scanned > 0 => tracing::info!(
             "prompt backfill: scanned {} of {} sessions, {} bytes",
@@ -265,8 +388,18 @@ fn write_cursor(root: &Path, before: Option<PageCursor>) {
     // The store root may not exist yet on a fresh install, and the cursor is
     // the only state this pass keeps: create it rather than losing the walk.
     let _created = create_dir_all(root);
-    let tmp = root.join(format!("{CURSOR_FILE}.{}.tmp", id()));
+    // The pid and counter keep two launches in one process from sharing a
+    // temporary file and truncating each other's bytes.
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = root.join(format!(
+        "{CURSOR_FILE}.{}.{}.tmp",
+        id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     if write(&tmp, bytes).is_err() || rename(&tmp, cursor_path(root)).is_err() {
+        // A failed rename leaves the temp file behind; removing it keeps the
+        // root from collecting one per failed launch.
+        let _removed = remove_file(&tmp);
         tracing::warn!("prompt backfill: could not write the cursor");
     }
 }

@@ -143,6 +143,7 @@ pub(crate) fn assemble_bundle(
             provider_facts,
         },
         None,
+        session_log_root(),
     );
     // The server task owns the runner + the permission gate; the TUI holds
     // only the protocol client.
@@ -172,9 +173,14 @@ pub(crate) fn assemble_bundle(
 /// event sequencer receives runtime events before the runner is shared, then
 /// becomes the sole ordering authority for durable event frames, model
 /// deltas, and fleet status. The server is the only carrier writer.
+///
+/// The sessions root is passed in rather than read from the environment: the
+/// prompt backfill walks and writes that directory, and a test building this
+/// host over in-memory stores would otherwise walk the real one.
 pub(crate) fn start_local_server(
     assembled: AssembledRunner,
     settings_path: Option<PathBuf>,
+    sessions_root: PathBuf,
 ) -> (Arc<Runner>, Client, Vec<String>, HostLifecycle) {
     let AssembledRunner {
         mut runner,
@@ -289,10 +295,13 @@ pub(crate) fn start_local_server(
     });
     // Fill legacy session prompts off the frame loop. The picker answers from
     // records alone, so a record written before prompts were recorded would
-    // leave its session untitled; the pass is bounded per launch and aborted
-    // with the host, so a session switch stops it between records.
+    // leave its session untitled; the pass is bounded per launch and follows
+    // the host's shutdown signal, so a session switch stops it between
+    // records instead of holding the closing host's store until the pass
+    // finishes.
     if let Some(store) = backfill_store {
-        let handle = runtime.spawn(run_background(session_log_root(), backfill_log, store));
+        let shutdown = host.cancel_token();
+        let handle = runtime.spawn(run_background(sessions_root, backfill_log, store, shutdown));
         host.track(handle);
     }
     // Ask the provider which model ids it serves and cache them for catalog
