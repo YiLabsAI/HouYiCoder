@@ -3,7 +3,7 @@
 //! Split from main.rs on the per-file size gate. Default (dry-run) prints a
 //! summary; --verbose lists every entry; --apply executes after a typed
 //! confirmation, or non-interactively with --yes. No alternate screen here
-//! (CLI subcommand, not TUI), so print is the correct sink. The summary
+//! (CLI subcommand, not TUI), so print is the correct destination. The summary
 //! keeps a backlog that plan_all reports in the tens of thousands to a
 //! screen, where the per-entry list would flood it.
 
@@ -14,6 +14,9 @@ use crate::session::housekeeping::try_prune_lock;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::lifecycle::prune::plan_all;
 use houyicoder_service::lifecycle::prune::{PruneEntry, PruneKind, PrunePlan, PruneReason};
+use houyicoder_service::lifecycle::reclaim::{
+    ReclaimOutcome, ReclaimPolicy, ReclaimReport, reclaim_store_blocks,
+};
 use houyicoder_service::lifecycle::repair::{DescriptorRepair, repair_child_descriptors};
 use std::env::current_dir;
 use std::error::Error;
@@ -21,6 +24,7 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
+use std::path::Path;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -37,8 +41,87 @@ fn repair_summary(repair: DescriptorRepair) -> Option<String> {
     }
 }
 
+/// The freed count with a noun that agrees with it, since a one-block pass is
+/// ordinary and reading as a bug is not.
+fn block_count(removed: usize) -> String {
+    if removed == 1 {
+        format!("{removed} block")
+    } else {
+        format!("{removed} blocks")
+    }
+}
+
+/// What the pass kept and why, as a trailing phrase. A pass that kept nothing
+/// for an ordinary reason prints nothing, so the common line stays short.
+fn kept_detail(report: &ReclaimReport) -> String {
+    let mut parts = Vec::new();
+    if report.leased > 0 {
+        parts.push(format!("{} too recent to remove", report.leased));
+    }
+    if report.deferred > 0 {
+        parts.push(format!("{} could not be removed", report.deferred));
+    }
+    if report.skipped_refs > 0 {
+        parts.push(format!("{} references not recognised", report.skipped_refs));
+    }
+    if report.torn_tail > 0 {
+        parts.push(format!("{} logs ended mid-record", report.torn_tail));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+/// What the reclaim pass found after the apply, as one line.
+fn reclaim_summary(sessions_root: &Path) -> String {
+    reclaim_line(reclaim_store_blocks(
+        sessions_root,
+        &ReclaimPolicy::default(),
+    ))
+}
+
+/// The one line an outcome prints. A stopped pass says so instead of
+/// reporting an empty reclaim: freeing disk is what the operator ran this
+/// command for, and a silent shortfall would read as success. Split from the
+/// call so every ending is assertable without a store in the state that
+/// produces it.
+fn reclaim_line(outcome: ReclaimOutcome) -> String {
+    match outcome {
+        ReclaimOutcome::Completed(report) => format!(
+            "Reclaimed {}.{}",
+            block_count(report.removed),
+            kept_detail(&report)
+        ),
+        ReclaimOutcome::Partial(report) => format!(
+            "Reclaimed {}; the pass stopped at its budget and the rest waits for the next run.{}",
+            block_count(report.removed),
+            kept_detail(&report)
+        ),
+        ReclaimOutcome::Skipped => {
+            "Block reclaim skipped: another pass holds its lock.".to_string()
+        }
+        ReclaimOutcome::Stopped { error, report } => {
+            format!(
+                "Block reclaim stopped after {}: {error}",
+                block_count(report.removed)
+            )
+        }
+    }
+}
+
+/// What a plan with no entries leaves to do. The store can still hold blocks
+/// nothing names: an append that never landed, or a write cut off before its
+/// rename. Freeing those is what --apply is for, and the background window
+/// does it with no plan at all, so leaving them to the next window would make
+/// the manual lever weaker than the automatic one.
+fn empty_plan_summary(apply: bool, sessions_root: &Path) -> Option<String> {
+    apply.then(|| reclaim_summary(sessions_root))
+}
+
 /// One-word kind label shared by the summary and the per-entry list so the two
-/// views never drift apart. Matches the file-system object being reclaimed.
+/// views never drift apart. Matches the file-system object being removed.
 fn kind_label(kind: PruneKind) -> &'static str {
     match kind {
         PruneKind::Session => "session",
@@ -84,6 +167,9 @@ pub(crate) fn run_cleanup(apply: bool, verbose: bool, yes: bool) -> Result<(), B
     let plan = plan_all(&targets, &policy);
     if plan.entries.is_empty() {
         println!("Nothing to prune.");
+        if let Some(line) = empty_plan_summary(apply, &sessions_root) {
+            println!("{line}");
+        }
         return Ok(());
     }
     print_prune_summary(&plan);
@@ -132,6 +218,9 @@ pub(crate) fn run_cleanup(apply: bool, verbose: bool, yes: bool) -> Result<(), B
         "Removed {}, truncated {} logs, {} skipped (live), errors {}.",
         report.removed, report.truncated, skipped, report.errors
     );
+    // The deleted sessions no longer name their blocks, so the pass can free
+    // them in the same act rather than at the next background window.
+    println!("{}", reclaim_summary(&sessions_root));
     Ok(())
 }
 

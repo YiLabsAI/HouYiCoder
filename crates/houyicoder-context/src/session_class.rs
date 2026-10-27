@@ -24,6 +24,9 @@ pub const DESCRIPTOR_FILE: &str = "session.json";
 /// rather than broken, and a directory holding a bad one loses speed and
 /// nothing else.
 pub const INDEX_FILE: &str = "log.index";
+/// The directory a session's checkpoint manifests live in. The store writes
+/// it and the reclaim pass reads it, so both name it here.
+pub const CHECKPOINT_DIR: &str = "checkpoints";
 /// The single-writer guard a session's directory holds, empty and never read:
 /// only the kernel lock on the open handle carries meaning. A resume, a
 /// serving host, and the retention pass all name it here, so a probe and an

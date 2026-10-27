@@ -1,5 +1,130 @@
 use super::*;
 use houyicoder_service::lifecycle::prune::{PruneAction, PruneEntry, PruneKind, PruneReason};
+use houyicoder_service::lifecycle::reclaim::ReclaimError;
+use std::env::temp_dir;
+use std::fs;
+use std::fs::OpenOptions;
+use std::process::id;
+use std::time::Duration;
+
+/// The apply path reports the blocks it freed, so a user who ran the cleanup
+/// for disk space sees the disk come back instead of a silent zero.
+#[test]
+fn test_reclaim_summary_reports() {
+    let root = temp_dir().join(format!("houyicoder_cleanup_reclaim_{}", id()));
+    let shard = root.join(".cas").join("ab");
+    fs::create_dir_all(&shard).expect("create shard");
+    let stale = shard.join("ab00.bin.tmp");
+    fs::write(&stale, b"never renamed").expect("write the interrupted temp");
+    let handle = OpenOptions::new()
+        .write(true)
+        .open(&stale)
+        .expect("open the temp");
+    handle
+        .set_modified(SystemTime::now() - Duration::from_secs(7200))
+        .expect("age the temp");
+
+    assert_eq!(
+        reclaim_summary(&root),
+        "Reclaimed 1 block.",
+        "one block reads as a noun that agrees with the count"
+    );
+    assert!(!stale.exists(), "the temp is gone");
+    fs::remove_dir_all(&root).ok();
+}
+
+/// Every ending of a pass reaches the operator in words: a partial pass says
+/// the rest waits for the next run, a held lock says nothing ran, and a
+/// stopped pass says what it freed before it stopped.
+#[test]
+fn test_reclaim_lines_read() {
+    let freed = ReclaimReport {
+        removed: 2,
+        ..ReclaimReport::default()
+    };
+    assert_eq!(
+        reclaim_line(ReclaimOutcome::Completed(freed)),
+        "Reclaimed 2 blocks."
+    );
+    assert_eq!(
+        reclaim_line(ReclaimOutcome::Partial(freed)),
+        "Reclaimed 2 blocks; the pass stopped at its budget and the rest waits for the next run."
+    );
+    assert_eq!(
+        reclaim_line(ReclaimOutcome::Skipped),
+        "Block reclaim skipped: another pass holds its lock."
+    );
+    let stopped = ReclaimOutcome::Stopped {
+        error: ReclaimError::Busy,
+        report: ReclaimReport {
+            removed: 1,
+            ..ReclaimReport::default()
+        },
+    };
+    assert_eq!(
+        reclaim_line(stopped),
+        "Block reclaim stopped after 1 block: another pass holds the reclaim lock"
+    );
+}
+
+/// An empty plan is not an empty store: with --apply the manual lever still
+/// reclaims, and a dry run leaves the store alone.
+#[test]
+fn test_empty_plan_reclaims() {
+    let root = temp_dir().join(format!("houyicoder_cleanup_empty_{}", id()));
+    let shard = root.join(".cas").join("ab");
+    fs::create_dir_all(&shard).expect("create shard");
+    let stale = shard.join("ab11.bin.tmp");
+    fs::write(&stale, b"never renamed").expect("write the interrupted temp");
+    let handle = OpenOptions::new()
+        .write(true)
+        .open(&stale)
+        .expect("open the temp");
+    handle
+        .set_modified(SystemTime::now() - Duration::from_secs(7200))
+        .expect("age the temp");
+
+    assert_eq!(
+        empty_plan_summary(false, &root),
+        None,
+        "a dry run reclaims nothing"
+    );
+    assert!(stale.exists(), "the temp is untouched");
+    assert_eq!(
+        empty_plan_summary(true, &root).as_deref(),
+        Some("Reclaimed 1 block."),
+        "the apply path reclaims with no plan"
+    );
+    assert!(!stale.exists(), "the temp is gone");
+    fs::remove_dir_all(&root).ok();
+}
+
+/// The noun follows the count in the other direction too, so the summary a
+/// multi-block pass prints is unchanged.
+#[test]
+fn test_block_count_agrees() {
+    assert_eq!(block_count(0), "0 blocks");
+    assert_eq!(block_count(1), "1 block");
+    assert_eq!(block_count(7), "7 blocks");
+}
+
+/// What the pass kept is said in words the operator can act on, and nothing
+/// is said when it kept nothing: a clause of zeros would only add noise.
+#[test]
+fn test_kept_detail_reads() {
+    assert_eq!(kept_detail(&ReclaimReport::default()), "");
+    let kept = ReclaimReport {
+        leased: 2,
+        deferred: 1,
+        skipped_refs: 4,
+        torn_tail: 3,
+        ..ReclaimReport::default()
+    };
+    assert_eq!(
+        kept_detail(&kept),
+        " (2 too recent to remove, 1 could not be removed, 4 references not recognised, 3 logs ended mid-record)"
+    );
+}
 
 /// The apply path says what the repair did only when it did something,
 /// and never hides a failure behind a zero count.

@@ -4,11 +4,13 @@ use houyicoder_context::{
     EventId, SessionDescriptor, SessionEvent, SessionLogEntry, SessionProvenance,
 };
 use houyicoder_service::lifecycle::prune::{PruneAction, PruneEntry, PruneReason};
+use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::fs::{OpenOptions, Permissions};
+use std::fs::Permissions;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -215,6 +217,38 @@ fn test_sweep_repairs_child_descriptor() {
     assert_eq!(
         descriptor.created_at, 1_700_000_042,
         "created at the second the delegation was recorded"
+    );
+    let _r = remove_dir_all(&home);
+    let _r = remove_dir_all(&sessions);
+}
+
+/// The sweep reaches the block reclaim with the store it just swept: a block
+/// nothing names does not outlive the maintenance window. The pass itself is
+/// tested where it lives; this covers the call site.
+#[test]
+fn test_sweep_reclaims_orphan() {
+    let home = temp_root();
+    let sessions = temp_root();
+    let shard = sessions.join(".cas").join("ab");
+    create_dir_all(&shard).unwrap();
+    let orphan = shard.join("ab00.bin.tmp");
+    write(&orphan, b"never renamed").unwrap();
+    let handle = OpenOptions::new().write(true).open(&orphan).unwrap();
+    handle
+        .set_modified(SystemTime::now() - Duration::from_secs(7200))
+        .unwrap();
+
+    run_once(
+        &home,
+        &sessions,
+        &home.join("shell-snapshots"),
+        None,
+        &SessionId::new(),
+    );
+
+    assert!(
+        !orphan.exists(),
+        "the sweep reclaims the block nothing names"
     );
     let _r = remove_dir_all(&home);
     let _r = remove_dir_all(&sessions);

@@ -7,27 +7,29 @@
 //! so no one directory grows without bound. A write goes to a temp sibling,
 //! fsyncs, then renames, so a reader sees a whole block or nothing at all.
 //!
-//! Reclaim is a maintenance pass rather than a hot path: it reads every
-//! session log for the block references it holds and deletes the blocks none
-//! of them name.
+//! Reclaim is a maintenance pass rather than a hot path: it owns its lock and
+//! budget, marks the blocks the live references name, and frees what none of
+//! them does. The pass lives in the gc submodule.
 
-use std::collections::HashSet;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 #[cfg(unix)]
 use std::{fs::File, os::unix::fs::OpenOptionsExt};
 
-use houyicoder_context::{BlockHash, ContextError, session_class::LOG_FILE};
+use houyicoder_context::{BlockHash, ContextError};
 
 use crate::sha256_file;
 use crate::sha256_hex;
 
 use crate::local_file::LocalFileBackend;
+
+pub use gc::{ReclaimError, ReclaimPolicy, ReclaimReport, ReclaimStop};
 
 /// Makes each writer's temporary file name unique within its process. Two
 /// concurrent writers of the same block must not share a temp path: both
@@ -35,12 +37,19 @@ use crate::local_file::LocalFileBackend;
 /// half-written block.
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// How many hex characters name a shard directory.
+pub(super) const SHARD_CHARS: usize = 2;
+/// The suffix of a stored block.
+pub(super) const BLOCK_SUFFIX: &str = ".bin";
+/// The suffix of a block write that never reached its rename.
+pub(super) const TEMP_SUFFIX: &str = ".bin.tmp";
+
 /// The temp sibling one writer fills before renaming it onto the block's
 /// path. The process id separates writers in different processes and the
 /// counter separates writers within one.
 fn temp_block_path(block_path: &Path, hash: &BlockHash) -> PathBuf {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    block_path.with_file_name(format!("{}.{}.{sequence}.bin.tmp", hash.0, id()))
+    block_path.with_file_name(format!("{}.{}.{sequence}{TEMP_SUFFIX}", hash.0, id()))
 }
 
 impl LocalFileBackend {
@@ -49,8 +58,10 @@ impl LocalFileBackend {
     }
 
     fn block_path(&self, hash: &BlockHash) -> PathBuf {
-        let prefix = hash.0.get(..2).unwrap_or("");
-        self.cas_dir().join(prefix).join(format!("{}.bin", hash.0))
+        let prefix = hash.0.get(..SHARD_CHARS).unwrap_or("");
+        self.cas_dir()
+            .join(prefix)
+            .join(format!("{}{BLOCK_SUFFIX}", hash.0))
     }
 
     pub(super) fn block_put_sync(&self, block: Vec<u8>) -> Result<BlockHash, ContextError> {
@@ -62,7 +73,14 @@ impl LocalFileBackend {
         // address, so stopping early would report success for a block every
         // later read rejects.
         if path.exists() && sha256_file(&path).is_ok_and(|stored| stored == hash) {
-            return Ok(hash);
+            // A hit is a fresh claim on bytes an earlier event may still be
+            // about to name. Refresh their age, so a reclaim pass running
+            // between this put and the append does not free them. A touch
+            // that fails falls through to the rewrite below, which publishes
+            // a new time anyway.
+            if self.touch_block(&path).is_ok() {
+                return Ok(hash);
+            }
         }
         if let Some(parent) = path.parent() {
             Self::ensure_dir(parent)?;
@@ -96,6 +114,20 @@ impl LocalFileBackend {
         Ok(hash)
     }
 
+    /// Mark a stored block as just used. The reclaim pass keeps a block while
+    /// its time is inside the write lease, so a put that finds the bytes
+    /// already stored must refresh that time: the caller is about to append
+    /// the event that names them.
+    fn touch_block(&self, path: &Path) -> Result<(), ContextError> {
+        let handle = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(|_| ContextError::Io)?;
+        handle
+            .set_modified(SystemTime::now())
+            .map_err(|_| ContextError::Io)
+    }
+
     pub(super) fn block_get_sync(&self, hash: &BlockHash) -> Result<Vec<u8>, ContextError> {
         if !hash.is_canonical() {
             return Err(ContextError::Corrupt(format!(
@@ -122,74 +154,9 @@ impl LocalFileBackend {
             Err(_) => Err(ContextError::Io),
         }
     }
-
-    /// Collect the block hashes every session log references, so the reclaim
-    /// pass can tell a referenced block from an orphan. Scans the JSONL for
-    /// the block_ref field instead of parsing events: the pass walks every
-    /// session, and a typed parse buys nothing here.
-    fn referenced_block_hashes(&self) -> HashSet<String> {
-        let mut refs = HashSet::new();
-        let Ok(sessions) = fs::read_dir(&self.root) else {
-            return refs;
-        };
-        let needle = "\"block_ref\":\"";
-        for entry in sessions.flatten() {
-            let log = entry.path().join(LOG_FILE);
-            let Ok(content) = fs::read_to_string(&log) else {
-                continue;
-            };
-            let mut at = 0;
-            while let Some(i) = content[at..].find(needle) {
-                let start = at + i + needle.len();
-                let rest = &content[start..];
-                let end = rest.find('"').unwrap_or(0);
-                if end > 0 {
-                    refs.insert(rest[..end].to_string());
-                }
-                at = start + end + 1;
-            }
-        }
-        refs
-    }
-
-    /// Delete the blocks no session log still names: the event carrying that
-    /// block_ref was compacted out. Returns how many were removed. A block
-    /// any session references stays.
-    pub fn reclaim_orphan_blocks(&self) -> Result<usize, ContextError> {
-        let referenced = self.referenced_block_hashes();
-        let mut removed = 0;
-        let Ok(shards) = fs::read_dir(self.cas_dir()) else {
-            return Ok(0);
-        };
-        for shard in shards.flatten() {
-            let Ok(blocks) = fs::read_dir(shard.path()) else {
-                continue;
-            };
-            for block in blocks.flatten() {
-                let fname = block.file_name();
-                let name = match fname.to_str() {
-                    Some(n) => n,
-                    None => continue,
-                };
-                // <hash>.bin — strip the suffix for the referenced-set lookup.
-                let Some(hash) = name.strip_suffix(".bin") else {
-                    // A stale .bin.tmp left by a crash during block_put_sync
-                    // (the temp sibling never reached the rename). No
-                    // reference can exist for a temp file, so reap it
-                    // unconditionally instead of leaking CAS storage.
-                    if name.ends_with(".bin.tmp") && fs::remove_file(block.path()).is_ok() {
-                        removed += 1;
-                    }
-                    continue;
-                };
-                if !referenced.contains(hash) && fs::remove_file(block.path()).is_ok() {
-                    removed += 1;
-                }
-            }
-        }
-        Ok(removed)
-    }
 }
+
+mod gc;
 
 #[cfg(test)]
 mod tests;

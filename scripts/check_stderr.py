@@ -70,8 +70,8 @@ from rules.paths import is_test_file  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
 
-# Console writes that are the correct sink: no alternate screen is up when
-# they run. Permanent entries, NOT a ratchet -- do not migrate these to a
+# Console writes that are the correct destination: no alternate screen is up
+# when they run. Permanent entries, NOT a ratchet -- do not migrate these to a
 # system line (there is no transcript yet) or to the debug log (the user
 # needs to see why the binary refused to start, on the terminal, now).
 #
@@ -81,7 +81,7 @@ CRATES = ROOT / "crates"
 # listener only runs in detached mode, where this process has no TUI.
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
-    "crates/houyicoder-cli/src/session/cleanup.rs": 13,
+    "crates/houyicoder-cli/src/session/cleanup.rs": 15,
     "crates/houyicoder-cli/src/main.rs": 13,
     "crates/houyicoder-loader/src/main.rs": 2,
     "crates/houyicoder-service/src/uds.rs": 2,

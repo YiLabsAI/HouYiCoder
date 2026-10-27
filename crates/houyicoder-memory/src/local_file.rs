@@ -34,11 +34,12 @@ use houyicoder_context::{
     BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId,
     LenientRead, LogIndexEntry, LogIndexReader, LogRangeRead, MAX_WINDOW_BYTES, ReverseRead,
     SAMPLE_INTERVAL_BYTES, SessionId, SessionLogEntry,
-    session_class::{INDEX_FILE, LOG_FILE, session_dir},
+    session_class::{CHECKPOINT_DIR, INDEX_FILE, LOG_FILE, session_dir},
 };
 
 mod blocks;
 mod log_index;
+pub use blocks::{ReclaimError, ReclaimPolicy, ReclaimReport, ReclaimStop};
 #[cfg(unix)]
 use fs::DirBuilder;
 use fs::File;
@@ -121,7 +122,7 @@ impl LocalFileBackend {
     }
 
     fn checkpoint_dir(&self, session: SessionId) -> PathBuf {
-        session_dir(&self.root, session).join("checkpoints")
+        session_dir(&self.root, session).join(CHECKPOINT_DIR)
     }
 
     fn checkpoint_path(&self, session: SessionId, cp: CheckpointId) -> PathBuf {
@@ -263,7 +264,7 @@ impl LocalFileBackend {
         // root's session dirs for <session>/checkpoints/<id>.json.
         let entries = fs::read_dir(&self.root).map_err(|_| ContextError::Io)?;
         for entry in entries.flatten() {
-            let cp_dir = entry.path().join("checkpoints");
+            let cp_dir = entry.path().join(CHECKPOINT_DIR);
             let cp_file = cp_dir.join(format!("{id}.json"));
             if cp_file.exists() {
                 let content = fs::read_to_string(&cp_file).map_err(|_| ContextError::Io)?;

@@ -5,6 +5,7 @@
 use serde_json::Value;
 
 use crate::brief::{edit_diff_summary, result_summary, value_brief};
+use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::tool::{simple_command_word, strip_ansi};
 
 /// Build the Write tool result body: the "Wrote N lines to {path}" chip
@@ -141,7 +142,7 @@ fn raw_body(output: &str) -> String {
     // Surface the preview (the actual content) and the retrieval hint,
     // not the raw marker JSON. Resumed old sessions benefit too: their
     // logged results carry top-level block_ref markers.
-    if v.get("block_ref").is_some() {
+    if v.get(BLOCK_REF_KEY).is_some() {
         let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("");
         let hint = v
             .get("hint")
@@ -163,7 +164,7 @@ fn raw_body(output: &str) -> String {
 fn field_level_marker_body(v: &Value) -> Option<String> {
     let obj = v.as_object()?;
     for (_, field) in obj.iter() {
-        if field.get("block_ref").is_none() {
+        if field.get(BLOCK_REF_KEY).is_none() {
             continue;
         }
         let preview = field.get("preview").and_then(|p| p.as_str()).unwrap_or("");

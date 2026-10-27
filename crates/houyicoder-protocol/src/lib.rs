@@ -20,6 +20,7 @@
 pub mod a2a;
 pub mod acp_wire;
 pub mod acpx;
+pub mod block_ref;
 pub mod cache_policy;
 pub mod capability;
 pub mod envelope;

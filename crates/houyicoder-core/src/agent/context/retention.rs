@@ -30,6 +30,7 @@
 use std::collections::HashSet;
 
 use houyicoder_context::{BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry};
+use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use serde_json::Value;
 
 /// A resource key for supersession: a later tool call for the same resource
@@ -274,7 +275,7 @@ pub(crate) fn materialize_block(
     // Top-level marker: the whole output was externalized (blob tools like
     // bash/grep, or old-session logs written before field-level isolation).
     // The tier replaces the whole output — these have no envelope to keep.
-    if let Some(hash_str) = output.get("block_ref").and_then(|v| v.as_str()) {
+    if let Some(hash_str) = output.get(BLOCK_REF_KEY).and_then(|v| v.as_str()) {
         return apply_tier(hash_str, output, backend, policy, ctx);
     }
     // Field-level marker: a single top-level field's value is the marker
@@ -285,7 +286,7 @@ pub(crate) fn materialize_block(
     // renders the Subagent fold-group across all three retention tiers.
     if let Some(obj) = output.as_object()
         && let Some((field_key, marker)) = obj.iter().find_map(|(k, v)| {
-            let hash = v.get("block_ref").and_then(|b| b.as_str())?;
+            let hash = v.get(BLOCK_REF_KEY).and_then(|b| b.as_str())?;
             Some((k.clone(), (hash, v.clone())))
         })
     {
@@ -352,7 +353,7 @@ fn apply_tier(
                 serde_json::json!({
                     "summarized": true,
                     "preview": marker.get("preview").cloned().unwrap_or_default(),
-                    "block_ref": hash_str,
+                    BLOCK_REF_KEY: hash_str,
                     "hint": "large output summarized; re-invoke the tool for full content",
                 })
             } else {
@@ -365,7 +366,7 @@ fn apply_tier(
             // retrieval; the model is told to re-invoke if it needs the
             // content.
             serde_json::json!({
-                "block_ref": hash_str,
+                BLOCK_REF_KEY: hash_str,
                 "evicted": true,
                 "hint": "large output evicted by retention policy; re-invoke the tool to retrieve it",
             })
@@ -380,7 +381,7 @@ fn apply_tier(
 /// re-invoke the tool.
 fn unavailable_marker(hash_str: &str, reason: &str) -> serde_json::Value {
     serde_json::json!({
-        "block_ref": hash_str,
+        BLOCK_REF_KEY: hash_str,
         "unavailable": true,
         "reason": reason,
         "hint": "large output unavailable; re-invoke the tool to retrieve it",

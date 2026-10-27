@@ -1,5 +1,6 @@
 //! Background session housekeeping: the prune that bounds the sessions
-//! store. A long-lived entry (Serve, Acp, Tui, Resume, Continue) calls
+//! store, followed by the block reclaim that frees what no session names.
+//! A long-lived entry (Serve, Acp, Tui, Resume, Continue) calls
 //! start_background_housekeeping after assembling its bundle; the prune
 //! fires once after a 10-minute delay, on a spawn_blocking thread so the
 //! blocking FS IO (readdir + delete, minutes on a 50k backlog) does not
@@ -30,6 +31,7 @@ use houyicoder_context::session_class::LOCK_FILE;
 use houyicoder_service::lifecycle::prune::{
     self, PruneKind, PrunePlan, PrunePolicy, PruneReport, PruneTargets,
 };
+use houyicoder_service::lifecycle::reclaim::{ReclaimOutcome, ReclaimPolicy, reclaim_store_blocks};
 use houyicoder_service::lifecycle::repair::repair_child_descriptors;
 
 const DELAY_SECS: u64 = 10 * 60;
@@ -160,6 +162,9 @@ fn run_once(
             plan.len(),
             threshold
         );
+        // Skipped sessions still name their blocks, so the reclaim keeps
+        // what they reference and collects only what nothing does.
+        reclaim_blocks(sessions_root);
         return;
     }
     // Delete under the per-session lock: a session may have been resumed
@@ -175,6 +180,43 @@ fn run_once(
         report.errors
     );
     write_marker(&marker_path, &report, planned);
+    // After the prune, so a deleted session's unshared blocks are collected
+    // in the same window rather than waiting for the next one.
+    reclaim_blocks(sessions_root);
+}
+
+/// Reclaim the content-addressed blocks no session log or checkpoint names.
+///
+/// The pass keeps a block a writer stored but has not yet referenced (the
+/// write lease), keeps everything a source it cannot finish reading might
+/// name (a scan error stops it), and spends at most its own budget. None of
+/// those outcomes deletes a block that a reference names.
+fn reclaim_blocks(sessions_root: &Path) {
+    match reclaim_store_blocks(sessions_root, &ReclaimPolicy::default()) {
+        ReclaimOutcome::Completed(report) | ReclaimOutcome::Partial(report) => tracing::info!(
+            "housekeeping: blocks {} stored, {} reclaimed, {} leased, {} deferred, {} sources read, {} refs skipped, {} torn tails, complete {}",
+            report.blocks,
+            report.removed,
+            report.leased,
+            report.deferred,
+            report.sources,
+            report.skipped_refs,
+            report.torn_tail,
+            report.complete
+        ),
+        ReclaimOutcome::Skipped => {
+            tracing::debug!("housekeeping: block reclaim lock held, skipping");
+        }
+        ReclaimOutcome::Stopped { error, report } => {
+            // The store keeps what the pass could not account for; a sweep
+            // that had already finished shards keeps their freed blocks too,
+            // so the log line carries that count.
+            tracing::warn!(
+                "housekeeping: block reclaim stopped after {} freed: {error}",
+                report.removed
+            );
+        }
+    }
 }
 
 /// Why a prune lock was not taken.

@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::agent_event::{AgentEventHandlers, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
@@ -477,7 +478,7 @@ impl Runner {
             None => (raw_preview, false),
         };
         serde_json::json!({
-            "block_ref": hash,
+            BLOCK_REF_KEY: hash,
             "preview": preview,
             "data_tag": data_tag,
             "hint": "large output compacted; re-invoke the tool to retrieve it",
@@ -732,7 +733,7 @@ fn json_string_byte_len(s: &str) -> usize {
 /// result is not lost — the raw is in the CAS).
 fn marker_upper_bound() -> serde_json::Value {
     serde_json::json!({
-        "block_ref": "x".repeat(128),
+        BLOCK_REF_KEY: "x".repeat(128),
         "preview": "x".repeat(PREVIEW_CHARS * 4 + 4),
         "data_tag": false,
         "hint": "x".repeat(120),

@@ -26,6 +26,7 @@
 
 pub mod prompt_backfill;
 pub mod prune;
+pub mod reclaim;
 pub mod repair;
 
 use houyicoder_async::PFut;

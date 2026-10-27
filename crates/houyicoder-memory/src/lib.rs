@@ -26,7 +26,7 @@ pub mod reranker;
 pub use descriptor_store::{FileDescriptorStore, InMemoryDescriptorStore};
 pub use houyi::StubMemoryProvider;
 pub use in_memory::InMemoryBackend;
-pub use local_file::LocalFileBackend;
+pub use local_file::{LocalFileBackend, ReclaimError, ReclaimPolicy, ReclaimReport, ReclaimStop};
 pub use markdown_memory::MarkdownMemoryProvider;
 pub use native::KeywordRecallProvider;
 pub use reranker::SemanticReranker;
