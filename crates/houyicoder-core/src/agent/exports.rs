@@ -6,6 +6,9 @@ pub use crate::agent::backbone::{
 };
 pub use crate::agent::compaction::{CompactionOutcome, LlmSummarizer, RecordedCompaction};
 pub use crate::agent::conditional_activation::{ConditionalActivation, ConditionalSkillActivator};
+pub use crate::agent::context::recap::{
+    RECAP_INPUT_TOKENS, RECAP_MESSAGE_LIMIT, RecapWindowSkip, build_recap_input,
+};
 pub use crate::agent::context::{
     AssembledContext, CategoryBreakdown, ContextBreakdown, ContextBuilder, ContextMeasurement,
     GridCell, Section, SectionKind, Tokenizer, build_grid,

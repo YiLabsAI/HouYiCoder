@@ -18,6 +18,7 @@
 pub(crate) mod cache_liveness;
 pub(crate) mod conversation;
 pub(crate) mod prompt;
+pub(crate) mod recap;
 pub(crate) mod retention;
 pub(crate) mod selection;
 pub(crate) mod turn_group;

@@ -168,8 +168,10 @@ fn find_late_result<'a>(
 }
 
 /// Extract user-role text from an event when it is one of the user or
-/// system-reminder variants served to the model in a user message.
-fn user_text_of(event: &SessionEvent) -> Option<String> {
+/// system-reminder variants served to the model in a user message. One list
+/// decides which events form a message, so a window that cuts the conversation
+/// and the assembly that serves it agree on where a message begins.
+pub(crate) fn user_text_of(event: &SessionEvent) -> Option<String> {
     match event {
         // Merge consecutive user messages: providers reject multiple
         // user-in-a-row. MetaUser (runner nudge) + MemoryRecall
