@@ -18,11 +18,16 @@ use crate::agent::multi_agent::bus_types::ChildRunMode;
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::multi_agent::spawn::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use crate::agent::runner_config::RunnerConfig;
+use crate::agent::worktree::preview::preview_remove_worktree;
+use crate::agent::worktree::record::{WorktreeLease, worktree_leased};
+use crate::agent::worktree::session::{
+    WorktreeError, get_or_create_worktree, run_git, worktree_branch_name, worktree_path_for,
+};
 use crate::provider::test_support::FakeProvider;
 
 use super::super::ChildCleanup;
 use super::super::ExitAction;
-use super::super::run_conservative_reclaim;
+use super::super::child_reclaim::{WorktreeReclaimRecord, run_conservative_reclaim};
 use super::super::tests::{make_repo, wired, wired_err};
 use houyicoder_api::provider::ModelProvider;
 use std::fs::remove_dir_all;
@@ -65,6 +70,51 @@ async fn test_enter_child_refused_inflight() {
         Ok(_) => panic!("in-flight must refuse"),
         Err(e) => assert!(e.to_string().contains("in flight"), "{e}"),
     }
+    remove_dir_all(&repo).ok();
+}
+
+/// A tree another session holds the lease for is refused before anything is
+/// created: a tree made and then refused a lease is a directory nothing owns,
+/// and no reclaim record covers it.
+#[tokio::test]
+async fn test_child_refused_when_leased() {
+    let repo = make_repo(14);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let slug = "agent-leased";
+    let holder = WorktreeLease::acquire(&repo, slug).expect("hold the lease");
+
+    let refused = controller.enter_for_child(slug.to_string()).await.err();
+    assert!(
+        matches!(refused, Some(WorktreeError::Leased { .. })),
+        "{refused:?}"
+    );
+    assert!(
+        !worktree_path_for(&repo, slug).exists(),
+        "the refusal comes before the tree is made"
+    );
+    drop(holder);
+    remove_dir_all(&repo).ok();
+}
+
+/// The user-facing enter takes the lease before it creates the tree, so a
+/// tree another session holds is refused with no directory left behind.
+#[tokio::test]
+async fn test_enter_refused_when_leased() {
+    let repo = make_repo(15);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let slug = "user-leased";
+    let holder = WorktreeLease::acquire(&repo, slug).expect("hold the lease");
+
+    let refused = controller.enter(Some(slug.to_string())).await.err();
+    assert!(
+        matches!(refused, Some(WorktreeError::Leased { .. })),
+        "{refused:?}"
+    );
+    assert!(
+        !worktree_path_for(&repo, slug).exists(),
+        "the refusal comes before the tree is made"
+    );
+    drop(holder);
     remove_dir_all(&repo).ok();
 }
 
@@ -248,6 +298,68 @@ async fn test_reclaim_keeps_dirty_worktree() {
     drop(cw);
     controller.reclaim_abandoned().await;
     assert!(path.exists(), "dirty abandoned worktree preserved");
+    remove_dir_all(&repo).ok();
+}
+
+/// A tree whose creation never read its baseline is kept even though a diff
+/// against the empty string would report it clean: the sweep cannot prove the
+/// tree holds no work, and an empty baseline is a commit no tree descends
+/// from, so the answer would be clean for the wrong reason.
+#[test]
+fn test_reclaim_keeps_unproven_worktree() {
+    let repo = make_repo(29);
+    let slug = "agent-no-baseline";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let record = WorktreeReclaimRecord {
+        repo_root: repo.clone(),
+        worktree_path: created.worktree_path.clone(),
+        worktree_branch: created.worktree_branch.clone(),
+        slug: slug.to_string(),
+        head_commit: None,
+    };
+
+    let outcome = run_conservative_reclaim(&record);
+
+    assert!(
+        matches!(outcome, ChildCleanup::Kept { .. }),
+        "an unproven tree is kept: {outcome:?}"
+    );
+    assert!(created.worktree_path.exists(), "the directory survives");
+    let branch = worktree_branch_name(slug);
+    let branch_ref = format!("refs/heads/{branch}");
+    assert!(
+        run_git(&repo, &["rev-parse", "--verify", &branch_ref]).is_ok(),
+        "the branch survives with the directory"
+    );
+    remove_dir_all(&repo).ok();
+}
+
+/// A clean tree the sweep cannot remove is kept and reported as kept: a
+/// removal failure is not a removal, and the record the sweep would drop has
+/// to match what stands on disk. A lease another holder took is the failure a
+/// sweep can meet without damaging the tree.
+#[test]
+fn test_reclaim_keeps_leased_worktree() {
+    let repo = make_repo(32);
+    let slug = "agent-reclaim-held";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let record = WorktreeReclaimRecord {
+        repo_root: repo.clone(),
+        worktree_path: created.worktree_path.clone(),
+        worktree_branch: created.worktree_branch.clone(),
+        slug: slug.to_string(),
+        head_commit: created.head_commit.clone(),
+    };
+    let holder = WorktreeLease::acquire(&repo, slug).expect("hold the lease");
+
+    let outcome = run_conservative_reclaim(&record);
+
+    assert!(
+        matches!(outcome, ChildCleanup::Kept { .. }),
+        "a refused removal is reported as kept: {outcome:?}"
+    );
+    assert!(created.worktree_path.exists(), "the directory survives");
+    drop(holder);
     remove_dir_all(&repo).ok();
 }
 
@@ -592,6 +704,32 @@ async fn test_reclaim_awaits_launched_task() {
     assert!(
         !path.exists(),
         "launched task removed the tree, observed by the sweep"
+    );
+    remove_dir_all(&repo).ok();
+}
+
+/// A child working in its tree holds that tree's active-use lease for its
+/// run, so a removal preview beside it reports the tree in use; cleanup gives
+/// the lease up before the reclaim, which removes the tree.
+#[tokio::test]
+async fn test_child_holds_lease() {
+    let repo = make_repo(60);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let cw = controller
+        .enter_for_child("agent-leased".into())
+        .await
+        .expect("enter");
+    let preview = preview_remove_worktree(&repo, "agent-leased").expect("preview");
+    assert!(preview.leased, "the child's tree reads as in use");
+
+    let outcome = controller.cleanup_child(cw).await;
+    assert!(
+        matches!(outcome, ChildCleanup::Removed { .. }),
+        "a clean child tree is removed: {outcome:?}"
+    );
+    assert!(
+        !worktree_leased(&repo, "agent-leased").expect("probe the lease"),
+        "cleanup releases the lease"
     );
     remove_dir_all(&repo).ok();
 }

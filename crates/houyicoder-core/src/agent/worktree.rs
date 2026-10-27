@@ -1,5 +1,12 @@
-//! Git worktree session isolation and discard classification.
+//! Managed Git worktrees: the session that isolates a turn, the creation
+//! record that makes a tree this product's object, the lease a live session
+//! holds while it works in one, the identity check that decides whether a
+//! directory is that tree, and the preview a removal is decided from.
 
+pub mod changes;
 pub mod controller;
 pub mod git_discard;
+pub mod identify;
+pub mod preview;
+pub mod record;
 pub mod session;

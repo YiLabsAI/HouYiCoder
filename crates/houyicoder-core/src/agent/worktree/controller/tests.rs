@@ -1,15 +1,19 @@
 use super::*;
 use crate::agent::tools::{EnterWorktreeTool, ExitWorktreeTool};
+use crate::agent::worktree::preview::preview_remove_worktree;
+use crate::agent::worktree::record::lease_path;
+use crate::agent::worktree::session::WorktreeError;
 use houyicoder_api::sandbox::WorktreeFenceGuard;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
-use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
+use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError, SessionEvent};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 use serde_json::json;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
+use std::fs::write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -155,6 +159,9 @@ fn wired_opt(
     (controller, store, cwd)
 }
 
+/// A session in a worktree holds its lease for the whole session, so a
+/// removal preview beside it reads the tree as in use; exit gives the lease
+/// up whether it keeps or removes the tree.
 #[tokio::test]
 async fn test_enter_exit_round_trip() {
     let repo = make_repo(1);
@@ -165,12 +172,76 @@ async fn test_enter_exit_round_trip() {
         .expect("enter");
     assert!(controller.current(), "in session after enter");
     assert_eq!(*cwd.read().unwrap(), PathBuf::from(&r.worktree_path));
+    let preview = preview_remove_worktree(&repo, "feat-a").expect("preview");
+    assert!(preview.leased, "the entered tree reads as in use");
     controller
         .exit(ExitAction::Keep, false)
         .await
         .expect("exit keep");
     assert!(!controller.current(), "out of session after exit");
+    let after = preview_remove_worktree(&repo, "feat-a").expect("preview after exit");
+    assert!(!after.leased, "exit releases the lease");
     remove_dir_all(&repo).ok();
+}
+
+/// A session enter that fails after the lease was taken gives the lease back:
+/// the file it made would otherwise be residue nothing clears, and the next
+/// session for that slug would read it as in use.
+#[tokio::test]
+async fn test_failed_enter_releases_lease() {
+    let repo = make_repo(17);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let slug = "feat-collide";
+    let taken = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["branch", &worktree_session::worktree_branch_name(slug)])
+        .status()
+        .expect("take the branch name");
+    assert!(taken.success(), "the branch name is taken");
+
+    let error = controller
+        .enter(Some(slug.into()))
+        .await
+        .expect_err("the branch name is taken");
+
+    assert!(
+        matches!(error, WorktreeError::Collision { .. }),
+        "expected Collision, got {error:?}"
+    );
+    assert!(
+        !lease_path(&repo, slug).exists(),
+        "the lease file is removed with the failed create"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A per-child enter follows the same rule: a create that fails after the
+/// lease was taken leaves no lease file behind for the shutdown sweep.
+#[tokio::test]
+async fn test_child_enter_releases_lease() {
+    let repo = make_repo(18);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let slug = "child-collide";
+    let taken = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["branch", &worktree_session::worktree_branch_name(slug)])
+        .status()
+        .expect("take the branch name");
+    assert!(taken.success(), "the branch name is taken");
+
+    let error = controller.enter_for_child(slug.into()).await.err();
+
+    assert!(
+        matches!(error, Some(WorktreeError::Collision { .. })),
+        "expected Collision, got {error:?}"
+    );
+    assert!(
+        !lease_path(&repo, slug).exists(),
+        "the lease file is removed with the failed create"
+    );
+    drop(remove_dir_all(&repo));
 }
 
 #[tokio::test]
@@ -187,6 +258,122 @@ async fn test_exit_remove_clean_succeeds() {
         .expect("exit remove clean");
     assert!(!controller.current());
     remove_dir_all(&repo).ok();
+}
+
+/// The action a session's durable exit entry recorded.
+fn exit_action(store: &SessionStore, controller: &WorktreeController) -> String {
+    store
+        .trajectory_tail(controller.session_id)
+        .into_iter()
+        .find_map(|entry| match entry.event {
+            SessionEvent::WorktreeExit { action, .. } => Some(action),
+            _ => None,
+        })
+        .expect("a worktree exit event")
+}
+
+/// A removal Git refuses still ends the session: the cwd and fence already
+/// went back to the repository root and the lease is gone, so reporting a
+/// session inside the tree would describe a hold this controller no longer
+/// has. The tree keeps its record, which is what a later removal acts on, and
+/// the answer says the session ended so a caller does not keep working as if it
+/// were still isolated.
+#[tokio::test]
+async fn test_failed_remove_ends_session() {
+    let repo = make_repo(16);
+    let (controller, store, _cwd) = wired(&repo, 0);
+    let entered = controller
+        .enter(Some("feat-held".into()))
+        .await
+        .expect("enter");
+    let path = entered.worktree_path.clone();
+    let locked = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["worktree", "lock"])
+        .arg(&path)
+        .status()
+        .expect("lock the worktree");
+    assert!(locked.success(), "the worktree is locked");
+
+    let error = controller
+        .exit(ExitAction::Remove, true)
+        .await
+        .expect_err("a locked worktree is not removed");
+
+    assert!(
+        matches!(error, WorktreeError::RemovalFailed { .. }),
+        "the removal failed and the session ended: {error:?}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("is locked"),
+        "the answer carries why the removal stopped: {message}"
+    );
+    assert!(
+        message.contains("session ended"),
+        "the answer says the isolation is over: {message}"
+    );
+    assert!(
+        !controller.current(),
+        "the session ended even though the removal did not"
+    );
+    assert!(
+        Path::new(&path).exists(),
+        "the tree survives the refused removal"
+    );
+    assert!(
+        preview_remove_worktree(&repo, "feat-held").is_ok(),
+        "the record survives, so a later removal finds its object"
+    );
+    assert_eq!(
+        exit_action(&store, &controller),
+        "keep",
+        "the durable action names the state the session ended in"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A branch Git will not delete after the directory is gone leaves the act half
+/// done, and the durable event has to name that third state: recording it as a
+/// plain keep would tell a later reader the tree is still on disk.
+#[tokio::test]
+async fn test_branch_lock_keeps_tree() {
+    let repo = make_repo(19);
+    let (controller, store, _cwd) = wired(&repo, 0);
+    let entered = controller
+        .enter(Some("feat-branch-held".into()))
+        .await
+        .expect("enter");
+    let path = entered.worktree_path.clone();
+    let branch = entered.worktree_branch.clone();
+    let ref_lock = repo
+        .join(".git")
+        .join("refs")
+        .join("heads")
+        .join(format!("{branch}.lock"));
+    create_dir_all(ref_lock.parent().expect("refs dir")).expect("refs dir");
+    write(&ref_lock, "").expect("hold the branch ref lock");
+
+    let error = controller
+        .exit(ExitAction::Remove, true)
+        .await
+        .expect_err("the branch cannot be deleted");
+
+    assert!(
+        matches!(error, WorktreeError::RemovalFailed { .. }),
+        "the act finished half done and the session ended: {error:?}"
+    );
+    assert!(
+        !Path::new(&path).exists(),
+        "the directory was removed before the branch step"
+    );
+    assert_eq!(
+        exit_action(&store, &controller),
+        "remove-incomplete",
+        "the durable action names the branch-only residue"
+    );
+    drop(remove_dir_all(&repo));
 }
 
 #[tokio::test]

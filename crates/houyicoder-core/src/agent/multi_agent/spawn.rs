@@ -22,6 +22,7 @@ use houyicoder_api::spawn::AgentIdentity;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_protocol::llm::Usage;
 use tokio::sync::mpsc::unbounded_channel;
+use tracing::warn;
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
 /// A child cannot delegate further, so the topology is exactly two levels:
@@ -163,10 +164,13 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
                 .as_ref()
                 .ok_or(SpawnError::WorktreeFenceNarrowFail)?;
             let slug = format!("agent-{}", &child_sid.to_string()[..8]);
-            let cw = controller
-                .enter_for_child(slug)
-                .await
-                .map_err(|_| SpawnError::WorktreeFenceNarrowFail)?;
+            // The error this returns carries no reason, so the cause is logged
+            // here: without it an operator sees a refused child and no way to
+            // tell a busy worktree from a failing git.
+            let cw = controller.enter_for_child(slug).await.map_err(|error| {
+                warn!(%error, "child worktree setup failed");
+                SpawnError::WorktreeFenceNarrowFail
+            })?;
             (Some(cw), "worktree")
         }
     };
