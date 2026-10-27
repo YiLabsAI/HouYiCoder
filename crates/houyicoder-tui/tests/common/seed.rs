@@ -7,6 +7,8 @@
 
 use futures::executor::block_on;
 use houyicoder_context::ContextBackend;
+use houyicoder_context::session_intent::prompt_intent;
+use houyicoder_context::session_intent::stated_input;
 use houyicoder_context::{CheckpointId, CheckpointManifest, Disposition, TurnGroup};
 use houyicoder_core::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::LocalFileBackend;
@@ -180,7 +182,9 @@ pub fn seed_session_with_context_cost(
 /// migration fills them for a session written before prompts were recorded.
 /// The picker titles its rows from the record and opens no log, so a seed
 /// without these fields would list a placeholder and prove nothing about the
-/// title a user sees.
+/// title a user sees. The same judgment that decides what the recorder treats
+/// as a task statement decides what the seed records, so a fixture cannot
+/// title a session production would leave untitled.
 fn write_session(
     root: &Path,
     sid_str: &str,
@@ -206,7 +210,7 @@ fn write_session(
         if first_id.is_none() {
             first_id = Some(event.id);
         }
-        if let SessionEvent::UserInput { text } = &event.event {
+        if let Some(text) = stated_input(&event.event).and_then(prompt_intent) {
             let record = serde_json::json!({
                 "text": text,
                 "event_id": event.id.to_string(),
