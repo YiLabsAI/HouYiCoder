@@ -4,8 +4,8 @@ use super::*;
 use crate::composition::BuildRunnerOptions;
 use crate::composition::build_runner;
 use houyicoder_context::{
-    EventId, NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionDescriptorStore,
-    SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
+    EventId, NameSource, PromptCoverage, PromptRecord, RecapSource, RecapUsage, SessionDescriptor,
+    SessionDescriptorStore, SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
 };
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;
@@ -179,6 +179,43 @@ async fn test_snapshot_reads_record_only() {
         None,
         "a record with no prompt states no title, whatever its log holds"
     );
+}
+
+/// A recap spends between turns. Its account belongs to the session's total,
+/// so the figures a reader compares against the recap row already hold it.
+#[tokio::test]
+async fn test_snapshot_totals_include_recap() {
+    let session = SessionId::new();
+    let log = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    log.append(SessionLogEntry {
+        id: EventId::new(),
+        session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::AwayRecap {
+            text: "the parser is half converted".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "small-1".into(),
+            usage: Some(RecapUsage {
+                input_tokens: Some(400),
+                output_tokens: Some(40),
+                cache_read_input_tokens: None,
+                cache_write_input_tokens: None,
+                duration_ms: Some(900),
+            }),
+        },
+    })
+    .await
+    .expect("append recap");
+    let server = Server::new(runner_over(log), session, Arc::new(DefaultModeGate::new()));
+    let snapshot = server.build_status_snapshot();
+    assert_eq!(
+        snapshot.cumulative_usage.input_tokens, 400,
+        "the recap's input is inside the total its row says includes it"
+    );
+    assert_eq!(snapshot.cumulative_usage.output_tokens, 40);
 }
 
 /// A name the user chose outranks anything the prompts say, so renaming is

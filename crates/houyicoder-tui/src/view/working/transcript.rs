@@ -352,6 +352,7 @@ pub(crate) fn push_line_rows(
     let tag = match line {
         TranscriptLine::User(_) => USER,
         TranscriptLine::System(_) => SYSTEM,
+        TranscriptLine::Recap(_) => SYSTEM,
         TranscriptLine::Interrupted => SYSTEM,
         TranscriptLine::ThoughtFor { .. } => SYSTEM,
         _ => PLAIN,
@@ -440,37 +441,8 @@ pub(crate) fn push_line_rows(
         }
         return true;
     }
-    if let TranscriptLine::ThoughtFor {
-        reasoning, turn_id, ..
-    } = line
-    {
-        let expanded = app.ui.transcript_view.expanded.thinking.contains(turn_id) || app.ui.verbose;
-        // Inside an expanded delegation the reasoning row is shown, not
-        // operated: no hint, and no turn id below, so the enclosing block
-        // stays the only thing the next toggle acts on.
-        let hint = match reasoning {
-            Some(_) if sink.in_subagent() => None,
-            Some(_) if expanded => Some(ToggleHint::Collapse),
-            Some(_) => Some(ToggleHint::Expand),
-            None => None,
-        };
-        let row_text = line.thought_row_text(hint).unwrap_or_default();
-        // The handle is the row's toggle identity: it is published exactly
-        // when the row offers a toggle, so a click consults the row the draw
-        // produced instead of re-deriving the row's shape from its text.
-        let handle = hint.map(|_| turn_id.clone());
-        sink.push(
-            Row::new(SYSTEM, row_text)
-                .group(grp_key.clone())
-                .turn_id(handle),
-        );
-        if let Some(r) = reasoning
-            && expanded
-        {
-            for rline in app.ui.renderer.lines.borrow_mut().thought_rows(r, width) {
-                sink.push(Row::new(SYSTEM, rline).group(grp_key.clone()));
-            }
-        }
+    if let TranscriptLine::ThoughtFor { .. } = line {
+        push_thought_rows(line, &grp_key, width, app, sink);
         return true;
     }
     if let TranscriptLine::User(text) = line {
@@ -485,12 +457,20 @@ pub(crate) fn push_line_rows(
         }
         return true;
     }
+    if let Some(rows) = line.recap_rows(width) {
+        for row in rows {
+            sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
+        }
+        return true;
+    }
     let text = if app.ui.verbose {
         line.render_verbose()
     } else {
         line.render()
     };
     for logical in text.split('\n') {
+        // A notice is a sentence, not a control line: it wraps by display
+        // columns so a wide character never pushes the row past the pane.
         let rows = if matches!(line, TranscriptLine::System(_)) {
             wrap_line(logical, width as usize)
         } else {
@@ -501,6 +481,49 @@ pub(crate) fn push_line_rows(
         }
     }
     true
+}
+
+/// Emit the reasoning row for a ThoughtFor line and, when the reasoning is
+/// expanded, its text below. Inside a delegation the row is shown but not
+/// operated: no hint and no turn id, so the enclosing block stays the only
+/// thing the next toggle acts on.
+fn push_thought_rows(
+    line: &TranscriptLine,
+    grp_key: &Option<String>,
+    width: u16,
+    app: &App,
+    sink: &mut RowSet,
+) {
+    let TranscriptLine::ThoughtFor {
+        reasoning, turn_id, ..
+    } = line
+    else {
+        return;
+    };
+    let expanded = app.ui.transcript_view.expanded.thinking.contains(turn_id) || app.ui.verbose;
+    let hint = match reasoning {
+        Some(_) if sink.in_subagent() => None,
+        Some(_) if expanded => Some(ToggleHint::Collapse),
+        Some(_) => Some(ToggleHint::Expand),
+        None => None,
+    };
+    let row_text = line.thought_row_text(hint).unwrap_or_default();
+    // The handle is the row's toggle identity: it is published exactly when
+    // the row offers a toggle, so a click consults the row the draw produced
+    // instead of re-deriving the row's shape from its text.
+    let handle = hint.map(|_| turn_id.clone());
+    sink.push(
+        Row::new(TAG_SYSTEM, row_text)
+            .group(grp_key.clone())
+            .turn_id(handle),
+    );
+    if let Some(r) = reasoning
+        && expanded
+    {
+        for rline in app.ui.renderer.lines.borrow_mut().thought_rows(r, width) {
+            sink.push(Row::new(TAG_SYSTEM, rline).group(grp_key.clone()));
+        }
+    }
 }
 
 /// Build one display row as a styled line. When query is non-empty, every

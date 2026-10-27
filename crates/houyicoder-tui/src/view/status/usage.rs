@@ -6,22 +6,27 @@
 //! count is a floor on what was reused, while a quotient over a partial
 //! account can read higher than the truth.
 
+use houyicoder_protocol::llm::UsageProvenance;
 use unicode_width::UnicodeWidthStr;
 
 use crate::command::render::{field, format_tokens};
 use crate::view::relative_time::span_label;
+use crate::view::trajectory_pane::TrajectoryView;
 
 use super::*;
 
 /// The Usage tab's latency rows, read from the same typed summary the
-/// trajectory pane reads: one computation, two surfaces, so the two cannot
+/// trajectory pane reads: one computation, two views, so the two cannot
 /// disagree about the session. A row is omitted when the session recorded no
 /// sample for it — an unmeasured value is not a zero.
-fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut String) {
-    let Some(log) = app.sessions.persistence.trajectory_log.as_ref() else {
+fn render_usage_latency(
+    view: Option<&TrajectoryView>,
+    f: &impl Fn(&str, &str) -> String,
+    s: &mut String,
+) {
+    let Some(view) = view else {
         return;
     };
-    let view = log.trajectory();
     let timing = view.timing;
     if timing.model_ms > 0 || timing.tool_ms > 0 {
         s.push_str(&f(
@@ -53,52 +58,112 @@ fn render_usage_latency(app: &App, f: &impl Fn(&str, &str) -> String, s: &mut St
             &format!("{tps:.1} tok/s ({} samples)", timing.decode_samples),
         ));
     }
-    // Delegated work is already inside the token rows above: the runner folds a
-    // child's usage into its cumulative tally. This row exists to say how much
-    // of that total the subagents contributed, so the reader can see the split.
+}
+
+/// The rows splitting the totals above between the work the user asked for and
+/// the background calls the session made on its own.
+///
+/// Both halves are already inside the token totals: the status snapshot folds
+/// a child's account and the recaps' spend into it. These rows exist so the
+/// reader can see the split instead of subtracting for it.
+/// They sit next to the totals rather than after the latency rows, because the
+/// pane's body is shorter than its content on a common terminal and the split
+/// of the token spend outranks the shape of the timings; the latency rows are
+/// what should fall off the bottom first.
+fn render_background_spend(
+    view: Option<&TrajectoryView>,
+    f: &impl Fn(&str, &str) -> String,
+    s: &mut String,
+) {
+    let Some(view) = view else {
+        return;
+    };
     if let Some(subagent) = view.subagent_usage {
-        // A child that returned before reporting usage leaves every field at
-        // zero; that is an unmeasured cost, not a free one, so the row says so
-        // instead of printing zeroes.
-        let mut parts: Vec<String> = Vec::new();
-        // A count is named when the children reported the field or when it is
-        // above zero, so a field no child measured leaves its zero out of the
-        // row instead of stating a cost the children never reported. The
-        // output total carries no report flag on the durable record, so a zero
-        // there cannot be told from an omitted count: it stays off the row,
-        // the same floor rule the call rows use.
-        if count_visible(subagent.input, subagent.provenance.input_reported) {
-            parts.push(format!("{} input", format_tokens(subagent.input)));
-        }
-        if subagent.output > 0 {
-            parts.push(format!("{} output", format_tokens(subagent.output)));
-        }
-        // The count is named whenever it is above zero, and the share joins it
-        // only over an account the children fully reported: a count with no
-        // complete account behind it keeps the count and drops the share,
-        // while a measured miss states the share alone. The same two levels
-        // the turn header uses.
-        match (subagent.cache_hit_pct(), subagent.cache_read) {
-            (Some(pct), cache_read) if cache_read > 0 => {
-                parts.push(format!("{} ({pct:.0}% cached)", format_tokens(cache_read)))
-            }
-            (Some(_), _) => parts.push("0% cached".to_string()),
-            (None, cache_read) if cache_read > 0 => {
-                parts.push(format!("{} cached", format_tokens(cache_read)));
-            }
-            _ => {}
-        }
-        let detail = if parts.is_empty() {
-            format!("usage not reported ({} subagent calls)", subagent.calls)
-        } else {
-            format!(
-                "{} ({} subagent calls, included above)",
-                parts.join(" · "),
-                subagent.calls
-            )
-        };
-        s.push_str(&f("delegated usage", &detail));
+        let parts = spend_parts(
+            subagent.input,
+            subagent.output,
+            subagent.cache_read,
+            subagent.provenance,
+        );
+        let row = spend_row(&parts, "subagent call", subagent.calls, subagent.unmeasured);
+        s.push_str(&f("delegated usage", &row));
     }
+    if let Some(recap) = view.recap_usage {
+        let mut parts = spend_parts(
+            recap.input,
+            recap.output,
+            recap.cache_read,
+            recap.provenance,
+        );
+        if let Some(ms) = recap.duration_ms {
+            parts.push(span_label(ms));
+        }
+        let row = spend_row(&parts, "recap", recap.calls, recap.unmeasured);
+        s.push_str(&f("recap usage", &row));
+    }
+}
+
+/// The figures one background caller reported, under the floor rules the call
+/// rows use.
+///
+/// A count is named when it was reported or when it is above zero, so a field
+/// nobody measured leaves its zero out of the row instead of stating a cost
+/// that was never reported. The output total carries no report flag on the
+/// durable record, so a zero there cannot be told from an omitted count: it
+/// stays off the row. The cache count is named whenever it is above zero, and
+/// the share joins it only over an account that fully reported both counts.
+fn spend_parts(
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    provenance: UsageProvenance,
+) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if count_visible(input, provenance.input_reported) {
+        parts.push(format!("{} input", format_tokens(input)));
+    }
+    if output > 0 {
+        parts.push(format!("{} output", format_tokens(output)));
+    }
+    match (provenance.cache_hit_pct(cache_read, input), cache_read) {
+        (Some(pct), cache_read) if cache_read > 0 => {
+            parts.push(format!("{} ({pct:.0}% cached)", format_tokens(cache_read)))
+        }
+        (Some(_), _) => parts.push("0% cached".to_string()),
+        (None, cache_read) if cache_read > 0 => {
+            parts.push(format!("{} cached", format_tokens(cache_read)));
+        }
+        _ => {}
+    }
+    parts
+}
+
+/// One background caller's row text. No figures at all is an unmeasured cost,
+/// not a free one, so the row says so instead of printing zeroes. A row whose
+/// every call went unmeasured says the same even if a figure slipped through:
+/// nothing it could print was measured, so nothing is inside the totals above.
+///
+/// The count leads because the pane does not wrap: on a terminal narrower than
+/// the row the tail is clipped, and how many calls the figures cover is what a
+/// reader needs before the figures themselves. When some calls wrote no figure
+/// the sum is a floor, so the count says how many were measured rather than
+/// letting the sum pass for the whole.
+fn spend_row(parts: &[String], one: &str, calls: usize, unmeasured: usize) -> String {
+    let counted = if calls == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{calls} {one}s")
+    };
+    if parts.is_empty() || unmeasured >= calls {
+        return format!("usage not reported ({counted})");
+    }
+    let counted = if unmeasured == 0 {
+        counted
+    } else {
+        let measured = calls.saturating_sub(unmeasured);
+        format!("{measured} of {counted} measured")
+    };
+    format!("{counted} (included above) · {}", parts.join(" · "))
 }
 
 pub(super) fn render_usage(app: &App) -> String {
@@ -138,8 +203,18 @@ pub(super) fn render_usage(app: &App) -> String {
             snap.tool_calls, snap.tool_success, snap.tool_errors
         ),
     ));
+    // One read of the session's typed summary serves both the split and the
+    // latency rows, so a frame pays for it once.
+    let trajectory = app
+        .sessions
+        .persistence
+        .trajectory_log
+        .as_ref()
+        .map(|log| log.trajectory());
+    // The split of the totals above, before the latency detail.
+    render_background_spend(trajectory.as_deref(), &f, &mut s);
     // Session latency, from the same typed summary the trajectory pane reads.
-    render_usage_latency(app, &f, &mut s);
+    render_usage_latency(trajectory.as_deref(), &f, &mut s);
     // Per-model breakdown only when two or more models share the session;
     // a single model is already covered by the flat rows above, so a
     // per-model section would just repeat them. Sorted by input+output

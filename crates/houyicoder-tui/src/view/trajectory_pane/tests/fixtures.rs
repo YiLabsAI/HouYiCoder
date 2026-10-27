@@ -75,6 +75,7 @@ pub(super) fn view(rows: Vec<TrajectoryRow>) -> TrajectoryView {
         newer_hidden: 0,
         history_generation: 0,
         subagent_usage: None,
+        recap_usage: None,
         rows,
     }
 }

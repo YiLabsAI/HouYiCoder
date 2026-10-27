@@ -370,6 +370,30 @@ pub(crate) fn wait_for_request(
     }
 }
 
+/// Wait for the connected transport to send a notification under this
+/// method, then return its params. Panics when the transport drops or none
+/// arrives within two seconds.
+pub(crate) fn wait_for_notification(
+    events: &Receiver<TransportEvent>,
+    method: &str,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match events.recv_timeout(remaining) {
+            Ok(TransportEvent::Frame(frame)) => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&frame)
+                    && value.get("method").and_then(|m| m.as_str()) == Some(method)
+                {
+                    return value.get("params").cloned().unwrap_or_default();
+                }
+            }
+            Ok(TransportEvent::Dropped) => panic!("transport dropped before the notification"),
+            Err(_) => panic!("no notification under {method} within 2s"),
+        }
+    }
+}
+
 /// Build an App with an active negotiated test session, plus the transport
 /// events it records, so tests can assert on the frames it shipped.
 pub(crate) fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {

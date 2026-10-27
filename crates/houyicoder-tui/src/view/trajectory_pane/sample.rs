@@ -99,10 +99,6 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
             model_ms: 12400,
             tool_ms: 3200,
         },
-        hidden_turns: 0,
-        newer_hidden: 0,
-        history_generation: 0,
-        subagent_usage: None,
         rows: vec![
             TrajectoryRow::Turn(t1),
             TrajectoryRow::Turn(t2),
@@ -111,6 +107,7 @@ pub(crate) fn sample_trajectory() -> TrajectoryView {
             TrajectoryRow::Bg(bg("save", "2 memories saved (auto, extracted)", 100)),
             TrajectoryRow::Turn(t3),
         ],
+        ..TrajectoryView::default()
     }
 }
 

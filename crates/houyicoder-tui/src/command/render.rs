@@ -11,7 +11,9 @@ use houyicoder_protocol::frontend::permission::{
 use houyicoder_protocol::frontend::status::{
     SessionProvenance as WireSessionProvenance, StatusSnapshot,
 };
-use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};
+use houyicoder_protocol::frontend::trajectory::{
+    RedundantCallEntry, TrajectoryEntry, TrajectoryUsage,
+};
 
 use crate::evidence::MemoryEntry;
 use crate::todo_view::{TodoStatus, TodoView};
@@ -372,6 +374,33 @@ pub(crate) fn render_breaker_line(snap: &StatusSnapshot) -> String {
     }
 }
 
+/// The spend one event carries, in the figures the endpoint reported. A
+/// request whose account was never reported reads as unreported rather than
+/// as a zero-cost call.
+fn usage_label(usage: &TrajectoryUsage) -> String {
+    let reported = usage.input_tokens.is_some()
+        || usage.output_tokens.is_some()
+        || usage.cache_read_input_tokens.is_some()
+        || usage.cache_write_input_tokens.is_some();
+    if !reported {
+        return format!("  {} · usage not reported", usage.model);
+    }
+    let mut parts = vec![usage.model.clone()];
+    if let Some(tokens) = usage.input_tokens {
+        parts.push(format!("{} in", format_tokens(tokens)));
+    }
+    if let Some(tokens) = usage.output_tokens {
+        parts.push(format!("{} out", format_tokens(tokens)));
+    }
+    if let Some(tokens) = usage.cache_read_input_tokens {
+        parts.push(format!("{} cached", format_tokens(tokens)));
+    }
+    if let Some(tokens) = usage.cache_write_input_tokens {
+        parts.push(format!("{} written", format_tokens(tokens)));
+    }
+    format!("  {}", parts.join(" · "))
+}
+
 /// Render the wire trajectory (the /trajectory query reply, a Vec of
 /// session/update) without importing the engine or context crate.
 pub(crate) fn render_trajectory_wire(
@@ -393,9 +422,10 @@ pub(crate) fn render_trajectory_wire(
             .duration_ms
             .map(|d| format!("  {:.1}s", d as f64 / 1000.0))
             .unwrap_or_default();
+        let cost = e.usage.as_ref().map(usage_label).unwrap_or_default();
         s.push_str(&format!(
-            "  {:<14} ts:{} id:{} prev:{}{}\n",
-            e.kind, e.ts, id_short, hash, dur,
+            "  {:<14} ts:{} id:{} prev:{}{}{}\n",
+            e.kind, e.ts, id_short, hash, dur, cost,
         ));
     }
     // Redundant calls: the self-evolution reward signal. Same-batch = the

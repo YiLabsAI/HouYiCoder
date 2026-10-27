@@ -94,12 +94,8 @@ fn test_recap_spend_sums_reported() {
     assert_eq!(spend.duration_ms, Some(2_400));
     assert_eq!(
         spend.provenance,
-        UsageProvenance {
-            input_reported: true,
-            cache_read_reported: true,
-            cache_write_reported: false,
-        },
-        "a figure nobody reported leaves its flag clear, so the sum is a floor"
+        UsageProvenance::default(),
+        "the silent recap leaves the whole account unknown, not merely short"
     );
 }
 
@@ -121,6 +117,28 @@ fn test_recap_spend_counts_silent() {
     assert_eq!(spend.unmeasured_calls, 1);
     assert_eq!(spend.duration_ms, None);
     assert_eq!(spend.input_tokens, 0);
+    assert_eq!(
+        spend.provenance,
+        UsageProvenance::default(),
+        "a recap with no figures leaves the account unknown, not zero"
+    );
+}
+
+/// The bucket converts to the status shape with its provenance intact, so a
+/// recap nobody measured lowers the combined account's completeness instead of
+/// adding zeroes that read as measured.
+#[test]
+fn test_recap_spend_converts() {
+    let events = [
+        recap_entry(Some(reported(2_000, 160, 1_500))),
+        recap_entry(None),
+    ];
+    let usage = aggregate_recap_spend(&events).to_usage();
+    assert_eq!(usage.input_tokens, 2_000);
+    assert!(
+        !usage.provenance.input_reported,
+        "the unmeasured recap leaves the converted account a floor"
+    );
 }
 
 #[test]

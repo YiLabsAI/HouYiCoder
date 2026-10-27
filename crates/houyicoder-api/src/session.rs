@@ -173,7 +173,7 @@ impl RecapSpend {
         };
         self.calls = self.calls.saturating_add(1);
         let Some(usage) = usage else {
-            self.unmeasured_calls = self.unmeasured_calls.saturating_add(1);
+            self.count_unmeasured();
             return;
         };
         let provenance = UsageProvenance {
@@ -186,7 +186,7 @@ impl RecapSpend {
             && !provenance.cache_write_reported
             && usage.output_tokens.is_none()
         {
-            self.unmeasured_calls = self.unmeasured_calls.saturating_add(1);
+            self.count_unmeasured();
             return;
         }
         // A figure the endpoint did not report adds nothing to the sum and
@@ -208,6 +208,30 @@ impl RecapSpend {
             self.duration_ms = Some(self.duration_ms.unwrap_or(0).saturating_add(ms));
         }
         self.provenance = self.provenance.merge(provenance);
+    }
+
+    /// Count a recap that wrote no figure, and record the hole it leaves.
+    ///
+    /// The empty provenance is merged rather than the all-reported identity,
+    /// so a session holding such a recap reads as a floor instead of a bill.
+    fn count_unmeasured(&mut self) {
+        self.unmeasured_calls = self.unmeasured_calls.saturating_add(1);
+        self.provenance = self.provenance.merge(UsageProvenance::default());
+    }
+
+    /// Convert the totals to the provider usage shape used by status. The
+    /// provenance is the AND-fold recorded from the recaps: a recap that
+    /// reported nothing leaves the session's combined account unknown rather
+    /// than passing its empty figures off as measured.
+    pub fn to_usage(self) -> Usage {
+        Usage::from_recorded(RecordedCounts {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_input_tokens: self.cache_read_input_tokens,
+            cache_write_input_tokens: self.cache_write_input_tokens,
+            reasoning_tokens: 0,
+            provenance: self.provenance,
+        })
     }
 }
 

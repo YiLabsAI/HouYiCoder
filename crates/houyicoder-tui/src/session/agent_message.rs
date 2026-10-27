@@ -608,6 +608,12 @@ pub enum ClientCommand {
         session_id: FrontendSessionId,
         id: PendingInputId,
     },
+    /// Report whether this terminal is looking at the session. The host owns
+    /// the timer that decides when an idle session may be summarized; the
+    /// terminal only says whether a human is watching. Fire-and-forget.
+    ReportFocus {
+        focused: bool,
+    },
     /// Reset the server's cumulative usage + trajectory for the session (the
     /// /clear command). Fire-and-forget; the ack is ignored — the host
     /// clears its local view in parallel.

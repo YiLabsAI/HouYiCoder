@@ -34,6 +34,7 @@ use std::ops::Range;
 
 use houyicoder_protocol::acpx::AcpxNotification;
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
+use houyicoder_protocol::frontend::recap::RecapNotice;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::brief::tool_call_brief;
@@ -60,6 +61,7 @@ use crate::records::subagent_line;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
 use houyicoder_protocol::envelope::ChildTranscriptFrame;
+use houyicoder_protocol::tool::strip_ansi;
 use houyicoder_protocol::tool::tool_invocation;
 use serde_json::Value;
 use std::mem::take;
@@ -548,33 +550,61 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                     }
                 }
             }
-            TranscriptFrame::Acpx(n) => match n.method {
-                AcpxMethod::ContextCompactionBoundary => {
-                    self.out
-                        .push(TranscriptLine::System("compaction checkpoint".to_string()));
-                    self.ids.push(id);
-                }
-                AcpxMethod::ContextSummary => {
-                    let text = n
-                        .params
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    self.out
-                        .push(TranscriptLine::System(format!("summary: {text}")));
-                    self.ids.push(id);
-                }
-                // Audit-only: the meta-user nudge is a control message the
-                // runner injects (never authored by the human); the verdict is
-                // already visible via the approval card. Both stay out of the
-                // readable transcript.
-                AcpxMethod::ContextMetaUser | AcpxMethod::ContextPermissionDecision => {}
-                _ => {}
-            },
+            TranscriptFrame::Acpx(n) => self.emit_acpx(n, id),
             // A future SessionUpdate variant the transcript does not render
             // yet (Plan, SessionInfoUpdate, ...) is ignored so the rebuild
             // never fails on a shape the frontend does not model.
+            _ => {}
+        }
+    }
+
+    /// Emit the row a host notification contributes. Audit-only notifications
+    /// stay out of the readable transcript.
+    fn emit_acpx(&mut self, n: &AcpxNotification, id: RowId) {
+        match n.method {
+            AcpxMethod::ContextCompactionBoundary => {
+                self.out
+                    .push(TranscriptLine::System("compaction checkpoint".to_string()));
+                self.ids.push(id);
+            }
+            AcpxMethod::ContextSummary => {
+                let text = n
+                    .params
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.out
+                    .push(TranscriptLine::System(format!("summary: {text}")));
+                self.ids.push(id);
+            }
+            // The answer is model text, so it reaches the terminal only after
+            // control sequences are removed: a summary that carries one could
+            // move the cursor or repaint the frame. The text is trimmed before
+            // it is stored, so surrounding blank lines cannot draw a row that
+            // holds only the marker, and a payload that trims to nothing draws
+            // no row at all: an empty recap line would claim the host
+            // summarized the work and then said nothing.
+            AcpxMethod::ContextRecap => {
+                let notice = match serde_json::from_value::<RecapNotice>(n.params.clone()) {
+                    Ok(notice) => notice,
+                    Err(error) => {
+                        tracing::warn!(%error, "a recap notification did not decode");
+                        return;
+                    }
+                };
+                let text = strip_ansi(&notice.text);
+                let text = text.trim();
+                if text.is_empty() {
+                    return;
+                }
+                self.out.push(TranscriptLine::Recap(text.to_string()));
+                self.ids.push(id);
+            }
+            // The meta-user nudge is a control message the runner injects and
+            // never authored by the human; the permission verdict is already
+            // visible via the approval card. Both stay out of the transcript.
+            AcpxMethod::ContextMetaUser | AcpxMethod::ContextPermissionDecision => {}
             _ => {}
         }
     }

@@ -169,12 +169,17 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
             // is idempotent.
             assert_mouse_modes()?;
             app.ui.terminal_focused = true;
+            // The host cancels an away recap the moment someone is looking
+            // again, so the report goes out with the change, not on the next
+            // turn.
+            app.report_focus(true);
             Ok(true)
         }
         Event::FocusLost => {
             // Keep the logical caret position while hiding it from an
             // unfocused terminal so input composition resumes correctly.
             app.ui.terminal_focused = false;
+            app.report_focus(false);
             Ok(true)
         }
     }

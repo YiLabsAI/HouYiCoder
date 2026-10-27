@@ -1170,3 +1170,5 @@ fn test_thought_row_subsecond_draw() {
 mod bash_progress;
 
 mod highlight;
+
+mod recap;

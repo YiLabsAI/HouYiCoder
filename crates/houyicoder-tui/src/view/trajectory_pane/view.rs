@@ -183,6 +183,10 @@ impl SessionTiming {
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct SubagentUsage {
     pub calls: usize,
+    /// Children that returned without reporting any usage. Their spend is
+    /// missing from the figures below, so a row that names them states a floor
+    /// instead of presenting the sum as the whole.
+    pub unmeasured: usize,
     pub input: u64,
     pub output: u64,
     pub cache_read: u64,
@@ -200,6 +204,30 @@ impl SubagentUsage {
     pub fn cache_hit_pct(&self) -> Option<f64> {
         self.provenance.cache_hit_pct(self.cache_read, self.input)
     }
+}
+
+/// What the session's recaps spent, summed over the ones it wrote.
+///
+/// The session totals already include it: a recap runs between turns and its
+/// cost belongs to the session, not to any turn. This type is the breakdown,
+/// so a reader can say how much of the total the recaps contributed instead
+/// of leaving it indistinguishable from the work the user asked for.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct RecapSpend {
+    pub calls: usize,
+    /// Recaps that wrote no token figure. Their spend is missing from the
+    /// figures below, so a row that names them states a floor instead of
+    /// presenting the sum as the whole.
+    pub unmeasured: usize,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    /// Wall time the recaps measured; None when none of them measured any.
+    pub duration_ms: Option<u64>,
+    /// Which breakdown fields the recaps reported, AND-folded. A recap that
+    /// did not report its cache-read leaves the count at zero, so without this
+    /// the zero reads as a cache miss.
+    pub provenance: UsageProvenance,
 }
 
 /// What the pane can say about its data right now.
@@ -267,6 +295,8 @@ pub struct TrajectoryView {
     pub history_generation: u64,
     /// What delegated sub-agents spent, when the session delegated any work.
     pub subagent_usage: Option<SubagentUsage>,
+    /// What the session's away and resume recaps spent, when it wrote any.
+    pub recap_usage: Option<RecapSpend>,
     /// Whether the rows below are loaded, still loading, or unavailable.
     pub state: TrajectoryViewState,
     /// Log lines in the loaded window that could not be read. The rest of the

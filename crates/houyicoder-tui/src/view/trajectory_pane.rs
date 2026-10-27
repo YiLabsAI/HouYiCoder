@@ -49,9 +49,9 @@ use crate::state::App;
 pub use detail::{TrajectoryDetailState, TrajectoryDetailView};
 use ratatui::layout::{Constraint, Direction, Layout};
 pub use view::{
-    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecordOutcome, SessionTiming,
-    SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow,
-    TrajectoryTurn, TrajectoryView, TrajectoryViewState, TurnBoundary,
+    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecapSpend, RecordOutcome,
+    SessionTiming, SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRecordKind,
+    TrajectoryRow, TrajectoryTurn, TrajectoryView, TrajectoryViewState, TurnBoundary,
 };
 
 /// The trajectory-data seam the render path calls. Matches the disk-search

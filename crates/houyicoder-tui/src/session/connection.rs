@@ -22,8 +22,8 @@ mod driver;
 
 #[cfg(test)]
 pub(crate) use driver::{
-    cancel_child_turn_notification, drive_client, inject_child_notification, inject_notification,
-    kill_all_notification, kill_child_notification, queue_remove_notification,
+    cancel_child_turn_notification, drive_client, focus_notification, inject_child_notification,
+    inject_notification, kill_all_notification, kill_child_notification, queue_remove_notification,
 };
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -269,6 +269,17 @@ impl App {
         match error {
             EnqueueError::NotConnected => format!("{subject}: not connected"),
             EnqueueError::Closed => format!("{subject}: connection lost"),
+        }
+    }
+
+    /// Report whether this terminal is looking at the session. The host
+    /// decides from these reports whether an idle session may be summarized,
+    /// so a report that cannot be sent goes to the diagnostic channel at
+    /// warning level: the terminal keeps working, but a host that still
+    /// believes someone is watching never starts the summary.
+    pub(crate) fn report_focus(&self, focused: bool) {
+        if let Err(error) = self.enqueue(ClientCommand::ReportFocus { focused }) {
+            tracing::warn!(?error, focused, "focus report not sent");
         }
     }
 

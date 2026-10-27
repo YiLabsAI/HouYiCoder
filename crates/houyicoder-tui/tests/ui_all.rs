@@ -42,6 +42,8 @@ mod ui_palette;
 mod ui_permissions;
 #[path = "ui_prompt_migration.rs"]
 mod ui_prompt_migration;
+#[path = "ui_recap.rs"]
+mod ui_recap;
 #[path = "ui_resume.rs"]
 mod ui_resume;
 #[path = "ui_run.rs"]

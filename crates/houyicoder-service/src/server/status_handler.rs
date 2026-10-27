@@ -105,17 +105,20 @@ impl Server {
         let mut snapshot = pa::map_status_snapshot(&snap);
         // The append owner folds the whole-session figures once. Status is
         // polled every second while idle, so reading them must stay constant
-        // time rather than clone and scan the growing event log state.
-        let delegated = self
+        // time rather than clone and scan the growing event log state. Both
+        // background accounts belong to the session total: a reader comparing
+        // the figures against the rows that split them must find the split
+        // already inside.
+        let background = self
             .runner
             .store()
             .trajectory_head(self.session)
             .summary
-            .usage
-            .subagent;
+            .usage;
         snapshot.cumulative_usage = snapshot
             .cumulative_usage
-            .saturating_add(&delegated.to_usage());
+            .saturating_add(&background.subagent.to_usage())
+            .saturating_add(&background.recap.to_usage());
         if let Some(store) = self.descriptor_store.as_ref()
             && let Some(mut descriptor) = store.read_descriptor(self.session)
         {

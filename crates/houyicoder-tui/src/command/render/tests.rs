@@ -7,7 +7,9 @@ use houyicoder_protocol::frontend::memory::MemoryDetail;
 use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
 use houyicoder_protocol::frontend::permission::PermissionDecisionEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
-use houyicoder_protocol::frontend::trajectory::{RedundantCallEntry, TrajectoryEntry};
+use houyicoder_protocol::frontend::trajectory::{
+    RedundantCallEntry, TrajectoryEntry, TrajectoryUsage,
+};
 use houyicoder_protocol::llm::Usage;
 
 fn snap_with_data() -> StatusSnapshot {
@@ -233,6 +235,55 @@ fn test_trajectory_renders_redundant() {
     assert!(out.contains("same-message repeat"), "{out}");
     assert!(out.contains("cross-turn context-loss re-read"), "{out}");
     assert!(out.contains("a.rs"), "tool + preview: {out}");
+}
+
+/// A recap row carries the model it named and the figures the endpoint
+/// reported, so the recap's spend is visible beside the rest of the audit
+/// log.
+#[test]
+fn test_recap_cost_shown() {
+    let entry = TrajectoryEntry {
+        kind: "recap".into(),
+        ts: 300,
+        event_id: "01HEVENT3".into(),
+        prev_hash: None,
+        duration_ms: Some(900),
+        usage: Some(TrajectoryUsage {
+            model: "small".into(),
+            input_tokens: Some(120),
+            output_tokens: Some(7),
+            cache_read_input_tokens: Some(96),
+            cache_write_input_tokens: Some(12),
+        }),
+    };
+    let out = render_trajectory_wire(&[entry], &[]);
+    assert!(out.contains("small"), "the model is named: {out}");
+    assert!(out.contains("120 in"), "{out}");
+    assert!(out.contains("7 out"), "{out}");
+    assert!(out.contains("96 cached"), "{out}");
+    assert!(out.contains("12 written"), "{out}");
+}
+
+/// A recap whose endpoint reported no account says so: a missing figure is
+/// not a zero-cost request.
+#[test]
+fn test_recap_cost_unknown() {
+    let entry = TrajectoryEntry {
+        kind: "recap".into(),
+        ts: 300,
+        event_id: "01HEVENT3".into(),
+        prev_hash: None,
+        duration_ms: None,
+        usage: Some(TrajectoryUsage {
+            model: "small".into(),
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+        }),
+    };
+    let out = render_trajectory_wire(&[entry], &[]);
+    assert!(out.contains("small · usage not reported"), "{out}");
 }
 
 /// Both empty (entries + redundant) → the "no events" message. Covers the

@@ -7,7 +7,9 @@ use super::super::reader::SessionLogTrajectory;
 use super::super::view::build_view;
 use super::paging::{pump, reader_of};
 use super::view::{ev, usage_ev, usage_ev_unreported};
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{
+    EventId, RecapSource, RecapUsage, SessionEvent, SessionId, SessionLogEntry,
+};
 use houyicoder_memory::LocalFileBackend;
 use houyicoder_session::SessionStore;
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryTurn, TrajectoryView};
@@ -545,4 +547,70 @@ fn disk_usage_reader(
     }
     let (reader, _history) = reader_of(&store, sid);
     reader
+}
+
+/// A recap as the host appends it, with the account the endpoint gave.
+fn recap_entry(sid: SessionId, ts: u64) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session: sid,
+        ts,
+        prev_hash: None,
+        event: SessionEvent::AwayRecap {
+            text: "half done".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "small".into(),
+            usage: Some(RecapUsage {
+                input_tokens: Some(400),
+                output_tokens: Some(20),
+                cache_read_input_tokens: Some(300),
+                cache_write_input_tokens: None,
+                duration_ms: Some(900),
+            }),
+        },
+    }
+}
+
+/// A recap's spend reaches the session view: it joins the headline totals and
+/// is reported beside them, so a reader sees what the background summaries
+/// took without subtracting.
+#[test]
+fn test_recap_spend_in_view() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        usage_ev(110, 1, 1_000, 10, 500),
+        recap_entry(SessionId::new(), 120),
+    ];
+    let view = build_view(&events, "test", 0);
+    assert_eq!(view.tokens_in, Some(1_400), "the recap is inside the total");
+    assert_eq!(view.tokens_out, Some(30));
+    let recap = view.recap_usage.expect("the session has a recap");
+    assert_eq!(recap.calls, 1);
+    assert_eq!(recap.input, 400);
+    assert_eq!(recap.duration_ms, Some(900));
+}
+
+/// The paged disk path reports the same recap spend the whole-log fold does:
+/// the header answers what the session spent from one source.
+#[test]
+fn test_disk_header_reports_recap() {
+    let reader = disk_usage_reader(|sid| {
+        vec![
+            usage_entry(sid, 110, 1_000, 10, 500, true),
+            recap_entry(sid, 120),
+        ]
+    });
+    let view = pump(&reader);
+    assert_eq!(
+        view.tokens_in,
+        Some(1_400),
+        "the recap is inside the session's headline total"
+    );
+    let recap = view.recap_usage.expect("the session has a recap");
+    assert_eq!(recap.calls, 1);
+    assert_eq!(recap.input, 400);
+    assert_eq!(recap.cache_read, 300);
+    assert_eq!(recap.duration_ms, Some(900));
 }

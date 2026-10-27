@@ -115,6 +115,11 @@ pub const INTERRUPTED_NOTICE: &str = "  ⎿  Interrupted · What should Houyi do
 pub const TURN_CONTENT_OUT_OF_VIEW: &str =
     "earlier content of this turn is out of view — scroll up to load";
 
+/// The marker leading a recap row. The line's own text and its wrap path both
+/// read it here, so a wrapped summary hangs under the words it continues
+/// instead of under the marker's second column.
+pub const RECAP_MARKER: &str = "※ recap: ";
+
 /// One line in the work transcript (action log, not chat bubbles).
 #[derive(Debug, Clone)]
 pub enum TranscriptLine {
@@ -160,6 +165,12 @@ pub enum TranscriptLine {
     },
     /// System or slash-command feedback.
     System(String),
+    /// A summary of the session the user left: the work in progress and the
+    /// next step, written while they were away. It describes the conversation
+    /// without being part of it — nothing reads it back to the model, and it
+    /// claims no work that the log does not state. Rendered dim at the
+    /// transcript tail under a marker that keeps it from reading as a turn.
+    Recap(String),
     /// The Esc-abort notice. Rendered as a dim child row welded under the
     /// message the abort cut off, not as a top-level notice: the interrupt is
     /// a property of that message (it stopped mid-sentence), not a new event
@@ -393,6 +404,17 @@ impl TranscriptLine {
         Some(format!("✻ {text}"))
     }
 
+    /// The rows a recap notice draws, or None for a line that is not one. The
+    /// marker leads the first row and every continuation hangs under the
+    /// summary text, so a summary longer than the pane reads as one sentence
+    /// rather than as a stack of repeated markers.
+    pub(crate) fn recap_rows(&self, width: u16) -> Option<Vec<String>> {
+        let Self::Recap(text) = self else {
+            return None;
+        };
+        Some(wrap_plain_block(text, RECAP_MARKER, width, None))
+    }
+
     pub(crate) fn tool_call_rows(&self, width: u16, full: bool) -> Option<Vec<String>> {
         let Self::Tool {
             name,
@@ -462,6 +484,7 @@ impl TranscriptLine {
                 }
             }
             Self::System(s) => format!("✻ {s}"),
+            Self::Recap(s) => format!("{RECAP_MARKER}{s}"),
             Self::Interrupted => INTERRUPTED_NOTICE.to_string(),
             Self::Thinking { text } => format!("✻ {}", thinking_brief(text)),
             Self::ThoughtFor { .. } => {

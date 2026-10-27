@@ -43,6 +43,11 @@ impl App {
                     if let Some(s) = self.sessions.current.connection.as_mut() {
                         s.mark_ready();
                     }
+                    // The host treats a client that never reported as one
+                    // that may be watching, so this terminal states its focus
+                    // as soon as the connection can carry it.
+                    let focused = self.ui.terminal_focused;
+                    self.report_focus(focused);
                 }
                 ConnectionEvent::Lost { cause, not_sent } => {
                     // The driver is gone: settle the active run and sweep

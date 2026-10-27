@@ -12,6 +12,7 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::recap::FocusReport;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 
@@ -435,6 +436,9 @@ async fn drive_connection(
                     // publishes and drops its strip row. No reply.
                     outbound.push_back(Outbound::Notification(kill_all_notification()));
                 }
+                Some(ClientCommand::ReportFocus { focused }) => {
+                    outbound.push_back(Outbound::Notification(focus_notification(focused)));
+                }
                 Some(ClientCommand::QueueRemove { session_id, id }) => {
                     // A session/queue_remove notification drops only the exact
                     // identified queue item. No reply.
@@ -723,6 +727,11 @@ async fn drive_connection(
             }
         }
     }
+}
+
+/// Report whether this terminal is looking at the session.
+pub(crate) fn focus_notification(focused: bool) -> AcpNotification {
+    AcpNotification::new("session/focus", FocusReport { focused }.params())
 }
 
 /// Build a session/inject notification with stable queue identity.

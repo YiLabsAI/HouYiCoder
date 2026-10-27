@@ -8,14 +8,15 @@ use std::collections::{HashMap, HashSet};
 
 use super::turns::{self, FoldMode};
 
+use houyicoder_api::session;
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::aggregate_subagent_usage;
 use houyicoder_protocol::llm::{UsageProvenance, count_visible};
 use houyicoder_protocol::tool::tool_result_failed;
 use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
-    SessionTiming, SubagentUsage, TrajectoryRecord, TrajectoryRow, TrajectoryTurn, TrajectoryView,
-    TrajectoryViewState, TurnBoundary,
+    RecapSpend, SessionTiming, SubagentUsage, TrajectoryRecord, TrajectoryRow, TrajectoryTurn,
+    TrajectoryView, TrajectoryViewState, TurnBoundary,
 };
 use serde_json::Value;
 use std::mem::take;
@@ -140,6 +141,33 @@ pub(super) fn result_failed(output: &Value, call_id: &str, calls: &CallIndex) ->
     tool_result_failed(output, tool, input)
 }
 
+/// The pane's copy of a delegated account. Both read paths build it here so a
+/// figure added to the record reaches every view instead of being carried by
+/// one path and dropped by the other.
+pub(crate) fn to_subagent_usage(spend: session::SubagentUsage) -> SubagentUsage {
+    SubagentUsage {
+        calls: spend.calls,
+        unmeasured: spend.unmeasured_calls,
+        input: spend.input_tokens,
+        output: spend.output_tokens,
+        cache_read: spend.cache_read_input_tokens,
+        provenance: spend.provenance,
+    }
+}
+
+/// The pane's copy of a recap account, by the same rule.
+pub(crate) fn to_recap_spend(spend: session::RecapSpend) -> RecapSpend {
+    RecapSpend {
+        calls: spend.calls,
+        unmeasured: spend.unmeasured_calls,
+        input: spend.input_tokens,
+        output: spend.output_tokens,
+        cache_read: spend.cache_read_input_tokens,
+        duration_ms: spend.duration_ms,
+        provenance: spend.provenance,
+    }
+}
+
 fn build_summary(
     rows: Vec<TrajectoryRow>,
     acc: &AccTotals,
@@ -147,16 +175,20 @@ fn build_summary(
     hidden_turns: usize,
 ) -> TrajectoryView {
     // The session's economic account is what the whole session spent: the
-    // parent's own calls plus every delegated child's. A child that reported no
-    // usage leaves the total unknown rather than understated.
+    // parent's own calls plus every delegated child's and every recap's. A
+    // child that reported no usage leaves the total unknown rather than
+    // understated, and so does a recap.
     let subagent_usage = (acc.subagent.calls > 0).then_some(acc.subagent);
+    let recap_usage = (acc.recap.calls > 0).then_some(acc.recap);
     // One child that never reported its usage leaves a hole in the sum, so the
-    // session total is unknown rather than short by that child.
-    let subagent_unknown = acc.subagent_unmeasured;
-    // The totals are known only when every turn reported usage and no delegation
-    // left its own usage unmeasured. A turn with no usage is a hole in the sum,
-    // and a child's tokens do not fill it: they are the child's own spend.
-    let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns || subagent_unknown;
+    // session total is unknown rather than short by that child, and a recap
+    // written without figures is the same hole.
+    let background_unknown = acc.subagent.unmeasured > 0 || acc.recap.unmeasured > 0;
+    // The totals are known only when every turn reported usage and no
+    // background call left its own usage unmeasured. A turn with no usage is a
+    // hole in the sum, and the background tokens do not fill it: they are that
+    // call's own spend.
+    let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns || background_unknown;
     let total_turns = rows.len() + hidden_turns;
     let distinct_models: Vec<&str> = acc.models.iter().map(String::as_str).collect();
     let header_model = match distinct_models.len() {
@@ -164,14 +196,15 @@ fn build_summary(
         1 => distinct_models[0].to_string(),
         n => format!("{n} models"),
     };
-    let total_cache_read = acc.cache_read + acc.subagent.cache_read;
-    // The account's completeness is one fact: the parent's turns and every
-    // child were folded by the same rule, so a reader asks this field whether a
-    // share is claimable instead of combining the two halves itself.
+    let total_cache_read = acc.cache_read + acc.subagent.cache_read + acc.recap.cache_read;
+    // The account's completeness is one fact: the parent's turns, every child,
+    // and every recap were folded by the same rule, so a reader asks this field
+    // whether a share is claimable instead of combining the parts itself.
     let usage_provenance = acc
         .usage_provenance
         .unwrap_or(UsageProvenance::ALL_REPORTED)
-        .merge(acc.subagent.provenance);
+        .merge(acc.subagent.provenance)
+        .merge(acc.recap.provenance);
     let (ttft_avg_ms, ttft_p95_ms, ttft_p99_ms) = if acc.ttfts.is_empty() {
         (None, None, None)
     } else {
@@ -207,12 +240,12 @@ fn build_summary(
         tokens_in: if any_unknown {
             None
         } else {
-            Some((acc.total_in + acc.subagent.input) as usize)
+            Some((acc.total_in + acc.subagent.input + acc.recap.input) as usize)
         },
         tokens_out: if any_unknown {
             None
         } else {
-            Some((acc.total_out + acc.subagent.output) as usize)
+            Some((acc.total_out + acc.subagent.output + acc.recap.output) as usize)
         },
         cache_read: count_visible(total_cache_read, usage_provenance.cache_read_reported)
             .then_some(total_cache_read),
@@ -227,6 +260,7 @@ fn build_summary(
         newer_hidden: 0,
         history_generation: 0,
         subagent_usage,
+        recap_usage,
         state: TrajectoryViewState::Ready,
         skipped_records: 0,
         rows,
@@ -266,9 +300,9 @@ struct AccTotals {
     turns: usize,
     /// What the session's delegated children spent, from the shared aggregator.
     subagent: SubagentUsage,
-    /// True when a child reached a terminal without reporting usage, so the
-    /// session total is a lower bound rather than a complete figure.
-    subagent_unmeasured: bool,
+    /// What the session's recaps spent, from the same per-event rule the
+    /// session summary folds with.
+    recap: RecapSpend,
 }
 
 /// Fold one timing event into the session's latency samples. Tool durations are
@@ -559,14 +593,12 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
     // Delegated usage comes from the one aggregator every surface shares, so
     // the trajectory totals and the status tally cannot drift apart.
     let delegated = aggregate_subagent_usage(events);
-    acc.subagent = SubagentUsage {
-        calls: delegated.calls,
-        input: delegated.input_tokens,
-        output: delegated.output_tokens,
-        cache_read: delegated.cache_read_input_tokens,
-        provenance: delegated.provenance,
-    };
-    acc.subagent_unmeasured = delegated.unmeasured_calls > 0;
+    acc.subagent = to_subagent_usage(delegated);
+    // A recap runs between turns, so its spend is summed here rather than
+    // through the turn counters, and the recap model stays out of the models
+    // the session ran.
+    let recap = session::aggregate_recap_spend(events);
+    acc.recap = to_recap_spend(recap);
     // The session's own running time is the sum of what each turn took, which
     // is the same figure the turn rows report. The span between the log's
     // first and last event is a different question: it also covers the hours a

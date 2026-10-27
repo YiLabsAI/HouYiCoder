@@ -96,6 +96,7 @@ impl App {
             TranscriptLine::Tool { name, .. } if name != "result" => line
                 .tool_call_rows(w, full_tool_call)
                 .map_or(1, |rows| rows.len()),
+            TranscriptLine::Recap(_) => line.recap_rows(w).map_or(0, |rows| rows.len()),
             TranscriptLine::System(_) => {
                 let text = if self.ui.verbose {
                     line.render_verbose()

@@ -10,10 +10,9 @@ use super::{DELTA_MAX_BYTES, PageRead, SessionHistory};
 use super::{
     DurableWatermark, ResidentPage, SessionLogTrajectory, TrajectoryHead, TrajectoryState,
 };
+use crate::trajectory::view::{to_recap_spend, to_subagent_usage};
 use houyicoder_protocol::llm::count_visible;
-use houyicoder_tui::view::trajectory_pane::{
-    ModelSwitchBoundary, SessionTiming, SubagentUsage, TurnBoundary,
-};
+use houyicoder_tui::view::trajectory_pane::{ModelSwitchBoundary, SessionTiming, TurnBoundary};
 use houyicoder_tui::view::trajectory_pane::{TrajectoryRow, TrajectoryView, TrajectoryViewState};
 use std::collections::VecDeque;
 use std::mem::take;
@@ -159,13 +158,10 @@ impl SessionLogTrajectory {
             hidden_turns: summary.total_turns,
             newer_hidden: 0,
             history_generation: generation,
-            subagent_usage: (summary.usage.subagent.calls > 0).then_some(SubagentUsage {
-                calls: summary.usage.subagent.calls,
-                input: summary.usage.subagent.input_tokens,
-                output: summary.usage.subagent.output_tokens,
-                cache_read: summary.usage.subagent.cache_read_input_tokens,
-                provenance: summary.usage.subagent.provenance,
-            }),
+            subagent_usage: (summary.usage.subagent.calls > 0)
+                .then_some(to_subagent_usage(summary.usage.subagent)),
+            recap_usage: (summary.usage.recap.calls > 0)
+                .then_some(to_recap_spend(summary.usage.recap)),
             state: load,
             skipped_records: 0,
             rows: Vec::new(),

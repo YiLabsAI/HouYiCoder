@@ -125,6 +125,20 @@ fn test_kill_child_notif_shape() {
     assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
 }
 
+/// The focus report carries the method and the boolean field the server
+/// reads. A report under another name, or with the flag under another key,
+/// leaves the host treating this terminal as never having reported, which
+/// keeps the away timer off and the summary unavailable.
+#[test]
+fn test_focus_notif_shape() {
+    for focused in [true, false] {
+        let n = focus_notification(focused);
+        assert_eq!(n.method, "session/focus");
+        let p = n.params.expect("params present");
+        assert_eq!(p.get("focused"), Some(&serde_json::json!(focused)));
+    }
+}
+
 // --- request-identifier allocation ---
 
 /// A fresh connection issues its first identifier at zero and counts up by
@@ -282,6 +296,41 @@ async fn test_drive_forwards_rename_command() {
         "rename lost its session identity in dispatch: {run:?}"
     );
     assert_eq!(run.requests().len(), 1);
+}
+
+/// The focus command leaves as a notification carrying the flag, because
+/// the host never answers it. A request frame would make the driver wait for
+/// a reply that does not exist, and an unreported flag would keep the host
+/// from ever beginning the away timer.
+#[tokio::test]
+async fn test_drive_forwards_focus() {
+    let run = FakeEngine::new()
+        .drive(vec![
+            ClientCommand::ReportFocus { focused: false },
+            ClientCommand::ReportFocus { focused: true },
+        ])
+        .await;
+    let reported: Vec<bool> = run
+        .sent
+        .iter()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim_end()).ok())
+        .filter(|frame| frame.get("method").and_then(|m| m.as_str()) == Some("session/focus"))
+        .filter_map(|frame| {
+            frame
+                .get("params")
+                .and_then(|p| p.get("focused"))
+                .and_then(|v| v.as_bool())
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        vec![false, true],
+        "each focus change must reach the host in order: {run:?}"
+    );
+    assert!(
+        run.notification("session/focus").is_some(),
+        "the focus report must keep its method name: {run:?}"
+    );
 }
 
 /// A ServerFrame::Event carrying AgentStatus is translated to
@@ -618,6 +667,17 @@ impl SessionRun {
             .filter_map(|line| serde_json::from_str::<ClientFrame>(line.trim_end()).ok())
             .filter(|f| matches!(f, ClientFrame::Request(_)))
             .collect()
+    }
+
+    /// The body of the notification sent under this method name. A
+    /// notification carries no request id, so it cannot be decoded as a
+    /// request frame; reading the method back from the raw line is what
+    /// shows the server will route it.
+    fn notification(&self, method: &str) -> Option<serde_json::Value> {
+        self.sent
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim_end()).ok())
+            .find(|frame| frame.get("method").and_then(|m| m.as_str()) == Some(method))
     }
 }
 

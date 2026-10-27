@@ -3,10 +3,13 @@
 
 use super::render_usage;
 use crate::command::render::format_tokens;
-use crate::state::{TrajectoryDrill, TrajectoryTurnKey};
-use crate::test_harness::working_app;
+use crate::state::enums::StatusTab;
+use crate::state::{Pane, TrajectoryDrill, TrajectoryTurnKey};
+use crate::test_harness::{render_text, working_app};
 use crate::view::trajectory_pane::TrajectoryDetailView;
-use crate::view::trajectory_pane::{SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView};
+use crate::view::trajectory_pane::{
+    RecapSpend, SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView,
+};
 use houyicoder_protocol::frontend::status::ModelUsageView;
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use std::sync::Arc;
@@ -378,6 +381,7 @@ fn test_usage_tab_delegated() {
         hidden_turns: 0,
         subagent_usage: Some(SubagentUsage {
             calls: 2,
+            unmeasured: 0,
             input: 812_000,
             output: 41_000,
             cache_read: 755_000,
@@ -390,9 +394,89 @@ fn test_usage_tab_delegated() {
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
     assert!(
         s.contains(
-            "812k input · 41k output · 755k (93% cached) (2 subagent calls, included above)"
+            "2 subagent calls (included above) · 812k input · 41k output · 755k (93% cached)"
         ),
         "the row names each count and the share the complete account supports: {s}"
+    );
+}
+
+/// Recap spend is reported on its own row, which says the token rows above
+/// already include it, and names the time the summaries took.
+#[test]
+fn test_usage_tab_recap_spend() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: Some(4_100),
+        tokens_out: Some(300),
+        cache_read: Some(3_100),
+        failures: 0,
+        duration_ms: Some(1_000),
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        recap_usage: Some(RecapSpend {
+            calls: 3,
+            unmeasured: 0,
+            input: 4_100,
+            output: 300,
+            cache_read: 3_100,
+            duration_ms: Some(2_400),
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
+            },
+        }),
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    assert!(s.contains("recap usage:"), "the row is present: {s}");
+    assert!(
+        s.contains(
+            "3 recaps (included above) · 4.1k input · 300 output · 3.1k (76% cached) · 2.4s"
+        ),
+        "the row names each figure, the time, and the count: {s}"
+    );
+}
+
+/// A recap whose endpoint reported nothing reads as unmeasured, not as a
+/// free request. The count of unmeasured calls and the all-reported identity
+/// are the shape production emits, so the row must not print the zeroes the
+/// identity would let through as measured figures.
+#[test]
+fn test_usage_tab_recap_unknown() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        tokens_in: None,
+        tokens_out: None,
+        cache_read: None,
+        failures: 0,
+        duration_ms: None,
+        timing: SessionTiming::default(),
+        hidden_turns: 0,
+        recap_usage: Some(RecapSpend {
+            calls: 1,
+            unmeasured: 1,
+            provenance: UsageProvenance::ALL_REPORTED,
+            ..RecapSpend::default()
+        }),
+        rows: Vec::new(),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    assert!(
+        s.contains("usage not reported (1 recap)"),
+        "an unmeasured recap says so: {s}"
+    );
+    assert!(
+        !s.contains("0 input"),
+        "a figure nobody measured is not stated as zero: {s}"
     );
 }
 
@@ -520,6 +604,7 @@ fn test_usage_tab_delegated_unreported() {
         hidden_turns: 0,
         subagent_usage: Some(SubagentUsage {
             calls: 1,
+            unmeasured: 0,
             input: 0,
             output: 0,
             cache_read: 0,
@@ -567,6 +652,7 @@ fn test_delegated_row_cache_unknown() {
         hidden_turns: 0,
         subagent_usage: Some(SubagentUsage {
             calls: 1,
+            unmeasured: 0,
             input: 812_000,
             output: 41_000,
             cache_read: 0,
@@ -610,6 +696,7 @@ fn test_delegated_share_clamped() {
         hidden_turns: 0,
         subagent_usage: Some(SubagentUsage {
             calls: 1,
+            unmeasured: 0,
             input: 100_000,
             output: 4_000,
             cache_read: 150_000,
@@ -642,6 +729,7 @@ fn test_delegated_row_keeps_cache() {
         hidden_turns: 0,
         subagent_usage: Some(SubagentUsage {
             calls: 2,
+            unmeasured: 0,
             input: 0,
             output: 0,
             cache_read: 12_300,
@@ -697,6 +785,7 @@ fn test_delegated_row_omits_output() {
         hidden_turns: 0,
         subagent_usage: Some(SubagentUsage {
             calls: 1,
+            unmeasured: 0,
             input: 900,
             output: 0,
             cache_read: 0,
@@ -721,5 +810,109 @@ fn test_delegated_row_omits_output() {
     assert!(
         !row.contains("0 output"),
         "a completion total no endpoint sent is not stated as zero: {row}"
+    );
+}
+
+/// A row covering calls of which some wrote no figure states how many it
+/// covers, so the sum cannot pass for the whole.
+#[test]
+fn test_recap_row_names_unmeasured() {
+    let mut app = working_app();
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 1,
+        timing: SessionTiming::default(),
+        recap_usage: Some(RecapSpend {
+            calls: 3,
+            unmeasured: 1,
+            input: 4_100,
+            output: 300,
+            cache_read: 0,
+            duration_ms: Some(2_400),
+            provenance: UsageProvenance::default(),
+        }),
+        ..TrajectoryView::default()
+    }))));
+    let s = render_usage(&app);
+    assert!(
+        s.contains("2 of 3 recaps measured (included above) · 4.1k input · 300 output · 2.4s"),
+        "the row states the floor its figures stand for: {s}"
+    );
+}
+
+/// A session with a full account still draws the recap row inside the pane
+/// body: the split of the totals sits beside them, so it stays on screen on a
+/// common terminal where the latency rows below it do not fit.
+#[test]
+fn test_recap_row_stays_visible() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.cumulative_usage = Usage {
+        input_tokens: 1_000_000,
+        output_tokens: 40_000,
+        reasoning_tokens: 5_000,
+        cache_read_input_tokens: 800_000,
+        cache_write_input_tokens: 20_000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
+        },
+        ..Default::default()
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+    app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(TrajectoryView {
+        session_id: "s".into(),
+        model: "m".into(),
+        total_turns: 2,
+        timing: SessionTiming {
+            ttft_samples: 4,
+            ttft_avg_ms: Some(1_200),
+            ttft_p95_ms: Some(2_400),
+            ttft_p99_ms: Some(2_600),
+            decode_samples: 4,
+            decode_tok_per_sec: Some(48.2),
+            model_ms: 20_000,
+            tool_ms: 5_000,
+        },
+        subagent_usage: Some(SubagentUsage {
+            calls: 2,
+            unmeasured: 0,
+            input: 812_000,
+            output: 41_000,
+            cache_read: 755_000,
+            provenance: UsageProvenance::ALL_REPORTED,
+        }),
+        recap_usage: Some(RecapSpend {
+            calls: 3,
+            unmeasured: 0,
+            input: 4_100,
+            output: 300,
+            cache_read: 3_100,
+            duration_ms: Some(2_400),
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
+            },
+        }),
+        ..TrajectoryView::default()
+    }))));
+
+    let screen = render_text(&app, 80, 24);
+    assert!(
+        screen.contains("recap usage:"),
+        "the row is on screen: {screen}"
+    );
+    assert!(
+        screen.contains("3 recaps"),
+        "the count is on screen: {screen}"
+    );
+    assert!(
+        screen.contains("4.1k input"),
+        "the figures are on screen: {screen}"
     );
 }

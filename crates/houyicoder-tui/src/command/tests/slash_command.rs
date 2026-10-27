@@ -424,6 +424,7 @@ fn test_trajectory_renders_chain() {
         event_id: "01HEVENT1".into(),
         prev_hash: None,
         duration_ms: None,
+        usage: None,
     };
     let e2 = TrajectoryEntry {
         kind: "assistant".into(),
@@ -431,6 +432,7 @@ fn test_trajectory_renders_chain() {
         event_id: "01HEVENT2".into(),
         prev_hash: Some("abababab".into()),
         duration_ms: None,
+        usage: None,
     };
     let out = render_trajectory_wire(&[e1, e2], &[]);
     assert!(out.starts_with("trajectory: 2 events"), "{out}");

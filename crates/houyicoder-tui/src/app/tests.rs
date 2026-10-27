@@ -11,10 +11,10 @@ use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnect
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::{
     FailedHandshakeTransport, connected_app_events, connection_lost_app, render_text,
-    wait_for_request,
+    wait_for_notification, wait_for_request,
 };
 use crate::todo_view::{TodoStatus, TodoView};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_client::Client;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
@@ -903,6 +903,44 @@ fn test_connection_status_ready() {
     // A repeat confirmation is idempotent: still Ready.
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Ready));
     assert_eq!(app.connection_status(), ConnectionStatus::Ready);
+}
+
+/// The handshake result states the terminal's focus to the host. A terminal
+/// that never reports one is treated as watching, so the host never begins
+/// the away timer and a summary of an idle session never appears.
+#[test]
+fn test_ready_reports_focus() {
+    let (mut app, events) = connected_app_events();
+    app.ui.terminal_focused = false;
+    app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Ready));
+    let params = wait_for_notification(&events, "session/focus");
+    assert_eq!(
+        params.get("focused"),
+        Some(&serde_json::json!(false)),
+        "the handshake must state the focus the terminal actually has"
+    );
+}
+
+/// A focus change reaches the host as it happens. The host cancels an away
+/// summary the moment a human looks again, so a report held back until the
+/// next turn would let a summary of an abandoned session appear anyway.
+#[test]
+fn test_focus_change_reports_host() {
+    let (mut app, events) = connected_app_events();
+    assert!(handle_event(&mut app, Event::FocusLost).expect("focus loss handled"));
+    let params = wait_for_notification(&events, "session/focus");
+    assert_eq!(
+        params.get("focused"),
+        Some(&serde_json::json!(false)),
+        "losing focus must tell the host this terminal is not watching"
+    );
+    assert!(handle_event(&mut app, Event::FocusGained).expect("focus gain handled"));
+    let params = wait_for_notification(&events, "session/focus");
+    assert_eq!(
+        params.get("focused"),
+        Some(&serde_json::json!(true)),
+        "regaining focus must tell the host to stop the away timer"
+    );
 }
 
 /// A late ConnectionReady cannot revive a lost connection: the transition
