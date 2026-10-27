@@ -10,7 +10,8 @@
 //! trajectory is the durable audit record (one row per event, with the
 //! hash chain a client can verify the server is not dropping events). Kinds
 //! the base session/update has no standard variant for (permission decision,
-//! compaction boundary, summary, meta user) ride here too, so the audit log
+//! compaction boundary, summary, meta user, recap attempt and recap) ride
+//! here too, so the audit log
 //! is complete the stream + the acpx notifications are mappings of the
 //! same events for different surfaces.
 
@@ -52,11 +53,35 @@ pub struct TrajectoryEntry {
     /// string. None for the genesis event (the first event in the chain).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prev_hash: Option<String>,
-    /// Wall-clock duration of a tool call in ms. None for non-tool events;
-    /// Some(ms) for ToolResult so the trajectory surface can flag slow calls
-    /// without re-deriving timing from the raw event log.
+    /// Wall-clock duration of the event in ms, when the host measured one: a
+    /// ToolResult's run time, so the trajectory surface can flag slow calls
+    /// without re-deriving timing from the raw event log, or a recap's request
+    /// time. Other events leave it absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// What the event cost, when the host measured it. A recap records the
+    /// model it named and the figures the endpoint reported; other events
+    /// leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TrajectoryUsage>,
+}
+
+/// The cost one event was billed at, audit form. Every token figure is
+/// optional because an endpoint that reported no account leaves them
+/// unknown, and a missing figure is not a zero-cost call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrajectoryUsage {
+    /// The model the request named.
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
 }
 
 fn is_zero(v: &u32) -> bool {

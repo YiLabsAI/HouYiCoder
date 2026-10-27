@@ -6,7 +6,9 @@
 //! turn, or terminating background children.
 
 use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::frontend::FocusReport;
 use houyicoder_protocol::frontend::QueuedInput;
+use tokio::time::Instant;
 
 use super::Server;
 
@@ -15,11 +17,27 @@ impl Server {
     ///
     /// session/cancel aborts the active run; session/inject enqueues a user
     /// message for the next turn boundary; session/queue_remove drops the
-    /// identified queued item; session/inject_child, session/cancel_child_turn,
+    /// identified queued item; session/focus records whether this terminal is
+    /// looking at the session; session/inject_child, session/cancel_child_turn,
     /// session/kill_child, and session/kill_all control delegated child runs.
     pub(super) fn handle_session_notification(&self, notif: &AcpNotification) {
         match notif.method.as_str() {
             "session/cancel" => self.runner.abort(),
+            "session/focus" => {
+                let Some(client) = self.recap_client.as_ref() else {
+                    return;
+                };
+                let report = notif
+                    .params
+                    .clone()
+                    .and_then(|params| serde_json::from_value::<FocusReport>(params).ok());
+                match report {
+                    Some(report) => client.report_focus(report.focused, Instant::now()),
+                    None => {
+                        tracing::debug!("a session/focus payload did not decode as a focus report");
+                    }
+                }
+            }
             "session/inject" => {
                 let input = notif.params.as_ref().and_then(|params| {
                     params

@@ -53,6 +53,19 @@ fn test_load_reads_fields() {
 }
 
 #[test]
+fn test_model_id_is_trimmed() {
+    let path = temp_settings(r#"{"recap": {"enabled": true, "model": "  small-1 "}}"#);
+    let (cfg, warnings) = load_recap_from(&path);
+    assert_eq!(
+        cfg.model.as_deref(),
+        Some("small-1"),
+        "a stray space must not turn a named entry into an unknown model"
+    );
+    assert!(warnings.is_empty());
+    fs::remove_file(&path).ok();
+}
+
+#[test]
 fn test_absent_section_stays_off() {
     let path = temp_settings(r#"{"auto_memory": true}"#);
     let (cfg, warnings) = load_recap_from(&path);
@@ -119,5 +132,30 @@ fn test_load_ignores_empty_model() {
     assert_eq!(cfg.model, None, "whitespace names no model");
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].field, "recap.model");
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_enabled_without_model_warns() {
+    let path = temp_settings(r#"{"recap": {"enabled": true}}"#);
+    let (cfg, warnings) = load_recap_from(&path);
+    assert!(cfg.enabled);
+    assert_eq!(
+        cfg.model, None,
+        "no catalog fact stands in for a model the user did not name"
+    );
+    assert_eq!(warnings.len(), 1, "the inert feature is reported once");
+    assert_eq!(warnings[0].field, "recap.model");
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_disabled_section_is_silent() {
+    let path = temp_settings(r#"{"recap": {}}"#);
+    let (_cfg, warnings) = load_recap_from(&path);
+    assert!(
+        warnings.is_empty(),
+        "a feature the file never turned on has nothing to warn about"
+    );
     fs::remove_file(&path).ok();
 }

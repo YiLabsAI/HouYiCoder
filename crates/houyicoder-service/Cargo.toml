@@ -44,7 +44,7 @@ houyicoder-resilience = { path = "../houyicoder-resilience" }
 houyicoder-skill = { path = "../houyicoder-skill" }
 dunce = "1"
 futures = "0.3"
-tokio = { version = "1", features = ["macros", "rt", "sync", "net", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "net", "io-util", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
@@ -94,6 +94,8 @@ path = "tests/acpx_cross_decode.rs"
 required-features = ["acp-cross-decode"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros", "time"] }
+# test-util drives the recap deadline and the away window on a paused clock,
+# so their tests prove the timing without waiting for it.
+tokio = { version = "1", features = ["rt", "macros", "time", "test-util"] }
 serde = { version = "1", features = ["derive"] }
 houyicoder-client = { path = "../houyicoder-client" }

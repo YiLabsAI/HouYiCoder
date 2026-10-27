@@ -153,6 +153,18 @@ fn test_deepseek_effort_dialect() {
     assert_eq!(effort_dialect("deepseek-chat"), EffortDialect::NotSupported);
 }
 
+/// A caller that must run without thinking can only use a dialect that can
+/// turn it off. A reasoning-level dialect cannot: asking for less still
+/// thinks. A model that speaks no thinking parameter sends nothing either
+/// way, so there is no switch to lose.
+#[test]
+fn test_thinking_switch_per_dialect() {
+    assert!(EffortDialect::Qwen3.can_disable_thinking());
+    assert!(EffortDialect::NotSupported.can_disable_thinking());
+    assert!(!EffortDialect::OpenaiReasoning.can_disable_thinking());
+    assert!(!EffortDialect::Glm.can_disable_thinking());
+}
+
 #[test]
 fn test_reasoning_family_unlisted_window() {
     // No OpenAI reasoning model carries a window entry; an effort-recognized

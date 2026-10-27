@@ -44,6 +44,24 @@ impl SessionLog for InMemoryLog {
         self.events.lock().unwrap().push(event);
         Box::pin(async move { Ok(id) })
     }
+    /// This double is driven by one test thread, so reading the log and
+    /// pushing to it in sequence is the same serial step a store takes under
+    /// its append lock.
+    fn append_if<'a>(
+        &'a self,
+        event: SessionLogEntry,
+        allow: &'a (dyn Fn(&[SessionLogEntry]) -> bool + Send + Sync),
+    ) -> PFut<'a, Result<Option<EventId>, ContextError>> {
+        Box::pin(async move {
+            let mut events = self.events.lock().unwrap();
+            if !allow(&events) {
+                return Ok(None);
+            }
+            let id = event.id;
+            events.push(event);
+            Ok(Some(id))
+        })
+    }
     fn replay(&self, _session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         let events = self.events.lock().unwrap().clone();
         Box::pin(async move { Ok(events) })

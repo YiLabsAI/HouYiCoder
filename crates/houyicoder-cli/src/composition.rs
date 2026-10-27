@@ -104,6 +104,7 @@ pub(crate) fn assemble_bundle(
         worktree_controller,
         bus,
         provider_facts,
+        recap,
     } = assembled;
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the prompt
@@ -141,6 +142,7 @@ pub(crate) fn assemble_bundle(
             worktree_controller,
             bus,
             provider_facts,
+            recap,
         },
         None,
         session_log_root(),
@@ -191,6 +193,7 @@ pub(crate) fn start_local_server(
         worktree_controller,
         bus,
         provider_facts,
+        recap,
     } = assembled;
     // The server's rename and model writes touch the same descriptor the
     // runner records prompts through, so it takes the runner's own store
@@ -253,6 +256,7 @@ pub(crate) fn start_local_server(
     let mut server =
         Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer)
             .with_append_notify(append_notify)
+            .with_recap(recap)
             .with_bus(server_bus);
     if let Some(s) = sandbox_session {
         server = server.with_session(s);

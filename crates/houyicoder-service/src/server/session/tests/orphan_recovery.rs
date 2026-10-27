@@ -110,6 +110,7 @@ async fn test_disconnect_orphan_repaired() {
         event_sequencer,
         gate,
         Arc::new(Notify::new()),
+        Arc::new(RecapSession::inert(session)),
     );
 
     // Connection 1: send "go" → run starts → provider emits ToolCall(c1) →

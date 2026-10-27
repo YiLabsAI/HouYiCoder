@@ -119,6 +119,7 @@ async fn test_inject_cancel_run_clear() {
         event_sequencer,
         gate,
         Arc::new(Notify::new()),
+        Arc::new(RecapSession::inert(session)),
     );
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);

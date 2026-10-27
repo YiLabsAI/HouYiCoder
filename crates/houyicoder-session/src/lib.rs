@@ -224,8 +224,29 @@ impl SessionStore {
     /// durable subset (deltas never touch the chain's cache, so the chain
     /// skips them naturally), hash, persist to the backend, cache the new
     /// hash, log state, notify.
-    pub async fn append(&self, mut event: SessionLogEntry) -> Result<EventId, ContextError> {
+    pub async fn append(&self, event: SessionLogEntry) -> Result<EventId, ContextError> {
         let _guard = self.append_lock.lock().await;
+        self.append_locked(event).await
+    }
+
+    /// Append an event only if the log still satisfies allow. The read and
+    /// the write share the append lock, so no event can land between them.
+    pub async fn append_if(
+        &self,
+        event: SessionLogEntry,
+        allow: &(dyn Fn(&[SessionLogEntry]) -> bool + Send + Sync),
+    ) -> Result<Option<EventId>, ContextError> {
+        let _guard = self.append_lock.lock().await;
+        let events = self.backend.replay(event.session).await?;
+        if !allow(&events) {
+            return Ok(None);
+        }
+        self.append_locked(event).await.map(Some)
+    }
+
+    /// The durable write itself. The caller holds the append lock, which is
+    /// what makes a conditional append check and write as one step.
+    async fn append_locked(&self, mut event: SessionLogEntry) -> Result<EventId, ContextError> {
         let session = event.session;
         if matches!(event.event, SessionEvent::AssistantTextDelta { .. }) {
             // Delta path: log state + notify only. No backend, no chain, no cache.
@@ -643,6 +664,13 @@ impl SessionStore {
 impl SessionLog for SessionStore {
     fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
         Box::pin(Self::append(self, event))
+    }
+    fn append_if<'a>(
+        &'a self,
+        event: SessionLogEntry,
+        allow: &'a (dyn Fn(&[SessionLogEntry]) -> bool + Send + Sync),
+    ) -> PFut<'a, Result<Option<EventId>, ContextError>> {
+        Box::pin(Self::append_if(self, event, allow))
     }
     fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {
         Box::pin(Self::replay(self, session))

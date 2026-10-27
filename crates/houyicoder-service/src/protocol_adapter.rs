@@ -35,6 +35,7 @@ use houyicoder_protocol::frontend::permission::PermissionMode;
 use houyicoder_protocol::frontend::permission::PermissionRule;
 use houyicoder_protocol::frontend::permission::RuleDestination;
 use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionRuleContent};
+use houyicoder_protocol::frontend::recap::RecapNotice;
 use houyicoder_protocol::frontend::run::DelegationSource;
 use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunOutcome, RunResult, StopReason,
@@ -44,6 +45,7 @@ use houyicoder_protocol::frontend::session_update::{
 };
 use houyicoder_protocol::frontend::status::StatusSnapshot as ProtocolStatusSnapshot;
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
+use houyicoder_protocol::frontend::trajectory::TrajectoryUsage;
 use houyicoder_protocol::llm::ProviderError;
 pub(crate) use session_descriptor::map_session_descriptor;
 
@@ -183,12 +185,27 @@ pub(crate) fn build_trajectory_entries(
                 }
                 _ => None,
             };
+            let usage = match &ev.event {
+                SessionEvent::AwayRecap { model, usage, .. } => Some(TrajectoryUsage {
+                    model: model.clone(),
+                    input_tokens: usage.as_ref().and_then(|usage| usage.input_tokens),
+                    output_tokens: usage.as_ref().and_then(|usage| usage.output_tokens),
+                    cache_read_input_tokens: usage
+                        .as_ref()
+                        .and_then(|usage| usage.cache_read_input_tokens),
+                    cache_write_input_tokens: usage
+                        .as_ref()
+                        .and_then(|usage| usage.cache_write_input_tokens),
+                }),
+                _ => None,
+            };
             TrajectoryEntry {
                 kind: event_name(&ev.event).to_string(),
                 ts: ev.ts,
                 event_id: ev.id.to_string(),
                 prev_hash: ev.prev_hash.as_ref().map(|h| hex_short(&h.0)),
                 duration_ms,
+                usage,
             }
         })
         .collect()
@@ -590,7 +607,7 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         // about and the model it used stay in the durable record, where a
         // reader that wants them finds them.
         SessionEvent::AwayRecap { text, .. } => {
-            AcpxNotification::new(ContextRecap, serde_json::json!({ "text": text }))
+            AcpxNotification::new(ContextRecap, RecapNotice { text: text.clone() }.params())
         }
         // The interrupt notice is an event of the turn it interrupts, not a
         // message that opens a turn: the mark rides beside the notice so a

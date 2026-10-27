@@ -28,6 +28,7 @@ use houyicoder_session::SessionStore;
 use crate::composition::SessionHost;
 use crate::lifecycle::SessionLeaseStore;
 use crate::server::EventSequencer;
+use crate::server::recap::RecapSession;
 use serde_json::json;
 use std::{env, fs, path::Path, process, sync::Arc, time::Duration};
 use tokio::sync::Notify;
@@ -344,6 +345,7 @@ fn test_resume_server_restores_sandbox() {
         gate,
         host,
         Arc::new(Notify::new()),
+        Arc::new(RecapSession::inert(session)),
     );
     let input = json!({"path": target.to_string_lossy()});
     let reason = AskReason {

@@ -58,6 +58,13 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::time::Instant;
+use tokio::time::sleep_until;
+
+use crate::server::recap::RecapAttachment;
+use crate::server::recap::RecapSession;
+use crate::server::recap::job::Outcome;
+use crate::server::recap::job::run as run_recap;
 
 /// Request routing plus the per-domain request and notification handlers.
 mod capability_handler;
@@ -96,6 +103,8 @@ mod outbound_frames;
 enum ServeWake {
     Frame(Result<Option<String>, ProtocolError>),
     Event,
+    /// A recap entry is due: the user left the session open, or reopened it.
+    Recap,
 }
 
 pub struct Server {
@@ -153,9 +162,21 @@ pub struct Server {
     /// Shared multi-agent bus; routes a child permission ask to the
     /// wire-approval flow. None on the single-agent path.
     bus: Option<Arc<AgentBus>>,
+    /// The session's recap state. One instance per session, shared across
+    /// connections; None on a server assembled without the feature, which
+    /// never starts a request.
+    recap: Option<Arc<RecapSession>>,
+    /// This connection's registration with the recap state. Dropping it
+    /// detaches the client, so a closed connection cannot keep a summary
+    /// waiting for nobody.
+    recap_client: Option<RecapAttachment>,
 }
 
 pub(crate) mod child_permission;
+/// The away and resume recap: when one may run, and the request it makes.
+/// Public because a server is built with the recap state the session was
+/// assembled with, so an embedder that builds a server builds this too.
+pub mod recap;
 /// Reconnect-replay entry points: serve_session, resume_pending.
 pub(crate) mod session;
 
@@ -192,7 +213,17 @@ impl Server {
             descriptor_store: None,
             diagnostics: handle(),
             bus: None,
+            recap: None,
+            recap_client: None,
         }
+    }
+
+    /// Attach the session's recap state. The composition root passes the one
+    /// the session was assembled with; a server built without it never asks
+    /// for a summary.
+    pub fn with_recap(mut self, recap: Arc<RecapSession>) -> Self {
+        self.recap = Some(recap);
+        self
     }
 
     /// Override the settings path the /memory toggle handler persists to.
@@ -319,6 +350,10 @@ impl Server {
     /// loop onto a runtime.
     pub async fn serve(mut self, mut io: FrameCarrier) -> Result<(), ProtocolError> {
         let _negotiated = self.handshake(&mut io).await?;
+        // Register this connection with the session's recap state. The
+        // attachment lives as long as the serve loop, so a disconnect detaches
+        // its client and the last one leaving stops the away timer.
+        self.recap_client = self.recap.clone().and_then(RecapAttachment::attach);
         // Ask the client to trust the project workspace before any run
         // proceeds. One-time, workspace-level (not per-call): a project not
         // yet acknowledged in user-level settings prompts once, persists the
@@ -340,15 +375,28 @@ impl Server {
                     None => Either::Right(pending::<()>()),
                 };
                 let event_fut = self.event_sequencer.notified();
+                let recap_fut = match self
+                    .recap
+                    .as_ref()
+                    .and_then(|recap| recap.next_due(Instant::now()))
+                {
+                    Some(due) => Either::Left(sleep_until(due)),
+                    None => Either::Right(pending::<()>()),
+                };
                 tokio::select! {
                     frame = io.next_frame() => ServeWake::Frame(frame),
                     _ = append_fut => ServeWake::Event,
                     _ = event_fut => ServeWake::Event,
+                    _ = recap_fut => ServeWake::Recap,
                 }
             };
             let frame = match wake {
                 ServeWake::Event => {
                     self.flush_events(&mut io).await?;
+                    continue;
+                }
+                ServeWake::Recap => {
+                    self.start_recap();
                     continue;
                 }
                 ServeWake::Frame(Ok(Some(frame))) => frame,
@@ -372,7 +420,7 @@ impl Server {
             if let Ok(notif) = serde_json::from_str::<AcpNotification>(&frame) {
                 match notif.method.as_str() {
                     "session/cancel" => continue,
-                    "session/inject" | "session/queue_remove" => {
+                    "session/inject" | "session/queue_remove" | "session/focus" => {
                         self.handle_session_notification(&notif);
                         continue;
                     }
@@ -478,6 +526,19 @@ impl Server {
         req_id: RequestId,
         content: Vec<ContentBlock>,
     ) -> Result<(), ProtocolError> {
+        let _turn = self.recap.as_ref().map(|recap| recap.turn_scope());
+        self.drive_turn(io, req_id, content).await
+    }
+
+    /// The run itself, from the first attempt through every approval round
+    /// trip. Split from the caller so the session's recap state brackets it
+    /// however it ends.
+    async fn drive_turn(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        content: Vec<ContentBlock>,
+    ) -> Result<(), ProtocolError> {
         let text: String = content
             .into_iter()
             .filter_map(|block| match block {
@@ -505,6 +566,39 @@ impl Server {
                 }
             }
         }
+    }
+
+    /// Start the recap entry that is due and authorized. The request runs on
+    /// its own task, so the connection keeps sending frames while the summary
+    /// is on its way and the session can cancel it the moment the user returns.
+    fn start_recap(&self) {
+        let Some(recap) = self.recap.clone() else {
+            return;
+        };
+        let Some(job) = recap.take_due(Instant::now()) else {
+            return;
+        };
+        tokio::spawn(async move {
+            let entry = job.entry;
+            let _scope = recap.job_scope(entry);
+            let outcome = run_recap(recap.as_ref(), entry, job.cancel).await;
+            match outcome {
+                Outcome::Failed(reason) | Outcome::Refused(reason) => {
+                    tracing::warn!(
+                        session = %recap.session(),
+                        ?entry,
+                        %reason,
+                        "a recap attempt left no row"
+                    );
+                }
+                other => tracing::debug!(
+                    session = %recap.session(),
+                    ?entry,
+                    ?other,
+                    "a recap attempt finished"
+                ),
+            }
+        });
     }
 
     async fn dispatch_during_run_frame(&mut self, io: &mut FrameCarrier, frame: &str) {

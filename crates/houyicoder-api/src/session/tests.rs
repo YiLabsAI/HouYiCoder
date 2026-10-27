@@ -1,9 +1,12 @@
 //! Tests for the session log port: a logged turn reads back as the usage the
 //! views show, and a paged read of a history ends on the store's terms.
 
+use super::aggregate_recap_spend;
 use super::recorded_turn_usage;
 use houyicoder_async::PFut;
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{
+    EventId, RecapSource, RecapUsage, SessionEvent, SessionId, SessionLogEntry,
+};
 use houyicoder_protocol::llm::UsageProvenance;
 
 use super::{SessionLog, TrajectoryHead, TrajectoryPage, TrajectoryPages, TrajectoryPosition};
@@ -37,6 +40,95 @@ fn turn_usage(model: &str) -> SessionLogEntry {
             cache_write_reported: false,
         },
     }
+}
+
+/// A recap as the host appends it, with whatever account the endpoint gave.
+fn recap_entry(usage: Option<RecapUsage>) -> SessionLogEntry {
+    SessionLogEntry {
+        id: EventId::new(),
+        session: SessionId::new(),
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::AwayRecap {
+            text: "the parser is half converted".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "small-1".into(),
+            usage,
+        },
+    }
+}
+
+fn reported(input: u64, output: u64, cache_read: u64) -> RecapUsage {
+    RecapUsage {
+        input_tokens: Some(input),
+        output_tokens: Some(output),
+        cache_read_input_tokens: Some(cache_read),
+        cache_write_input_tokens: None,
+        duration_ms: Some(1_200),
+    }
+}
+
+/// A recap's spend joins the session account without moving a turn counter,
+/// and every figure it names is summed. A call the endpoint reported nothing
+/// for is counted as unmeasured rather than as a free one, so the total
+/// reads as a floor.
+#[test]
+fn test_recap_spend_sums_reported() {
+    let events = vec![
+        turn_usage("claude-sonnet-5-5"),
+        recap_entry(Some(reported(2_000, 160, 1_500))),
+        recap_entry(Some(reported(2_100, 140, 1_600))),
+        recap_entry(None),
+    ];
+    let spend = aggregate_recap_spend(&events);
+    assert_eq!(spend.calls, 3, "every recap event is a call");
+    assert_eq!(
+        spend.unmeasured_calls, 1,
+        "the silent one is not a free one"
+    );
+    assert_eq!(spend.input_tokens, 4_100);
+    assert_eq!(spend.output_tokens, 300);
+    assert_eq!(spend.cache_read_input_tokens, 3_100);
+    assert_eq!(spend.duration_ms, Some(2_400));
+    assert_eq!(
+        spend.provenance,
+        UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+        "a figure nobody reported leaves its flag clear, so the sum is a floor"
+    );
+}
+
+/// A usage object carrying a duration but no token figure is still an
+/// unmeasured call: the time says the request ran, not what it cost. It
+/// contributes nothing to the bucket, so no row can print a time beside an
+/// account nobody reported.
+#[test]
+fn test_recap_spend_counts_silent() {
+    let silent = RecapUsage {
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
+        duration_ms: Some(900),
+    };
+    let spend = aggregate_recap_spend(&[recap_entry(Some(silent))]);
+    assert_eq!(spend.calls, 1);
+    assert_eq!(spend.unmeasured_calls, 1);
+    assert_eq!(spend.duration_ms, None);
+    assert_eq!(spend.input_tokens, 0);
+}
+
+#[test]
+fn test_recap_spend_skips_turns() {
+    let spend = aggregate_recap_spend(&[turn_usage("claude-sonnet-5-5")]);
+    assert_eq!(spend.calls, 0, "a turn is not a recap");
+    assert_eq!(spend.input_tokens, 0);
+    assert_eq!(spend.unmeasured_calls, 0);
 }
 
 #[test]
@@ -130,6 +222,13 @@ fn entry(text: &str) -> SessionLogEntry {
 
 impl SessionLog for ScriptedLog {
     fn append(&self, _event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>> {
+        unreachable!("a paged walk appends nothing")
+    }
+    fn append_if<'a>(
+        &'a self,
+        _event: SessionLogEntry,
+        _allow: &'a (dyn Fn(&[SessionLogEntry]) -> bool + Send + Sync),
+    ) -> PFut<'a, Result<Option<EventId>, ContextError>> {
         unreachable!("a paged walk appends nothing")
     }
     fn replay(&self, _session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>> {

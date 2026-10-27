@@ -17,6 +17,7 @@ pub mod memory;
 pub mod model;
 pub mod permission;
 pub mod queue;
+pub mod recap;
 pub mod run;
 pub mod session_update;
 mod size;
@@ -48,6 +49,7 @@ pub use permission::{
     PermissionEffect, PermissionMode, PermissionRule, PermissionRuleContent, RuleDestination,
 };
 pub use queue::{PendingInputId, QueuedInput};
+pub use recap::{FocusReport, RecapNotice};
 pub use run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, DelegationSource, RunError, RunOutcome,
     RunResult, StopReason,

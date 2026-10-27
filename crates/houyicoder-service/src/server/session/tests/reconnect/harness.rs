@@ -218,6 +218,7 @@ pub(super) fn parked_host(
         event_sequencer,
         gate,
         append_notify,
+        Arc::new(RecapSession::inert(session)),
     );
     (runner, session, host)
 }

@@ -1,10 +1,10 @@
 //! Recap settings (recap.enabled, recap.model), read from settings.json.
 //!
 //! A recap spends a model request while the user is away, so the section is
-//! off unless the file switches it on: an upgrade must not start background
-//! spending on its own. A file with no recap section is not a warning; a
-//! section this build cannot read stays off and says so, because a typo that
-//! silently enables paid work is the failure worth surfacing.
+//! off unless the file switches it on. The model must be named: a catalog
+//! entry able to run in Fast mode says how the user wants that model to
+//! respond, not what it costs, so it is not a recap model, and the session's
+//! main model is never a fallback either.
 
 use std::fs::read_to_string;
 use std::path::Path;
@@ -21,9 +21,8 @@ pub struct RecapConfig {
     /// Whether the host may generate a recap. False keeps every trigger
     /// path inert, which is the default for a file that never names it.
     pub enabled: bool,
-    /// The catalog id the recap request uses. None leaves the choice to the
-    /// host, which falls back to a catalog entry declared as the fast tier
-    /// and skips the recap when the catalog declares none.
+    /// The model id the recap request names. None leaves the recap off: no
+    /// catalog fact stands in for a model the user did not choose.
     pub model: Option<String>,
 }
 
@@ -64,11 +63,21 @@ pub fn load_recap_from(path: &Path) -> (RecapConfig, Vec<ConfigWarning>) {
     let mut warnings = Vec::new();
     let enabled = extract_enabled(section, &mut warnings);
     let model = extract_model(section, &mut warnings);
+    if enabled && model.is_none() && !warnings.iter().any(|w| w.field == "recap.model") {
+        // Enabling the feature and naming no model leaves it inert. Say so
+        // once at startup: the user asked for recaps and would otherwise
+        // wait for a summary that never comes. A malformed value already
+        // warned about this field, so it is not reported twice.
+        warnings.push(ConfigWarning {
+            field: "recap.model".into(),
+            reason: "the recap is enabled but names no model — it stays off until one is set"
+                .into(),
+        });
+    }
     (RecapConfig { enabled, model }, warnings)
 }
 
-/// Read the switch. Off unless the file says a JSON true, so every value
-/// this build cannot read leaves the host spending nothing.
+/// Read the switch. Off unless the file says a JSON true.
 fn extract_enabled(section: &Value, warnings: &mut Vec<ConfigWarning>) -> bool {
     match section.get("enabled") {
         None | Some(Value::Null) => false,
@@ -87,16 +96,17 @@ fn extract_enabled(section: &Value, warnings: &mut Vec<ConfigWarning>) -> bool {
 }
 
 /// Read the model id. A malformed value is dropped rather than guessed: the
-/// host then falls back to the declared fast tier, which is a catalog fact
-/// rather than a guess from a model's name.
+/// recap then stays off instead of spending on a model the user did not name.
+/// The id is trimmed, so a stray space cannot turn a named catalog entry into
+/// an unknown model at the request.
 fn extract_model(section: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<String> {
     match section.get("model") {
         None | Some(Value::Null) => None,
-        Some(Value::String(model)) if !model.trim().is_empty() => Some(model.clone()),
+        Some(Value::String(model)) if !model.trim().is_empty() => Some(model.trim().to_string()),
         Some(Value::String(_)) => {
             warnings.push(ConfigWarning {
                 field: "recap.model".into(),
-                reason: "the value is empty — the host chooses the model".into(),
+                reason: "the value is empty — the recap stays off until a model is set".into(),
             });
             None
         }
@@ -104,7 +114,7 @@ fn extract_model(section: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<S
             warnings.push(ConfigWarning {
                 field: "recap.model".into(),
                 reason: format!(
-                    "expected a string, got {} — the host chooses the model",
+                    "expected a string, got {} — the recap stays off until a model is set",
                     json_type_name(other)
                 ),
             });

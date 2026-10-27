@@ -23,4 +23,6 @@ tracing = "0.1.44"
 [dev-dependencies]
 houyicoder-config = { path = "../houyicoder-config" }
 houyicoder-memory = { path = "../houyicoder-memory" }
-tokio = { version = "1", features = ["rt", "macros"] }
+# rt-multi-thread lets the conditional-append test drive real concurrent
+# writers, so the one-writer guarantee is proven against interleaving.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

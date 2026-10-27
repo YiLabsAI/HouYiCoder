@@ -14,6 +14,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::DefaultModeGate;
+use houyicoder_permission::ModeGate;
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ServerFrame, ServerRequestPayload,
 };
@@ -27,6 +28,7 @@ use serde_json::Value;
 
 use crate::composition::SessionHost;
 use crate::lifecycle::SessionLeaseStore;
+use crate::server::recap::RecapSession;
 
 /// A scripted provider: returns a queued response per complete/stream call.
 pub struct FakeProvider {
@@ -123,17 +125,30 @@ pub fn runner_and_host() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
             ..RunnerConfig::default()
         },
     ));
-    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
+    insert_without_recap(&host, session, runner.clone(), event_sequencer, gate);
+    (runner, session, host)
+}
+
+/// Register a runner whose recap feature is off: these tests exercise the
+/// connection paths, so no recap request is ever authorized.
+fn insert_without_recap(
+    host: &SessionHost,
+    session: SessionId,
+    runner: Arc<Runner>,
+    event_sequencer: EventSequencer,
+    gate: Arc<dyn ModeGate>,
+) {
     host.insert(
         session,
-        runner.clone(),
+        runner,
         event_sequencer,
         gate,
         Arc::new(Notify::new()),
+        Arc::new(RecapSession::inert(session)),
     );
-    (runner, session, host)
 }
 
 /// One connection through serve_session: the run lands an Interruption, the
@@ -399,16 +414,10 @@ async fn test_reconnect_batch_preserves_decided() {
             ..RunnerConfig::default()
         },
     ));
-    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(
-        session,
-        runner.clone(),
-        event_sequencer,
-        gate,
-        Arc::new(Notify::new()),
-    );
+    insert_without_recap(&host, session, runner.clone(), event_sequencer, gate);
 
     // Connection 1: answer a1, then disconnect when a2 arrives.
     let (client_tx1, server_rx1) = mpsc::channel::<String>(8);
@@ -588,16 +597,10 @@ fn runner_with_noop() -> (Arc<Runner>, SessionId, Arc<SessionHost>) {
             ..RunnerConfig::default()
         },
     ));
-    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(
-        session,
-        runner.clone(),
-        event_sequencer,
-        gate,
-        Arc::new(Notify::new()),
-    );
+    insert_without_recap(&host, session, runner.clone(), event_sequencer, gate);
     (runner, session, host)
 }
 
@@ -735,16 +738,10 @@ async fn test_during_run_inject_caught() {
             ..RunnerConfig::default()
         },
     ));
-    let gate: Arc<dyn houyicoder_permission::ModeGate> = Arc::new(DefaultModeGate::new());
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let event_sequencer = EventSequencer::new();
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(
-        session,
-        runner.clone(),
-        event_sequencer,
-        gate,
-        Arc::new(Notify::new()),
-    );
+    insert_without_recap(&host, session, runner.clone(), event_sequencer, gate);
 
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);

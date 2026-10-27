@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use houyicoder_api::session::{
-    SubagentUsage, TrajectorySummary, TrajectoryTimingSummary, TrajectoryUsageSummary,
+    RecapSpend, SubagentUsage, TrajectorySummary, TrajectoryTimingSummary, TrajectoryUsageSummary,
 };
 use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::llm::UsageProvenance;
@@ -161,6 +161,7 @@ pub(crate) struct TrajectorySummaryState {
     failures: usize,
     tool_calls: usize,
     subagent: SubagentUsage,
+    recap: RecapSpend,
 
     first_ts: Option<u64>,
     last_ts: Option<u64>,
@@ -278,6 +279,11 @@ impl TrajectorySummaryState {
                 self.failures = self.failures.saturating_add(*tool_failures as usize);
                 self.subagent.record(event);
             }
+            // A recap runs between turns, so its spend joins the session's own
+            // account while moving no turn counter, and the model it named is
+            // not added to the models the session ran: the user never switched
+            // to it.
+            SessionEvent::AwayRecap { .. } => self.recap.record(event),
             SessionEvent::TurnAborted { .. }
             | SessionEvent::RunCompleted { .. }
             | SessionEvent::ContextCleared { .. } => self.close_turn(),
@@ -420,9 +426,10 @@ impl TrajectorySummaryState {
         let (ttft_p95_ms, p95_capped) = split(self.ttft.percentile(0.95));
         let (ttft_p99_ms, p99_capped) = split(self.ttft.percentile(0.99));
         // A child that reached a terminal without reporting usage leaves a
-        // hole in the session total just as a turn does, so the one definition
-        // of completeness covers both. A reader that had to combine the two
-        // fields itself would eventually read the total as complete.
+        // hole in the session total just as a turn does, and so does a recap
+        // written without figures, so the one definition of completeness
+        // covers all three. A reader that had to combine the fields itself
+        // would eventually read the total as complete.
         let subagent_unmeasured = self.subagent.unmeasured_calls > 0;
         let turn_provenance = self
             .turn_provenance
@@ -431,23 +438,33 @@ impl TrajectorySummaryState {
             total_turns: self.numbered_turns(),
             usage: TrajectoryUsageSummary {
                 // The session's own account is the parent's calls plus every
-                // child's: what the whole session spent is the figure the
-                // headline reports, and the delegated half is carried beside
-                // it so a reader can see the child's contribution rather than
-                // subtract for it.
-                input_tokens: self.input_tokens.saturating_add(self.subagent.input_tokens),
+                // child's and every recap's: what the whole session spent is
+                // the figure the headline reports, and each background half is
+                // carried beside it so a reader can see its contribution
+                // rather than subtract for it.
+                input_tokens: self
+                    .input_tokens
+                    .saturating_add(self.subagent.input_tokens)
+                    .saturating_add(self.recap.input_tokens),
                 output_tokens: self
                     .output_tokens
-                    .saturating_add(self.subagent.output_tokens),
+                    .saturating_add(self.subagent.output_tokens)
+                    .saturating_add(self.recap.output_tokens),
                 cache_read_tokens: self
                     .cache_read_tokens
-                    .saturating_add(self.subagent.cache_read_input_tokens),
-                totals_known: self.totals_known() && !subagent_unmeasured,
-                provenance: turn_provenance.merge(self.subagent.provenance),
+                    .saturating_add(self.subagent.cache_read_input_tokens)
+                    .saturating_add(self.recap.cache_read_input_tokens),
+                totals_known: self.totals_known()
+                    && !subagent_unmeasured
+                    && self.recap.unmeasured_calls == 0,
+                provenance: turn_provenance
+                    .merge(self.subagent.provenance)
+                    .merge(self.recap.provenance),
                 failures: self.failures,
                 tool_calls: self.tool_calls,
                 subagent: self.subagent,
                 subagent_unmeasured,
+                recap: self.recap,
             },
             timing: TrajectoryTimingSummary {
                 ttft_samples: self.ttft.samples as usize,

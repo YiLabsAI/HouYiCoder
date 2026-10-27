@@ -27,7 +27,7 @@ fn test_provider_warning_reaches_queue() {
         "apiKeyHelper",
         "a project settings file asked to run a command for your API key; ignored",
     )];
-    let out = collect_startup_warnings(&[], &[], &[], &provider);
+    let out = collect_startup_warnings(&[], &[], &[], &provider, &[]);
     assert_eq!(
         out,
         vec![
@@ -39,7 +39,7 @@ fn test_provider_warning_reaches_queue() {
 }
 
 /// Every source arm reaches the queue, in load order. Asserting the whole
-/// vector rather than four separate contains checks is what catches a
+/// vector rather than five separate contains checks is what catches a
 /// dropped arm: a per-arm check still passes when another arm is deleted.
 #[test]
 fn test_arms_merge_in_order() {
@@ -48,6 +48,7 @@ fn test_arms_merge_in_order() {
         &[warning("auto_memory", "expected a bool")],
         &[warning("effort", "unknown level")],
         &[warning("apiKeyHelper", "ignored")],
+        &[warning("recap.model", "unknown model")],
     );
     assert_eq!(
         out,
@@ -56,8 +57,9 @@ fn test_arms_merge_in_order() {
             "auto_memory: expected a bool".to_string(),
             "effort: unknown level".to_string(),
             "apiKeyHelper: ignored".to_string(),
+            "recap.model: unknown model".to_string(),
         ],
-        "network, then toggles, then model-section, then provider"
+        "network, then toggles, then model-section, then provider, then recap"
     );
 }
 
@@ -65,5 +67,5 @@ fn test_arms_merge_in_order() {
 /// transcript with an empty system line.
 #[test]
 fn test_clean_startup_silent() {
-    assert!(collect_startup_warnings(&[], &[], &[], &[]).is_empty());
+    assert!(collect_startup_warnings(&[], &[], &[], &[], &[]).is_empty());
 }

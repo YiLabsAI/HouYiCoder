@@ -2,7 +2,7 @@
 //! what the turn bookkeeping reports, and what a read costs.
 
 use super::*;
-use houyicoder_context::{EventId, RecapSource, SessionId};
+use houyicoder_context::{EventId, RecapSource, RecapUsage, SessionId};
 
 fn entry(ts: u64, event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -136,17 +136,7 @@ fn test_leading_partial_turn_counts() {
 #[test]
 fn test_recap_skips_turn() {
     let events = vec![
-        entry(
-            0,
-            SessionEvent::AwayRecap {
-                text: "where the work stands".into(),
-                last_user_event: EventId::new(),
-                as_of_event: EventId::new(),
-                source: RecapSource::Away,
-                model: "fast-1".into(),
-                usage: None,
-            },
-        ),
+        recap(0, Some(recap_figures(4, 1, 0))),
         entry(10, SessionEvent::UserInput { text: "a".into() }),
         usage(20, 10, 1, "m"),
     ];
@@ -619,6 +609,68 @@ fn test_unmeasured_child_flagged() {
         },
     )];
     assert!(fold(&events).usage.subagent_unmeasured);
+}
+
+fn recap(ts: u64, usage: Option<RecapUsage>) -> SessionLogEntry {
+    entry(
+        ts,
+        SessionEvent::AwayRecap {
+            text: "half done".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "small".into(),
+            usage,
+        },
+    )
+}
+
+fn recap_figures(input: u64, output: u64, cache_read: u64) -> RecapUsage {
+    RecapUsage {
+        input_tokens: Some(input),
+        output_tokens: Some(output),
+        cache_read_input_tokens: Some(cache_read),
+        cache_write_input_tokens: None,
+        duration_ms: Some(900),
+    }
+}
+
+/// A recap spends between turns, so its figures join the session account and
+/// the headline reports them, while the turn counters and the model list stay
+/// what the user's own turns made them.
+#[test]
+fn test_recap_usage_folds() {
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "a".into() }),
+        usage(10, 1_000, 100, "m"),
+        recap(20, Some(recap_figures(400, 20, 300))),
+    ];
+    let summary = fold(&events);
+    assert_eq!(summary.usage.input_tokens, 1_400);
+    assert_eq!(summary.usage.output_tokens, 120);
+    assert_eq!(summary.usage.cache_read_tokens, 800);
+    assert_eq!(summary.usage.recap.calls, 1);
+    assert_eq!(summary.usage.recap.input_tokens, 400);
+    assert_eq!(summary.usage.recap.duration_ms, Some(900));
+    assert_eq!(summary.total_turns, 1, "a recap is not a turn");
+    assert_eq!(
+        summary.models_used, 1,
+        "the recap model is not one the session ran"
+    );
+    assert!(summary.usage.totals_known);
+}
+
+/// A recap written without figures leaves a hole in the same account, so the
+/// headline reads as partial rather than reporting a spend it never saw.
+#[test]
+fn test_unmeasured_recap_hides_share() {
+    let events = vec![usage(10, 1_000, 100, "m"), recap(20, None)];
+    let summary = fold(&events);
+    assert_eq!(summary.usage.recap.unmeasured_calls, 1);
+    assert!(
+        !summary.usage.totals_known,
+        "the account holds the recap, so its silence is a hole in it"
+    );
 }
 
 /// A streaming delta advances the span but no counter: it is not durable, so

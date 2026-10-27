@@ -45,9 +45,11 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
+use houyicoder_config::recap::RecapConfig;
+use houyicoder_config::recap::load_recap_from;
 use houyicoder_config::{
-    ConfigWarning, ModelSelection, load_model_section_from, resolve_model_selection_from,
-    settings_path,
+    ConfigWarning, ModelSection, ModelSelection, load_model_section_from,
+    resolve_model_selection_from, settings_path,
 };
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
@@ -77,6 +79,8 @@ use std::sync::RwLock;
 
 use crate::lifecycle::SessionLeaseStore;
 use crate::server::EventSequencer;
+use crate::server::recap::RecapSession;
+use crate::server::recap::RecapSettings;
 use built_in_tools::BuiltInToolProvider;
 use hook_compose::SkillRuntime;
 use houyicoder_api::launcher::StdProcessLauncher;
@@ -136,6 +140,11 @@ pub struct AssembledRunner {
     /// caller that had to re-derive the facts would be a second source for the
     /// endpoint the status view reports.
     pub provider_facts: ProviderFacts,
+    /// The session's recap state: when an idle session may be summarized and
+    /// the request it makes. One instance per session so it outlives every
+    /// connection; a session assembled without the feature enabled still
+    /// carries it, inert.
+    pub recap: Arc<RecapSession>,
 }
 
 /// An assembled runner plus the model restored from a resumed session's
@@ -300,6 +309,7 @@ pub(crate) fn assemble(
         descriptor_store: Some(Arc::clone(&descriptor_store)),
     });
     let (section, effort_warnings) = load_model_section_from(&settings_path());
+    let (recap, recap_warnings) = build_recap(session, &section, &store, &provider_for_extractor);
     let store_log_root = store.session_log_root();
     let runner = Runner::new(store, provider, tools, config)
         .with_recall_meter(recall_meter)
@@ -339,6 +349,7 @@ pub(crate) fn assemble(
         &toggle_warnings,
         &effort_warnings,
         &provider_cfg_warnings,
+        &recap_warnings,
     );
     finish_startup_warnings(
         &mut startup,
@@ -356,6 +367,77 @@ pub(crate) fn assemble(
         worktree_controller,
         bus: Some(bus),
         provider_facts,
+        recap,
+    }
+}
+
+/// Build the session's recap state from the settings file. The recap reads
+/// and writes the session's own log through the same provider the session runs
+/// on, so neither is a second source for the traffic it describes.
+fn build_recap(
+    session: SessionId,
+    section: &ModelSection,
+    store: &Arc<SessionStore>,
+    provider: &Arc<dyn ModelProvider>,
+) -> (Arc<RecapSession>, Vec<ConfigWarning>) {
+    let (config, mut warnings) = load_recap_from(&settings_path());
+    let (settings, model_warnings) = recap_settings(config, section);
+    warnings.extend(model_warnings);
+    let log: Arc<dyn SessionLog> = store.clone();
+    let recap = Arc::new(RecapSession::new(
+        session,
+        settings,
+        Arc::clone(provider),
+        log,
+    ));
+    (recap, warnings)
+}
+
+/// Decide whether the configured recap may run, and say why when it may not.
+///
+/// The named model must be a catalog entry, and its dialect must run without
+/// thinking: the request carries no tools and no reasoning, so a model that
+/// cannot turn thinking off would spend on something this feature did not
+/// authorize. Either failure leaves the recap off with a startup warning
+/// rather than falling back to the session's own model.
+fn recap_settings(
+    config: RecapConfig,
+    section: &ModelSection,
+) -> (RecapSettings, Vec<ConfigWarning>) {
+    let settings = RecapSettings {
+        enabled: config.enabled,
+        model: config.model,
+    };
+    if !settings.enabled {
+        return (settings, Vec::new());
+    }
+    let Some(model) = settings.model.as_deref() else {
+        // The loader already warned that an enabled section names no model.
+        return (settings, Vec::new());
+    };
+    let reason = if !section.catalog.iter().any(|entry| entry.id == model) {
+        Some(format!(
+            "{model} is not in the model catalog — the recap stays off"
+        ))
+    } else if !model_window::effort_dialect(model).can_disable_thinking() {
+        Some(format!(
+            "{model} cannot run without thinking — the recap stays off"
+        ))
+    } else {
+        None
+    };
+    match reason {
+        Some(reason) => (
+            RecapSettings {
+                enabled: false,
+                ..settings
+            },
+            vec![ConfigWarning {
+                field: "recap.model".into(),
+                reason,
+            }],
+        ),
+        None => (settings, Vec::new()),
     }
 }
 
@@ -521,6 +603,7 @@ struct LiveRunnerHandle {
     event_sequencer: EventSequencer,
     gate: Arc<dyn ModeGate>,
     append_notify: Arc<Notify>,
+    recap: Arc<RecapSession>,
 }
 
 /// The session-indexed host a reattaching connection re-hydrates from. Holds
@@ -567,7 +650,8 @@ impl SessionHost {
         self.provider_facts.as_ref()
     }
 
-    /// Register a runner and its session-scoped event sequencer.
+    /// Register a runner, its session-scoped event sequencer, and its recap
+    /// state.
     pub fn insert(
         &self,
         session: SessionId,
@@ -575,6 +659,7 @@ impl SessionHost {
         event_sequencer: EventSequencer,
         gate: Arc<dyn ModeGate>,
         append_notify: Arc<Notify>,
+        recap: Arc<RecapSession>,
     ) {
         self.runners.lock().expect("host lock").insert(
             session,
@@ -583,12 +668,14 @@ impl SessionHost {
                 event_sequencer,
                 gate,
                 append_notify,
+                recap,
             },
         );
     }
 
-    /// Clone the runner, sequencer, gate, and append notification needed by a
-    /// reattaching connection. None when the session is not registered.
+    /// Clone the runner, sequencer, gate, append notification, and recap state
+    /// needed by a reattaching connection. None when the session is not
+    /// registered.
     pub(crate) fn clone_handle(&self, session: SessionId) -> Option<RunnerHandleClone> {
         self.runners
             .lock()
@@ -599,6 +686,7 @@ impl SessionHost {
                 event_sequencer: h.event_sequencer.clone(),
                 gate: h.gate.clone(),
                 append_notify: h.append_notify.clone(),
+                recap: h.recap.clone(),
             })
     }
 
@@ -617,6 +705,7 @@ pub(crate) struct RunnerHandleClone {
     pub(crate) event_sequencer: EventSequencer,
     pub(crate) gate: Arc<dyn ModeGate>,
     pub(crate) append_notify: Arc<Notify>,
+    pub(crate) recap: Arc<RecapSession>,
 }
 
 #[cfg(test)]

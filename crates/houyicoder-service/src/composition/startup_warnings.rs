@@ -14,6 +14,7 @@ pub(super) fn collect_startup_warnings(
     toggles: &[ConfigWarning],
     effort: &[ConfigWarning],
     provider: &[ConfigWarning],
+    recap: &[ConfigWarning],
 ) -> Vec<String> {
     let mut out: Vec<String> = network
         .iter()
@@ -22,6 +23,7 @@ pub(super) fn collect_startup_warnings(
     out.extend(toggles.iter().map(format_warning));
     out.extend(effort.iter().map(format_warning));
     out.extend(provider.iter().map(format_warning));
+    out.extend(recap.iter().map(format_warning));
     out
 }
 

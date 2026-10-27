@@ -35,6 +35,8 @@ mod model_switch_concurrent;
 mod model_switch_window;
 #[path = "permission_contract.rs"]
 mod permission_contract;
+#[path = "recap_contract.rs"]
+mod recap_contract;
 #[path = "server_contract.rs"]
 mod server_contract;
 #[path = "session_descriptor_contract.rs"]

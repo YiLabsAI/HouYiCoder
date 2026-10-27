@@ -13,7 +13,7 @@ use houyicoder_api::session::SubagentUsage;
 use houyicoder_context::{CheckpointId, Disposition, EventId, SessionEvent, TurnGroup};
 use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::{Barrier, Notify};
 use tokio::time::timeout;
 
 fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
@@ -87,6 +87,45 @@ async fn test_append_sets_hash_chain() {
         e3_stored.prev_hash,
         Some(chain::hash_event(&e2_stored).unwrap())
     );
+}
+
+/// Two hosts can summarize the same point at the same time, and the log
+/// admits exactly one of them: the condition and the write share one lock,
+/// so no append lands between another caller's read and its write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_append_if_single_writer() {
+    const WRITERS: usize = 8;
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let session = SessionId::new();
+    let gate = Arc::new(Barrier::new(WRITERS));
+    let mut tasks = Vec::new();
+    for _ in 0..WRITERS {
+        let store = Arc::clone(&store);
+        let gate = Arc::clone(&gate);
+        tasks.push(tokio::spawn(async move {
+            gate.wait().await;
+            let allow = |events: &[SessionLogEntry]| {
+                !events
+                    .iter()
+                    .any(|entry| matches!(entry.event, SessionEvent::UserInput { .. }))
+            };
+            let entry = evt(
+                session,
+                EventId::new(),
+                SessionEvent::UserInput { text: "go".into() },
+            );
+            store.append_if(entry, &allow).await.expect("append_if")
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        if task.await.expect("writer task").is_some() {
+            admitted += 1;
+        }
+    }
+    assert_eq!(admitted, 1, "exactly one writer admits the request");
+    let events = store.replay(session).await.expect("replay");
+    assert_eq!(events.len(), 1, "the log holds only the admitted event");
 }
 
 #[tokio::test]

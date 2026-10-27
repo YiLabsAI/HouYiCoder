@@ -18,6 +18,7 @@ use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use crate::server::approval::disclose_directory_grants;
+use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_context::{
     EventId, PermissionVerdict, SessionDescriptorStore, SessionEvent, SessionLogEntry,
@@ -39,6 +40,7 @@ impl Server {
         gate: Arc<dyn houyicoder_permission::ModeGate>,
         host: Arc<SessionHost>,
         append_notify: Arc<Notify>,
+        recap: Arc<RecapSession>,
     ) -> Self {
         let sandbox_session = runner.sandbox_session();
         Self {
@@ -56,6 +58,8 @@ impl Server {
             append_notify: Some(append_notify),
             descriptor_store: None,
             diagnostics: handle(),
+            recap: Some(recap),
+            recap_client: None,
             // Resume path does not wire the bus yet; a reconnecting session
             // mid-child-approval is a follow-up (the parent serve path covers
             // the common case).
@@ -343,6 +347,7 @@ pub(crate) async fn serve_session(
         handle.gate,
         host.clone(),
         handle.append_notify,
+        handle.recap,
     );
     // The facts are process-scoped, so a reattaching connection reports the
     // same ones the live connection does instead of falling back to the

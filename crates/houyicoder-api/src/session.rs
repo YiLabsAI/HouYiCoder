@@ -119,6 +119,111 @@ impl SubagentUsage {
     }
 }
 
+/// What a session's recaps spent.
+///
+/// A recap runs between turns, so its cost is carried apart from the turn
+/// account rather than as a turn that reported no user input. The session
+/// totals include this bucket, and a reader that wants to know how much of the
+/// total the recaps contributed reads it here instead of subtracting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecapSpend {
+    /// Recaps written to the log.
+    pub calls: usize,
+    /// Recaps whose record carried no token figure at all, so the totals hold a
+    /// hole for them.
+    pub unmeasured_calls: usize,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_write_input_tokens: u64,
+    /// Wall time summed over the recaps that reported an account, and None
+    /// when none did. A call with no figures contributes nothing here either,
+    /// so the row that says the usage was not reported carries no time that
+    /// could read as a measured cost.
+    pub duration_ms: Option<u64>,
+    /// The AND-fold of the figures each recap reported. Seeded to all-reported,
+    /// the merge identity, so a session with no recap leaves a joined account
+    /// as complete as it was.
+    pub provenance: UsageProvenance,
+}
+
+impl Default for RecapSpend {
+    fn default() -> Self {
+        Self {
+            calls: 0,
+            unmeasured_calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            duration_ms: None,
+            provenance: UsageProvenance::ALL_REPORTED,
+        }
+    }
+}
+
+impl RecapSpend {
+    /// Fold one durable event into the bucket. Events other than a written
+    /// recap leave it unchanged: an attempt records that a request may have
+    /// left and carries no figures to add, so it counts as neither a call nor
+    /// a measured one.
+    pub fn record(&mut self, event: &SessionEvent) {
+        let SessionEvent::AwayRecap { usage, .. } = event else {
+            return;
+        };
+        self.calls = self.calls.saturating_add(1);
+        let Some(usage) = usage else {
+            self.unmeasured_calls = self.unmeasured_calls.saturating_add(1);
+            return;
+        };
+        let provenance = UsageProvenance {
+            input_reported: usage.input_tokens.is_some(),
+            cache_read_reported: usage.cache_read_input_tokens.is_some(),
+            cache_write_reported: usage.cache_write_input_tokens.is_some(),
+        };
+        if !provenance.input_reported
+            && !provenance.cache_read_reported
+            && !provenance.cache_write_reported
+            && usage.output_tokens.is_none()
+        {
+            self.unmeasured_calls = self.unmeasured_calls.saturating_add(1);
+            return;
+        }
+        // A figure the endpoint did not report adds nothing to the sum and
+        // leaves its flag in the provenance, so a reader can tell the sum is a
+        // floor rather than the bill.
+        self.input_tokens = self
+            .input_tokens
+            .saturating_add(usage.input_tokens.unwrap_or(0));
+        self.output_tokens = self
+            .output_tokens
+            .saturating_add(usage.output_tokens.unwrap_or(0));
+        self.cache_read_input_tokens = self
+            .cache_read_input_tokens
+            .saturating_add(usage.cache_read_input_tokens.unwrap_or(0));
+        self.cache_write_input_tokens = self
+            .cache_write_input_tokens
+            .saturating_add(usage.cache_write_input_tokens.unwrap_or(0));
+        if let Some(ms) = usage.duration_ms {
+            self.duration_ms = Some(self.duration_ms.unwrap_or(0).saturating_add(ms));
+        }
+        self.provenance = self.provenance.merge(provenance);
+    }
+}
+
+/// Fold every written recap in a log into one account.
+///
+/// The whole-log read and the session summary's incremental fold share the
+/// per-event rule, so a session read back from its log and a session that just
+/// appended report the same spend.
+pub fn aggregate_recap_spend(events: &[SessionLogEntry]) -> RecapSpend {
+    let mut spend = RecapSpend::default();
+    for entry in events {
+        spend.record(&entry.event);
+    }
+    spend
+}
+
 /// The usage one recorded turn accounts for, together with the model that ran
 /// it. None for an event that records no usage.
 ///
@@ -225,6 +330,8 @@ pub struct TrajectoryUsageSummary {
     pub subagent: SubagentUsage,
     /// True when a child reached a terminal without reporting usage.
     pub subagent_unmeasured: bool,
+    /// What the session's recaps spent, included in the figures above.
+    pub recap: RecapSpend,
 }
 
 /// The session's latency facts.
@@ -405,6 +512,21 @@ pub trait SessionLog: Send + Sync {
     /// Append an event to the lossless log. The facade sets prev_hash; the
     /// backend stores it verbatim.
     fn append(&self, event: SessionLogEntry) -> PFut<'_, Result<EventId, ContextError>>;
+
+    /// Append the event only if the session's log still satisfies allow,
+    /// evaluating the condition and writing under one lock so no append can
+    /// land between them. Ok(None) when the condition no longer holds and
+    /// nothing was written.
+    ///
+    /// A writer that decided from an earlier read of the log uses this to
+    /// land its record without a gap a concurrent append could fill: the
+    /// condition sees the log it is about to extend, not the one it read
+    /// before queueing for the write.
+    fn append_if<'a>(
+        &'a self,
+        event: SessionLogEntry,
+        allow: &'a (dyn Fn(&[SessionLogEntry]) -> bool + Send + Sync),
+    ) -> PFut<'a, Result<Option<EventId>, ContextError>>;
 
     /// Read the full event log for a session in append order.
     fn replay(&self, session: SessionId) -> PFut<'_, Result<Vec<SessionLogEntry>, ContextError>>;

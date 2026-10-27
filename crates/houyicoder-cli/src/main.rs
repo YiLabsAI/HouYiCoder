@@ -426,6 +426,7 @@ fn run_serve(
         event_sequencer,
         gate,
         bundle.append_notify,
+        bundle.recap,
     );
     runtime.block_on(async move {
         fire_after_bundle(session);

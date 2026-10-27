@@ -497,6 +497,21 @@ fn test_build_trajectory_carries_duration() {
     let entries3 = super::build_trajectory_entries(from_ref(&recap));
     assert_eq!(entries3[0].kind, "recap");
     assert_eq!(entries3[0].duration_ms, Some(760));
+    let cost = entries3[0]
+        .usage
+        .as_ref()
+        .expect("the recap's cost reaches the audit row");
+    assert_eq!(cost.model, "fast-1");
+    assert_eq!(cost.input_tokens, Some(900));
+    assert_eq!(cost.output_tokens, Some(40));
+    assert_eq!(
+        cost.cache_read_input_tokens, None,
+        "a figure the endpoint did not report stays unknown"
+    );
+    assert!(
+        entries2[0].usage.is_none(),
+        "an event the host did not bill carries no cost"
+    );
 }
 
 /// A skill-tool always-allow scopes to the specific skill name + lands at

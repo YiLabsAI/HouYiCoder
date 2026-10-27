@@ -85,6 +85,23 @@ pub enum EffortDialect {
     NotSupported,
 }
 
+impl EffortDialect {
+    /// Whether a request in this dialect can turn thinking off.
+    ///
+    /// A caller that must run without thinking, such as a background summary,
+    /// cannot use a dialect that only offers a reasoning level: asking for
+    /// less reasoning still sends a request that thinks. A dialect with no
+    /// thinking parameter at all sends nothing either way, so there is no
+    /// switch to lose; the two reasoning levels are the ones that must be
+    /// skipped.
+    pub fn can_disable_thinking(self) -> bool {
+        match self {
+            EffortDialect::Qwen3 | EffortDialect::NotSupported => true,
+            EffortDialect::OpenaiReasoning | EffortDialect::Glm => false,
+        }
+    }
+}
+
 /// Probe the model id for its effort dialect. qwen3 wins over other families
 /// (a hypothetical qwen3-reasoning id is qwen3 first). Keep in lockstep with
 /// the provider's own probe so the resolved dialect and the emitted fields

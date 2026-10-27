@@ -149,6 +149,11 @@ pub fn build_runner_for_resume_export(
         resolved,
         descriptor_store.clone(),
     );
+    // Opening a session through resume is its own entry: the user is coming
+    // back, so a summary of what they left is owed whether or not they look
+    // away again. The job itself refuses when the session was worked in
+    // moments ago or already carries a recap of this point.
+    assembled.recap.resume_entry();
     Ok(ResumedRunner {
         assembled,
         model: model_for_return,
@@ -311,6 +316,9 @@ pub fn build_runner_for_resume_sid(
         resolved,
         descriptor_store.clone(),
     );
+    // Same entry as the export path: the session is being reopened after an
+    // absence, which is what a resume recap describes.
+    assembled.recap.resume_entry();
     Ok(ResumedRunner {
         assembled,
         model: model_for_return,
