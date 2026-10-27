@@ -200,8 +200,10 @@ pub trait SessionDescriptorStore: Send + Sync {
         descriptor: &SessionDescriptor,
     ) -> Result<bool, SessionDescriptorError>;
 
-    /// Read, edit, and write the descriptor as one indivisible step, returning
-    /// whether there was a descriptor to edit.
+    /// Read, edit, and write the descriptor as one indivisible step, reporting
+    /// which of three outcomes happened: the store wrote the edited record, the
+    /// edit left the record as it found it so nothing was written, or the
+    /// session held no record to edit.
     ///
     /// Every caller that changes one field must use this rather than
     /// read_descriptor followed by write_descriptor. Those calls each write a
@@ -223,12 +225,17 @@ pub trait SessionDescriptorStore: Send + Sync {
     fn delete_descriptor(&self, session: SessionId);
 }
 
-/// Whether an update_descriptor call found a descriptor to edit. Absent is not
-/// an error because a descriptor materializes on the first durable append.
+/// What an update_descriptor call did with the descriptor. Absent is not an
+/// error because a descriptor materializes on the first durable append.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorUpdate {
     /// The descriptor existed; the edit was applied and written back.
     Written,
+    /// The descriptor existed and the edit left it exactly as it was, so
+    /// nothing was written. A record that already holds what an edit would set
+    /// must not pay a write: an edit can run on every launch, and rewriting an
+    /// unchanged record replaces its file for no reader.
+    Unchanged,
     /// No descriptor for the session; nothing was edited or written.
     Absent,
 }

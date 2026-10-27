@@ -679,12 +679,16 @@ pub(super) fn stamp_spawned_by(
         let outcome = store.update_descriptor(child_sid, &mut |descriptor| {
             descriptor.provenance = prov.clone();
         });
-        // Written means there was a descriptor to edit; anything else -- a
-        // store that materializes none on a first append, or an update that
-        // failed -- leaves the provenance unrecorded, so create a descriptor
-        // here. Complete is truthful at this point: the child has written
-        // nothing yet and its runner observes every later append.
-        if !matches!(outcome, Ok(DescriptorUpdate::Written)) {
+        // Written means there was a descriptor to edit, and Unchanged means the
+        // one there already states this provenance. Anything else -- a store
+        // that materializes none on a first append, or an update that failed
+        // -- leaves the provenance unrecorded, so create a descriptor here.
+        // Complete is truthful at this point: the child has written nothing
+        // yet and its runner observes every later append.
+        if !matches!(
+            outcome,
+            Ok(DescriptorUpdate::Written | DescriptorUpdate::Unchanged)
+        ) {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())

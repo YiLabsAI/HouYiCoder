@@ -65,7 +65,7 @@ impl PromptRecorder {
             // Reported on the worker that ran the write, so a shutdown that
             // drops the awaiting task does not take the diagnostic with it.
             match outcome {
-                Ok(DescriptorUpdate::Written) => {}
+                Ok(DescriptorUpdate::Written | DescriptorUpdate::Unchanged) => {}
                 Ok(DescriptorUpdate::Absent) => {
                     tracing::warn!(
                         session = %session,

@@ -178,7 +178,11 @@ impl SessionDescriptorStore for FileDescriptorStore {
         let Some(mut descriptor) = self.read_sync(session) else {
             return Ok(DescriptorUpdate::Absent);
         };
+        let before = descriptor.clone();
         edit(&mut descriptor);
+        if descriptor == before {
+            return Ok(DescriptorUpdate::Unchanged);
+        }
         self.write_sync(session, &descriptor)?;
         Ok(DescriptorUpdate::Written)
     }
@@ -261,7 +265,11 @@ impl SessionDescriptorStore for InMemoryDescriptorStore {
         let Some(descriptor) = descriptors.get_mut(&session) else {
             return Ok(DescriptorUpdate::Absent);
         };
+        let before = descriptor.clone();
         edit(descriptor);
+        if *descriptor == before {
+            return Ok(DescriptorUpdate::Unchanged);
+        }
         Ok(DescriptorUpdate::Written)
     }
 

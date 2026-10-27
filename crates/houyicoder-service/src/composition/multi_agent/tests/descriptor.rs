@@ -71,3 +71,32 @@ async fn test_child_prompt_reaches_descriptor() {
         "find the auth module"
     );
 }
+
+/// A descriptor that already records this delegation keeps every other field.
+/// The edit changes nothing, so the store reports that it wrote nothing and
+/// the record stands as it is: writing a fresh one would reset the name, the
+/// creation time, and both prompt slots the child has filled since.
+#[test]
+fn test_stamp_keeps_existing_record() {
+    let descriptors = Arc::new(InMemoryDescriptorStore::new());
+    let parent = SessionId::new();
+    let child = SessionId::new();
+    let provenance = SessionProvenance::SpawnedBy {
+        parent_session_id: parent.to_string(),
+        subagent_type: "explore".to_string(),
+        task_id: "task-1".to_string(),
+    };
+    let mut existing =
+        SessionDescriptor::delegated_child(provenance, 1_700_000_000, PromptCoverage::Complete);
+    existing.name = Some("kept".to_string());
+    descriptors
+        .write_descriptor(child, &existing)
+        .expect("seed the child's record");
+    let store: Option<Arc<dyn SessionDescriptorStore>> = Some(descriptors.clone());
+    stamp_spawned_by(&store, child, parent, "explore", "task-1");
+    assert_eq!(
+        descriptors.read_descriptor(child),
+        Some(existing),
+        "a record that already states the delegation is left alone"
+    );
+}

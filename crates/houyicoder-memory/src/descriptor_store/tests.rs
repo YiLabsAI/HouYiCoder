@@ -147,6 +147,38 @@ fn test_update_absent_writes_nothing() {
     drop(fs::remove_dir_all(&root));
 }
 
+/// An edit that leaves the descriptor as it was reports Unchanged and writes
+/// nothing. A caller that re-applies a record it already holds must not make
+/// the store replace the file, which costs a write and moves the mtime for no
+/// reader.
+#[test]
+fn test_update_unchanged_writes_nothing() {
+    let root = temp_root();
+    let store = FileDescriptorStore::new(root.clone());
+    let sid = SessionId::new();
+    store
+        .write_descriptor(sid, &sample_descriptor(Some("same"), 1))
+        .expect("write");
+    let outcome = store
+        .update_descriptor(sid, &mut |descriptor| descriptor.name = Some("same".into()))
+        .expect("update");
+    assert_eq!(
+        outcome,
+        DescriptorUpdate::Unchanged,
+        "the edit changed no field"
+    );
+    let memory = InMemoryDescriptorStore::new();
+    memory
+        .write_descriptor(sid, &sample_descriptor(Some("same"), 1))
+        .expect("write");
+    assert_eq!(
+        memory.update_descriptor(sid, &mut |_| ()).expect("update"),
+        DescriptorUpdate::Unchanged,
+        "an edit that touches nothing writes nothing in the memory store too"
+    );
+    drop(fs::remove_dir_all(&root));
+}
+
 #[test]
 fn test_file_store_delete_idempotent() {
     let root = temp_root();

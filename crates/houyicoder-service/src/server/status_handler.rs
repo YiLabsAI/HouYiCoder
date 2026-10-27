@@ -74,7 +74,7 @@ impl Server {
             }
         });
         let detail = match outcome {
-            Ok(DescriptorUpdate::Written) => None,
+            Ok(DescriptorUpdate::Written | DescriptorUpdate::Unchanged) => None,
             Ok(DescriptorUpdate::Absent) => {
                 Some("rename: no session descriptor to rename".to_string())
             }
@@ -99,8 +99,7 @@ impl Server {
     }
 
     /// Build the current protocol status, titling an unnamed session from the
-    /// prompts its descriptor records, or from its log head when it records
-    /// none.
+    /// prompts its descriptor records and answering from the record alone.
     pub(super) fn build_status_snapshot(&self) -> StatusSnapshot {
         let snap = self.runner.status_snapshot();
         let mut snapshot = pa::map_status_snapshot(&snap);
