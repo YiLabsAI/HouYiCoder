@@ -4,6 +4,10 @@ use houyicoder_context::{
     EventId, SessionDescriptor, SessionEvent, SessionLogEntry, SessionProvenance,
 };
 use houyicoder_service::lifecycle::prune::{PruneAction, PruneEntry, PruneReason};
+#[cfg(unix)]
+use std::fs::{OpenOptions, Permissions};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 fn temp_root() -> PathBuf {
@@ -16,14 +20,14 @@ fn temp_root() -> PathBuf {
 }
 
 /// A one-entry plan removing a session directory. with_lock controls
-/// whether the directory already carries a session.lock: a session no
+/// whether the directory already carries a lock file: a session no
 /// live process has ever opened does not have one, which is the case the
 /// delete-time acquire has to create.
 fn plan_with_session(dir: &Path, with_lock: bool) -> PrunePlan {
     create_dir_all(dir).unwrap();
     write(dir.join("log.jsonl"), b"[]").unwrap();
     if with_lock {
-        write(dir.join("session.lock"), b"").unwrap();
+        write(dir.join(LOCK_FILE), b"").unwrap();
     }
     PrunePlan {
         entries: vec![PruneEntry {
@@ -38,7 +42,7 @@ fn plan_with_session(dir: &Path, with_lock: bool) -> PrunePlan {
 }
 
 /// A session nobody holds is deleted and reported as removed. It starts
-/// without a session.lock, so this also covers the acquire creating one
+/// without a lock file, so this also covers the acquire creating one
 /// on a directory that has never been opened by a live process.
 #[test]
 fn test_apply_removes_free_session() {
@@ -60,18 +64,71 @@ fn test_apply_spares_held_session() {
     let sid_dir = root.join("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
     let plan = plan_with_session(&sid_dir, true);
     // Stand in for a live process holding the session open.
-    let _external = Flock::lock(
-        OpenOptions::new()
-            .write(true)
-            .open(sid_dir.join("session.lock"))
-            .unwrap(),
-        FlockArg::LockExclusiveNonblock,
-    )
-    .unwrap();
+    let external = open_lock_file(&sid_dir.join(LOCK_FILE), false).unwrap();
+    external.try_lock().unwrap();
+    let _external = external;
     let (report, skipped) = apply_prune_locked(&plan);
     assert_eq!(report.removed, 0, "a held session is not deleted");
     assert_eq!(skipped, 1, "the skip is counted, not silently dropped");
     assert!(sid_dir.exists(), "the held session survives");
+    let _r = remove_dir_all(&root);
+}
+
+/// Leave a lock file at the mode an earlier build would have left it, so a
+/// mode assertion afterwards says the open repaired the file rather than
+/// created it right.
+#[cfg(unix)]
+fn seed_wide_lock_file(path: &Path) {
+    let seeded = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o644)
+        .open(path)
+        .expect("seed a lock file");
+    // State the mode rather than inherit it from the process umask: one that
+    // masks the group bits leaves the fixture owner-only, and the assertion
+    // below would then fail without saying what it meant to set up.
+    seeded
+        .set_permissions(Permissions::from_mode(0o644))
+        .expect("state the seeded mode");
+    let mode = metadata(path).expect("seeded").permissions().mode();
+    assert_eq!(
+        mode & 0o077,
+        0o044,
+        "fixture must start wider, got {mode:o}"
+    );
+}
+
+/// Both lock files the prune opens are owner-only, including one an earlier
+/// build left wider: taking the prune lock or a session's delete lock states
+/// the mode on the handle. A mode that admits other users lets one of them
+/// hold the prune lock or a session's lock, which stops the owner's sweep and
+/// protects a session nobody is using.
+#[cfg(unix)]
+#[test]
+fn test_prune_locks_owner_only() {
+    let root = temp_root();
+    let home = root.join("home");
+    create_dir_all(&home).unwrap();
+    seed_wide_lock_file(&home.join(".prune.lock"));
+    let guard = acquire_prune_lock(&home).expect("prune lock is free");
+    let mode = metadata(home.join(".prune.lock"))
+        .expect("prune lock exists")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "prune lock mode {mode:o} admits others");
+    drop(guard);
+    let sid_dir = root.join("dddddddd-dddd-dddd-dddd-dddddddddddd");
+    create_dir_all(&sid_dir).unwrap();
+    seed_wide_lock_file(&sid_dir.join(LOCK_FILE));
+    let guard = acquire_delete_lock(&sid_dir).expect("delete lock is free");
+    let mode = metadata(sid_dir.join(LOCK_FILE))
+        .expect("delete lock exists")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "delete lock mode {mode:o} admits others");
+    drop(guard);
     let _r = remove_dir_all(&root);
 }
 
@@ -80,7 +137,7 @@ fn test_apply_spares_held_session() {
 /// the real SessionLock the resume path uses, not an imitation of it, so
 /// the two sides are proven to contend rather than assumed to.
 ///
-/// The session starts with no session.lock, which is the ordinary state
+/// The session starts with no lock file, which is the ordinary state
 /// for an old session in a plan -- the file only appears once a process
 /// has opened the session. An acquire that skipped an absent lock file
 /// left this case entirely unprotected: the resume created its own lock,
@@ -93,7 +150,7 @@ fn test_delete_lock_blocks_resume() {
     create_dir_all(&sid_dir).unwrap();
     write(sid_dir.join("log.jsonl"), b"[]").unwrap();
     assert!(
-        !sid_dir.join("session.lock").exists(),
+        !sid_dir.join(LOCK_FILE).exists(),
         "the fixture must start with no lock file for this to mean anything"
     );
     let guard = acquire_delete_lock(&sid_dir).expect("prune acquires the delete lock");

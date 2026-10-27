@@ -6,7 +6,7 @@
 //! starve the tokio runtime or freeze the TUI. Attach does not call it -
 //! it connects to an existing daemon that runs its own.
 //!
-//! A non-blocking flock on .prune.lock serializes across processes (multi
+//! A non-blocking lock on .prune.lock serializes across processes (multi
 //! worktree is the norm; a second holder skips, not queues). A marker file
 //! stores the last PruneReport as JSON and throttles to once per 24h; the
 //! marker is the evidence trail for an irreversible deletion, not just a
@@ -24,24 +24,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(unix)]
-use nix::fcntl::{Flock, FlockArg};
-#[cfg(unix)]
-use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-
 use houyicoder_config::{config_home, retention};
 use houyicoder_context::SessionId;
+use houyicoder_context::session_class::LOCK_FILE;
 use houyicoder_service::lifecycle::prune::{
-    self, PrunePlan, PrunePolicy, PruneReport, PruneTargets,
+    self, PruneKind, PrunePlan, PrunePolicy, PruneReport, PruneTargets,
 };
 use houyicoder_service::lifecycle::repair::repair_child_descriptors;
-// PruneKind is read only by the flock-guarded apply path, which exists on
-// unix alone. Importing it unconditionally is an unused import everywhere
-// else, and unused imports are denied.
-#[cfg(unix)]
-use houyicoder_service::lifecycle::prune::PruneKind;
 
 const DELAY_SECS: u64 = 10 * 60;
 const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
@@ -50,27 +39,27 @@ const MARKER_THROTTLE_SECS: u64 = 24 * 60 * 60;
 // ceilings below are sweep/cleanup-only and stay here.
 const SNAPSHOT_TTL_SECS: u64 = 7 * 24 * 60 * 60;
 const DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
-#[cfg(all(test, unix))]
+use crate::session::lock::FileLock;
+#[cfg(test)]
 use crate::session::lock::SessionLock;
+use crate::session::lock::open_lock_file;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::lifecycle::prune::EMPTY_TTL_SECS;
 use std::env::current_dir;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use std::env::temp_dir;
-#[cfg(unix)]
-use std::fs::File;
+use std::fs::TryLockError;
 use std::fs::create_dir_all;
 use std::fs::metadata;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use std::fs::read;
-#[cfg(unix)]
 use std::fs::read_dir;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use std::fs::remove_dir_all;
 use std::fs::write;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use std::process::id;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
@@ -113,9 +102,13 @@ fn run_once(
     current_session: &SessionId,
 ) {
     let _lock = match acquire_prune_lock(home) {
-        Some(l) => l,
-        None => {
+        Ok(lock) => lock,
+        Err(PruneLockError::Contended) => {
             tracing::debug!("housekeeping: .prune.lock held by another process, skipping");
+            return;
+        }
+        Err(PruneLockError::Failed(e)) => {
+            tracing::warn!("housekeeping: could not take the prune lock: {e}");
             return;
         }
     };
@@ -184,32 +177,28 @@ fn run_once(
     write_marker(&marker_path, &report, planned);
 }
 
-/// Non-blocking exclusive flock on .prune.lock. None if held by another
-/// process (skip, do not queue). RAII: the Flock guard is returned + its
-/// Drop releases. Unix-only (flock is a unix primitive); a non-unix build
-/// has no cross-process lock (best-effort, single-process).
-#[cfg(unix)]
-fn acquire_prune_lock(home: &Path) -> Option<Flock<File>> {
+/// Why a prune lock was not taken.
+#[derive(Debug)]
+pub(crate) enum PruneLockError {
+    /// Another process holds the lock; this pass skips rather than queues.
+    Contended,
+    /// The lock file could not be created, opened, or locked.
+    Failed(String),
+}
+
+/// Non-blocking exclusive lock on .prune.lock. The guard releases the lock
+/// when dropped.
+fn acquire_prune_lock(home: &Path) -> Result<FileLock, PruneLockError> {
     let path = home.join(".prune.lock");
     if let Some(parent) = path.parent() {
         let _r = create_dir_all(parent);
     }
-    let file = match OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)
-    {
-        Ok(f) => f,
-        Err(_) => return None,
-    };
-    Flock::lock(file, FlockArg::LockExclusiveNonblock).ok()
-}
-
-#[cfg(not(unix))]
-fn acquire_prune_lock(_home: &Path) -> Option<()> {
-    Some(())
+    let file = open_lock_file(&path, true)
+        .map_err(|e| PruneLockError::Failed(format!("open {path:?}: {e}")))?;
+    FileLock::try_acquire(file).map_err(|e| match e {
+        TryLockError::WouldBlock => PruneLockError::Contended,
+        TryLockError::Error(e) => PruneLockError::Failed(format!("lock {path:?}: {e}")),
+    })
 }
 
 /// True if the marker was written less than 24h ago (throttle).
@@ -258,11 +247,10 @@ pub fn fire_after_bundle(session: SessionId) {
 }
 
 /// Scan every session dir for a session.lock held by another live process.
-/// The probe is a non-blocking try-flock on each lock file: success means no
-/// holder (the probe drops immediately), failure (EAGAIN) means a live
-/// process holds it. mtime recency does not cover a held-but-idle session,
-/// so the probe is the real guard, not a fallback. Unix-only (flock);
-/// non-unix returns empty (no cross-process lock, single-process only).
+/// The probe is a non-blocking try-lock on each lock file: success means no
+/// holder (the probe drops immediately), failure means a live process holds
+/// it. mtime recency does not cover a held-but-idle session, so the probe is
+/// the real guard, not a fallback.
 ///
 /// This pre-scan has one job that the apply-time filter_live_sessions does
 /// NOT cover: it feeds the held sessions into PrunePolicy.protected, so
@@ -270,7 +258,6 @@ pub fn fire_after_bundle(session: SessionId) {
 /// counts toward max_count, and the cap over-prunes the rest to compensate.
 /// The apply-time filter then re-checks each entry right before deletion
 /// (a session resumed between this scan and the apply is caught there).
-#[cfg(unix)]
 pub(crate) fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
     let Ok(entries) = read_dir(sessions_root) else {
         return Vec::new();
@@ -287,7 +274,7 @@ pub(crate) fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
         let Some(sid) = SessionId::from_display_string(sid_str) else {
             continue;
         };
-        let lock_path = path.join("session.lock");
+        let lock_path = path.join(LOCK_FILE);
         if !lock_path.exists() {
             continue;
         }
@@ -300,27 +287,19 @@ pub(crate) fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
     held
 }
 
-#[cfg(not(unix))]
-pub(crate) fn scan_lock_held_sessions(_sessions_root: &Path) -> Vec<SessionId> {
-    Vec::new()
-}
-
-/// Probe an existing session.lock without creating it: acquire the flock,
-/// and the caller drops the guard immediately. Some means no live process
-/// held it. None means held (EAGAIN) or unopenable (permissions, IO); both
-/// count as protected, since an ambiguous lock state must never allow
-/// deleting the session.
+/// Probe an existing session.lock without creating it: take the lock, and
+/// the caller drops the guard immediately. Some means no live process held
+/// it. None means held or unopenable (permissions, IO); both count as
+/// protected, since an ambiguous lock state must never allow deleting the
+/// session.
 ///
 /// Deliberately does NOT create a missing lock file, unlike the acquire the
 /// delete path uses. This probe walks every directory under the sessions
 /// root, so creating on the way would write a lock file into tens of
-/// thousands of directories it has no intention of touching. The two are
-/// separate functions rather than one with a create flag because folding
-/// them together is what hid the missing create from review once already.
-#[cfg(unix)]
-fn probe_session_lock(lock_path: &Path) -> Option<Flock<File>> {
-    let file = OpenOptions::new().write(true).open(lock_path).ok()?;
-    Flock::lock(file, FlockArg::LockExclusiveNonblock).ok()
+/// thousands of directories it has no intention of touching.
+fn probe_session_lock(lock_path: &Path) -> Option<FileLock> {
+    let file = open_lock_file(lock_path, false).ok()?;
+    FileLock::try_acquire(file).ok()
 }
 
 /// Acquire the session lock for a directory the caller is about to delete,
@@ -334,20 +313,9 @@ fn probe_session_lock(lock_path: &Path) -> Option<Flock<File>> {
 ///
 /// None means the lock is held by a live process, or the file could not be
 /// created or opened. All three protect the session (fail-closed).
-#[cfg(unix)]
-fn acquire_delete_lock(session_dir: &Path) -> Option<Flock<File>> {
-    // truncate(false) on purpose: the open happens before the flock, so it
-    // can land on a file a live session holds, and rewriting another
-    // process's lock file is no business of a probe. Nothing reads the
-    // content anyway -- only the flock on the inode carries meaning.
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(session_dir.join("session.lock"))
-        .ok()?;
-    Flock::lock(file, FlockArg::LockExclusiveNonblock).ok()
+fn acquire_delete_lock(session_dir: &Path) -> Option<FileLock> {
+    let file = open_lock_file(&session_dir.join(LOCK_FILE), true).ok()?;
+    FileLock::try_acquire(file).ok()
 }
 
 /// Build the prune policy + targets from the retention config + the
@@ -388,20 +356,12 @@ pub(crate) fn build_prune_context(
 }
 
 /// Try to acquire the prune lock for a manual cleanup --apply. Returns the
-/// guard (held until the caller drops it, so apply_prune runs under the
-/// lock) or None if held by another process. Dry-run planning does not
-/// need the lock. This is a thin pub(crate) wrapper around the private
-/// acquire_prune_lock so the cleanup subcommand does not name the Flock
-/// type directly.
-#[cfg(unix)]
-pub(crate) fn try_prune_lock(home: &Path) -> Option<Flock<File>> {
+/// guard, held until the caller drops it so apply_prune runs under the lock.
+/// Dry-run planning does not need the lock. This is a thin pub(crate) wrapper
+/// around the private acquire_prune_lock so the cleanup subcommand does not
+/// name the lock file directly.
+pub(crate) fn try_prune_lock(home: &Path) -> Result<FileLock, PruneLockError> {
     acquire_prune_lock(home)
-}
-
-#[cfg(not(unix))]
-#[allow(dead_code)]
-pub(crate) fn try_prune_lock(_home: &Path) -> Option<()> {
-    Some(())
 }
 
 /// Apply a plan one entry at a time, each session deleted while this process
@@ -422,7 +382,6 @@ pub(crate) fn try_prune_lock(_home: &Path) -> Option<()> {
 /// process holds a lock on them, and the debug log is rotated, not removed.
 /// The held-out count is returned rather than dropped so a caller can
 /// explain why a plan of N removed fewer than N.
-#[cfg(unix)]
 pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
     let mut report = PruneReport::default();
     let mut skipped_live = 0;
@@ -458,14 +417,5 @@ pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
     (report, skipped_live)
 }
 
-#[cfg(not(unix))]
-pub(crate) fn apply_prune_locked(plan: &PrunePlan) -> (PruneReport, usize) {
-    (prune::apply_prune(plan), 0)
-}
-
-// Every test here drives the flock-based delete lock, so the module as a
-// whole is unix-only. The gate belongs on the module rather than on each
-// test function: gating the functions leaves the helpers they share behind
-// as dead code on other platforms, which is denied.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;

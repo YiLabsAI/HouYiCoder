@@ -24,6 +24,11 @@ pub const DESCRIPTOR_FILE: &str = "session.json";
 /// rather than broken, and a directory holding a bad one loses speed and
 /// nothing else.
 pub const INDEX_FILE: &str = "log.index";
+/// The single-writer guard a session's directory holds, empty and never read:
+/// only the kernel lock on the open handle carries meaning. A resume, a
+/// serving host, and the retention pass all name it here, so a probe and an
+/// acquire can never drift onto different files.
+pub const LOCK_FILE: &str = "session.lock";
 /// How much of a log's head is read to find the delegation a child wrote
 /// there. A delegation record holds two ids, a type name, and its own
 /// second, so this bound is generous for what it looks for and small enough

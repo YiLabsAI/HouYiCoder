@@ -32,6 +32,8 @@ use std::thread;
 use std::time::Duration;
 
 use houyicoder_context::SessionId;
+#[cfg(unix)]
+use houyicoder_context::session_class::LOCK_FILE;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
     BuildRunnerOptions, ProviderResolution, build_runner, resolve_provider,
@@ -318,7 +320,7 @@ fn test_pair_completes_handshake() {
     options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
     let (runner_arc, mut client, _startup_warnings, host) =
-        start_local_server(bundle, Some(root.join("settings.json")));
+        start_local_server(bundle, Some(root.join("settings.json")), root.clone());
     // The runner Arc is shared: the server task and the caller hold the
     // same allocation.
     assert!(Arc::ptr_eq(&runner_arc, &runner_arc));
@@ -492,7 +494,7 @@ fn test_resume_refuses_held() {
         Err(e) => e,
     };
     assert!(
-        err.to_string().contains("held by another"),
+        err.to_string().contains("in use in this process"),
         "friendly held refusal, got: {err}"
     );
     drop(first);
@@ -642,8 +644,10 @@ fn lock_holder_entry() {
 
 /// Re-execute this test binary in a real second OS process that holds the
 /// session lock, then assert this process's acquire fails with the held
-/// refusal. flock's exclusion is per process, so a same-process double
-/// acquire does not exercise the real guarantee.
+/// refusal. The kernel excludes by open file description, so two opens in one
+/// process contend as well, which the lock tests cover; what this adds is a
+/// holder whose guard this process cannot see in its own registry, the shape a
+/// second host has.
 #[cfg(unix)]
 #[test]
 fn test_second_process_refused() {
@@ -695,13 +699,14 @@ fn test_second_process_refused() {
         "the child must hold the lock before the parent asserts; stderr: {child_err}"
     );
     match SessionLock::acquire(&sid_str, &root) {
-        Err(LockError::HeldByOther(_)) => {}
+        Err(LockError::Held(_)) => {}
         Ok(_) => panic!(
             "a second OS process holding the lock must refuse; child alive: {:?}, lock file: {:?}",
             child.try_wait().map(|s| s.is_none()),
-            root.join(&sid_str).join("session.lock")
+            root.join(&sid_str).join(LOCK_FILE)
         ),
         Err(LockError::Io(e)) => panic!("unexpected io error: {e}"),
+        Err(LockError::InvalidId(e)) => panic!("unexpected invalid id: {e}"),
     }
     remove_file(&release_path).ok();
     drop(child.wait());
@@ -709,9 +714,11 @@ fn test_second_process_refused() {
 }
 
 /// A held sid must be refused before any writer construction: the session
-/// directory holds nothing but the lock file, and the refusal names the
-/// holder. A reorder that built first would leave a log or descriptor file
-/// behind, so the directory contents pin the zero-construction order.
+/// directory holds nothing but the lock file, and the refusal says the
+/// holder is this process rather than another one, so the user retries
+/// instead of attaching to a process that is going away. A reorder that
+/// built first would leave a log or descriptor file behind, so the directory
+/// contents are the evidence that nothing was built.
 #[cfg(unix)]
 #[test]
 fn test_held_refusal_builds_nothing() {
@@ -725,8 +732,8 @@ fn test_held_refusal_builds_nothing() {
         Err(e) => e,
     };
     assert!(
-        err.to_string().contains("held by another"),
-        "the refusal names the holder, got: {err}"
+        err.to_string().contains("in use in this process"),
+        "the refusal says the holder is this process, got: {err}"
     );
     // The only artifact admitted into the session dir is the lock file
     // itself; a build that ran before or despite the refusal would leave a
@@ -738,7 +745,7 @@ fn test_held_refusal_builds_nothing() {
         .collect();
     assert_eq!(
         entries,
-        vec!["session.lock".to_string()],
+        vec![LOCK_FILE.to_string()],
         "no writer artifact may exist for a refused sid"
     );
     remove_dir_all(&root).ok();

@@ -7,6 +7,7 @@
 //! keeps a backlog that plan_all reports in the tens of thousands to a
 //! screen, where the per-entry list would flood it.
 
+use crate::session::housekeeping::PruneLockError;
 use crate::session::housekeeping::apply_prune_locked;
 use crate::session::housekeeping::build_prune_context;
 use crate::session::housekeeping::try_prune_lock;
@@ -104,13 +105,14 @@ pub(crate) fn run_cleanup(apply: bool, verbose: bool, yes: bool) -> Result<(), B
     // the user re-runs when the sweep is done. The guard lives until the
     // end of this scope, so apply_prune runs under the lock.
     let _guard = match try_prune_lock(&houyicoder_config::config_home()) {
-        Some(g) => g,
-        None => {
+        Ok(guard) => guard,
+        Err(PruneLockError::Contended) => {
             println!(
                 "Another prune is running (background sweep or another process). Try again later."
             );
             return Ok(());
         }
+        Err(PruneLockError::Failed(e)) => return Err(e.into()),
     };
     // The repair is not bounded by the plan -- it heals the store -- but it
     // is the apply path's second act, so a store with nothing to prune keeps

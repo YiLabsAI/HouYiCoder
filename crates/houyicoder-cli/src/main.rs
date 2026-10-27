@@ -52,7 +52,7 @@ pub(crate) use local_host::{HostLease, HostLeaseScope, HostLeaseSlot, LeaseScope
 
 use crate::session::cleanup::run_cleanup;
 use crate::session::housekeeping::fire_after_bundle;
-use crate::session::lock::{LockError, SessionLock};
+use crate::session::lock::{LockError, SessionLock, StoreIdentity};
 use crate::session::resume_bundle::build_bundle_for_fork;
 use crate::session::resume_bundle::build_bundle_for_resume_sid;
 use futures::StreamExt;
@@ -270,9 +270,18 @@ fn admit_existing_sid(
     }
     match SessionLock::acquire(&sid_str, sessions_root) {
         Ok(lock) => Ok(lock),
+        // A holder inside this process is work this process started -- a host
+        // that has not finished closing, or a background pass still reading
+        // the session -- so the lock frees itself shortly. Telling the user to
+        // attach would send them to a process that is going away.
+        Err(LockError::Held(_)) if SessionLock::held_in_this_process(&sid_str, sessions_root) => {
+            Err(Box::<dyn Error>::from(format!(
+                "session {sid_str} is in use in this process; retry in a moment"
+            )))
+        }
         // A held lock is the same refusal as a live process: the user can
         // attach or fork, so present that guidance instead of a raw enum.
-        Err(LockError::HeldByOther(_)) => Err(Box::<dyn Error>::from(format!(
+        Err(LockError::Held(_)) => Err(Box::<dyn Error>::from(format!(
             "session {sid_str} is held by another live process; attach to it \
              (houyi attach) or fork (--fork-session)"
         ))),
@@ -374,6 +383,13 @@ fn run_serve(
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
+    // A serving host records this session for as long as it runs, so it holds
+    // the session lock: a background pass, in this launch or a later one,
+    // skips the session rather than writing over the record kept current here.
+    let lease = SessionLock::acquire(&bundle.session.to_string(), &session_log_root())?;
+    if let Some(store) = bundle.runner.descriptor_store() {
+        lease.bind(StoreIdentity::of(store.as_ref()));
+    }
     eprintln!("session_id={}", bundle.session);
     eprintln!("pid={}", id());
     let socket_path = match socket {
@@ -474,6 +490,12 @@ fn run_acp_stdio(
     let bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
+    }
+    // The ACP server records this session for as long as it runs, so it holds
+    // the session lock, as the detached server does.
+    let lease = SessionLock::acquire(&bundle.session.to_string(), &session_log_root())?;
+    if let Some(store) = bundle.runner.descriptor_store() {
+        lease.bind(StoreIdentity::of(store.as_ref()));
     }
     // Print the session id to stderr so a client prompts against the right
     // id; stdout stays clean for the JSON-RPC frame stream.
