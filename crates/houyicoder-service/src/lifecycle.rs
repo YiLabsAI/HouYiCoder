@@ -24,9 +24,9 @@
 //! both need engine support and are deferred. The pure-store state-machine
 //! enforcement here is the foundation both build on.
 
+pub mod prompt_backfill;
 pub mod prune;
 pub mod repair;
-pub mod session_title;
 
 use houyicoder_async::PFut;
 use houyicoder_context::{EventId, SessionId};

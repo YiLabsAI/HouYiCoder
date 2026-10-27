@@ -453,3 +453,82 @@ fn test_scan_reports_both_spellings() {
     );
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// A page continues below the last entry it returned, so a caller that bounds
+/// its work per launch still walks the whole store over several launches, and
+/// two pages never hand out the same session.
+#[test]
+fn test_session_page_continues_below() {
+    let root = temp_root("page");
+    let mut created = Vec::new();
+    for _ in 0..4 {
+        let sid = SessionId::new();
+        write_session(&root, sid, true, Some(SessionProvenance::Fresh));
+        created.push(sid);
+    }
+    let first = session_page(&root, None, 2);
+    assert_eq!(first.len(), 2);
+    let last = first.last().expect("a page holds its entries");
+    let cursor = PageCursor {
+        last_active: last.last_active,
+        sid: last.sid,
+    };
+    let rest = session_page(&root, Some(cursor), 2);
+    assert_eq!(rest.len(), 2);
+    let mut seen: Vec<SessionId> = first.iter().chain(rest.iter()).map(|e| e.sid).collect();
+    seen.sort();
+    created.sort();
+    assert_eq!(seen, created, "two pages cover the store without repeats");
+    let end = rest.last().expect("a page holds its entries");
+    assert!(
+        session_page(
+            &root,
+            Some(PageCursor {
+                last_active: end.last_active,
+                sid: end.sid,
+            }),
+            2
+        )
+        .is_empty()
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// A page orders by activity, and two sessions active in the same second are
+/// still ordered, so a page boundary inside that second advances.
+#[test]
+fn test_session_page_orders_activity() {
+    let root = temp_root("page-order");
+    let old = SessionId::new();
+    let path = write_session(&root, old, true, Some(SessionProvenance::Fresh));
+    age(&path.join("log.jsonl"), 3600);
+    let fresh = SessionId::new();
+    write_session(&root, fresh, true, Some(SessionProvenance::Fresh));
+    let page = session_page(&root, None, 8);
+    assert_eq!(
+        page.iter().map(|entry| entry.sid).collect::<Vec<_>>(),
+        vec![fresh, old],
+        "the newest session opens the walk"
+    );
+    let tied = PageCursor {
+        last_active: page[1].last_active,
+        sid: page[1].sid,
+    };
+    assert!(session_page(&root, Some(tied), 8).is_empty());
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// A page member that holds no log is classified without a descriptor read
+/// and still named in the page, so a caller counting what it walked sees the
+/// shell directories too.
+#[test]
+fn test_session_page_lists_shells() {
+    let root = temp_root("page-shell");
+    let sid = SessionId::new();
+    write_session(&root, sid, false, None);
+    let page = session_page(&root, None, 8);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].class, SessionClass::Shell);
+    assert!(page[0].descriptor.is_none());
+    fs::remove_dir_all(&root).unwrap();
+}

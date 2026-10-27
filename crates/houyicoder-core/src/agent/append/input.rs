@@ -9,6 +9,7 @@
 //! interjection path but states that agent's words rather than the user's.
 
 use houyicoder_context::session_intent::prompt_intent;
+use houyicoder_context::session_intent::stated_input;
 use houyicoder_context::{EventId, SessionEvent, SessionId};
 
 use super::{RunError, Runner, new_event};
@@ -21,8 +22,8 @@ impl Runner {
         session: SessionId,
         text: String,
     ) -> Result<(), RunError> {
-        let prompt = prompt_intent(&text);
         let entry = new_event(session, SessionEvent::UserInput { text });
+        let prompt = stated_input(&entry.event).and_then(prompt_intent);
         let event_id = entry.id;
         self.store.append(entry).await?;
         self.record_session_intent(session, prompt, event_id);
@@ -70,10 +71,6 @@ impl Runner {
         text: String,
         pending_input_id: Option<u64>,
     ) -> Result<(), RunError> {
-        let prompt = match pending_input_id {
-            Some(_) => prompt_intent(&text),
-            None => None,
-        };
         let entry = new_event(
             session,
             SessionEvent::MidTurnInput {
@@ -81,6 +78,7 @@ impl Runner {
                 pending_input_id,
             },
         );
+        let prompt = stated_input(&entry.event).and_then(prompt_intent);
         let event_id = entry.id;
         self.store.append(entry).await?;
         self.record_session_intent(session, prompt, event_id);

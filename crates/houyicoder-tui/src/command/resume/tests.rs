@@ -45,7 +45,6 @@ impl SessionCatalog for EmptyCatalog {
     fn sessions(&self, _current: &str) -> Vec<SessionRow> {
         Vec::new()
     }
-    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
 struct TwoRowCatalog;
@@ -68,7 +67,6 @@ impl SessionCatalog for TwoRowCatalog {
             },
         ]
     }
-    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
 /// A disconnected app reports not connected and never opens a pane.
@@ -123,13 +121,14 @@ fn test_opens_pane_with_rows() {
     assert_eq!(app.ui.navigation.pane, Pane::Resume);
 }
 
-/// Opening the picker does no detail reads: the per-row log read would stall
-/// the key that opened it, so the listing fills in from the poll loop instead.
+/// Opening the picker loads the listing in one catalog call: the rows carry
+/// their titles, so no per-row read follows the key that opened it.
 #[test]
-fn test_open_defers_resolution() {
+fn test_open_loads_rows_once() {
     struct CountingCatalog(AtomicUsize);
     impl SessionCatalog for CountingCatalog {
         fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            self.0.fetch_add(1, Ordering::Relaxed);
             (0..3)
                 .map(|i| SessionRow {
                     sid_str: format!("sid{i}"),
@@ -138,9 +137,6 @@ fn test_open_defers_resolution() {
                     ..Default::default()
                 })
                 .collect()
-        }
-        fn resolve_detail(&self, _row: &mut SessionRow) {
-            self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -151,8 +147,8 @@ fn test_open_defers_resolution() {
     assert!(app.ui.navigation.resume_picker.open);
     assert_eq!(
         catalog.0.load(Ordering::Relaxed),
-        0,
-        "opening the picker reads no session detail"
+        1,
+        "one listing call opens the picker"
     );
 }
 
@@ -266,8 +262,7 @@ fn test_export_path_enqueues_resume() {
     drop(remove_dir_all(&dir));
 }
 
-/// A catalog of named sessions, so resolve_detail leaves every title as
-/// the row already carries it.
+/// A catalog of named sessions.
 struct ManyRowCatalog(usize);
 impl SessionCatalog for ManyRowCatalog {
     fn sessions(&self, _current: &str) -> Vec<SessionRow> {
@@ -281,13 +276,11 @@ impl SessionCatalog for ManyRowCatalog {
             })
             .collect()
     }
-    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
-/// A store with more sessions than the picker resolves on open: the rows
-/// past that first batch resolve in the poll loop and must stay listed.
-/// A title that counts as its own duplicate would drop them, so this
-/// pins that a named session keeps its own name.
+/// A store with many sessions lists every one of them: a title that counts
+/// as its own duplicate would drop rows, so this pins that a named session
+/// keeps its own name.
 #[test]
 fn test_many_sessions_all_visible() {
     let mut app = connected_app();
@@ -297,14 +290,6 @@ fn test_many_sessions_all_visible() {
     assert_eq!(
         app.ui.navigation.resume_picker.filtered().len(),
         25,
-        "at open"
-    );
-    for _ in 0..4 {
-        app.poll_agent();
-    }
-    assert_eq!(
-        app.ui.navigation.resume_picker.filtered().len(),
-        25,
-        "every named session stays listed after the poll loop resolves the rest"
+        "every named session stays listed"
     );
 }

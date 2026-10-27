@@ -40,6 +40,8 @@ mod ui_multiagent;
 mod ui_palette;
 #[path = "ui_permissions.rs"]
 mod ui_permissions;
+#[path = "ui_prompt_migration.rs"]
+mod ui_prompt_migration;
 #[path = "ui_resume.rs"]
 mod ui_resume;
 #[path = "ui_run.rs"]

@@ -254,6 +254,44 @@ pub fn recent_user_sessions(root: &Path, limit: usize) -> Vec<SessionEntry> {
     out
 }
 
+/// Where a paged walk continues: one session and when it was last active.
+///
+/// Activity orders the walk because the store is most valuable newest first,
+/// while the id breaks a tie so a page boundary inside one second still
+/// advances. Both parts come from the directory alone, so ordering a page
+/// costs no file read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PageCursor {
+    /// The session's log mtime, else its directory's, in seconds.
+    pub last_active: u64,
+    /// The session the walk resumes below.
+    pub sid: SessionId,
+}
+
+/// One page of the store, newest-active first, for a caller that walks the
+/// whole store across several launches.
+///
+/// The cursor is the last entry a previous page returned and the next page
+/// continues below it; None starts from the newest session. A descriptor is
+/// read only for a page member that holds a log, and a caller that must bound
+/// its work per launch advances the cursor instead of returning to the same
+/// newest sessions every time. A session rewritten between two passes moves
+/// above the cursor and is seen again after the walk wraps, which costs a
+/// repeat and skips nothing.
+pub fn session_page(root: &Path, before: Option<PageCursor>, limit: usize) -> Vec<SessionEntry> {
+    let mut candidates: Vec<Candidate> = candidates(root)
+        .into_iter()
+        .filter(|candidate| {
+            before.is_none_or(|before| {
+                (candidate.last_active, candidate.sid) < (before.last_active, before.sid)
+            })
+        })
+        .collect();
+    candidates.sort_by_key(|candidate| Reverse((candidate.last_active, candidate.sid)));
+    candidates.truncate(limit);
+    candidates.into_iter().map(Candidate::classified).collect()
+}
+
 /// The parent one session's log names, read from its head. None when the
 /// session has no log, its head does not parse, or its first record is not a
 /// delegation. A caller holding one session id asks about that session

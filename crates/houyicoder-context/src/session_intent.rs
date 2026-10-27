@@ -9,6 +9,7 @@
 //! pasted path such as /Users/me/src/main.rs is a real subject and stays.
 
 use crate::descriptor::{NameSource, PromptCoverage, PromptRecord, SessionDescriptor};
+use crate::event::SessionEvent;
 
 /// Longest prompt kept in the descriptor, in characters. A pasted document
 /// is a title only up to its opening statement.
@@ -79,6 +80,25 @@ const NO_TASK_INPUT: [&str; 41] = [
     "对的",
     "就这样",
 ];
+
+/// The text a record carries when the user stated it.
+///
+/// Two event shapes carry the user's words: a turn that starts with typed
+/// input, and a message the user queued while a turn was running. The second
+/// shape also carries messages another agent sent, so it counts only when its
+/// queue identity says the user queued it. Every reader that looks for the
+/// user's words in a log asks here, so no two of them can pick different
+/// records.
+pub fn stated_input(event: &SessionEvent) -> Option<&str> {
+    match event {
+        SessionEvent::UserInput { text } => Some(text),
+        SessionEvent::MidTurnInput {
+            text,
+            pending_input_id: Some(_),
+        } => Some(text),
+        _ => None,
+    }
+}
 
 /// The task statement a user input carries, or None when it carries none.
 ///

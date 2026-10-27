@@ -10,7 +10,7 @@ use houyicoder_context::{
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend};
+use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_provider::FakeProvider;
 use houyicoder_provider::ProviderFacts;
@@ -161,32 +161,24 @@ fn test_snapshot_ignores_auto_name() {
     );
 }
 
-/// A record written before prompts were recorded states no title, and its log
-/// head still does: status names that session from the first input that
-/// states a task, skipping the greeting that opened it.
+/// Status answers from the record alone. A record written before prompts were
+/// recorded states no title until the background migration fills it, and the
+/// poll that runs meanwhile opens no log: the task its log holds is not read
+/// here, so it cannot name the session.
 #[tokio::test]
-async fn test_snapshot_titles_from_log() {
+async fn test_snapshot_reads_record_only() {
     let session = SessionId::new();
     let store = seed(session, |_unused| {});
-    // A file log is what the head read serves; the in-memory backend keeps
-    // its events in a map and answers no byte range.
-    let root = temp_dir().join(format!("status-log-head-{}-{}", id(), line!()));
-    drop(remove_dir_all(&root));
-    create_dir_all(&root).expect("mkdir root");
-    let log = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
-        root.clone(),
-    ))));
-    append_input(&log, session, "你好").await;
+    let log = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     append_input(&log, session, "research demo repo").await;
     let server = Server::new(runner_over(log), session, Arc::new(DefaultModeGate::new()))
         .with_descriptor_store(store);
     let snapshot = server.build_status_snapshot();
     assert_eq!(
         snapshot.descriptor.and_then(|descriptor| descriptor.name),
-        Some("research demo repo".to_string()),
-        "the log head names a session whose record carries no prompt"
+        None,
+        "a record with no prompt states no title, whatever its log holds"
     );
-    remove_dir_all(&root).ok();
 }
 
 /// A name the user chose outranks anything the prompts say, so renaming is

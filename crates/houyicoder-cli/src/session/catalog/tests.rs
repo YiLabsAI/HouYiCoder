@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_context::session_class::session_page;
 use houyicoder_context::{
     EventId, NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionDescriptorStore,
     SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
@@ -6,6 +7,7 @@ use houyicoder_context::{
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::SessionStore;
 use std::env::temp_dir;
+use std::env::var;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::fs::create_dir_all;
@@ -15,7 +17,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -141,9 +143,8 @@ async fn test_catalog_titles_from_record() {
     // is constant and does not sort).
     age(&root.join(older.to_string()).join("log.jsonl"), 100);
     age(&root.join(newer.to_string()).join("log.jsonl"), 200);
-    let log: Arc<dyn SessionLog> = Arc::new(store);
-    let catalog = DescriptorSessionCatalog::new(log, root.clone());
-    let mut rows = catalog.sessions(&cur.to_string());
+    let catalog = DescriptorSessionCatalog::new(root.clone());
+    let rows = catalog.sessions(&cur.to_string());
     assert_eq!(rows.len(), 2, "current session excluded: {rows:?}");
     assert_eq!(
         rows[0].sid_str,
@@ -164,11 +165,6 @@ async fn test_catalog_titles_from_record() {
         rows[1].title, "named session",
         "a name the user chose outranks the prompts"
     );
-    catalog.resolve_detail(&mut rows[0]);
-    assert_eq!(
-        rows[0].title, "fix the cache table",
-        "resolving a titled row changes nothing"
-    );
     let _r = remove_dir_all(&root);
 }
 
@@ -184,8 +180,7 @@ async fn test_catalog_keeps_prompt_text() {
     let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
     append_log(&store, sid, PROMPT).await;
     age(&root.join(sid.to_string()).join("log.jsonl"), 100);
-    let log: Arc<dyn SessionLog> = Arc::new(store);
-    let catalog = DescriptorSessionCatalog::new(log, root.clone());
+    let catalog = DescriptorSessionCatalog::new(root.clone());
     let rows = catalog.sessions(&SessionId::new().to_string());
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -205,9 +200,8 @@ async fn test_catalog_placeholder_without_prompt() {
     // listed) but states no task -- the title stays the sid placeholder,
     // the property under test.
     append_log(&store, sid, "").await;
-    let log: Arc<dyn SessionLog> = Arc::new(store);
-    let catalog = DescriptorSessionCatalog::new(log, root.clone());
-    let mut rows = catalog.sessions(&SessionId::new().to_string());
+    let catalog = DescriptorSessionCatalog::new(root.clone());
+    let rows = catalog.sessions(&SessionId::new().to_string());
     assert_eq!(rows.len(), 1);
     assert!(
         rows[0].title.starts_with("(session) "),
@@ -218,46 +212,6 @@ async fn test_catalog_placeholder_without_prompt() {
         rows[0].title.len() > "(session) ".len(),
         "the suffix must add distinguishing info: {}",
         rows[0].title
-    );
-    catalog.resolve_detail(&mut rows[0]);
-    assert!(
-        rows[0].title.starts_with("(session) "),
-        "placeholder survives resolve_detail when no prompt exists: {}",
-        rows[0].title
-    );
-    let _r = remove_dir_all(&root);
-}
-
-/// A descriptor written before prompts were recorded carries only a derived
-/// name. The row starts as the placeholder and the bounded log-head read
-/// names it in the user's own words, skipping the greeting that opened the
-/// session.
-#[tokio::test]
-async fn test_catalog_resolves_legacy_title() {
-    let root = temp_root();
-    let sid = SessionId::new();
-    write_descriptor(
-        &root,
-        sid,
-        &named(base("/repo", 1), "hello-there", NameSource::Auto),
-    );
-    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    append_log(&store, sid, "你好").await;
-    append_log(&store, sid, "研究 ray 的 sandbox 用了什么技术").await;
-    age(&root.join(sid.to_string()).join("log.jsonl"), 100);
-    let log: Arc<dyn SessionLog> = Arc::new(store);
-    let catalog = DescriptorSessionCatalog::new(log, root.clone());
-    let mut rows = catalog.sessions(&SessionId::new().to_string());
-    assert_eq!(rows.len(), 1);
-    assert!(
-        rows[0].title.starts_with("(session) "),
-        "no recorded prompt leaves the placeholder until detail resolution: {}",
-        rows[0].title
-    );
-    catalog.resolve_detail(&mut rows[0]);
-    assert_eq!(
-        rows[0].title, "研究 ray 的 sandbox 用了什么技术",
-        "the first task statement in the log head names the row"
     );
     let _r = remove_dir_all(&root);
 }
@@ -285,8 +239,7 @@ async fn test_catalog_keeps_duplicate_rows() {
     age(&root.join(a.to_string()).join("log.jsonl"), 100);
     age(&root.join(b.to_string()).join("log.jsonl"), 300);
     age(&root.join(c.to_string()).join("log.jsonl"), 200);
-    let log: Arc<dyn SessionLog> = Arc::new(store);
-    let catalog = DescriptorSessionCatalog::new(log, root.clone());
+    let catalog = DescriptorSessionCatalog::new(root.clone());
     let rows = catalog.sessions(&SessionId::new().to_string());
     assert_eq!(rows.len(), 3, "no row hides behind a matching title");
     assert_eq!(rows[0].sid_str, a.to_string(), "newest first");
@@ -331,9 +284,7 @@ async fn test_catalog_reads_legacy_name() {
     )
     .unwrap();
 
-    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
-    let log: Arc<dyn SessionLog> = Arc::new(store);
-    let catalog = DescriptorSessionCatalog::new(log, root.clone());
+    let catalog = DescriptorSessionCatalog::new(root.clone());
     let rows = catalog.sessions(&SessionId::new().to_string());
     assert_eq!(rows.len(), 1, "a legacy-named session is still a row");
     assert_eq!(rows[0].sid_str, sid.to_string());
@@ -352,4 +303,44 @@ fn test_basename_takes_last_segment() {
     assert_eq!(cwd_basename("/work/repo"), "repo");
     assert_eq!(cwd_basename("/work/repo/"), "repo");
     assert_eq!(cwd_basename("/"), "?");
+}
+
+/// What the picker's first frame costs over ten thousand sessions, and what
+/// one backfill page costs over the same store. A measurement rather than a
+/// gate: it reports its numbers and asserts only the row bounds, and it stays
+/// out of the ignored suites unless asked for one by name.
+#[test]
+#[ignore = "measurement"]
+fn test_listing_scale_cost() {
+    if var("HOUYICODER_MEASURE_SCALE").as_deref() != Ok("1") {
+        return;
+    }
+    let root = temp_root();
+    for i in 0..10_000u64 {
+        let sid = SessionId::new();
+        let dir = root.join(sid.to_string());
+        create_dir_all(&dir).unwrap();
+        let record = says(
+            base("/work/repo", 1_000 + i % 100),
+            "fix the login test",
+            "ship it",
+        );
+        write(
+            dir.join("session.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        write(dir.join("log.jsonl"), "").unwrap();
+    }
+    let catalog = DescriptorSessionCatalog::new(root.clone());
+    let started = Instant::now();
+    let rows = catalog.sessions(&SessionId::new().to_string());
+    let listing = started.elapsed();
+    assert_eq!(rows.len(), 100, "the listing stops at its visible limit");
+    let started = Instant::now();
+    let page = session_page(&root, None, 400);
+    let paging = started.elapsed();
+    assert_eq!(page.len(), 400, "the page stops at its bound");
+    println!("ten thousand sessions: picker listing {listing:?}, backfill page {paging:?}");
+    let _r = remove_dir_all(&root);
 }

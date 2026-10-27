@@ -2,7 +2,6 @@
 //! server lifecycle.
 
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
@@ -61,7 +60,6 @@ impl Server {
             // mid-child-approval is a follow-up (the parent serve path covers
             // the common case).
             bus: None,
-            log_head_title: OnceLock::new(),
         }
     }
 

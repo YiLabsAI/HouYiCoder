@@ -26,6 +26,7 @@ use houyicoder_tui::transcript::snapshot::TranscriptSnapshot;
 use houyicoder_tui::view::export_log::ExportLog;
 use houyicoder_tui::view::trajectory_pane::TrajectoryLog;
 
+use crate::session::backfill::run_background;
 use crate::session::catalog::DescriptorSessionCatalog;
 use crate::session::history::SessionHistory;
 use crate::session::housekeeping::fire_after_bundle;
@@ -105,8 +106,8 @@ pub(crate) fn assemble_bundle(
         provider_facts,
     } = assembled;
     // Grab the SessionLog BEFORE the runner moves into the server task — the
-    // trajectory view reads it for the /trajectory pane, and the session
-    // picker reads other sessions' log heads to derive their titles.
+    // trajectory view reads it for the /trajectory pane, and the prompt
+    // backfill reads other sessions' logs to fill their records.
     let session_log = runner.store();
     // The session-log snapshot loads the durable log into a TranscriptLine
     // snapshot for the search view (read-whole path under the threshold).
@@ -155,10 +156,7 @@ pub(crate) fn assemble_bundle(
             trajectory_log,
             export_log,
             snapshot,
-            session_catalog: Some(Arc::new(DescriptorSessionCatalog::new(
-                session_log,
-                session_log_root(),
-            ))),
+            session_catalog: Some(Arc::new(DescriptorSessionCatalog::new(session_log_root()))),
         },
         FrontendStartup {
             skip_login,
@@ -194,6 +192,10 @@ pub(crate) fn start_local_server(
     // store, and a second instance over the same root lets an interleaved
     // rename and prompt record revert each other's field.
     let descriptor_store = runner.descriptor_store();
+    // The prompt backfill reads session logs and writes their records, so it
+    // takes both handles before the runner moves into the server.
+    let backfill_log = runner.store();
+    let backfill_store = descriptor_store.clone();
     let mut host = HostLifecycle::new();
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
@@ -285,6 +287,14 @@ pub(crate) fn start_local_server(
     runtime.spawn(async move {
         fire_after_bundle(session);
     });
+    // Fill legacy session prompts off the frame loop. The picker answers from
+    // records alone, so a record written before prompts were recorded would
+    // leave its session untitled; the pass is bounded per launch and aborted
+    // with the host, so a session switch stops it between records.
+    if let Some(store) = backfill_store {
+        let handle = runtime.spawn(run_background(session_log_root(), backfill_log, store));
+        host.track(handle);
+    }
     // Ask the provider which model ids it serves and cache them for catalog
     // existence validation. A no-op for the stub provider; a /v1/models fetch
     // for the real one. Failure is silent — the old cache stays, nothing

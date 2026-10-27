@@ -7,7 +7,6 @@ use houyicoder_protocol::frontend::SessionId;
 use super::status_view::build_model_usage_view;
 use super::status_view::setting_sources_label;
 use super::{Server, frame_carrier::FrameCarrier};
-use crate::lifecycle::session_title::log_head_title;
 use crate::protocol_adapter as pa;
 use houyicoder_context::DescriptorUpdate;
 use houyicoder_context::NameSource;
@@ -123,11 +122,10 @@ impl Server {
         {
             // One policy names the session everywhere: the name its user gave
             // it, else its newest prompt, else the first one. A record written
-            // before prompts were recorded states none, and the head of its
-            // log still names the work.
-            descriptor.name = display_title(&descriptor)
-                .map(|title| title.text.to_string())
-                .or_else(|| self.title_from_log_head());
+            // before prompts were recorded states none until the bounded
+            // migration fills it; status answers from the record and never
+            // opens a log.
+            descriptor.name = display_title(&descriptor).map(|title| title.text.to_string());
             snapshot.descriptor = Some(pa::map_session_descriptor(&descriptor));
         }
         snapshot.version = env!("CARGO_PKG_VERSION").to_string();
@@ -155,15 +153,6 @@ impl Server {
         snapshot.auto_dream = toggles.auto_dream;
         snapshot.by_model = build_model_usage_view(self.runner.by_model_usage());
         snapshot
-    }
-
-    /// The title a legacy session's log head supplies, read once. Appending a
-    /// prompt from now on records it on the descriptor, which outranks this
-    /// fallback, so a later prompt reaches the screen through the record.
-    fn title_from_log_head(&self) -> Option<String> {
-        self.log_head_title
-            .get_or_init(|| log_head_title(self.runner.store().as_ref(), self.session))
-            .clone()
     }
 }
 

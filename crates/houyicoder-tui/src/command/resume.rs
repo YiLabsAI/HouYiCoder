@@ -47,14 +47,9 @@ impl App {
                     self.system_line(self.resume_switch_message(query));
                     return;
                 }
-                // One-shot lookup: resolve all rows (need real titles for
-                // unnamed sessions), then find a match. Slower than the
-                // picker open path, but this is an explicit name search,
-                // not a list display.
-                let mut rows = catalog.sessions(&current_sid);
-                for row in &mut rows {
-                    catalog.resolve_detail(row);
-                }
+                // One-shot lookup over the rows the catalog loads: an
+                // explicit name search, not a list display.
+                let rows = catalog.sessions(&current_sid);
                 let sid = rows
                     .into_iter()
                     .find(|r| r.matches(query))

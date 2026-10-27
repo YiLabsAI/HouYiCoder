@@ -197,15 +197,6 @@ impl App {
             }
         }
         self.apply_frames(batch);
-        // Resolve a bounded number of resume rows per poll.
-        if self.ui.navigation.resume_picker.open
-            && let Some(catalog) = self.sessions.catalog.as_ref()
-        {
-            self.ui
-                .navigation
-                .resume_picker
-                .resolve_rows(catalog.as_ref(), 3);
-        }
         // Refresh status while idle. Active runs and reverse requests retain
         // exclusive ownership of response frames.
         let poll_due = self.sessions.current.capabilities.status.poll_due();

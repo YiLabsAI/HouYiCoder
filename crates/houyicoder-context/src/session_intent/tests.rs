@@ -1,9 +1,12 @@
 //! Tests for this module.
 
-use super::{TitleSource, apply_prompt, apply_prompt_backfill, display_title, prompt_intent};
+use super::{
+    TitleSource, apply_prompt, apply_prompt_backfill, display_title, prompt_intent, stated_input,
+};
 use crate::descriptor::{
     NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionProvenance,
 };
+use crate::event::SessionEvent;
 use crate::ids::EventId;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -388,6 +391,26 @@ fn test_backfill_keeps_coverage() {
     unknown.prompt_coverage = PromptCoverage::Unknown;
     apply_prompt_backfill(&mut unknown, None, None, PromptCoverage::Complete);
     assert_eq!(unknown.prompt_coverage, PromptCoverage::Complete);
+}
+
+/// A queued message counts as the user's words only when the queue says the
+/// user typed it; the same event carries steering text another agent sent.
+#[test]
+fn test_stated_input_skips_steering() {
+    let typed = SessionEvent::UserInput {
+        text: "fix the login test".into(),
+    };
+    let queued = SessionEvent::MidTurnInput {
+        text: "also update the docs".into(),
+        pending_input_id: Some(7),
+    };
+    let steering = SessionEvent::MidTurnInput {
+        text: "keep going".into(),
+        pending_input_id: None,
+    };
+    assert_eq!(stated_input(&typed), Some("fix the login test"));
+    assert_eq!(stated_input(&queued), Some("also update the docs"));
+    assert_eq!(stated_input(&steering), None);
 }
 
 #[test]

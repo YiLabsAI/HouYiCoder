@@ -1,6 +1,7 @@
 //! Resume PTY journey tests that drive the real binary: the sid-resume, lock
-//! release (clean exit + crash), status provenance, stale-cwd-degraded, and
-//! history-load journeys. Helpers are shared via the common module.
+//! release (clean exit + crash), status provenance, stale-cwd-degraded,
+//! history-load, and legacy-record prompt migration journeys. Helpers are
+//! shared via the common module.
 
 #![allow(clippy::unwrap_in_result)]
 
@@ -469,10 +470,13 @@ fn test_status_rename_emits_title() {
     // promoted to User by seeding the buffer; typing lands on a clean buffer.
     s.send_str("shiny-new-name");
     s.send_key(&Key::Enter);
+    // Assert the reconstructed screen, not the byte stream: the renderer
+    // redraws only the cells a frame changes, so the raw stream can hold a
+    // partial copy of the row while the screen holds the whole name.
     assert!(
-        s.wait_for_plain("shiny-new-name", RENDER_TIMEOUT),
+        s.wait_for_screen("shiny-new-name", RENDER_TIMEOUT),
         "pane should show the renamed session:\n{}",
-        s.output_plain()
+        s.screen().contents()
     );
     assert!(
         s.output().contains("\u{1b}]0;shiny-new-name"),

@@ -2,11 +2,9 @@
 //! slash-palette shape (open + sel + query + filtered + prev/next +
 //! push/pop) so the picker renders in the same inline cell the palette
 //! uses, but over a dynamic session list. The list itself is loaded by the
-//! CLI session catalog (SessionCatalog), which reads the descriptor store +
-//! each session log head; the TUI stays a presentation layer and never names
-//! the storage traits directly (the dep-graph layering).
-
-use std::collections::HashSet;
+//! CLI session catalog (SessionCatalog) in one pass when the picker opens;
+//! the TUI stays a presentation layer and never names the storage traits
+//! directly (the dep-graph layering).
 
 /// Where a row's title came from. The picker reads it to decide whether a
 /// secondary line adds anything: a name the user chose says nothing about
@@ -23,8 +21,7 @@ pub enum TitleSource {
     User,
     /// The newest prompt that states the work.
     LastPrompt,
-    /// The first prompt that states the work, or the log head of a record
-    /// that carries none.
+    /// The first prompt that states the work.
     FirstPrompt,
 }
 
@@ -110,35 +107,27 @@ fn contains_folded(text: &str, needle: &str) -> bool {
 
 /// The picker overlay state. The rows field is loaded once when the picker
 /// opens (via the session catalog); the query narrows the loaded rows
-/// client-side. Selection wraps the filtered list and stays on the same
-/// session when the list changes underneath it.
+/// client-side. Selection wraps the filtered list.
 #[derive(Debug, Clone, Default)]
 pub struct SessionPickerState {
     pub open: bool,
     pub sel: usize,
-    /// The session the cursor is on. Selection follows the session rather
-    /// than the line number, so a match that appears above the cursor while
-    /// rows are still resolving cannot move the choice under the user.
-    pub anchor: Option<String>,
     pub query: String,
     pub rows: Vec<SessionRow>,
-    pub resolved: HashSet<usize>,
 }
 
 /// The storage-facing trait the CLI implements: the resumable sessions (with
-/// a derived title each) excluding the current one, plus the lazy detail
-/// resolution. The TUI names this trait, the CLI provides it over the
-/// descriptor store + the SessionLog, so the TUI never imports the storage
-/// traits (dep-graph layering). Returns rows newest-updated first.
+/// a derived title each) excluding the current one. The TUI names this
+/// trait, the CLI provides it over the descriptor store, so the TUI never
+/// imports the storage traits (dep-graph layering). Returns rows
+/// newest-updated first.
 ///
-/// Two-phase progressive loading: sessions walks the store once and reads a
-/// descriptor only where a row could take a visible slot, so the picker
-/// opens after that one walk and never per frame; rows arrive sorted by real
-/// last activity. resolve_detail names a row whose record carries no prompt
-/// from its log head, lazily and a few rows per frame.
+/// The walk reads a descriptor only where a row could take a visible slot,
+/// so the picker opens after one store walk and never reads a session log.
+/// A session whose record states no prompt is titled by a bounded migration
+/// pass that fills those records in the background, not by this call.
 pub trait SessionCatalog: Send + Sync {
     fn sessions(&self, current_sid: &str) -> Vec<SessionRow>;
-    fn resolve_detail(&self, row: &mut SessionRow);
 }
 
 impl SessionPickerState {
@@ -175,7 +164,6 @@ impl SessionPickerState {
         let n = self.filtered().len();
         if n > 0 {
             self.sel = (self.sel + n - 1) % n;
-            self.anchor = self.cursor_sid();
         }
     }
 
@@ -183,80 +171,29 @@ impl SessionPickerState {
         let n = self.filtered().len();
         if n > 0 {
             self.sel = (self.sel + 1) % n;
-            self.anchor = self.cursor_sid();
         }
     }
 
     pub fn push(&mut self, c: char) {
         self.query.push(c);
         self.sel = 0;
-        self.anchor = self.cursor_sid();
     }
 
     pub fn pop(&mut self) {
         self.query.pop();
         self.sel = 0;
-        self.anchor = self.cursor_sid();
     }
 
     pub fn open(&mut self) {
         self.open = true;
         self.query.clear();
         self.sel = 0;
-        self.anchor = None;
-        self.resolved.clear();
-    }
-
-    /// Resolve detail for up to budget rows that have none yet, so the
-    /// listing fills in titles over a few frames instead of blocking the
-    /// open. Resolution never drops a row: two sessions can carry the same
-    /// title and still be two sessions.
-    pub fn resolve_rows(&mut self, catalog: &dyn SessionCatalog, budget: usize) {
-        let mut done = 0;
-        for i in 0..self.rows.len() {
-            if done >= budget {
-                break;
-            }
-            if self.resolved.contains(&i) {
-                continue;
-            }
-            catalog.resolve_detail(&mut self.rows[i]);
-            self.resolved.insert(i);
-            done += 1;
-        }
-        self.settle();
     }
 
     pub fn close(&mut self) {
         self.open = false;
         self.query.clear();
         self.sel = 0;
-        self.anchor = None;
-        self.resolved.clear();
-    }
-
-    /// The session id under the cursor, or None when nothing is selected.
-    fn cursor_sid(&self) -> Option<String> {
-        self.filtered().get(self.sel).map(|row| row.sid_str.clone())
-    }
-
-    /// Hold the cursor on the anchored session after the match set changed.
-    /// A title that resolves late can add a matching row above the cursor,
-    /// and re-indexing by position would silently move the choice to a
-    /// different session. When the anchored session no longer matches the
-    /// query, the cursor stays at its position clamped to the shorter list.
-    fn settle(&mut self) {
-        let Some(anchor) = self.anchor.clone() else {
-            return;
-        };
-        let filtered = self.filtered();
-        let position = filtered.iter().position(|row| row.sid_str == anchor);
-        let len = filtered.len();
-        self.sel = match position {
-            Some(index) => index,
-            None => self.sel.min(len.saturating_sub(1)),
-        };
-        self.anchor = self.cursor_sid();
     }
 }
 

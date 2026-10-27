@@ -285,41 +285,6 @@ fn test_resume_missing_reports_error() {
     );
 }
 
-/// Write a session on disk (log.jsonl + session.json) so a subsequent
-/// --resume <sid> or the /resume picker can re-open it. The log carries one
-/// UserInput event (a genesis line with prev_hash null, so the chain
-/// verifies); the descriptor carries the model the resume path should restore.
-fn seed_session_on_disk(root: &Path, sid_str: &str, model: &str, prompt: &str) {
-    let sid = SessionId::from_display_string(sid_str).expect("sid parses");
-    let event = SessionLogEntry {
-        id: EventId::new(),
-        session: sid,
-        ts: 0,
-        prev_hash: None,
-        event: SessionEvent::UserInput {
-            text: prompt.into(),
-        },
-    };
-    let line = serde_json::to_string(&event).expect("serialize event");
-    let dir = root.join(sid_str);
-    fs::create_dir_all(&dir).expect("mkdir session dir");
-    fs::write(dir.join("log.jsonl"), format!("{line}\n")).expect("write log");
-    let descriptor = serde_json::json!({
-        "name": null,
-        "name_source": "auto",
-        "cwd": "/tmp",
-        "model": model,
-        "provenance": {"kind": "fresh"},
-        "version": "test",
-        "created_at": 1000,
-    });
-    fs::write(
-        dir.join("session.json"),
-        serde_json::to_string_pretty(&descriptor).expect("serialize descriptor"),
-    )
-    .expect("write descriptor");
-}
-
 /// /resume picker in-process swap e2e: seed a session A on disk, launch the
 /// binary (which starts in a fresh session B), open the picker, select A, and
 /// verify the event loop swaps to A in place -- no quit, no re-login, the
@@ -334,7 +299,7 @@ fn seed_session_on_disk(root: &Path, sid_str: &str, model: &str, prompt: &str) {
 fn test_resume_picker_swaps_process() {
     let sessions_dir = common::fresh_temp_dir("sessions-swap");
     let sid_a = "11111111-1111-1111-1111-111111111111";
-    seed_session_on_disk(&sessions_dir, sid_a, "stub-model-a", "seeded prompt a");
+    common::seed_session_on_disk(&sessions_dir, sid_a, "stub-model-a", "seeded prompt a");
 
     let mut s =
         PtySession::launch_with_sessions_dir(None, None, None, None, &[], sessions_dir.clone());
@@ -355,9 +320,9 @@ fn test_resume_picker_swaps_process() {
         s.output()
     );
     assert!(
-        s.output_plain().contains("seeded prompt a"),
+        s.wait_for_screen("seeded prompt a", RENDER_TIMEOUT),
         "picker should show session A's title in the user's own words:\n{}",
-        s.output()
+        s.screen().contents()
     );
     // Select A (the only row, already selected) + Enter to switch.
     s.send_key(&Key::Enter);
@@ -403,7 +368,7 @@ fn test_resume_picker_swaps_process() {
 fn test_resume_lock_rejects_second() {
     let sessions_dir = common::fresh_temp_dir("sessions-lock");
     let sid_a = "22222222-2222-2222-2222-222222222222";
-    seed_session_on_disk(&sessions_dir, sid_a, "stub-model-lock", "locked session");
+    common::seed_session_on_disk(&sessions_dir, sid_a, "stub-model-lock", "locked session");
 
     // Binary 1: --resume <sid_a> acquires the lock + holds it on the login
     // screen (the TUI path does not write a pidfile, so is_session_live
@@ -795,7 +760,7 @@ fn test_retention_notice() {
     .unwrap();
     let sessions_dir = fresh_temp_dir("backlog-warn-sessions");
     for i in 0..3 {
-        seed_session_on_disk(
+        common::seed_session_on_disk(
             &sessions_dir,
             &format!("00000000-0000-0000-0000-00000000000{i}"),
             "test",

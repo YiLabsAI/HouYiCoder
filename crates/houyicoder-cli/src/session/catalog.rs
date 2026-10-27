@@ -1,13 +1,9 @@
-//! Adapt durable session descriptors and logs to the TUI SessionCatalog port.
+//! Adapt durable session descriptors to the TUI SessionCatalog port.
 
-use std::sync::Arc;
-
-use houyicoder_api::session::SessionLog;
 use houyicoder_context::SessionId;
 use houyicoder_context::session_class::{LOG_FILE, recent_user_sessions};
 use houyicoder_context::session_intent::TitleSource as RecordTitleSource;
 use houyicoder_context::session_intent::display_title;
-use houyicoder_service::lifecycle::session_title::log_head_title;
 use houyicoder_tui::resume_picker::{SessionCatalog, SessionRow, TitleSource};
 use std::fs::metadata;
 use std::path::Path;
@@ -24,19 +20,15 @@ fn cwd_basename(cwd: &str) -> String {
 }
 
 pub struct DescriptorSessionCatalog {
-    session_log: Arc<dyn SessionLog>,
     sessions_root: PathBuf,
 }
 
 impl DescriptorSessionCatalog {
-    /// Build the catalog over one sessions root. The listing reads each
-    /// session's record; the log answers only where a record carries no
-    /// prompt.
-    pub fn new(session_log: Arc<dyn SessionLog>, sessions_root: PathBuf) -> Self {
-        Self {
-            session_log,
-            sessions_root,
-        }
+    /// Build the catalog over one sessions root. Every row is answered from
+    /// the store's directory listing and the session's record; no session
+    /// log is opened, so opening the picker costs no log read per row.
+    pub fn new(sessions_root: PathBuf) -> Self {
+        Self { sessions_root }
     }
 }
 
@@ -79,23 +71,6 @@ impl SessionCatalog for DescriptorSessionCatalog {
                 })
             })
             .collect()
-    }
-
-    fn resolve_detail(&self, row: &mut SessionRow) {
-        if row.title_source != TitleSource::Placeholder {
-            return;
-        }
-        let Some(sid) = SessionId::from_display_string(&row.sid_str) else {
-            return;
-        };
-        // A record written before prompts were recorded states nothing, and
-        // the bounded log head still names the work in the user's own words.
-        // Nothing is written back, so the row keeps this as a display title
-        // until the record itself carries the prompt.
-        if let Some(title) = log_head_title(self.session_log.as_ref(), sid) {
-            row.title = title;
-            row.title_source = TitleSource::FirstPrompt;
-        }
     }
 }
 

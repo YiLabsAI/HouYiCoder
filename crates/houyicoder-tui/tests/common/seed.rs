@@ -175,6 +175,12 @@ pub fn seed_session_with_context_cost(
 /// session.json descriptor the resume reader scans, and return the first
 /// event's id. One writer for every seed that lays down a log, so a schema
 /// change to the event or descriptor shape is fixed in one place.
+///
+/// The descriptor records the prompts the log states, as the background
+/// migration fills them for a session written before prompts were recorded.
+/// The picker titles its rows from the record and opens no log, so a seed
+/// without these fields would list a placeholder and prove nothing about the
+/// title a user sees.
 fn write_session(
     root: &Path,
     sid_str: &str,
@@ -187,6 +193,8 @@ fn write_session(
     create_dir_all(&dir).expect("mkdir session dir");
     let mut log = String::new();
     let mut first_id = None;
+    let mut first_prompt: Option<serde_json::Value> = None;
+    let mut last_prompt: Option<serde_json::Value> = None;
     for (i, session_event) in events.iter().enumerate() {
         let event = SessionLogEntry {
             id: EventId::new(),
@@ -197,6 +205,16 @@ fn write_session(
         };
         if first_id.is_none() {
             first_id = Some(event.id);
+        }
+        if let SessionEvent::UserInput { text } = &event.event {
+            let record = serde_json::json!({
+                "text": text,
+                "event_id": event.id.to_string(),
+            });
+            if first_prompt.is_none() {
+                first_prompt = Some(record.clone());
+            }
+            last_prompt = Some(record);
         }
         log.push_str(&serde_json::to_string(&event).expect("serialize event"));
         log.push('\n');
@@ -210,6 +228,9 @@ fn write_session(
         "provenance": {"kind": "fresh"},
         "version": "test",
         "created_at": 1000,
+        "first_prompt": first_prompt,
+        "last_prompt": last_prompt,
+        "prompt_coverage": "complete",
     });
     write(
         dir.join("session.json"),

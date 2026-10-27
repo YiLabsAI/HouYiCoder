@@ -43,12 +43,6 @@ impl SessionCatalog for StubCatalog {
     fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
         self.0.clone()
     }
-
-    // The stub rows already carry full titles + last_active (canned data), so
-    // progressive detail resolution is a no-op here. The real catalog's
-    // resolve_detail reads the log head + mtime; that path is covered by the
-    // catalog's own tests, not here.
-    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
 fn stub_catalog_app() -> App {
@@ -354,8 +348,8 @@ fn test_resume_picker_empty_list() {
     );
 }
 
-/// A catalog whose detail resolution names an unnamed row, so two rows can
-/// carry the same title after resolution.
+/// A catalog whose two sessions carry the same title, as two runs of the
+/// same opening request do.
 struct SharedTitleCatalog;
 impl SessionCatalog for SharedTitleCatalog {
     fn sessions(&self, _current_sid: &str) -> Vec<SessionRow> {
@@ -369,23 +363,17 @@ impl SessionCatalog for SharedTitleCatalog {
             },
             SessionRow {
                 sid_str: "older".into(),
-                title: "(session) aaaaaaaa".into(),
+                title: "fix login".into(),
+                title_source: TitleSource::FirstPrompt,
                 last_active: 2000,
                 ..Default::default()
             },
         ]
     }
-
-    fn resolve_detail(&self, row: &mut SessionRow) {
-        if row.sid_str == "older" {
-            row.title = "fix login".into();
-            row.title_source = TitleSource::FirstPrompt;
-        }
-    }
 }
 
-/// Two sessions can end up with the same title, and both stay listed: the
-/// time and project columns are what tells them apart.
+/// Two sessions can carry the same title, and both stay listed: the time
+/// and project columns are what tells them apart.
 #[test]
 fn test_duplicate_title_keeps_rows() {
     let mut p = SessionPickerState {
@@ -393,21 +381,17 @@ fn test_duplicate_title_keeps_rows() {
         ..Default::default()
     };
     p.open();
-    p.resolve_rows(&SharedTitleCatalog, 2);
-    assert_eq!(p.rows[1].title, "fix login", "the older row resolves");
+    assert_eq!(p.rows[1].title, "fix login");
     assert_eq!(p.filtered().len(), 2, "both rows are listed");
 }
 
-/// The same pair through the picker render: the shared title is drawn on
-/// both rows rather than collapsing to one.
+/// The same two sessions through the picker render: the shared title is
+/// drawn on both rows rather than collapsing to one.
 #[test]
 fn test_duplicate_title_renders_both() {
     let mut app = working();
     app.sessions.catalog = Some(Arc::new(SharedTitleCatalog));
     app.run_command(SlashCommand::Resume);
-    // Detail resolves from the poll loop, so the listing needs one frame
-    // before the derived titles are on screen.
-    app.poll_agent();
     let out = render(&app);
     assert_eq!(
         out.matches("fix login").count(),
@@ -444,8 +428,6 @@ impl SessionCatalog for TopicCatalog {
             },
         ]
     }
-
-    fn resolve_detail(&self, _row: &mut SessionRow) {}
 }
 
 /// The selected row gains a second line saying what the work started as, and
