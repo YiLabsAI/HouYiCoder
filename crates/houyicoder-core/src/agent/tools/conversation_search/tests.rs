@@ -8,8 +8,8 @@ use houyicoder_api::session::TrajectoryPage;
 use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::CheckpointId;
 use houyicoder_context::{
-    CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, SessionId,
-    SessionLogEntry, TurnGroup,
+    CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, RecapSource,
+    SessionId, SessionLogEntry, TurnGroup,
 };
 use houyicoder_protocol::extension::ToolError;
 use std::sync::Mutex;
@@ -523,6 +523,23 @@ fn test_transcript_item_empty_textless() {
         SessionEvent::AssistantMessage {
             text: String::new(),
             thinking: Some(String::new()),
+        },
+        // A recap is the host's second-hand account of the run, excluded from
+        // model context; recalling it would feed the model that account back
+        // as if it were conversation.
+        SessionEvent::AwayRecap {
+            text: "recap text".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "fast-1".into(),
+            usage: None,
+        },
+        SessionEvent::RecapAttempt {
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "fast-1".into(),
         },
     ];
     for event in cases {

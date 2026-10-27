@@ -301,6 +301,12 @@ pub fn assemble_model_input_with(
                 }
                 i += 1;
             }
+            // Display and audit only: a recap never enters the model input,
+            // so the model cannot read its own earlier summary as a fresh
+            // instruction or as evidence that work finished.
+            SessionEvent::RecapAttempt { .. } | SessionEvent::AwayRecap { .. } => {
+                i += 1;
+            }
             _ => {
                 i += 1;
             }

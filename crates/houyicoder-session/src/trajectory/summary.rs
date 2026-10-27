@@ -192,6 +192,13 @@ impl TrajectorySummaryState {
                 entry.event,
                 SessionEvent::ContextCleared { .. }
                     | SessionEvent::CompactionBoundary { .. }
+                    // A recap is written while no turn runs, so a log that
+                    // opens with one opens between turns, not mid-run: taking
+                    // it for content would open a turn that reported no usage
+                    // and make the session total read incomplete for the rest
+                    // of its life.
+                    | SessionEvent::RecapAttempt { .. }
+                    | SessionEvent::AwayRecap { .. }
                     // A delta is not durable and not turn content: a log state that
                     // saw one before any durable event must not take it for a
                     // turn that reported no usage, or the session total would

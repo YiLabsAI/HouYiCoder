@@ -89,6 +89,12 @@ pub enum AcpxMethod {
     ContextSummary,
     #[serde(rename = "acpx/context/meta_user")]
     ContextMetaUser,
+    /// A recap the host wrote while the user was away or after reopening an
+    /// idle session. It is not a turn of the conversation: the client renders
+    /// it as its own dim row and never counts it as a message. Params carry
+    /// the summary text.
+    #[serde(rename = "acpx/context/recap")]
+    ContextRecap,
     #[serde(rename = "acpx/context/permission_decision")]
     ContextPermissionDecision,
     /// A run reached its terminal outcome. The params carry the turn's

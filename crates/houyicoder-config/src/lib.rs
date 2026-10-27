@@ -18,6 +18,7 @@
 //! marks unsafe and this workspace denies). The resolve_* fns are thin
 //! env-reading wrappers over those helpers.
 
+pub mod recap;
 pub mod retention;
 pub mod runner_settings;
 pub mod sandbox_network;

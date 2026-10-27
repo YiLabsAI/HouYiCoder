@@ -281,7 +281,12 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. }
         | SessionEvent::ModelStepTiming { .. }
-        | SessionEvent::CacheDecisions { .. }
+| SessionEvent::CacheDecisions { .. }
+        // A recap is a summary the host wrote about the run, not a turn of
+        // it; it is also excluded from model context, so recalling it as
+        // conversation would feed the model its own second-hand account.
+        | SessionEvent::RecapAttempt { .. }
+        | SessionEvent::AwayRecap { .. }
         | SessionEvent::ContextCleared { .. } => return None,
     };
     if text.is_empty() {

@@ -530,6 +530,8 @@ fn event_bytes(event: &SessionEvent) -> usize {
         SessionEvent::ToolResult {
             call_id, output, ..
         } => call_id.len() + value_bytes(output),
+        SessionEvent::RecapAttempt { model, .. } => model.len(),
+        SessionEvent::AwayRecap { text, model, .. } => text.len() + model.len(),
         // Every other event carries counters and identities, whose size the
         // record itself already covers.
         _ => 0,

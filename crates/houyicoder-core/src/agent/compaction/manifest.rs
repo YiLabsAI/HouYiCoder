@@ -430,6 +430,10 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &Tokenizer) -> usiz
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::ModelStepTiming { .. }
         | SessionEvent::CacheDecisions { .. }
+        // The assembly skips both, so they add nothing to the model-visible
+        // budget the estimator reports.
+        | SessionEvent::RecapAttempt { .. }
+        | SessionEvent::AwayRecap { .. }
         | SessionEvent::ContextCleared { .. } => 0,
     }
 }

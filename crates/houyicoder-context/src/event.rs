@@ -76,6 +76,37 @@ pub struct CachedBlockDecision {
     pub decision: String,
 }
 
+/// What started a recap attempt. The two entries differ in what cancels them:
+/// the window gaining focus back cancels the away entry, while the resume
+/// entry is entered by that same focus, so it runs through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RecapSource {
+    Away,
+    Resume,
+    /// A source this build does not know (written by a newer version), so a
+    /// newer log still reads instead of failing the line.
+    #[serde(other)]
+    Unknown,
+}
+
+/// What one recap request cost, as its endpoint reported it. Every figure is
+/// optional because an endpoint may omit usage; an absent one is unknown, not
+/// a zero-cost call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecapUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
+    /// Wall time of the whole request, unknown when the host recorded none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
 /// The payload of a SessionLogEntry. Tagged for JSONL. ToolResult carries call_id
 /// linking to the ToolCall it answers — the pair invariant. PermissionDecision
 /// carries the call_id of the tool call the verdict answers, closing the audit
@@ -598,6 +629,33 @@ pub enum SessionEvent {
     #[serde(rename = "ContextCleared")]
     ContextCleared {
         prior_turn: u32,
+    },
+    /// Written before a recap request leaves the host, so a crash cannot cause
+    /// the same work to be summarized and billed twice on the next start. The
+    /// pair of ids is the dedup key: the last user event the attempt is about
+    /// and the event its input snapshot ended at. An attempt with no later
+    /// AwayRecap has an outcome this log cannot state — not a failure.
+    #[serde(rename = "RecapAttempt")]
+    RecapAttempt {
+        last_user_event: EventId,
+        as_of_event: EventId,
+        source: RecapSource,
+        model: String,
+    },
+    /// A recap the host wrote while the user was away, or when an idle session
+    /// was reopened: a bounded model summary of where the work stands. The text
+    /// is display-only — model input assembly skips it, so it can never act as
+    /// a user instruction or as evidence that work finished.
+    #[serde(rename = "AwayRecap")]
+    AwayRecap {
+        text: String,
+        last_user_event: EventId,
+        as_of_event: EventId,
+        source: RecapSource,
+        model: String,
+        /// Absent when the endpoint reported nothing about the request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<RecapUsage>,
     },
     /// An event kind this build does not know (written by a newer version).
     /// Lets an old binary read a newer log instead of failing the whole

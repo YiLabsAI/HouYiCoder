@@ -2,7 +2,7 @@
 //! what the turn bookkeeping reports, and what a read costs.
 
 use super::*;
-use houyicoder_context::{EventId, SessionId};
+use houyicoder_context::{EventId, RecapSource, SessionId};
 
 fn entry(ts: u64, event: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -127,6 +127,34 @@ fn test_leading_partial_turn_counts() {
     assert_eq!(
         summary.total_turns, 2,
         "one numbered turn before the first user input, plus one after"
+    );
+}
+
+/// A recap is written between turns, so a log that opens with one did not
+/// open mid-run. Counting it as turn content would open a turn that reports
+/// no usage and leave the session total a permanent lower bound.
+#[test]
+fn test_recap_skips_turn() {
+    let events = vec![
+        entry(
+            0,
+            SessionEvent::AwayRecap {
+                text: "where the work stands".into(),
+                last_user_event: EventId::new(),
+                as_of_event: EventId::new(),
+                source: RecapSource::Away,
+                model: "fast-1".into(),
+                usage: None,
+            },
+        ),
+        entry(10, SessionEvent::UserInput { text: "a".into() }),
+        usage(20, 10, 1, "m"),
+    ];
+    let summary = fold(&events);
+    assert_eq!(summary.total_turns, 1, "the recap opened no turn");
+    assert!(
+        summary.usage.totals_known,
+        "the one real turn reported its usage"
     );
 }
 

@@ -82,5 +82,6 @@ pub use log_index::{
 /// record can be).
 mod event;
 pub use event::{
-    CachedBlockDecision, PermissionVerdict, SessionEvent, SessionLogEntry, TruncationSignal,
+    CachedBlockDecision, PermissionVerdict, RecapSource, RecapUsage, SessionEvent, SessionLogEntry,
+    TruncationSignal,
 };

@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::{event_name, hex_short};
-use houyicoder_context::SessionEvent;
+use houyicoder_context::{EventId, RecapSource, SessionEvent};
 
 #[test]
 fn test_hex_short_first_bytes() {
@@ -15,6 +15,28 @@ fn test_hex_short_first_bytes() {
 #[test]
 fn test_unknown_kind_labeled_unknown() {
     assert_eq!(event_name(&SessionEvent::Unknown), "unknown");
+}
+
+/// A recap and its attempt record get labels of their own, so an audit row
+/// never borrows the name of a turn event the user did not trigger.
+#[test]
+fn test_recap_labels() {
+    let recap = SessionEvent::AwayRecap {
+        text: String::new(),
+        last_user_event: EventId::new(),
+        as_of_event: EventId::new(),
+        source: RecapSource::Away,
+        model: String::new(),
+        usage: None,
+    };
+    assert_eq!(event_name(&recap), "recap");
+    let attempt = SessionEvent::RecapAttempt {
+        last_user_event: EventId::new(),
+        as_of_event: EventId::new(),
+        source: RecapSource::Resume,
+        model: String::new(),
+    };
+    assert_eq!(event_name(&attempt), "recap_attempt");
 }
 
 #[test]

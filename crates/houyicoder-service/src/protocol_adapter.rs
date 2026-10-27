@@ -178,6 +178,9 @@ pub(crate) fn build_trajectory_entries(
         .map(|ev| {
             let duration_ms = match &ev.event {
                 SessionEvent::ToolResult { duration_ms, .. } => Some(*duration_ms),
+                SessionEvent::AwayRecap { usage, .. } => {
+                    usage.as_ref().and_then(|usage| usage.duration_ms)
+                }
                 _ => None,
             };
             TrajectoryEntry {
@@ -505,6 +508,11 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }
         | SessionEvent::ModelStepTiming { .. }
+        // A recap renders as its own dim row, set apart from the conversation,
+        // so it rides the extension stream instead of arriving as a chat
+        // message. The attempt record is audit.
+        | SessionEvent::RecapAttempt { .. }
+        | SessionEvent::AwayRecap { .. }
         | SessionEvent::ContextCleared { .. } => return None,
         // TurnAborted is the user-visible boundary marker: map it as a
         // message chunk so the host renders the notice. The model-input
@@ -578,6 +586,12 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
                 "reason": reason,
             }),
         ),
+        // The recap text is the whole payload: the snapshot the host asked
+        // about and the model it used stay in the durable record, where a
+        // reader that wants them finds them.
+        SessionEvent::AwayRecap { text, .. } => {
+            AcpxNotification::new(ContextRecap, serde_json::json!({ "text": text }))
+        }
         // The interrupt notice is an event of the turn it interrupts, not a
         // message that opens a turn: the mark rides beside the notice so a
         // reader keeps the turn whole instead of ending it at the notice and
@@ -585,7 +599,8 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         SessionEvent::TurnAborted { .. } => {
             AcpxNotification::new(ContextTurnInterrupted, serde_json::json!({}))
         }
-        SessionEvent::TruncationVerdict { .. }
+        SessionEvent::RecapAttempt { .. }
+        | SessionEvent::TruncationVerdict { .. }
         | SessionEvent::WorktreeEnter { .. }
         | SessionEvent::WorktreeExit { .. }
         | SessionEvent::TurnUsage { .. }

@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::{EventId, SessionId};
+use houyicoder_context::{EventId, RecapSource, SessionId};
 
 fn evt(kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -50,6 +50,37 @@ fn test_assembles_user_assistant_toolresult() {
         _ => panic!("expected assistant item"),
     }
     assert!(matches!(items[2], InputItem::ToolResult { .. }));
+}
+
+/// A recap is written for the user's eyes only. If assembly ever passed it to
+/// the model, the model would read its own earlier summary as a fresh
+/// instruction and could treat unfinished work as finished.
+#[test]
+fn test_recap_excluded_from_input() {
+    let events = vec![
+        evt(user("build the thing")),
+        evt(SessionEvent::AwayRecap {
+            text: "the thing is finished".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "fast-1".into(),
+            usage: None,
+        }),
+        evt(SessionEvent::RecapAttempt {
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "fast-1".into(),
+        }),
+    ];
+    let items = assemble_model_input(&events, None);
+    let joined = format!("{items:?}");
+    assert!(
+        !joined.contains("the thing is finished"),
+        "the recap text never reaches the model: {joined}"
+    );
+    assert_eq!(items.len(), 1, "only the user message is assembled");
 }
 
 #[test]

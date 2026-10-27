@@ -331,6 +331,8 @@ fn collect_checkpoints_and_errors(
             | SessionEvent::RunCompleted { .. }
             | SessionEvent::NotificationInjected { .. }
             | SessionEvent::ModelStepTiming { .. }
+            | SessionEvent::RecapAttempt { .. }
+            | SessionEvent::AwayRecap { .. }
             | SessionEvent::ContextCleared { .. }
             | SessionEvent::Unknown => {}
         }

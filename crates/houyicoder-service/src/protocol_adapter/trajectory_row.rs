@@ -36,6 +36,8 @@ pub fn event_name(kind: &SessionEvent) -> &'static str {
         SessionEvent::NotificationInjected { .. } => "notify",
         SessionEvent::ModelStepTiming { .. } => "timing",
         SessionEvent::ContextCleared { .. } => "cleared",
+        SessionEvent::RecapAttempt { .. } => "recap_attempt",
+        SessionEvent::AwayRecap { .. } => "recap",
         SessionEvent::Unknown => "unknown",
     }
 }

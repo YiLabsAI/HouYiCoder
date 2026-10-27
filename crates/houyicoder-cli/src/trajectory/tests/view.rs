@@ -7,7 +7,7 @@ use super::super::turns::FoldMode;
 use super::super::view::*;
 use crate::session::history::TurnPage;
 use houyicoder_context::CheckpointId;
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{EventId, RecapSource, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_tui::view::trajectory_pane::{
     CompactedBoundary, ModelSwitchBoundary, RecordOutcome, TrajectoryRecord, TrajectoryRecordKind,
     TrajectoryRow, TrajectoryTurn, TurnBoundary,
@@ -1857,4 +1857,68 @@ fn test_total_excludes_idle_gap() {
 #[test]
 fn test_total_absent_without_events() {
     assert_eq!(build_view(&[], "m", 0).duration_ms, None);
+}
+
+/// A recap is written while the user is away, so it belongs to neither the
+/// turn before it nor the one after. Treating it as content would stretch the
+/// finished turn across the whole absence and make the session total disagree
+/// with the rows it summarises.
+#[test]
+fn test_total_excludes_recap_gap() {
+    let user = |ts: u64, text: &str| {
+        ev(
+            ts,
+            SessionEvent::UserInput {
+                text: text.to_string(),
+            },
+        )
+    };
+    let timing = |turn: u32| SessionEvent::ModelStepTiming {
+        turn,
+        step: 0,
+        total_ms: 1_000,
+        ttft_ms: None,
+        decode_ms: None,
+        reasoning_ms: None,
+        response_ms: None,
+    };
+    let recap = |ts: u64| {
+        ev(
+            ts,
+            SessionEvent::AwayRecap {
+                text: "summarized the build".into(),
+                last_user_event: EventId::new(),
+                as_of_event: EventId::new(),
+                source: RecapSource::Away,
+                model: "small".into(),
+                usage: None,
+            },
+        )
+    };
+    let events = vec![
+        user(1_000, "first"),
+        ev(2_000, timing(1)),
+        recap(400_000),
+        user(500_000, "second"),
+        ev(501_000, timing(2)),
+    ];
+    let view = build_view(&events, "m", 0);
+    assert_eq!(
+        view.duration_ms,
+        Some(2_000),
+        "two one-second turns, not the gap the recap filled"
+    );
+    let summed: u64 = view
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            TrajectoryRow::Turn(t) => Some(t.duration_ms),
+            TrajectoryRow::Bg(_) => None,
+        })
+        .sum();
+    assert_eq!(
+        Some(summed),
+        view.duration_ms,
+        "the header must equal the rows it summarises"
+    );
 }

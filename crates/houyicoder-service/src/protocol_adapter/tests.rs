@@ -1,5 +1,7 @@
 use super::*;
 use houyicoder_context::PermissionVerdict;
+use houyicoder_context::RecapSource;
+use houyicoder_context::RecapUsage;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::{EventId, SessionId, SessionLogEntry};
 use houyicoder_core::agent::ApprovalRequest;
@@ -360,6 +362,40 @@ fn test_rule_destination_round_trips() {
     }
 }
 
+/// A recap reaches the client as its own acpx row, never as a chat message:
+/// the client draws it apart from the conversation. The attempt record is
+/// audit only, since the reader derives success from the recap beside it.
+#[test]
+fn test_recap_maps_acpx_only() {
+    let kind = SessionEvent::AwayRecap {
+        text: "wiring the focus report".into(),
+        last_user_event: EventId::new(),
+        as_of_event: EventId::new(),
+        source: RecapSource::Away,
+        model: "fast-1".into(),
+        usage: None,
+    };
+    assert!(
+        map_session_update(&kind).is_none(),
+        "a recap is not a conversation message"
+    );
+    let notice = map_acpx_notification(&kind).expect("the recap maps");
+    assert_eq!(notice.method, AcpxMethod::ContextRecap);
+    assert_eq!(notice.params["text"], "wiring the focus report");
+
+    let attempt = SessionEvent::RecapAttempt {
+        last_user_event: EventId::new(),
+        as_of_event: EventId::new(),
+        source: RecapSource::Resume,
+        model: "fast-1".into(),
+    };
+    assert!(map_session_update(&attempt).is_none());
+    assert!(
+        map_acpx_notification(&attempt).is_none(),
+        "a started attempt has nothing to show"
+    );
+}
+
 /// TurnAborted maps to the "aborted" trajectory label, a visible
 /// session-update message chunk (so the host renders the boundary notice),
 /// and the acpx mark that tells a reader the notice belongs to the turn it
@@ -441,6 +477,26 @@ fn test_build_trajectory_carries_duration() {
     let user = mk(SessionEvent::UserInput { text: "hi".into() });
     let entries2 = super::build_trajectory_entries(from_ref(&user));
     assert_eq!(entries2[0].duration_ms, None);
+
+    // A recap's row carries its request time, the one figure that makes the
+    // background spend visible in the audit page.
+    let recap = mk(SessionEvent::AwayRecap {
+        text: "where the work stands".into(),
+        last_user_event: EventId::new(),
+        as_of_event: EventId::new(),
+        source: RecapSource::Away,
+        model: "fast-1".into(),
+        usage: Some(RecapUsage {
+            input_tokens: Some(900),
+            output_tokens: Some(40),
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            duration_ms: Some(760),
+        }),
+    });
+    let entries3 = super::build_trajectory_entries(from_ref(&recap));
+    assert_eq!(entries3[0].kind, "recap");
+    assert_eq!(entries3[0].duration_ms, Some(760));
 }
 
 /// A skill-tool always-allow scopes to the specific skill name + lands at

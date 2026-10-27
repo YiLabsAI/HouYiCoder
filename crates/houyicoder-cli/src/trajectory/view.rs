@@ -576,10 +576,11 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
 }
 
 /// The sum of each turn's own span, from the event that opened it to the last
-/// content event it carried. Between-turn boundaries (context clear and
-/// compaction) do not extend the finished turn before them, so an overnight
-/// gap followed by a clear or compaction never inflates the session total.
-/// None when the log carried no event to measure.
+/// content event it carried. Between-turn records (context clear, compaction,
+/// and a recap) do not extend the finished turn before them, so an overnight
+/// gap followed by one of them never inflates the session total. A recap is
+/// written during that gap, so counting it as content would stretch the turn
+/// by the whole absence. None when the log carried no event to measure.
 fn active_turn_ms(events: &[SessionLogEntry]) -> Option<u64> {
     let mut total = 0u64;
     let mut open: Option<(u64, u64, u64)> = None;
@@ -591,7 +592,10 @@ fn active_turn_ms(events: &[SessionLogEntry]) -> Option<u64> {
                 }
                 open = Some((ev.ts, ev.ts, 0));
             }
-            SessionEvent::ContextCleared { .. } | SessionEvent::CompactionBoundary { .. } => {}
+            SessionEvent::ContextCleared { .. }
+            | SessionEvent::CompactionBoundary { .. }
+            | SessionEvent::RecapAttempt { .. }
+            | SessionEvent::AwayRecap { .. } => {}
             SessionEvent::RunCompleted { ms: Some(ms) } => {
                 let entry = open.get_or_insert((ev.ts, ev.ts, 0));
                 entry.2 = *ms;

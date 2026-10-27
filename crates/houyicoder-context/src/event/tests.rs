@@ -581,6 +581,142 @@ fn test_timing_and_clear_events() {
     assert_eq!(back2, e2);
 }
 
+#[test]
+fn test_recap_round_trips() {
+    let s = SessionId::new();
+    let last_user = EventId::new();
+    let as_of = EventId::new();
+    let recap = SessionEvent::AwayRecap {
+        text: "Building the recap path. Next: wire the focus report.".into(),
+        last_user_event: last_user,
+        as_of_event: as_of,
+        source: RecapSource::Away,
+        model: "fast-1".into(),
+        usage: Some(RecapUsage {
+            input_tokens: Some(1200),
+            output_tokens: Some(64),
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: Some(0),
+            duration_ms: Some(850),
+        }),
+    };
+    let entry = event(s, EventId::new(), recap);
+    let json = serde_json::to_string(&entry).expect("serialize");
+    assert!(json.contains("\"type\":\"AwayRecap\""));
+    assert!(
+        json.contains(&format!("\"last_user_event\":\"{last_user}\"")),
+        "the dedup key survives so a replay can tell repeated work apart: {json}"
+    );
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, entry);
+}
+
+#[test]
+fn test_recap_omits_unknown_usage() {
+    let s = SessionId::new();
+    let entry = event(
+        s,
+        EventId::new(),
+        SessionEvent::AwayRecap {
+            text: "one line".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Resume,
+            model: "fast-1".into(),
+            usage: None,
+        },
+    );
+    let json = serde_json::to_string(&entry).expect("serialize");
+    assert!(
+        !json.contains("\"usage\""),
+        "an unknown cost is written as no key, not as zeros: {json}"
+    );
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, entry);
+}
+
+/// An endpoint may report the output count and no input count. The figures it
+/// did report survive and the ones it did not are written as no key, so a
+/// reader never mistakes an unreported count for a measured zero.
+#[test]
+fn test_recap_usage_omits_unknown() {
+    let s = SessionId::new();
+    let entry = event(
+        s,
+        EventId::new(),
+        SessionEvent::AwayRecap {
+            text: "one line".into(),
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "fast-1".into(),
+            usage: Some(RecapUsage {
+                input_tokens: None,
+                output_tokens: Some(64),
+                cache_read_input_tokens: None,
+                cache_write_input_tokens: None,
+                duration_ms: Some(850),
+            }),
+        },
+    );
+    let json = serde_json::to_string(&entry).expect("serialize");
+    assert!(json.contains("\"output_tokens\":64"), "{json}");
+    for absent in [
+        "\"input_tokens\"",
+        "\"cache_read_input_tokens\"",
+        "\"cache_write_input_tokens\"",
+    ] {
+        assert!(
+            !json.contains(absent),
+            "{absent} was not reported and must not appear: {json}"
+        );
+    }
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, entry);
+}
+
+#[test]
+fn test_recap_attempt_round_trips() {
+    let s = SessionId::new();
+    let entry = event(
+        s,
+        EventId::new(),
+        SessionEvent::RecapAttempt {
+            last_user_event: EventId::new(),
+            as_of_event: EventId::new(),
+            source: RecapSource::Away,
+            model: "fast-1".into(),
+        },
+    );
+    let json = serde_json::to_string(&entry).expect("serialize");
+    assert!(json.contains("\"type\":\"RecapAttempt\""));
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, entry);
+}
+
+/// A source a newer build adds must not end the read of a recap: the text is
+/// still displayable, so the unknown value reads as Unknown rather than
+/// failing the whole record.
+#[test]
+fn test_future_source_decodes() {
+    let s = SessionId::new();
+    let json = format!(
+        r#"{{"id":"{}","session":"{}","ts":3,"prev_hash":null,"event":{{"type":"AwayRecap","text":"t","last_user_event":"{}","as_of_event":"{}","source":"Scheduled","model":"m"}}}}"#,
+        EventId::new(),
+        s,
+        EventId::new(),
+        EventId::new(),
+    );
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
+    match back.event {
+        SessionEvent::AwayRecap { source, text, .. } => {
+            assert_eq!(source, RecapSource::Unknown);
+            assert_eq!(text, "t");
+        }
+        other => panic!("a recap event: {other:?}"),
+    }
+}
+
 /// An entry whose spans were never recorded carries neither key, and reads back
 /// with both unknown: an absent figure is not a zero, and a reader that
 /// defaulted them to zero would report a model that thought for no time.
