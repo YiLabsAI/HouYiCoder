@@ -449,8 +449,8 @@ pub enum SessionEvent {
     },
     /// A prompt-cache break detected at the agent loop (after a provider
     /// response). Carries the attributed cause: "compact", "model-switch",
-    /// "system-prompt-changed", "tools-changed", "ttl-expired", or "unknown".
-    /// Recorded when cache_read dropped sharply
+    /// "system-prompt-changed", "tools-changed", "retention-demoted",
+    /// "ttl-expired", or "unknown". Recorded when cache_read dropped sharply
     /// vs the previous turn. Provider-agnostic (runs in the agent loop, not
     /// in a provider-specific adapter), surfacing the attribution to the user
     /// via /trajectory rather than keeping it internal. A resumed session can

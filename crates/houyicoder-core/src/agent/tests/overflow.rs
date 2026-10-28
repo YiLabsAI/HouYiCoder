@@ -848,3 +848,47 @@ async fn test_break_names_prefix_half() {
     );
     remove_dir_all(&root).ok();
 }
+
+#[tokio::test]
+async fn test_cache_break_retention_demoted() {
+    let runner = runner_with_overflow(
+        Arc::new(OverflowThenSucceedProvider::new(0, "x")),
+        ToolRegistry::new(),
+    );
+    let session = SessionId::new();
+    let high = Usage {
+        cache_read_input_tokens: 8_000,
+        input_tokens: 8_000,
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+    runner
+        .append_turn_usage(session, "test", &high, false, None)
+        .await
+        .unwrap();
+    runner.cached_prefix().mark_retention_demoted();
+    let zero = Usage {
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+    runner
+        .append_turn_usage(session, "test", &zero, false, None)
+        .await
+        .unwrap();
+    let events = runner.store().replay(session).await.unwrap();
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.event,
+            SessionEvent::CacheBreak { cause } if cause == "retention-demoted"
+        )),
+        "a retention demotion is named instead of unknown"
+    );
+}

@@ -543,6 +543,10 @@ fn test_batch_no_rebreak() {
         policy.decide(&ctx(3, Some("young"), 3)),
         RetentionDecision::Materialize
     );
+    assert!(
+        s.retention_demoted(),
+        "the batch demotion is attributed as retention"
+    );
     // The server reports the expected partial read after our own change.
     s.record_turn(2_000, 20_000);
     // The following assembly must hold the new tiers, not demote again.

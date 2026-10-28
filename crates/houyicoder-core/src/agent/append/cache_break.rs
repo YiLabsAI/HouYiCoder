@@ -37,12 +37,20 @@ impl Runner {
                     return Some("tools-changed");
                 }
             }
+            // The system and tools halves are unchanged; a retention demotion
+            // in this turn's assembly is the specific cause of the drop.
+            if self.cached_prefix.retention_demoted() {
+                return Some("retention-demoted");
+            }
             // The prefix is identical, so the miss is the provider letting
             // its cache expire while the session sat idle.
             if now_millis().saturating_sub(previous_at) >= CACHE_TTL_MS {
                 return Some("ttl-expired");
             }
             return Some("unknown");
+        }
+        if self.cached_prefix.retention_demoted() {
+            return Some("retention-demoted");
         }
         // A reopened session has no prefix hash from this process yet, but it
         // restored the last completion's clock. An idle gap at or past the

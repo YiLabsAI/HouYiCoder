@@ -74,6 +74,9 @@ struct CacheState {
     /// This assembly intentionally changed the prefix bytes. A reported drop
     /// after it is the expected cost of that change, not a server miss.
     prefix_changed: bool,
+    /// The change above was a retention demotion, not a supersession or a
+    /// block re-entering the window. Reported as its own break cause.
+    retention_demoted: bool,
 }
 
 impl CacheState {
@@ -86,6 +89,7 @@ impl CacheState {
             last_assembly: None,
             dirty: false,
             prefix_changed: false,
+            retention_demoted: false,
         }
     }
 }
@@ -203,6 +207,7 @@ impl CachedPrefixState {
             state.alive = false;
             state.dirty = false;
             state.prefix_changed = false;
+            state.retention_demoted = false;
         }
     }
 
@@ -217,6 +222,7 @@ impl CachedPrefixState {
         if state.last_assembly != Some(assembly_id) {
             state.last_assembly = Some(assembly_id);
             state.prefix_changed = false;
+            state.retention_demoted = false;
             let floor = assembly_id.saturating_sub(PRUNE_AFTER_ASSEMBLIES);
             let before = state.decisions.len();
             state.decisions.retain(|_, held| {
@@ -228,6 +234,7 @@ impl CachedPrefixState {
             match replace(&mut state.pending, Recompute::None) {
                 Recompute::All => {
                     state.prefix_changed = !state.decisions.is_empty();
+                    state.retention_demoted = state.prefix_changed;
                     state.decisions.clear();
                     state.dead_band = true;
                 }
@@ -240,6 +247,7 @@ impl CachedPrefixState {
                                 || held.last_age < materialize_turns_live)
                     });
                     state.prefix_changed = state.decisions.len() != before;
+                    state.retention_demoted = state.prefix_changed;
                     state.dead_band = false;
                 }
                 Recompute::None => {}
@@ -393,6 +401,30 @@ impl CachedPrefixState {
         }
     }
 
+    /// Whether the last turn assembly demoted a held decision. The break
+    /// detector reads this once, before the cache state advances.
+    pub fn retention_demoted(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.retention_demoted)
+            .unwrap_or(false)
+    }
+
+    /// Clear the demotion marker after the response that observed it.
+    pub fn clear_retention_demoted(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.retention_demoted = false;
+        }
+    }
+
+    /// Mark a retention demotion for the break-attribution test.
+    #[cfg(test)]
+    pub(crate) fn mark_retention_demoted(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.retention_demoted = true;
+        }
+    }
+
     /// Take the durable map when a decision write changed it. The payload
     /// carries only the blocks this turn assembly saw, so a long session's
     /// log does not accumulate rows for blocks that left the window. None
@@ -473,6 +505,7 @@ impl CachedPrefixState {
             state.alive = false;
             state.dirty = false;
             state.prefix_changed = false;
+            state.retention_demoted = false;
         }
     }
 }

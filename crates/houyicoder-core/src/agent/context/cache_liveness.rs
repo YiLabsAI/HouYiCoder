@@ -50,6 +50,7 @@ impl Runner {
         if usage.provenance.cache_read_reported {
             self.cached_prefix
                 .record_turn(now_ms, usage.cache_read_input_tokens as u64);
+            self.cached_prefix.clear_retention_demoted();
         } else {
             self.cached_prefix.touch_timestamp(now_ms);
         }
