@@ -136,6 +136,13 @@ pub struct WorktreeController {
     /// that owns it is gone, so a child aborted mid-cleanup still has its tree
     /// reclaimed off the worker.
     reclaims: ChildReclaimLedger,
+    /// Keeps one enter inside from the check that no session is active to the
+    /// install that makes one active. Without it two callers that arrive
+    /// together both pass the check, and the later fence guard replaces the
+    /// earlier one, whose drop restores the fence to the repository root while
+    /// the session stays in a worktree. Held without the session lock, so a
+    /// removal preview still reads the session while an enter runs.
+    enter_lock: Mutex<()>,
 }
 
 impl WorktreeController {
@@ -162,6 +169,7 @@ impl WorktreeController {
             user_notice: Mutex::new(None),
             hook_fire: Mutex::new(None),
             reclaims: ChildReclaimLedger::default(),
+            enter_lock: Mutex::new(()),
         }
     }
 
@@ -260,8 +268,8 @@ impl WorktreeController {
 
     /// Enter a worktree session (EnterWorktree tool body). Creates or resumes
     /// the worktree, narrows the fence + cwd, records the main ref + a
-    /// WorktreeEnter event. Refuses a second enter + refuses while an exec is
-    /// in flight.
+    /// WorktreeEnter event. Refuses a second enter, including one that arrives
+    /// while this one is running, and refuses while an exec is in flight.
     pub async fn enter(&self, slug: Option<String>) -> Result<EnterResult, WorktreeError> {
         let prepared = self.enter_prepared(slug)?;
         self.finish_enter(prepared).await
@@ -273,7 +281,11 @@ impl WorktreeController {
     /// work meanwhile can run this on the blocking pool; the Git checkout and
     /// the fence hold no awaiting point, and running them on the task that
     /// carries the session's events stalls that session until they finish.
+    ///
+    /// The whole sequence runs under one lock, so a caller that arrives while
+    /// another is entering waits for it and then sees the session installed.
     pub fn enter_prepared(&self, slug: Option<String>) -> Result<PreparedEnter, WorktreeError> {
+        let _entering = self.enter_lock.lock().expect("enter lock");
         {
             let s = self.session.lock().expect("session lock");
             if s.is_some() {

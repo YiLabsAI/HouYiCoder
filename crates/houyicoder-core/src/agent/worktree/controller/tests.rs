@@ -18,7 +18,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::id;
+use std::sync::Barrier;
 use std::sync::atomic::AtomicU64;
+use std::thread;
 
 /// A stub sandbox whose narrow returns a no-op restore guard. The
 /// controller only calls narrow_to_worktree + active_exec_count; the other
@@ -423,6 +425,49 @@ async fn test_second_enter_refused() {
         .expect_err("second refused");
     assert!(err.to_string().contains("already in a worktree"));
     controller.exit(ExitAction::Remove, true).await.ok();
+    remove_dir_all(&repo).ok();
+}
+
+/// Two callers that enter at the same instant: one installs the session and
+/// the other is refused, so only one fence guard is ever installed.
+#[test]
+fn test_second_enter_refused_concurrently() {
+    let repo = make_repo(50);
+    let (controller, _store, _cwd) = wired(&repo, 0);
+    let start = Barrier::new(2);
+    let results = thread::scope(|scope| {
+        let handles: Vec<_> = ["feat-p", "feat-q"]
+            .into_iter()
+            .map(|slug| {
+                let controller = Arc::clone(&controller);
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    controller.enter_prepared(Some(slug.into()))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread"))
+            .collect::<Vec<_>>()
+    });
+    let (entered, refused): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
+    assert_eq!(entered.len(), 1, "one enter installs the session");
+    assert_eq!(refused.len(), 1, "the other is refused");
+    let winner = entered.into_iter().next().expect("winner").expect("ok");
+    assert!(winner.path.exists(), "the winner's tree exists");
+    let error = refused
+        .into_iter()
+        .next()
+        .expect("loser")
+        .expect_err("refused");
+    assert!(
+        error.to_string().contains("already in a worktree"),
+        "the refusal names the session that won"
+    );
+    assert!(controller.current(), "the controller holds the winner");
+    drop(controller);
     remove_dir_all(&repo).ok();
 }
 
