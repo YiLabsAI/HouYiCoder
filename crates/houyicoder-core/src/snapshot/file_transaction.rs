@@ -31,7 +31,10 @@ use self::record::{
 mod record;
 mod recovery;
 
-pub use self::recovery::{RecoveredWrite, RecoveryError, RestoreOutcome, WriteState};
+pub use self::recovery::{
+    ImageSummary, RecoveredWrite, RecoveryError, RecoveryReport, RestoreOutcome, UnreadableWrite,
+    WriteState,
+};
 
 #[cfg(test)]
 mod test_support;

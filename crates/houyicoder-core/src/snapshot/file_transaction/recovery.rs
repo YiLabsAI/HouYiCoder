@@ -55,6 +55,44 @@ pub struct RecoveredWrite {
     /// When the committed record was published, in milliseconds since the
     /// epoch. Absent for a write that never committed and never landed.
     pub written_ms: Option<u64>,
+    /// What the target held before the write.
+    pub before: ImageSummary,
+    /// What the write left: the committed record's image when it has one, the
+    /// image the write expected to leave otherwise.
+    pub after: ImageSummary,
+}
+
+/// One side of a recorded write, for a reader that reports what the record
+/// kept without opening the stored bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageSummary {
+    /// Whether the file was there at all.
+    pub present: bool,
+    /// The name the stored bytes are kept under. Absent when they were not
+    /// kept: the file was not there, or it was over the backup ceiling.
+    pub hash: Option<String>,
+    /// How many bytes the file held.
+    pub bytes: Option<u64>,
+}
+
+/// Every write a session recorded, split by whether recovery could judge it.
+#[derive(Debug, Default)]
+pub struct RecoveryReport {
+    /// The writes recovery could judge, in the order they were recorded.
+    pub writes: Vec<RecoveredWrite>,
+    /// The writes recovery could not judge, and why. One unreadable record
+    /// does not take the rest of the list with it.
+    pub unreadable: Vec<UnreadableWrite>,
+}
+
+/// One recorded write recovery could not judge.
+#[derive(Debug)]
+pub struct UnreadableWrite {
+    /// The name the write recorded itself under, when its directory name
+    /// could be read as text.
+    pub operation: Option<String>,
+    /// Why the write could not be judged.
+    pub error: RecoveryError,
 }
 
 /// What a restore did.
@@ -122,21 +160,27 @@ impl FileTransaction {
     /// A write that landed without its committed record is settled here: its
     /// committed record is published from what is on disk, so the next reader
     /// does not have to derive it again.
+    ///
+    /// A write whose record cannot be read or whose target cannot be resolved
+    /// is reported beside the writes that could be judged, not in place of
+    /// them: a listing that fails whole would hide every write behind one bad
+    /// record, and the readable ones are exactly what a reader can act on.
     pub async fn recover(
         &self,
         session: SessionId,
         sandbox: &dyn SandboxSession,
-    ) -> Result<Vec<RecoveredWrite>, RecoveryError> {
+    ) -> Result<RecoveryReport, RecoveryError> {
+        let mut report = RecoveryReport::default();
         let Some(root) = self.root.as_deref() else {
-            return Ok(Vec::new());
+            return Ok(report);
         };
         let dir = session_dir(root, session).join(FILE_TRANSACTION_DIR);
         let entries = match read_dir(&dir) {
             Ok(entries) => entries,
-            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(report),
             Err(source) => return Err(RecoveryError::List { path: dir, source }),
         };
-        let mut named = Vec::new();
+        let mut paths = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|source| RecoveryError::List {
                 path: dir.clone(),
@@ -147,54 +191,80 @@ impl FileTransaction {
                 Ok(meta) if meta.is_dir() => {}
                 Ok(_) => continue,
                 Err(source) if source.kind() == ErrorKind::NotFound => continue,
-                Err(source) => return Err(RecoveryError::List { path, source }),
+                Err(source) => {
+                    report.unreadable.push(UnreadableWrite {
+                        operation: None,
+                        error: RecoveryError::List { path, source },
+                    });
+                    continue;
+                }
             }
-            let operation = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| RecoveryError::Record {
-                    path: path.clone(),
-                    reason: "the write name is not text".into(),
-                })?;
-            named.push((operation, path));
+            paths.push(path);
         }
-        named.sort();
-        let mut found = Vec::with_capacity(named.len());
-        for (operation, operation_dir) in named {
-            let Some(prepared) = read_prepared(&operation_dir).map_err(record_error)? else {
+        paths.sort();
+        for path in paths {
+            // A directory whose name is not text was not named by this
+            // journal, so it is not a write of this session.
+            let Some(operation) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            let target =
-                sandbox
-                    .resolve_write(&prepared.target)
-                    .map_err(|error| RecoveryError::Target {
-                        path: prepared.target.clone(),
-                        error,
-                    })?;
-            // The same lock the write path takes, held across the read and the
-            // settle: a write landing in between would otherwise be recorded
-            // against metadata that belongs to a different write.
-            let lock = self.target_lock(&target);
-            let _held = lock.lock().await;
-            let committed = read_committed(&operation_dir).map_err(record_error)?;
-            let mut written_ms = committed.as_ref().map(|record| record.written_ms);
-            let mut has_commit = committed.is_some();
-            let state = self
-                .classify(&prepared, committed.as_ref(), &target)
-                .await?;
-            if state == WriteState::Applied && !has_commit {
-                written_ms = Some(self.settle(&operation_dir, &prepared, &target)?);
-                has_commit = true;
+            match self.judge(operation, &path, sandbox).await {
+                Ok(Some(write)) => report.writes.push(write),
+                Ok(None) => {}
+                Err(error) => report.unreadable.push(UnreadableWrite {
+                    operation: Some(operation.to_string()),
+                    error,
+                }),
             }
-            found.push(RecoveredWrite {
-                operation,
-                target: prepared.target,
-                state,
-                committed: has_commit,
-                written_ms,
-            });
         }
-        Ok(found)
+        Ok(report)
+    }
+
+    /// Judge one recorded write. Returns None when it never published its
+    /// prepared record: it never reached the point of touching the target.
+    async fn judge(
+        &self,
+        operation: &str,
+        dir: &Path,
+        sandbox: &dyn SandboxSession,
+    ) -> Result<Option<RecoveredWrite>, RecoveryError> {
+        let Some(prepared) = read_prepared(dir).map_err(record_error)? else {
+            return Ok(None);
+        };
+        let target =
+            sandbox
+                .resolve_write(&prepared.target)
+                .map_err(|error| RecoveryError::Target {
+                    path: prepared.target.clone(),
+                    error,
+                })?;
+        // The same lock the write path takes, held across the read and the
+        // settle: a write landing in between would otherwise be recorded
+        // against metadata that belongs to a different write.
+        let lock = self.target_lock(&target);
+        let _held = lock.lock().await;
+        let committed = read_committed(dir).map_err(record_error)?;
+        let mut written_ms = committed.as_ref().map(|record| record.written_ms);
+        let mut has_commit = committed.is_some();
+        let state = self
+            .classify(&prepared, committed.as_ref(), &target)
+            .await?;
+        if state == WriteState::Applied && !has_commit {
+            written_ms = Some(self.settle(dir, &prepared, &target)?);
+            has_commit = true;
+        }
+        let after = committed
+            .as_ref()
+            .map_or(&prepared.expected_after, |record| &record.after);
+        Ok(Some(RecoveredWrite {
+            operation: operation.to_string(),
+            target: prepared.target,
+            state,
+            committed: has_commit,
+            written_ms,
+            before: summary_of(&prepared.before),
+            after: summary_of(after),
+        }))
     }
 
     /// Undo one recorded write, if the target still holds what it left.
@@ -420,6 +490,15 @@ fn metadata_changed(image: &ImageRecord, current: Option<&Metadata>) -> bool {
         _ => false,
     };
     replaced || permissions
+}
+
+/// What one side of a record states, without opening the stored bytes.
+fn summary_of(image: &ImageRecord) -> ImageSummary {
+    ImageSummary {
+        present: image.present,
+        hash: image.block_ref.clone(),
+        bytes: image.bytes,
+    }
 }
 
 /// A record failure with the file it names.

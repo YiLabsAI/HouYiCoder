@@ -24,7 +24,20 @@ use super::super::test_support::{
     Scratch, Stub, edit_prepared, find_record, operation_of, record, seed_write, session, stored,
     transactions_of,
 };
-use super::{RecoveryError, RestoreOutcome, WriteState};
+use super::{
+    ImageSummary, RecoveryError, RecoveryReport, RestoreOutcome, UnreadableWrite, WriteState,
+};
+
+/// The one write a report could not judge, when every other record was fine.
+fn only_unreadable(report: &RecoveryReport) -> &UnreadableWrite {
+    assert_eq!(
+        report.unreadable.len(),
+        1,
+        "exactly one write could not be judged"
+    );
+    assert!(report.writes.is_empty(), "nothing else was listed");
+    &report.unreadable[0]
+}
 
 /// The one committed record of a scratch tree.
 fn committed_path(scratch: &Scratch) -> PathBuf {
@@ -46,17 +59,38 @@ async fn test_recover_reports_landed() {
         .await
         .expect("write");
 
-    let found = transaction
+    let report = transaction
         .recover(session, stub.as_ref())
         .await
         .expect("recover");
-    assert_eq!(found.len(), 1, "one recorded write");
-    assert_eq!(found[0].target, "a.txt");
-    assert_eq!(found[0].state, WriteState::Applied);
-    assert!(found[0].committed, "the write was committed");
+    assert_eq!(report.writes.len(), 1, "one recorded write");
+    let found = &report.writes[0];
+    assert_eq!(found.target, "a.txt");
+    assert_eq!(found.state, WriteState::Applied);
+    assert!(found.committed, "the write was committed");
     assert!(
-        found[0].written_ms.is_some(),
+        found.written_ms.is_some(),
         "a committed write states when it ran"
+    );
+    let prepared = record(&scratch.sessions, PREPARED_FILE);
+    let committed = record(&scratch.sessions, COMMITTED_FILE);
+    assert_eq!(
+        found.before,
+        ImageSummary {
+            present: true,
+            hash: prepared["before"]["block_ref"].as_str().map(str::to_string),
+            bytes: Some(3),
+        },
+        "the earlier side names the bytes the write found"
+    );
+    assert_eq!(
+        found.after,
+        ImageSummary {
+            present: true,
+            hash: committed["after"]["block_ref"].as_str().map(str::to_string),
+            bytes: Some(3),
+        },
+        "the later side names the bytes the write left"
     );
 }
 
@@ -73,15 +107,17 @@ async fn test_recover_settles_landed() {
         .expect("write");
     remove_file(committed_path(&scratch)).expect("drop the commit, as a crash before it would");
 
-    let found = transaction
+    let report = transaction
         .recover(session, stub.as_ref())
         .await
         .expect("recover");
 
-    assert_eq!(found[0].state, WriteState::Applied);
-    assert!(found[0].committed, "the recovery published the commit");
+    let found = &report.writes[0];
+    assert!(report.unreadable.is_empty(), "every record was readable");
+    assert_eq!(found.state, WriteState::Applied);
+    assert!(found.committed, "the recovery published the commit");
     assert!(
-        found[0].written_ms.is_some(),
+        found.written_ms.is_some(),
         "the settled write states when it ran"
     );
     let committed = record(&scratch.sessions, COMMITTED_FILE);
@@ -107,12 +143,12 @@ async fn test_recover_reports_missing() {
         .expect("write");
     write(scratch.file("a.txt"), "old").expect("put the earlier bytes back by hand");
 
-    let found = transaction
+    let report = transaction
         .recover(session, stub.as_ref())
         .await
         .expect("recover");
 
-    assert_eq!(found[0].state, WriteState::NotApplied);
+    assert_eq!(report.writes[0].state, WriteState::NotApplied);
 }
 
 #[tokio::test]
@@ -128,12 +164,12 @@ async fn test_recover_reports_change() {
         .expect("write");
     write(scratch.file("a.txt"), "other").expect("a later writer");
 
-    let found = transaction
+    let report = transaction
         .recover(session, stub.as_ref())
         .await
         .expect("recover");
 
-    assert_eq!(found[0].state, WriteState::Conflict);
+    assert_eq!(report.writes[0].state, WriteState::Conflict);
 }
 
 #[tokio::test]
@@ -141,25 +177,28 @@ async fn test_recover_without_store_empty() {
     let scratch = Scratch::new("recover-rootless");
     let transaction = FileTransaction::new(Arc::new(InMemoryBackend::new()));
 
-    let found = transaction
+    let report = transaction
         .recover(session(), scratch.stub().as_ref())
         .await
         .expect("recover");
 
-    assert!(found.is_empty(), "a store with no root records no write");
+    assert!(
+        report.writes.is_empty(),
+        "a store with no root records no write"
+    );
 }
 
 #[tokio::test]
 async fn test_recover_without_records_empty() {
     let scratch = Scratch::new("recover-empty");
 
-    let found = scratch
+    let report = scratch
         .transaction()
         .recover(session(), scratch.stub().as_ref())
         .await
         .expect("recover");
 
-    assert!(found.is_empty(), "a session with no write records");
+    assert!(report.writes.is_empty(), "a session with no write records");
 }
 
 #[tokio::test]
@@ -186,14 +225,14 @@ async fn test_recover_skips_unstarted_write() {
     let dir = transactions_of(&scratch.sessions, session);
     create_dir_all(dir.join("0001-1-000000")).expect("a write that never published a record");
 
-    let found = scratch
+    let report = scratch
         .transaction()
         .recover(session, scratch.stub().as_ref())
         .await
         .expect("recover");
 
     assert!(
-        found.is_empty(),
+        report.writes.is_empty() && report.unreadable.is_empty(),
         "a directory with no record is not a write"
     );
 }
@@ -206,13 +245,16 @@ async fn test_recover_skips_stray_file() {
     create_dir_all(&dir).expect("record directory");
     write(dir.join("stray.txt"), "left by something else").expect("a file among the writes");
 
-    let found = scratch
+    let report = scratch
         .transaction()
         .recover(session, scratch.stub().as_ref())
         .await
         .expect("recover");
 
-    assert!(found.is_empty(), "a file where writes live is not one");
+    assert!(
+        report.writes.is_empty() && report.unreadable.is_empty(),
+        "a file where writes live is not one"
+    );
 }
 
 #[tokio::test]
@@ -222,16 +264,22 @@ async fn test_recover_reports_foreign_schema() {
     let stub = seed_write(&scratch, session).await;
     edit_prepared(&scratch.sessions, |record| record["schema"] = json!(2));
 
-    let error = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
-        .expect_err("a record from a version this reader does not know");
+        .expect("recover returns what it could judge");
 
+    let unreadable = only_unreadable(&report);
+    let error = &unreadable.error;
     assert!(matches!(error, RecoveryError::Record { .. }), "got {error}");
     assert!(
         error.to_string().contains("schema 2"),
         "{error} names the version it found"
+    );
+    assert!(
+        unreadable.operation.is_some(),
+        "the listing names the write it could not judge"
     );
 }
 
@@ -243,12 +291,13 @@ async fn test_recover_reports_broken_record() {
     let path = find_record(&scratch.sessions, PREPARED_FILE)[0].clone();
     write(&path, "{").expect("a record that does not parse");
 
-    let error = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
-        .expect_err("a record that does not parse");
+        .expect("recover returns what it could judge");
 
+    let error = &only_unreadable(&report).error;
     assert!(matches!(error, RecoveryError::Record { .. }), "got {error}");
     assert!(
         error.to_string().contains("parse"),
@@ -265,16 +314,53 @@ async fn test_recover_reports_unreadable_record() {
     remove_file(&path).expect("clear the record file");
     create_dir_all(&path).expect("put a directory where the record was");
 
-    let error = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
-        .expect_err("a record that cannot be read");
+        .expect("recover returns what it could judge");
 
+    let error = &only_unreadable(&report).error;
     assert!(matches!(error, RecoveryError::Record { .. }), "got {error}");
     assert!(
         error.to_string().contains("read the record"),
         "{error} says the record could not be read"
+    );
+}
+
+#[tokio::test]
+async fn test_recover_keeps_readable_writes() {
+    let scratch = Scratch::new("recover-partial");
+    let session = session();
+    let stub = seed_write(&scratch, session).await;
+    scratch
+        .transaction()
+        .write(Some(session), stub.as_ref(), "b.txt", b"new".to_vec())
+        .await
+        .expect("write");
+    let mut broken = 0;
+    for path in find_record(&scratch.sessions, PREPARED_FILE) {
+        let body = read_to_string(&path).expect("read the record");
+        if body.contains("\"a.txt\"") {
+            write(&path, "{").expect("a record that does not parse");
+            broken += 1;
+        }
+    }
+    assert_eq!(broken, 1, "one record names the write to break");
+
+    let report = scratch
+        .transaction()
+        .recover(session, stub.as_ref())
+        .await
+        .expect("recover returns what it could judge");
+
+    assert_eq!(report.writes.len(), 1, "the readable write is still listed");
+    assert_eq!(report.writes[0].target, "b.txt");
+    assert_eq!(report.writes[0].state, WriteState::Applied);
+    assert_eq!(
+        report.unreadable.len(),
+        1,
+        "the broken write is reported beside it, not in place of it"
     );
 }
 
@@ -288,12 +374,13 @@ async fn test_recover_reports_missing_image() {
         record["expected_after"]["block_ref"] = json!("missing-block");
     });
 
-    let error = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
-        .expect_err("an image the store does not hold");
+        .expect("recover returns what it could judge");
 
+    let error = &only_unreadable(&report).error;
     assert!(matches!(error, RecoveryError::Image { .. }), "got {error}");
 }
 
@@ -306,12 +393,13 @@ async fn test_recover_reports_target_escape() {
         record["target"] = json!("../outside.txt");
     });
 
-    let error = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
-        .expect_err("a target outside the workspace");
+        .expect("recover returns what it could judge");
 
+    let error = &only_unreadable(&report).error;
     assert!(matches!(error, RecoveryError::Target { .. }), "got {error}");
 }
 
@@ -322,14 +410,14 @@ async fn test_recover_reports_removed_target() {
     let stub = seed_write(&scratch, session).await;
     remove_file(scratch.file("a.txt")).expect("a file the write replaced is now gone");
 
-    let found = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
         .expect("recover");
 
     assert_eq!(
-        found[0].state,
+        report.writes[0].state,
         WriteState::Conflict,
         "the write found a file, and no file is not that file"
     );
@@ -347,17 +435,22 @@ async fn test_recover_reports_removed_created() {
         .expect("write");
     remove_file(scratch.file("fresh.txt")).expect("a file the write created is now gone");
 
-    let found = transaction
+    let report = transaction
         .recover(session, stub.as_ref())
         .await
         .expect("recover");
 
+    let found = &report.writes[0];
     assert_eq!(
-        found[0].state,
+        found.state,
         WriteState::NotApplied,
         "a write that created its file left nothing behind"
     );
-    assert!(found[0].committed, "the write still has its commit");
+    assert!(found.committed, "the write still has its commit");
+    assert!(
+        !found.before.present,
+        "a write that created its file found nothing"
+    );
 }
 
 #[tokio::test]
@@ -368,12 +461,13 @@ async fn test_recover_reports_unreadable_target() {
     remove_file(scratch.file("a.txt")).expect("clear the target");
     create_dir_all(scratch.file("a.txt")).expect("put a directory where the target was");
 
-    let error = scratch
+    let report = scratch
         .transaction()
         .recover(session, stub.as_ref())
         .await
-        .expect_err("a target that cannot be read");
+        .expect("recover returns what it could judge");
 
+    let error = &only_unreadable(&report).error;
     assert!(matches!(error, RecoveryError::Read { .. }), "got {error}");
 }
 
