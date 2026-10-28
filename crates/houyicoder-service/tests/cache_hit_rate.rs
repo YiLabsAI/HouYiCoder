@@ -75,23 +75,25 @@
 //! a counter that stayed where it was would not be reading the prefix at all,
 //! and every row above it would be void.
 
+use std::collections::VecDeque;
 use std::env::{temp_dir, var};
-use std::fs::{create_dir_all, write};
+use std::fs::{create_dir_all, remove_dir_all, write};
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
+use houyicoder_context::{EventId, SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::Runner;
 use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{
-    CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, ProviderError,
-    UsageProvenance,
+    CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, OutputItem,
+    ProviderError, Usage, UsageProvenance,
 };
 use houyicoder_service::composition::AssembledRunner;
 use houyicoder_service::composition::BuildRunnerOptions;
@@ -1147,4 +1149,242 @@ fn test_ending_call_follows_retry() {
     ];
     let ended = ended_call(&calls, 4).expect("the turn recorded a call");
     assert_eq!(ended.input, 1100);
+}
+
+/// A provider that answers a scripted number of calls itself and delegates the
+/// rest to the real endpoint. Used by the agentic scenarios to force a tool
+/// call without asking the model to cooperate.
+struct AgenticProvider {
+    endpoint: Arc<dyn ModelProvider>,
+    scripts: Mutex<VecDeque<CompletionResponse>>,
+}
+
+impl AgenticProvider {
+    fn take_script(&self) -> Option<CompletionResponse> {
+        self.scripts.lock().ok()?.pop_front()
+    }
+}
+
+impl ModelProvider for AgenticProvider {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        if let Some(response) = self.take_script() {
+            return Box::pin(async move { Ok(response) });
+        }
+        self.endpoint.complete(req)
+    }
+
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        if let Some(response) = self.take_script() {
+            return stream_from_response(response);
+        }
+        self.endpoint.stream(req)
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        self.endpoint.capabilities()
+    }
+}
+
+/// Build a disk-backed runner whose provider scripts one response before the
+/// real endpoint takes over. Disk-backed so a second runner can reopen the same
+/// session log for the resume scenario.
+fn open_agentic(
+    root: PathBuf,
+    project: &str,
+    model: &str,
+    scripts: Vec<CompletionResponse>,
+) -> (AssembledRunner, Arc<AgenticProvider>) {
+    let resolved = resolve_provider(Some(project));
+    let provider = Arc::new(AgenticProvider {
+        endpoint: Arc::clone(&resolved.provider),
+        scripts: Mutex::new(scripts.into()),
+    });
+    let mut options = BuildRunnerOptions::disk_at(root, Some(project.to_string()), None);
+    options.provider = Some(ProviderResolution {
+        provider: Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        facts: resolved.facts,
+        warnings: resolved.warnings,
+    });
+    let assembled = build_runner(options);
+    assembled.runner.set_model(model.to_string());
+    assembled.runner.set_auto_memory(false);
+    assembled.runner.set_auto_dream(false);
+    (assembled, provider)
+}
+
+/// A synthetic response that reads four distinct 32 KiB files in one turn.
+fn tool_call_response(model: &str, files: &[&str]) -> CompletionResponse {
+    CompletionResponse {
+        output: files
+            .iter()
+            .enumerate()
+            .map(|(index, path)| OutputItem::ToolCall {
+                id: format!("call_{index}"),
+                name: "read".into(),
+                input: serde_json::json!({ "path": path }),
+            })
+            .collect(),
+        usage: Usage {
+            input_tokens: 1_000,
+            output_tokens: 10,
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: true,
+                cache_write_reported: false,
+            },
+            ..Default::default()
+        },
+        model: model.to_string(),
+    }
+}
+
+fn print_agentic_row(label: &str, call: &Call) {
+    let share = if call.input == 0 {
+        0.0
+    } else {
+        call.cached as f64 * 100.0 / call.input as f64
+    };
+    println!(
+        "{label}: turn {} input {} cache-read {} hit {share:.2}%",
+        call.turn, call.input, call.cached
+    );
+}
+
+fn last_call(runner: &Runner, session: SessionId) -> Call {
+    session_calls(runner, session)
+        .pop()
+        .expect("the turn recorded a usage row")
+}
+
+/// The agentic scenarios the steady-state harness cannot reach: a large
+/// block_ref held across a local clock that crossed the old TTL, a second
+/// process resuming the same log, and the batch demotion's single break.
+#[tokio::test]
+#[ignore]
+#[expect(
+    clippy::too_many_lines,
+    reason = "three live scenarios share one session and one real endpoint"
+)]
+async fn test_live_agentic_cache_scenarios() {
+    let model = var(MODEL_ENV).unwrap_or_else(|_| "deepseek-v4.1-flash".into());
+    let root = temp_dir().join(format!("agentic-cache-{}", id()));
+    let project = root.join("workspace");
+    create_dir_all(&project).expect("workspace");
+    let mut files = Vec::new();
+    for index in 0..4 {
+        let name = format!("file{index}.txt");
+        let body = char::from(b'a' + index as u8).to_string().repeat(32 * 1024);
+        write(project.join(&name), body).expect("fixture file");
+        files.push(name);
+    }
+    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let scripts = vec![tool_call_response(&model, &file_refs)];
+    let (assembled, _provider) = open_agentic(
+        root.clone(),
+        project.to_str().expect("utf8"),
+        &model,
+        scripts,
+    );
+    let runner = &assembled.runner;
+    let session = assembled.session;
+    let old = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+        .saturating_sub(3 * 86_400_000);
+    runner
+        .store()
+        .append(SessionLogEntry {
+            id: EventId::new(),
+            session,
+            ts: old,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: "older".into(),
+            },
+        })
+        .await
+        .expect("backdated event");
+    runner.seed_session_from_log(session);
+
+    for turn in 1..=3 {
+        runner
+            .run(session, turn_prompt(turn))
+            .await
+            .expect("build turn");
+    }
+    // Scenario 1: the local clock is two hours past the last completion while
+    // the server cache is still hot. The held block must not be rewritten.
+    let before = last_call(runner, session);
+    runner.cached_prefix().seed_turn(old, Some(before.cached));
+    runner
+        .run(session, turn_prompt(4))
+        .await
+        .expect("clock turn");
+    let c1 = last_call(runner, session);
+    print_agentic_row("scenario 1 (block_ref + 2h local clock)", &c1);
+    assert!(
+        c1.cached * 100 >= c1.input * 98,
+        "a held block_ref must keep the prefix after the local clock passes the old TTL"
+    );
+
+    for turn in 5..=7 {
+        runner
+            .run(session, turn_prompt(turn))
+            .await
+            .expect("aging turn");
+    }
+
+    // Scenario 2: a second runner reopens the same log and sends the next turn.
+    let (resumed, _) = open_agentic(
+        root.clone(),
+        project.to_str().expect("utf8"),
+        &model,
+        Vec::new(),
+    );
+    resumed.runner.seed_session_from_log(session);
+    resumed
+        .runner
+        .run(session, turn_prompt(8))
+        .await
+        .expect("resume turn");
+    let c2 = last_call(&resumed.runner, session);
+    print_agentic_row("scenario 2 (resume first hop)", &c2);
+    assert!(
+        c2.cached * 100 >= c2.input * 98,
+        "a resumed process must reuse the previous process prefix"
+    );
+
+    // Scenario 3: the next assembly pays the batch demotion once; the turn
+    // after it must hold the new tiers and recover.
+    resumed
+        .runner
+        .run(session, turn_prompt(9))
+        .await
+        .expect("demote turn");
+    let c3 = last_call(&resumed.runner, session);
+    print_agentic_row("scenario 3 (batch demote turn)", &c3);
+    assert!(
+        c3.input * 2 < c2.input,
+        "the batch demotion must release at least half of the context"
+    );
+    resumed
+        .runner
+        .run(session, turn_prompt(10))
+        .await
+        .expect("recover turn");
+    let c4 = last_call(&resumed.runner, session);
+    print_agentic_row("scenario 3 (turn after demote)", &c4);
+    assert!(
+        c4.cached * 100 >= c4.input * 95,
+        "the turn after the demotion must recover without a second full recompute"
+    );
+
+    println!(
+        "old behavior: the 2h local clock recomputed the block under the dead band; a resume without the decision record and epoch would have missed both the block and the date line"
+    );
+    remove_dir_all(&root).ok();
 }
