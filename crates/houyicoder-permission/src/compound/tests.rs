@@ -368,3 +368,150 @@ fn test_not_readonly_hostname_positional() {
     let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
     assert!(!is_readonly_compound(&refs));
 }
+
+#[test]
+fn test_readonly_across_leading_cd() {
+    // A move into one literal directory places the reads that follow it and
+    // has no effect of its own, so a survey that starts with one still reads.
+    for cmd in [
+        "cd /work/repo && head README.md",
+        "cd /work/repo && grep -rn todo . | wc -l",
+        "cd ~ && ls",
+        "cd /a; cat b",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_cd_destination() {
+    // The destination must be a literal token: an expansion or a redirect
+    // makes it something the check cannot see, and a move placed after a read
+    // is a second command rather than the setup for the first.
+    for cmd in [
+        "cd $(mktemp -d) && head x",
+        "cd $DIR && head x",
+        "cd /a > log && head x",
+        "head x && cd /a",
+        "cd /a && rm x",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "not read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_leading_assignment() {
+    // A variable set for one command can redirect the repository directory
+    // or the loader search path, so the argv no longer describes what runs.
+    for cmd in [
+        "GIT_DIR=/x git log",
+        "LD_PRELOAD=/tmp/x.so cat y",
+        "LC_ALL=C sort y",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "not read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_readonly_repository_commands() {
+    for cmd in [
+        "git status",
+        "git log --oneline -n 5",
+        "git diff --stat",
+        "git show HEAD:file",
+        "git rev-parse HEAD",
+        "git hash-object file",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_repository_writes() {
+    for cmd in [
+        "git hash-object -w file",
+        "git diff --output=patch.diff",
+        "git diff --textconv",
+        "git log --ext-diff",
+        "git log -o.claude/settings.json",
+        "git config user.name",
+        "git add .",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "not read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_readonly_search_commands() {
+    for cmd in [
+        "find . -name '*.rs'",
+        "find . -type f -newer a.rs",
+        "rg todo crates",
+        "rg -n 'fn main' .",
+        "diff a.rs b.rs",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_search_writes() {
+    // A search that deletes, runs a program, or writes a file is not a read,
+    // whichever way the destination is spelled.
+    for cmd in [
+        "find . -delete",
+        "find . -exec rm {} \\;",
+        "find . -fprint out.txt",
+        "rg --pre ./run.sh todo",
+        "rg --pre=./run.sh todo",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "not read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_readonly_network_fetch() {
+    for cmd in [
+        "curl http://example.com",
+        "curl -sS https://example.com/status.json",
+        "curl --url http://example.com",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(is_readonly_compound(&refs), "read-only: {cmd}");
+    }
+}
+
+#[test]
+fn test_not_readonly_network_upload() {
+    // Anything that writes a local file, sends a body, or names a non-http
+    // operand is not a plain fetch.
+    for cmd in [
+        "curl -o out.html http://example.com",
+        "curl -O http://example.com/a.txt",
+        "curl --output=out.html http://example.com",
+        "curl -d secret=1 http://example.com",
+        "curl --data=secret=1 http://example.com",
+        "curl -X POST http://example.com",
+        "curl ftp://example.com",
+        "curl help",
+    ] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(!is_readonly_compound(&refs), "not read-only: {cmd}");
+    }
+}

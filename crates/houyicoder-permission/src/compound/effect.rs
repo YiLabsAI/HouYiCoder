@@ -7,7 +7,7 @@
 //! where a write lands, so the gate only has to exclude constructs that can
 //! change what the fence is asked to open.
 
-use super::readonly::{find_matching_paren, is_readonly_compound};
+use super::readonly::{command_reads_only, find_matching_paren};
 use super::{is_env_assignment, split_compound, strip_safe_redirects};
 use crate::git_discard::{decode_token, is_shell_control_keyword, should_ask_before_git};
 use crate::heredoc::strip_quoted_heredoc_bodies;
@@ -28,23 +28,6 @@ const ALLOWED_ENV_NAMES: &[&str] = &[
     "c",
     "s",
     "e",
-];
-
-const READONLY_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "strings", "ls", "wc", "file", "which",
-    "whereis", "basename", "dirname", "realpath", "stat", "du", "df", "pwd", "echo", "printf",
-    "diff",
-];
-
-const READONLY_GIT_SUBCOMMANDS: &[&str] = &[
-    "status",
-    "diff",
-    "show",
-    "log",
-    "ls-files",
-    "rev-parse",
-    "rev-list",
-    "hash-object",
 ];
 
 /// Commands a fenced session can predict. A segment that writes or removes a
@@ -488,43 +471,8 @@ fn is_readonly_protected_segment(segment: &str) -> bool {
     let Some(cmd) = words.first().map(String::as_str) else {
         return false;
     };
-    if cmd == "printf" {
-        return !words.iter().skip(1).any(|w| w.starts_with("-v"));
-    }
-    if cmd == "sort" || cmd == "uniq" {
-        return is_readonly_compound(&[segment]);
-    }
-    if READONLY_COMMANDS.contains(&cmd) {
-        return true;
-    }
-    if cmd == "find" {
-        return !words.iter().any(|w| {
-            matches!(
-                w.as_str(),
-                "-delete"
-                    | "-exec"
-                    | "-execdir"
-                    | "-ok"
-                    | "-okdir"
-                    | "-fprint"
-                    | "-fprint0"
-                    | "-fprintf"
-                    | "-fls"
-            )
-        });
-    }
-    if cmd == "git" {
-        let sub = words.get(1).map(String::as_str).unwrap_or("");
-        let has_write_or_exec_flag = words.iter().skip(2).any(|arg| {
-            arg.starts_with("-o")
-                || arg.starts_with("--output")
-                || arg.starts_with("--ext-diff")
-                || arg.starts_with("-c")
-                || arg.starts_with("--exec-path")
-        });
-        return READONLY_GIT_SUBCOMMANDS.contains(&sub) && !has_write_or_exec_flag;
-    }
-    false
+    let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    command_reads_only(cmd, &args, &cleaned, false)
 }
 
 fn decode_shell_word(raw: &str) -> Option<String> {

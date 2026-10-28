@@ -9,24 +9,215 @@ use super::split_compound;
 use super::strip_safe_redirects;
 use crate::pipeline::detection::strip_quotes;
 
-/// Commands whose effect is reading or printing, never writing or executing.
-/// A segment whose first command token is in this set and whose only shell
-/// constructs are safe redirects (stripped) and command substitution (whose
-/// contents are themselves read-only) is read-only, so a pipe chain of
-/// read-only commands with command substitution auto-allows in Auto. Absent
-/// are passthrough builtins (command, env, exec, xargs) that run a wrapped
-/// command, and commands with dangerous positional forms (date sets the
-/// clock, hostname sets the host, printenv leaks secrets); the conditional
-/// ones need per-flag validation a follow-up ports. They still ask, which
-/// is safe. The stream filters belong here because a counting or sorting tail
-/// is what a survey command ends with, and asking for one buries the asks that
-/// matter. Two of them can also write, so their arguments are checked
-/// separately.
+/// Commands whose effect is reading or printing, provided their arguments
+/// carry no writing form. A segment whose first command token is in this set,
+/// whose arguments pass the rule below, and whose only shell constructs are
+/// safe redirects (stripped) and command substitution (whose contents are
+/// themselves read-only) is read-only, so a pipe chain of read-only commands
+/// auto-allows.
+///
+/// Absent are passthrough builtins (command, env, exec, xargs) that run a
+/// wrapped command, commands with dangerous positional forms (date sets the
+/// clock, hostname sets the host, printenv leaks secrets), and anything whose
+/// read form can write or run a program. They still ask, which is safe.
+///
+/// The set mixes commands that read files, commands that read the filesystem,
+/// one repository client, and one network client. Every one of them is
+/// admitted by the argument rule, never by the name alone: the name says what
+/// the command usually does, the rule says what this call does.
 const READONLY_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "strings", "ls", "wc", "file", "which",
-    "whereis", "basename", "dirname", "realpath", "stat", "du", "df", "pwd", "uname", "whoami",
-    "id", "groups", "echo", "printf", "seq", "test", "true", "false", "sort", "uniq", "cut", "tr",
+    "basename", "cat", "curl", "cut", "df", "diff", "dirname", "du", "echo", "egrep", "false",
+    "fgrep", "file", "find", "git", "grep", "groups", "head", "id", "ls", "printf", "pwd",
+    "realpath", "rg", "seq", "sort", "stat", "strings", "tail", "test", "tr", "true", "uname",
+    "uniq", "wc", "whereis", "which", "whoami",
 ];
+
+/// Repository subcommands that only inspect a repository. The hash form is
+/// included because without its write flag it prints the hash instead of
+/// storing the object; the writing form is rejected by the argument rule. The
+/// configuration reader is absent because its default form writes.
+const GIT_READ_SUBCOMMANDS: &[&str] = &[
+    "status",
+    "diff",
+    "show",
+    "log",
+    "ls-files",
+    "rev-parse",
+    "rev-list",
+    "hash-object",
+];
+
+/// Repository options that write a file, run a program the user did not
+/// choose, or inject configuration. Matched by prefix so an abbreviation that
+/// could reach one of them is treated as the writer it may be.
+const GIT_WRITE_OPTIONS: &[&str] = &[
+    "-o",
+    "--output",
+    "--ext-diff",
+    "--textconv",
+    "-c",
+    "--exec-path",
+];
+
+/// Predicates that delete a file, run a program, or write output into one.
+const FIND_WRITE_PREDICATES: &[&str] = &[
+    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls",
+];
+
+/// Long options of the network client that write a local file, upload one,
+/// send a request body, or load configuration and command text.
+const CURL_WRITE_LONG: &[&str] = &[
+    "output",
+    "remote",
+    "upload-file",
+    "config",
+    "data",
+    "form",
+    "json",
+    "url-query",
+];
+
+/// The short letters behind the long options above, plus the request method,
+/// which a short option cluster can carry.
+const CURL_WRITE_SHORT: &[char] = &['o', 'O', 'T', 'K', 'd', 'F', 'J', 'X'];
+
+/// Whether a command with these arguments only reads. The argument rules are
+/// why a name alone never decides: the same program that prints a count also
+/// writes a file when one flag is added.
+///
+/// The network client is admitted only at the top level of a pipeline. Inside
+/// a command substitution its request would run while the outer command is
+/// still being judged, so the substitution stays a place where a network call
+/// asks.
+pub(super) fn command_reads_only(
+    cmd: &str,
+    args: &[&str],
+    segment: &str,
+    allow_network: bool,
+) -> bool {
+    if !READONLY_COMMANDS.contains(&cmd) {
+        return false;
+    }
+    match cmd {
+        "sort" | "uniq" | "printf" => !writes_output(cmd, segment),
+        "find" => !args.iter().any(|arg| FIND_WRITE_PREDICATES.contains(arg)),
+        "git" => git_reads_only(args),
+        "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
+        "curl" => allow_network && curl_reads_only(segment, args),
+        _ => true,
+    }
+}
+
+fn git_reads_only(args: &[&str]) -> bool {
+    let Some(sub) = args.first() else {
+        return false;
+    };
+    if !GIT_READ_SUBCOMMANDS.contains(sub) {
+        return false;
+    }
+    let rest = &args[1..];
+    if rest.iter().any(|arg| git_writes(arg)) {
+        return false;
+    }
+    // Only the hash form writes the object database, and only when asked to.
+    if *sub == "hash-object" {
+        return !rest.iter().any(|arg| short_cluster_has(arg, 'w'));
+    }
+    true
+}
+
+/// Whether one repository argument asks for a write, an outside program, or
+/// injected configuration. A long option is matched with and without its
+/// attached value. A short one is matched by its leading letter, because an
+/// attached value leaves no separator to check.
+fn git_writes(arg: &str) -> bool {
+    if let Some(long) = arg.strip_prefix("--") {
+        return GIT_WRITE_OPTIONS.iter().any(|option| {
+            option
+                .strip_prefix("--")
+                .is_some_and(|name| long == name || long.starts_with(&format!("{name}=")))
+        });
+    }
+    let Some(short) = arg.strip_prefix('-') else {
+        return false;
+    };
+    GIT_WRITE_OPTIONS
+        .iter()
+        .filter_map(|option| option.strip_prefix('-'))
+        .any(|letter| short.starts_with(letter))
+}
+
+/// Whether the network client would write, upload, or send a body. A request
+/// reads only as a plain fetch whose every operand is an http or https URL and
+/// whose text carries no expansion: a substitution inside the URL is what
+/// turns a read into an upload of whatever the substitution printed.
+fn curl_reads_only(segment: &str, args: &[&str]) -> bool {
+    if segment.contains('$') || segment.contains('`') {
+        return false;
+    }
+    let mut saw_url = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        i += 1;
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (long, None),
+            };
+            // The named-target option carries its own operand; either spelling
+            // still has to name an http address.
+            if name == "url" {
+                let target = match value {
+                    Some(value) => value,
+                    None => match args.get(i) {
+                        Some(next) => {
+                            i += 1;
+                            next
+                        }
+                        None => return false,
+                    },
+                };
+                if !is_http_url(target) {
+                    return false;
+                }
+                saw_url = true;
+                continue;
+            }
+            if name.is_empty() {
+                continue;
+            }
+            if CURL_WRITE_LONG
+                .iter()
+                .any(|option| option.starts_with(name))
+            {
+                return false;
+            }
+            continue;
+        }
+        if let Some(cluster) = arg.strip_prefix('-') {
+            if cluster.chars().any(|c| CURL_WRITE_SHORT.contains(&c)) {
+                return false;
+            }
+            continue;
+        }
+        if !is_http_url(arg) {
+            return false;
+        }
+        saw_url = true;
+    }
+    saw_url
+}
+
+fn is_http_url(arg: &str) -> bool {
+    arg.starts_with("http://") || arg.starts_with("https://")
+}
+
+/// Whether a short option cluster carries the given letter.
+fn short_cluster_has(arg: &str, letter: char) -> bool {
+    arg.strip_prefix('-')
+        .is_some_and(|cluster| !cluster.starts_with('-') && cluster.contains(letter))
+}
 
 /// Whether a read-only command was asked to write instead of print.
 ///
@@ -87,31 +278,54 @@ fn sort_writes(arg: &str) -> bool {
     }
 }
 
-/// Whether a compound command is entirely read-only: every segment's first
-/// command token is in the read-only set, no segment writes a file (safe
-/// redirects are stripped first, and an argument-named destination is
-/// rejected), and every
-/// command substitution nests read-only commands (depth-limited,
-/// fail-closed). The destructive validator's word scan catches destructive
-/// verbs anywhere in the content, and the egress validator catches network
-/// tools at the top level, so a read-only shell around a destructive
-/// substitution still asks via the inner scan.
+/// How many nested command substitutions the check follows before it refuses.
+/// The same number is the top level: a body reached at a lower count is
+/// nested, and the rules that only hold at the top are dropped there.
+const READONLY_DEPTH: u8 = 3;
+
+/// Whether a compound command is entirely read-only: every segment passes the
+/// read-only rule, no segment writes a file (safe redirects are stripped
+/// first, and an argument-named destination is rejected), and every command
+/// substitution nests read-only commands (depth-limited, fail-closed). A
+/// leading move into one literal directory is transparent, because reading a
+/// directory the user names is not a write. The destructive validator's word
+/// scan catches destructive verbs anywhere in the content, and the egress
+/// validator catches network tools at the top level, so a read-only shell
+/// around a destructive substitution still asks via the inner scan.
 pub fn is_readonly_compound(segments: &[&str]) -> bool {
-    is_readonly_compound_depth(segments, 3)
+    is_readonly_compound_depth(segments, READONLY_DEPTH)
 }
 
 fn is_readonly_compound_depth(segments: &[&str], depth: u8) -> bool {
     if segments.is_empty() || depth == 0 {
         return false;
     }
-    segments.iter().all(|s| is_readonly_segment(s, depth))
+    // A leading move into one literal directory is transparent: it changes
+    // where the following read commands look, and it has no effect of its own
+    // beyond this shell. Only the first segment can be one, because its whole
+    // purpose is to place the reads that come after it.
+    let head = usize::from(segments.len() > 1 && is_literal_cd(segments[0]));
+    segments[head..]
+        .iter()
+        .all(|s| is_readonly_segment(s, depth))
+}
+
+/// Whether a segment is exactly a move into one directory named literally.
+/// An expansion or redirect would make the destination something the check
+/// cannot see, so anything but two plain tokens is refused.
+fn is_literal_cd(segment: &str) -> bool {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    match tokens.as_slice() {
+        ["cd", dir] => !dir.contains(['$', '`', '>', '<']),
+        _ => false,
+    }
 }
 
 /// Whether one segment is read-only at the given recursion depth. Strips
-/// safe redirects, rejects unquoted file redirects and process substitution,
-/// extracts command-substitution and backtick bodies for recursive read-only
-/// checks, and requires the first non-assignment token to be a read-only
-/// command.
+/// safe redirects, rejects unquoted file redirects, process substitution, and
+/// a leading environment assignment, extracts command-substitution and
+/// backtick bodies for recursive read-only checks, and requires the command
+/// token plus its arguments to pass the read-only rule.
 fn is_readonly_segment(seg: &str, depth: u8) -> bool {
     if depth == 0 {
         return false;
@@ -171,15 +385,20 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
         }
         i += 1;
     }
-    // First non-assignment command token must be a read-only command. Skip
-    // leading env assignments (FOO=bar) the way the egress scan does.
-    let first = stripped.split_whitespace().find(|t| !t.contains('='));
-    let Some(cmd) = first else { return false };
-    let cmd = strip_quotes(cmd);
-    if !READONLY_COMMANDS.contains(&cmd) {
+    // A leading environment assignment is refused outright rather than
+    // skipped. A variable set for one command can redirect the repository
+    // directory, the shell startup file, or the loader search path, so the
+    // same argv would no longer describe what runs; asking is the safe answer.
+    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    if first.contains('=') {
         return false;
     }
-    if writes_output(cmd, &stripped) {
+    let cmd = strip_quotes(first);
+    let args: Vec<&str> = tokens[1..].iter().map(|t| strip_quotes(t)).collect();
+    if !command_reads_only(cmd, &args, &stripped, depth >= READONLY_DEPTH) {
         return false;
     }
     // Every substitution body is itself a read-only compound (split on pipes,
