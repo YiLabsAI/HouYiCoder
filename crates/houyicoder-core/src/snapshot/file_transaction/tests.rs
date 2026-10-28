@@ -8,6 +8,11 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+#[cfg(unix)]
+use std::{
+    fs::{Permissions, set_permissions},
+    os::unix::fs::PermissionsExt,
+};
 
 use houyicoder_context::session_class::FILE_TRANSACTION_DIR;
 use houyicoder_context::{ContextError, SandboxError, SessionId};
@@ -312,6 +317,83 @@ async fn test_writes_serialize_per_target() {
     assert_eq!(
         chained, 1,
         "one write found the bytes the other left, not the ones both found"
+    );
+}
+
+/// A target whose bytes cannot be read is refused before the write; a target
+/// that is readable but not writable gets as far as the write and is refused
+/// there. The second case is the one a permission diagnosis has to name, and
+/// the bytes the write could not replace must still be the ones on disk.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_write_refuses_readonly_target() {
+    let scratch = Scratch::new("readonly-target");
+    let stub = scratch.stub();
+    let target = scratch.file("a.txt");
+    write(&target, "old").expect("seed the target");
+    set_permissions(&target, Permissions::from_mode(0o444)).expect("a file without writes");
+
+    let refusal = scratch
+        .transaction()
+        .write(
+            Some(SessionId::new()),
+            stub.as_ref(),
+            "a.txt",
+            b"new".to_vec(),
+        )
+        .await
+        .expect_err("a target without writes is refused");
+
+    assert!(
+        matches!(&refusal, WriteRefusal::Write { path, .. } if path == "a.txt"),
+        "the refusal names the target: {refusal}"
+    );
+    assert_eq!(
+        read_to_string(&target).expect("read"),
+        "old",
+        "the bytes the write could not replace are still there"
+    );
+    assert_eq!(
+        find_record(&scratch.sessions, PREPARED_FILE).len(),
+        1,
+        "the prepared record stays for a recovery to read"
+    );
+    assert!(
+        find_record(&scratch.sessions, COMMITTED_FILE).is_empty(),
+        "nothing was committed"
+    );
+}
+
+/// A new file in a directory without writes fails at the same place, and the
+/// directory is left as it was: no file appears.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_write_refuses_unwritable_parent() {
+    let scratch = Scratch::new("readonly-parent");
+    let stub = scratch.stub();
+    let parent = scratch.file("locked");
+    create_dir_all(&parent).expect("the parent directory");
+    set_permissions(&parent, Permissions::from_mode(0o555)).expect("a directory without writes");
+
+    let refusal = scratch
+        .transaction()
+        .write(
+            Some(SessionId::new()),
+            stub.as_ref(),
+            "locked/new.txt",
+            b"new".to_vec(),
+        )
+        .await
+        .expect_err("a file cannot be created in a directory without writes");
+
+    set_permissions(&parent, Permissions::from_mode(0o755)).expect("put the permissions back");
+    assert!(
+        matches!(&refusal, WriteRefusal::Write { path, .. } if path == "locked/new.txt"),
+        "the refusal names the target: {refusal}"
+    );
+    assert!(
+        !scratch.file("locked/new.txt").exists(),
+        "nothing was created"
     );
 }
 

@@ -28,6 +28,19 @@ fn test_parse_rejects_unknown() {
     assert_eq!(SlashCommand::parse("login"), None);
 }
 
+/// Undo belongs to the sandbox pane, which lists the checkpoints and restores
+/// the one the user picks. A top-level command for it would be a second way to
+/// reach the same operation with no state to show first, so the name must stay
+/// out of the palette and out of the parser.
+#[test]
+fn test_undo_command_removed() {
+    assert_eq!(SlashCommand::parse("/undo"), None);
+    assert!(
+        SlashCommand::ALL.iter().all(|v| v.name() != "/undo"),
+        "undo must not be registered as a top-level command"
+    );
+}
+
 /// /debug is registered (parseable + has a name/help) so it is discoverable
 /// in the palette like /status and /context, not a hidden string command.
 #[test]
