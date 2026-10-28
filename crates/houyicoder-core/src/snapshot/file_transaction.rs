@@ -5,14 +5,15 @@
 //! the target is touched. A failure at any step before the record is on disk
 //! refuses the write; the record is what a recovery reads afterwards.
 
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::fs::{Metadata, metadata, read};
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::id;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -21,12 +22,19 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_context::session_class::{FILE_TRANSACTION_DIR, session_dir};
 use houyicoder_context::{ContextBackend, ContextError, SandboxError, SessionId};
+use tokio::sync::Mutex as AsyncMutex;
 
 use self::record::{
     CommittedRecord, Identity, ImageRecord, PreparedRecord, write_committed, write_prepared,
 };
 
 mod record;
+mod recovery;
+
+pub use self::recovery::{RecoveredWrite, RecoveryError, RestoreOutcome, WriteState};
+
+#[cfg(test)]
+mod test_support;
 
 /// The most bytes one previous image is kept from. A larger target is still
 /// written and its record states that the previous bytes were not kept:
@@ -42,6 +50,12 @@ pub struct FileTransaction {
     backend: Arc<dyn ContextBackend>,
     root: Option<PathBuf>,
     backup_ceiling: u64,
+    /// One lock per target path. Two writes to the same file run in turn, so
+    /// the second records what the first left rather than what both found.
+    /// An entry stays for the life of this transaction, so the set is bounded
+    /// by the files it wrote. Two transactions over one store do not order
+    /// each other: only the writers that take this lock are ordered.
+    locks: Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>,
 }
 
 impl FileTransaction {
@@ -54,6 +68,7 @@ impl FileTransaction {
             backend,
             root,
             backup_ceiling: MAX_BACKUP_BYTES,
+            locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -93,6 +108,8 @@ impl FileTransaction {
                 path: path.to_string(),
                 error,
             })?;
+        let lock = self.target_lock(&target);
+        let _held = lock.lock().await;
         let before = self.capture(&target)?;
         let before_block = match &before {
             Captured::Present {
@@ -101,12 +118,16 @@ impl FileTransaction {
             _ => None,
         };
         let after_block = self.store(bytes.clone(), path).await?;
+        // The write truncates the file it found, so the identity and the
+        // permissions of the image it leaves are the ones it recorded first.
+        // A recovery compares them: the same bytes in a file someone replaced
+        // or re-permissioned are not the file this write produced.
         let expected_after = ImageRecord {
             present: true,
             block_ref: Some(after_block.clone()),
             bytes: Some(bytes.len() as u64),
-            mode: None,
-            identity: None,
+            mode: before.mode(),
+            identity: before.identity(),
         };
         let operation = operation_name();
         let dir = session_dir(root, session)
@@ -121,7 +142,7 @@ impl FileTransaction {
         );
         write_prepared(&dir, &prepared).map_err(|error| WriteRefusal::Record {
             path: error.path().to_path_buf(),
-            reason: error.to_string(),
+            reason: error.reason(),
         })?;
         sandbox
             .write_file(path, bytes)
@@ -175,6 +196,17 @@ impl FileTransaction {
         })
     }
 
+    /// The lock one target's writers take. A poisoned map is not a reason to
+    /// skip the lock: another writer panicked while looking a path up, and the
+    /// map is still usable.
+    fn target_lock(&self, target: &Path) -> Arc<AsyncMutex<()>> {
+        let mut locks = match self.locks.lock() {
+            Ok(locks) => locks,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        locks.entry(target.to_path_buf()).or_default().clone()
+    }
+
     /// Store bytes in the block store, returning the hash a record names.
     async fn store(&self, bytes: Vec<u8>, target: &str) -> Result<String, WriteRefusal> {
         let hash = self
@@ -203,6 +235,22 @@ enum Captured {
 }
 
 impl Captured {
+    /// The permissions the target had, when it was there.
+    fn mode(&self) -> Option<u32> {
+        match self {
+            Self::Present { mode, .. } => *mode,
+            Self::Absent => None,
+        }
+    }
+
+    /// What the target was, when it was there.
+    fn identity(&self) -> Option<Identity> {
+        match self {
+            Self::Present { identity, .. } => *identity,
+            Self::Absent => None,
+        }
+    }
+
     fn to_record(&self, block_ref: Option<String>) -> ImageRecord {
         match self {
             Self::Absent => ImageRecord::absent(),

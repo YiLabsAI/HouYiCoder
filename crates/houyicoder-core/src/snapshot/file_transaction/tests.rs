@@ -2,186 +2,19 @@
 //! the target is touched, every refusal leaves the target alone, and a write
 //! that lands without its committed record is not reported as a failure.
 
-use std::env::temp_dir;
-use std::fs::{create_dir_all, read_dir, read_to_string, remove_dir_all, write};
+use std::fs::{create_dir_all, read_to_string, write};
 use std::io::Error as IoError;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
-use std::process::id;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
-use houyicoder_api::sandbox::SandboxSession;
-use houyicoder_async::PFut;
 use houyicoder_context::session_class::FILE_TRANSACTION_DIR;
-use houyicoder_context::{
-    BlockHash, ContextBackend, ContextError, ExecConfig, ExecResult, SandboxError, SessionId,
-};
-use houyicoder_memory::LocalFileBackend;
-use serde_json::Value;
+use houyicoder_context::{ContextError, SandboxError, SessionId};
 
+use super::WriteRefusal;
 use super::record::{COMMITTED_FILE, PREPARED_FILE};
-use super::{FileTransaction, WriteRefusal};
-
-/// One test's own sessions tree and workspace, removed when the test ends.
-struct Scratch {
-    root: PathBuf,
-    sessions: PathBuf,
-    workspace: PathBuf,
-}
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let root = temp_dir().join(format!("file-transaction-{name}-{}", id()));
-        remove_dir_all(&root).ok();
-        create_dir_all(root.join("sessions")).expect("sessions directory");
-        create_dir_all(root.join("workspace")).expect("workspace directory");
-        let workspace = dunce::canonicalize(root.join("workspace")).expect("canonical workspace");
-        Self {
-            sessions: root.join("sessions"),
-            root,
-            workspace,
-        }
-    }
-
-    fn file(&self, name: &str) -> PathBuf {
-        self.workspace.join(name)
-    }
-
-    fn backend(&self) -> Arc<dyn ContextBackend> {
-        Arc::new(LocalFileBackend::new(self.sessions.clone()))
-    }
-
-    fn stub(&self) -> Arc<Stub> {
-        Arc::new(Stub::new(&self.workspace, &self.sessions))
-    }
-
-    fn transaction(&self) -> FileTransaction {
-        FileTransaction::new(self.backend())
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        remove_dir_all(&self.root).ok();
-    }
-}
-
-/// What the record directory held at the moment the write ran.
-#[derive(Clone, Default)]
-struct Observed {
-    prepared: Arc<AtomicUsize>,
-    committed: Arc<AtomicUsize>,
-    wrote: Arc<AtomicBool>,
-}
-
-/// A sandbox over the scratch workspace. It keeps the trait's path rules and
-/// file operations, and records the record directory as the write begins: the
-/// journal's whole promise is that the prepared record is on disk first.
-struct Stub {
-    workspace: Arc<Path>,
-    sessions: PathBuf,
-    observed: Observed,
-    refuse_write: bool,
-}
-
-impl Stub {
-    fn new(workspace: &Path, sessions: &Path) -> Self {
-        Self {
-            workspace: Arc::from(workspace),
-            sessions: sessions.to_path_buf(),
-            observed: Observed::default(),
-            refuse_write: false,
-        }
-    }
-
-    fn refusing(workspace: &Path, sessions: &Path) -> Self {
-        Self {
-            refuse_write: true,
-            ..Self::new(workspace, sessions)
-        }
-    }
-}
-
-impl SandboxSession for Stub {
-    fn exec_with_config(
-        &self,
-        _command: &str,
-        _config: ExecConfig,
-    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-        Box::pin(async { Err(SandboxError::Unsupported("no execution".into())) })
-    }
-
-    fn write_file(&self, path: &str, content: Vec<u8>) -> PFut<'_, Result<(), SandboxError>> {
-        self.observed.prepared.store(
-            count_records(&self.sessions, PREPARED_FILE),
-            Ordering::SeqCst,
-        );
-        self.observed.committed.store(
-            count_records(&self.sessions, COMMITTED_FILE),
-            Ordering::SeqCst,
-        );
-        self.observed.wrote.store(true, Ordering::SeqCst);
-        let target = self.resolve_write(path);
-        let refuse = self.refuse_write;
-        Box::pin(async move {
-            if refuse {
-                return Err(SandboxError::Io("no space left".into()));
-            }
-            let target = target?;
-            if let Some(parent) = target.parent() {
-                create_dir_all(parent)?;
-            }
-            write(&target, content)?;
-            Ok(())
-        })
-    }
-
-    fn workspace_root(&self) -> Arc<Path> {
-        self.workspace.clone()
-    }
-}
-
-/// How many record files of one name are on disk under the sessions root.
-fn count_records(root: &Path, name: &str) -> usize {
-    find_record(root, name).len()
-}
-
-fn find_record(root: &Path, name: &str) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(sessions) = read_dir(root) else {
-        return found;
-    };
-    for session in sessions.flatten() {
-        let Ok(operations) = read_dir(session.path().join(FILE_TRANSACTION_DIR)) else {
-            continue;
-        };
-        for operation in operations.flatten() {
-            let candidate = operation.path().join(name);
-            if candidate.is_file() {
-                found.push(candidate);
-            }
-        }
-    }
-    found
-}
-
-/// The one record of this name, parsed.
-fn record(root: &Path, name: &str) -> Value {
-    let found = find_record(root, name);
-    assert_eq!(found.len(), 1, "exactly one {name} under the sessions root");
-    let body = read_to_string(&found[0]).expect("read the record");
-    serde_json::from_str(&body).expect("parse the record")
-}
-
-/// The bytes a record's block name holds.
-async fn stored(backend: &Arc<dyn ContextBackend>, image: &Value) -> Vec<u8> {
-    let hash = image["block_ref"].as_str().expect("a stored block");
-    backend
-        .block_get(&BlockHash(hash.to_string()))
-        .await
-        .expect("read the stored block")
-}
+use super::test_support::{Scratch, Stub, find_record, record, stored};
 
 #[tokio::test]
 async fn test_write_records_both_sides() {
@@ -439,6 +272,46 @@ async fn test_no_session_passes_through() {
     assert!(
         find_record(&scratch.sessions, PREPARED_FILE).is_empty(),
         "there is no session to record under"
+    );
+}
+
+#[tokio::test]
+async fn test_writes_serialize_per_target() {
+    let scratch = Scratch::new("serialize");
+    let stub = Arc::new(Stub::yielding(&scratch.workspace, &scratch.sessions));
+    write(scratch.file("a.txt"), "old").expect("seed the target");
+    let transaction = Arc::new(scratch.transaction());
+    let session = SessionId::new();
+    let write_once = |content: &'static [u8]| {
+        let transaction = transaction.clone();
+        let stub = stub.clone();
+        tokio::spawn(async move {
+            transaction
+                .write(Some(session), stub.as_ref(), "a.txt", content.to_vec())
+                .await
+        })
+    };
+
+    let first = write_once(b"one");
+    let second = write_once(b"two");
+    first.await.expect("first task").expect("first write");
+    second.await.expect("second task").expect("second write");
+
+    let backend = scratch.backend();
+    let mut earlier = Vec::new();
+    for path in find_record(&scratch.sessions, PREPARED_FILE) {
+        let body = read_to_string(&path).expect("read the record");
+        let prepared: serde_json::Value = serde_json::from_str(&body).expect("parse the record");
+        earlier.push(stored(&backend, &prepared["before"]).await);
+    }
+    assert_eq!(earlier.len(), 2, "both writes recorded");
+    let chained = earlier
+        .iter()
+        .filter(|bytes| bytes.as_slice() == b"one")
+        .count();
+    assert_eq!(
+        chained, 1,
+        "one write found the bytes the other left, not the ones both found"
     );
 }
 
