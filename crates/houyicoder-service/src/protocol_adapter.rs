@@ -500,6 +500,7 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::HookSignal { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::CacheBreak { .. }
+        | SessionEvent::CacheDecisions { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }
@@ -591,6 +592,7 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         | SessionEvent::HookSignal { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::CacheBreak { .. }
+        | SessionEvent::CacheDecisions { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }

@@ -24,17 +24,19 @@ pub(crate) mod turn_group;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::agent::context::conversation::ConversationCost;
+use crate::agent::context::retention::AssemblyScope;
+use crate::agent::context::turn_group::AssemblyMode;
+use crate::agent::multi_agent::registry::{AgentDefinition, agent_directory_section};
 use houyicoder_context::{
     CheckpointManifest, MemoryEntry, SessionEvent, SessionLogEntry, memory_age_days,
     memory_age_label, memory_freshness_text,
 };
 use houyicoder_protocol::frontend::context::{DelegatedContext, ToolFootprint};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
-
-use crate::agent::context::conversation::ConversationCost;
-use crate::agent::multi_agent::registry::{AgentDefinition, agent_directory_section};
 
 /// Per-turn recall budget shared by retrieval and context assembly.
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;
@@ -343,6 +345,14 @@ pub struct ContextBuilder {
     /// The prefix the last assembly produced. Declared here and owned by the
     /// prompt cache module, which is the only reader and writer.
     prompt_hash: Mutex<Option<PromptHash>>,
+    /// The assembly counter a retention policy scopes a batch decision to.
+    assembly_seq: AtomicU64,
+    /// The wall-clock start of the session epoch (the last clear boundary, or
+    /// the first event when the session never cleared). The date line derives
+    /// from it so a reopened session reproduces the prompt bytes its previous
+    /// process sent instead of stamping the reopen time. Zero means unset: a
+    /// fresh session uses its first assembly's clock.
+    epoch_start_ms: AtomicU64,
 }
 
 impl ContextBuilder {
@@ -356,6 +366,8 @@ impl ContextBuilder {
             agent_types: Mutex::new(Vec::new()),
             frozen_prompt: Mutex::new(None),
             prompt_hash: Mutex::new(None),
+            assembly_seq: AtomicU64::new(0),
+            epoch_start_ms: AtomicU64::new(0),
         }
     }
 
@@ -419,6 +431,7 @@ impl ContextBuilder {
             None,
             &AssemblyInput::default(),
             ConversationCost::SectionsOnly,
+            AssemblyMode::default(),
         )
     }
 
@@ -439,6 +452,7 @@ impl ContextBuilder {
             backend,
             input,
             ConversationCost::WithFootprints,
+            AssemblyMode::default(),
         )
     }
 
@@ -454,6 +468,7 @@ impl ContextBuilder {
         manifest: Option<&CheckpointManifest>,
         backend: Option<&dyn houyicoder_context::ContextBackend>,
         input: &AssemblyInput<'_>,
+        continuation: bool,
     ) -> AssembledContext {
         let assembled = self.assemble(
             events,
@@ -461,6 +476,10 @@ impl ContextBuilder {
             backend,
             input,
             ConversationCost::SectionsOnly,
+            AssemblyMode {
+                mutating: true,
+                continuation,
+            },
         );
         if let Ok(mut g) = self.last_measurement.lock() {
             *g = Some(assembled.measurement.clone());
@@ -475,12 +494,13 @@ impl ContextBuilder {
         backend: Option<&dyn houyicoder_context::ContextBackend>,
         input: &AssemblyInput<'_>,
         cost: ConversationCost,
+        mode: AssemblyMode,
     ) -> AssembledContext {
         let filtered = match manifest {
             Some(manifest) => selection::apply_manifest(events, manifest, backend),
             None => events.to_vec(),
         };
-        let messages = self.assemble_messages(&filtered, backend);
+        let messages = self.assemble_messages(&filtered, backend, mode);
         let msg_tokens: u32 = messages
             .iter()
             .map(|message| self.tokenizer.count_input(message))
@@ -657,6 +677,7 @@ impl ContextBuilder {
         &self,
         events: &[SessionLogEntry],
         backend: Option<&dyn houyicoder_context::ContextBackend>,
+        mode: AssemblyMode,
     ) -> Vec<InputItem> {
         let policy = self
             .retention_policy
@@ -666,11 +687,20 @@ impl ContextBuilder {
         let Some(policy) = policy else {
             return turn_group::assemble_model_input(events, backend);
         };
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0);
-        turn_group::assemble_model_input_with(events, backend, &*policy, now_ms)
+        let assembly_id = if mode.mutating && !mode.continuation {
+            self.assembly_seq.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            self.assembly_seq.load(Ordering::Relaxed)
+        };
+        turn_group::assemble_model_input_with(
+            events,
+            backend,
+            &*policy,
+            AssemblyScope {
+                id: assembly_id,
+                mutating: mode.mutating,
+            },
+        )
     }
 
     /// The measurement of the most recent turn. None before the first turn.

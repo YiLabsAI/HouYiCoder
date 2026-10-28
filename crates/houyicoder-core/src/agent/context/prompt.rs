@@ -430,11 +430,18 @@ pub struct FrozenPrompt {
 
 impl FrozenPrompt {
     /// Read the cwd walk-up and the clock once, for the session to hold.
-    /// Read the cwd walk-up and the clock once, for the session to hold.
     pub fn read(cwd: &Path) -> Self {
+        Self::read_at(cwd, date::now_millis())
+    }
+
+    /// Read the cwd walk-up and freeze the date at the session epoch's start
+    /// instead of the current clock. A reopened session then renders the same
+    /// date line its previous process sent, so the system prompt prefix stays
+    /// byte-identical across the reopen.
+    pub fn read_at(cwd: &Path, epoch_ms: u64) -> Self {
         Self {
             project_memory: read_project_memory(cwd),
-            date_line: date::utc_date_line(),
+            date_line: date::utc_date_line_at(epoch_ms),
         }
     }
 

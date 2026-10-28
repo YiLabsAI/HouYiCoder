@@ -10,11 +10,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use super::Runner;
-
-/// Ephemeral prompt-cache time-to-live (5 minutes in milliseconds). When the
-/// prefix is unchanged and the gap since the previous response is at least
-/// this long, a cache miss is explained by provider TTL expiry.
-const EPHEMERAL_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
+use crate::agent::context::cache_liveness::CACHE_TTL_MS;
 
 impl Runner {
     /// Name what broke the cached prefix.
@@ -32,20 +28,28 @@ impl Runner {
             return Some("model-switch");
         }
         let previous = self.cache_prev_prefix.lock().ok().and_then(|slot| *slot);
-        if let Some((previous, previous_at)) = previous
-            && let Some(current) = self.context_builder.prompt_hash()
-        {
-            if current.system != previous.system {
-                return Some("system-prompt-changed");
-            }
-            if current.tools != previous.tools {
-                return Some("tools-changed");
+        if let Some((previous, previous_at)) = previous {
+            if let Some(current) = self.context_builder.prompt_hash() {
+                if current.system != previous.system {
+                    return Some("system-prompt-changed");
+                }
+                if current.tools != previous.tools {
+                    return Some("tools-changed");
+                }
             }
             // The prefix is identical, so the miss is the provider letting
             // its cache expire while the session sat idle.
-            if now_millis().saturating_sub(previous_at) >= EPHEMERAL_CACHE_TTL_MS {
+            if now_millis().saturating_sub(previous_at) >= CACHE_TTL_MS {
                 return Some("ttl-expired");
             }
+            return Some("unknown");
+        }
+        // A reopened session has no prefix hash from this process yet, but it
+        // restored the last completion's clock. An idle gap at or past the
+        // declared TTL is the one cause that evidence can still name.
+        let seeded = self.cached_prefix.last_completion_ts();
+        if seeded > 0 && now_millis().saturating_sub(seeded) >= CACHE_TTL_MS {
+            return Some("ttl-expired");
         }
         Some("unknown")
     }

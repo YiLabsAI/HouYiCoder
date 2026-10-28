@@ -12,6 +12,7 @@ use crate::agent::ToolRegistry;
 use crate::agent::backbone::WorkspaceProbe;
 use crate::agent::conditional_activation::ConditionalSkillActivator;
 use crate::agent::context::AssemblyInput;
+use crate::agent::context::prompt::date::now_millis;
 use crate::agent::hook::CompactTrigger;
 use crate::agent::hook::registry::HookRegistry;
 use crate::agent::manifest::Summarizer;
@@ -338,7 +339,9 @@ impl Runner {
         self.memory.before_clear(session).await;
         // A clear is the boundary the user chose to rebuild the prompt, so the
         // project memory and date line are re-read here rather than on every
-        // turn.
+        // turn. The date line moves to the clear instant, which is the start
+        // of the new session epoch.
+        self.context_builder.set_epoch_start_ms(now_millis());
         self.context_builder.reset_frozen_prompt();
     }
 

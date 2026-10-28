@@ -4,6 +4,7 @@
 //! reach sibling tests that resolve the default "test" window.
 
 use super::*;
+use crate::agent::cache_liveness::CACHE_TTL_MS;
 use crate::agent::context::AssemblyInput;
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{
@@ -730,6 +731,10 @@ async fn test_fake_stream_complete() {
 /// two independent halves — the system prompt and the tool schemas — and a
 /// reader chasing a cache miss needs to know which one to look at.
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one four-turn attribution journey; the runner and temp dirs are the fixture"
+)]
 async fn test_break_names_prefix_half() {
     let runner = runner_with_overflow(
         Arc::new(OverflowThenSucceedProvider::new(0, "x")),
@@ -744,7 +749,6 @@ async fn test_break_names_prefix_half() {
     create_dir_all(&b).expect("mkdir b");
     write(a.join("AGENTS.md"), "# Rules A\n\nrules a.").expect("write a");
     write(b.join("AGENTS.md"), "# Rules B\n\nrules b.").expect("write b");
-
     let prov = UsageProvenance {
         input_reported: true,
         cache_read_reported: true,
@@ -760,7 +764,6 @@ async fn test_break_names_prefix_half() {
         provenance: prov,
         ..Usage::default()
     };
-
     let build_tools = |tools: &[ToolDef]| {
         runner.context_builder.build_for_turn(
             &[],
@@ -772,6 +775,7 @@ async fn test_break_names_prefix_half() {
                 announced_skills: &[],
                 discovered_skills: &[],
             },
+            false,
         );
     };
 
@@ -810,7 +814,7 @@ async fn test_break_names_prefix_half() {
         .unwrap();
 
     // Fourth turn: restore high cache with identical prefix, then age the
-    // previous timestamp past the 5-minute TTL window.
+    // previous timestamp past the provider TTL window.
     runner
         .append_turn_usage(session, "test", &high, false, None)
         .await
@@ -818,7 +822,7 @@ async fn test_break_names_prefix_half() {
     if let Ok(mut slot) = runner.cache_prev_prefix.lock()
         && let Some((_, ts)) = slot.as_mut()
     {
-        *ts = ts.saturating_sub(301_000);
+        *ts = ts.saturating_sub(CACHE_TTL_MS + 1_000);
     }
     runner
         .append_turn_usage(session, "test", &zero, false, None)

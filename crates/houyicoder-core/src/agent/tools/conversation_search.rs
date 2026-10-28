@@ -281,6 +281,7 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. }
         | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::CacheDecisions { .. }
         | SessionEvent::ContextCleared { .. } => return None,
     };
     if text.is_empty() {

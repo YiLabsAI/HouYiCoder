@@ -90,6 +90,7 @@ impl Runner {
         &self,
         events: &[houyicoder_context::SessionLogEntry],
         manifest: Option<&houyicoder_context::CheckpointManifest>,
+        continuation: bool,
     ) -> (RequestInferenceConfig, AssembledContext) {
         let inference = self.snapshot_inference();
         let parts = self.assembly_parts();
@@ -98,6 +99,7 @@ impl Runner {
             manifest,
             Some(self.store.backend()),
             &parts.input(),
+            continuation,
         );
         (inference, assembled)
     }
@@ -152,8 +154,11 @@ impl Runner {
             let snapshot = self.store.current_view(session).await?;
             // A model switch must invalidate the cached prefix before context
             // assembly; the request and the context report use that same view.
-            let (inference, mut assembled) =
-                self.assemble_request(&snapshot.events, snapshot.manifest.as_ref());
+            let (inference, mut assembled) = self.assemble_request(
+                &snapshot.events,
+                snapshot.manifest.as_ref(),
+                length_retries > 0,
+            );
             // Capture before assembled.messages moves into the request;
             // token_count() can't run after that. Fallback for
             // provider-omits-usage, passed to record_turn at turn end.
@@ -511,7 +516,6 @@ impl Runner {
                     window,
                     inference.max_output_tokens,
                 );
-                self.record_turn_cache(&partial.usage);
                 // The cut call is part of the turn the re-call continues, so it
                 // joins the turn's total here and reaches the run figure and
                 // the session tally with it.
@@ -540,6 +544,9 @@ impl Runner {
                     applied_effort.map(EffortLevel::label),
                 )
                 .await?;
+                // The break detector reads the previous completion clock, so
+                // the cache state advances after the usage is recorded.
+                self.record_turn_cache(&partial.usage);
                 self.append_resume_nudge(session).await?;
                 continue 'outer;
             }
@@ -581,7 +588,6 @@ impl Runner {
                 window,
                 inference.max_output_tokens,
             );
-            self.record_turn_cache(&response.usage);
             let total_dur_ms = api_start.elapsed().as_millis() as u64;
             let decode_dur_ms = first_token_elapsed.map(|ttft| total_dur_ms.saturating_sub(ttft));
             if let Err(e) = self
@@ -605,6 +611,9 @@ impl Runner {
                 applied_effort.map(EffortLevel::label),
             )
             .await?;
+            // The break detector reads the previous completion clock, so the
+            // cache state advances after the usage is recorded.
+            self.record_turn_cache(&response.usage);
             call.account(&response.usage);
             call.response = Some(response);
             return Ok(call);

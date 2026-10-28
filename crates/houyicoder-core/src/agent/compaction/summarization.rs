@@ -209,6 +209,7 @@ fn event_byte_len(event: &SessionLogEntry) -> usize {
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. }
         | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::CacheDecisions { .. }
         | SessionEvent::ContextCleared { .. } => 0,
     }
 }

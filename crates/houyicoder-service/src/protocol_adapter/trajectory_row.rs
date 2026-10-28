@@ -18,6 +18,7 @@ pub fn event_name(kind: &SessionEvent) -> &'static str {
         SessionEvent::Reasoning { .. } => "reasoning",
         SessionEvent::CompactionBoundary { .. } => "boundary",
         SessionEvent::CacheBreak { .. } => "cache_break",
+        SessionEvent::CacheDecisions { .. } => "cache_decisions",
         SessionEvent::Summary { .. } => "summary",
         SessionEvent::PermissionDecision { .. } => "verdict",
         SessionEvent::TurnAborted { .. } => "aborted",

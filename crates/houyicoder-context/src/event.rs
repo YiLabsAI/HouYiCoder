@@ -67,6 +67,15 @@ pub enum TruncationSignal {
     None,
 }
 
+/// One block_ref's frozen retention decision as the session log records it.
+/// The decision is a label rather than the policy enum so this crate stays a
+/// leaf; a reader skips a label it does not know instead of guessing a tier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedBlockDecision {
+    pub block_ref: String,
+    pub decision: String,
+}
+
 /// The payload of a SessionLogEntry. Tagged for JSONL. ToolResult carries call_id
 /// linking to the ToolCall it answers — the pair invariant. PermissionDecision
 /// carries the call_id of the tool call the verdict answers, closing the audit
@@ -440,12 +449,26 @@ pub enum SessionEvent {
     },
     /// A prompt-cache break detected at the agent loop (after a provider
     /// response). Carries the attributed cause: "compact", "model-switch",
-    /// "ttl-expiry", or "unknown". Recorded when cache_read dropped sharply
+    /// "system-prompt-changed", "tools-changed", "ttl-expired", or "unknown".
+    /// Recorded when cache_read dropped sharply
     /// vs the previous turn. Provider-agnostic (runs in the agent loop, not
     /// in a provider-specific adapter), surfacing the attribution to the user
-    /// via /trajectory rather than keeping it internal.
+    /// via /trajectory rather than keeping it internal. A resumed session can
+    /// name only the idle gap until its first response records a prefix hash
+    /// in this process.
     CacheBreak {
         cause: String,
+    },
+    /// The frozen per-block retention decisions the assembly used, recorded
+    /// whenever they change. A resumed session restores them so its first
+    /// request reuses the bytes the previous process sent. The model name
+    /// lets a reader discard a map written before a model switch.
+    #[serde(rename = "CacheDecisions")]
+    CacheDecisions {
+        #[serde(default)]
+        decisions: Vec<CachedBlockDecision>,
+        #[serde(default)]
+        model: String,
     },
     /// A parent runner spawned a sub-agent. The durable boundary so a parent
     /// log replay reconstructs the spawn + its config; the child's turns live

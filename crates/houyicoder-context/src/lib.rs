@@ -75,4 +75,6 @@ pub use log_index::{
 /// The append-only log's wire types (SessionLogEntry + the vocabulary of what a
 /// record can be).
 mod event;
-pub use event::{PermissionVerdict, SessionEvent, SessionLogEntry, TruncationSignal};
+pub use event::{
+    CachedBlockDecision, PermissionVerdict, SessionEvent, SessionLogEntry, TruncationSignal,
+};

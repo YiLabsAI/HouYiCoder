@@ -461,7 +461,7 @@ async fn test_tally_covers_length_retry() {
         length_retry_provider(&cut, &terminal),
         ToolRegistry::new(),
     );
-    reopened.seed_usage_from_log(session);
+    reopened.seed_session_from_log(session);
     let resumed = reopened.status_snapshot().cumulative_usage;
     assert_eq!(
         (

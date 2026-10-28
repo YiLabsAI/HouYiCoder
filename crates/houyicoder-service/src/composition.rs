@@ -317,7 +317,7 @@ pub(crate) fn assemble(
         .with_spawn_handle(spawn_handle)
         .with_sandbox_session(fences.sandbox_session.clone())
         .with_reducer(Arc::new(HotPathReducer));
-    runner.seed_usage_from_log(session);
+    runner.seed_session_from_log(session);
     let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());
     runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
     multi_agent::install_agent_types(&runner, agent_registry.as_ref(), &denied_agents);

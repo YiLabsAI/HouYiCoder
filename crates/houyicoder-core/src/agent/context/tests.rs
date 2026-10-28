@@ -1,5 +1,6 @@
 //! Context assembly and token-accounting tests.
 use super::*;
+use crate::agent::context::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
 use crate::agent::multi_agent::registry::built_in_general_purpose;
 use crate::agent::skill::listing::format_skill_listing;
 use houyicoder_api::skill::{SkillDescriptor, SkillUsage};
@@ -184,7 +185,7 @@ fn test_tool_schema_tokens_counted() {
             "required": ["command"]
         }),
     }];
-    let v = b.build_for_turn(&[], None, None, &assembly_input(&tool_defs, None));
+    let v = b.build_for_turn(&[], None, None, &assembly_input(&tool_defs, None), false);
     let tools = v
         .measurement
         .section(SectionKind::Tools)
@@ -215,7 +216,7 @@ fn test_clear_drops_measurement() {
     scratch.push(format!("ctx-test-clear-{}", id()));
     create_dir_all(&scratch).expect("mkdir scratch");
     let b = ContextBuilder::new().with_cwd(scratch);
-    let v = b.build_for_turn(&[], None, None, &AssemblyInput::default());
+    let v = b.build_for_turn(&[], None, None, &AssemblyInput::default(), false);
     assert!(v.measurement.token_count() > 0, "a turn measures something");
     assert!(b.last_measurement().is_some(), "and caches it");
     b.clear_measurement();
@@ -1045,7 +1046,7 @@ fn test_turn_skips_conversation_cost() {
             duration_ms: 0,
         }),
     ];
-    let turn = b.build_for_turn(&events, None, None, &AssemblyInput::default());
+    let turn = b.build_for_turn(&events, None, None, &AssemblyInput::default(), false);
     assert!(
         turn.measurement.tool_footprints.is_empty(),
         "a turn reports no tool footprint"
@@ -1588,4 +1589,50 @@ fn test_cwd_switch_keeps_prompt() {
         "an explicit boundary re-reads the project memory:\n{after_reset}"
     );
     remove_dir_all(&root).ok();
+}
+
+struct SpyPolicy {
+    ids: Mutex<Vec<u64>>,
+}
+
+impl RetentionPolicy for SpyPolicy {
+    fn decide(&self, ctx: &RetentionContext<'_>) -> RetentionDecision {
+        self.ids.lock().expect("spy lock").push(ctx.assembly_id);
+        RetentionDecision::Materialize
+    }
+}
+
+/// A length-recovery continuation reuses the assembly id, so it cannot
+/// consume a pending demotion halfway through a sentence.
+#[test]
+fn test_continuation_reuses_id() {
+    let builder = ContextBuilder::new();
+    let spy = Arc::new(SpyPolicy {
+        ids: Mutex::new(Vec::new()),
+    });
+    builder.set_retention_policy(spy.clone());
+    let events = vec![
+        entry(SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "read".into(),
+            input: serde_json::json!({"path": "a"}),
+        }),
+        entry(SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: serde_json::json!({"block_ref": "h1", "preview": "x"}),
+            duration_ms: 0,
+        }),
+    ];
+    let input = AssemblyInput::default();
+    let store =
+        houyicoder_session::SessionStore::new(Box::new(houyicoder_memory::InMemoryBackend::new()));
+    let backend = Some(store.backend());
+    drop(builder.build_for_turn(&events, None, backend, &input, false));
+    drop(builder.build_for_turn(&events, None, backend, &input, true));
+    drop(builder.build_for_turn(&events, None, backend, &input, false));
+    assert_eq!(
+        *spy.ids.lock().expect("spy lock"),
+        vec![1, 1, 2],
+        "the continuation reuses the first assembly's id"
+    );
 }

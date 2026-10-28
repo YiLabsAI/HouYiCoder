@@ -276,8 +276,9 @@ fn test_session_id_rejects_garbage() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
 fn test_event_variants_round_trip() {
-    // Every SessionEvent variant must survive a serde cycle: the
-    // internally-tagged enum plus nested Value and CheckpointId.
+    // The event variants whose payloads carry nested values (Value,
+    // CheckpointId, vectors) must survive a serde cycle through the
+    // internally-tagged enum.
     let s = SessionId::new();
     let call_id = "toolu_01call";
     let cp = CheckpointId::new();
@@ -411,12 +412,31 @@ fn test_event_variants_round_trip() {
             SessionEvent::RunCompleted { ms: Some(620) },
         ),
         event(s, EventId::new(), SessionEvent::RunCompleted { ms: None }),
+        event(
+            s,
+            EventId::new(),
+            SessionEvent::CacheDecisions {
+                decisions: vec![CachedBlockDecision {
+                    block_ref: "abc123".into(),
+                    decision: "materialize".into(),
+                }],
+                model: "test-model".into(),
+            },
+        ),
     ];
     for e in &cases {
         let json = serde_json::to_string(e).expect("serialize");
         let back: SessionLogEntry = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, *e);
     }
+    // CacheDecisions carries a nested vector of decision records.
+    let decisions = cases
+        .iter()
+        .find(|e| matches!(e.event, SessionEvent::CacheDecisions { .. }))
+        .expect("the decision map case is present");
+    let json = serde_json::to_string(decisions).expect("serialize");
+    assert!(json.contains("\"block_ref\""));
+    assert!(json.contains("\"materialize\""));
     // CompactionBoundary carries the nested CheckpointId — verify it.
     let json = serde_json::to_string(&cases[5]).unwrap();
     assert!(json.contains("\"checkpoint\""));

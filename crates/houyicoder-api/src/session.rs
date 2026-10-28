@@ -15,6 +15,16 @@ use houyicoder_context::{
 use houyicoder_protocol::llm::{RecordedCounts, Usage, UsageProvenance};
 use std::path::PathBuf;
 
+/// The index of the session's last clear boundary, or None when the session
+/// was never cleared. The durable log keeps the archived turns so a reader
+/// can show them, so the live session starts at this boundary; the boundary
+/// event itself is included.
+pub fn last_clear_index(events: &[SessionLogEntry]) -> Option<usize> {
+    events
+        .iter()
+        .rposition(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
+}
+
 /// The delegated usage a session's children reported in durable returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubagentUsage {

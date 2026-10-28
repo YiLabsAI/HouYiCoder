@@ -9,11 +9,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use houyicoder_protocol::llm::ToolDef;
 
 use super::super::ContextBuilder;
 use super::FrozenPrompt;
+use super::date::now_millis;
 
 /// A digest of the two halves of the cached prefix. Equality means the bytes
 /// the provider saw last turn are the bytes it will see now.
@@ -41,10 +43,37 @@ impl ContextBuilder {
     /// the prompt prefix and invalidate the whole cached context. They are
     /// frozen here and refreshed only by reset_frozen_prompt.
     pub(crate) fn frozen_prompt(&self, cwd: &Path) -> FrozenPrompt {
+        let epoch_ms = self.epoch_start_ms();
         let Ok(mut slot) = self.frozen_prompt.lock() else {
-            return FrozenPrompt::read(cwd);
+            return FrozenPrompt::read_at(cwd, epoch_ms);
         };
-        slot.get_or_insert_with(|| FrozenPrompt::read(cwd)).clone()
+        slot.get_or_insert_with(|| FrozenPrompt::read_at(cwd, epoch_ms))
+            .clone()
+    }
+
+    /// Set the session epoch's wall-clock start. The date line derives from
+    /// this instant, so a resumed session renders the same line its previous
+    /// process sent. A clear moves the epoch to the clear instant.
+    pub(crate) fn set_epoch_start_ms(&self, ms: u64) {
+        self.epoch_start_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// The epoch start, or the current clock when the session has not set
+    /// one yet. The first caller pins it, so a later reset (compaction) reads
+    /// the date at this instant rather than at the reset's clock.
+    pub(crate) fn epoch_start_ms(&self) -> u64 {
+        let current = self.epoch_start_ms.load(Ordering::Relaxed);
+        if current != 0 {
+            return current;
+        }
+        let now = now_millis();
+        match self
+            .epoch_start_ms
+            .compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => now,
+            Err(existing) => existing,
+        }
     }
 
     /// Release the frozen prompt inputs so the next assembly re-reads the

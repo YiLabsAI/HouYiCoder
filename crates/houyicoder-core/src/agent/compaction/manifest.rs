@@ -429,6 +429,7 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &Tokenizer) -> usiz
         | SessionEvent::ChildDelegated { .. }
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::ModelStepTiming { .. }
+        | SessionEvent::CacheDecisions { .. }
         | SessionEvent::ContextCleared { .. } => 0,
     }
 }

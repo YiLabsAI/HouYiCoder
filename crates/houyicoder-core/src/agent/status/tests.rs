@@ -7,6 +7,9 @@ use houyicoder_session::SessionStore;
 use crate::agent::Runner;
 use crate::agent::ToolRegistry;
 use crate::agent::append::new_event;
+use crate::agent::cache_liveness::{CACHE_TTL_MS, CacheLivenessRetentionPolicy};
+use crate::agent::context::prompt::date::{now_millis, utc_date_line_at};
+use crate::agent::context::retention::{RetentionContext, RetentionPolicy};
 use crate::agent::runner_config::RunnerConfig;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::memory::MemoryProvider;
@@ -14,9 +17,12 @@ use houyicoder_api::skill::SkillDescriptor;
 use houyicoder_api::skill::SkillError;
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::skill::SkillSnapshot;
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySource};
+use houyicoder_context::{
+    CachedBlockDecision, CheckpointId, MemoryEntry, MemoryError, MemoryScope, MemorySource,
+};
 use houyicoder_protocol::llm::EffortLevel;
 use std::collections::HashSet;
+use std::path::Path;
 
 fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
     Usage {
@@ -145,7 +151,7 @@ async fn test_seed_covers_by_model() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     );
-    runner.seed_usage_from_log(session);
+    runner.seed_session_from_log(session);
     let rows = runner.by_model_usage();
     assert_eq!(rows.len(), 1, "the logged model has a row");
     assert_eq!(rows[0].0, "logged-model");
@@ -174,7 +180,7 @@ async fn test_reset_drops_by_model() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     );
-    runner.seed_usage_from_log(session);
+    runner.seed_session_from_log(session);
     runner.reset_usage();
     assert!(
         runner.by_model_usage().is_empty(),
@@ -621,3 +627,457 @@ fn test_memory_forget_routes_scope() {
 }
 
 mod status_override;
+
+/// A logged turn on a named model, for the restore tests that need to move
+/// the model between two turns.
+fn logged_turn_on(session: SessionId, model: &str, cache_read: u64) -> SessionLogEntry {
+    new_event(
+        session,
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: 1_000,
+            output_tokens: 10,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: model.into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: false,
+        },
+    )
+}
+
+fn decisions(rows: &[(&str, &str)], model: &str) -> SessionEvent {
+    SessionEvent::CacheDecisions {
+        decisions: rows
+            .iter()
+            .map(|(block_ref, decision)| CachedBlockDecision {
+                block_ref: (*block_ref).into(),
+                decision: (*decision).into(),
+            })
+            .collect(),
+        model: model.into(),
+    }
+}
+
+/// A reopened session restores the cache baseline and the frozen decisions
+/// its log holds, so its first request can reuse the bytes the previous
+/// process sent. The date line derives from the session epoch, not the reopen
+/// clock, so the system prompt half of that prefix stays identical too.
+#[tokio::test]
+async fn test_seed_restores_cached_prefix() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let turn = logged_turn(session, 9_000, 400, 7_200, true);
+    let epoch = turn.ts;
+    store.append(turn).await.expect("the log accepts a turn");
+    store
+        .append(new_event(
+            session,
+            decisions(
+                &[("h1", "materialize"), ("h2", "summarize")],
+                "logged-model",
+            ),
+        ))
+        .await
+        .expect("the log accepts a decision map");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_session_from_log(session);
+
+    assert!(runner.cached_prefix().cache_live());
+    assert_eq!(runner.cached_prefix().last_cache_read_tokens(), 7_200);
+    assert_eq!(
+        runner.cached_prefix().last_completion_ts(),
+        epoch,
+        "the break detector's clock is restored with the baseline"
+    );
+    let rows = runner.cached_prefix().decision_snapshot();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].block_ref, "h1");
+    assert_eq!(rows[0].decision, "materialize");
+    assert_eq!(rows[1].decision, "summarize");
+    assert_eq!(
+        *runner.cache_prev_read.lock().expect("prev read lock"),
+        Some(7_200),
+        "the break detector starts from the last reported reading"
+    );
+    assert_eq!(runner.context_builder.epoch_start_ms(), epoch);
+    let date = runner
+        .context_builder
+        .frozen_prompt(Path::new("."))
+        .date_line()
+        .to_string();
+    assert_eq!(
+        date,
+        utc_date_line_at(epoch),
+        "the date line is the epoch's, not the reopen clock's"
+    );
+}
+
+/// A decision map written before a model switch describes a prefix the
+/// current model never cached, so the restore drops it.
+#[tokio::test]
+async fn test_seed_drops_other_model() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    store
+        .append(logged_turn_on(session, "first-model", 7_200))
+        .await
+        .expect("the log accepts a turn");
+    store
+        .append(new_event(
+            session,
+            decisions(&[("h1", "materialize")], "first-model"),
+        ))
+        .await
+        .expect("the log accepts a decision map");
+    store
+        .append(logged_turn_on(session, "second-model", 0))
+        .await
+        .expect("the log accepts the switched turn");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_session_from_log(session);
+    assert!(
+        runner.cached_prefix().decision_snapshot().is_empty(),
+        "a map from another model is not restored"
+    );
+}
+
+/// A clear boundary drops the decisions written before it; the restore must
+/// not resurrect a prefix the user cleared.
+#[tokio::test]
+async fn test_seed_drops_before_clear() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    store
+        .append(logged_turn(session, 1_000, 10, 800, true))
+        .await
+        .expect("the log accepts a turn");
+    store
+        .append(new_event(
+            session,
+            decisions(&[("h1", "materialize")], "logged-model"),
+        ))
+        .await
+        .expect("the log accepts a decision map");
+    store
+        .append(new_event(
+            session,
+            SessionEvent::ContextCleared { prior_turn: 1 },
+        ))
+        .await
+        .expect("the log accepts a clear");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_session_from_log(session);
+    assert!(
+        runner.cached_prefix().decision_snapshot().is_empty(),
+        "a cleared prefix restores no decisions"
+    );
+}
+
+/// A decision write is persisted once, on the turn that changed it. A steady
+/// turn appends no second map.
+#[tokio::test]
+async fn test_turn_records_dirty() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let policy = CacheLivenessRetentionPolicy::new(Arc::clone(runner.cached_prefix()));
+    let ctx = RetentionContext {
+        age_in_turns: 0,
+        is_superseded: false,
+        block_ref: Some("h1"),
+        assembly_id: 1,
+        mutating: true,
+    };
+    let _ = policy.decide(&ctx);
+
+    runner
+        .append_turn_usage(session, "logged-model", &usage(100, 10, 80), false, None)
+        .await
+        .expect("the usage turn is appended");
+    let events = store.replay(session).await.expect("the log replays");
+    let maps: Vec<(&[CachedBlockDecision], &str)> = events
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            SessionEvent::CacheDecisions { decisions, model } => {
+                Some((decisions.as_slice(), model.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(maps.len(), 1, "one map for the changed decision");
+    assert_eq!(maps[0].0.len(), 1);
+    assert_eq!(maps[0].0[0].block_ref, "h1");
+    assert_eq!(maps[0].0[0].decision, "materialize");
+    assert_eq!(maps[0].1, "logged-model");
+
+    runner
+        .append_turn_usage(session, "logged-model", &usage(100, 10, 80), false, None)
+        .await
+        .expect("the second usage turn is appended");
+    let count = store
+        .replay(session)
+        .await
+        .expect("the log replays")
+        .iter()
+        .filter(|entry| matches!(entry.event, SessionEvent::CacheDecisions { .. }))
+        .count();
+    assert_eq!(count, 1, "a steady turn writes no second map");
+}
+
+/// A reopened session has no prefix hash from this process, but the restored
+/// completion clock can still name an idle gap past the provider TTL.
+#[tokio::test]
+async fn test_resume_names_idle_break() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let old = now_millis().saturating_sub(CACHE_TTL_MS + 1_000);
+    runner.cached_prefix().seed_turn(old, Some(800));
+    *runner.cache_prev_read.lock().expect("prev read lock") = Some(800);
+    let zero = Usage {
+        provenance: UsageProvenance {
+            input_reported: true,
+            cache_read_reported: true,
+            ..UsageProvenance::default()
+        },
+        ..Usage::default()
+    };
+    runner
+        .append_turn_usage(session, "logged-model", &zero, false, None)
+        .await
+        .expect("the usage turn is appended");
+    let events = store.replay(session).await.expect("the log replays");
+    assert!(
+        events.iter().any(|entry| matches!(
+            &entry.event,
+            SessionEvent::CacheBreak { cause } if cause == "ttl-expired"
+        )),
+        "the restored clock names the idle gap"
+    );
+}
+
+/// The production turn order records the usage before it advances the cache
+/// state. If the cache state moved first, the break detector would compare
+/// the seeded clock with itself and report unknown instead of the idle gap.
+#[tokio::test]
+async fn test_break_sees_seeded_clock() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let response = houyicoder_protocol::llm::CompletionResponse {
+        output: vec![houyicoder_protocol::llm::OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage {
+            provenance: UsageProvenance {
+                input_reported: true,
+                cache_read_reported: true,
+                ..UsageProvenance::default()
+            },
+            ..Usage::default()
+        },
+        model: "test".into(),
+    };
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::new(vec![response])),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let old = now_millis().saturating_sub(CACHE_TTL_MS + 1_000);
+    runner.cached_prefix().seed_turn(old, Some(800));
+    *runner.cache_prev_read.lock().expect("prev read lock") = Some(800);
+    runner.run(session, "hello".into()).await.expect("the run");
+    let events = store.replay(session).await.expect("the log replays");
+    assert!(
+        events.iter().any(|entry| matches!(
+            &entry.event,
+            SessionEvent::CacheBreak { cause } if cause == "ttl-expired"
+        )),
+        "the break sees the seeded clock, so the usage is recorded first"
+    );
+}
+
+/// A log written before the decision record still restores the hold's
+/// default for its block_refs when the last reading was a cache hit.
+#[tokio::test]
+async fn test_seed_legacy_restores_hold() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    store
+        .append(new_event(
+            session,
+            SessionEvent::ToolResult {
+                call_id: "c1".into(),
+                output: serde_json::json!({"block_ref": "h1", "preview": "x"}),
+                duration_ms: 0,
+            },
+        ))
+        .await
+        .expect("the log accepts a result");
+    store
+        .append(logged_turn(session, 9_000, 400, 7_200, true))
+        .await
+        .expect("the log accepts a turn");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_session_from_log(session);
+    let rows = runner.cached_prefix().decision_snapshot();
+    assert_eq!(rows.len(), 1, "the legacy block gets a default decision");
+    assert_eq!(rows[0].block_ref, "h1");
+    assert_eq!(rows[0].decision, "materialize");
+}
+
+/// A legacy log with a real miss restores the dead band's tier for blocks
+/// that existed at the miss, and Materialize for blocks first served after it.
+#[tokio::test]
+async fn test_seed_legacy_miss_tier() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let result = |hash: &str, call: &str| {
+        new_event(
+            session,
+            SessionEvent::ToolResult {
+                call_id: call.into(),
+                output: serde_json::json!({"block_ref": hash, "preview": "x"}),
+                duration_ms: 0,
+            },
+        )
+    };
+    let assistant = || {
+        new_event(
+            session,
+            SessionEvent::AssistantMessage {
+                text: "x".into(),
+                thinking: None,
+            },
+        )
+    };
+    store.append(result("h1", "c1")).await.expect("result h1");
+    store.append(assistant()).await.expect("assistant 1");
+    store
+        .append(logged_turn(session, 9_000, 400, 800, true))
+        .await
+        .expect("hit");
+    store.append(assistant()).await.expect("assistant 2");
+    store.append(assistant()).await.expect("assistant 3");
+    store
+        .append(logged_turn(session, 9_000, 400, 0, true))
+        .await
+        .expect("miss");
+    store.append(assistant()).await.expect("assistant 4");
+    store.append(result("h2", "c2")).await.expect("result h2");
+    store
+        .append(logged_turn(session, 9_000, 400, 500, true))
+        .await
+        .expect("hit again");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_session_from_log(session);
+    let rows = runner.cached_prefix().decision_snapshot();
+    let h1 = rows.iter().find(|row| row.block_ref == "h1").expect("h1");
+    let h2 = rows.iter().find(|row| row.block_ref == "h2").expect("h2");
+    assert_eq!(h1.decision, "summarize", "age 3 at the miss");
+    assert_eq!(h2.decision, "materialize", "first served after the miss");
+}
+
+/// A compaction boundary resets the decision record and the fallback's
+/// block set; a later turn with no new record must still restore the blocks
+/// that exist after the boundary.
+#[tokio::test]
+async fn test_seed_resets_after_compaction() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    store
+        .append(logged_turn(session, 9_000, 400, 7_200, true))
+        .await
+        .expect("first turn");
+    store
+        .append(new_event(
+            session,
+            decisions(&[("h1", "materialize")], "logged-model"),
+        ))
+        .await
+        .expect("decision map");
+    store
+        .append(new_event(
+            session,
+            SessionEvent::CompactionBoundary {
+                checkpoint: CheckpointId::new(),
+                pre_tokens: 10,
+                post_tokens: 5,
+            },
+        ))
+        .await
+        .expect("compaction boundary");
+    store
+        .append(new_event(
+            session,
+            SessionEvent::ToolResult {
+                call_id: "c2".into(),
+                output: serde_json::json!({"block_ref": "h2", "preview": "x"}),
+                duration_ms: 0,
+            },
+        ))
+        .await
+        .expect("post-boundary result");
+    store
+        .append(logged_turn(session, 9_000, 400, 7_200, true))
+        .await
+        .expect("post-boundary turn");
+    let runner = Runner::new(
+        store.clone(),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    runner.seed_session_from_log(session);
+    let rows = runner.cached_prefix().decision_snapshot();
+    assert!(
+        rows.iter()
+            .any(|row| row.block_ref == "h2" && row.decision == "materialize"),
+        "the post-boundary block gets the fallback"
+    );
+    assert!(
+        !rows.iter().any(|row| row.block_ref == "h1"),
+        "the pre-boundary map is dropped"
+    );
+}

@@ -26,7 +26,7 @@ pub mod worktree;
 pub(crate) use append::reducer;
 pub(crate) use compaction::{backbone, economy, manifest};
 pub(crate) use context::prompt::cache::PromptHash;
-pub(crate) use context::{cache_liveness, prompt, retention, selection, turn_group};
+pub(crate) use context::{cache_liveness, prompt, selection, turn_group};
 pub use inference::{effort, model_window};
 pub use memory::{auto_dream, extract, extractor};
 pub(crate) use memory::{durable_scan, extraction_window, fact, reward_snapshot};

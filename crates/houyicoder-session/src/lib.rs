@@ -44,6 +44,8 @@ mod chain;
 mod log_windows;
 mod trajectory;
 
+use houyicoder_api::session::last_clear_index;
+
 use chain::LogChain;
 use trajectory::{LogStates, RestoredHistory, WindowRead};
 
@@ -54,10 +56,7 @@ use trajectory::{LogStates, RestoredHistory, WindowRead};
 /// The boundary event itself is included. Callers that read the log whole
 /// (full-text search, memory preservation) use replay instead.
 fn epoch_start(events: &[SessionLogEntry]) -> usize {
-    events
-        .iter()
-        .rposition(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
-        .unwrap_or(0)
+    last_clear_index(events).unwrap_or(0)
 }
 
 /// The bytes a session's log state may hold, from the test variable when one is

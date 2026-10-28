@@ -125,7 +125,8 @@ fn test_rehydrate_3tier_not_unconditional() {
         age_in_turns: 0,
         is_superseded: false,
         block_ref: None,
-        now_ms: 0,
+        assembly_id: 0,
+        mutating: true,
     };
     let out = materialize_block(
         &marker,
@@ -141,7 +142,8 @@ fn test_rehydrate_3tier_not_unconditional() {
         age_in_turns: 3,
         is_superseded: false,
         block_ref: None,
-        now_ms: 0,
+        assembly_id: 0,
+        mutating: true,
     };
     let out = materialize_block(
         &marker,
@@ -165,7 +167,8 @@ fn test_rehydrate_3tier_not_unconditional() {
         age_in_turns: 10,
         is_superseded: false,
         block_ref: None,
-        now_ms: 0,
+        assembly_id: 0,
+        mutating: true,
     };
     let out = materialize_block(
         &marker,
@@ -199,7 +202,8 @@ fn test_rehydrate_3tier_not_unconditional() {
         age_in_turns: 0,
         is_superseded: true,
         block_ref: None,
-        now_ms: 0,
+        assembly_id: 0,
+        mutating: true,
     };
     let out = materialize_block(
         &marker,
@@ -236,7 +240,8 @@ fn test_summarize_without_preview_marker() {
         age_in_turns: 3,
         is_superseded: false,
         block_ref: None,
-        now_ms: 0,
+        assembly_id: 0,
+        mutating: true,
     };
     let out = materialize_block(
         &marker_no_preview,
@@ -462,7 +467,8 @@ fn age_ctx(age: u32) -> RetentionContext<'static> {
         age_in_turns: age,
         is_superseded: false,
         block_ref: None,
-        now_ms: 0,
+        assembly_id: 0,
+        mutating: true,
     }
 }
 
@@ -508,6 +514,43 @@ fn test_superseded_file_re_read() {
     assert!(
         !superseded_by_later(&events, 3),
         "the latest read is not superseded"
+    );
+}
+
+#[test]
+fn test_pending_not_superseded() {
+    fn tc(cid: &str) -> SessionLogEntry {
+        SessionLogEntry {
+            id: EventId::new(),
+            session: SessionId::new(),
+            ts: 0,
+            prev_hash: None,
+            event: SessionEvent::ToolCall {
+                call_id: cid.into(),
+                tool: "read".into(),
+                input: serde_json::json!({"path": "a.rs"}),
+            },
+        }
+    }
+    fn tr(cid: &str) -> SessionLogEntry {
+        SessionLogEntry {
+            id: EventId::new(),
+            session: SessionId::new(),
+            ts: 1,
+            prev_hash: None,
+            event: SessionEvent::ToolResult {
+                call_id: cid.into(),
+                output: serde_json::json!({"ok": true}),
+                duration_ms: 0,
+            },
+        }
+    }
+    // A later read is still in flight: its call is in the window but its
+    // result is not. The older result is the only readable copy, so it stays.
+    let events = vec![tc("c1"), tr("c1"), tc("c2")];
+    assert!(
+        !superseded_by_later(&events, 1),
+        "a pending call has not replaced the older result"
     );
 }
 
@@ -610,7 +653,8 @@ fn test_holds_decision_while_alive() {
         age_in_turns: 1,
         is_superseded: false,
         block_ref: None,
-        now_ms: 1_100,
+        assembly_id: 1,
+        mutating: true,
     };
     let out1 = materialize_block(
         &marker,
@@ -628,7 +672,8 @@ fn test_holds_decision_while_alive() {
         age_in_turns: 8,
         is_superseded: false,
         block_ref: None,
-        now_ms: 1_200,
+        assembly_id: 2,
+        mutating: true,
     };
     let out2 = materialize_block(
         &marker,
@@ -639,11 +684,12 @@ fn test_holds_decision_while_alive() {
     assert_eq!(out2, big, "decision stable: Materialize held at age 8");
 }
 
-/// Once the cache expires (TTL elapses + the last turn missed), the stored
-/// decision is no longer consulted — the aggressive band recomputes, so
-/// an age-8 block Evicts instead of holding the stale Materialize.
+/// The hold is not expired by the local clock: a block served at age 1 stays
+/// Materialize after a gap far past the declared TTL, because the server may
+/// still hold the prefix. Only a reported miss ends the hold, and then the
+/// next assembly recomputes under the aggressive band.
 #[test]
-fn test_expired_recomputes_aggressively() {
+fn test_miss_recomputes_aggressively() {
     let backend = CountingBackend::new();
     let big = serde_json::json!({"out": "x".repeat(300)});
     let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
@@ -657,7 +703,8 @@ fn test_expired_recomputes_aggressively() {
         age_in_turns: 1,
         is_superseded: false,
         block_ref: None,
-        now_ms: 1_100,
+        assembly_id: 1,
+        mutating: true,
     };
     let _out = materialize_block(
         &marker,
@@ -666,13 +713,35 @@ fn test_expired_recomputes_aggressively() {
         &ctx,
     );
 
-    // The cache expires + the next turn missed (zero cache read).
-    state.record_turn(1_000 + CACHE_TTL_MS + 5_000, 0);
+    // A long idle gap alone does not expire the hold.
+    let later = 1_000 + CACHE_TTL_MS + 5_000;
     let ctx = RetentionContext {
         age_in_turns: 8,
         is_superseded: false,
         block_ref: None,
-        now_ms: 1_000 + CACHE_TTL_MS + 5_001,
+        assembly_id: 2,
+        mutating: true,
+    };
+    let held = materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &policy,
+        &ctx,
+    );
+    assert_eq!(held, big, "an idle gap does not rewrite the held prefix");
+    assert!(
+        state.cache_live(),
+        "the last reported reading was still a hit"
+    );
+
+    // A reported miss ends the hold; the next assembly recomputes.
+    state.record_turn(later, 0);
+    let ctx = RetentionContext {
+        age_in_turns: 8,
+        is_superseded: false,
+        block_ref: None,
+        assembly_id: 3,
+        mutating: true,
     };
     let out = materialize_block(
         &marker,
@@ -682,6 +751,6 @@ fn test_expired_recomputes_aggressively() {
     );
     assert!(
         out.get("evicted").and_then(|v| v.as_bool()) == Some(true),
-        "expired cache recomputes aggressively: age 8 evicts, got: {out}"
+        "a reported miss recomputes aggressively: age 8 evicts, got: {out}"
     );
 }

@@ -10,15 +10,28 @@
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+/// The wall clock in milliseconds. Shared with the session epoch, which
+/// freezes the date line at the boundary the user chose rather than at the
+/// reopen time.
+pub(crate) fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Today's date line. UTC, not local: the two differ only inside the
 /// local-midnight-to-UTC-midnight window, immaterial for date-grounding a
 /// coding run, and staying UTC keeps a timezone dependency out of this crate.
 pub(crate) fn utc_date_line() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("Today's date is {}.", iso_date(secs))
+    utc_date_line_at(now_millis())
+}
+
+/// The date line for an instant in milliseconds since the Unix epoch. A
+/// session freezes this at its epoch start, so a resume does not stamp the
+/// reopen date onto a prompt the server already cached.
+pub(crate) fn utc_date_line_at(ms: u64) -> String {
+    format!("Today's date is {}.", iso_date(ms / 1000))
 }
 
 /// Seconds since the Unix epoch as a zero-padded civil date.

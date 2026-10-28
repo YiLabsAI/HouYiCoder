@@ -15,18 +15,26 @@
 //! endpoint can produce.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ModelCatalogResolver, Runner, StubTool, ToolRegistry};
-use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{EffortLevel, Usage, UsageProvenance};
 use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_resilience::Retry;
 use houyicoder_session::SessionStore;
 use serde_json::{Value, json};
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::path::PathBuf;
+use std::process::id;
+use std::time::{SystemTime, UNIX_EPOCH};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -52,6 +60,8 @@ struct PrefixCacheStub {
     entries: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     records: Arc<Mutex<Vec<RequestRecord>>>,
     reports_cache: bool,
+    script_tool: bool,
+    calls: Arc<AtomicU32>,
 }
 
 impl Clone for PrefixCacheStub {
@@ -60,6 +70,8 @@ impl Clone for PrefixCacheStub {
             entries: Arc::clone(&self.entries),
             records: Arc::clone(&self.records),
             reports_cache: self.reports_cache,
+            script_tool: self.script_tool,
+            calls: Arc::clone(&self.calls),
         }
     }
 }
@@ -67,20 +79,28 @@ impl Clone for PrefixCacheStub {
 impl PrefixCacheStub {
     /// A stand-in whose replies report the cache read.
     fn reporting() -> Self {
-        Self::with_cache_account(true)
+        Self::with_cache_account(true, false)
+    }
+
+    /// A stand-in that answers the first call with a tool call whose output is
+    /// large enough to be externalized, then reports the cache read.
+    fn reporting_tool() -> Self {
+        Self::with_cache_account(true, true)
     }
 
     /// A stand-in whose replies say nothing about the cache, which leaves the
     /// cache read of every call unknown.
     fn silent() -> Self {
-        Self::with_cache_account(false)
+        Self::with_cache_account(false, false)
     }
 
-    fn with_cache_account(reports_cache: bool) -> Self {
+    fn with_cache_account(reports_cache: bool, script_tool: bool) -> Self {
         Self {
             entries: Arc::new(Mutex::new(HashMap::new())),
             records: Arc::new(Mutex::new(Vec::new())),
             reports_cache,
+            script_tool,
+            calls: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -92,6 +112,7 @@ impl PrefixCacheStub {
 
 impl Respond for PrefixCacheStub {
     fn respond(&self, request: &Request) -> ResponseTemplate {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
         let body = request.body.clone();
         let cache_key = serde_json::from_slice::<Value>(&body)
             .ok()
@@ -126,9 +147,14 @@ impl Respond for PrefixCacheStub {
                 body,
                 shared,
             });
+        let reply = if self.script_tool && call == 0 {
+            tool_reply_body(shared, input)
+        } else {
+            reply_body(self.reports_cache, shared, input)
+        };
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .set_body_string(reply_body(self.reports_cache, shared, input))
+            .set_body_string(reply)
     }
 }
 
@@ -239,6 +265,28 @@ fn reply_body(reports_cache: bool, cached: usize, input: usize) -> String {
     let chunks = [
         json!({"choices": [{"index": 0, "delta": {"content": "ack"}, "finish_reason": null}], "usage": null}),
         json!({"choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}], "usage": null}),
+        json!({"choices": [], "usage": usage}),
+        json!("[DONE]"),
+    ];
+    chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .collect()
+}
+
+/// A reply that asks for the echo tool with an input large enough that the
+/// result is externalized into a block_ref.
+fn tool_reply_body(cached: usize, input: usize) -> String {
+    let usage = json!({
+        "prompt_tokens": input,
+        "completion_tokens": 1,
+        "total_tokens": input + 1,
+        "prompt_tokens_details": {"cached_tokens": cached},
+    });
+    let arguments = json!({"data": "x".repeat(9_000)}).to_string();
+    let chunks = [
+        json!({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "echo", "arguments": arguments}}]}, "finish_reason": null}], "usage": null}),
+        json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": null}),
         json!({"choices": [], "usage": usage}),
         json!("[DONE]"),
     ];
@@ -632,4 +680,124 @@ async fn test_absent_account_stays_unknown() {
         "a usage whose endpoint reported no cache read yields no share: {:?}",
         usages.iter().map(Usage::cache_hit_rate).collect::<Vec<_>>()
     );
+}
+
+/// A reopened process sends the same message prefix as the process that wrote
+/// the log, including a block_ref old enough to have been frozen at
+/// Materialize. The comparison is the parsed messages array, element by
+/// element, plus the tool definitions.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one writer-then-reopen journey; the store, server, and runner are the fixture"
+)]
+async fn test_resume_keeps_prefix() {
+    let server = MockServer::start().await;
+    let stub = PrefixCacheStub::reporting_tool();
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(stub.clone())
+        .mount(&server)
+        .await;
+
+    let root: PathBuf = temp_dir().join(format!("cache-resume-{}", id()));
+    create_dir_all(&root).expect("temp root");
+    let provider: Arc<dyn ModelProvider> = Arc::new(OpenAiCompatibleProvider::new(
+        server.uri(),
+        "test-key".into(),
+    ));
+    let config = || RunnerConfig {
+        model: "test-model".into(),
+        instructions: String::new(),
+        max_turns: 5,
+        max_output_tokens: 8_000,
+        retry: Retry {
+            max_attempts: 2,
+            ..Retry::default()
+        },
+    };
+    let tools = || {
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(StubTool::new("echo")));
+        tools
+    };
+    let session = SessionId::new();
+    let store_a = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
+        root.clone(),
+    ))));
+    // Start the session three days ago: the resumed process must freeze the
+    // same date line the writer's epoch produced, not the reopen date.
+    let old = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+        .saturating_sub(3 * 86_400_000);
+    store_a
+        .append(SessionLogEntry {
+            id: EventId::new(),
+            session,
+            ts: old,
+            prev_hash: None,
+            event: SessionEvent::UserInput {
+                text: "older".into(),
+            },
+        })
+        .await
+        .expect("the backdated event");
+    let runner_a = Runner::new(store_a, Arc::clone(&provider), tools(), config());
+    runner_a.seed_session_from_log(session);
+    for turn in 1..=10 {
+        runner_a
+            .run(
+                session,
+                format!("Reply with the single word ack. This is message {turn}."),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("turn {turn} failed: {error:?}"));
+    }
+    let records = stub.records();
+    let a_count = records.len();
+    let a_last = records
+        .last()
+        .expect("the writer sent a request")
+        .body
+        .clone();
+
+    let store_b = Arc::new(SessionStore::new(Box::new(LocalFileBackend::new(
+        root.clone(),
+    ))));
+    let runner_b = Runner::new(store_b, provider, tools(), config());
+    runner_b.seed_session_from_log(session);
+    runner_b
+        .run(
+            session,
+            "Reply with the single word ack. This is message 11.".into(),
+        )
+        .await
+        .expect("the resumed turn");
+    let records = stub.records();
+    let b_first = records
+        .get(a_count)
+        .expect("the reopened process sent a request")
+        .body
+        .clone();
+
+    let a_json: Value = serde_json::from_slice(&a_last).expect("writer request json");
+    let b_json: Value = serde_json::from_slice(&b_first).expect("resume request json");
+    let a_messages = a_json["messages"].as_array().expect("writer messages");
+    let b_messages = b_json["messages"].as_array().expect("resume messages");
+    assert!(
+        b_messages.len() > a_messages.len(),
+        "the resumed request appends the new exchange"
+    );
+    assert_eq!(
+        &b_messages[..a_messages.len()],
+        a_messages.as_slice(),
+        "the resumed request keeps every previous message byte for byte"
+    );
+    assert_eq!(
+        a_json["tools"], b_json["tools"],
+        "the tool definitions stay identical"
+    );
+    remove_dir_all(&root).ok();
 }

@@ -16,11 +16,22 @@ use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
-use crate::agent::retention::RetentionContext;
-use crate::agent::retention::materialize_block;
-use crate::agent::retention::superseded_by_later;
-use crate::agent::retention::{AgeRetentionPolicy, RetentionPolicy};
+use crate::agent::context::retention::AssemblyScope;
+use crate::agent::context::retention::RetentionContext;
+use crate::agent::context::retention::materialize_block;
+use crate::agent::context::retention::superseded_by_later;
+use crate::agent::context::retention::{AgeRetentionPolicy, RetentionPolicy};
 use crate::agent::skill_body::frame_untrusted_body;
+
+/// How an assembly relates to the provider request it serves. A turn that
+/// will be sent advances the assembly id and may record decisions; a
+/// measurement reads without recording; a length-recovery continuation reuses
+/// the id so it does not consume a recompute mid-sentence.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AssemblyMode {
+    pub(crate) mutating: bool,
+    pub(crate) continuation: bool,
+}
 
 /// Assemble the model-input history from a replayed event log, in order.
 ///
@@ -34,7 +45,15 @@ pub fn assemble_model_input(
     events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
 ) -> Vec<InputItem> {
-    assemble_model_input_with(events, backend, &AgeRetentionPolicy::default(), 0)
+    assemble_model_input_with(
+        events,
+        backend,
+        &AgeRetentionPolicy::default(),
+        AssemblyScope {
+            id: 0,
+            mutating: false,
+        },
+    )
 }
 
 /// Push a user-role text into the items, merging into the last item if it is
@@ -111,11 +130,11 @@ impl HeldUserText {
         from: usize,
         backend: Option<&dyn ContextBackend>,
         policy: &dyn RetentionPolicy,
-        now_ms: u64,
+        scope: AssemblyScope,
     ) {
         for call_id in self.open.drain(..) {
             let output = match find_late_result(events, from, &call_id) {
-                Some((idx, raw)) => materialize_result(events, idx, raw, backend, policy, now_ms),
+                Some((idx, raw)) => materialize_result(events, idx, raw, backend, policy, scope),
                 None => serde_json::json!({"error": "no tool result recorded"}),
             };
             items.push(InputItem::ToolResult { call_id, output });
@@ -193,14 +212,15 @@ fn push_tool_call(items: &mut Vec<InputItem>, call: AssistantToolCall) {
 }
 
 /// Assemble the model-input history from a replayed event log with an explicit
-/// retention policy + wall-clock now. The cache-liveness policy uses now to
-/// test the cached-prefix TTL; the default path (tests + the no-cache view)
-/// passes the age policy + 0, which never reports a live cache.
+/// retention policy and assembly id. The cache-liveness policy scopes a batch
+/// recompute to the assembly boundary; the default path (tests and the
+/// no-cache view) passes the age policy and a fixed id, which never reports a
+/// live cache.
 pub fn assemble_model_input_with(
     events: &[SessionLogEntry],
     backend: Option<&dyn ContextBackend>,
     policy: &dyn RetentionPolicy,
-    now_ms: u64,
+    scope: AssemblyScope,
 ) -> Vec<InputItem> {
     #[cfg(debug_assertions)]
     let mut seen_call_ids: HashSet<&str> = HashSet::new();
@@ -215,7 +235,7 @@ pub fn assemble_model_input_with(
         }
         match &events[i].event {
             SessionEvent::AssistantMessage { text, .. } => {
-                held.finish_open_group(&mut items, events, i, backend, policy, now_ms);
+                held.finish_open_group(&mut items, events, i, backend, policy, scope);
                 let mut tool_calls = Vec::new();
                 let mut j = i + 1;
                 while j < events.len() {
@@ -275,7 +295,7 @@ pub fn assemble_model_input_with(
                 if held.is_open(call_id) {
                     items.push(InputItem::ToolResult {
                         call_id: call_id.clone(),
-                        output: materialize_result(events, i, output, backend, policy, now_ms),
+                        output: materialize_result(events, i, output, backend, policy, scope),
                     });
                     held.close_call(&mut items, call_id);
                 }
@@ -286,7 +306,7 @@ pub fn assemble_model_input_with(
             }
         }
     }
-    held.finish_open_group(&mut items, events, events.len(), backend, policy, now_ms);
+    held.finish_open_group(&mut items, events, events.len(), backend, policy, scope);
     items
 }
 
@@ -302,7 +322,7 @@ fn materialize_result(
     output: &serde_json::Value,
     backend: Option<&dyn ContextBackend>,
     policy: &dyn RetentionPolicy,
-    now_ms: u64,
+    scope: AssemblyScope,
 ) -> serde_json::Value {
     let age_in_turns = events[i + 1..]
         .iter()
@@ -313,7 +333,8 @@ fn materialize_result(
         age_in_turns,
         is_superseded,
         block_ref: None,
-        now_ms,
+        assembly_id: scope.id,
+        mutating: scope.mutating,
     };
     materialize_block(output, backend, policy, &ctx)
 }

@@ -13,6 +13,7 @@
 pub(crate) mod obs_wire;
 pub(crate) mod redundancy;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
@@ -22,6 +23,10 @@ use crate::agent::ContextMeasurement;
 use crate::agent::RunError;
 use crate::agent::Runner;
 use crate::agent::append::new_event;
+use crate::agent::context::cache_liveness::CachedPrefixState;
+use crate::agent::context::retention::{
+    AgeRetentionPolicy, RetentionContext, RetentionDecision, RetentionPolicy,
+};
 use crate::agent::hook::registry::HookEntry;
 use crate::agent::memory::MemoryGateState;
 use crate::agent::model_window::resolve_capabilities;
@@ -33,9 +38,11 @@ use crate::snapshot::UndoOutcome;
 use crate::snapshot::UndoStack;
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
+use houyicoder_api::session::last_clear_index;
 use houyicoder_api::session::recorded_turn_usage;
 use houyicoder_api::skill::SkillSnapshot;
-use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{CachedBlockDecision, SessionEvent, SessionId, SessionLogEntry};
+use serde_json::Value;
 use std::mem::take;
 use std::time::Duration;
 
@@ -233,39 +240,160 @@ impl Default for UsageAccumulator {
 /// reads from status_snapshot (reader).
 pub(crate) type SharedUsage = Arc<Mutex<UsageAccumulator>>;
 
+/// The running facts one log walk needs to restore the cache state. The
+/// walk is a single pass, so the trackers live together rather than as
+/// locals threaded through every arm.
+#[derive(Default)]
+struct SeedState {
+    first_ts: Option<u64>,
+    epoch_ts: Option<u64>,
+    last_model: Option<String>,
+    saw_decisions: bool,
+    block_refs: HashMap<String, u32>,
+    assistant_count: u32,
+    last_miss: Option<u32>,
+    previous_cache_read: Option<u64>,
+}
+
+impl SeedState {
+    /// Fold one durable event into the seed state.
+    fn fold(
+        &mut self,
+        entry: &SessionLogEntry,
+        cached: &CachedPrefixState,
+        prev_read: &Mutex<Option<u64>>,
+    ) {
+        self.first_ts.get_or_insert(entry.ts);
+        match &entry.event {
+            SessionEvent::ContextCleared { .. } => {
+                cached.clear_decisions();
+                self.block_refs.clear();
+                self.assistant_count = 0;
+                self.saw_decisions = false;
+                self.last_miss = None;
+                self.previous_cache_read = None;
+            }
+            SessionEvent::CompactionBoundary { .. } => {
+                cached.clear_decisions();
+                self.block_refs.clear();
+                self.saw_decisions = false;
+                self.last_miss = None;
+                self.previous_cache_read = None;
+            }
+            SessionEvent::AssistantMessage { .. } => {
+                self.assistant_count = self.assistant_count.saturating_add(1);
+            }
+            SessionEvent::TurnUsage {
+                model,
+                cache_read_input_tokens,
+                cache_read_reported,
+                ..
+            } => {
+                if self
+                    .last_model
+                    .as_deref()
+                    .is_some_and(|previous| previous != model)
+                {
+                    cached.clear_decisions();
+                    self.saw_decisions = false;
+                    self.last_miss = None;
+                    self.previous_cache_read = None;
+                }
+                self.last_model = Some(model.clone());
+                if *cache_read_reported {
+                    if let Some(previous) = self.previous_cache_read
+                        && previous > 0
+                        && (*cache_read_input_tokens == 0
+                            || *cache_read_input_tokens < previous / 2)
+                    {
+                        self.last_miss = Some(self.assistant_count);
+                    }
+                    self.previous_cache_read = Some(*cache_read_input_tokens);
+                }
+                cached.seed_turn(
+                    entry.ts,
+                    cache_read_reported.then_some(*cache_read_input_tokens),
+                );
+                if *cache_read_reported && let Ok(mut slot) = prev_read.lock() {
+                    *slot = Some(*cache_read_input_tokens);
+                }
+            }
+            SessionEvent::CacheDecisions { decisions, model } => {
+                self.saw_decisions = true;
+                if model.is_empty() || self.last_model.as_deref() == Some(model.as_str()) {
+                    cached.replace_decisions(decisions);
+                } else {
+                    cached.clear_decisions();
+                }
+            }
+            SessionEvent::ToolResult { output, .. } => {
+                collect_block_refs(output, &mut self.block_refs, self.assistant_count);
+            }
+            _ => {}
+        }
+    }
+
+    /// Restore a log written before the decision record and return the epoch
+    /// start the prompt should freeze.
+    fn finish(self, cached: &CachedPrefixState) -> Option<u64> {
+        if !self.saw_decisions && cached.cache_live() && cached.decision_snapshot().is_empty() {
+            // A block first served after the last real miss was Materialize;
+            // one that existed then took the dead band's tier at that miss.
+            let policy = AgeRetentionPolicy::default();
+            let mut rows: Vec<CachedBlockDecision> = self
+                .block_refs
+                .into_iter()
+                .map(|(block_ref, first_seen)| {
+                    let decision = match self.last_miss {
+                        Some(miss) if first_seen <= miss => policy.decide(&RetentionContext {
+                            age_in_turns: miss - first_seen,
+                            is_superseded: false,
+                            block_ref: None,
+                            assembly_id: 0,
+                            mutating: false,
+                        }),
+                        _ => RetentionDecision::Materialize,
+                    };
+                    CachedBlockDecision {
+                        block_ref,
+                        decision: decision.label().to_string(),
+                    }
+                })
+                .collect();
+            rows.sort_by(|a, b| a.block_ref.cmp(&b.block_ref));
+            cached.replace_decisions(&rows);
+        }
+        self.epoch_ts.or(self.first_ts)
+    }
+}
+
 impl Runner {
-    /// Start the session's usage tally from the turns its own log already
-    /// holds. Called once at assembly, so a runner that reopened a session
-    /// reports that session's totals: without it the cumulative covers only
-    /// the turns since the reopen, while the delegated half of the same
-    /// figure covers the whole session.
-    ///
-    /// The runner reads the log itself rather than taking the turns from a
-    /// caller: the tally and the log it answers for belong to one owner, so
-    /// no assembly path can seed it from a span other than the session it was
-    /// built for.
-    ///
-    /// The per-model table is seeded from the same turns, because a pane reads
-    /// the session's cumulative and its per-model rows side by side: seeding
-    /// one and not the other would leave two figures of one panel covering
-    /// different spans.
-    ///
-    /// The turns come from the session's durable history page by page, not
-    /// from the log state's tail: it holds the newest rows, so a tally
-    /// read from it would cover the part of the session memory happens to hold
-    /// while the pane reports it as the session's own.
-    pub fn seed_usage_from_log(&self, session: SessionId) {
+    /// Seed the usage tallies, the cached-prefix state, and the prompt epoch
+    /// from the session's durable log. One pass: a reopened session must report
+    /// the same figures and send the same prefix bytes its previous process
+    /// did. A log without a decision record restores the Materialize default.
+    pub fn seed_session_from_log(&self, session: SessionId) {
         let store = self.store.clone();
         let pages = TrajectoryPages::new(store.as_ref(), session, TrajectoryPosition::start());
+        let mut state = SeedState::default();
         for page in pages {
             let page = match page {
                 Ok(page) => page,
                 Err(e) => {
-                    tracing::warn!("usage seed read of session {session} stopped: {e}");
+                    tracing::warn!("session seed read of {session} stopped: {e}");
                     break;
                 }
             };
             self.seed_usage_page(&page.events);
+            if let Some(index) = last_clear_index(&page.events) {
+                state.epoch_ts = Some(page.events[index].ts);
+            }
+            for entry in &page.events {
+                state.fold(entry, &self.cached_prefix, &self.cache_prev_read);
+            }
+        }
+        if let Some(ts) = state.finish(&self.cached_prefix) {
+            self.context_builder.set_epoch_start_ms(ts);
         }
     }
 
@@ -622,3 +750,24 @@ fn breaker_label(state: BreakerState) -> &'static str {
 
 #[cfg(test)]
 mod tests;
+
+/// Collect every block_ref marker in a tool result. A marker is either the
+/// whole output or one field of its envelope, so the walk covers both.
+fn collect_block_refs(value: &Value, out: &mut HashMap<String, u32>, assistant_count: u32) {
+    match value {
+        Value::Object(map) => {
+            if let Some(hash) = map.get("block_ref").and_then(Value::as_str) {
+                out.entry(hash.to_string()).or_insert(assistant_count);
+            }
+            for value in map.values() {
+                collect_block_refs(value, out, assistant_count);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                collect_block_refs(value, out, assistant_count);
+            }
+        }
+        _ => {}
+    }
+}

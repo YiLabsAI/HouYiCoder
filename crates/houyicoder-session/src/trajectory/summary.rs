@@ -197,6 +197,7 @@ impl TrajectorySummaryState {
                     // turn that reported no usage, or the session total would
                     // read as incomplete for the rest of its life.
                     | SessionEvent::AssistantTextDelta { .. }
+                    | SessionEvent::CacheDecisions { .. }
             )
         {
             self.seen_any_event = true;

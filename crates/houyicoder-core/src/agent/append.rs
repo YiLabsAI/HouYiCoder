@@ -5,6 +5,7 @@
 pub(crate) mod reducer;
 
 mod cache_break;
+mod cache_decisions;
 use cache_break::now_millis;
 mod hook;
 pub(crate) mod timing;
@@ -661,6 +662,7 @@ impl Runner {
                 ))
                 .await?;
         }
+        self.append_cache_decisions(session, model).await?;
         // Remember the prefix this response was served against, so the next
         // break can tell which half of it moved.
         if let Ok(mut slot) = self.cache_prev_prefix.lock() {

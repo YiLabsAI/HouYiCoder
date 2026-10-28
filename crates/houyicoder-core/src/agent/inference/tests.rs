@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::agent::cache_liveness::CachedPrefixState;
-use crate::agent::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
+use crate::agent::context::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use std::sync::Mutex;
 
@@ -204,7 +204,7 @@ fn test_switch_resets_before_assembly() {
             },
         ),
     ];
-    let (_inference, _assembled) = runner.assemble_request(&events, None);
+    let (_inference, _assembled) = runner.assemble_request(&events, None, false);
     assert_eq!(
         *probe.seen.lock().expect("probe"),
         Some(1),

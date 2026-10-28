@@ -27,6 +27,8 @@
 //! when the cache is already dead) and TTL, using the provider
 //! microcompact vocabulary (trigger/keep/clear_at_least).
 
+use std::collections::HashSet;
+
 use houyicoder_context::{BlockHash, ContextBackend, SessionEvent, SessionLogEntry};
 
 /// A resource key for supersession: a later tool call for the same resource
@@ -82,13 +84,30 @@ pub(crate) fn superseded_by_later(events: &[SessionLogEntry], i: usize) -> bool 
     let Some((own_tool, key)) = own else {
         return false; // not resource-keyed, never superseded by this rule
     };
+    // Only a call whose result is also in the window has replaced the older
+    // result. A pending call has not answered yet, so the older content is
+    // still the best copy the model can read; evicting it early would lose
+    // content on a call that fails or is cancelled.
+    let answered: HashSet<&str> = events[i + 1..]
+        .iter()
+        .filter_map(|ev| match &ev.event {
+            SessionEvent::ToolResult { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
     events[i + 1..].iter().any(|ev| match &ev.event {
-        SessionEvent::ToolCall { tool, input, .. } => {
+        SessionEvent::ToolCall {
+            call_id: later_call,
+            tool,
+            input,
+        } => {
             let Some(later_key) = resource_key(tool, input) else {
                 return false;
             };
             let later_tool = tool.as_str();
-            later_key == key && (is_mutation(later_tool) || later_tool == own_tool)
+            later_key == key
+                && (is_mutation(later_tool) || later_tool == own_tool)
+                && answered.contains(later_call.as_str())
         }
         _ => false,
     })
@@ -109,6 +128,37 @@ pub enum RetentionDecision {
     Evict,
 }
 
+impl RetentionDecision {
+    /// The label recorded in the session log. A log carries the label rather
+    /// than the enum so the context crate stays independent of this policy.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Materialize => "materialize",
+            Self::Summarize => "summarize",
+            Self::Evict => "evict",
+        }
+    }
+
+    /// Parse a label a log recorded. An unknown label is None rather than a
+    /// guessed tier, so a record from a newer build is skipped.
+    pub(crate) fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "materialize" => Some(Self::Materialize),
+            "summarize" => Some(Self::Summarize),
+            "evict" => Some(Self::Evict),
+            _ => None,
+        }
+    }
+}
+
+/// The assembly a retention decision belongs to. A measurement reuses the
+/// turn id with mutating false, so a policy can tell a request from a view.
+#[derive(Debug, Clone, Copy)]
+pub struct AssemblyScope {
+    pub id: u64,
+    pub mutating: bool,
+}
+
 /// The context a retention policy decides on. The unit of age is the API
 /// round (one assistant turn): age 0 is the most recent round, age 1 one
 /// round back, and so on. A superseded result was replaced by a later result
@@ -116,7 +166,8 @@ pub enum RetentionDecision {
 /// succeeded) and is prioritized for eviction regardless of age. The block_ref
 /// is the CAS hash of the ToolResult output (None when the output carries no
 /// block_ref marker) so a cache-liveness policy can hold a per-block decision
-/// stable across turns. The wall-clock now_ms lets it test the cache TTL.
+/// stable across turns. The assembly id names the one assembly a decision
+/// belongs to, so a policy can scope a batch recompute to a turn boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct RetentionContext<'a> {
     /// How many assistant turns ago this result was produced.
@@ -125,8 +176,10 @@ pub struct RetentionContext<'a> {
     pub is_superseded: bool,
     /// The CAS hash when the output is a block_ref marker, else None.
     pub block_ref: Option<&'a str>,
-    /// Wall-clock milliseconds at serve time (for the cache-liveness TTL test).
-    pub now_ms: u64,
+    /// The assembly this decision is computed for.
+    pub assembly_id: u64,
+    /// Whether this assembly will be sent to the provider.
+    pub mutating: bool,
 }
 
 /// The retention policy seam. The default AgeRetentionPolicy keys the
@@ -134,6 +187,11 @@ pub struct RetentionContext<'a> {
 /// per-block decision stable across turns while the cache is live.
 pub trait RetentionPolicy: Send + Sync {
     fn decide(&self, ctx: &RetentionContext<'_>) -> RetentionDecision;
+
+    /// Report the byte size of a block the policy materialized, so a policy
+    /// that measures the context it holds can size the held set. The default
+    /// ignores the observation.
+    fn record_materialized_bytes(&self, _block_ref: &str, _bytes: usize) {}
 }
 
 /// Default policy: superseded results evict regardless of age; recent
@@ -237,12 +295,16 @@ fn apply_tier(
         RetentionDecision::Materialize => {
             let hash = BlockHash(hash_str.to_string());
             match pollster::block_on(backend.block_get(&hash)) {
-                Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+                Ok(bytes) => match serde_json::from_slice(&bytes) {
+                    Ok(value) => {
+                        policy.record_materialized_bytes(hash_str, bytes.len());
+                        value
+                    }
                     // Stored bytes did not deserialize: the block is corrupt or
                     // schema-drifted. Surface a typed unavailable marker so the
                     // model knows the content is unreachable, not absent.
-                    unavailable_marker(hash_str, "block content corrupt or unreadable")
-                }),
+                    Err(_) => unavailable_marker(hash_str, "block content corrupt or unreadable"),
+                },
                 Err(_) => unavailable_marker(hash_str, "block_get failed; re-invoke the tool"),
             }
         }
