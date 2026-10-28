@@ -148,6 +148,50 @@ fn test_long_bash_wraps() {
     );
 }
 
+/// The expansion key reaches the pending card in the real terminal: the
+/// marker names the rows it released, and the chord replaces it with them
+/// while the options stay on screen.
+#[test]
+#[ignore]
+fn test_ctrl_o_expands_arguments() {
+    let mut session = pty_session_in_repo(make_temp_repo(4), &crowded_command_script());
+    session.send_key(&Key::Backtab);
+    assert!(session.wait_for("manual mode on", RENDER_TIMEOUT));
+    session.send_str("run it");
+    session.send_key(&Key::Enter);
+    assert!(
+        session.wait_for_screen("lines hidden", RENDER_TIMEOUT),
+        "a command taller than the block's cap folds behind a marker:\n{}",
+        session.screen().contents()
+    );
+    assert!(
+        !session.screen().contents().contains("token-050"),
+        "the folded block releases its middle rows:\n{}",
+        session.screen().contents()
+    );
+    session.send_key(&Key::Ctrl('o'));
+    assert!(
+        session.wait_for_screen("token-050", RENDER_TIMEOUT),
+        "the chord shows the rows the marker named:\n{}",
+        session.screen().contents()
+    );
+    assert!(
+        session.screen().contents().contains("1. Yes"),
+        "the card keeps its options while expanded:\n{}",
+        session.screen().contents()
+    );
+}
+
+/// A bash call whose command wraps to more rows than the argument block may
+/// take, so the block folds and offers the expansion key.
+fn crowded_command_script() -> String {
+    let args: Vec<String> = (0..100).map(|i| format!("token-{i:03}-xxxxxxxx")).collect();
+    let command = format!("echo start {}", args.join(" "));
+    format!(
+        r#"[[{{"type":"ToolCall","id":"c1","name":"bash","input":{{"command":"{command}"}}}}],[{{"type":"Text","text":"done"}}]]"#
+    )
+}
+
 /// The deny half of the flow: rejecting the bash (Esc) clears the card, the
 /// run still ends, and no approval card is left stranded on screen. Catches a
 /// deny that leaves a stale "1. Yes" card or strands agent_busy.

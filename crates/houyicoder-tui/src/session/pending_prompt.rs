@@ -302,6 +302,7 @@ impl App {
             delegation: ask.delegation,
             containment_note,
             selected,
+            expanded: false,
             call_id,
             options: ask.options,
         };

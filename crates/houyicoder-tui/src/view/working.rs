@@ -16,7 +16,9 @@ use ratatui::{
     style::Color,
 };
 
-use super::approval::card_height as approval_card_height;
+use super::approval::{
+    card_height as approval_card_height, draw as approval_draw, essential_rows as approval_floor,
+};
 use super::teammate_view::draw_banner;
 use crate::keys::pane_replaces_input;
 use crate::selection::TAG_PLAIN;
@@ -102,7 +104,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     };
     let footer = footer_budget::allocate(total_h, input_h, queue_want, fleet_want);
     app.ui.frame.layout.fleet_granted.set(footer.fleet);
-    let layout = build_working_layout(app, f.area().width, input_h, footer.queue, footer.fleet);
+    let layout = build_working_layout(app, f.area(), input_h, footer.queue, footer.fleet);
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints(layout.constraints)
@@ -115,7 +117,7 @@ fn draw_working(f: &mut Frame, app: &App) {
         toast::draw_toast(f, outer[layout.transcript_idx], app);
     }
     if let Some(i) = layout.slots.approval {
-        super::approval::draw(f, app, outer[i]);
+        approval_draw(f, app, outer[i]);
         stash_approval_rows(f, outer[i], app);
     }
     if let Some(i) = layout.slots.ask {
@@ -202,6 +204,19 @@ struct LayoutSlots {
     queue: Option<usize>,
 }
 
+/// The rows the palette and the skill picker take when one of them is open.
+/// The reservation and the cell that draws it read this one figure, so they
+/// cannot drift apart.
+const PALETTE_ROWS: u16 = 10;
+
+/// The shortest the input box may be: one content row between its borders. A
+/// shorter box has nowhere to put the caret.
+const MIN_INPUT_ROWS: u16 = 3;
+
+fn palette_open(app: &App) -> bool {
+    app.ui.navigation.palette.open || app.ui.navigation.skill_picker.open
+}
+
 /// Build the Working-mode constraint stack. Each optional region appends a
 /// Length cell only when its height is non-zero and records the slot index;
 /// the transcript is the fixed Min(1) remainder. Indices are positions in the
@@ -209,7 +224,7 @@ struct LayoutSlots {
 #[allow(clippy::too_many_lines)]
 fn build_working_layout(
     app: &App,
-    width: u16,
+    area: Rect,
     input_h: u16,
     queue_h: u16,
     fleet_h: u16,
@@ -228,15 +243,44 @@ fn build_working_layout(
     };
     constraints.push(Constraint::Min(1));
     let transcript_idx = constraints.len() - 1;
-    let approval_h = app
-        .approval()
-        .map(|approval| approval_card_height(approval, width))
-        .unwrap_or(0);
+    let status_h = if pane_hides_status(app) { 0 } else { 1 };
     let ask_h = if let Some(aq) = app.ask_question() {
         aq.card_height()
     } else {
         0u16
     };
+    // The approval card may use only what is left once every other region
+    // holds its rows: the status bar, the pinned strips, the open overlay, and
+    // the transcript minimum of one row. Counting all of them is what keeps
+    // the card's rows from being taken out of the input box by the layout
+    // solver. Its optional rows give back what does not fit.
+    let overlay_h = if palette_open(app) { PALETTE_ROWS } else { 0 };
+    let fixed = status_h + banner_h + ask_h + fleet_h + queue_h + overlay_h;
+    // The question and the numbered options are the card's own content and
+    // cannot be given back, so they outrank rows of draft the user is not
+    // editing: the run is blocked until the card is answered, and the keys
+    // that answer it are the ones it draws. The composer keeps its minimum
+    // height and releases the rest of its draft rows.
+    let card_floor = app.approval().map(approval_floor).unwrap_or(0);
+    let input_h = if card_floor > 0 {
+        // What the composer may keep once the card and the transcript floor
+        // hold their rows, never below its own minimum unless the terminal is
+        // too short for that minimum either.
+        let spare = area.height.saturating_sub(fixed + card_floor + 1);
+        let ceiling = area.height.saturating_sub(fixed + 1);
+        input_h.min(spare.max(MIN_INPUT_ROWS).min(ceiling))
+    } else {
+        input_h
+    };
+    // The card takes its rows from what the composer released and from the
+    // transcript, which keeps its floor of one row. A terminal too short for
+    // that leaves the card fewer rows than its question and list need; the
+    // card then shows the option the keys act on instead of a partial list.
+    let approval_room = area.height.saturating_sub(input_h + fixed + 1);
+    let approval_h = app
+        .approval()
+        .map(|approval| approval_card_height(approval, area.width, approval_room, area.height))
+        .unwrap_or(0);
     let approval = if approval_h > 0 {
         constraints.push(Constraint::Length(approval_h));
         Some(constraints.len() - 1)
@@ -250,8 +294,8 @@ fn build_working_layout(
         None
     };
     let mut overlay: Option<usize> = None;
-    if app.ui.navigation.palette.open || app.ui.navigation.skill_picker.open {
-        constraints.push(Constraint::Length(10));
+    if palette_open(app) {
+        constraints.push(Constraint::Length(PALETTE_ROWS));
         overlay = Some(constraints.len() - 1);
     }
     let fleet = if fleet_h > 0 {
@@ -268,7 +312,6 @@ fn build_working_layout(
     };
     constraints.push(Constraint::Length(input_h));
     let input_idx = constraints.len() - 1;
-    let status_h = if pane_hides_status(app) { 0 } else { 1 };
     constraints.push(Constraint::Length(status_h));
     let status_idx = constraints.len() - 1;
     WorkingLayout {

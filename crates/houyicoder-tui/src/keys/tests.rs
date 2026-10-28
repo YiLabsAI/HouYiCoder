@@ -1248,6 +1248,20 @@ fn approval_app(selected: usize) -> App {
     app
 }
 
+/// The card bounds its argument block, so the expand chord belongs to the
+/// card while it is up and leaves the verdict focus alone.
+#[test]
+fn test_approval_ctrl_o_toggles() {
+    let mut app = approval_app(0);
+    let toggle = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+    handle_working(&mut app, toggle);
+    let card = app.approval().expect("approval");
+    assert!(card.expanded, "ctrl+o must show the released rows");
+    assert_eq!(card.selected, 0, "the verdict focus does not move");
+    handle_working(&mut app, toggle);
+    assert!(!app.approval().expect("approval").expanded);
+}
+
 #[test]
 fn test_approval_down_dont_ask() {
     // Down from Yes(0) goes to Yes-don't-ask(2) in display order. Full dispatch.

@@ -892,6 +892,7 @@ fn test_approval_drag_resets() {
             delegation: None,
             containment_note: None,
             selected: 0,
+            expanded: false,
             call_id: "c1".into(),
             options: Vec::new(),
         },

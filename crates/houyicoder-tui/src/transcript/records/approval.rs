@@ -34,6 +34,12 @@ pub struct Approval {
     pub containment_note: Option<String>,
     /// The index of the currently highlighted option (0-based).
     pub selected: usize,
+    /// Whether the argument block asks for the whole of its content instead of
+    /// the bounded head and tail. The bound leaves the question and the
+    /// options their rows; expanding trades those rows back for the part the
+    /// bound released, so even an expanded block still gives way while the
+    /// card is short.
+    pub expanded: bool,
     /// The agent-loop call_id this popup resolves.
     pub call_id: String,
     /// The verdict options the server offered (N-option). Empty when the

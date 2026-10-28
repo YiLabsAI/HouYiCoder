@@ -181,6 +181,17 @@ pub(crate) fn handle_trust(app: &mut App, k: KeyEvent) {
 /// row does the key fall back to the tail-most block. A kind that answers for
 /// rows it does not own makes every later kind here unreachable.
 pub(crate) fn handle_ctrl_o(app: &mut App) {
+    // A pending approval card owns this chord while it is on screen: its
+    // argument block is bounded so the question and the options keep their
+    // rows, and this chord shows the rows the bound released. The card exists
+    // only in the Working viewport, so any other viewport keeps the chord for
+    // the folds it can actually show.
+    if app.ui.navigation.viewport == ViewportMode::Working
+        && let Some(card) = app.approval_mut()
+    {
+        card.expanded = !card.expanded;
+        return;
+    }
     if app.toggle_subagent_expand() {
         return;
     }

@@ -1,13 +1,16 @@
 //! Tests for the approval card renderer, split from approval.rs so the
 //! production file stays under the file-size gate.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::run::DelegationSource;
 
-use super::{cap_first, diff_preview};
+use super::args::{diff_preview, entitlement_detail};
+use super::cap_first;
 use crate::composition;
+use crate::keys::handle_working;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::Approval;
-use crate::state::Screen;
+use crate::state::{App, Screen};
 use crate::test_harness::render_text;
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::envelope::RequestId;
@@ -577,7 +580,7 @@ fn test_entitlement_detail_command_line() {
         "command": long_cmd,
     })
     .to_string();
-    let lines = super::entitlement_detail(&args, serde_json::from_str(&args).ok().as_ref());
+    let lines = entitlement_detail(serde_json::from_str(&args).ok().as_ref());
     let text: String = lines.iter().map(|l| l.to_string()).collect();
     assert!(
         text.contains("Command:"),
@@ -606,7 +609,7 @@ fn test_entitlement_detail_multibyte_safe() {
     })
     .to_string();
     // Must not panic — that is the entire assertion.
-    let _lines = super::entitlement_detail(&args, serde_json::from_str(&args).ok().as_ref());
+    let _lines = entitlement_detail(serde_json::from_str(&args).ok().as_ref());
 }
 
 mod cursor_priority;
@@ -770,5 +773,250 @@ fn test_render_parent_ask_plain() {
     assert!(
         !out.contains("(subagent)"),
         "no marker for a parent ask:\n{out}"
+    );
+}
+
+/// A command with more lines than the card can hold still leaves the question
+/// and the options on screen, which is what the user has to act on.
+#[test]
+fn test_long_command_keeps_question() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let command: Vec<String> = (1..=40).map(|i| format!("echo step-{i}")).collect();
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: serde_json::to_string(&serde_json::json!({ "command": command.join("\n") }))
+                .unwrap(),
+            reason: "test".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    for (width, height) in [(100u16, 40u16), (60, 16)] {
+        let out = render_text(&app, width, height);
+        assert!(out.contains("echo step-1"), "{height}: {out}");
+        assert!(out.contains("echo step-40"), "{height}: {out}");
+        assert!(out.contains("lines hidden"), "{height}: {out}");
+        assert!(!out.contains("echo step-20"), "{height}: {out}");
+        assert!(out.contains("Do you want to proceed?"), "{height}: {out}");
+        assert!(out.contains("1. Yes"), "{height}: {out}");
+        assert!(out.contains("ctrl+o to expand"), "{height}: {out}");
+    }
+}
+
+/// The expand key shows the rows the collapsed block released, so a user who
+/// has to read the middle of a long command is not left with a summary.
+#[test]
+fn test_expanded_card_shows_middle() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let command: Vec<String> = (1..=20).map(|i| format!("echo step-{i}")).collect();
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: serde_json::to_string(&serde_json::json!({ "command": command.join("\n") }))
+                .unwrap(),
+            reason: "test".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let collapsed = render_text(&app, 100, 40);
+    assert!(!collapsed.contains("echo step-10"), "{collapsed}");
+    assert!(collapsed.contains("lines hidden"), "{collapsed}");
+    assert!(collapsed.contains("ctrl+o to expand"), "{collapsed}");
+
+    let toggle = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+    handle_working(&mut app, toggle);
+    let expanded = render_text(&app, 100, 40);
+    assert!(expanded.contains("echo step-10"), "{expanded}");
+    assert!(!expanded.contains("lines hidden"), "{expanded}");
+    assert!(expanded.contains("Do you want to proceed?"), "{expanded}");
+
+    handle_working(&mut app, toggle);
+    let again = render_text(&app, 100, 40);
+    assert!(!again.contains("echo step-10"), "{again}");
+    assert!(again.contains("ctrl+o to expand"), "{again}");
+}
+
+/// A short terminal with a multi-line input under the card gives the argument
+/// block nothing rather than pushing the input box or the question off the
+/// screen.
+#[test]
+fn test_card_fits_short_terminal() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui
+        .input
+        .editor
+        .set("first line\nsecond line\nthird line\n".into());
+    let command: Vec<String> = (1..=40).map(|i| format!("echo item-{i}")).collect();
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: serde_json::to_string(&serde_json::json!({ "command": command.join("\n") }))
+                .unwrap(),
+            reason: "test".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    for height in [14u16, 12] {
+        let out = render_text(&app, 60, height);
+        assert!(out.contains("Do you want to proceed?"), "{height}: {out}");
+        assert!(out.contains("1. Yes"), "{height}: {out}");
+        assert!(
+            out.contains("2. Yes, and don't ask again"),
+            "every option stays selectable on screen: {height}: {out}"
+        );
+        assert!(out.contains("3. No"), "{height}: {out}");
+        assert!(
+            out.contains("third line"),
+            "the input the user is typing into stays visible: {height}: {out}"
+        );
+        assert!(
+            !out.contains("echo item-1"),
+            "no room for argument rows: {height}: {out}"
+        );
+    }
+}
+
+/// When the card cannot hold everything, the context gives way before the
+/// choice: the reason and the argument rows go, the question and every option
+/// stay, and the input box the user is typing into keeps its rows.
+#[test]
+fn test_short_card_options() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui
+        .input
+        .editor
+        .set("first line\nsecond line\nthird line\n".into());
+    let command: Vec<String> = (1..=40).map(|i| format!("echo item-{i}")).collect();
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: serde_json::to_string(&serde_json::json!({ "command": command.join("\n") }))
+                .unwrap(),
+            reason: "this command writes outside the workspace and reaches the network".into(),
+            source: Some(AskSource::Detection),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 60, 12);
+    assert!(out.contains("Do you want to proceed?"), "{out}");
+    assert!(out.contains("1. Yes"), "{out}");
+    assert!(out.contains("2. Yes, and don't ask again"), "{out}");
+    assert!(out.contains("3. No"), "{out}");
+    assert!(
+        out.contains("third line"),
+        "the caret keeps its rows: {out}"
+    );
+    assert!(
+        !out.contains("this command writes outside"),
+        "the reason is what the card releases first: {out}"
+    );
+}
+
+/// A card with room for itself but not for the transcript still draws the
+/// question and every option: the approval is what the keys answer, and the
+/// transcript regrows once it is answered.
+#[test]
+fn test_tight_slot_keeps_options() {
+    let app = app_with_draft_card(0);
+    let out = render_text(&app, 60, 9);
+    assert!(out.contains("Do you want to proceed?"), "{out}");
+    assert!(out.contains("1. Yes"), "{out}");
+    assert!(out.contains("2. Yes, and don't ask again"), "{out}");
+    assert!(out.contains("3. No"), "{out}");
+}
+
+/// Below the rows the question and the list need, the card falls back to the
+/// option the keys will act on. A narrowed terminal must never hide the
+/// verdict that Enter confirms.
+#[test]
+fn test_narrow_card_shows_focus() {
+    let out = render_text(&app_with_draft_card(0), 60, 7);
+    assert!(out.contains("1. Yes"), "the focused option stays: {out}");
+    assert!(
+        out.contains("Enter confirm"),
+        "and says what Enter does: {out}"
+    );
+    assert!(
+        !out.contains("3. No"),
+        "the rows the slot cannot hold are dropped whole: {out}"
+    );
+    let out = render_text(&app_with_draft_card(1), 60, 7);
+    assert!(out.contains("3. No"), "focus follows the selection: {out}");
+    assert!(!out.contains("1. Yes"), "{out}");
+}
+
+/// A working surface holding a draft long enough to crowd the card, and a
+/// card focused on the given option.
+fn app_with_draft_card(selected: usize) -> App {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui
+        .input
+        .editor
+        .set("first line\nsecond line\nthird line\nfourth line\n".into());
+    let command: Vec<String> = (1..=40).map(|i| format!("echo item-{i}")).collect();
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: serde_json::to_string(&serde_json::json!({ "command": command.join("\n") }))
+                .unwrap(),
+            reason: "this command writes outside the workspace".into(),
+            source: Some(AskSource::Detection),
+            selected,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    app
+}
+
+/// A reason that arrived without a source renders the sentence alone rather
+/// than opening on a bare colon.
+#[test]
+fn test_reason_without_label_plain() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"cargo test"}"#.into(),
+            reason: "agent wants to run this tool".into(),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 90, 24);
+    assert!(
+        out.contains("agent wants to run this tool"),
+        "the reason must stay:\n{out}"
+    );
+    assert!(
+        !out.contains(": agent wants to run this tool"),
+        "no leading colon without a label:\n{out}"
     );
 }
