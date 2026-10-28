@@ -7,6 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use super::super::cleanup::PendingCleanup;
+use super::super::cleanup::RemovalIntent;
 use super::super::cleanup::clear_pending;
 use super::super::cleanup::lookup_pending;
 use super::super::cleanup::remove_tree;
@@ -16,6 +17,7 @@ use super::super::identify::listed_in_git;
 use super::super::identify::resolve_identity;
 use super::super::preview::MergeState;
 use super::super::preview::merge_state;
+use super::super::preview::preview_remove_worktree;
 use super::super::record::ManagedWorktree;
 use super::super::record::RecordLookup;
 use super::super::record::WorktreeLease;
@@ -35,7 +37,43 @@ use super::worktrees_dir;
 /// tree that record names, is refused before Git is asked.
 pub fn remove_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError> {
     let repo_root = canonicalize(repo_root)?;
-    remove_linked(&repo_root, slug, RemovalForce::AuthorizedDiscard)
+    remove_linked(
+        &repo_root,
+        slug,
+        RemovalForce::AuthorizedDiscard,
+        Authorization::Discard,
+    )
+}
+
+/// Remove a linked worktree + delete its branch, but only while the tree is
+/// still the state its preview showed: the token a preview returned has to
+/// name what the tree holds now.
+///
+/// The user confirmed that preview, so the removal has the same standing as an
+/// accepted discard. The lease is taken before the token is compared, so
+/// nothing can start working in the tree between the comparison and the act,
+/// and a token that no longer matches removes nothing.
+pub fn remove_previewed_worktree(
+    repo_root: &Path,
+    slug: &str,
+    token: &str,
+    delete_unmerged_branch: bool,
+) -> Result<(), WorktreeError> {
+    let repo_root = canonicalize(repo_root)?;
+    let force = if delete_unmerged_branch {
+        RemovalForce::AuthorizedDiscard
+    } else {
+        RemovalForce::AuthorizedKeepBranch
+    };
+    remove_linked(&repo_root, slug, force, Authorization::Previewed(token))
+}
+
+/// What entitles a caller to remove a worktree.
+enum Authorization<'a> {
+    /// The user accepted the loss through the exit discard gate.
+    Discard,
+    /// The user confirmed a preview, and this token names the state it showed.
+    Previewed(&'a str),
 }
 
 /// Remove a linked worktree + delete its branch, conservatively, for the
@@ -45,7 +83,12 @@ pub fn remove_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError
 /// checks as the exit path run before anything is removed.
 pub fn remove_clean_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError> {
     let repo_root = canonicalize(repo_root)?;
-    remove_linked(&repo_root, slug, RemovalForce::Conservative)
+    remove_linked(
+        &repo_root,
+        slug,
+        RemovalForce::Conservative,
+        Authorization::Discard,
+    )
 }
 
 /// How much of Git's own caution a removal is allowed to override.
@@ -57,13 +100,37 @@ enum RemovalForce {
     /// The user accepted the loss: a tree with uncommitted work is removed,
     /// and an unmerged branch is deleted. A worktree Git locked still refuses.
     AuthorizedDiscard,
+    /// The user accepted the loss of the tree and chose to keep its branch:
+    /// the tree is removed with the same force, and an unmerged branch stays
+    /// where it is.
+    AuthorizedKeepBranch,
 }
 
 impl RemovalForce {
     fn remove_args(self) -> Vec<&'static str> {
         match self {
             Self::Conservative => vec!["worktree", "remove"],
-            Self::AuthorizedDiscard => vec!["worktree", "remove", "--force"],
+            Self::AuthorizedDiscard | Self::AuthorizedKeepBranch => {
+                vec!["worktree", "remove", "--force"]
+            }
+        }
+    }
+
+    /// What this removal is allowed to do, as the leftover record keeps it.
+    fn intent(self) -> RemovalIntent {
+        match self {
+            Self::Conservative => RemovalIntent::Conservative,
+            Self::AuthorizedDiscard => RemovalIntent::Discard,
+            Self::AuthorizedKeepBranch => RemovalIntent::KeepBranch,
+        }
+    }
+
+    /// The force a leftover record replays.
+    fn from_intent(intent: RemovalIntent) -> Self {
+        match intent {
+            RemovalIntent::Conservative => Self::Conservative,
+            RemovalIntent::Discard => Self::AuthorizedDiscard,
+            RemovalIntent::KeepBranch => Self::AuthorizedKeepBranch,
         }
     }
 }
@@ -72,11 +139,13 @@ impl RemovalForce {
 /// with the lease held for the whole act.
 ///
 /// The lease is taken rather than asked about, so a session that acquires it
-/// after a probe cannot begin working in a tree this call is deleting. Inside
-/// it the act is verified before anything is removed: the slug has to carry a
-/// record this version reads, the directory has to resolve to the tree that
-/// record names, and Git must not have it locked. A directory at the managed
-/// path without that evidence is left alone whatever Git has registered there.
+/// after a probe cannot begin working in a tree this call is deleting. A
+/// previewed removal compares its token inside that lease, so the state the
+/// user confirmed is still the state the act begins from. Inside it the act is
+/// verified before anything is removed: the slug has to carry a record this
+/// version reads, the directory has to resolve to the tree that record names,
+/// and Git must not have it locked. A directory at the managed path without
+/// that evidence is left alone whatever Git has registered there.
 ///
 /// Each step runs only after the one before it is confirmed, and the record is
 /// cleared last. A failure before the directory is gone leaves the directory,
@@ -84,9 +153,15 @@ impl RemovalForce {
 /// delete once the directory is gone answers RemovalIncomplete, naming what
 /// survived instead of a Git message about a step that never ran, and the
 /// record of the target lets the next attempt finish only that branch.
-fn remove_linked(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<(), WorktreeError> {
+fn remove_linked(
+    repo_root: &Path,
+    slug: &str,
+    force: RemovalForce,
+    authorization: Authorization<'_>,
+) -> Result<(), WorktreeError> {
     let lease = WorktreeLease::acquire(repo_root, slug)?;
-    match remove_verified(repo_root, slug, force) {
+    let checked = remove_verified(repo_root, slug, force, authorization);
+    match checked {
         Ok(()) => {
             // The lease is still held, so the lease file this deletes is one no
             // other process can hold.
@@ -100,9 +175,14 @@ fn remove_linked(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<()
     }
 }
 
-/// The verified part of a removal: the checks that establish the object, then
-/// the Git steps that take it apart.
-fn remove_verified(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<(), WorktreeError> {
+/// The verified part of a removal: the checks that establish the object, the
+/// preview the user confirmed, then the Git steps that take it apart.
+fn remove_verified(
+    repo_root: &Path,
+    slug: &str,
+    force: RemovalForce,
+    authorization: Authorization<'_>,
+) -> Result<(), WorktreeError> {
     let record = match lookup_record(repo_root, slug) {
         RecordLookup::Read(record) => record,
         RecordLookup::Rejected { reason } => {
@@ -124,7 +204,7 @@ fn remove_verified(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<
     if let Some(pending) = lookup_pending(repo_root, slug)? {
         let repo = canonicalize(repo_root)?;
         if !listed_in_git(&repo, &worktree_path_for(&repo, slug))? {
-            return finish_pending(&repo, slug, &record, &pending, force);
+            return finish_pending(&repo, slug, &record, &pending);
         }
         clear_pending(repo_root, slug);
     }
@@ -152,6 +232,18 @@ fn remove_verified(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<
     {
         return Err(WorktreeError::Identity { path, reason });
     }
+    // The confirmed preview is re-read here rather than when this act began,
+    // because this is the last point before Git is asked to change the tree. A
+    // tree that moved since the preview answers Stale instead of being
+    // removed. The re-read produces the token through the same path the
+    // preview did, so the two describe the same facts.
+    if let Authorization::Previewed(token) = authorization
+        && preview_remove_worktree(repo_root, slug)?.token != token
+    {
+        return Err(WorktreeError::Stale {
+            slug: slug.to_string(),
+        });
+    }
     // The record of the target goes down before Git is asked to take the
     // registration apart, so a removal that stops, or a process that dies,
     // between the two halves leaves a target the next attempt can finish.
@@ -160,7 +252,10 @@ fn remove_verified(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<
     // stops the removal here, while the tree is still whole: past this point
     // the registration can be detached, and a directory left without a record
     // is one no later attempt knows how to finish.
-    write_pending(repo_root, &PendingCleanup::new(slug, &path, stamp))?;
+    write_pending(
+        repo_root,
+        &PendingCleanup::new(slug, &path, stamp, force.intent()),
+    )?;
     run_git(repo_root, &args)?;
     // A stat error is not the directory being gone: the branch is deleted and
     // the record cleared only once the directory is proven absent, so a
@@ -199,13 +294,18 @@ fn remove_verified(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<
 /// directory replaced since the record was written is reported instead of
 /// deleted. A directory already gone means only the branch and the records are
 /// left, which is what a previous attempt stopped before.
+///
+/// The branch step replays the intent the record was written with, not the
+/// force of the caller finishing it. No token can be compared here: the tree
+/// it described is gone, so the authorization that took the removal this far
+/// is the one that finishes it.
 fn finish_pending(
     repo_root: &Path,
     slug: &str,
     record: &ManagedWorktree,
     pending: &PendingCleanup,
-    force: RemovalForce,
 ) -> Result<(), WorktreeError> {
+    let force = RemovalForce::from_intent(pending.intent());
     if pending.slug() != slug {
         return Err(WorktreeError::CleanupPending {
             path: pending.path().to_path_buf(),
@@ -267,10 +367,11 @@ fn finish_pending(
 ///
 /// A branch proven merged into the branch the tree was forked from is deleted
 /// with the flag that keeps Git's refusal for a branch holding unmerged work.
-/// Only an authorized discard may use the flag that overrides it, and a merged
-/// branch still falls back to that flag when Git refuses because the repository
-/// is checked out where this work is not: the work is in the base branch
-/// either way, so the branch name is all that is left to delete.
+/// A merged branch still falls back to the flag that overrides the refusal,
+/// because the work is in the base branch either way and the branch name is
+/// all that is left to delete. The conservative caller never overrides Git;
+/// the user's choice to keep unmerged work may, because what it keeps is
+/// unmerged work and this branch has none.
 ///
 /// A branch that is already gone is the step being done, not a failure: an
 /// attempt that deleted it and then died before clearing the record leaves the
@@ -309,7 +410,21 @@ fn delete_branch(
         merge_state(repo_root, record),
         Ok(MergeState::Merged { .. })
     );
+    // An unmerged branch the user chose to keep is not a step that failed: the
+    // tree is gone and the branch stays where it was, which is what the
+    // removal was asked for.
+    if !merged && matches!(force, RemovalForce::AuthorizedKeepBranch) {
+        return Ok(());
+    }
     let discard_allowed = matches!(force, RemovalForce::AuthorizedDiscard);
+    // A merged branch is work the base branch already holds, so the fallback
+    // that overrides Git's refusal stays available for a user who chose to
+    // keep unmerged work; only the conservative caller never overrides it.
+    let may_override = match force {
+        RemovalForce::AuthorizedDiscard => true,
+        RemovalForce::AuthorizedKeepBranch => merged,
+        RemovalForce::Conservative => false,
+    };
     let first = if merged || !discard_allowed {
         "-d"
     } else {
@@ -318,7 +433,7 @@ fn delete_branch(
     match run_git(repo_root, &["branch", first, &branch]) {
         Ok(_) => Ok(()),
         Err(error) => {
-            if discard_allowed && merged && run_git(repo_root, &["branch", "-D", &branch]).is_ok() {
+            if may_override && merged && run_git(repo_root, &["branch", "-D", &branch]).is_ok() {
                 return Ok(());
             }
             Err(WorktreeError::RemovalIncomplete {

@@ -43,6 +43,22 @@ const REPARSE_POINT: u32 = 0x400;
 /// drop could be the one naming the target.
 const CLEANUP_SCHEMA: u32 = 1;
 
+/// What the removal that wrote a leftover record was allowed to do. The
+/// attempt that finishes the record replays this instead of the choice in
+/// hand: the tree that choice was confirmed against is no longer there, so
+/// the authorization that started the removal is the one that finishes it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RemovalIntent {
+    /// Git's own caution stands: nothing is overridden.
+    #[default]
+    Conservative,
+    /// The user accepted the loss: an unmerged branch goes with the tree.
+    Discard,
+    /// The user accepted the loss of the tree and kept its branch.
+    KeepBranch,
+}
+
 /// What a removal that stopped between its two halves leaves behind: the
 /// registration is gone and the directory is not, and this record names the
 /// one directory a later attempt may finish.
@@ -57,17 +73,32 @@ pub(super) struct PendingCleanup {
     /// directory this record was written for. None when there was no directory
     /// to read them from, which leaves nothing for a later attempt to prove.
     stamp: Option<TargetStamp>,
+    /// What the removal was allowed to do. A record written before this was
+    /// kept finishes conservatively.
+    #[serde(default)]
+    intent: RemovalIntent,
 }
 
 impl PendingCleanup {
     /// A record for the leftover a removal just found at a resolved path.
-    pub(super) fn new(slug: &str, path: &Path, stamp: Option<TargetStamp>) -> Self {
+    pub(super) fn new(
+        slug: &str,
+        path: &Path,
+        stamp: Option<TargetStamp>,
+        intent: RemovalIntent,
+    ) -> Self {
         Self {
             schema: CLEANUP_SCHEMA,
             slug: slug.to_string(),
             path: path.to_path_buf(),
             stamp,
+            intent,
         }
+    }
+
+    /// What the removal that wrote this record was allowed to do.
+    pub(super) fn intent(&self) -> RemovalIntent {
+        self.intent
     }
 
     /// The slug the leftover belongs to.

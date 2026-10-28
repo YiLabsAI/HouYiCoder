@@ -35,6 +35,9 @@ use crate::frontend::tools::ToolEntry;
 use crate::frontend::trajectory::TrajectoryResponse;
 use crate::frontend::trust::TrustAccept;
 use crate::frontend::trust::TrustPrompt;
+use crate::frontend::worktree::WorktreeEnterView;
+use crate::frontend::worktree::WorktreePreviewView;
+use crate::frontend::worktree::WorktreeRemoveOutcome;
 
 /// A caller-minted request id. Unique within a session; the response echoes it
 /// so the caller pairs reply to request.
@@ -263,6 +266,14 @@ pub enum ResponsePayload {
         child_sid: SessionId,
         frames: Vec<ChildTranscriptFrame>,
     },
+    /// What removing a managed worktree would discard, plus the token the
+    /// removal has to carry back. Nothing was written or deleted.
+    WorktreePreview(WorktreePreviewView),
+    /// The worktree the session now works in, after a host-direct enter.
+    WorktreeEntered(WorktreeEnterView),
+    /// How a confirmed removal ended. The two unfinished shapes name what
+    /// survived instead of reporting a clean result.
+    WorktreeRemoved(WorktreeRemoveOutcome),
     /// The request itself was invalid for the current state or capability.
     Error(ProtocolError),
 }

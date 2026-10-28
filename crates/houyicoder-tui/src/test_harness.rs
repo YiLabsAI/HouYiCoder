@@ -15,6 +15,7 @@ use houyicoder_protocol::frontend::model::{
     ModelCatalog, ModelCatalogEntry, ModelChoice, ModelDisplayCapabilities, ResolvedModel,
     SpeedMode,
 };
+use houyicoder_protocol::frontend::worktree::WorktreePreviewView;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::EffortLevel;
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
@@ -203,6 +204,33 @@ pub(crate) fn agent_entry(subagent_type: &str, when_to_use: &str) -> AgentEntry 
         model: None,
         effort: None,
         system_prompt: AgentPrompt::InheritParent,
+    }
+}
+
+/// The directory a fixture worktree row names, for the verbs that ask the
+/// host about it. The preview answers the same string.
+pub(crate) fn worktree_path(name: &str) -> String {
+    format!("/some/repo/{name}")
+}
+
+/// One removal preview as the host answers it: dirty and untracked files, an
+/// ignored build directory, and an unmerged branch two commits ahead of dev.
+pub(crate) fn worktree_preview(slug: &str) -> WorktreePreviewView {
+    WorktreePreviewView {
+        slug: slug.to_string(),
+        path: worktree_path(slug),
+        branch: format!("worktree-{slug}"),
+        head: "abcdef0".to_string(),
+        tracked_dirty: 2,
+        untracked: 1,
+        ignored_build_dirs: vec!["target".to_string()],
+        ignored_unknown: 3,
+        merged: false,
+        base_branch: Some("dev".to_string()),
+        unmerged_commits: Some(2),
+        leased: false,
+        locked: false,
+        token: "digest-1".to_string(),
     }
 }
 

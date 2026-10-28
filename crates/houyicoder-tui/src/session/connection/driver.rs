@@ -13,7 +13,6 @@ use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::recap::FocusReport;
-use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 
 use crate::agent_message::{
@@ -22,6 +21,8 @@ use crate::agent_message::{
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 use houyicoder_protocol::acpx::AcpxMethod;
 use tokio::sync::mpsc::UnboundedReceiver;
+
+mod outbound;
 
 /// How many unknown-method notices one connection writes to the diagnostic
 /// log. The notification is dropped either way; the bound keeps a peer that
@@ -120,7 +121,10 @@ pub(crate) async fn drive_client(
 /// The driver body: translate until the connection dies or the command
 /// channel closes. Returns the death record for the caller to announce,
 /// or None on a clean shutdown (no connection to lose).
-#[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the send loop interleaves queue order with per-frame refusal handling"
+)]
 async fn drive_connection(
     mut client: houyicoder_client::Client,
     mut cmd_rx: UnboundedReceiver<ClientCommand>,
@@ -185,283 +189,7 @@ async fn drive_connection(
         }
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
-                Some(ClientCommand::SendMessage { req_id, session_id, content, disabled_skills }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::MessageSend { session_id, content, disabled_skills },
-                    });
-                }
-                Some(ClientCommand::Verdict { req_id, decision }) => {
-                    outbound.push_back(Outbound::Reverse {
-                        req_id,
-                        payload: ClientResponsePayload::Permission(decision),
-                    });
-                }
-                Some(ClientCommand::TrustVerdict { req_id, accept }) => {
-                    outbound.push_back(Outbound::Reverse {
-                        req_id,
-                        payload: ClientResponsePayload::TrustAccept(
-                            TrustAccept { accepted: accept },
-                        ),
-                    });
-                }
-                Some(ClientCommand::StatusQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Status,
-                    });
-                }
-                Some(ClientCommand::TrajectoryQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Trajectory,
-                    });
-                }
-                Some(ClientCommand::ContextQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Context,
-                    });
-                }
-                Some(ClientCommand::CompactQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Compact,
-                    });
-                }
-                Some(ClientCommand::PermissionModeQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionMode,
-                    });
-                }
-                Some(ClientCommand::PermissionRulesQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionRules,
-                    });
-                }
-                Some(ClientCommand::ToolListQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::ToolList,
-                    });
-                }
-                Some(ClientCommand::AgentsQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Agents,
-                    });
-                }
-                Some(ClientCommand::ChildTranscriptQuery { req_id, child_sid }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::ChildTranscript { child_sid },
-                    });
-                }
-                Some(ClientCommand::HooksQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Hooks,
-                    });
-                }
-                Some(ClientCommand::SkillBodyQuery { req_id, name }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::SkillBody { name },
-                    });
-                }
-                Some(ClientCommand::SkillsQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Skills,
-                    });
-                }
-                Some(ClientCommand::MemoryListQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::MemoryList,
-                    });
-                }
-                Some(ClientCommand::MemoryShowQuery { req_id, key }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::MemoryShow { key },
-                    });
-                }
-                Some(ClientCommand::MemoryToggleStateQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::MemoryToggleState,
-                    });
-                }
-                Some(ClientCommand::MemoryToggleQuery { req_id, which }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::MemoryToggle { which },
-                    });
-                }
-                Some(ClientCommand::MemoryForgetQuery { req_id, key, scope }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::MemoryForget { key, scope },
-                    });
-                }
-                Some(ClientCommand::UndoQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::Undo,
-                    });
-                }
-                Some(ClientCommand::ModelInfoQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::ModelInfo,
-                    });
-                }
-                Some(ClientCommand::ModelSwitch {
-                    req_id,
-                    model,
-                    effort,
-                    effort_toggled,
-                    speed,
-                }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::ModelSet {
-                            model,
-                            effort,
-                            effort_toggled,
-                            speed,
-                        },
-                    });
-                }
-                Some(ClientCommand::RenameSessionQuery {
-                    req_id,
-                    session_id,
-                    name,
-                }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::RenameSession { session_id, name },
-                    });
-                }
-                Some(ClientCommand::PermissionCycleModeQuery { req_id }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionCycleMode,
-                    });
-                }
-                Some(ClientCommand::PermissionAddRuleQuery { req_id, rule }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionAddRule { rule },
-                    });
-                }
-                Some(ClientCommand::PermissionRemoveRuleQuery { req_id, index }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionRemoveRule { index },
-                    });
-                }
-                Some(ClientCommand::PermissionAddDirQuery { req_id, path }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionAddWorkingDir { path },
-                    });
-                }
-                Some(ClientCommand::PermissionRemoveDirQuery { req_id, path }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionRemoveWorkingDir { path },
-                    });
-                }
-                Some(ClientCommand::PermissionAskBeforeGitQuery { req_id, enabled }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::PermissionAskBeforeGit { enabled },
-                    });
-                }
-                Some(ClientCommand::AbortRun { session_id }) => {
-                    // A session/cancel notification: the server's mid-run
-                    // select catches it and aborts the runner token. No id
-                    // (no reply) — the run resolves Interrupted and the
-                    // outcome returns on the original run's req_id.
-                    let notif = AcpNotification::new(
-                        "session/cancel",
-                        serde_json::json!({ "sessionId": session_id.0 }),
-                    );
-                    outbound.push_back(Outbound::Notification(notif));
-                }
-                Some(ClientCommand::InjectUser { session_id, input }) => {
-                    // A session/inject notification: the server enqueues the
-                    // identified input for mid-turn injection. No reply; the
-                    // message shows up in the transcript once the drive loop
-                    // drains it, or runs as a follow-up if the run ends first.
-                    outbound.push_back(Outbound::Notification(inject_notification(
-                        &session_id,
-                        &input,
-                    )));
-                }
-                Some(ClientCommand::InjectToChild { child_sid, text }) => {
-                    // Steering: route the text into a running child's inbox.
-                    // The server's bus delivers it; the child drains at its
-                    // next turn boundary. No reply; no parent turn starts.
-                    outbound.push_back(Outbound::Notification(inject_child_notification(
-                        &child_sid,
-                        &text,
-                    )));
-                }
-                Some(ClientCommand::CancelChildTurn { child_sid }) => {
-                    // Per-turn abort (the teammate-view Esc path). The server
-                    // cancels the viewed child's in-flight model fetch; the
-                    // child's drive loop appends an interrupt marker + starts
-                    // the next turn. No reply.
-                    outbound.push_back(Outbound::Notification(
-                        cancel_child_turn_notification(&child_sid),
-                    ));
-                }
-                Some(ClientCommand::KillChild { child_sid }) => {
-                    // Lifecycle kill of one child (the 'k' on a selected
-                    // strip). The server cancels the child's lifecycle token
-                    // so its drive loop returns terminal; the completion
-                    // publishes + drops the strip row. No reply.
-                    outbound.push_back(Outbound::Notification(
-                        kill_child_notification(&child_sid),
-                    ));
-                }
-                Some(ClientCommand::KillAllChildren) => {
-                    // The fleet kill-all path ('K' two-press). The server
-                    // kills every live background child; each completion
-                    // publishes and drops its strip row. No reply.
-                    outbound.push_back(Outbound::Notification(kill_all_notification()));
-                }
-                Some(ClientCommand::ReportFocus { focused }) => {
-                    outbound.push_back(Outbound::Notification(focus_notification(focused)));
-                }
-                Some(ClientCommand::QueueRemove { session_id, id }) => {
-                    // A session/queue_remove notification drops only the exact
-                    // identified queue item. No reply.
-                    outbound.push_back(Outbound::Notification(queue_remove_notification(
-                        &session_id,
-                        id,
-                    )));
-                }
-                Some(ClientCommand::SessionReset {
-                    req_id,
-                    session_id,
-                }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::SessionReset { session_id },
-                    });
-                }
-                Some(ClientCommand::DebugSet { req_id, level }) => {
-                    outbound.push_back(Outbound::Request {
-                        req_id,
-                        payload: FrontendRequest::DebugSet { level },
-                    });
-                }
+                Some(command) => outbound.push_back(outbound::frame_for(command)),
                 None => return None,
             },
             frame = client.next_frame() => match frame {
@@ -697,6 +425,15 @@ async fn drive_connection(
                         ResponsePayload::ModelInfo(catalog) => {
                             Some(ServerResponse::ModelInfo { catalog })
                         }
+                        ResponsePayload::WorktreePreview(preview) => {
+                            Some(ServerResponse::WorktreePreview { preview })
+                        }
+                        ResponsePayload::WorktreeEntered(entered) => {
+                            Some(ServerResponse::WorktreeEntered { entered })
+                        }
+                        ResponsePayload::WorktreeRemoved(outcome) => {
+                            Some(ServerResponse::WorktreeRemoved { outcome })
+                        }
                         // A known acknowledgement (e.g. SessionReset): the
                         // host already acted locally, but the reply keeps
                         // its request id like every other response.
@@ -727,6 +464,15 @@ async fn drive_connection(
             }
         }
     }
+}
+
+/// Abort the running turn. The hub clears the run token; the run then
+/// resolves Interrupted and its outcome returns on the original request.
+pub(crate) fn cancel_notification(session_id: &FrontendSessionId) -> AcpNotification {
+    AcpNotification::new(
+        "session/cancel",
+        serde_json::json!({ "sessionId": session_id.0 }),
+    )
 }
 
 /// Report whether this terminal is looking at the session.

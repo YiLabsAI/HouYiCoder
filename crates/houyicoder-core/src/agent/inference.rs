@@ -3,6 +3,7 @@
 pub mod effort;
 pub(crate) mod model_display;
 pub mod model_window;
+mod settings;
 
 use houyicoder_protocol::frontend::model::{ModelChoice, SpeedMode};
 use houyicoder_protocol::llm::EffortLevel;

@@ -17,6 +17,10 @@ path = "tests/reward_bench.rs"
 name = "cache_hit_rate"
 path = "tests/cache_hit_rate.rs"
 
+[[test]]
+name = "worktree_contract"
+path = "tests/worktree_contract.rs"
+
 [lib]
 path = "src/lib.rs"
 

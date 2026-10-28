@@ -87,6 +87,7 @@ impl Runner {
             prompt_recorder: None,
             skill_registry: None,
             sandbox_session: None,
+            worktree_controller: None,
             skill_grants: None,
             active_skill: Arc::new(Mutex::new(None)),
             hooks: None,

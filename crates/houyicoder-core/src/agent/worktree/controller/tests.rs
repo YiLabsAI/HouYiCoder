@@ -558,3 +558,4 @@ async fn test_exit_warns_history_rewrite() {
 }
 
 mod child;
+mod preview;

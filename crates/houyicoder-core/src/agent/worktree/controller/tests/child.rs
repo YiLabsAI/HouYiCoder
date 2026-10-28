@@ -27,11 +27,12 @@ use crate::provider::test_support::FakeProvider;
 
 use super::super::ChildCleanup;
 use super::super::ExitAction;
-use super::super::child_reclaim::{
+use super::super::child::reclaim::{
     WorktreeReclaimRecord, resumes_leftover, run_conservative_reclaim,
 };
 use super::super::tests::{make_repo, wired, wired_err};
 use crate::agent::worktree::cleanup::PendingCleanup;
+use crate::agent::worktree::cleanup::RemovalIntent;
 use crate::agent::worktree::cleanup::write_pending;
 use crate::agent::worktree::record::ManagedWorktree;
 use crate::agent::worktree::record::write_managed_worktree;
@@ -355,7 +356,11 @@ fn test_reclaim_finishes_leftover() {
     write_managed_worktree(&repo, &ManagedWorktree::new(slug, None)).expect("creation record");
     run_git(&repo, &["branch", &worktree_branch_name(slug)]).expect("branch");
     let resolved = dunce::canonicalize(&path).expect("resolve the leftover");
-    write_pending(&repo, &PendingCleanup::new(slug, &resolved, None)).expect("cleanup record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new(slug, &resolved, None, RemovalIntent::Conservative),
+    )
+    .expect("cleanup record");
     let record = WorktreeReclaimRecord {
         repo_root: repo.clone(),
         worktree_path: path.clone(),
@@ -388,7 +393,11 @@ fn test_reclaim_probes_registered_tree() {
     let slug = "agent-registered";
     let created = get_or_create_worktree(&repo, slug).expect("create");
     let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
-    write_pending(&repo, &PendingCleanup::new(slug, &path, None)).expect("cleanup record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new(slug, &path, None, RemovalIntent::Conservative),
+    )
+    .expect("cleanup record");
     write(path.join("dirty.txt"), "work").expect("a change in the tree");
     let record = WorktreeReclaimRecord {
         repo_root: repo.clone(),
@@ -630,9 +639,9 @@ async fn test_cleanup_reused_worktree_kept() {
 }
 
 /// A HookFire that records the event kinds it was called with, for asserting
-/// the controller fires at the per-child enter and cleanup boundaries.
-struct RecordingHookFire {
-    events: Arc<Mutex<Vec<HookEventKind>>>,
+/// the controller fires at the enter, removal, and cleanup boundaries.
+pub(super) struct RecordingHookFire {
+    pub(super) events: Arc<Mutex<Vec<HookEventKind>>>,
 }
 impl HookFire for RecordingHookFire {
     fn fire(
@@ -754,7 +763,7 @@ async fn test_reclaim_awaits_launched_task() {
     let latch = Arc::new((Mutex::new(false), Condvar::new()));
     let latch_for_task = latch.clone();
     let task = {
-        let mut map = controller.pending_reclaims.lock().expect("reclaims lock");
+        let mut map = controller.reclaims.held_for_test();
         let slot = map
             .get_mut("agent-launched-reclaim")
             .expect("reclaim record present");

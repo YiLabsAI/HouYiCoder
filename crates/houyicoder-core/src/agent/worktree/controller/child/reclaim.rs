@@ -21,15 +21,15 @@ use crate::agent::worktree::session::{has_worktree_changes, remove_clean_worktre
 /// What an aborted child leaves behind for the shutdown sweep: the identity a
 /// conservative reclaim needs, and nothing that a live handle already owns.
 #[derive(Clone)]
-pub(super) struct WorktreeReclaimRecord {
-    pub(super) repo_root: PathBuf,
-    pub(super) worktree_path: PathBuf,
-    pub(super) worktree_branch: String,
-    pub(super) slug: String,
+pub(crate) struct WorktreeReclaimRecord {
+    pub(crate) repo_root: PathBuf,
+    pub(crate) worktree_path: PathBuf,
+    pub(crate) worktree_branch: String,
+    pub(crate) slug: String,
     /// The commit the tree started from, which a diff counts against. None
     /// when the creation could not read it, which leaves the tree's
     /// cleanliness unprovable and keeps the reclaim from removing it.
-    pub(super) head_commit: Option<String>,
+    pub(crate) head_commit: Option<String>,
 }
 
 /// A launch-once completion cell for one per-child reclaim. The blocking Git
@@ -48,7 +48,7 @@ pub(super) struct WorktreeReclaimRecord {
 /// waiter is registered) is therefore enough: a set that lands before the
 /// awaiter registers is not lost, and there is never a second concurrent
 /// awaiter to miss a wake.
-pub(super) struct ReclaimCompletion {
+pub(crate) struct ReclaimCompletion {
     /// Held only for the instant of reading or writing the Option; never
     /// across an await. The blocking task writes; awaiters read and clone.
     outcome: Mutex<Option<ChildCleanup>>,
@@ -75,7 +75,7 @@ impl ReclaimCompletion {
 
     /// Write the outcome and wake one awaiter. Called exactly once, from the
     /// detached blocking reclaim task.
-    pub(super) fn set(&self, outcome: ChildCleanup) {
+    pub(crate) fn set(&self, outcome: ChildCleanup) {
         *self.lock() = Some(outcome);
         self.notify.notify_one();
     }
@@ -84,7 +84,7 @@ impl ReclaimCompletion {
     /// check-then-wait loop tolerates a set that arrived before registration
     /// (the stashed permit wakes the parked awaiter; the next loop iteration
     /// reads the cell) and a set that arrives while parked (the wake fires).
-    pub(super) async fn await_outcome(&self) -> ChildCleanup {
+    pub(crate) async fn await_outcome(&self) -> ChildCleanup {
         loop {
             {
                 let guard = self.lock();
@@ -103,14 +103,14 @@ impl ReclaimCompletion {
 /// keeps launched false until the shutdown sweep launches it; a slot whose
 /// cleanup was aborted mid-reclaim keeps launched true so the sweep awaits the
 /// already-running task instead of starting a second one.
-pub(super) struct ReclaimSlot {
-    pub(super) record: WorktreeReclaimRecord,
-    pub(super) completion: Arc<ReclaimCompletion>,
-    pub(super) launched: bool,
+pub(crate) struct ReclaimSlot {
+    pub(crate) record: WorktreeReclaimRecord,
+    pub(crate) completion: Arc<ReclaimCompletion>,
+    pub(crate) launched: bool,
 }
 
 impl ReclaimSlot {
-    pub(super) fn new(record: WorktreeReclaimRecord) -> Self {
+    pub(crate) fn new(record: WorktreeReclaimRecord) -> Self {
         Self {
             record,
             completion: ReclaimCompletion::new(),
@@ -127,7 +127,7 @@ impl ReclaimSlot {
     /// any awaiter survives. A panic in the reclaim body reports Kept: the tree
     /// it left behind is not proven clean, so it stays on disk rather than
     /// being treated as removed.
-    pub(super) fn launch(&mut self) {
+    pub(crate) fn launch(&mut self) {
         if self.launched {
             return;
         }
@@ -177,7 +177,7 @@ fn panic_text(payload: &(dyn Any + Send)) -> &str {
 /// stopped listing the tree: while the tree is still registered, or its listing
 /// cannot be read, the probe decides. A record takes the place of a proof the
 /// removal already made, not of the proof itself.
-pub(super) fn resumes_leftover(repo_root: &Path, worktree_path: &Path, recorded: bool) -> bool {
+pub(crate) fn resumes_leftover(repo_root: &Path, worktree_path: &Path, recorded: bool) -> bool {
     recorded && matches!(listed_in_git(repo_root, worktree_path), Ok(false))
 }
 
@@ -196,7 +196,7 @@ pub(super) fn resumes_leftover(repo_root: &Path, worktree_path: &Path, recorded:
 /// listing cannot be read, goes through the probe like any other, which is what
 /// keeps a tree holding work from being removed on the strength of a record
 /// alone.
-pub(super) fn run_conservative_reclaim(record: &WorktreeReclaimRecord) -> ChildCleanup {
+pub(crate) fn run_conservative_reclaim(record: &WorktreeReclaimRecord) -> ChildCleanup {
     let pending = match lookup_pending(&record.repo_root, &record.slug) {
         Ok(pending) => pending,
         Err(error) => {

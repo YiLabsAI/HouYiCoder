@@ -74,6 +74,7 @@ mod notification_handler;
 mod permission_handler;
 mod request_router;
 mod status_handler;
+mod worktree_handler;
 
 /// The /debug request handler.
 mod debug_dispatch;

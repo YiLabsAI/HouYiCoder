@@ -230,12 +230,29 @@ impl App {
     /// ids ran out. A session with no connection has nothing to ask, and the
     /// pane it opened still shows what it has.
     fn refresh_query(&mut self, query: impl FnOnce(RequestId) -> ClientCommand) {
-        let Some(s) = self.sessions.current.connection.as_ref() else {
-            return;
-        };
-        match s.next_request_id() {
-            Ok(req_id) => self.enqueue_refresh(query(req_id)),
-            Err(_) => self.note_request_id_exhausted(),
+        if let Some(req_id) = self.claim_request_id() {
+            self.enqueue_refresh(query(req_id));
+        }
+    }
+
+    /// Take the next request id from the live connection, so a reply can be
+    /// matched back to the action that asked. None when no session is
+    /// connected or the ids ran out; the caller must then send nothing and
+    /// leave its state as it was.
+    fn claim_request_id(&mut self) -> Option<RequestId> {
+        let next = self
+            .sessions
+            .current
+            .connection
+            .as_ref()
+            .map(|s| s.next_request_id());
+        match next {
+            Some(Ok(req_id)) => Some(req_id),
+            Some(Err(_)) => {
+                self.note_request_id_exhausted();
+                None
+            }
+            None => None,
         }
     }
 

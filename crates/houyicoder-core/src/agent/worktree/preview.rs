@@ -37,7 +37,12 @@ pub enum MergeState {
         base: String,
     },
     /// No base branch was recorded, or Git could not answer the question.
-    Unknown,
+    Unknown {
+        /// The base the question was asked against, when the creation record
+        /// named one. A caller can then say which question went unanswered
+        /// instead of reporting that no base exists.
+        base: Option<String>,
+    },
 }
 
 /// What removing a worktree would discard, and the state a decision was made
@@ -60,10 +65,12 @@ pub struct WorktreePreview {
     /// Whether Git records the worktree as locked, which refuses removal until
     /// the lock is cleared or a second force is given.
     pub locked: bool,
-    /// A digest of every field above, used only to detect that the state moved
-    /// between the preview and the act. It proves nothing on its own: a caller
-    /// that trusts it without re-running the preview has a digest of whatever
-    /// it was shown, not a permission.
+    /// A digest of the tree's own state: the identity, the changes, and how
+    /// the branch stands. It proves nothing on its own, and a caller that
+    /// trusts it without re-reading the tree has a digest of whatever it was
+    /// shown, not a permission. The lease is not part of it: a removal holds
+    /// the lease while it compares, and a tree another process has leased
+    /// refuses at that acquisition instead.
     pub token: String,
 }
 
@@ -107,14 +114,7 @@ pub fn preview_remove_worktree(
     let merge = merge_state(&repo_root, &record)?;
     let unmerged_commits = count_unmerged(&repo_root, &record, &merge);
     let locked = identity.locked;
-    let token = preview_token(
-        &identity,
-        &changes,
-        &merge,
-        unmerged_commits,
-        leased,
-        locked,
-    );
+    let token = preview_token(&identity, &changes, &merge, unmerged_commits, locked);
     Ok(WorktreePreview {
         identity,
         changes,
@@ -134,7 +134,7 @@ pub(super) fn merge_state(
     record: &ManagedWorktree,
 ) -> Result<MergeState, WorktreeError> {
     let Some(base) = record.base_branch() else {
-        return Ok(MergeState::Unknown);
+        return Ok(MergeState::Unknown { base: None });
     };
     let branch = format!("refs/heads/{}", record.branch());
     let base_ref = format!("refs/heads/{base}");
@@ -148,7 +148,9 @@ pub(super) fn merge_state(
         Some(1) => Ok(MergeState::NotMerged {
             base: base.to_string(),
         }),
-        _ => Ok(MergeState::Unknown),
+        _ => Ok(MergeState::Unknown {
+            base: Some(base.to_string()),
+        }),
     }
 }
 
@@ -156,7 +158,7 @@ pub(super) fn merge_state(
 /// user sees beside the merge state; the state itself comes from the ancestry
 /// question, never from this number.
 fn count_unmerged(repo_root: &Path, record: &ManagedWorktree, merge: &MergeState) -> Option<u32> {
-    if *merge == MergeState::Unknown {
+    if matches!(merge, MergeState::Unknown { .. }) {
         return None;
     }
     let base = record.base_branch()?;
@@ -171,21 +173,24 @@ fn count_unmerged(repo_root: &Path, record: &ManagedWorktree, merge: &MergeState
 }
 
 /// A digest of the previewed state. Two previews of an unchanged worktree
-/// produce the same token, and every field the preview reports is part of it:
-/// a moved head, another change count, another merge answer or unmerged
-/// count, a lease, or a lock each produce a different one.
+/// produce the same token, and every fact about the tree the preview reports
+/// is part of it: a moved head, another change count, another merge answer or
+/// unmerged count, or a lock each produce a different one. The lease is left
+/// out on purpose, and the field list below says why.
 fn preview_token(
     identity: &WorktreeIdentity,
     changes: &WorktreeChanges,
     merge: &MergeState,
     unmerged_commits: Option<u32>,
-    leased: bool,
     locked: bool,
 ) -> String {
     let merge_label = match merge {
         MergeState::Merged { base } => format!("merged:{base}"),
         MergeState::NotMerged { base } => format!("unmerged:{base}"),
-        MergeState::Unknown => "unknown".to_string(),
+        MergeState::Unknown { base } => match base {
+            Some(base) => format!("unknown:{base}"),
+            None => "unknown:".to_string(),
+        },
     };
     // The two paths go in as their own bytes: a path that is not valid text
     // has no lossless string form, and a lossy one could make two directories
@@ -207,7 +212,11 @@ fn preview_token(
             Some(count) => count.to_string(),
             None => "unknown".to_string(),
         },
-        leased.to_string(),
+        // The lease is left out on purpose. The removal takes the lease before
+        // it compares this digest, so its own hold would make every comparison
+        // fail; a tree another process has leased already refuses at that
+        // acquisition, which is the same question asked where it can be
+        // answered.
         locked.to_string(),
     ];
     // A NUL cannot appear in a path or a branch name, so a value holding the

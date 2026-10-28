@@ -15,8 +15,11 @@ use serde_json::json;
 
 use super::super::*;
 use super::make_repo;
-use crate::agent::worktree::cleanup::{PendingCleanup, lookup_pending, write_pending};
+use crate::agent::worktree::cleanup::{
+    PendingCleanup, RemovalIntent, lookup_pending, write_pending,
+};
 use crate::agent::worktree::identify::TargetStamp;
+use crate::agent::worktree::preview::preview_remove_worktree;
 #[cfg(unix)]
 use crate::agent::worktree::record::state_dir;
 use crate::agent::worktree::record::{
@@ -34,7 +37,11 @@ fn leftover(tag: &str, slug: &str) -> (PathBuf, PathBuf) {
     run_git(&repo, &["branch", &worktree_branch_name(slug)]).expect("branch");
     let resolved = dunce::canonicalize(&path).expect("resolve the leftover");
     let stamp = TargetStamp::read(&resolved).expect("read the stamp");
-    write_pending(&repo, &PendingCleanup::new(slug, &resolved, stamp)).expect("cleanup record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new(slug, &resolved, stamp, RemovalIntent::Conservative),
+    )
+    .expect("cleanup record");
     (repo, resolved)
 }
 
@@ -70,6 +77,68 @@ fn test_leftover_resumes() {
     drop(fs::remove_dir_all(&repo));
 }
 
+/// Put a commit on a leftover's branch that its base does not hold, so a
+/// deletion that respects Git's caution and one that overrides it end
+/// differently.
+fn commit_ahead(repo: &Path, slug: &str) {
+    let branch = worktree_branch_name(slug);
+    let head = run_git(repo, &["rev-parse", "HEAD"]).expect("read the base commit");
+    let tree = run_git(repo, &["rev-parse", "HEAD^{tree}"]).expect("read the base tree");
+    let ahead = run_git(repo, &["commit-tree", &tree, "-p", &head, "-m", "wip"])
+        .expect("make a commit on the branch");
+    run_git(
+        repo,
+        &["update-ref", &format!("refs/heads/{branch}"), ahead.trim()],
+    )
+    .expect("move the branch onto it");
+}
+
+/// The leftover finishes with the choice the removal that wrote it was given:
+/// one that stopped after the user kept the branch still keeps it, whatever a
+/// later attempt arrives able to discard.
+#[test]
+fn test_leftover_replays_keep_branch() {
+    let (repo, path) = leftover("leftover-keep-branch", "kept-work");
+    commit_ahead(&repo, "kept-work");
+    write_pending(
+        &repo,
+        &PendingCleanup::new("kept-work", &path, None, RemovalIntent::KeepBranch),
+    )
+    .expect("record the keep choice");
+
+    remove_worktree(&repo, "kept-work").expect("the leftover is finished");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(
+        branch_exists(&repo, "kept-work"),
+        "the choice the record carries stands over the caller's discard"
+    );
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// The other half: a leftover written by a removal the user accepted as a
+/// discard deletes the unmerged branch even when the attempt that finishes it
+/// would only remove what Git removes on its own.
+#[test]
+fn test_leftover_replays_discard() {
+    let (repo, path) = leftover("leftover-discard", "dropped-work");
+    commit_ahead(&repo, "dropped-work");
+    write_pending(
+        &repo,
+        &PendingCleanup::new("dropped-work", &path, None, RemovalIntent::Discard),
+    )
+    .expect("record the discard choice");
+
+    remove_clean_worktree(&repo, "dropped-work").expect("the leftover is finished");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(
+        !branch_exists(&repo, "dropped-work"),
+        "the choice the record carries stands over the caller's caution"
+    );
+    drop(fs::remove_dir_all(&repo));
+}
+
 /// A record naming a directory other than the one the slug resolves to is
 /// refused: the leftover is an object that was recorded, not whatever now sits
 /// where the slug points.
@@ -79,8 +148,11 @@ fn test_leftover_refuses_other_path() {
     let elsewhere = repo.join("elsewhere");
     fs::create_dir_all(&elsewhere).expect("another directory");
     let elsewhere = dunce::canonicalize(&elsewhere).expect("resolve it");
-    write_pending(&repo, &PendingCleanup::new("moved", &elsewhere, None))
-        .expect("repoint the record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new("moved", &elsewhere, None, RemovalIntent::Conservative),
+    )
+    .expect("repoint the record");
 
     let error = remove_clean_worktree(&repo, "moved").expect_err("the record points elsewhere");
     assert!(
@@ -179,6 +251,29 @@ fn test_merged_branch_deleted_elsewhere() {
     drop(fs::remove_dir_all(&repo));
 }
 
+/// A merged branch is deleted even when the user chose to keep unmerged work:
+/// that choice keeps unmerged work, and this branch has none.
+#[test]
+fn test_keep_option_deletes_merged() {
+    let repo = make_repo("merged-kept");
+    let slug = "kept-merge";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    write(created.worktree_path.join("work.txt"), "work").expect("write work");
+    run_git(&created.worktree_path, &["add", "work.txt"]).expect("stage the work");
+    run_git(&created.worktree_path, &["commit", "-m", "work", "-q"]).expect("commit the work");
+    run_git(&repo, &["merge", "--ff-only", &worktree_branch_name(slug)]).expect("merge the work");
+    run_git(&repo, &["checkout", "-b", "elsewhere", "HEAD~1"])
+        .expect("leave the merged work behind");
+    let token = preview_remove_worktree(&repo, slug)
+        .expect("preview the tree")
+        .token;
+
+    remove_previewed_worktree(&repo, slug, &token, false).expect("the merged branch is deleted");
+
+    assert!(!branch_exists(&repo, slug), "the merged branch is gone");
+    drop(fs::remove_dir_all(&repo));
+}
+
 /// Removing one worktree leaves every other registered worktree alone: the act
 /// is scoped to its own slug, and no sweep of the repository follows it.
 #[test]
@@ -241,7 +336,11 @@ fn test_leftover_blocked_path() {
     let target = repo.join("leftover");
     fs::create_dir_all(&target).expect("a directory to name");
     let resolved = dunce::canonicalize(&target).expect("resolve the target");
-    write_pending(&repo, &PendingCleanup::new("blocked", &resolved, None)).expect("cleanup record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new("blocked", &resolved, None, RemovalIntent::Conservative),
+    )
+    .expect("cleanup record");
 
     let error =
         remove_clean_worktree(&repo, "blocked").expect_err("the managed root is not a directory");
@@ -273,7 +372,11 @@ fn test_leftover_link_outside() {
     fs::create_dir_all(&root).expect("managed root");
     symlink(&outside, root.join(flatten_slug(slug))).expect("link where the worktree goes");
     let resolved = dunce::canonicalize(&outside).expect("resolve the outside directory");
-    write_pending(&repo, &PendingCleanup::new(slug, &resolved, None)).expect("cleanup record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new(slug, &resolved, None, RemovalIntent::Conservative),
+    )
+    .expect("cleanup record");
 
     let error = remove_clean_worktree(&repo, slug).expect_err("the leftover resolves outside");
 
@@ -516,6 +619,111 @@ fn test_remove_keeps_namesake_records() {
     drop(fs::remove_dir_all(&repo));
 }
 
+/// A removal that carries the token a preview returned acts on the tree that
+/// preview showed: the directory, the branch and the records all go.
+#[test]
+fn test_removal_accepts_matching_preview() {
+    let repo = make_repo("preview-match");
+    let slug = "confirmed";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
+    let token = preview_remove_worktree(&repo, slug).expect("preview").token;
+
+    remove_previewed_worktree(&repo, slug, &token, true).expect("the confirmed removal runs");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(!branch_exists(&repo, slug), "the branch is gone");
+    assert!(
+        read_managed_worktree(&repo, slug).is_none(),
+        "the creation record goes with the tree"
+    );
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// A confirmed removal keeps an unmerged branch unless the confirmation said
+/// otherwise: the tree goes, and the commits the preview counted stay
+/// reachable on the branch.
+#[test]
+fn test_removal_keeps_unmerged_branch() {
+    let repo = make_repo("preview-keep");
+    let slug = "keep-me";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
+    run_git(
+        &created.worktree_path,
+        &["commit", "--allow-empty", "-m", "wip"],
+    )
+    .expect("work on the branch");
+    let preview = preview_remove_worktree(&repo, slug).expect("preview");
+    assert_eq!(
+        preview.unmerged_commits,
+        Some(1),
+        "the preview counts the work the branch holds"
+    );
+
+    remove_previewed_worktree(&repo, slug, &preview.token, false).expect("the tree is removed");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(branch_exists(&repo, slug), "the branch outlives the tree");
+    let tip = run_git(
+        &repo,
+        &["log", "-1", "--format=%s", &worktree_branch_name(slug)],
+    )
+    .expect("read the branch tip");
+    assert_eq!(tip.trim(), "wip", "the work stays reachable on the branch");
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// The other half of the choice: the same unmerged branch goes when the
+/// confirmation asked for it.
+#[test]
+fn test_removal_discards_unmerged_branch() {
+    let repo = make_repo("preview-discard");
+    let slug = "discard-me";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
+    run_git(
+        &created.worktree_path,
+        &["commit", "--allow-empty", "-m", "wip"],
+    )
+    .expect("work on the branch");
+    let preview = preview_remove_worktree(&repo, slug).expect("preview");
+
+    remove_previewed_worktree(&repo, slug, &preview.token, true).expect("the tree is removed");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(!branch_exists(&repo, slug), "the branch goes with the tree");
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// A tree that changed after its preview is not the tree the user confirmed, so
+/// the removal stops before anything is taken apart and answers Stale. Every
+/// part of the object survives, which is what a second preview acts on.
+#[test]
+fn test_removal_refuses_changed_preview() {
+    let repo = make_repo("preview-stale");
+    let slug = "moved-on";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
+    let token = preview_remove_worktree(&repo, slug).expect("preview").token;
+    write(path.join("added-after-preview.txt"), "work").expect("change the tree");
+
+    let error =
+        remove_previewed_worktree(&repo, slug, &token, true).expect_err("the tree moved on");
+
+    assert!(
+        matches!(error, WorktreeError::Stale { ref slug } if slug == "moved-on"),
+        "expected Stale, got {error:?}"
+    );
+    assert!(path.exists(), "the directory survives");
+    assert!(branch_exists(&repo, slug), "the branch survives");
+    assert!(
+        read_managed_worktree(&repo, slug).is_some(),
+        "the creation record survives"
+    );
+    drop(fs::remove_dir_all(&repo));
+}
+
 /// A stale record for a worktree Git still registers describes nothing, so the
 /// ordinary removal runs and the record goes with it.
 #[test]
@@ -524,7 +732,11 @@ fn test_pending_cleared_when_registered() {
     let slug = "still-there";
     let created = get_or_create_worktree(&repo, slug).expect("create");
     let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
-    write_pending(&repo, &PendingCleanup::new(slug, &path, None)).expect("stale cleanup record");
+    write_pending(
+        &repo,
+        &PendingCleanup::new(slug, &path, None, RemovalIntent::Conservative),
+    )
+    .expect("stale cleanup record");
 
     remove_clean_worktree(&repo, slug).expect("the tree is removed");
 

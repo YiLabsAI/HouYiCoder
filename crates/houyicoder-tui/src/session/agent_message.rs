@@ -32,6 +32,9 @@ use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::trajectory::RedundantCallEntry;
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
+use houyicoder_protocol::frontend::worktree::WorktreeEnterView;
+use houyicoder_protocol::frontend::worktree::WorktreePreviewView;
+use houyicoder_protocol::frontend::worktree::WorktreeRemoveOutcome;
 use std::collections::HashSet;
 
 /// One row in the agent status footer: a spawned child's latest snapshot.
@@ -363,6 +366,12 @@ pub enum ServerResponse {
     /// and the file path it writes to. Routed to a system line so the user
     /// is told where to look.
     Debug { state: DebugState },
+    /// What removing a worktree would discard, as the host measured it.
+    WorktreePreview { preview: WorktreePreviewView },
+    /// The worktree the session entered.
+    WorktreeEntered { entered: WorktreeEnterView },
+    /// How a confirmed removal ended.
+    WorktreeRemoved { outcome: WorktreeRemoveOutcome },
 }
 
 /// A command the TUI ships to the client-driver task. The driver owns the
@@ -531,6 +540,27 @@ pub enum ClientCommand {
     /// settings.json, not a hardcoded list.
     ModelInfoQuery {
         req_id: RequestId,
+    },
+    /// Ask the host what removing a worktree would discard (the /worktrees
+    /// detail and its confirmation). The reply carries the token the removal
+    /// sends back. The directory is the row the pane shows; the host answers
+    /// whether it manages that tree.
+    WorktreePreviewQuery {
+        req_id: RequestId,
+        path: String,
+    },
+    /// Move the session into a worktree (the /worktrees e action). The host
+    /// enters without a model turn.
+    WorktreeEnterQuery {
+        req_id: RequestId,
+        path: String,
+    },
+    /// Remove a worktree the user confirmed from its preview.
+    WorktreeRemoveQuery {
+        req_id: RequestId,
+        path: String,
+        token: String,
+        delete_unmerged_branch: bool,
     },
     /// Switch the runner's active model (the /model pane select). The host
     /// resolves a Default sentinel, applies the model id, and persists the

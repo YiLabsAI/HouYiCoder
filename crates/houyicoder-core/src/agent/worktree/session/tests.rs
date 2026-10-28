@@ -78,6 +78,57 @@ fn test_flatten_replaces_slash() {
     assert_eq!(flatten_slug("a/b/c"), "a+b+c");
 }
 
+/// A scratch directory that is not a git repository, for the path checks
+/// that read the filesystem and run no git.
+fn scratch(tag: &str) -> PathBuf {
+    let dir = temp_dir().join(format!("houyi-wtspath-{tag}-{}", id()));
+    drop(fs::remove_dir_all(&dir));
+    fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+/// The directory a managed worktree sits in names its slug again, including
+/// one whose slug carries a slash.
+#[test]
+fn test_managed_slug_round_trips() {
+    let root = scratch("inverts");
+    let managed = worktrees_dir(&root);
+    fs::create_dir_all(managed.join("feat+x")).expect("managed dir");
+    fs::create_dir_all(managed.join("plain")).expect("managed dir");
+    assert_eq!(
+        managed_slug_for_path(&root, &managed.join("feat+x")).expect("a managed tree"),
+        "feat/x"
+    );
+    assert_eq!(
+        managed_slug_for_path(&root, &managed.join("plain")).expect("a managed tree"),
+        "plain"
+    );
+}
+
+/// A directory this product did not create answers unmanaged, so a worktree
+/// Git lists but no record names cannot be entered, previewed, or removed.
+#[test]
+fn test_managed_slug_refuses_foreign() {
+    let root = scratch("foreign");
+    let managed = worktrees_dir(&root);
+    fs::create_dir_all(managed.join("inside").join("nested")).expect("nested dir");
+    fs::create_dir_all(root.join("elsewhere")).expect("foreign dir");
+    let foreign = [
+        root.join("elsewhere"),
+        managed.join("inside").join("nested"),
+        managed.join("missing"),
+    ];
+    for path in foreign {
+        assert!(
+            matches!(
+                managed_slug_for_path(&root, &path),
+                Err(WorktreeError::UnmanagedPath { .. })
+            ),
+            "{path:?} is not a managed worktree"
+        );
+    }
+}
+
 #[test]
 fn test_branch_name_uses_slug() {
     assert_eq!(
@@ -161,7 +212,7 @@ fn test_resume_adopts_record() {
     let preview = preview_remove_worktree(&repo, slug).expect("preview the adopted tree");
     assert_eq!(
         preview.merge,
-        MergeState::Unknown,
+        MergeState::Unknown { base: None },
         "an adopted tree's merge answer is unknown, not merged"
     );
     assert_eq!(preview.unmerged_commits, None);

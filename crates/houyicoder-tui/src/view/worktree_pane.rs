@@ -1,24 +1,25 @@
-//! The /worktrees pane body content. Uses shared ListPaneState helpers
-//! (truncate_path, search_hint_line) so the pattern is reusable across
-//! panes. Mirrors the /hooks pane layout (header + scrollable List + fixed
-//! footer) so the cursor stays visible when the list is longer than the
-//! pane and the footer hint stays pinned.
+//! The /worktrees pane at its three levels: the list, one worktree's detail,
+//! and the removal confirmation. The list is a stateful List widget so the
+//! cursor stays visible when the pane is shorter than the list; the detail and
+//! the confirmation are fixed blocks whose last row names the keys that act
+//! on them.
 
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph},
-};
+use std::cell::Cell;
+
+use houyicoder_protocol::frontend::WorktreePreviewView;
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::composition::WorktreeEntry;
 use crate::list_pane_state::{filter_by_query, search_hint_line, truncate_path};
 use crate::state::App;
-use crate::view::navigation::key_hint;
+use crate::ui::{RemoveFocus, WorktreeLevel};
+use crate::view::navigation::{key_hint, tab_header};
 use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
-use std::path::Path;
 
 /// Max width for the path column. Long paths are left-truncated (tail kept)
 /// so the identifying segment stays visible. Fixed width so the column
@@ -26,29 +27,33 @@ use std::path::Path;
 const PATH_WIDTH: usize = 32;
 
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
+    match app.ui.worktree_pane.level.get() {
+        WorktreeLevel::Detail => draw_detail(f, area, app),
+        WorktreeLevel::Confirm => draw_confirm(f, area, app),
+        WorktreeLevel::List => draw_list(f, area, app),
+    }
+}
+
+fn draw_list(f: &mut Frame, area: Rect, app: &App) {
     let entries = &app.sessions.current.capabilities.worktree.entries;
     let n = entries.len();
-    // Level 1 detail (Enter on the list opens this).
-    if app.ui.worktree_pane.level.get() == 1 && n > 0 {
-        let cur = app.ui.worktree_pane.list.cursor.min(n.saturating_sub(1));
-        if let Some(e) = entries.get(cur) {
-            draw_detail(f, area, e);
-            return;
-        }
-    }
-    let searching = app.ui.worktree_pane.list.searching();
+    let searching = app.ui.worktree_pane.search.get() || app.ui.worktree_pane.list.searching();
     let search_h: u16 = if searching { 1 } else { 0 };
-    // Header + optional search hint + scrollable list + fixed footer. The
-    // list is a stateful List widget (not a Paragraph dump) so the cursor
-    // stays visible when the list is longer than the pane and the footer
-    // hint stays pinned at the bottom — same shape as the /hooks pane.
+    let footer = key_hint(&[
+        ("Up/Down", "select"),
+        ("Enter", "open"),
+        ("e", "enter"),
+        ("d", "remove"),
+        ("/", "search"),
+        ("Esc", "close"),
+    ]);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(search_h),
             Constraint::Min(0),
-            Constraint::Length(1),
+            Constraint::Length(key_row_height(&footer, area)),
         ])
         .split(area);
     f.render_widget(
@@ -98,47 +103,324 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
             &mut state,
         );
     }
-    let footer = if app.ui.worktree_pane.level.get() == 1 {
-        key_hint(&[("e", "enter"), ("Esc", "back")])
-    } else {
-        key_hint(&[("Up/Down", "select"), ("Enter", "open"), ("Esc", "close")])
-    };
     f.render_widget(
-        Paragraph::new(footer).style(Style::new().fg(Color::DarkGray)),
+        Paragraph::new(footer)
+            .wrap(Wrap { trim: false })
+            .style(Style::new().fg(Color::DarkGray)),
         chunks[3],
     );
 }
 
-/// Level 1 detail view: full path (not truncated) + branch + HEAD + current
-/// marker. dirty/time/type are deferred (parse_worktrees does not provide
-/// them; the design's display-only round). 'e' in this view opens the
-/// worktree; Esc returns to the list.
-fn draw_detail(f: &mut Frame, area: Rect, e: &WorktreeEntry) {
-    let slug = Path::new(&e.path)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| e.path.clone());
+/// The detail of one worktree: the fields the listing holds, then what the
+/// host measured about a removal. A field the host has not answered yet shows
+/// the listing's own value instead of a zero.
+fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
+    let entries = &app.sessions.current.capabilities.worktree.entries;
+    let cur = app
+        .ui
+        .worktree_pane
+        .list
+        .cursor
+        .min(entries.len().saturating_sub(1));
+    let Some(entry) = entries.get(cur) else {
+        f.render_widget(
+            Paragraph::new("  (no worktree selected)").style(Style::new().fg(Color::DarkGray)),
+            area,
+        );
+        return;
+    };
+    let draft = app.ui.worktree_pane.draft.borrow();
+    let preview = draft.preview();
     let mut lines = vec![
         Line::from(vec![Span::styled(
-            format!("Worktree: {slug}"),
+            format!("Worktree: {}", entry.name()),
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )]),
-        Line::from(format!("Path:     {}", e.path)),
-        Line::from(format!("Branch:   {}", e.branch)),
-        Line::from(format!("HEAD:     {}", e.head)),
+        Line::from(format!("Path:     {}", entry.path)),
+        Line::from(format!("Branch:   {} ({})", entry.branch, entry.head)),
+        Line::from(format!(
+            "State:    {}",
+            if entry.is_current {
+                "current worktree"
+            } else {
+                "linked worktree"
+            }
+        )),
     ];
-    if e.is_current {
-        lines.push(Line::from("Status:   current worktree"));
+    match preview {
+        Some(preview) => {
+            lines.push(Line::from(format!("Merge:    {}", merge_label(preview))));
+            lines.push(Line::from(format!(
+                "Changes:  {} tracked dirty · {} untracked",
+                preview.tracked_dirty, preview.untracked
+            )));
+            lines.push(Line::from(format!(
+                "Ignored:  {}",
+                ignored_summary(preview)
+            )));
+            lines.push(Line::from(format!("Use:      {}", use_state(preview))));
+        }
+        None => {
+            let changes = if entry.dirty_summary.is_empty() {
+                "clean".to_string()
+            } else {
+                entry.dirty_summary.clone()
+            };
+            lines.push(Line::from(format!("Changes:  {changes}")));
+            // A read that is still out is what the host has not answered; a
+            // read that ended without a preview says why below.
+            if draft.preview_request().is_some() {
+                lines.push(Line::from("Merge:    reading from the host…".to_string()));
+            }
+        }
     }
-    let changes = if e.dirty_summary.is_empty() {
-        "clean".to_string()
-    } else {
-        e.dirty_summary.clone()
+    if let Some(notice) = draft.notice() {
+        lines.push(Line::from(Span::styled(
+            format!("Notice:   {notice}"),
+            Style::new().fg(Color::Yellow),
+        )));
+    }
+    draw_block_with_keys(
+        f,
+        area,
+        lines,
+        key_hint(&[
+            ("Up/Down", "scroll"),
+            ("e", "enter"),
+            ("d", "remove"),
+            ("Esc", "back"),
+        ]),
+        &app.ui.worktree_pane.scroll,
+    );
+}
+
+/// Render a fixed block above a key row that keeps its place at the bottom. A
+/// narrow terminal wraps the keys onto another row rather than dropping the
+/// last of them, and a small one shortens the block instead of the key row.
+///
+/// The block scrolls when it is taller than the room it has, and the position
+/// it is held at comes back through the same cell: a block that fits reads as
+/// zero, so a downward key at the end of a short block leaves the next upward
+/// key something to undo.
+fn draw_block_with_keys(
+    f: &mut Frame,
+    area: Rect,
+    body: Vec<Line>,
+    keys: Line,
+    scroll: &Cell<u16>,
+) {
+    let keys_height = key_row_height(&keys, area);
+    let keys_row = Paragraph::new(keys).wrap(Wrap { trim: false });
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(keys_height)])
+        .split(area);
+    let rows = wrapped_rows(&body, chunks[0].width);
+    let offset = scroll.get().min(rows.saturating_sub(chunks[0].height));
+    scroll.set(offset);
+    f.render_widget(
+        Paragraph::new(body)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        chunks[0],
+    );
+    f.render_widget(keys_row.style(Style::new().fg(Color::DarkGray)), chunks[1]);
+}
+
+/// The rows a key row occupies at this width, keeping at least two thirds of
+/// the pane for what the keys act on. Every hint stays reachable in the common
+/// case by wrapping; only a pane too short to hold both gives up a hint, and
+/// the hints are ordered so the last to go is the one for leaving.
+fn key_row_height(keys: &Line, area: Rect) -> u16 {
+    let needed = line_chars(keys).div_ceil(usize::from(area.width.max(1)));
+    needed.clamp(1, usize::from((area.height / 3).max(1))) as u16
+}
+
+/// The rows a block occupies at this width, counted from the characters its
+/// lines hold. A row carries at most a full width of them, so this is the
+/// fewest rows the wrap can use, and the one it does use for a value that is a
+/// single word or a path that breaks mid-word. A line of several words can
+/// take one row more, and its last row is then out of the reach of the
+/// position held here.
+fn wrapped_rows(body: &[Line], width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    body.iter()
+        .map(|line| u16::try_from(line_chars(line).div_ceil(width)).unwrap_or(u16::MAX))
+        .fold(0u16, u16::saturating_add)
+}
+
+/// How many characters a line holds, which its key row and its block both
+/// measure to decide how many rows they take.
+fn line_chars(line: &Line) -> usize {
+    line.spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum()
+}
+
+/// The removal confirmation: the focused-button row, what the preview measured
+/// would be discarded, the branch choice, and the host's last answer. The
+/// confirmation submits nothing while a removal is already out.
+fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
+    let draft = app.ui.worktree_pane.draft.borrow();
+    let focus = draft.focus();
+    let mut lines = vec![tab_header(
+        focus,
+        &[
+            (RemoveFocus::Cancel, "Cancel"),
+            (RemoveFocus::Remove, "Remove worktree"),
+        ],
+    )];
+    match draft.preview() {
+        Some(preview) => {
+            lines.push(Line::from(format!(
+                "Worktree: {} ({})",
+                preview.slug, preview.path
+            )));
+            lines.push(Line::from(format!(
+                "Branch:   {} · {}",
+                preview.branch,
+                merge_label(preview)
+            )));
+            lines.push(Line::from(format!(
+                "Changes:  {} tracked dirty · {} untracked",
+                preview.tracked_dirty, preview.untracked
+            )));
+            lines.push(Line::from(format!(
+                "Ignored:  {}",
+                ignored_summary(preview)
+            )));
+            if preview.leased || preview.locked {
+                lines.push(Line::from(Span::styled(
+                    format!("Blocked:  {}", use_state(preview)),
+                    Style::new().fg(Color::Yellow),
+                )));
+            }
+            let discarded_commits = !preview.merged && draft.delete_unmerged_branch();
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Removal:  {}",
+                    branch_disposition(preview, draft.delete_unmerged_branch())
+                ),
+                if discarded_commits {
+                    Style::new().fg(Color::Yellow)
+                } else {
+                    Style::new()
+                },
+            )));
+        }
+        None => {
+            // Only a read still out is "reading"; a read that ended without a
+            // preview states its reason in the notice below.
+            if draft.preview_request().is_some() {
+                lines.push(Line::from("Reading what a removal would discard…"));
+            }
+        }
+    }
+    if draft.removing() {
+        lines.push(Line::from(Span::styled(
+            "Removing…",
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+    }
+    if let Some(notice) = draft.notice() {
+        lines.push(Line::from(Span::styled(
+            notice,
+            Style::new().fg(Color::Yellow),
+        )));
+    }
+    let mut keys: Vec<(&str, &str)> = vec![
+        ("Left/Right", "choose"),
+        ("Up/Down", "scroll"),
+        ("Enter", "confirm"),
+    ];
+    // A merged branch goes with the tree whatever the choice says, so the key
+    // that changes the choice is not offered where it would change nothing.
+    if draft.preview().is_none_or(|preview| !preview.merged) {
+        keys.push(("b", "branch choice"));
+    }
+    keys.push(("r", "read again"));
+    keys.push(("Esc", "back"));
+    draw_block_with_keys(
+        f,
+        area,
+        lines,
+        key_hint(&keys),
+        &app.ui.worktree_pane.scroll,
+    );
+}
+
+/// What the removal does with the worktree's branch. A merged branch is
+/// deleted whatever the toggle says, because its commits are already in the
+/// base; the toggle decides only whether an unmerged branch's commits survive.
+/// A branch Git counted no commits for is not the same as one holding none, so
+/// the row says what it does not know instead of counting to zero.
+fn branch_disposition(preview: &WorktreePreviewView, delete_unmerged: bool) -> String {
+    if preview.merged {
+        let base = preview.base_branch.as_deref().unwrap_or("its base");
+        return format!("deleted with the worktree, already merged into {base}");
+    }
+    let held = match preview.unmerged_commits {
+        Some(_) => "unmerged commits included",
+        None => "no count of what it holds",
     };
-    lines.push(Line::from(format!("Changes:  {changes}")));
-    lines.push(Line::from(""));
-    lines.push(key_hint(&[("e", "enter"), ("Esc", "back")]));
-    f.render_widget(Paragraph::new(lines), area);
+    if delete_unmerged {
+        format!("deleted with the worktree, {held} (b to keep)")
+    } else {
+        format!("kept, {held} (b to drop)")
+    }
+}
+
+/// How the worktree's branch stands against the branch it was forked from.
+fn merge_label(preview: &WorktreePreviewView) -> String {
+    let Some(base) = preview.base_branch.as_deref() else {
+        return "the record names no base branch".to_string();
+    };
+    if preview.merged {
+        return format!("merged into {base}");
+    }
+    match preview.unmerged_commits {
+        Some(commits) => format!("unmerged: {} ahead of {base}", commits_label(commits)),
+        None => format!("Git did not answer against {base}"),
+    }
+}
+
+fn commits_label(commits: u64) -> String {
+    if commits == 1 {
+        "1 commit".to_string()
+    } else {
+        format!("{commits} commits")
+    }
+}
+
+/// The ignored entries a removal would take with the tree: the build-output
+/// directories Git listed by name, then the count no build-output name covers.
+fn ignored_summary(preview: &WorktreePreviewView) -> String {
+    let mut parts = Vec::new();
+    if !preview.ignored_build_dirs.is_empty() {
+        parts.push(format!(
+            "{} (build output)",
+            preview.ignored_build_dirs.join(", ")
+        ));
+    }
+    if preview.ignored_unknown > 0 {
+        parts.push(format!("{} other", preview.ignored_unknown));
+    }
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// Whether a process or a Git lock holds the worktree, which refuses removal
+/// until it goes.
+fn use_state(preview: &WorktreePreviewView) -> &'static str {
+    match (preview.leased, preview.locked) {
+        (true, _) => "in use by a session",
+        (_, true) => "locked in Git",
+        _ => "free",
+    }
 }
 
 /// Build the list rows (one per filtered worktree). The cursor is an index
@@ -195,3 +477,6 @@ fn worktree_items(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

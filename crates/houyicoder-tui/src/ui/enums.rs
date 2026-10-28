@@ -233,10 +233,11 @@ pub enum Pane {
     Artifact,
     /// The interactive permission-rule manager (/permissions).
     Permission,
-    /// The linked-worktree manager (/worktrees). This pane lists
-    /// the git worktree entries with Enter to enter one and d to remove
-    /// one. Remove routes through the agent worktree tool so the approval
-    /// gate still fires.
+    /// The linked-worktree manager (/worktrees). The list shows every Git
+    /// worktree; Enter opens one's detail, e moves the session into it, and
+    /// d opens the removal confirmation. The host answers all three, so none
+    /// of them costs a model turn, and a directory this product did not
+    /// create is refused there.
     Worktree,
     /// The /trajectory pane: a turn-organized distributed-trace view with
     /// an ASCII time axis. Shows session summary, turn list, and per-turn

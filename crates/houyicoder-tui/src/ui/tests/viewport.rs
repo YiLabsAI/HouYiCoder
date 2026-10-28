@@ -7,7 +7,9 @@
 #![cfg(test)]
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SlashCommand;
+use houyicoder_protocol::frontend::worktree::WorktreePreviewView;
 
 use crate::composition;
 use crate::composition::WorktreeEntry;
@@ -17,6 +19,8 @@ use crate::state::App;
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::attach_connection;
 use crate::test_harness::render_text;
+use crate::test_harness::worktree_preview;
+use crate::ui::{RemoveFocus, WorktreeLevel};
 
 fn working() -> App {
     let mut app = composition::app();
@@ -572,8 +576,9 @@ fn test_memory_pane_scroll() {
     );
 }
 
-/// Level 1 detail view (Enter on the list): shows the full path (not
-/// truncated), branch, HEAD, and the "e=enter Esc=back" footer.
+/// The detail view (Enter on the list): shows the full path (not truncated),
+/// the branch with its head, and the keys that act on it. While the host has
+/// not answered, the removal measures say the read is still out.
 #[test]
 fn test_worktree_pane_detail() {
     let mut app = working();
@@ -585,7 +590,12 @@ fn test_worktree_pane_detail() {
         is_current: true,
         ..Default::default()
     }];
-    app.ui.worktree_pane.level.set(1);
+    app.ui.worktree_pane.level.set(WorktreeLevel::Detail);
+    {
+        let mut draft = app.ui.worktree_pane.draft.borrow_mut();
+        draft.begin("/some/repo/alpha", WorktreeLevel::Detail);
+        draft.expect_preview(RequestId(1));
+    }
     let out = render(&app);
     assert!(out.contains("Worktree:"), "detail title: {out}");
     assert!(
@@ -593,9 +603,90 @@ fn test_worktree_pane_detail() {
         "full path in detail: {out}"
     );
     assert!(out.contains("Branch:"), "branch label: {out}");
-    assert!(out.contains("HEAD:"), "HEAD label: {out}");
+    assert!(out.contains("(abcdef0)"), "head beside the branch: {out}");
+    assert!(
+        out.contains("reading from the host"),
+        "an unanswered read says so instead of showing zeros: {out}"
+    );
     assert!(
         out.contains("e to enter"),
         "enter hint in detail footer: {out}"
+    );
+}
+
+fn removal_preview(slug: &str) -> WorktreePreviewView {
+    worktree_preview(slug)
+}
+
+/// The confirmation names what the removal would discard and starts on
+/// Cancel, so removing takes one deliberate move.
+#[test]
+fn test_confirm_starts_on_cancel() {
+    let mut app = working();
+    app.ui.navigation.pane = Pane::Worktree;
+    app.sessions.current.capabilities.worktree.entries = vec![WorktreeEntry {
+        path: "/some/repo/alpha".into(),
+        head: "abcdef0".into(),
+        branch: "main".into(),
+        ..Default::default()
+    }];
+    {
+        let mut draft = app.ui.worktree_pane.draft.borrow_mut();
+        draft.begin("alpha", WorktreeLevel::List);
+        draft.accept(removal_preview("alpha"));
+    }
+    app.ui.worktree_pane.level.set(WorktreeLevel::Confirm);
+    let out = render(&app);
+    assert!(out.contains("[Cancel]"), "the default button: {out}");
+    assert!(
+        out.contains("Remove worktree") && !out.contains("[Remove worktree]"),
+        "Remove is offered but not focused: {out}"
+    );
+    assert!(
+        out.contains("2 tracked dirty · 1 untracked"),
+        "the preview's counts: {out}"
+    );
+    assert!(
+        out.contains("target (build output)"),
+        "build directories are named: {out}"
+    );
+    assert!(
+        out.contains("unmerged: 2 commits ahead of dev"),
+        "the branch state: {out}"
+    );
+    assert!(
+        out.contains("kept, unmerged commits included"),
+        "the branch is kept by default: {out}"
+    );
+    assert!(
+        out.contains("Left/Right to choose"),
+        "the confirmation footer: {out}"
+    );
+}
+
+/// Moving the focus onto Remove shows the same row with the other button
+/// bracketed, because that is the one Enter would act on.
+#[test]
+fn test_confirm_brackets_focus() {
+    let mut app = working();
+    app.ui.navigation.pane = Pane::Worktree;
+    app.sessions.current.capabilities.worktree.entries = vec![WorktreeEntry {
+        path: "/some/repo/alpha".into(),
+        head: "abcdef0".into(),
+        branch: "main".into(),
+        ..Default::default()
+    }];
+    {
+        let mut draft = app.ui.worktree_pane.draft.borrow_mut();
+        draft.begin("alpha", WorktreeLevel::List);
+        draft.accept(removal_preview("alpha"));
+        assert_eq!(draft.focus(), RemoveFocus::Cancel);
+        draft.toggle_focus();
+    }
+    app.ui.worktree_pane.level.set(WorktreeLevel::Confirm);
+    let out = render(&app);
+    assert!(
+        out.contains("[Remove worktree]"),
+        "the focused button is bracketed: {out}"
     );
 }

@@ -1,5 +1,5 @@
 use crate::composition::{WorktreeEntry, app};
-use crate::records::TranscriptLine;
+use crate::ui::WorktreeLevel;
 
 fn row(path: &str) -> WorktreeEntry {
     WorktreeEntry {
@@ -100,19 +100,45 @@ fn test_cursor_search_empty_noop() {
     );
 }
 
+/// A session with no connection cannot enter a worktree or read a removal
+/// preview: no request goes out and no run starts, so the pane keeps what it
+/// shows rather than waiting on a reply that cannot come.
 #[test]
-fn test_enter_no_carrier() {
+fn test_enter_needs_connection() {
     let mut app = app();
     app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
     app.ui.worktree_pane.list.cursor = 0;
-    // Disconnected: the enter path reports it and enters nothing.
     app.enter_worktree_at_cursor();
+    app.open_worktree_detail();
+    assert_eq!(
+        app.ui.worktree_pane.level.get(),
+        WorktreeLevel::Detail,
+        "the detail still opens on what the listing holds"
+    );
     assert!(
-        app.sessions
-            .current
-            .transcript
-            .iter()
-            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("not connected"))),
-        "disconnected enter should report not connected"
+        app.ui.worktree_pane.draft.borrow().preview().is_none(),
+        "a preview needs a host to answer it"
+    );
+    assert!(
+        app.active_run_req_id().is_none(),
+        "neither action starts a run"
+    );
+}
+
+/// The confirmation backs out to the level it was opened from, so removing
+/// from the detail returns to the detail rather than the list.
+#[test]
+fn test_close_returns_to_opener() {
+    let mut app = app();
+    app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
+    app.ui.worktree_pane.list.cursor = 0;
+    app.open_worktree_detail();
+    app.begin_worktree_removal();
+    assert_eq!(app.ui.worktree_pane.level.get(), WorktreeLevel::Confirm);
+    app.close_worktree_removal();
+    assert_eq!(
+        app.ui.worktree_pane.level.get(),
+        WorktreeLevel::Detail,
+        "the confirmation returns to the detail it came from"
     );
 }

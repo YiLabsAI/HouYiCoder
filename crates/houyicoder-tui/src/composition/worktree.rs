@@ -8,6 +8,7 @@
 use std::fs::canonicalize;
 use std::fs::metadata;
 use std::mem::take;
+use std::path::Path;
 use std::process::Command;
 use std::process::Stdio;
 use std::time::SystemTime;
@@ -28,6 +29,18 @@ pub struct WorktreeEntry {
     pub last_modified: u64,
     /// Empty when clean; otherwise a breakdown like "3 modified, 1 untracked".
     pub dirty_summary: String,
+}
+
+impl WorktreeEntry {
+    /// The last segment of the directory, shown as the row's name. The verbs
+    /// name the directory itself; turning this back into a worktree name is
+    /// the host's job, because only it knows which trees it created.
+    pub fn name(&self) -> String {
+        Path::new(&self.path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.path.clone())
+    }
 }
 
 /// Run git worktree list --porcelain against the project root and parse the

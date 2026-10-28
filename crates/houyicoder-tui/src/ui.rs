@@ -33,7 +33,6 @@ use crate::agents_state::AgentsPaneState;
 use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
-use crate::list_pane_state::ListPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::permission_pane_state::PermissionPaneState;
@@ -46,15 +45,12 @@ use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
 use crate::state::{ParkedViewStates, Stage, TrajectoryPaneState, ViewportMode};
 
-pub use crate::ui::navigation::{Navigation, StatusPaneState};
+mod worktree;
 
-/// The /worktrees pane state: the list cursor and search query plus the
-/// drill-down level (0 = list, 1 = detail).
-#[derive(Default)]
-pub struct WorktreePaneState {
-    pub list: ListPaneState,
-    pub level: Cell<u8>,
-}
+pub use crate::ui::navigation::{Navigation, StatusPaneState};
+pub use crate::ui::worktree::{
+    BeginOutcome, RemovalDraft, RemovalSubmission, RemoveFocus, WorktreeLevel, WorktreePaneState,
+};
 
 /// Presentation and interaction state for the visible frontend: navigation,
 /// input, the transcript and pane view states, the verbose render flag, the

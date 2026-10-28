@@ -32,6 +32,7 @@ use std::process::Stdio;
 mod removal;
 
 pub use removal::remove_clean_worktree;
+pub use removal::remove_previewed_worktree;
 pub use removal::remove_worktree;
 
 /// Per-segment allowlist: letters, digits, dot, underscore, dash. The
@@ -59,6 +60,10 @@ pub enum WorktreeError {
     /// The slug names no worktree this product recorded, so removal has no
     /// object it can act on and must leave the directory alone.
     Unmanaged { slug: String },
+    /// The directory is not one this product created under its managed
+    /// worktrees directory, so no slug of this product names it and nothing
+    /// here may act on it.
+    UnmanagedPath { path: PathBuf },
     /// The slug has a creation record this version refuses, so the directory
     /// cannot be established as the tree that record describes and nothing may
     /// act on it.
@@ -99,6 +104,11 @@ pub enum WorktreeError {
     /// naming it are kept, so running the same removal again finishes that one
     /// target instead of leaving a directory nothing accounts for.
     CleanupPending { path: PathBuf, reason: String },
+    /// The worktree no longer matches the state its removal was previewed
+    /// from, so nothing was removed. The user was shown a different tree than
+    /// the one the removal would have acted on, and a new preview is what
+    /// shows the difference.
+    Stale { slug: String },
 }
 
 impl Display for WorktreeError {
@@ -114,6 +124,11 @@ impl Display for WorktreeError {
             Self::Unmanaged { slug } => write!(
                 f,
                 "worktree \"{slug}\" carries no creation record; it is left untouched"
+            ),
+            Self::UnmanagedPath { path } => write!(
+                f,
+                "{} is not a worktree this product created under its state directory, so it cannot be previewed, entered, or removed from here",
+                path.display()
             ),
             Self::RecordRejected { slug, reason } => write!(
                 f,
@@ -158,6 +173,10 @@ impl Display for WorktreeError {
                 f,
                 "{} is no longer registered as a worktree, but its directory could not be removed: {reason}. The directory and the record naming it are kept, and a later removal of this worktree finishes it",
                 path.display()
+            ),
+            Self::Stale { slug } => write!(
+                f,
+                "worktree \"{slug}\" changed since its removal was previewed; nothing was removed, and a new preview shows what it holds now"
             ),
         }
     }
@@ -223,6 +242,33 @@ pub fn worktree_path_for(repo_root: &Path, slug: &str) -> PathBuf {
 /// The worktree container dir under the repo root.
 pub(super) fn worktrees_dir(repo_root: &Path) -> PathBuf {
     repo_root.join(".houyicoder").join("worktrees")
+}
+
+/// The slug of the managed worktree a directory names.
+///
+/// A directory this product created sits directly under the managed worktrees
+/// directory and carries the flattened form of its slug. The plus sign is not
+/// allowed inside a slug segment, so flattening is invertible and the slug is
+/// recovered from the directory name. Every other directory answers
+/// UnmanagedPath: that refusal is what keeps a worktree Git lists but this
+/// product never created from being entered, previewed, or removed from here.
+pub fn managed_slug_for_path(repo_root: &Path, path: &Path) -> Result<String, WorktreeError> {
+    let unmanaged = || WorktreeError::UnmanagedPath {
+        path: path.to_path_buf(),
+    };
+    let managed_root = canonicalize(&worktrees_dir(repo_root)).map_err(|_| unmanaged())?;
+    let dir = canonicalize(path).map_err(|_| unmanaged())?;
+    let name = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(unmanaged)?
+        .to_string();
+    let slug = name.replace('+', "/");
+    validate_worktree_slug(&slug).map_err(|_| unmanaged())?;
+    if dir != managed_root.join(&name) {
+        return Err(unmanaged());
+    }
+    Ok(slug)
 }
 
 /// A live worktree session identity, captured at enter so exit can restore the

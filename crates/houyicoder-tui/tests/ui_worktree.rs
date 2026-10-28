@@ -13,7 +13,9 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use crate::common::{Key, RENDER_TIMEOUT, pty_session, pty_session_in_repo, run_slash_command};
+use crate::common::{
+    COLS, Key, PtySession, RENDER_TIMEOUT, pty_session, pty_session_in_repo, run_slash_command,
+};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -21,7 +23,8 @@ use std::fs::write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::id;
-use std::time::Duration;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 /// /worktree opens the pane and renders the list header plus at least one
 /// worktree row (the main worktree is always present in a git repo). The
@@ -52,10 +55,11 @@ fn test_pane_lists_worktrees() {
     drop(s);
 }
 
-/// Typing into the /worktrees pane filters the list (the search feature).
-/// A char pushes into the search query, the search hint line renders, and
-/// the first Esc clears the query (not the pane) so a typo does not dismiss
-/// the whole pane. This is the path-truncation + search surface.
+/// The /worktrees pane filters its list through a search box opened with /.
+/// A char pushes into the query once the box is open, the search hint line
+/// renders, and the first Esc clears the query (not the pane) so a typo does
+/// not dismiss the whole pane. A bare letter is an action (e, d, b) and never
+/// starts the search, which is what this sequence drives.
 #[test]
 #[ignore]
 fn test_pane_search_esc_clears() {
@@ -67,6 +71,7 @@ fn test_pane_search_esc_clears() {
         "worktrees pane header should render:\n{}",
         s.output()
     );
+    s.send_key(&Key::Char('/'));
     s.send_key(&Key::Char('x'));
     assert!(
         s.wait_for("search:", RENDER_TIMEOUT),
@@ -110,6 +115,130 @@ fn make_temp_repo(slug: u64) -> PathBuf {
         assert!(ok, "git {:?}", args);
     }
     dir
+}
+
+/// Poll until the marker leaves the visible screen, so a level change is read
+/// from what the user no longer sees rather than from the scrollback.
+fn wait_for_screen_gone(s: &mut PtySession, marker: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !s.screen().contents().contains(marker) {
+            return true;
+        }
+        sleep(Duration::from_millis(20));
+    }
+    !s.screen().contents().contains(marker)
+}
+
+/// A run that only moves the session into a worktree, so the pane below has a
+/// managed tree to open.
+const ENTER_ONLY_SCRIPT: &str = r#"[
+  [{"type":"ToolCall","id":"c1","name":"enter_worktree","input":{"name":"u8p"}}],
+  [{"type":"Text","text":"moved"}]
+]"#;
+
+/// The confirmation's keys through a real terminal: d opens it on the row
+/// under the cursor with the host's measured preview, b flips what happens to
+/// the branch, and Esc returns to the list without closing the pane. The row
+/// for the main checkout answers the host's refusal instead, because this
+/// product did not create it.
+#[test]
+#[ignore]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test fixture spawn, not model-driven"
+)]
+fn test_terminal_routes_confirm_keys() {
+    let repo = make_temp_repo(3);
+    let mut s = pty_session_in_repo(repo.clone(), ENTER_ONLY_SCRIPT);
+    s.resize(40, COLS);
+    s.send_str("go");
+    s.send_key(&Key::Enter);
+    let run_timeout = Duration::from_secs(15);
+    assert!(
+        s.wait_for("moved", run_timeout),
+        "the run should enter the worktree and end:\n{}",
+        s.output()
+    );
+    // Give the worktree branch a commit of its own, so the confirmation has
+    // an unmerged branch to offer the toggle for.
+    let wt_dir = repo.join(".houyicoder").join("worktrees").join("u8p");
+    let advanced = Command::new("git")
+        .arg("-C")
+        .arg(&wt_dir)
+        .args(["commit", "--allow-empty", "-m", "ahead", "-q"])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    assert!(advanced, "the worktree branch moves on");
+    run_slash_command(&mut s, "worktree");
+    assert!(
+        s.wait_for_screen("worktrees —", RENDER_TIMEOUT),
+        "the pane lists the worktrees:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_screen("2 listed", RENDER_TIMEOUT),
+        "the entered worktree and the main one are both listed:\n{}",
+        s.output()
+    );
+    // The cursor sits on the main checkout, which this product did not
+    // create: the host refuses it rather than removing the user's tree.
+    s.send_key(&Key::Char('d'));
+    assert!(
+        s.wait_for_screen("not a worktree this product created", RENDER_TIMEOUT),
+        "the host refuses a directory it did not create:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        wait_for_screen_gone(&mut s, "Remove worktree", RENDER_TIMEOUT),
+        "Esc returns to the list:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Down);
+    s.send_key(&Key::Char('d'));
+    assert!(
+        s.wait_for_screen("Remove worktree", RENDER_TIMEOUT),
+        "d opens the confirmation on the managed worktree:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_screen(
+            "kept, unmerged commits included (b to drop)",
+            RENDER_TIMEOUT
+        ),
+        "the branch line states what a removal would do with it:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Char('b'));
+    assert!(
+        s.wait_for_screen(
+            "deleted with the worktree, unmerged commits included (b to keep)",
+            RENDER_TIMEOUT
+        ),
+        "b flips the branch choice and the line says so:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        wait_for_screen_gone(&mut s, "Remove worktree", RENDER_TIMEOUT),
+        "Esc returns to the list:\n{}",
+        s.output()
+    );
+    assert!(
+        s.screen().contents().contains("worktrees —"),
+        "Esc from the confirmation keeps the pane open:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::Esc);
+    assert!(
+        wait_for_screen_gone(&mut s, "worktrees —", RENDER_TIMEOUT),
+        "Esc at the list closes the pane:\n{}",
+        s.output()
+    );
+    drop(s);
+    remove_dir_all(&repo).ok();
 }
 
 /// A three-response script: enter a worktree, then exit with remove + discard,

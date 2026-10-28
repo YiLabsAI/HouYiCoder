@@ -34,6 +34,8 @@ mod subagent_render;
 mod teammate_esc;
 #[path = "tests/teammate_view.rs"]
 mod teammate_view;
+#[path = "tests/worktree.rs"]
+mod worktree;
 
 /// An invocable user skill, so a pane test needs only a name to build the
 /// list row it acts on.

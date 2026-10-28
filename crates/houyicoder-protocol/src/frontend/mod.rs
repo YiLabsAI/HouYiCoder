@@ -27,6 +27,7 @@ pub mod tools;
 pub mod trajectory;
 pub mod trust;
 pub mod verdict;
+pub mod worktree;
 
 use crate::frontend::debug::DebugLevel;
 use crate::frontend::model::SpeedMode;
@@ -60,6 +61,7 @@ use std::fmt::Formatter;
 pub use trajectory::TrajectoryEntry;
 pub use trust::{TrustAccept, TrustPrompt, TrustRisk};
 pub use verdict::Verdict;
+pub use worktree::{WorktreeEnterView, WorktreePreviewView, WorktreeRemoveOutcome};
 
 /// A wire session id, carried by run verbs (MessageSend, RunCancel) so a
 /// multi-session host can route a request to the session it drives. A
@@ -587,7 +589,32 @@ pub enum FrontendRequest {
         key: String,
         scope: String,
     },
-    Worktree,
+    /// Show what removing a managed worktree would discard, plus the token
+    /// naming that state. Nothing is written or deleted, so this answer is
+    /// safe to ask for while a turn runs.
+    ///
+    /// The request names the directory the row shows rather than a slug: the
+    /// directory is what the terminal has, and the host is the only side that
+    /// can say whether it is a worktree this product manages.
+    WorktreePreview {
+        path: String,
+    },
+    /// Enter a managed worktree as the session's working tree. The host does
+    /// the work itself: no model turn is started, and the reply names the
+    /// directory and branch the session now works in.
+    WorktreeEnter {
+        path: String,
+    },
+    /// Remove a managed worktree the user confirmed from its preview. The
+    /// host re-reads the tree and removes nothing unless the token still
+    /// names what it finds.
+    WorktreeRemove {
+        path: String,
+        token: String,
+        /// Whether the branch goes with the tree when its commits are not on
+        /// the branch it was forked from. False keeps them.
+        delete_unmerged_branch: bool,
+    },
     Compact,
     Metrics,
     // permission mode and rule set (the TUI renders /mode and /rules without

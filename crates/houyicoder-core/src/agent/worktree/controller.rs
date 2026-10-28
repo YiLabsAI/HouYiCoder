@@ -19,14 +19,14 @@
 //! the record lands now (resume consumption is a separate, deferred task);
 //! never silent on the cwd + fence switch.
 
-use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use self::child_reclaim::ReclaimCompletion;
-use self::child_reclaim::ReclaimSlot;
-use self::child_reclaim::WorktreeReclaimRecord;
+pub use self::child::ChildCleanup;
+use self::child::ChildReclaimLedger;
+pub use self::child::ChildWorktree;
 
 use houyicoder_api::agent_event::{EventHandler, UserNoticeEvent};
 use houyicoder_api::hook_fire::HookFire;
@@ -36,6 +36,8 @@ use houyicoder_context::{
     EventId, HookEventKind, HookFirePayload, SessionEvent, SessionId, SessionLogEntry,
 };
 
+use crate::agent::worktree::preview::WorktreePreview;
+use crate::agent::worktree::preview::preview_remove_worktree;
 use crate::agent::worktree::record::WorktreeLease;
 use crate::agent::worktree::session as worktree_session;
 use crate::agent::worktree::session::WorktreeError;
@@ -65,6 +67,19 @@ pub struct EnterResult {
     pub message: String,
 }
 
+/// A worktree the controller has already entered as far as the non-awaiting
+/// steps go: the tree exists, the fence and the working directory have moved,
+/// and the session holds its lease. Handed to finish_enter for the log record
+/// and the hook, so the caller can do the Git work on the blocking pool
+/// first.
+#[derive(Debug)]
+pub struct PreparedEnter {
+    slug: String,
+    path: PathBuf,
+    branch: String,
+    head_commit: Option<String>,
+}
+
 /// The result of an exit (rendered into the tool result message).
 #[derive(Clone, Debug)]
 pub struct ExitOutcome {
@@ -75,28 +90,6 @@ pub struct ExitOutcome {
     pub message: String,
 }
 
-/// A per-child worktree: the path + branch + the fence guard the child
-/// holds during its run. The guard keeps the child's sandbox execs fenced
-/// to the worktree; cleanup_child restores the wide fence, then removes
-/// the worktree when the child left no changes or preserves it for the
-/// caller to continue on the branch when it did. Not Clone -- the guard
-/// is single-owner.
-///
-/// The guard's own Drop restores the wide fence when the handle is dropped
-/// without a cleanup_child call (a force-aborted child). The controller keeps
-/// a separate reclaim record per child so that abandoned tree is removed at
-/// shutdown instead of leaking.
-pub struct ChildWorktree {
-    pub worktree_path: PathBuf,
-    pub worktree_branch: String,
-    slug: String,
-    pub fence_guard: WorktreeFenceGuard,
-    /// Held for the child's run and released before its tree is reclaimed, so
-    /// the reclaim is not refused by the child's own hold and no other session
-    /// enters the tree meanwhile.
-    lease: WorktreeLease,
-}
-
 /// The worktree the session entered, with the lease that keeps other sessions
 /// from working in the same tree. The lease is taken out of this owner before
 /// a removal asks git to delete the tree, and released with the owner on keep.
@@ -105,21 +98,6 @@ struct ActiveWorktree {
     /// None only between the release before a removal and the exit that
     /// clears this owner.
     lease: Option<WorktreeLease>,
-}
-
-/// The outcome of cleaning up a per-child worktree at terminal state. A
-/// clean worktree (no uncommitted files, no new commits) is auto-removed;
-/// a dirty one is preserved so the caller can continue on the branch, with
-/// the path + branch reported back.
-#[derive(Debug, Clone)]
-pub enum ChildCleanup {
-    Removed {
-        worktree_path: PathBuf,
-    },
-    Kept {
-        worktree_path: PathBuf,
-        worktree_branch: String,
-    },
 }
 
 pub struct WorktreeController {
@@ -153,14 +131,11 @@ pub struct WorktreeController {
     /// attaches the runner's hook-fire handle once it exists. None when no
     /// hooks are wired; fire is a no-op then.
     hook_fire: Mutex<Option<Arc<dyn HookFire>>>,
-    /// Per-child worktrees not yet reclaimed, by slug. Populated at
-    /// enter_for_child, removed by cleanup_child once its reclaim is observed,
-    /// and swept by reclaim_abandoned at shutdown. Each slot holds the
-    /// recovery record plus a launch-once completion cell, so an aborted
-    /// cleanup leaves both the record and the launched task's completion
-    /// reachable: Drop restores the fence, this map keeps the blocking reclaim
-    /// observable to completion off the worker.
-    pending_reclaims: Mutex<HashMap<String, ReclaimSlot>>,
+    /// The per-child trees this controller created and has not yet reclaimed.
+    /// The ledger keeps each tree's recovery record reachable after the handle
+    /// that owns it is gone, so a child aborted mid-cleanup still has its tree
+    /// reclaimed off the worker.
+    reclaims: ChildReclaimLedger,
 }
 
 impl WorktreeController {
@@ -186,7 +161,7 @@ impl WorktreeController {
             original_main_ref: Mutex::new(None),
             user_notice: Mutex::new(None),
             hook_fire: Mutex::new(None),
-            pending_reclaims: Mutex::new(HashMap::new()),
+            reclaims: ChildReclaimLedger::default(),
         }
     }
 
@@ -230,11 +205,75 @@ impl WorktreeController {
         self.session.lock().expect("session lock").is_some()
     }
 
+    /// What removing a managed worktree would discard, and the token naming
+    /// that state. Nothing is written and nothing is deleted.
+    ///
+    /// The repository this controller was built for is the one asked about, so
+    /// a caller names a slug rather than a path it composed itself.
+    pub fn preview_remove(&self, slug: &str) -> Result<WorktreePreview, WorktreeError> {
+        preview_remove_worktree(&self.repo_root, slug)
+    }
+
+    /// The slug of the managed worktree a directory names, for a caller that
+    /// has a path rather than a name.
+    pub fn slug_for_path(&self, path: &Path) -> Result<String, WorktreeError> {
+        worktree_session::managed_slug_for_path(&self.repo_root, path)
+    }
+
+    /// Remove a worktree the user confirmed from its preview.
+    ///
+    /// The tree this session works in is refused before its lease is tried:
+    /// the session's own hold would otherwise fail the removal's acquisition,
+    /// which reads as another process using the tree rather than as the one
+    /// thing the user cannot remove from inside it.
+    pub fn remove_previewed(
+        &self,
+        slug: &str,
+        token: &str,
+        delete_unmerged_branch: bool,
+    ) -> Result<(), WorktreeError> {
+        let active = self.session.lock().expect("session lock");
+        if let Some(active) = active.as_ref()
+            && active.session.worktree_name == slug
+        {
+            return Err(WorktreeError::Leased {
+                slug: slug.to_string(),
+                reason: "this session is working in it".to_string(),
+            });
+        }
+        drop(active);
+        worktree_session::remove_previewed_worktree(
+            &self.repo_root,
+            slug,
+            token,
+            delete_unmerged_branch,
+        )
+    }
+
+    /// Fire the removal hook for a tree the pane removed. The exit path fires
+    /// the same event; a removal driven from the pane changes no session
+    /// state, so the hook is the whole notice an automation gets.
+    pub async fn fire_removed(&self, path: PathBuf) {
+        self.fire_worktree_event(HookEventKind::WorktreeRemove, path)
+            .await;
+    }
+
     /// Enter a worktree session (EnterWorktree tool body). Creates or resumes
     /// the worktree, narrows the fence + cwd, records the main ref + a
     /// WorktreeEnter event. Refuses a second enter + refuses while an exec is
     /// in flight.
     pub async fn enter(&self, slug: Option<String>) -> Result<EnterResult, WorktreeError> {
+        let prepared = self.enter_prepared(slug)?;
+        self.finish_enter(prepared).await
+    }
+
+    /// The part of entering that does not await: the guard checks, the lease,
+    /// the tree, the sandbox fence, the working directory swap, and the
+    /// session install. Split from enter so a caller that keeps serving other
+    /// work meanwhile can run this on the blocking pool; the Git checkout and
+    /// the fence hold no awaiting point, and running them on the task that
+    /// carries the session's events stalls that session until they finish.
+    pub fn enter_prepared(&self, slug: Option<String>) -> Result<PreparedEnter, WorktreeError> {
         {
             let s = self.session.lock().expect("session lock");
             if s.is_some() {
@@ -293,8 +332,35 @@ impl WorktreeController {
         let cwd_handle = self.cwd_handle.lock().expect("cwd handle lock").clone();
         let original_cwd = cwd_handle.read().expect("cwd lock").clone();
         *cwd_handle.write().expect("cwd lock") = created.worktree_path.clone();
-        // Record the event (H2: the record lands now so the log is
-        // reproducible; resume consumption is deferred).
+        let session = WorktreeSession {
+            original_cwd,
+            worktree_path: created.worktree_path.clone(),
+            worktree_name: slug.clone(),
+            worktree_branch: Some(created.worktree_branch.clone()),
+            original_branch,
+            original_head_commit: created.head_commit.clone(),
+            session_id: self.session_id,
+        };
+        *self.session.lock().expect("session lock") = Some(ActiveWorktree {
+            session,
+            lease: Some(lease),
+        });
+        Ok(PreparedEnter {
+            slug,
+            path: created.worktree_path,
+            branch: created.worktree_branch,
+            head_commit: created.head_commit,
+        })
+    }
+
+    /// The part of entering that awaits: the session-log record, the
+    /// worktree-create hook, and the answer.
+    pub async fn finish_enter(
+        &self,
+        prepared: PreparedEnter,
+    ) -> Result<EnterResult, WorktreeError> {
+        // The record is written before the answer, so a log holds the enter
+        // even when the answer never reaches the terminal.
         if let Err(e) = self
             .store
             .append(SessionLogEntry {
@@ -303,207 +369,28 @@ impl WorktreeController {
                 ts: 0,
                 prev_hash: None,
                 event: SessionEvent::WorktreeEnter {
-                    slug: slug.clone(),
-                    path: created.worktree_path.to_string_lossy().into_owned(),
-                    branch: created.worktree_branch.clone(),
-                    head_commit: created.head_commit.clone(),
+                    slug: prepared.slug,
+                    path: prepared.path.to_string_lossy().into_owned(),
+                    branch: prepared.branch.clone(),
+                    head_commit: prepared.head_commit,
                 },
             })
             .await
         {
             tracing::warn!("worktree enter event append failed: {e}");
         }
-        let session = WorktreeSession {
-            original_cwd,
-            worktree_path: created.worktree_path.clone(),
-            worktree_name: slug.clone(),
-            worktree_branch: Some(created.worktree_branch.clone()),
-            original_branch,
-            original_head_commit: created.head_commit,
-            session_id: self.session_id,
-        };
-        *self.session.lock().expect("session lock") = Some(ActiveWorktree {
-            session,
-            lease: Some(lease),
-        });
-        self.fire_worktree_event(HookEventKind::WorktreeCreate, created.worktree_path.clone())
+        self.fire_worktree_event(HookEventKind::WorktreeCreate, prepared.path.clone())
             .await;
         let message = format!(
             "Created worktree at {} on branch {}. The session is now working in the worktree. Use exit_worktree to leave.",
-            created.worktree_path.to_string_lossy(),
-            created.worktree_branch,
+            prepared.path.to_string_lossy(),
+            prepared.branch,
         );
         Ok(EnterResult {
-            worktree_path: created.worktree_path.to_string_lossy().into_owned(),
-            worktree_branch: created.worktree_branch,
+            worktree_path: prepared.path.to_string_lossy().into_owned(),
+            worktree_branch: prepared.branch,
             message,
         })
-    }
-
-    /// Create a per-child worktree + narrow the fence, leaving the parent on
-    /// its original cwd and wide fence. The returned guard travels with the
-    /// child handle and is held for the child's run; Drop restores the wide
-    /// fence on completion. Refused while a sandbox exec is in flight (an
-    /// in-flight exec keeps its spawn-time profile and could escape the
-    /// narrow). Fail-closed: a fence failure returns an error, never a
-    /// degraded no-isolation spawn.
-    pub async fn enter_for_child(&self, slug: String) -> Result<ChildWorktree, WorktreeError> {
-        if self.sandbox.active_exec_count() > 0 {
-            return Err(WorktreeError::Git {
-                stderr: "per-child worktree refused: a sandbox exec is in flight".into(),
-            });
-        }
-        // The child's tree is marked in use for the child's run; cleanup
-        // releases the lease before it asks for the reclaim. The lease comes
-        // first so a refusal leaves no tree behind for nobody to reclaim.
-        let lease = WorktreeLease::acquire(&self.repo_root, &slug)?;
-        let created = match worktree_session::get_or_create_worktree(&self.repo_root, &slug) {
-            Ok(created) => created,
-            Err(error) => {
-                // The lease was taken for a tree that was never made, so the
-                // file it created is residue nothing else would clear.
-                lease.discard();
-                return Err(error);
-            }
-        };
-        // Register before the fence is restricted and before the hook-fire
-        // await, so a failure or abort in either still leaves the tree in the
-        // reclaim map for the shutdown sweep. A resumed tree carries a prior
-        // child's output; a diff against its current tip would read that work
-        // as no new changes and let reclaim delete it. Only a freshly created
-        // tree is registered: a resumed one is the caller's to keep, so it
-        // never enters the sweep.
-        if !created.existed {
-            self.pending_reclaims.lock().expect("reclaims lock").insert(
-                slug.clone(),
-                ReclaimSlot::new(WorktreeReclaimRecord {
-                    repo_root: self.repo_root.clone(),
-                    worktree_path: created.worktree_path.clone(),
-                    worktree_branch: created.worktree_branch.clone(),
-                    slug: slug.clone(),
-                    head_commit: created.head_commit.clone(),
-                }),
-            );
-        }
-        let guard = self
-            .sandbox
-            .narrow_to_worktree(&created.worktree_path, &self.git_common_dir)
-            .map_err(|e| WorktreeError::Git {
-                stderr: format!("narrow_to_worktree: {e}"),
-            })?;
-        self.fire_worktree_event(HookEventKind::WorktreeCreate, created.worktree_path.clone())
-            .await;
-        Ok(ChildWorktree {
-            worktree_path: created.worktree_path,
-            worktree_branch: created.worktree_branch,
-            slug,
-            fence_guard: guard,
-            lease,
-        })
-    }
-
-    /// Clean up a per-child worktree at terminal state: restore the wide
-    /// fence, then remove the tree when the child left no changes or preserve
-    /// it (with path + branch) when it did. Infallible: an abandoned tree is a
-    /// cleanup outcome the caller observes, not an error to propagate at
-    /// finalize. The fence restore happens here (the child handle carries the
-    /// guard); the controller then runs the same conservative reclaim as the
-    /// shutdown sweep, removing its reclaim record only after that reclaim
-    /// finishes (an abort mid-reclaim leaves the record for the sweep). A
-    /// normal cleanup and an abandoned-child reclaim share one removal path.
-    pub async fn cleanup_child(&self, cw: ChildWorktree) -> ChildCleanup {
-        let ChildWorktree {
-            worktree_path,
-            worktree_branch,
-            slug,
-            fence_guard,
-            lease,
-        } = cw;
-        if let Err(e) = fence_guard.restore() {
-            tracing::warn!("child worktree fence restore failed: {e}");
-        }
-        // The child is done with the tree, so its hold ends here: the reclaim
-        // below refuses a leased tree, and this session's own lease is not a
-        // reason to keep one.
-        drop(lease);
-        // Launch the blocking reclaim if it has not been launched already, then
-        // await the shared completion. The slot stays in the map through the
-        // await so an abort mid-reclaim leaves the launched task's completion
-        // reachable for the shutdown sweep; the slot is removed only once the
-        // outcome is observed.
-        let outcome = {
-            let completion = match self
-                .pending_reclaims
-                .lock()
-                .expect("reclaims lock")
-                .get_mut(&slug)
-            {
-                Some(slot) => {
-                    slot.launch();
-                    Arc::clone(&slot.completion)
-                }
-                // No reclaim record: the entry was already swept by a shutdown
-                // sweep. Report the tree kept so the caller does not delete it
-                // a second time.
-                None => {
-                    return ChildCleanup::Kept {
-                        worktree_path,
-                        worktree_branch,
-                    };
-                }
-            };
-            completion.await_outcome().await
-        };
-        self.pending_reclaims
-            .lock()
-            .expect("reclaims lock")
-            .remove(&slug);
-        // The normal path fires WorktreeRemove only when the removal actually
-        // succeeded; the shutdown sweep removes without firing (see
-        // reclaim_abandoned) so an aborted child's silent recovery never
-        // over-reports a lifecycle event.
-        if let ChildCleanup::Removed { worktree_path } = &outcome {
-            self.fire_worktree_event(HookEventKind::WorktreeRemove, worktree_path.clone())
-                .await;
-        }
-        outcome
-    }
-
-    /// Reclaim every per-child worktree still recorded (a child force-aborted
-    /// before its finalize cleanup tail, whose slot cleanup_child never
-    /// removed). Called by the shutdown owner after all child drivers have
-    /// joined and before the parent lease is released, so the blocking reclaim
-    /// is observed to completion rather than left to a Drop that would run
-    /// sync Git on the worker.
-    ///
-    /// A slot whose cleanup was aborted mid-reclaim is already launched; the
-    /// sweep awaits that launched task's completion rather than relaunching Git, so
-    /// a blocked branch deletion (a Git ref lock held by another process) is
-    /// waited out, not raced by a second directory re-check. A slot whose
-    /// child never reached cleanup is launched here for the first time. The
-    /// sweep removes a clean tree without firing WorktreeRemove: the abort
-    /// already left the child's lifecycle event unbalanced, and the silent
-    /// recovery does not manufacture a removal event for it.
-    pub async fn reclaim_abandoned(&self) {
-        // Launch every not-yet-launched reclaim, collecting each completion.
-        // The slots stay in the map through the await (a late cleanup_child
-        // for the same slug would await the same completion rather than find
-        // the slot drained); the map is cleared only once every outcome is
-        // observed.
-        let completions: Vec<Arc<ReclaimCompletion>> = self
-            .pending_reclaims
-            .lock()
-            .expect("reclaims lock")
-            .values_mut()
-            .map(|slot| {
-                slot.launch();
-                Arc::clone(&slot.completion)
-            })
-            .collect();
-        for completion in completions {
-            completion.await_outcome().await;
-        }
-        self.pending_reclaims.lock().expect("reclaims lock").clear();
     }
 
     /// Exit the worktree session (ExitWorktree tool body). keep preserves the
@@ -744,7 +631,7 @@ fn recorded_exit_action(
     }
 }
 
-mod child_reclaim;
+mod child;
 
 #[cfg(test)]
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]

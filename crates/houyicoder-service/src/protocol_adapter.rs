@@ -11,6 +11,7 @@ pub(crate) mod redundancy;
 pub(crate) mod session_descriptor;
 pub(crate) mod skills;
 mod trajectory_row;
+pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;

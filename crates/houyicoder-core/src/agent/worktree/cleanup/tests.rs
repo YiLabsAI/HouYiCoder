@@ -126,7 +126,12 @@ fn test_pending_refuses_linked_dir() {
 
     let error = write_pending(
         &repo,
-        &PendingCleanup::new("feat", &repo.join("leftover"), None),
+        &PendingCleanup::new(
+            "feat",
+            &repo.join("leftover"),
+            None,
+            RemovalIntent::Conservative,
+        ),
     )
     .expect_err("the record directory resolves outside the state directory");
     assert!(
@@ -152,7 +157,7 @@ fn test_pending_refuses_linked_dir() {
 fn test_pending_round_trips() {
     let repo = scratch("record");
     let path = repo.join("leftover");
-    let pending = PendingCleanup::new("feat", &path, None);
+    let pending = PendingCleanup::new("feat", &path, None, RemovalIntent::KeepBranch);
 
     write_pending(&repo, &pending).expect("write the record");
     let read = lookup_pending(&repo, "feat")
@@ -161,6 +166,11 @@ fn test_pending_round_trips() {
 
     assert_eq!(read.slug(), "feat");
     assert_eq!(read.path(), path);
+    assert_eq!(
+        read.intent(),
+        RemovalIntent::KeepBranch,
+        "the record keeps what the removal was allowed to do"
+    );
 
     clear_pending(&repo, "feat");
     assert!(
@@ -173,6 +183,32 @@ fn test_pending_round_trips() {
     // that finishes a leftover does not know whether an earlier attempt
     // managed to write one.
     clear_pending(&repo, "feat");
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// A record written before the intent was kept finishes conservatively: an
+/// authorization this version cannot read is not one it may act on, and
+/// Git's own caution is the answer that loses nothing.
+#[test]
+fn test_old_record_stays_conservative() {
+    let repo = scratch("old-record");
+    let path = pending_path(&repo, "legacy");
+    fs::create_dir_all(path.parent().expect("state dir")).expect("state dir");
+    fs::write(
+        &path,
+        r#"{"schema":1,"slug":"legacy","path":"/left","stamp":null}"#,
+    )
+    .expect("write a record from an earlier version");
+
+    let read = lookup_pending(&repo, "legacy")
+        .expect("read the record")
+        .expect("a record is there");
+
+    assert_eq!(
+        read.intent(),
+        RemovalIntent::Conservative,
+        "a record that names no intent overrides nothing"
+    );
     drop(fs::remove_dir_all(&repo));
 }
 

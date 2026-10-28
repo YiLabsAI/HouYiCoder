@@ -186,7 +186,7 @@ fn test_unknown_base_counts_none() {
         .expect("record without base");
 
     let preview = preview_remove_worktree(&repo, "orphan").expect("preview");
-    assert_eq!(preview.merge, MergeState::Unknown);
+    assert_eq!(preview.merge, MergeState::Unknown { base: None });
     assert_eq!(preview.unmerged_commits, None);
     drop(remove_dir_all(&repo));
 }
@@ -206,7 +206,13 @@ fn test_missing_base_reports_unknown() {
     .expect("record with a missing base");
 
     let preview = preview_remove_worktree(&repo, "stale").expect("preview");
-    assert_eq!(preview.merge, MergeState::Unknown);
+    assert_eq!(
+        preview.merge,
+        MergeState::Unknown {
+            base: Some("gone".to_string())
+        },
+        "the base the question was asked against survives the unanswered answer"
+    );
     assert_eq!(preview.unmerged_commits, None);
     drop(remove_dir_all(&repo));
 }
@@ -320,7 +326,7 @@ fn test_history_moves_token() {
     write_managed_worktree(&repo, &ManagedWorktree::new("steady", None))
         .expect("record without a base");
     let unknown = preview_remove_worktree(&repo, "steady").expect("preview without a base");
-    assert_eq!(unknown.merge, MergeState::Unknown);
+    assert_eq!(unknown.merge, MergeState::Unknown { base: None });
     assert_ne!(
         unknown.token, relabelled.token,
         "the merge answer moves the token"
@@ -328,11 +334,13 @@ fn test_history_moves_token() {
     drop(remove_dir_all(&repo));
 }
 
-/// The token names the holds on a tree: a session's lease and Git's own lock
-/// both refuse a removal, and either one is part of the state the user was
-/// shown.
+/// A session's lease is reported but stays out of the token. The removal that
+/// carries the token takes the lease itself before comparing, so a digest that
+/// included it could never match; a tree another process has leased refuses at
+/// that acquisition instead, which asks the same question where it can be
+/// answered.
 #[test]
-fn test_holds_move_token() {
+fn test_token_ignores_lease() {
     let repo = make_repo("holds");
     let path = managed(&repo, "busy");
     let free = preview_remove_worktree(&repo, "busy").expect("preview");
@@ -342,13 +350,10 @@ fn test_holds_move_token() {
     let lease = WorktreeLease::acquire(&repo, "busy").expect("take the lease");
     let leased = preview_remove_worktree(&repo, "busy").expect("preview while leased");
     assert!(leased.leased, "the lease is reported");
-    assert_ne!(leased.token, free.token, "a lease moves the token");
+    assert_eq!(leased.token, free.token, "a lease does not move the token");
     drop(lease);
     let released = preview_remove_worktree(&repo, "busy").expect("preview after release");
-    assert_eq!(
-        released.token, free.token,
-        "a released lease restores the state"
-    );
+    assert_eq!(released.token, free.token, "the state is the one it was");
 
     git(&repo, &["worktree", "lock", &path.to_string_lossy()]);
     let locked = preview_remove_worktree(&repo, "busy").expect("preview while locked");
@@ -431,8 +436,20 @@ fn test_token_separates_fields() {
         ..late.clone()
     };
 
-    let late_token = preview_token(&late, &changes, &MergeState::Unknown, None, false, false);
-    let early_token = preview_token(&early, &changes, &MergeState::Unknown, None, false, false);
+    let late_token = preview_token(
+        &late,
+        &changes,
+        &MergeState::Unknown { base: None },
+        None,
+        false,
+    );
+    let early_token = preview_token(
+        &early,
+        &changes,
+        &MergeState::Unknown { base: None },
+        None,
+        false,
+    );
     assert_ne!(
         early_token, late_token,
         "a value cannot be read as the end of one field and the start of the next"

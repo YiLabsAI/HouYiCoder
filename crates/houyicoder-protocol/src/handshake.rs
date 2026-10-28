@@ -24,8 +24,11 @@ use serde::{Deserialize, Serialize};
 /// Unknown. v8: the agents reply payload changed shape, from the prompt's
 /// Markdown string to structured entries. A same-version peer would handshake
 /// through and then fail every agents reply at decode, leaving the pane
-/// waiting on a reply that cannot arrive.
-pub const PROTOCOL_VERSION: u16 = 8;
+/// waiting on a reply that cannot arrive. v9: the worktree request replaced
+/// its single variant with a preview, an enter, and a removal, and the
+/// replies gained three shapes. A same-version peer would handshake through
+/// and then fail the first worktree frame at decode.
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.

@@ -5,6 +5,8 @@ mod run_completion;
 
 mod memory;
 
+mod worktree;
+
 use std::iter;
 use std::time::Instant;
 
@@ -469,6 +471,15 @@ impl App {
             ServerResponse::MemoryToggleState { state } => {
                 self.apply_memory_toggles(request, state);
             }
+            ServerResponse::WorktreePreview { preview } => {
+                self.apply_worktree_preview(request, preview);
+            }
+            ServerResponse::WorktreeEntered { entered } => {
+                self.apply_worktree_entered(request, entered);
+            }
+            ServerResponse::WorktreeRemoved { outcome } => {
+                self.apply_worktree_removed(request, outcome);
+            }
             ServerResponse::Undo { description } => match description {
                 Some(desc) => self.system_line(format!("undo: {desc}")),
                 None => self.system_line("undo: nothing to undo (stack empty)"),
@@ -511,6 +522,9 @@ impl App {
             // The pending mark clears and the header keeps the old
             // value — nothing was applied.
             self.system_line(Self::memory_failure_line(action, &message));
+        } else if self.settle_worktree_failure(request, &message) {
+            // The worktree panel shows the host's reason where the action was
+            // taken, so the retry stays one key away.
         } else {
             // An error for the request the skills detail waits on settles it
             // as unavailable rather than leaving it loading on a reply that

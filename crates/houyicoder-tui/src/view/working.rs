@@ -617,9 +617,8 @@ const QUEUE_PANE_HEIGHT: u16 = 12;
 /// Render the /worktrees pane: transcript tail above, the linked-worktree
 /// list in the lower band. Shares the draw_command_pane template with
 /// /permissions /search /memory so the slash-command panes have one shape.
-/// The pane is the in-TUI worktree manager: browse, Enter to enter one, d to
-/// remove one (the remove action routes through the agent worktree tool so
-/// the approval gate still fires).
+/// The pane is the in-TUI worktree manager: browse, Enter for one's detail,
+/// e to enter it, d to remove it.
 fn draw_worktree_pane(f: &mut Frame, area: Rect, app: &App) {
     draw_command_pane(
         f,

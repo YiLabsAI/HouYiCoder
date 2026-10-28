@@ -105,6 +105,20 @@ impl Server {
                 .await
             }
             FrontendRequest::Hooks => self.dispatch_hooks(io, req_id).await,
+            FrontendRequest::WorktreePreview { path } => {
+                self.handle_worktree_preview(io, req_id, path).await
+            }
+            FrontendRequest::WorktreeEnter { path } => {
+                self.handle_worktree_enter(io, req_id, path).await
+            }
+            FrontendRequest::WorktreeRemove {
+                path,
+                token,
+                delete_unmerged_branch,
+            } => {
+                self.handle_worktree_remove(io, req_id, path, token, delete_unmerged_branch)
+                    .await
+            }
             FrontendRequest::Skills => self.dispatch_skills(io, req_id).await,
             FrontendRequest::SkillBody { name } => self.dispatch_skill_body(io, req_id, name).await,
             FrontendRequest::Undo => self.dispatch_undo(io, req_id).await,
@@ -471,7 +485,7 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
             | FrontendRequest::Context
             | FrontendRequest::Trajectory
             | FrontendRequest::Agents
-            | FrontendRequest::Worktree
+            | FrontendRequest::WorktreePreview { .. }
             | FrontendRequest::ToolList
             | FrontendRequest::Hooks
             | FrontendRequest::Skills
