@@ -187,7 +187,8 @@ pub struct Runner {
     /// FinalOutput passes through.
     verify_gate: Option<Arc<dyn VerifyGate>>,
     /// The undo stack + snapshot store for recoverable destructive ops.
-    /// Shared with the BashTool (which pushes); undo_last pops + restores.
+    /// Shared with the BashTool, which pushes; a restore pops the newest
+    /// entry.
     undo_stack: Option<Arc<Mutex<UndoStack>>>,
     snapshot_store: Option<Arc<SnapshotStore>>,
     /// Snapshot retention TTL in seconds; prune_snapshots drops older entries.

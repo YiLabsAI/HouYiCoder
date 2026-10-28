@@ -1,7 +1,7 @@
 //! Recoverable destructive operations: workspace copy-on-write snapshots
 //! and an undo stack. A destructive bash command snapshots the whole
-//! workspace tree (reflink per file, O(file count)) before executing; /undo
-//! restores from the snapshot. File-tool per-file before-images (Write/Edit/
+//! workspace tree (reflink per file, O(file count)) before executing; a
+//! restore puts it back. File-tool per-file before-images (Write/Edit/
 //! MultiEdit) share the same undo stack (the per-file before-image design).
 //!
 //! The store's default location is workspace-local, because clonefile/FICLONE
@@ -62,7 +62,7 @@ pub fn is_destructive_command(command: &str) -> bool {
     };
     // Git working-tree / history discards (checkout -- / path / -f, restore,
     // clean -f, stash drop/clear/pop, branch -d/-D, push --force) — back up
-    // the tree before they run so /undo can recover. Argument-aware so a bare
+    // the tree before they run so the undo stack can recover. Argument-aware so a bare
     // git checkout <branch> switch does NOT trigger a snapshot. Matches
     // the consent-gate classifier in the permission crate; keep both in
     // sync.
@@ -90,7 +90,7 @@ pub enum UndoEntry {
 }
 
 impl UndoEntry {
-    /// A human-readable description of what was undone, for the /undo reply.
+    /// A human-readable description of what was undone, for the restore reply.
     /// Does not oversell: says "restored N files from snapshot" (honest about
     /// the full-restore semantics — new files created after the snapshot
     /// are NOT deleted, .git is pruned from snapshots, symlinks are skipped).
@@ -105,9 +105,9 @@ impl UndoEntry {
     }
 }
 
-/// The outcome of an /undo attempt. Distinguishes empty stack, success, and
-/// restore failure — the caller (server handler) surfaces each to the user
-/// so a restore failure is never confused with an empty stack.
+/// The outcome of a restore attempt. Distinguishes empty stack, success, and
+/// restore failure — the caller surfaces each to the user so a restore
+/// failure is never confused with an empty stack.
 #[derive(Debug)]
 pub enum UndoOutcome {
     /// The undo stack is empty — nothing to undo.
@@ -130,7 +130,7 @@ fn count_restored_files(snap_path: &Path) -> usize {
         .count()
 }
 
-/// The undo stack: strict LIFO. /undo pops the most recent entry.
+/// The undo stack: strict LIFO. A restore pops the most recent entry.
 #[derive(Debug, Default)]
 pub struct UndoStack {
     entries: Vec<UndoEntry>,
@@ -322,7 +322,7 @@ impl SnapshotStore {
     }
 
     /// Reconstruct undo entries from the surviving on-disk snap-N dirs, so a
-    /// resumed session can /undo a destructive operation from the prior
+    /// resumed session can undo a destructive operation from the prior
     /// process. The snapshots persist on disk across restarts; only the
     /// in-memory stack is lost. The result is in LIFO order: the last element
     /// is the newest snapshot, which is the one a pop must hand back first.
@@ -337,8 +337,8 @@ impl SnapshotStore {
     /// roots (an __extra subtree) are skipped: the original extra_roots
     /// mapping is not on disk, so a restore could not remap the extra
     /// subtrees back to their roots. Restoring those needs that mapping on disk
-    /// (a future refinement); today they are left on disk, unrecoverable via
-    /// /undo after a restart, the same as before this re-link.
+    /// (a future refinement); today they are left on disk, unrecoverable from
+    /// the undo stack after a restart, the same as before this re-link.
     pub fn relink_undo_entries(&self) -> Vec<UndoEntry> {
         self.relink_undo_entries_within(DEFAULT_SNAPSHOT_TTL_SECS)
     }

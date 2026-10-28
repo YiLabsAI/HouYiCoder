@@ -349,9 +349,6 @@ pub enum ServerResponse {
     Skills { skills: Vec<SkillEntry> },
     /// One skill's body for the detail view, None when it does not resolve.
     SkillBody { body: Option<String> },
-    /// The /undo reply: a description of what was undone, or None when the
-    /// undo stack was empty.
-    Undo { description: Option<String> },
     /// The /model select reply: what the host actually applied, so the
     /// status bar renders what is being sent rather than what the picker
     /// requested, and the receipt is formatted from the reply. Carries
@@ -497,12 +494,6 @@ pub enum ClientCommand {
         req_id: RequestId,
         key: String,
         scope: String,
-    },
-    /// Request the /undo over the wire. The server pops the undo stack +
-    /// restores the workspace; the reply carries a description of what was
-    /// undone (or None when the stack was empty).
-    UndoQuery {
-        req_id: RequestId,
     },
     PermissionCycleModeQuery {
         req_id: RequestId,

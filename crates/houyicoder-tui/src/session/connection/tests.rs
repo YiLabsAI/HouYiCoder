@@ -1173,9 +1173,9 @@ async fn test_drive_translates_catalog_responses() {
     );
 }
 
-/// Memory and undo answers translate; an absent memory key and an empty
-/// undo stack come back as the None half of the same message, and the reply
-/// keeps the req_id its request was minted with.
+/// Memory answers translate; an absent memory key comes back as the None
+/// half of the same message, and the reply keeps the req_id its request was
+/// minted with.
 #[tokio::test]
 async fn test_drive_translates_memory_responses() {
     let mut engine = FakeEngine::new();
@@ -1198,8 +1198,6 @@ async fn test_drive_translates_memory_responses() {
         auto_memory: true,
         auto_dream: false,
     }));
-    engine.response(ResponsePayload::UndoResult(None));
-    engine.response(ResponsePayload::UndoResult(Some("undid the edit".into())));
     engine.close();
     let run = engine.drive(Vec::new()).await;
 
@@ -1231,26 +1229,10 @@ async fn test_drive_translates_memory_responses() {
         |m| matches!(m, SessionMessage::Response { response: ServerResponse::MemoryToggleState { state }, .. }
             if state.auto_memory && !state.auto_dream)
     ));
-    assert!(
-        run.msgs.iter().any(
-            |m| matches!(m, SessionMessage::Response { response: ServerResponse::Undo { description: Some(d) }, .. } if d == "undid the edit")
-        ),
-        "undo description lost: {run:?}"
-    );
-    assert!(
-        run.msgs.iter().any(|m| matches!(
-            m,
-            SessionMessage::Response {
-                response: ServerResponse::Undo { description: None },
-                ..
-            }
-        )),
-        "empty undo stack must surface as None: {run:?}"
-    );
     assert_eq!(
         run.msgs.len(),
-        6 + 1 + 1,
-        "six answers plus readiness and the death: {run:?}"
+        4 + 1 + 1,
+        "four answers plus readiness and the death: {run:?}"
     );
 }
 

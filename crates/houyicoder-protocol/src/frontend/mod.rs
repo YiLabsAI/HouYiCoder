@@ -144,9 +144,6 @@ pub enum SlashCommand {
     Help,
     Worktree,
     Compact,
-    /// Undo the most recent recoverable destructive operation (a CoW snapshot
-    /// restore or a per-file before-image).
-    Undo,
     // TUI-local commands registered in the palette so they are discoverable
     // (previously lived only in the string dispatcher and were invisible
     // when the user typed /). Arg-bearing forms still parse in the TUI's
@@ -200,7 +197,7 @@ const COMMANDS: &[CommandDescriptor] = &[
     CommandDescriptor {
         variant: SlashCommand::Rewind,
         name: "/rewind",
-        help: "rewind to an earlier stage (no args: one step; named: jump to that stage)",
+        help: "open the checkpoints a session can restore (named: jump to that stage)",
     },
     CommandDescriptor {
         variant: SlashCommand::Resume,
@@ -333,11 +330,6 @@ const COMMANDS: &[CommandDescriptor] = &[
         help: "Summarize earlier conversation to free up context",
     },
     CommandDescriptor {
-        variant: SlashCommand::Undo,
-        name: "/undo",
-        help: "undo the most recent destructive operation",
-    },
-    CommandDescriptor {
         variant: SlashCommand::Search,
         name: "/search",
         help: "Search messages and tool output in the transcript",
@@ -356,10 +348,10 @@ const COMMANDS: &[CommandDescriptor] = &[
 
 /// Build the ALL array from the command table at compile time so ALL and
 /// COMMANDS cannot drift apart. Const-eval reads the table by index.
-const fn all_variants() -> [SlashCommand; 34] {
-    let mut out = [SlashCommand::Login; 34];
+const fn all_variants() -> [SlashCommand; 33] {
+    let mut out = [SlashCommand::Login; 33];
     let mut i = 0;
-    while i < 34 {
+    while i < 33 {
         out[i] = COMMANDS[i].variant;
         i += 1;
     }
@@ -369,7 +361,7 @@ const fn all_variants() -> [SlashCommand; 34] {
 impl SlashCommand {
     /// All commands in palette order. Derived from the COMMANDS table at
     /// compile time, so the array and the table stay in sync.
-    pub const ALL: [SlashCommand; 34] = all_variants();
+    pub const ALL: [SlashCommand; 33] = all_variants();
 
     /// Parse a /foo input line. None if not a recognized command. Linear
     /// search over the COMMANDS table by name.
@@ -670,11 +662,6 @@ pub enum FrontendRequest {
     PermissionAskBeforeGit {
         enabled: Option<bool>,
     },
-    /// Undo the most recent recoverable destructive operation (a CoW snapshot
-    /// or a per-file before-image). The server pops the undo stack and
-    /// restores the workspace; the reply carries the entry description so
-    /// the host can surface what was undone.
-    Undo,
     // evidence-id coupling (evidence and audit prototype): click-jump and sign-off / replay verbs.
     // All stub.
     SpecClauseJump {

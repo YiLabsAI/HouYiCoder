@@ -416,9 +416,6 @@ async fn drive_connection(
                         ResponsePayload::ToggleState(state) => {
                             Some(ServerResponse::MemoryToggleState { state })
                         }
-                        ResponsePayload::UndoResult(description) => {
-                            Some(ServerResponse::Undo { description })
-                        }
                         ResponsePayload::ModelResult(result) => {
                             Some(ServerResponse::Model { result })
                         }

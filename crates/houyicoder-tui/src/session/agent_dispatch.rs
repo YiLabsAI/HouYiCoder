@@ -480,10 +480,6 @@ impl App {
             ServerResponse::WorktreeRemoved { outcome } => {
                 self.apply_worktree_removed(request, outcome);
             }
-            ServerResponse::Undo { description } => match description {
-                Some(desc) => self.system_line(format!("undo: {desc}")),
-                None => self.system_line("undo: nothing to undo (stack empty)"),
-            },
             ServerResponse::Debug { state } => {
                 if state.enabled {
                     self.system_line(format!("debug: logging to {}", state.path));

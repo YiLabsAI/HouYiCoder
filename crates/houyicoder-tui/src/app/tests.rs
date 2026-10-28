@@ -621,8 +621,6 @@ fn test_exhausted_commands_report() {
     assert_eq!(last_system(&app), "compact: request ids exhausted");
     app.run_debug("");
     assert_eq!(last_system(&app), "debug: request ids exhausted");
-    app.run_command(SlashCommand::Undo);
-    assert_eq!(last_system(&app), "undo: request ids exhausted");
     app.run_memory_subcommand("forget some-key");
     assert_eq!(last_system(&app), "memory: request ids exhausted");
     app.commit_model_pick();
@@ -759,8 +757,6 @@ fn test_closed_commands_report_loss() {
     assert_eq!(last_system(&app), "compact: connection lost");
     app.run_debug("");
     assert_eq!(last_system(&app), "debug: connection lost");
-    app.run_command(SlashCommand::Undo);
-    assert_eq!(last_system(&app), "undo: connection lost");
     app.run_memory_subcommand("forget some-key");
     assert_eq!(
         last_system(&app),

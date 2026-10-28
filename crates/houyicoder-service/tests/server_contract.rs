@@ -49,19 +49,11 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
 // below stays local: its canned reply + max_turns are specific to these
 // turn-outcome assertions.
 use crate::common::{pair, recv_frame, recv_hello, send_frame};
-use houyicoder_core::snapshot::{SnapshotStore, UndoEntry, UndoStack};
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::frontend::permission::PermissionEffect;
 use houyicoder_protocol::frontend::permission::PermissionRule;
 use houyicoder_protocol::frontend::permission::PermissionRuleContent;
 use houyicoder_protocol::frontend::run::RunOutcome;
-use std::env::temp_dir;
-use std::fs::create_dir_all;
-use std::fs::read_to_string;
-use std::fs::remove_dir_all;
-use std::fs::write;
-use std::process::id;
-use std::sync::Mutex;
 
 /// A full turn through the in-memory carrier: handshake, MessageSend, then the
 /// server forwards the turn events and returns the run outcome. The client
@@ -387,106 +379,6 @@ async fn test_add_rule_reject_denies() {
     }
     drop(client_tx);
     drop(handle.await);
-}
-
-/// /undo on a fresh server (no destructive ops run) returns UndoResult(None)
-#[tokio::test]
-async fn test_undo_empty_returns_none() {
-    let (runner, session) = stub_runner();
-    let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
-    let handle = tokio::spawn(async move { server.serve(server_io).await });
-
-    send_frame(&mut client_tx, &Hello::local()).await;
-    let _hello = recv_hello(&mut client_rx).await;
-
-    let req_id = RequestId(42);
-    let req = RequestEnvelope::new(req_id, FrontendRequest::Undo);
-    send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
-
-    let resp = recv_frame(&mut client_rx).await;
-    match resp {
-        ServerFrame::Response(r) => {
-            assert_eq!(r.req_id, req_id);
-            assert!(
-                matches!(r.payload, ResponsePayload::UndoResult(None)),
-                "empty undo stack returns None"
-            );
-        }
-        other => panic!("expected a response, got {other:?}"),
-    }
-    drop(client_tx);
-    drop(handle.await);
-}
-
-/// /undo with a pre-pushed BeforeImage entry returns UndoResult(Some(desc))
-/// — the server handler's closure body runs (covers the BeforeImage arm).
-#[tokio::test]
-async fn test_undo_entry_returns_description() {
-    let tmp = temp_dir().join(format!("undo-srv-{}", id()));
-    remove_dir_all(&tmp).ok();
-    create_dir_all(&tmp).expect("mkdir");
-    let file_path = tmp.join("file.txt");
-    write(&file_path, "modified").expect("write");
-
-    let store = Arc::new(SnapshotStore::new(&tmp).expect("store"));
-    let stack = Arc::new(Mutex::new(UndoStack::new()));
-    stack.lock().unwrap().push(UndoEntry::BeforeImage {
-        path: file_path.clone(),
-        before: Some(b"original".to_vec()),
-    });
-
-    let session_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let session = SessionId::new();
-    let runner = Runner::new(
-        session_store,
-        Arc::new(FakeProvider::text("hi")) as Arc<dyn ModelProvider>,
-        ToolRegistry::new(),
-        RunnerConfig {
-            model: "test".into(),
-            instructions: "".into(),
-            max_turns: 1,
-            ..RunnerConfig::default()
-        },
-    );
-    let mut runner = runner;
-    runner.set_undo(stack, store);
-    let runner = Arc::new(runner);
-
-    let (server_io, mut client_tx, mut client_rx) = pair();
-    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
-    let handle = tokio::spawn(async move { server.serve(server_io).await });
-
-    send_frame(&mut client_tx, &Hello::local()).await;
-    let _hello = recv_hello(&mut client_rx).await;
-
-    let req = RequestEnvelope::new(RequestId(99), FrontendRequest::Undo);
-    send_frame(&mut client_tx, &ClientFrame::Request(req)).await;
-
-    let resp = recv_frame(&mut client_rx).await;
-    match resp {
-        ServerFrame::Response(r) => {
-            assert_eq!(r.req_id, RequestId(99));
-            match r.payload {
-                ResponsePayload::UndoResult(Some(desc)) => {
-                    assert!(
-                        desc.contains("restored"),
-                        "description should say what was undone: {desc}"
-                    );
-                }
-                other => panic!("expected UndoResult(Some), got {other:?}"),
-            }
-        }
-        other => panic!("expected a response, got {other:?}"),
-    }
-    assert_eq!(
-        read_to_string(&file_path).unwrap(),
-        "original",
-        "undo restored the before-image"
-    );
-    drop(client_tx);
-    drop(handle.await);
-    remove_dir_all(&tmp).ok();
 }
 
 /// /permission git: query returns the default (on); set off flips it and a

@@ -13,7 +13,6 @@ use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::ContextError;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionLogEntry;
-use houyicoder_core::snapshot::UndoOutcome;
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::trajectory::TrajectoryResponse;
@@ -128,7 +127,6 @@ impl Server {
             }
             FrontendRequest::Skills => self.dispatch_skills(io, req_id).await,
             FrontendRequest::SkillBody { name } => self.dispatch_skill_body(io, req_id, name).await,
-            FrontendRequest::Undo => self.dispatch_undo(io, req_id).await,
             FrontendRequest::ModelInfo => self.handle_model_info(io, req_id).await,
             FrontendRequest::ModelSet {
                 model,
@@ -299,20 +297,6 @@ impl Server {
             }
         };
         self.send_response(io, req_id, ResponsePayload::SkillBody(body))
-            .await
-    }
-
-    async fn dispatch_undo(
-        &mut self,
-        io: &mut FrameCarrier,
-        req_id: RequestId,
-    ) -> Result<(), ProtocolError> {
-        let desc = match self.runner.undo_last() {
-            UndoOutcome::Restored(entry) => Some(entry.description()),
-            UndoOutcome::Empty => None,
-            UndoOutcome::Failed(msg) => Some(format!("restore failed: {msg}")),
-        };
-        self.send_response(io, req_id, ResponsePayload::UndoResult(desc))
             .await
     }
 

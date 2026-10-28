@@ -47,10 +47,10 @@ impl BuiltInToolProvider {
                 )
                 .map(Arc::new);
                 // Re-link the undo stack to surviving on-disk snapshots so a
-                // resumed session can /undo a destructive op from the prior
+                // resumed session can undo a destructive op from the prior
                 // process: the in-memory stack is lost on restart, but the
                 // snap-N dirs persist. An empty stack (store init failed, or
-                // no surviving snapshots) leaves /undo as no-op, same as before.
+                // no surviving snapshots) leaves a restore with nothing to do.
                 let stack = Arc::new(Mutex::new(match &store {
                     Some(st) => UndoStack::from_entries(st.relink_undo_entries()),
                     None => UndoStack::new(),
@@ -93,8 +93,9 @@ impl BuiltInToolProvider {
         self
     }
 
-    /// The shared undo stack (cloned into the BashTool; also set on the Runner
-    /// for /undo). None when no session or the snapshot store failed.
+    /// The shared undo stack (cloned into the BashTool and set on the Runner,
+    /// which restores from it). None when no session or the snapshot store
+    /// failed.
     pub(super) fn undo_handles(&self) -> Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)> {
         self.undo_stack
             .as_ref()

@@ -1,5 +1,6 @@
 //! BashTool: run a shell command in the sandbox. Destructive commands
-//! snapshot the writable roots first (so /undo can revert); the output is
+//! snapshot the writable roots first (so the command's writes can be
+//! reverted); the output is
 //! bounded so a runaway command cannot overflow the model context (the
 //! full output spills to a workspace file past the cap). Split from tools.rs so
 //! that file stays under the file-size gate.
@@ -77,7 +78,8 @@ fn wall_budget_ms(input: &Value) -> u64 {
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
 /// Run a shell command in the sandbox. When wired with undo, destructive
-/// commands snapshot the workspace before executing so /undo can revert.
+/// commands snapshot the workspace before executing so their writes can be
+/// reverted.
 pub struct BashTool {
     session: Arc<dyn SandboxSession>,
     undo_stack: Option<Arc<Mutex<UndoStack>>>,
@@ -173,7 +175,7 @@ impl Tool for BashTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidInput("bash: command (string) required".into()))?;
             // Snapshot a destructive command's writable roots before running
-            // it, so /undo can revert the write. The outcome is split by what
+            // it, so the write can be reverted. The outcome is split by what
             // it means, not just Ok/Err, so a performance skip (no copy-on-
             // write + workspace over the slow-copy threshold) does not masquer-
             // ade as a safety refusal and a real I/O failure does not slip

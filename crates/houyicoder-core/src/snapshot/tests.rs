@@ -61,9 +61,9 @@ fn test_snapshot_restore_recovers_file() {
 /// A resumed session re-links its undo stack to the on-disk snapshots the
 /// prior process left: the in-memory stack is gone on restart, but the
 /// snap-N dirs persist. relink_undo_entries reconstructs LIFO entries
-/// pointing at them, so /undo still works across a restart. The crash-
+/// pointing at them, so a restore still works across a restart. The crash-
 /// after-destructive-op case (the gap this closes) is the intersection
-/// this test pins.
+/// this test exercises.
 #[test]
 fn test_relink_recovers_snapshots_restart() {
     let tmp = temp_dir().join(format!("snap-relink-{}", id()));

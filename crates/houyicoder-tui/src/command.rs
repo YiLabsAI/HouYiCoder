@@ -93,21 +93,6 @@ impl App {
                 self.refresh_worktrees();
             }
             SlashCommand::Compact => self.run_compact(),
-            SlashCommand::Undo => {
-                let Some(s) = self.sessions.current.connection.as_ref() else {
-                    self.system_line("undo: not connected");
-                    return;
-                };
-                let Ok(req_id) = s.next_request_id() else {
-                    self.system_line("undo: request ids exhausted");
-                    return;
-                };
-                if let Err(e) = self.enqueue(ClientCommand::UndoQuery { req_id }) {
-                    self.system_line(Self::enqueue_failure_line("undo", e));
-                } else {
-                    self.system_line("undo: reverting most recent destructive op...");
-                }
-            }
             // Palette-registered local commands. The argless select form (and
             // any direct run_command call) delegates to the string dispatcher;
             // arg-bearing forms typed in the input box are caught there first

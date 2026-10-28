@@ -68,7 +68,7 @@ impl App {
             return;
         }
         if let Some(stripped) = text.strip_prefix('/') {
-            // A state-changing command (resume/clear/rewind/undo) submitted
+            // A state-changing command (resume/clear) submitted
             // while a run is in flight is deferred onto the pending queue
             // (drained FIFO at idle) so it does not fight the in-flight run's
             // writes. A bare /resume (no arg) is NOT deferred -- it opens the

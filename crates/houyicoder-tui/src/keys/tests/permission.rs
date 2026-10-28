@@ -142,13 +142,6 @@ fn test_permission_view_shows_mode() {
 }
 
 #[test]
-fn test_undo_no_shows_message() {
-    let mut app = app();
-    run(&mut app, "/undo");
-    assert!(last_system(&app).contains("not connected"));
-}
-
-#[test]
 fn test_permission_bad_effect_rejected() {
     let mut app = app();
     run(&mut app, "/permissions add bash bogus");
@@ -847,18 +840,6 @@ fn test_git_show_connection_lost() {
     app.submit_input();
     assert!(
         last_system(&app).contains("permission: connection lost"),
-        "send failure reports connection lost: {}",
-        last_system(&app)
-    );
-}
-
-#[test]
-fn test_undo_connection_lost() {
-    // A dead driver refuses the undo: no in-progress line is pushed.
-    let mut app = connection_lost_app();
-    run(&mut app, "/undo");
-    assert!(
-        last_system(&app).contains("undo: connection lost"),
         "send failure reports connection lost: {}",
         last_system(&app)
     );

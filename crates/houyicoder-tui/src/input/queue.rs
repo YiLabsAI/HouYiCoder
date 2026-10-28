@@ -57,7 +57,7 @@ impl InputItem {
 /// Whether a slash command (the text after the leading slash, trimmed) is
 /// state-changing -- writes persistent session state or the frame log, so it
 /// fights the in-flight run's writes and must be deferred to idle. The
-/// narrow set: resume, clear, rewind, undo. Everything else (status, model,
+/// narrow set: resume, clear. Everything else (status, model,
 /// search, tips, hooks, debug, trajectory, context, sandbox, cost, graph,
 /// diff, agents, memory, help, release-notes, worktrees, export,
 /// permissions, stage commands, exit) executes immediately even mid-run --
@@ -66,7 +66,7 @@ impl InputItem {
 /// touch the server session); export is read-only on the session.
 pub fn is_state_changing(stripped: &str) -> bool {
     let cmd = stripped.split_whitespace().next().unwrap_or("");
-    matches!(cmd, "clear" | "resume" | "rewind" | "undo")
+    matches!(cmd, "clear" | "resume")
 }
 
 /// The resolved target (sid or export path) of a queued /resume Command, if
@@ -261,7 +261,7 @@ impl InputQueue {
 
     /// Carry the queue across a session switch and return the dropped
     /// command texts for the caller's notice. Session-scoped Commands
-    /// (/clear, /rewind, /undo) typed in the old session drop: they act on
+    /// (/clear) typed in the old session drop: they act on
     /// whichever session is current when they drain, so carrying one would
     /// apply the old session's intent to the new one. A /resume Command
     /// stays -- the switch intent is still valid in the new session.

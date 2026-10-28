@@ -1,5 +1,5 @@
 //! Snapshot a destructive shell command's writable roots before the command
-//! runs, so /undo can revert it. Split the snapshot outcome by what it means,
+//! runs, so the snapshot can revert it. Split the snapshot outcome by what it means,
 //! not just Ok/Err, so a performance skip does not masquerade as a safety
 //! refusal and a real failure does not slip through as a skip.
 //!
@@ -43,7 +43,7 @@ pub(crate) fn prepare(
 /// Outcomes:
 /// - policy decline (undo is possible but deliberately not paid for): run
 ///   the command; return a notice so the user is not misled into expecting
-///   /undo. The decline reason is carried in the notice (the probe is
+///   a restore. The decline reason is carried in the notice (the probe is
 ///   injected, so the reason is not always size).
 /// - snapshot pushed: run the command (Ok(None)).
 /// - real I/O failure or a poisoned undo stack: undo is genuinely
@@ -68,7 +68,7 @@ pub(crate) fn prepare_with_probe(
         // Performance skip, not a safety event: undo is possible but
         // deliberately not paid for. Run the command; return a notice the
         // caller routes into the tool result so the user is not misled into
-        // expecting /undo. Carry the probe's reason -- it is injected, so
+        // expecting a restore. Carry the probe's reason -- it is injected, so
         // the reason is not always "workspace too large".
         Err(e) => Ok(Some(format!(
             "bash: snapshot skipped ({e}); undo unavailable for this command"

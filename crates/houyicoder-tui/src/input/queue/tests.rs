@@ -7,14 +7,7 @@ use super::*;
 
 #[test]
 fn test_state_changing_set_narrow() {
-    for c in [
-        "clear",
-        "resume",
-        "resume sid",
-        "rewind",
-        "rewind plan",
-        "undo",
-    ] {
+    for c in ["clear", "resume", "resume sid"] {
         assert!(is_state_changing(c), "{c:?} should be state-changing");
     }
 }
@@ -24,6 +17,8 @@ fn test_ui_commands_not_deferred() {
     for c in [
         "status",
         "model",
+        "rewind",
+        "rewind plan",
         "search foo",
         "tips",
         "hooks",

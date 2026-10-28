@@ -230,9 +230,6 @@ pub enum ResponsePayload {
     /// variables, resource manifest), or None when the skill is no longer
     /// discoverable or its body could not be read.
     SkillBody(Option<String>),
-    /// The /undo reply: a description of what was undone, or None when the
-    /// undo stack was empty.
-    UndoResult(Option<String>),
     /// The /model select reply: the selection the host applied, the model the
     /// next request will send, when the pick takes effect, and whether it
     /// persisted. The transcript and status bar format from this rather than

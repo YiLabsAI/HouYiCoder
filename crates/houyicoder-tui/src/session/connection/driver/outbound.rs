@@ -93,7 +93,6 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
         ClientCommand::MemoryForgetQuery { req_id, key, scope } => {
             request(req_id, FrontendRequest::MemoryForget { key, scope })
         }
-        ClientCommand::UndoQuery { req_id } => request(req_id, FrontendRequest::Undo),
         ClientCommand::ModelInfoQuery { req_id } => request(req_id, FrontendRequest::ModelInfo),
         ClientCommand::WorktreePreviewQuery { req_id, path } => {
             request(req_id, FrontendRequest::WorktreePreview { path })
