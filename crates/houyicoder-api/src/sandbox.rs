@@ -236,6 +236,8 @@ pub use boundary::{
     BoundaryAccess, BoundaryGrant, boundary_grants_for, boundary_path_uses_parent,
     is_within_bounds, normalize_tool_path, path_args_for_boundary,
 };
+mod credentials;
+pub use credentials::{CREDENTIAL_DIRS, CREDENTIAL_FILES, names_credential_path};
 use std::fs::create_dir_all;
 use std::fs::read;
 use std::fs::read_dir;

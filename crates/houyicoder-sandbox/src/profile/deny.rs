@@ -1,25 +1,9 @@
 //! Seatbelt rules for credentials, executable configuration, and the files that
 //! decide what the agent is allowed to do.
 
-use houyicoder_api::sandbox::normalize_tool_path;
+use houyicoder_api::sandbox::{CREDENTIAL_DIRS, CREDENTIAL_FILES, normalize_tool_path};
 use std::env::var;
 use std::path::Path;
-
-/// Credential and shell-startup files denied for reading and writing.
-/// Ordinary source files remain readable across projects, but credentials
-/// cannot rely on that broad read policy until value redaction is available.
-const MANDATORY_DENY_FILES: &[&str] = &[
-    ".bashrc",
-    ".bash_profile",
-    ".zshrc",
-    ".zprofile",
-    ".profile",
-    ".mcp.json",
-    // Workspace .env files remain readable as development inputs.
-    ".netrc",
-    ".npmrc",
-    ".pypirc",
-];
 
 /// Git and search configuration denied for writing but kept readable for
 /// normal tool operation. Reads of git config can expose embedded credentials;
@@ -55,20 +39,6 @@ const MANDATORY_DENY_SETTINGS_FILES: &[&str] = &[
     ".claude/settings.local.json",
 ];
 
-/// Home directories denied for reading and writing. They hold credentials
-/// (.ssh, .aws, .gnupg, .kube, .docker) or the agent and skill definitions that
-/// decide what runs later, so reading them leaks secrets and writing them
-/// hijacks a future session. Denied outright until value redaction exists.
-const MANDATORY_DENY_DIRS: &[&str] = &[
-    ".ssh",
-    ".claude/commands",
-    ".claude/agents",
-    ".aws",
-    ".gnupg",
-    ".kube",
-    ".docker",
-];
-
 /// Skill definition directories denied for write only: the agent must not
 /// plant or rewrite a SKILL.md (a directive the model later invokes), but
 /// may read the skill's reference and script files — the resource layer.
@@ -101,7 +71,7 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
             "(deny file-read* file-write* (subpath \"{subpath}\") (regex #\"{regex}\") (with message \"{tag}\"))\n"
         ));
     };
-    for file in MANDATORY_DENY_FILES {
+    for file in CREDENTIAL_FILES {
         let escaped = file.replace('.', r"\.");
         emit(
             &mut out,
@@ -122,7 +92,7 @@ pub(crate) fn mandatory_deny(home: &str, tag: &str) -> String {
     ));
     // The permission and settings denies are not emitted here: the profile
     // places them on either side of the scratch-directory allow rule.
-    for dir in MANDATORY_DENY_DIRS {
+    for dir in CREDENTIAL_DIRS {
         let escaped = dir.replace('.', r"\.");
         emit(
             &mut out,
