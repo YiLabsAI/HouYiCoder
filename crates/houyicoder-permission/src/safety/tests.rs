@@ -1,5 +1,7 @@
 mod claude_dir;
 
+use houyicoder_api::sandbox::CREDENTIAL_FILES;
+
 use super::*;
 
 #[test]
@@ -81,6 +83,149 @@ fn test_git_in_worktree_asks() {
     assert_eq!(safety_check("bash", Some(&v)), Some(Effect::Ask));
 }
 
+/// Session logs and captured output live under the configuration directory
+/// but decide nothing. Escalating on them turns every read of the agent's own
+/// records into a bypass-immune ask the user cannot silence.
+#[test]
+fn test_session_data_no_ask() {
+    for path in [
+        "/home/u/.houyicoder/sessions/2026-10-29.jsonl",
+        ".houyicoder/bash-output/01HXY.txt",
+        ".claude/projects/-home-u-repo/transcript.jsonl",
+    ] {
+        let v = serde_json::json!({ "path": path });
+        assert_eq!(safety_check("read", Some(&v)), None, "{path}");
+    }
+}
+
+/// A file whose name merely ends in a protected name is not that file.
+#[test]
+fn test_similar_name_no_ask() {
+    for command in ["cat ./install.bashrc", "cat AGENTS.md.bak"] {
+        let v = serde_json::json!({ "command": command });
+        assert_eq!(safety_check("bash", Some(&v)), None, "{command}");
+    }
+}
+
+/// Rewriting an instruction file changes every later decision, so a shell
+/// command that writes one escalates even where a plain file write inside
+/// the workspace would not.
+#[test]
+fn test_instruction_file_asks() {
+    for command in [
+        "echo x > AGENTS.md",
+        "printf y >> /home/u/repo/CLAUDE.md",
+        "cat notes >> SKILL.md",
+    ] {
+        let v = serde_json::json!({ "command": command });
+        assert_eq!(
+            safety_check("bash", Some(&v)),
+            Some(Effect::Ask),
+            "{command}"
+        );
+    }
+}
+
+/// Reading an instruction file decides nothing, so the read does not turn
+/// into a bypass-immune ask the user cannot silence.
+#[test]
+fn test_instruction_read_no_ask() {
+    for command in ["cat AGENTS.md", "rg hooks /home/u/repo/CLAUDE.md"] {
+        let v = serde_json::json!({ "command": command });
+        assert_eq!(safety_check("bash", Some(&v)), None, "{command}");
+    }
+}
+
+/// A write tool naming an instruction file escalates: no shell read-only
+/// waiver applies, because the call does not run a command at all.
+#[test]
+fn test_edit_instruction_file_asks() {
+    for path in ["AGENTS.md", "/home/u/repo/CLAUDE.md", "docs/SKILL.md"] {
+        let v = serde_json::json!({ "path": path });
+        assert_eq!(safety_check("write", Some(&v)), Some(Effect::Ask), "{path}");
+    }
+}
+
+/// The memory store is recalled into a later prompt, so a write to it plants
+/// an instruction the model follows then. Both layouts the store uses are
+/// protected, and a directory that is merely named memory is not.
+#[test]
+fn test_memory_store_asks() {
+    for path in [
+        "/home/u/.houyicoder/memory/MEMORY.md",
+        "/home/u/.houyicoder/projects/-home-u-repo/memory/MEMORY.md",
+        ".houyicoder/memory/notes/topic.md",
+    ] {
+        let v = serde_json::json!({ "path": path });
+        assert_eq!(safety_check("write", Some(&v)), Some(Effect::Ask), "{path}");
+    }
+    for path in [
+        "/tmp/memory/notes.md",
+        "/home/u/.claude/worktrees/w1/src/memory/store.rs",
+    ] {
+        let v = serde_json::json!({ "path": path });
+        assert_eq!(safety_check("write", Some(&v)), None, "{path}");
+    }
+}
+
+/// The store is loaded before the first turn, so a read-only command that
+/// reads one adds no exposure. A command that writes it still escalates.
+#[test]
+fn test_memory_read_no_ask() {
+    for command in [
+        "cat ~/.houyicoder/memory/MEMORY.md",
+        "head -20 .houyicoder/memory/notes/topic.md",
+    ] {
+        let v = serde_json::json!({ "command": command });
+        assert_eq!(safety_check("bash", Some(&v)), None, "{command}");
+    }
+    for command in [
+        "echo x >> ~/.houyicoder/memory/MEMORY.md",
+        "cp notes.md .houyicoder/memory/",
+    ] {
+        let v = serde_json::json!({ "command": command });
+        assert_eq!(
+            safety_check("bash", Some(&v)),
+            Some(Effect::Ask),
+            "{command}"
+        );
+    }
+}
+
+/// The snapshot store is what a restore reads, so rewriting it rewrites the
+/// state a later turn may go back to.
+#[test]
+fn test_snapshot_store_asks() {
+    for path in [
+        "/home/u/.houyicoder/snapshots/s-01.json",
+        ".claude/snapshots/index.json",
+    ] {
+        let v = serde_json::json!({ "path": path });
+        assert_eq!(safety_check("write", Some(&v)), Some(Effect::Ask), "{path}");
+    }
+}
+
+/// The stored credentials decide which account the agent acts as, so even a
+/// read of them escalates.
+#[test]
+fn test_credentials_file_asks() {
+    let v = serde_json::json!({ "path": "/home/u/.claude/.credentials.json" });
+    assert_eq!(safety_check("read", Some(&v)), Some(Effect::Ask));
+}
+
+/// A startup file runs at every later shell start, so the two lists that
+/// recognise credential reads and startup writes must stay in step: a name
+/// added to one and not the other opens a path the other list closes.
+#[test]
+fn test_startup_files_are_credentials() {
+    for name in STARTUP_FILES {
+        assert!(
+            CREDENTIAL_FILES.contains(name),
+            "{name} must also be recognised as a credential file"
+        );
+    }
+}
+
 #[test]
 fn test_bash_touching_bashrc_asks() {
     let v = serde_json::json!({"command": "echo x >> ~/.bashrc"});
@@ -96,6 +241,14 @@ fn test_bash_touching_zshrc_asks() {
 #[test]
 fn test_bash_touching_profile_asks() {
     let v = serde_json::json!({"command": "echo y >> ~/.profile"});
+    assert_eq!(safety_check("bash", Some(&v)), Some(Effect::Ask));
+}
+
+/// A startup file can export secrets, so reading one still escalates even
+/// though a verified read of an instruction file does not.
+#[test]
+fn test_startup_read_asks() {
+    let v = serde_json::json!({"command": "cat ~/.bashrc"});
     assert_eq!(safety_check("bash", Some(&v)), Some(Effect::Ask));
 }
 
