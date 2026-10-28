@@ -32,6 +32,35 @@ fn test_truncate_one_col_ellipsis() {
     assert_eq!(truncate_width("abc", 1), "\u{2026}");
 }
 
+/// A value longer than its column keeps the end, where the file name is, and
+/// a value that fits is left alone.
+#[test]
+fn test_elide_keeps_tail() {
+    assert_eq!(
+        elide_start("/work/repo/src/main.rs", 12),
+        "\u{2026}src/main.rs"
+    );
+    assert_eq!(elide_start("short", 10), "short");
+    assert_eq!(elide_start("short", 0), "");
+    assert_eq!(elide_start("short", 1), "\u{2026}");
+}
+
+/// The head it drops is measured in columns, so a wide glyph counts twice and
+/// the cut never lands inside one.
+#[test]
+fn test_elide_counts_columns() {
+    assert_eq!(elide_start("笔记/文件.rs", 8), "\u{2026}文件.rs");
+}
+
+/// The scroll limit is the rows the renderer draws, not the rows the columns
+/// divide into: three words that cannot share a four-column row take three
+/// rows, so a two-row window scrolls by one.
+#[test]
+fn test_max_scroll_uses_wrap() {
+    let body = vec![Line::from("aa bb cc")];
+    assert_eq!(max_scroll_offset(&body, 4, 2), 1);
+}
+
 #[test]
 fn test_truncate_cjk_no_panic() {
     // The crash that motivated this helper: a byte-slice truncation

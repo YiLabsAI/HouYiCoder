@@ -259,7 +259,7 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
     }
     if let Some(notice) = draft.notice() {
         lines.push(Line::from(Span::styled(
-            notice,
+            notice.to_string(),
             Style::new().fg(Color::Yellow),
         )));
     }

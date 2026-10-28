@@ -19,6 +19,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::state::App;
 use crate::ui::{CheckpointLevel, RestoreFocus, SandboxTab};
+use crate::view::line_wrap::{elide_start, pad_width, truncate_width};
 use crate::view::navigation::{block_with_keys, key_hint, key_row_height, tab_header};
 use crate::view::relative_time::{now_epoch_secs, relative_time};
 
@@ -27,6 +28,21 @@ const TABS: [(SandboxTab, &str); 2] = [
     (SandboxTab::Boundaries, "Boundaries"),
     (SandboxTab::Checkpoints, "Checkpoints"),
 ];
+
+/// Columns the listing spends on the cursor marker before a row starts.
+const MARKER_COLUMNS: usize = 2;
+
+/// Columns a row spends stating whether the write landed.
+const STATE_COLUMNS: usize = 12;
+
+/// Columns a row spends on when the write landed, or on an unreadable
+/// record's name.
+const SECOND_COLUMNS: usize = 12;
+
+/// Columns a row keeps for its target before the second column is given up.
+/// Below this the target would show only the directories its sibling rows
+/// share, and the rows could no longer be told apart.
+const TARGET_FLOOR: usize = 20;
 
 /// One row of the checkpoints listing: a write the host judged, or a record it
 /// could not judge and why.
@@ -217,7 +233,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             chunks[2],
         );
     } else {
-        let items = list_items(list);
+        let items = list_items(list, chunks[2].width);
         let mut state = ListState::default();
         state.select(Some(pane.cursor.get().min(rows - 1)));
         f.render_stateful_widget(
@@ -442,44 +458,89 @@ fn written_label(written_ms: Option<u64>) -> String {
     }
 }
 
-fn list_items(list: &CheckpointListView) -> Vec<ListItem<'static>> {
+fn list_items(list: &CheckpointListView, width: u16) -> Vec<ListItem<'static>> {
     let now = now_epoch_secs();
+    let columns = RowColumns::for_width(width);
     let mut items: Vec<ListItem<'static>> = list
         .checkpoints
         .iter()
-        .map(|view| ListItem::new(write_row(view, now)))
+        .map(|view| ListItem::new(write_row(view, now, columns)))
         .collect();
     items.extend(
         list.unreadable
             .iter()
-            .map(|view| ListItem::new(unreadable_row(view))),
+            .map(|view| ListItem::new(unreadable_row(view, columns))),
     );
     items
 }
 
-fn write_row(view: &CheckpointView, now: u64) -> Line<'static> {
-    let (label, color) = state_label(view.state);
-    let when = match view.written_ms {
-        Some(ms) => relative_time(now, ms / 1_000),
-        None => "never landed".to_string(),
-    };
-    Line::from(vec![
-        Span::styled(format!("{label:<14}"), Style::new().fg(color)),
-        Span::styled(format!("{when:<10}"), Style::new().fg(Color::DarkGray)),
-        Span::styled(view.target.clone(), Style::new().fg(Color::White)),
-    ])
+/// What each part of a row may take. The listing draws the cursor marker in
+/// front of every row, so a row has that much less room than the list has,
+/// and one without the room for a second column drops it rather than cut the
+/// target down to the prefix every row shares.
+#[derive(Clone, Copy)]
+struct RowColumns {
+    second: Option<usize>,
+    target: usize,
 }
 
-fn unreadable_row(view: &UnreadableView) -> Line<'static> {
+impl RowColumns {
+    fn for_width(width: u16) -> Self {
+        let room = usize::from(width).saturating_sub(MARKER_COLUMNS);
+        let second =
+            (room >= STATE_COLUMNS + SECOND_COLUMNS + TARGET_FLOOR).then_some(SECOND_COLUMNS);
+        let target = room.saturating_sub(STATE_COLUMNS + second.unwrap_or(0));
+        Self { second, target }
+    }
+}
+
+fn write_row(view: &CheckpointView, now: u64, columns: RowColumns) -> Line<'static> {
+    let (label, color) = state_label(view.state);
+    let mut spans = vec![Span::styled(
+        format!("{label:<STATE_COLUMNS$}"),
+        Style::new().fg(color),
+    )];
+    if let Some(width) = columns.second {
+        let when = match view.written_ms {
+            Some(ms) => relative_time(now, ms / 1_000),
+            None => "never landed".to_string(),
+        };
+        spans.push(Span::styled(
+            cell_text(&when, width),
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
+    spans.push(Span::styled(
+        elide_start(&view.target, columns.target),
+        Style::new().fg(Color::White),
+    ));
+    Line::from(spans)
+}
+
+fn unreadable_row(view: &UnreadableView, columns: RowColumns) -> Line<'static> {
     let name = view.operation.as_deref().unwrap_or("(unnamed record)");
-    Line::from(vec![
-        Span::styled(
-            format!("{:<14}", "unreadable"),
-            Style::new().fg(Color::Yellow),
-        ),
-        Span::styled(format!("{name:<10}"), Style::new().fg(Color::DarkGray)),
-        Span::styled(view.reason.clone(), Style::new().fg(Color::DarkGray)),
-    ])
+    let mut spans = vec![Span::styled(
+        cell_text("unreadable", STATE_COLUMNS),
+        Style::new().fg(Color::Yellow),
+    )];
+    if let Some(width) = columns.second {
+        spans.push(Span::styled(
+            cell_text(name, width),
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
+    spans.push(Span::styled(
+        elide_start(&view.reason, columns.target),
+        Style::new().fg(Color::DarkGray),
+    ));
+    Line::from(spans)
+}
+
+/// A value held to a fixed column count, so the column after it starts at the
+/// same place on every row. A value longer than the column is cut with an
+/// ellipsis instead of pushing the columns that follow out of line.
+fn cell_text(value: &str, width: usize) -> String {
+    pad_width(&truncate_width(value, width), width)
 }
 
 fn render_keys(f: &mut Frame, area: Rect, keys: Line) {

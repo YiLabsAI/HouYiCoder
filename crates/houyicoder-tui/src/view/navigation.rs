@@ -12,6 +12,9 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
+
+use crate::view::line_wrap::max_scroll_offset;
 
 /// Build a tab row with one bracketed active label.
 pub(crate) fn tab_header<T: Copy + Eq>(active: T, tabs: &[(T, &str)]) -> Line<'static> {
@@ -63,11 +66,14 @@ pub(crate) fn key_hint(pairs: &[(&str, &str)]) -> Line<'static> {
 /// The block scrolls when it is taller than the room it has, and the position
 /// it is held at comes back through the same cell: a block that fits reads as
 /// zero, so a downward key at the end of a short block leaves the next upward
-/// key something to undo.
+/// key something to undo. The limit is what the paragraph's own wrap draws,
+/// not a count of how many widths of text the block holds: a word-wrapped
+/// line can take one row more than its columns divide into, and a limit short
+/// by that row leaves the last line of the block out of reach.
 pub(crate) fn block_with_keys(
     f: &mut Frame,
     area: Rect,
-    body: Vec<Line>,
+    body: Vec<Line<'static>>,
     keys: Line,
     scroll: &Cell<u16>,
 ) {
@@ -77,8 +83,9 @@ pub(crate) fn block_with_keys(
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(keys_height)])
         .split(area);
-    let rows = wrapped_rows(&body, chunks[0].width);
-    let offset = scroll.get().min(rows.saturating_sub(chunks[0].height));
+    let offset = scroll
+        .get()
+        .min(max_scroll_offset(&body, chunks[0].width, chunks[0].height));
     scroll.set(offset);
     f.render_widget(
         Paragraph::new(body)
@@ -94,30 +101,14 @@ pub(crate) fn block_with_keys(
 /// case by wrapping; only a pane too short to hold both gives up a hint, and
 /// the hints are ordered so the last to go is the one for leaving.
 pub(crate) fn key_row_height(keys: &Line, area: Rect) -> u16 {
-    let needed = line_chars(keys).div_ceil(usize::from(area.width.max(1)));
+    let needed = line_columns(keys).div_ceil(usize::from(area.width.max(1)));
     needed.clamp(1, usize::from((area.height / 3).max(1))) as u16
 }
 
-/// The rows a block occupies at this width, counted from the characters its
-/// lines hold. A row carries at most a full width of them, so this is the
-/// fewest rows the wrap can use, and the one it does use for a value that is a
-/// single word or a path that breaks mid-word. A line of several words can
-/// take one row more, and its last row is then out of the reach of the
-/// position held here.
-fn wrapped_rows(body: &[Line], width: u16) -> u16 {
-    let width = usize::from(width.max(1));
-    body.iter()
-        .map(|line| u16::try_from(line_chars(line).div_ceil(width)).unwrap_or(u16::MAX))
-        .fold(0u16, u16::saturating_add)
-}
-
-/// How many characters a line holds, which its key row and its block both
-/// measure to decide how many rows they take.
-fn line_chars(line: &Line) -> usize {
-    line.spans
-        .iter()
-        .map(|span| span.content.chars().count())
-        .sum()
+/// How many terminal columns a line occupies. A wide glyph takes two columns,
+/// so counting characters would promise rows the terminal clips.
+fn line_columns(line: &Line) -> usize {
+    line.spans.iter().map(|span| span.content.width()).sum()
 }
 
 #[cfg(test)]

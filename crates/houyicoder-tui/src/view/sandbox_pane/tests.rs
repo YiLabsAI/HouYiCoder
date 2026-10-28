@@ -232,6 +232,79 @@ fn test_empty_list_says_so() {
     );
 }
 
+/// A 40-column terminal still names both tabs, the state of each row, the file
+/// the row targets, and the key that leaves. The target gives up its leading
+/// directories to the state column and the cursor marker, never the file name
+/// that tells one row from the next.
+#[test]
+fn test_columns_keep_row_identity() {
+    let app = pane_app();
+    app.ui.sandbox_pane.tab.set(SandboxTab::Checkpoints);
+    let mut view = write("deep", CheckpointState::Applied);
+    view.target =
+        "/work/repo/.claude/worktrees/s36-t3/crates/houyicoder-tui/src/view/sandbox_pane.rs"
+            .to_string();
+    app.ui.sandbox_pane.accept_checkpoints(CheckpointListView {
+        checkpoints: vec![view],
+        unreadable: Vec::new(),
+    });
+    for width in [40, 80, 120] {
+        let out = render_text(&app, width, 30);
+        assert!(out.contains("Boundaries"), "{width}: {out}");
+        assert!(out.contains("[Checkpoints]"), "{width}: {out}");
+        assert!(out.contains("ready"), "{width}: {out}");
+        assert!(out.contains("sandbox_pane.rs"), "{width}: {out}");
+        assert!(out.contains("Esc"), "{width}: {out}");
+    }
+}
+
+/// A write that never landed states that in the same column as the age of one
+/// that did, so the two targets still start at the same place.
+#[test]
+fn test_rows_share_target_column() {
+    let app = pane_app();
+    app.ui.sandbox_pane.tab.set(SandboxTab::Checkpoints);
+    let mut landed = write("landed", CheckpointState::Applied);
+    landed.target = "src/landed.rs".to_string();
+    let mut never = write("never", CheckpointState::Applied);
+    never.target = "src/never.rs".to_string();
+    never.written_ms = None;
+    app.ui.sandbox_pane.accept_checkpoints(CheckpointListView {
+        checkpoints: vec![landed, never],
+        unreadable: Vec::new(),
+    });
+    let out = render_text(&app, 100, 30);
+    let column = |target: &str| {
+        let line = out
+            .lines()
+            .find(|line| line.contains(target))
+            .unwrap_or_else(|| panic!("{target} is not on screen:\n{out}"));
+        let at = line.find(target).unwrap_or_default();
+        line[..at].chars().count()
+    };
+    assert!(out.contains("never landed"), "{out}");
+    assert_eq!(column("src/landed.rs"), column("src/never.rs"), "{out}");
+}
+
+/// A target whose glyphs are wider than one column. The detail still reaches
+/// its last line when scrolled to the end, because the wrap counts the columns
+/// a wide glyph takes rather than the characters it has.
+#[test]
+fn test_wide_glyphs_reach_end() {
+    let app = pane_app();
+    app.ui.sandbox_pane.tab.set(SandboxTab::Checkpoints);
+    let mut view = write("wide", CheckpointState::Applied);
+    view.target = format!("/w/{}", "报告📁".repeat(8));
+    app.ui.sandbox_pane.accept_checkpoints(CheckpointListView {
+        checkpoints: vec![view],
+        unreadable: Vec::new(),
+    });
+    app.ui.sandbox_pane.set_level(CheckpointLevel::Detail);
+    app.ui.sandbox_pane.scroll.set(u16::MAX);
+    let out = render_text(&app, 30, 12);
+    assert!(out.contains("9f2c"), "{out}");
+}
+
 /// A tab whose read is still out says so, and one that never got an answer
 /// names the key that tries again.
 #[test]

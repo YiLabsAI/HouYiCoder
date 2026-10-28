@@ -151,6 +151,10 @@ fn test_enter_cancels_by_default() {
         CheckpointLevel::List,
         "Enter on the default focus backs out without restoring"
     );
+    assert!(
+        app.ui.sandbox_pane.restore_request().is_none(),
+        "the default focus asks the host for nothing"
+    );
 }
 
 #[test]

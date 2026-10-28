@@ -66,6 +66,38 @@ pub(crate) fn truncate_width(s: &str, max_width: usize) -> String {
     out
 }
 
+/// Keep the end of a value within a display width, marking the dropped head
+/// with an ellipsis. A target path is identified by its tail, while the head
+/// only repeats a directory prefix its sibling rows share, so a row without
+/// the room for both keeps the part that tells it apart. A value that already
+/// fits is returned unchanged.
+pub(crate) fn elide_start(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(s) <= max_width {
+        return s.to_string();
+    }
+    if max_width == 1 {
+        return "\u{2026}".to_string();
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    for grapheme in s.graphemes(true).rev() {
+        let width = UnicodeWidthStr::width(grapheme);
+        if used + width > max_width - 1 {
+            break;
+        }
+        used += width;
+        kept.push(grapheme);
+    }
+    let mut out = String::from("\u{2026}");
+    for grapheme in kept.iter().rev() {
+        out.push_str(grapheme);
+    }
+    out
+}
+
 /// Split a single logical line into display rows each no wider than the avail
 /// display columns. Returns at least one row (the input unchanged when it
 /// fits, when avail is 0, or when the input is empty). Trailing whitespace is

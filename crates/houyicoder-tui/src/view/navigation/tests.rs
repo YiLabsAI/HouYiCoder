@@ -28,3 +28,12 @@ fn test_hint_empty() {
     let line = key_hint(&[]);
     assert!(line.spans.is_empty(), "no pairs = empty line");
 }
+
+/// A wide glyph occupies two terminal columns, so a line of two of them takes
+/// more width than the characters it has.
+#[test]
+fn test_line_measures_columns() {
+    let line = Line::from("笔记");
+    assert_eq!(line_columns(&line), 4);
+    assert_eq!(line_columns(&Line::from("ab")), 2);
+}

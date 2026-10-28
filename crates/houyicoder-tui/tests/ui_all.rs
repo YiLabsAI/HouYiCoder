@@ -48,6 +48,8 @@ mod ui_recap;
 mod ui_resume;
 #[path = "ui_run.rs"]
 mod ui_run;
+#[path = "ui_sandbox.rs"]
+mod ui_sandbox;
 #[path = "ui_search.rs"]
 mod ui_search;
 #[path = "ui_session.rs"]
