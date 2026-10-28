@@ -37,7 +37,7 @@ use houyicoder_context::{
     memory_age_label, memory_freshness_text,
 };
 use houyicoder_protocol::frontend::context::{DelegatedContext, ToolFootprint};
-use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
+use houyicoder_protocol::llm::{AssistantToolCall, InputItem, ToolDef};
 
 /// Per-turn recall budget shared by retrieval and context assembly.
 pub(crate) const MEMORY_RECALL_BUDGET: usize = 2000;
@@ -786,15 +786,11 @@ use houyicoder_api::skill::SkillSnapshot;
 pub use houyicoder_protocol::frontend::context::{
     CategoryBreakdown, ContextBreakdown, ContextFileEntry, ContextSkillEntry, GridCell, build_grid,
 };
-use houyicoder_protocol::llm::ToolDef;
-use prompt::FrozenPrompt;
-use prompt::SystemPrompt;
 use prompt::cache::PromptHash;
-use std::env::current_dir;
-use std::env::var;
+use prompt::{FrozenPrompt, SystemPrompt};
+use std::env::{current_dir, var};
 use std::sync::OnceLock;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 mod tests;
