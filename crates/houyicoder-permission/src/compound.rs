@@ -19,12 +19,17 @@ pub(crate) use effect::{is_temp_output_target, sets_tmpdir, starts_with_supporte
 pub use readonly::is_readonly_compound;
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
-/// and pipe. A bare pipe counts as a segment boundary (each stage of a pipeline
-/// is a separate attestable unit). Empty segments are dropped. Quote- and
-/// paren-aware: a separator inside quotes or inside a command substitution
-/// $(...) or group (...) is not a boundary, so a pipe inside a substitution
-/// stays in one segment. A full grammar is out of scope; the gate escalates
-/// anything ambiguous to Ask.
+/// pipe, newline, and background ampersand. A bare pipe counts as a segment
+/// boundary (each stage of a pipeline is a separate attestable unit). Empty
+/// segments are dropped. Quote- and paren-aware: a separator inside quotes or
+/// inside a command substitution $(...) or group (...) is not a boundary, so a
+/// pipe inside a substitution stays in one segment. Newline and a single
+/// ampersand are boundaries because the shell runs them as such: a segment that
+/// carries one would describe a one-command program while the shell runs two.
+/// A line-continuation backslash joins the next line instead, and an ampersand
+/// that joins a redirect (&> or >&) stays part of the segment. A heredoc body
+/// is input rather than commands, so its lines are not boundaries either. A
+/// full grammar is out of scope; the gate escalates anything ambiguous to Ask.
 pub fn split_compound(cmd: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -33,6 +38,7 @@ pub fn split_compound(cmd: &str) -> Vec<String> {
     let mut in_single = false;
     let mut in_double = false;
     let mut depth = 0i32;
+    let mut heredoc: Option<(String, bool)> = None;
     while i < chars.len() {
         let c = chars[i];
         match c {
@@ -75,11 +81,46 @@ pub fn split_compound(cmd: &str) -> Vec<String> {
             i += 1;
             continue;
         }
+        // A heredoc reads its body as input rather than running it, so the
+        // body is not a command list and its lines are not boundaries. The
+        // delimiter is remembered here and the body is skipped when the
+        // current line ends.
+        if c == '<' && chars.get(i + 1) == Some(&'<') {
+            let (next, found) = read_heredoc(&chars, i, &mut cur);
+            i = next;
+            heredoc = found.or(heredoc);
+            continue;
+        }
         // and/or operators: double ampersand or double pipe.
         if (c == '&' || c == '|') && i + 1 < chars.len() && chars[i + 1] == c {
             push_seg(&mut out, &cur);
             cur.clear();
             i += 2;
+            continue;
+        }
+        // A newline ends a command the way a semicolon does; a backslash
+        // before it continues the same command on the next line. A heredoc
+        // body that starts here is skipped up to its delimiter line.
+        if c == '\n' {
+            if cur.ends_with('\\') {
+                cur.pop();
+            } else {
+                push_seg(&mut out, &cur);
+                cur.clear();
+            }
+            i += 1;
+            if let Some((delim, strip_tabs)) = heredoc.take() {
+                i = skip_heredoc_body(&chars, i, &delim, strip_tabs);
+            }
+            continue;
+        }
+        // A single ampersand starts the next command once the left one is
+        // running, so it is a boundary too. It stays in the segment when it
+        // joins a redirect: &> sends both streams, >& duplicates one.
+        if c == '&' && chars.get(i + 1) != Some(&'>') && !cur.ends_with('>') {
+            push_seg(&mut out, &cur);
+            cur.clear();
+            i += 1;
             continue;
         }
         // single semicolon or pipe as a boundary.
@@ -94,6 +135,58 @@ pub fn split_compound(cmd: &str) -> Vec<String> {
     }
     push_seg(&mut out, &cur);
     out
+}
+
+/// Read a heredoc operator at start, appending it to the segment as written.
+/// Returns where scanning resumes, one past the delimiter word, and the
+/// delimiter the body runs to. A bare here-string (three angle brackets) or a
+/// word with no delimiter leaves the body unknown, so no delimiter is
+/// reported and the rest of the line scans as ordinary text.
+fn read_heredoc(chars: &[char], start: usize, cur: &mut String) -> (usize, Option<(String, bool)>) {
+    cur.push('<');
+    cur.push('<');
+    let mut i = start + 2;
+    let strip_tabs = chars.get(i) == Some(&'-');
+    if strip_tabs {
+        cur.push('-');
+        i += 1;
+    }
+    let word_start = i;
+    while i < chars.len()
+        && !chars[i].is_whitespace()
+        && !matches!(chars[i], ';' | '|' | '&' | '<' | '>' | '(' | ')')
+    {
+        cur.push(chars[i]);
+        i += 1;
+    }
+    let word: String = chars[word_start..i].iter().collect();
+    let name = word.trim_matches(|c| c == '\'' || c == '"');
+    let delim = (!name.is_empty()).then(|| (name.to_string(), strip_tabs));
+    (i, delim)
+}
+
+/// The position after a heredoc body. The first line whose text equals the
+/// delimiter ends the body; a tab-stripping heredoc (<<-) ignores leading tabs
+/// on that line, matching how the shell compares it. A body that never
+/// reaches its delimiter runs to the end of the input.
+fn skip_heredoc_body(chars: &[char], mut i: usize, delim: &str, strip_tabs: bool) -> usize {
+    while i < chars.len() {
+        let line_start = i;
+        while i < chars.len() && chars[i] != '\n' {
+            i += 1;
+        }
+        let line: String = chars[line_start..i].iter().collect();
+        let line = if strip_tabs {
+            line.trim_start_matches('\t')
+        } else {
+            line.as_str()
+        };
+        i += 1;
+        if line == delim {
+            break;
+        }
+    }
+    i
 }
 
 fn push_seg(out: &mut Vec<String>, s: &str) {

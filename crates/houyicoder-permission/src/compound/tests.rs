@@ -26,6 +26,42 @@ fn test_split_drops_empty() {
     assert_eq!(split_compound("a && && b"), vec!["a", "b"]);
 }
 
+/// The shell ends a command at a newline and at a single ampersand, so the
+/// splitter must too: a segment carrying one would describe one program while
+/// the shell runs two.
+#[test]
+fn test_split_newline_and_background() {
+    assert_eq!(split_compound("ls\ncp a b"), vec!["ls", "cp a b"]);
+    assert_eq!(split_compound("ls & touch x"), vec!["ls", "touch x"]);
+    assert_eq!(split_compound("a;\nb\r\nc"), vec!["a", "b", "c"]);
+}
+
+/// A backslash continues the command on the next line, and an ampersand that
+/// joins a redirect stays in the segment.
+#[test]
+fn test_split_keeps_joined_forms() {
+    assert_eq!(split_compound("cargo \\\nbuild"), vec!["cargo build"]);
+    assert_eq!(split_compound("cargo test 2>&1"), vec!["cargo test 2>&1"]);
+    assert_eq!(
+        split_compound("make check &> log"),
+        vec!["make check &> log"]
+    );
+}
+
+/// A heredoc body is input rather than a command list, so its lines are not
+/// segments; the command after the delimiter line is.
+#[test]
+fn test_split_heredoc_body() {
+    assert_eq!(
+        split_compound("cat <<'EOF'\nrm -rf x\necho done\nEOF\nls"),
+        vec!["cat <<'EOF'", "ls"]
+    );
+    assert_eq!(
+        split_compound("cat <<-EOF\n\tbody\n\tEOF\necho done"),
+        vec!["cat <<-EOF", "echo done"]
+    );
+}
+
 #[test]
 fn test_attestable_simple_command() {
     assert!(is_attestable("ls -la"));
