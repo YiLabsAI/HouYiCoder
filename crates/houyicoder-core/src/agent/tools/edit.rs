@@ -13,6 +13,7 @@ use houyicoder_protocol::extension::ToolError;
 
 use super::file_edit::apply_edit;
 use crate::agent::conditional_activation::ConditionalSkillActivator;
+use crate::snapshot::file_transaction::FileTransaction;
 
 /// Edit a file by replacing old_string with new_string. Strict exact
 /// matching (no fuzzy replacers — fuzzy matching is too error-prone).
@@ -24,6 +25,7 @@ use crate::agent::conditional_activation::ConditionalSkillActivator;
 pub struct EditTool {
     session: Arc<dyn SandboxSession>,
     activator: Option<Arc<dyn ConditionalSkillActivator>>,
+    transaction: Option<Arc<FileTransaction>>,
 }
 
 impl EditTool {
@@ -31,10 +33,17 @@ impl EditTool {
         Self {
             session,
             activator: None,
+            transaction: None,
         }
     }
     pub fn with_activator(mut self, activator: Option<Arc<dyn ConditionalSkillActivator>>) -> Self {
         self.activator = activator;
+        self
+    }
+    /// Record both sides of every write through this journal, so a crash
+    /// during an edit leaves what the target held.
+    pub fn with_transaction(mut self, transaction: Option<Arc<FileTransaction>>) -> Self {
+        self.transaction = transaction;
         self
     }
 }
@@ -62,9 +71,11 @@ impl Tool for EditTool {
             "required": ["path", "old_string", "new_string"]
         })
     }
-    fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
+    fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
         let activator = self.activator.clone();
+        let transaction = self.transaction.clone();
+        let session_id = ctx.session_id;
         Box::pin(async move {
             let path = input
                 .get("path")
@@ -90,7 +101,16 @@ impl Tool for EditTool {
                 .get("replace_all")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let (diff, n, bytes) = apply_edit(&session, path, old, new, replace_all).await?;
+            let (diff, n, bytes) = apply_edit(
+                transaction.as_deref(),
+                session_id,
+                &session,
+                path,
+                old,
+                new,
+                replace_all,
+            )
+            .await?;
             Ok(json!({
                 "path": path,
                 "diff": diff,

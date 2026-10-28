@@ -727,5 +727,7 @@ fn is_pruned(path: &Path, workspace_root: &Path, store_root: &Path) -> bool {
     false
 }
 
+pub mod file_transaction;
+
 #[cfg(test)]
 mod tests;

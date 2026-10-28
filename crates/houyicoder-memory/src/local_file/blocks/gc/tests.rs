@@ -29,6 +29,7 @@ use houyicoder_context::EventId;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
 use houyicoder_context::SessionLogEntry;
+use houyicoder_context::session_class::FILE_TRANSACTION_DIR;
 
 use super::CURSOR_NAME;
 use super::CURSOR_SCHEMA;
@@ -41,12 +42,12 @@ use super::ReclaimError;
 use super::ReclaimPolicy;
 use super::ReclaimReport;
 use super::ReclaimStop;
-use super::ReferenceSource;
 use super::Relist;
-#[cfg(unix)]
-use super::checkpoint_key;
 use super::relist;
 use super::source_fingerprint;
+use super::sources::ReferenceSource;
+#[cfg(unix)]
+use super::sources::checkpoint_key;
 use crate::local_file::LocalFileBackend;
 
 /// A pass whose lease window is empty, so age never keeps a block.
@@ -1207,6 +1208,41 @@ fn test_manifest_read_every_pass() {
     assert_eq!(report.sources, 1, "the manifest is read again");
     assert_eq!(report.removed, 0, "the address it holds keeps its block");
     assert!(block_path(&root, &held).exists());
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A block named only by a file write record survives the pass: the bytes a
+/// write backs up must outlive the record that points at them.
+#[test]
+fn test_reclaim_keeps_recorded_bytes() {
+    let root = temp_root();
+    let backend = LocalFileBackend::new(root.clone());
+    let session = SessionId::new();
+    let held = put(&backend, b"the bytes before a write");
+    let record = root
+        .join(session.to_string())
+        .join(FILE_TRANSACTION_DIR)
+        .join("0001-1-0")
+        .join("prepared.json");
+    fs::create_dir_all(record.parent().expect("write directory")).expect("write directory");
+    fs::write(
+        &record,
+        format!(r#"{{"before":{{"block_ref":"{}"}}}}"#, held.0),
+    )
+    .expect("write the record");
+    let orphan = put(&backend, b"nothing names this");
+    age(&block_path(&root, &held), Duration::from_secs(7200));
+    age(&block_path(&root, &orphan), Duration::from_secs(7200));
+
+    let report = backend
+        .reclaim_orphan_blocks(&immediate())
+        .expect("reclaim");
+    assert_eq!(report.removed, 1, "only the unnamed block goes");
+    assert!(
+        block_path(&root, &held).exists(),
+        "the record still names these bytes"
+    );
+    assert!(!block_path(&root, &orphan).exists());
     fs::remove_dir_all(&root).ok();
 }
 

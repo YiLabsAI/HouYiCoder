@@ -13,9 +13,10 @@ use serde_json::{Value, json};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 
-use super::file_edit::{apply_one, read_editable_text};
+use super::file_edit::{apply_one, read_editable_text, write_recorded};
 use crate::agent::conditional_activation::ConditionalSkillActivator;
 use crate::agent::diff::unified_diff;
+use crate::snapshot::file_transaction::FileTransaction;
 
 /// Apply multiple edits atomically to one file. Each edit is {old_string,
 /// new_string, replace_all?} applied in order to the in-memory content;
@@ -25,6 +26,7 @@ use crate::agent::diff::unified_diff;
 pub struct MultiEditTool {
     session: Arc<dyn SandboxSession>,
     activator: Option<Arc<dyn ConditionalSkillActivator>>,
+    transaction: Option<Arc<FileTransaction>>,
 }
 
 impl MultiEditTool {
@@ -32,10 +34,17 @@ impl MultiEditTool {
         Self {
             session,
             activator: None,
+            transaction: None,
         }
     }
     pub fn with_activator(mut self, activator: Option<Arc<dyn ConditionalSkillActivator>>) -> Self {
         self.activator = activator;
+        self
+    }
+    /// Record both sides of every write through this journal, so a crash
+    /// during an edit leaves what the target held.
+    pub fn with_transaction(mut self, transaction: Option<Arc<FileTransaction>>) -> Self {
+        self.transaction = transaction;
         self
     }
 }
@@ -71,9 +80,11 @@ impl Tool for MultiEditTool {
             "required": ["path", "edits"]
         })
     }
-    fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
+    fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
         let activator = self.activator.clone();
+        let transaction = self.transaction.clone();
+        let session_id = ctx.session_id;
         Box::pin(async move {
             let path = input.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
                 ToolError::InvalidInput("multiedit: path (string) required".into())
@@ -123,10 +134,15 @@ impl Tool for MultiEditTool {
                 applied += 1;
             }
             let diff = unified_diff(&original, &content, 3);
-            session
-                .write_file(path, content.into_bytes())
-                .await
-                .map_err(|e| ToolError::Failed(format!("multiedit: {e}")))?;
+            write_recorded(
+                transaction.as_deref(),
+                session_id,
+                &session,
+                path,
+                content.into_bytes(),
+            )
+            .await
+            .map_err(|reason| ToolError::Failed(format!("multiedit: {reason}")))?;
             Ok(json!({
                 "path": path,
                 "diff": diff,

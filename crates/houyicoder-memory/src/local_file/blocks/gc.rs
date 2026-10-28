@@ -30,8 +30,6 @@ use std::time::Instant;
 use std::time::UNIX_EPOCH;
 
 use houyicoder_context::BlockHash;
-use houyicoder_context::session_class::CHECKPOINT_DIR;
-use houyicoder_context::session_class::LOG_FILE;
 use houyicoder_protocol::block_ref::block_addresses;
 use serde_json::Value;
 
@@ -40,10 +38,12 @@ use self::cursor::Cursor;
 use self::cursor::SourceState;
 use self::cursor::resumable_cursor;
 use self::cursor::source_fingerprint;
+use self::sources::ReferenceSource;
 use super::SHARD_CHARS;
 use crate::local_file::LocalFileBackend;
 
 mod cursor;
+mod sources;
 mod sweep;
 
 /// The reclaim workspace under the store root, beside the shards.
@@ -187,34 +187,6 @@ impl Error for ReclaimError {}
 pub struct ReclaimStop {
     pub error: ReclaimError,
     pub report: ReclaimReport,
-}
-
-/// One reference source: a session log or a checkpoint manifest.
-enum ReferenceSource {
-    Log { key: String, path: PathBuf },
-    Checkpoint { key: String, path: PathBuf },
-}
-
-impl ReferenceSource {
-    fn key(&self) -> &str {
-        match self {
-            Self::Log { key, .. } | Self::Checkpoint { key, .. } => key,
-        }
-    }
-
-    fn path(&self) -> &Path {
-        match self {
-            Self::Log { path, .. } | Self::Checkpoint { path, .. } => path,
-        }
-    }
-
-    /// Whether this file only gains references. The session log is appended
-    /// to, so a longer one still names every address the mark filed from it.
-    /// A checkpoint manifest is written whole, so the same length proves
-    /// nothing about its contents.
-    fn is_append_only(&self) -> bool {
-        matches!(self, Self::Log { .. })
-    }
 }
 
 /// What a re-read of the source list means for a pass that already marked.
@@ -373,7 +345,8 @@ impl MarkRun {
                 .ok_or_else(|| unreadable(source.path(), "the source state could not be read"))?;
             match source {
                 ReferenceSource::Log { path, .. } => self.mark_log(path)?,
-                ReferenceSource::Checkpoint { path, .. } => self.mark_checkpoint(path)?,
+                ReferenceSource::Checkpoint { path, .. }
+                | ReferenceSource::Transaction { path, .. } => self.mark_whole(path)?,
             }
             self.report.sources += 1;
             if source.is_append_only() {
@@ -533,10 +506,11 @@ impl MarkRun {
         }
     }
 
-    /// File the block addresses one checkpoint manifest names. A manifest
-    /// carries none today; the source is scanned so a manifest that starts to
-    /// carry one keeps the block without a second edit here.
-    fn mark_checkpoint(&mut self, path: &Path) -> Result<(), ReclaimError> {
+    /// File the block addresses one whole-file source names. A manifest and a
+    /// write record are both published whole, so both are read the same way;
+    /// a manifest carries no address today, and scanning it means one that
+    /// starts to keeps the block without a second edit here.
+    fn mark_whole(&mut self, path: &Path) -> Result<(), ReclaimError> {
         let len = fs::metadata(path).map_err(|e| unreadable(path, e))?.len();
         if len > MAX_RECORD {
             return Err(unreadable(path, "a manifest is larger than the pass reads"));
@@ -668,87 +642,9 @@ impl LocalFileBackend {
 
     /// The sources a reference can be written to, in a stable order so a
     /// resumed mark knows which ones it already filed.
-    ///
-    /// Every step stops on an error other than a missing path. A session the
-    /// pass cannot name, stat, or open is a session whose references it does
-    /// not hold, and sweeping without them would free live blocks.
     fn reference_sources(&self) -> Result<Vec<ReferenceSource>, ReclaimError> {
-        let entries = fs::read_dir(&self.root).map_err(|e| unreadable(&self.root, e))?;
-        let mut sessions = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| unreadable(&self.root, e))?;
-            let path = entry.path();
-            // The store root also holds the reclaim workspace and the shards;
-            // neither is a session, and neither is stat'ed on the way past.
-            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-                return Err(unreadable(&path, "the session name is not UTF-8"));
-            };
-            if name.starts_with('.') {
-                continue;
-            }
-            // Only a directory is a session; a stray file at the root names
-            // no reference. A path that vanished is not a session either, and
-            // any other stat error is a store this pass cannot read.
-            match fs::metadata(&path) {
-                Ok(meta) if meta.is_dir() => {}
-                Ok(_) => continue,
-                Err(e) if e.kind() == ErrorKind::NotFound => continue,
-                Err(e) => return Err(unreadable(&path, e)),
-            }
-            sessions.push((name, path));
-        }
-        sessions.sort();
-        let mut sources = Vec::new();
-        for (session, dir) in sessions {
-            let log = dir.join(LOG_FILE);
-            match fs::metadata(&log) {
-                Ok(meta) if meta.is_file() => sources.push(ReferenceSource::Log {
-                    key: format!("log:{session}"),
-                    path: log,
-                }),
-                Ok(_) => return Err(unreadable(&log, "the log path is not a file")),
-                Err(e) if e.kind() == ErrorKind::NotFound => {}
-                Err(e) => return Err(unreadable(&log, e)),
-            }
-            let checkpoints = dir.join(CHECKPOINT_DIR);
-            let entries = match fs::read_dir(&checkpoints) {
-                Ok(entries) => entries,
-                Err(e) if e.kind() == ErrorKind::NotFound => continue,
-                Err(e) => return Err(unreadable(&checkpoints, e)),
-            };
-            let mut files = Vec::new();
-            for entry in entries {
-                let entry = entry.map_err(|e| unreadable(&checkpoints, e))?;
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
-                }
-                match fs::metadata(&path) {
-                    Ok(meta) if meta.is_file() => files.push(path),
-                    Ok(_) => {}
-                    Err(e) if e.kind() == ErrorKind::NotFound => {}
-                    Err(e) => return Err(unreadable(&path, e)),
-                }
-            }
-            files.sort();
-            for path in files {
-                let key = checkpoint_key(&session, &path)?;
-                sources.push(ReferenceSource::Checkpoint { key, path });
-            }
-        }
-        sources.sort_by(|a, b| a.key().cmp(b.key()));
-        Ok(sources)
+        sources::list(&self.root)
     }
-}
-
-/// The key one checkpoint manifest files under. A name that is not text
-/// cannot key a source: two such manifests would collapse onto one key, and a
-/// resumed mark would skip one of them while its references went unfiled.
-fn checkpoint_key(session: &str, path: &Path) -> Result<String, ReclaimError> {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Err(unreadable(path, "the checkpoint name is not UTF-8"));
-    };
-    Ok(format!("cp:{session}/{name}"))
 }
 
 /// The size and modification time of a reference source, as the mark sees it.
@@ -770,7 +666,7 @@ fn source_state(path: &Path) -> Option<SourceState> {
     })
 }
 
-fn unreadable(path: &Path, reason: impl Display) -> ReclaimError {
+pub(super) fn unreadable(path: &Path, reason: impl Display) -> ReclaimError {
     ReclaimError::Unreadable {
         source: path.display().to_string(),
         reason: reason.to_string(),

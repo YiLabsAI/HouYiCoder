@@ -63,6 +63,7 @@ use houyicoder_core::agent::{
     HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, TodoWriteTool, ToolRegistry,
     parse_event,
 };
+use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_memory::{
     FileDescriptorStore, InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend,
@@ -291,7 +292,7 @@ pub(crate) fn assemble(
         &gate_dyn,
     );
     let skills = SkillRuntime::new(fences.workspace.as_deref(), gate_dyn.clone());
-    let undo_handles = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn);
+    let undo_handles = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn, &store);
     let (config, runner_settings_warnings) =
         build_runner_config(model.clone(), fences.workspace.as_deref());
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
@@ -545,6 +546,16 @@ fn install_workspace_memory(
     }
 }
 
+/// The write journal over the same store the session log uses. None when the
+/// store keeps no root on disk: there is nowhere for a record to survive the
+/// process, so the file tools write straight through.
+fn file_write_journal(store: &SessionStore) -> Option<Arc<FileTransaction>> {
+    let root = store.backend().session_log_root()?.to_path_buf();
+    Some(Arc::new(FileTransaction::new(Arc::new(
+        LocalFileBackend::new(root),
+    ))))
+}
+
 /// Register the sandbox-backed built-in tools, and hand back the undo handles
 /// they expose so the workspace branch can attach them to the runner.
 fn register_builtin_tools(
@@ -552,10 +563,12 @@ fn register_builtin_tools(
     fences: &containment::SessionFences,
     skills: &SkillRuntime,
     gate_dyn: Arc<dyn ModeGate>,
+    store: &SessionStore,
 ) -> Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)> {
     let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), gate_dyn)
         .with_activator(Some(Arc::clone(&skills.conditional)))
-        .with_active_skill(skills.discovery_skill());
+        .with_active_skill(skills.discovery_skill())
+        .with_transaction(file_write_journal(store));
     let undo_handles = builtin.undo_handles();
     register_provider_tools(tools, builtin);
     undo_handles

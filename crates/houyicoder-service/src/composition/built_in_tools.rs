@@ -13,6 +13,7 @@ use houyicoder_core::agent::{
     AskUserQuestionTool, BashTool, EditTool, GlobTool, GrepTool, MultiEditTool, ReadTool,
     WebFetchTool, WriteTool,
 };
+use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_permission::{GuardedTool, ModeGate};
 use std::sync::Mutex;
@@ -30,6 +31,7 @@ pub(super) struct BuiltInToolProvider {
     snapshot_store: Option<Arc<SnapshotStore>>,
     activator: Option<Arc<dyn ConditionalSkillActivator>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
+    transaction: Option<Arc<FileTransaction>>,
 }
 
 impl BuiltInToolProvider {
@@ -64,7 +66,15 @@ impl BuiltInToolProvider {
             snapshot_store,
             activator: None,
             active_skill: None,
+            transaction: None,
         }
+    }
+
+    /// Wire the write journal into the file-touch tools, so every file they
+    /// write keeps what the target held before the write.
+    pub(super) fn with_transaction(mut self, transaction: Option<Arc<FileTransaction>>) -> Self {
+        self.transaction = transaction;
+        self
     }
 
     /// Wire the paths-skill activator into the file-touch tools so a touch
@@ -115,18 +125,25 @@ impl ToolProvider for BuiltInToolProvider {
                 Arc::new(ReadTool::new(session.clone()).with_activator(self.activator.clone())),
                 self.gate.clone(),
             )));
+            let write = WriteTool::new(session.clone())
+                .with_activator(self.activator.clone())
+                .with_transaction(self.transaction.clone());
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(WriteTool::new(session.clone()).with_activator(self.activator.clone())),
+                Arc::new(write),
                 self.gate.clone(),
             )));
+            let edit = EditTool::new(session.clone())
+                .with_activator(self.activator.clone())
+                .with_transaction(self.transaction.clone());
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(EditTool::new(session.clone()).with_activator(self.activator.clone())),
+                Arc::new(edit),
                 self.gate.clone(),
             )));
+            let multiedit = MultiEditTool::new(session.clone())
+                .with_activator(self.activator.clone())
+                .with_transaction(self.transaction.clone());
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(
-                    MultiEditTool::new(session.clone()).with_activator(self.activator.clone()),
-                ),
+                Arc::new(multiedit),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(

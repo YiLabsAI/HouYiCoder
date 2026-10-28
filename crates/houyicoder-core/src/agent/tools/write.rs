@@ -11,13 +11,15 @@ use serde_json::{Value, json};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 
-use super::file_edit::EDIT_MAX_BYTES;
+use super::file_edit::{EDIT_MAX_BYTES, write_recorded};
 use crate::agent::conditional_activation::ConditionalSkillActivator;
+use crate::snapshot::file_transaction::FileTransaction;
 
 /// Write a file in the sandbox workspace. Destructive, requires approval.
 pub struct WriteTool {
     session: Arc<dyn SandboxSession>,
     activator: Option<Arc<dyn ConditionalSkillActivator>>,
+    transaction: Option<Arc<FileTransaction>>,
 }
 
 impl WriteTool {
@@ -25,10 +27,17 @@ impl WriteTool {
         Self {
             session,
             activator: None,
+            transaction: None,
         }
     }
     pub fn with_activator(mut self, activator: Option<Arc<dyn ConditionalSkillActivator>>) -> Self {
         self.activator = activator;
+        self
+    }
+    /// Record both sides of every write through this journal, so a crash
+    /// during a write leaves what the target held.
+    pub fn with_transaction(mut self, transaction: Option<Arc<FileTransaction>>) -> Self {
+        self.transaction = transaction;
         self
     }
 }
@@ -51,9 +60,11 @@ impl Tool for WriteTool {
             "required": ["path", "content"]
         })
     }
-    fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
+    fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
         let activator = self.activator.clone();
+        let transaction = self.transaction.clone();
+        let session_id = ctx.session_id;
         Box::pin(async move {
             let path = input
                 .get("path")
@@ -93,10 +104,15 @@ impl Tool for WriteTool {
                     "unchanged": true
                 }));
             }
-            session
-                .write_file(path, content.as_bytes().to_vec())
-                .await
-                .map_err(|e| ToolError::Failed(format!("write: {e}")))?;
+            write_recorded(
+                transaction.as_deref(),
+                session_id,
+                &session,
+                path,
+                content.as_bytes().to_vec(),
+            )
+            .await
+            .map_err(|reason| ToolError::Failed(format!("write: {reason}")))?;
             Ok(json!({"path": path, "bytes": content.len(), "lines": lines}))
         })
     }

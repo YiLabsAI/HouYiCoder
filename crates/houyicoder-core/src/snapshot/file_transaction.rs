@@ -1,0 +1,310 @@
+//! Writing a file through a record that survives a crash.
+//!
+//! A write that cannot say what the target held is a write nothing can undo,
+//! so the previous bytes and the bytes about to land are both stored before
+//! the target is touched. A failure at any step before the record is on disk
+//! refuses the write; the record is what a recovery reads afterwards.
+
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::fs::{Metadata, metadata, read};
+use std::io::Error as IoError;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::process::id;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_context::session_class::{FILE_TRANSACTION_DIR, session_dir};
+use houyicoder_context::{ContextBackend, ContextError, SandboxError, SessionId};
+
+use self::record::{
+    CommittedRecord, Identity, ImageRecord, PreparedRecord, write_committed, write_prepared,
+};
+
+mod record;
+
+/// The most bytes one previous image is kept from. A larger target is still
+/// written and its record states that the previous bytes were not kept:
+/// refusing instead would take away a write that works today.
+pub const MAX_BACKUP_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Distinguishes two writes recorded in one process at the same millisecond.
+static WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Records each file write before it happens, so a later recovery can tell
+/// what the target held and whether the write landed.
+pub struct FileTransaction {
+    backend: Arc<dyn ContextBackend>,
+    root: Option<PathBuf>,
+    backup_ceiling: u64,
+}
+
+impl FileTransaction {
+    /// A transaction over the same store the session log uses. Without a store
+    /// root, writes pass straight through: there is nowhere for a record to
+    /// outlive the process.
+    pub fn new(backend: Arc<dyn ContextBackend>) -> Self {
+        let root = backend.session_log_root().map(Path::to_path_buf);
+        Self {
+            backend,
+            root,
+            backup_ceiling: MAX_BACKUP_BYTES,
+        }
+    }
+
+    /// Lower the largest previous image kept, for tests of the limit and for a
+    /// caller with its own storage budget.
+    pub fn with_backup_ceiling(mut self, bytes: u64) -> Self {
+        self.backup_ceiling = bytes;
+        self
+    }
+
+    /// Write bytes to a workspace path, recording both sides first.
+    ///
+    /// The prepared record is on disk before the target is touched, so a
+    /// refusal leaves the target exactly as it was. A failure to publish the
+    /// committed record afterwards does not fail the write: the bytes are
+    /// already there, and reporting a failure would have the caller repeat a
+    /// write that landed.
+    pub async fn write(
+        &self,
+        session: Option<SessionId>,
+        sandbox: &dyn SandboxSession,
+        path: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), WriteRefusal> {
+        let (Some(root), Some(session)) = (self.root.as_deref(), session) else {
+            return sandbox
+                .write_file(path, bytes)
+                .await
+                .map_err(|error| WriteRefusal::Write {
+                    path: path.to_string(),
+                    error,
+                });
+        };
+        let target = sandbox
+            .resolve_write(path)
+            .map_err(|error| WriteRefusal::Target {
+                path: path.to_string(),
+                error,
+            })?;
+        let before = self.capture(&target)?;
+        let before_block = match &before {
+            Captured::Present {
+                bytes: Some(kept), ..
+            } => Some(self.store(kept.clone(), path).await?),
+            _ => None,
+        };
+        let after_block = self.store(bytes.clone(), path).await?;
+        let expected_after = ImageRecord {
+            present: true,
+            block_ref: Some(after_block.clone()),
+            bytes: Some(bytes.len() as u64),
+            mode: None,
+            identity: None,
+        };
+        let operation = operation_name();
+        let dir = session_dir(root, session)
+            .join(FILE_TRANSACTION_DIR)
+            .join(&operation);
+        let prepared = PreparedRecord::new(
+            &operation,
+            &session.to_string(),
+            path,
+            before.to_record(before_block),
+            expected_after.clone(),
+        );
+        write_prepared(&dir, &prepared).map_err(|error| WriteRefusal::Record {
+            path: error.path().to_path_buf(),
+            reason: error.to_string(),
+        })?;
+        sandbox
+            .write_file(path, bytes)
+            .await
+            .map_err(|error| WriteRefusal::Write {
+                path: path.to_string(),
+                error,
+            })?;
+        let after = match metadata(&target) {
+            Ok(meta) => image_of(&meta, Some(after_block)),
+            Err(_) => expected_after,
+        };
+        let committed = CommittedRecord::new(&operation, path, after, now_millis());
+        if let Err(error) = write_committed(&dir, &committed) {
+            tracing::warn!(
+                %error,
+                "the write completed but its committed record did not"
+            );
+        }
+        Ok(())
+    }
+
+    /// Read what the target holds now. A file that cannot be read is refused
+    /// rather than recorded as absent: the write would destroy bytes nothing
+    /// kept.
+    fn capture(&self, target: &Path) -> Result<Captured, WriteRefusal> {
+        let meta = match metadata(target) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Captured::Absent),
+            Err(error) => {
+                return Err(WriteRefusal::Unreadable {
+                    path: target.to_path_buf(),
+                    error,
+                });
+            }
+        };
+        let size = meta.len();
+        let bytes = if size > self.backup_ceiling {
+            None
+        } else {
+            Some(read(target).map_err(|error| WriteRefusal::Unreadable {
+                path: target.to_path_buf(),
+                error,
+            })?)
+        };
+        Ok(Captured::Present {
+            bytes,
+            size,
+            mode: mode_of(&meta),
+            identity: identity_of(&meta),
+        })
+    }
+
+    /// Store bytes in the block store, returning the hash a record names.
+    async fn store(&self, bytes: Vec<u8>, target: &str) -> Result<String, WriteRefusal> {
+        let hash = self
+            .backend
+            .block_put(bytes)
+            .await
+            .map_err(|error| WriteRefusal::Backup {
+                path: target.to_string(),
+                error,
+            })?;
+        Ok(hash.0)
+    }
+}
+
+/// What the target held when the write began.
+enum Captured {
+    /// Nothing: the write creates the file.
+    Absent,
+    /// A file, with its bytes kept only when they fit the ceiling.
+    Present {
+        bytes: Option<Vec<u8>>,
+        size: u64,
+        mode: Option<u32>,
+        identity: Option<Identity>,
+    },
+}
+
+impl Captured {
+    fn to_record(&self, block_ref: Option<String>) -> ImageRecord {
+        match self {
+            Self::Absent => ImageRecord::absent(),
+            Self::Present {
+                size,
+                mode,
+                identity,
+                ..
+            } => ImageRecord {
+                present: true,
+                block_ref,
+                bytes: Some(*size),
+                mode: *mode,
+                identity: *identity,
+            },
+        }
+    }
+}
+
+/// Why a write did not happen.
+#[derive(Debug)]
+pub enum WriteRefusal {
+    /// The workspace path could not be resolved.
+    Target { path: String, error: SandboxError },
+    /// The previous contents could not be read, so the write would destroy
+    /// bytes nothing recorded.
+    Unreadable { path: PathBuf, error: IoError },
+    /// The bytes could not be stored, so the record would point at nothing.
+    Backup { path: String, error: ContextError },
+    /// The prepared record could not be published; the target was not touched.
+    Record { path: PathBuf, reason: String },
+    /// The write itself failed.
+    Write { path: String, error: SandboxError },
+}
+
+impl Display for WriteRefusal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Target { path, error } => {
+                write!(f, "resolve the write target {path}: {error}")
+            }
+            Self::Unreadable { path, error } => {
+                write!(f, "read the previous {}: {error}", path.display())
+            }
+            Self::Backup { path, error } => {
+                write!(f, "keep the previous bytes of {path}: {error}")
+            }
+            Self::Record { path, reason } => {
+                write!(f, "write the record {}: {reason}", path.display())
+            }
+            Self::Write { path, error } => write!(f, "write {path}: {error}"),
+        }
+    }
+}
+
+/// The record side for a file whose metadata was just read.
+fn image_of(meta: &Metadata, block_ref: Option<String>) -> ImageRecord {
+    ImageRecord {
+        present: true,
+        block_ref,
+        bytes: Some(meta.len()),
+        mode: mode_of(meta),
+        identity: identity_of(meta),
+    }
+}
+
+#[cfg(unix)]
+fn mode_of(meta: &Metadata) -> Option<u32> {
+    Some(meta.permissions().mode())
+}
+
+#[cfg(not(unix))]
+fn mode_of(_meta: &Metadata) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn identity_of(meta: &Metadata) -> Option<Identity> {
+    Some(Identity {
+        device: meta.dev(),
+        inode: meta.ino(),
+    })
+}
+
+#[cfg(not(unix))]
+fn identity_of(_meta: &Metadata) -> Option<Identity> {
+    None
+}
+
+/// Names one write: the wall clock first so a listing sorts by time, then the
+/// process and a counter so two writes never share a directory.
+fn operation_name() -> String {
+    let sequence = WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{:013}-{}-{sequence:06}", now_millis(), id())
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests;

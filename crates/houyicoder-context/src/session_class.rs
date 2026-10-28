@@ -27,6 +27,12 @@ pub const INDEX_FILE: &str = "log.index";
 /// The directory a session's checkpoint manifests live in. The store writes
 /// it and the reclaim pass reads it, so both name it here.
 pub const CHECKPOINT_DIR: &str = "checkpoints";
+/// The directory holding one write's prepared and committed records, each
+/// write under a name of its own. The write path creates it and the reclaim
+/// pass reads it, so both name it here: a record the pass does not scan would
+/// let the bytes a write backs up be reclaimed while the record still points
+/// at them.
+pub const FILE_TRANSACTION_DIR: &str = "file-transactions";
 /// The single-writer guard a session's directory holds, empty and never read:
 /// only the kernel lock on the open handle carries meaning. A resume, a
 /// serving host, and the retention pass all name it here, so a probe and an
