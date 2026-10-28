@@ -518,6 +518,88 @@ fn test_superseded_file_re_read() {
 }
 
 #[test]
+fn test_ranged_reads_not_superseded() {
+    fn tc(cid: &str, tool: &str, input: serde_json::Value) -> SessionLogEntry {
+        SessionLogEntry {
+            id: EventId::new(),
+            session: SessionId::new(),
+            ts: 0,
+            prev_hash: None,
+            event: SessionEvent::ToolCall {
+                call_id: cid.into(),
+                tool: tool.into(),
+                input,
+            },
+        }
+    }
+    fn tr(cid: &str) -> SessionLogEntry {
+        SessionLogEntry {
+            id: EventId::new(),
+            session: SessionId::new(),
+            ts: 1,
+            prev_hash: None,
+            event: SessionEvent::ToolResult {
+                call_id: cid.into(),
+                output: serde_json::json!({"ok": true}),
+                duration_ms: 0,
+            },
+        }
+    }
+    let disjoint = vec![
+        tc(
+            "c1",
+            "read",
+            serde_json::json!({"path": "a.rs", "offset": 740, "context": 30}),
+        ),
+        tr("c1"),
+        tc(
+            "c2",
+            "read",
+            serde_json::json!({"path": "a.rs", "offset": 1, "context": 60}),
+        ),
+        tr("c2"),
+    ];
+    assert!(
+        !superseded_by_later(&disjoint, 1),
+        "reading another line range does not supersede the earlier slice"
+    );
+
+    let same_slice = vec![
+        tc(
+            "c1",
+            "read",
+            serde_json::json!({"path": "a.rs", "offset": "640", "limit": 50}),
+        ),
+        tr("c1"),
+        tc(
+            "c2",
+            "read",
+            serde_json::json!({"path": "a.rs", "offset": 640, "limit": 50}),
+        ),
+        tr("c2"),
+    ];
+    assert!(
+        superseded_by_later(&same_slice, 1),
+        "re-reading the identical line range supersedes the earlier slice"
+    );
+
+    let full_covers_slice = vec![
+        tc(
+            "c1",
+            "read",
+            serde_json::json!({"path": "a.rs", "offset": 170, "context": 15}),
+        ),
+        tr("c1"),
+        tc("c2", "read", serde_json::json!({"path": "a.rs"})),
+        tr("c2"),
+    ];
+    assert!(
+        superseded_by_later(&full_covers_slice, 1),
+        "a later full-file read supersedes an earlier ranged slice"
+    );
+}
+
+#[test]
 fn test_pending_not_superseded() {
     fn tc(cid: &str) -> SessionLogEntry {
         SessionLogEntry {

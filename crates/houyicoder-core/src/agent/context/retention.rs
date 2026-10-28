@@ -30,12 +30,13 @@
 use std::collections::HashSet;
 
 use houyicoder_context::{BlockHash, ContextBackend, SessionEvent, SessionLogEntry};
+use serde_json::Value;
 
 /// A resource key for supersession: a later tool call for the same resource
 /// supersedes the earlier result. The key is the file path for file tools +
 /// the command for bash. Returns None when the call has no comparable key,
 /// so two unrelated calls never mark each other superseded.
-fn resource_key(tool: &str, input: &serde_json::Value) -> Option<String> {
+fn resource_key(tool: &str, input: &Value) -> Option<String> {
     match tool {
         "read" | "write" | "edit" | "multiedit" => input
             .get("path")
@@ -57,18 +58,42 @@ fn is_mutation(tool: &str) -> bool {
     matches!(tool, "write" | "edit" | "multiedit")
 }
 
+/// Extract a range parameter as a normalized string so numeric and string
+/// representations compare equal.
+fn range_field(input: &Value, key: &str) -> Option<String> {
+    match input.get(key)? {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        v => Some(v.to_string()),
+    }
+}
+
+/// The line-window parameters of a read call. None in all three positions
+/// means an unbounded full-file read.
+fn read_range(input: &Value) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        range_field(input, "offset"),
+        range_field(input, "limit"),
+        range_field(input, "context"),
+    )
+}
+
+/// Whether a later read of the same path covers the lines of an earlier read:
+/// a full-file read covers any slice, and an identical slice covers itself,
+/// while a disjoint slice leaves the earlier lines as the only copy in view.
+fn read_covers(own_input: &Value, later_input: &Value) -> bool {
+    let later = read_range(later_input);
+    later == (None, None, None) || later == read_range(own_input)
+}
+
 /// Whether a later tool call in the window supersedes the result at index i.
-/// A result is superseded when a later call touches the same resource AND
-/// either is a mutation (the resource changed, so any prior result is stale)
-/// or is the same tool (a re-read, a re-run — the newer result wins). The
-/// result's own ToolCall is found by scanning backward for the call_id.
-/// A superseded result is prioritized for eviction regardless of age.
+/// A result is superseded when a later answered call touches the same resource
+/// and either mutates it or re-reads a covering range.
 pub(crate) fn superseded_by_later(events: &[SessionLogEntry], i: usize) -> bool {
     let SessionEvent::ToolResult { call_id, .. } = &events[i].event else {
         return false;
     };
-    // Find the matching ToolCall (scan backward from the result) + its key.
-    let mut own: Option<(&str, String)> = None;
+    let mut own: Option<(&str, &Value, String)> = None;
     for ev in events[..i].iter().rev() {
         if let SessionEvent::ToolCall {
             call_id: cid,
@@ -77,12 +102,12 @@ pub(crate) fn superseded_by_later(events: &[SessionLogEntry], i: usize) -> bool 
         } = &ev.event
             && cid == call_id
         {
-            own = resource_key(tool, input).map(|k| (tool.as_str(), k));
+            own = resource_key(tool, input).map(|k| (tool.as_str(), input, k));
             break;
         }
     }
-    let Some((own_tool, key)) = own else {
-        return false; // not resource-keyed, never superseded by this rule
+    let Some((own_tool, own_input, key)) = own else {
+        return false;
     };
     // Only a call whose result is also in the window has replaced the older
     // result. A pending call has not answered yet, so the older content is
@@ -105,8 +130,10 @@ pub(crate) fn superseded_by_later(events: &[SessionLogEntry], i: usize) -> bool 
                 return false;
             };
             let later_tool = tool.as_str();
+            let same_tool_covers =
+                later_tool == own_tool && (own_tool != "read" || read_covers(own_input, input));
             later_key == key
-                && (is_mutation(later_tool) || later_tool == own_tool)
+                && (is_mutation(later_tool) || same_tool_covers)
                 && answered.contains(later_call.as_str())
         }
         _ => false,
