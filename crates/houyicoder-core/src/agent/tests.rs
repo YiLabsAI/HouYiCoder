@@ -34,6 +34,7 @@ mod ask_question;
 mod budget_pressure_gate;
 mod denied_agents;
 mod hook_gate;
+mod missing_args;
 pub(crate) mod run_completion;
 mod tool_duration;
 mod tool_result_baseline;

@@ -496,6 +496,7 @@ impl Runner {
                         },
                     ))
                     .await?;
+                self.drop_cut_tool_calls(&mut state);
                 let partial = state.clone().into_response(inference.model.clone());
                 self.append_response_events(session, &partial).await?;
                 // Record the partial call's cost before the nudge (the nudge

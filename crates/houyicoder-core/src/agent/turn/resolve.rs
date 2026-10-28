@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use houyicoder_api::skill::GrantSubject;
 use houyicoder_api::tool::Tool;
 use houyicoder_context::SessionId;
-use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::extension::{ENTITLEMENT_TOOL, ToolError};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::outcome_counts;
 use crate::agent::skill_body::skill_source;
 use crate::agent::step::{NextStep, extract_final_text};
+use crate::agent::turn::fallback::tool_error_json;
 use crate::agent::{ApprovalRequest, FallbackToolOutcome, RunError, Runner, obs_wire};
 
 /// One tool call the model emitted this turn, with everything dispatch needs
@@ -38,18 +39,29 @@ pub(crate) struct ToolCallPlan {
     pub(crate) concurrency_safe: bool,
     /// Must the user approve this call before it runs.
     pub(crate) needs_approval: bool,
+    /// Required arguments this call does not supply. A non-empty list means
+    /// the call cannot run: it is answered with the schema error instead of
+    /// being executed or put to a human.
+    pub(crate) invalid_arguments: Vec<String>,
 }
 
 impl ToolCallPlan {
     fn new(id: String, tool: Arc<dyn Tool>, input: Value) -> Self {
         let concurrency_safe = tool.is_concurrency_safe();
-        let needs_approval = tool.requires_approval_for(&input);
+        // A call that fails its own required-argument check cannot run, so it
+        // is neither executed nor put to a human. The model corrects itself on
+        // the next turn from the error this turn returns; a reply cut at the
+        // token cap produces exactly such calls, and interrupting a human for
+        // one spends attention on a call that is already over.
+        let invalid_arguments = tool.invalid_required_arguments(&input);
+        let needs_approval = invalid_arguments.is_empty() && tool.requires_approval_for(&input);
         Self {
             id,
             tool,
             input,
             concurrency_safe,
             needs_approval,
+            invalid_arguments,
         }
     }
 }
@@ -119,8 +131,18 @@ impl Runner {
         // an approval request the caller resolves via resume(); the rest run.
         let mut approvals: Vec<ApprovalRequest> = Vec::new();
         let mut exec: Vec<ToolCallPlan> = Vec::new();
+        // A call that cannot run is answered with the schema error the tool
+        // would have raised, without executing it or asking anyone about it.
+        let mut unrunnable: Vec<(String, Value)> = Vec::new();
         for plan in plans {
-            if plan.needs_approval {
+            if !plan.invalid_arguments.is_empty() {
+                let message = format!(
+                    "{}: {} required",
+                    plan.tool.name(),
+                    plan.invalid_arguments.join(", ")
+                );
+                unrunnable.push((plan.id, tool_error_json(&ToolError::InvalidInput(message))));
+            } else if plan.needs_approval {
                 let ToolCallPlan {
                     id, tool, input, ..
                 } = plan;
@@ -134,13 +156,18 @@ impl Runner {
         // Each executed result is appended to the log as the call completes,
         // so the live delta renders per-tool progress, not a batch dump when
         // the slowest parallel call returns. Blocked results (Deny/Feedback/
-        // Ask) had no execution, so they append after.
+        // Ask) and unrunnable calls had no execution, so they append after.
         let mut results = self.execute_partitioned(session, &exec, token).await?;
         for (id, output) in &blocked {
             self.append_tool_result(session, id.clone(), "", output.clone(), 0)
                 .await?;
         }
+        for (id, output) in &unrunnable {
+            self.append_tool_result(session, id.clone(), "", output.clone(), 0)
+                .await?;
+        }
         results.extend(blocked);
+        results.extend(unrunnable);
         self.fold_tool_outcomes(&results, &call_names);
         if let Some(skill) = self.active_skill()
             && let Some(req) = self.skill_registry.as_ref().and_then(|registry| {

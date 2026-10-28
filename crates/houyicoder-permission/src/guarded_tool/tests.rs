@@ -4,7 +4,7 @@ use crate::mode::PermissionMode;
 use crate::rule::{Effect, Rule};
 use houyicoder_protocol::extension::ToolError;
 use pollster::block_on;
-use serde_json::Map;
+use serde_json::{Map, json};
 use std::sync::Mutex;
 
 /// A destructive tool that records whether execute ran. Tracks the shape
@@ -309,4 +309,57 @@ fn test_auto_allows_native_exec() {
     assert_eq!(tool.description(), "");
     let _schema = tool.input_schema();
     let _exec = block_on(tool.execute(ToolCtx::new("t"), Value::Null));
+}
+
+/// In Manual mode a destructive tool's plain execute fails closed with the
+/// approval message, which tells the model nothing it can act on. A call
+/// missing its required argument cannot run whether or not a human is asked,
+/// so the schema error is the answer, and the tool is not invoked at all.
+#[test]
+fn test_manual_reports_missing_argument() {
+    struct CmdTool {
+        ran: Mutex<bool>,
+    }
+    impl Tool for CmdTool {
+        fn name(&self) -> &str {
+            "cmd"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn input_schema(&self) -> Value {
+            json!({
+                "type": "object",
+                "required": ["command"],
+                "properties": {"command": {"type": "string"}},
+            })
+        }
+        fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+            *self.ran.lock().unwrap() = true;
+            Box::pin(async { Ok(Value::Null) })
+        }
+        fn is_destructive(&self) -> bool {
+            true
+        }
+        fn requires_approval(&self) -> bool {
+            true
+        }
+    }
+    let inner = Arc::new(CmdTool {
+        ran: Mutex::new(false),
+    });
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Manual));
+    let tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(inner.clone(), gate));
+    let error = block_on(tool.execute(ToolCtx::new("t"), json!({})))
+        .expect_err("a call without its required argument cannot run");
+    match error {
+        ToolError::InvalidInput(message) => {
+            assert!(
+                message.contains("command (string) required"),
+                "got {message}"
+            );
+        }
+        other => panic!("expected the schema error, got {other:?}"),
+    }
+    assert!(!*inner.ran.lock().unwrap(), "the tool must not run");
 }

@@ -99,6 +99,18 @@ impl<T: Tool> Tool for GuardedTool<T> {
         let inner = self.inner.clone();
         let gate = self.gate.clone();
         Box::pin(async move {
+            // A call that fails its tool's required-argument check cannot run,
+            // so it is answered with that schema error rather than the gate's
+            // verdict. Asking would spend a human on a call that fails either
+            // way, and the model corrects itself from the error.
+            let invalid = inner.invalid_required_arguments(&input);
+            if !invalid.is_empty() {
+                return Err(ToolError::InvalidInput(format!(
+                    "{}: {} required",
+                    inner.name(),
+                    invalid.join(", ")
+                )));
+            }
             // Re-check with the real input so content, safety, and compound
             // rules fire at the enforcement point. Ask here is a misuse guard:
             // the inline path only runs when the gate said Allow or Deny, so a

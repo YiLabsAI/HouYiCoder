@@ -371,7 +371,14 @@ pub(crate) fn finalize_tool_calls(acc: Vec<ToolCallAccum>) -> Vec<LlmEvent> {
     acc.into_iter()
         .filter(|tc| !tc.name.is_empty())
         .map(|tc| {
-            let input = serde_json::from_str(&tc.args).unwrap_or_else(|_| serde_json::json!({}));
+            let input = serde_json::from_str(&tc.args).unwrap_or_else(|_| {
+                // A reply cut while the arguments were streaming ends here.
+                // The empty object is honest about what arrived; the tool
+                // refuses the call on its required arguments and the model
+                // corrects itself, so the failure is visible downstream.
+                tracing::debug!(tool = %tc.name, call_id = %tc.id, "tool arguments did not parse");
+                serde_json::json!({})
+            });
             let id = unique_id(&tc.id);
             LlmEvent::ToolCall {
                 id,
@@ -709,7 +716,10 @@ fn parse_response(json: &Value, model: &str) -> Result<CompletionResponse, Provi
                 .get("arguments")
                 .and_then(|v| v.as_str())
                 .unwrap_or("{}");
-            let input: Value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
+            let input: Value = serde_json::from_str(args_str).unwrap_or_else(|_| {
+                tracing::debug!(tool = %name, call_id = %id, "tool arguments did not parse");
+                json!({})
+            });
             output.push(OutputItem::ToolCall { id, name, input });
         }
     }

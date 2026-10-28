@@ -64,6 +64,35 @@ pub(super) fn note_exhausted_truncation(state: &mut StreamFold) {
 }
 
 impl Runner {
+    /// Drop the tool calls a reply cut at the token cap left unusable. A call
+    /// whose arguments were still streaming when the cap hit arrives with an
+    /// empty or partial object, so it cannot satisfy its tool's required
+    /// arguments and could not run even if it were kept. Keeping it would also
+    /// record a call the model did not finish making: the continuation restates
+    /// the whole call, so the kept fragment would shadow the real one.
+    pub(super) fn drop_cut_tool_calls(&self, state: &mut StreamFold) {
+        let total = state.tool_calls.len();
+        state.tool_calls.retain(|item| match item {
+            OutputItem::ToolCall {
+                id, name, input, ..
+            } => {
+                let complete = self
+                    .tools
+                    .get(name)
+                    .is_none_or(|tool| tool.invalid_required_arguments(input).is_empty());
+                if !complete {
+                    tracing::debug!(call_id = %id, tool = %name, "dropped a tool call the token cap cut");
+                }
+                complete
+            }
+            _ => true,
+        });
+        let dropped = total - state.tool_calls.len();
+        if dropped > 0 {
+            tracing::debug!(dropped, "a reply cut at the cap left incomplete tool calls");
+        }
+    }
+
     /// Append the resume-direct nudge as a persisted MetaUser event so the
     /// next serve picks it up and the model continues the cut reply.
     pub(super) async fn append_resume_nudge(&self, session: SessionId) -> Result<(), RunError> {

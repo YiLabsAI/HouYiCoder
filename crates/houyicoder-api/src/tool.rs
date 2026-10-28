@@ -209,6 +209,60 @@ pub trait Tool: Send + Sync {
         let _ = input;
         self.requires_approval()
     }
+
+    /// The required arguments this input does not supply in a usable form:
+    /// absent, null, an empty string, or a value of a different JSON type than
+    /// the schema declares, each named with its declared type. Empty means the
+    /// call can run.
+    ///
+    /// A model reply cut at the token cap streams its arguments mid-object and
+    /// arrives empty or partial, so this is how a caller tells a call the model
+    /// meant to make from the fragment a cut left behind. A call that fails
+    /// this check cannot run, and asking a human to approve it spends their
+    /// attention on a call that is already over. A tool that declares no
+    /// required arguments accepts whatever it is given.
+    fn invalid_required_arguments(&self, input: &Value) -> Vec<String> {
+        let schema = self.input_schema();
+        let Some(required) = schema.get("required").and_then(Value::as_array) else {
+            return Vec::new();
+        };
+        let describe = |name: &str| match declared_type(&schema, name) {
+            Some(kind) => format!("{name} ({kind})"),
+            None => name.to_string(),
+        };
+        let required = required.iter().filter_map(Value::as_str);
+        let Some(object) = input.as_object() else {
+            // An input that is not an object supplies none of them.
+            return required.map(describe).collect();
+        };
+        required
+            .filter(|name| !is_usable(object.get(*name), declared_type(&schema, name)))
+            .map(describe)
+            .collect()
+    }
+}
+
+/// Whether a required argument's value is one the call can use: present, not
+/// null, not the empty string, and of the JSON type the schema declares when
+/// it declares one.
+fn is_usable(value: Option<&Value>, declared: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    match declared {
+        Some("string") => value.as_str().is_some_and(|text| !text.is_empty()),
+        Some("integer") => value.is_i64() || value.is_u64(),
+        Some("number") => value.is_number(),
+        Some("boolean") => value.is_boolean(),
+        Some("object") => value.is_object(),
+        Some("array") => value.is_array(),
+        _ => !value.is_null(),
+    }
+}
+
+/// The JSON type a property's schema declares, when it declares one.
+fn declared_type<'a>(schema: &'a Value, name: &str) -> Option<&'a str> {
+    schema.get("properties")?.get(name)?.get("type")?.as_str()
 }
 
 /// A source of tools the composition root assembles into the registry. The
@@ -228,3 +282,6 @@ pub trait ToolProvider: Send + Sync {
     /// can wire runtime params (sandbox, gate) into its tools.
     fn tools(&self) -> Vec<Arc<dyn Tool>>;
 }
+
+#[cfg(test)]
+mod tests;
