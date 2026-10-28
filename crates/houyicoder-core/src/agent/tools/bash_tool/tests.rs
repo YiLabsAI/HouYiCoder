@@ -2,6 +2,8 @@ mod bash_cancel;
 
 mod bash_bound;
 
+mod bash_timeout;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::json;
 
-use super::{BashTool, MAX_TIMEOUT_MS, wall_budget_ms};
+use super::{BashTool, MAX_TIMEOUT_MS, fold_notice, wall_budget_ms};
 
 /// A session that never runs anything: the schema question does not need one.
 struct NoExec;
@@ -58,13 +60,72 @@ fn test_wall_budget_clamped() {
     );
 }
 
-/// The schema has to advertise the parameter, or the model cannot discover
-/// the budget and falls back to polling with sleep.
+/// The tool has to advertise the parameter, or the model cannot discover
+/// the budget and falls back to polling with sleep. The description names it
+/// in its input line, where a reader looks before the schema.
 #[test]
 fn test_schema_includes_timeout() {
-    let schema = BashTool::new(Arc::new(NoExec)).input_schema();
+    let tool = BashTool::new(Arc::new(NoExec));
+    let schema = tool.input_schema();
     let param = &schema["properties"]["timeout_ms"];
     assert_eq!(param["type"], "integer");
     assert_eq!(param["maximum"], MAX_TIMEOUT_MS);
     assert_eq!(schema["required"], json!(["command"]));
+    assert!(
+        tool.description()
+            .contains("{command: string, timeout_ms?: number}"),
+        "the input line names the budget: {}",
+        tool.description()
+    );
+    // The prose states the default and the cap in words the model reads as
+    // numbers. Keep them tied to the values the tool enforces, or a raised
+    // default leaves a description that promises a budget it no longer has.
+    let default_secs = ExecConfig::default().wall_timeout_ms / 1000;
+    assert!(
+        tool.description()
+            .contains(&format!("{default_secs} seconds")),
+        "the default budget is stated as enforced: {}",
+        tool.description()
+    );
+    assert!(
+        tool.description().contains(&MAX_TIMEOUT_MS.to_string()),
+        "the cap is stated as enforced: {}",
+        tool.description()
+    );
+}
+
+/// A notice about the call itself rides above the command's own stderr, and
+/// stands alone when the command printed none.
+#[test]
+fn test_notice_folded_above_stderr() {
+    let notice = Some("undo unavailable".to_string());
+    assert_eq!(
+        fold_notice(notice.clone(), "boom".into()),
+        "undo unavailable\nboom"
+    );
+    assert_eq!(fold_notice(notice, String::new()), "undo unavailable");
+    assert_eq!(fold_notice(None, "boom".into()), "boom");
+}
+
+/// A caller that sends the shorter name gets the budget it asked for. The
+/// name is not the model's habit to change mid-run: a budget that is read
+/// as missing falls back to the default and the long command is stopped
+/// once more, which is the failure this parameter exists to prevent.
+#[test]
+fn test_wall_budget_accepts_timeout() {
+    assert_eq!(
+        wall_budget_ms(&json!({"timeout": 300_000})),
+        300_000,
+        "the shorter name declares the same budget"
+    );
+    assert_eq!(
+        wall_budget_ms(&json!({"timeout": MAX_TIMEOUT_MS + 1})),
+        MAX_TIMEOUT_MS,
+        "the shorter name is clamped like the documented one"
+    );
+    assert_eq!(
+        wall_budget_ms(&json!({"timeout_ms": 4000, "timeout": 900_000})),
+        4000,
+        "the documented name wins when both are present"
+    );
 }

@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 use std::process::id;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+#[cfg(not(windows))]
+use std::time::{Duration, Instant};
 
 fn session() -> PlatformSession {
     PlatformSession::new().expect("platform session")
@@ -61,16 +63,16 @@ fn streams_cmd() -> String {
     }
 }
 
-/// A command that outlives the wall timeout under test. It never runs to
-/// completion: the timeout group-kills it, so the test costs the timeout
-/// budget, not the command's natural duration.
+/// A command that prints a marker and then outlives the wall timeout under
+/// test. It never runs to completion: the timeout group-kills it, so the test
+/// costs the timeout budget, not the command's natural duration.
 fn outlive_cmd(wall_ms: u64) -> String {
     if cfg!(windows) {
         let secs = wall_ms / 1000 + 5;
-        format!("ping -n {secs} 127.0.0.1 > nul")
+        format!("echo started & ping -n {secs} 127.0.0.1 > nul")
     } else {
         let secs = wall_ms / 1000 + 5;
-        format!("sleep {secs}")
+        format!("echo started; sleep {secs}")
     }
 }
 
@@ -232,14 +234,49 @@ async fn test_exec_round_trip() {
 async fn test_exec_wall_timeout() {
     let s = session();
     let config = ExecConfig {
-        wall_timeout_ms: 100,
+        wall_timeout_ms: 500,
         ..ExecConfig::default()
     };
     let err = s
         .exec_with_config(&outlive_cmd(config.wall_timeout_ms), config)
         .await
         .expect_err("the wall timeout must fire");
-    assert!(matches!(err, SandboxError::Timeout(_)), "got {err:?}");
+    let SandboxError::Timeout { stdout, .. } = &err else {
+        panic!("the wall timeout must be a timeout, got {err:?}");
+    };
+    assert!(
+        stdout.contains("started"),
+        "output printed before the stop is kept: {stdout:?}"
+    );
+}
+
+// A background descendant that inherits the pipe must not hold the call: the
+// shell exits at once and the call answers with what it printed, instead of
+// waiting out the descendant to the wall budget. The cmd.exe spelling of the
+// same construction is not established here, so this stays on unix.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_exec_background_holder_returns() {
+    let s = session();
+    let config = ExecConfig {
+        wall_timeout_ms: 20_000,
+        ..ExecConfig::default()
+    };
+    let started = Instant::now();
+    let r = s
+        .exec_with_config("(sleep 5; echo late) & echo started", config)
+        .await
+        .expect("the shell's own exit ends the call");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the descendant must not extend the call: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        r.stdout.contains("started"),
+        "output printed before exit is kept: {:?}",
+        r.stdout
+    );
 }
 
 // ---------------------------------------------------------------------------

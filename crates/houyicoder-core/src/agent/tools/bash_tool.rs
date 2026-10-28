@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_async::PFut;
-use houyicoder_context::ExecConfig;
+use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::{Value, json};
 
 use houyicoder_api::tool::{Tool, ToolCtx};
@@ -65,11 +65,15 @@ fn looks_like_sandbox_denial(stderr: &str) -> bool {
 /// The wall-clock budget this call declares, clamped into the range the
 /// schema advertises. A missing or malformed value keeps the session default,
 /// so a caller that does not think about the budget gets the ordinary one.
+/// The shorter name is accepted alongside the documented one because a budget
+/// that reads as missing is worse than no budget at all: the caller believes
+/// it raised the limit and the command is stopped at the default anyway.
 fn wall_budget_ms(input: &Value) -> u64 {
-    match input.get("timeout_ms").and_then(|v| v.as_u64()) {
-        Some(ms) => ms.clamp(1, MAX_TIMEOUT_MS),
-        None => ExecConfig::default().wall_timeout_ms,
-    }
+    ["timeout_ms", "timeout"]
+        .iter()
+        .find_map(|name| input.get(*name).and_then(Value::as_u64))
+        .map(|ms| ms.clamp(1, MAX_TIMEOUT_MS))
+        .unwrap_or_else(|| ExecConfig::default().wall_timeout_ms)
 }
 
 /// The largest wall-clock budget one call may declare. A build or test run
@@ -117,6 +121,38 @@ impl BashTool {
         self.active_skill = cell;
         self
     }
+
+    /// Turn a finished exec into the tool answer: bound the output so a huge
+    /// result cannot overflow the model window, fold the call's own notices
+    /// into stderr, and offer any authorizable service a failed command
+    /// discovered. The full output above the bound is re-readable through the
+    /// spill path the marker names.
+    async fn tool_result(&self, result: ExecResult, notice: Option<String>) -> Value {
+        let exit_code = result.exit_code;
+        let success = result.is_success();
+        let (stdout, stderr) =
+            bound_bash_output(result.stdout, result.stderr, &self.session.workspace_root());
+        let stderr = fold_notice(notice, stderr);
+        let has_active_skill = self
+            .active_skill
+            .as_ref()
+            .is_some_and(|cell| cell.lock().expect("active_skill lock").as_ref().is_some());
+        let authorizable = if has_active_skill {
+            discover_authorizable_if_failed(success, &stderr, self.session.clone()).await
+        } else {
+            Vec::new()
+        };
+        let mut output = json!({
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": exit_code,
+            "success": success,
+        });
+        if !authorizable.is_empty() {
+            output["authorizable_services"] = json!(authorizable);
+        }
+        output
+    }
 }
 
 impl Tool for BashTool {
@@ -125,8 +161,9 @@ impl Tool for BashTool {
     }
     fn description(&self) -> &str {
         "Run a shell command in the sandbox workspace. \
-         Input: {command: string}. \
-         Returns stdout/stderr/exit_code. \
+         Input: {command: string, timeout_ms?: number}. \
+         Returns stdout/stderr/exit_code; a call stopped at its budget returns \
+         timed_out and what the command printed before the stop. \
          When issuing multiple commands: if they are independent, make \
          multiple Bash calls in a single message so they run in parallel \
          (example: run git status and git diff as two calls in one message, \
@@ -163,7 +200,6 @@ impl Tool for BashTool {
         let session = self.session.clone();
         let undo_stack = self.undo_stack.clone();
         let snapshot_store = self.snapshot_store.clone();
-        let active_skill = self.active_skill.clone();
         // Clone the progress sink so a spawned ticker can report elapsed
         // seconds to the host while exec runs. None for non-interactive runs
         // (the ticker then no-ops). The sink ticks every ~1s; the host
@@ -216,7 +252,7 @@ impl Tool for BashTool {
             // Linux/Windows kills the direct child). The tool reports an
             // interrupted outcome so the model log stays lossless.
             let cancel = ctx.cancel.clone();
-            let result = if progress.is_some() {
+            let outcome = if progress.is_some() {
                 tokio::select! {
                     r = exec => r,
                     _ = async {
@@ -253,43 +289,31 @@ impl Tool for BashTool {
                         return Ok(FallbackToolOutcome::Interrupted.to_json());
                     }
                 }
-            }
-            .map_err(|e| ToolError::Failed(format!("bash: {e}")))?;
-            // Bound the output before it enters the model context so a huge
-            // result cannot overflow the window and brick the session (the
-            // reference harness spills to disk + returns a tail stub). The
-            // full output is re-readable via the spill path in the marker.
-            let exit_code = result.exit_code;
-            let success = result.is_success();
-            let (stdout, stderr) =
-                bound_bash_output(result.stdout, result.stderr, &self.session.workspace_root());
-            // Fold a snapshot-decline notice into stderr so the user sees it
-            // inline with the command's own output (it is a per-command
-            // notice about undo, not the command's own error, but stderr is
-            // the one channel the render path already surfaces verbatim).
-            let stderr = match notice {
-                Some(n) if stderr.is_empty() => n,
-                Some(n) => format!("{n}\n{stderr}"),
-                None => stderr,
             };
-            let has_active_skill = active_skill
-                .as_ref()
-                .is_some_and(|cell| cell.lock().expect("active_skill lock").as_ref().is_some());
-            let authorizable = if has_active_skill {
-                discover_authorizable_if_failed(success, &stderr, self.session.clone()).await
-            } else {
-                Vec::new()
+            // A stop at the wall-clock budget answers the call rather than
+            // failing it. It carries what the command printed before it was
+            // stopped, because that output is what tells the caller whether
+            // the command was making progress, and a tool error teaches the
+            // model to send the same call again or to poll with sleep in the
+            // background — the loop the budget exists to shorten.
+            let result = match outcome {
+                Ok(result) => result,
+                Err(SandboxError::Timeout {
+                    message,
+                    stdout,
+                    stderr,
+                }) => {
+                    let stderr = fold_notice(notice, stderr);
+                    return Ok(timed_out_output(
+                        &message,
+                        stdout,
+                        stderr,
+                        &self.session.workspace_root(),
+                    ));
+                }
+                Err(e) => return Err(ToolError::Failed(format!("bash: {e}"))),
             };
-            let mut output = json!({
-                "stdout": stdout,
-                "stderr": stderr,
-                "exit_code": exit_code,
-                "success": success,
-            });
-            if !authorizable.is_empty() {
-                output["authorizable_services"] = json!(authorizable);
-            }
-            Ok(output)
+            Ok(self.tool_result(result, notice).await)
         })
     }
     fn is_destructive(&self) -> bool {
@@ -301,6 +325,33 @@ impl Tool for BashTool {
     fn requires_approval(&self) -> bool {
         true
     }
+}
+
+/// Fold a notice about the call itself into stderr so the user sees it inline
+/// with the command's own output. It is not the command's error, but stderr is
+/// the channel the render path already shows verbatim.
+fn fold_notice(notice: Option<String>, stderr: String) -> String {
+    match notice {
+        Some(n) if stderr.is_empty() => n,
+        Some(n) => format!("{n}\n{stderr}"),
+        None => stderr,
+    }
+}
+
+/// The answer a command stopped at its wall-clock budget becomes. The exit
+/// code is absent rather than zero: nothing exited, and a fabricated code
+/// would read as a measured result. The notice goes above whatever the bound
+/// leaves of stderr, because output that spilled to a file leaves the model
+/// looking at an empty stderr and nothing else would say why the call ended.
+fn timed_out_output(message: &str, stdout: String, stderr: String, spill_dir: &Path) -> Value {
+    let (stdout, stderr) = bound_bash_output(stdout, stderr, spill_dir);
+    let stderr = fold_notice(Some(format!("bash: stopped, {message}")), stderr);
+    json!({
+        "stdout": stdout,
+        "stderr": stderr,
+        "success": false,
+        "timed_out": true,
+    })
 }
 
 /// Max chars a bash result may enter the model context before it spills to a

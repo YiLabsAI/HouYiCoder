@@ -15,7 +15,14 @@ use std::fmt;
 pub enum SandboxError {
     Io(String),
     Unsupported(String),
-    Timeout(String),
+    /// The wall-clock budget ran out. The captured streams hold what the
+    /// command printed before it was stopped; a session that captures only
+    /// at exit leaves them empty rather than inventing bytes.
+    Timeout {
+        message: String,
+        stdout: String,
+        stderr: String,
+    },
     ResourceLimitExceeded(String),
     NotFound(String),
     PathTraversal(String),
@@ -32,7 +39,7 @@ impl SandboxError {
         match self {
             Self::Io(_) => "io",
             Self::Unsupported(_) => "unsupported",
-            Self::Timeout(_) => "timeout",
+            Self::Timeout { .. } => "timeout",
             Self::ResourceLimitExceeded(_) => "resource_limit_exceeded",
             Self::NotFound(_) => "not_found",
             Self::PathTraversal(_) => "path_traversal",
@@ -48,7 +55,7 @@ impl fmt::Display for SandboxError {
         match self {
             Self::Io(m) => write!(f, "sandbox io error: {m}"),
             Self::Unsupported(m) => write!(f, "sandbox unsupported: {m}"),
-            Self::Timeout(m) => write!(f, "sandbox timeout: {m}"),
+            Self::Timeout { message, .. } => write!(f, "sandbox timeout: {message}"),
             Self::ResourceLimitExceeded(m) => {
                 write!(f, "sandbox resource limit exceeded: {m}")
             }

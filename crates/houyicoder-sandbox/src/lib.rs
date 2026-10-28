@@ -41,6 +41,7 @@ pub use mac::command_shell;
 
 pub mod deny_log;
 
+mod output_capture;
 mod runtime_dirs;
 mod timeout;
 

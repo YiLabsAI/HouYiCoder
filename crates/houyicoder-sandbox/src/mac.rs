@@ -27,16 +27,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod command;
 pub use command::command_shell;
 mod process;
-mod seatbelt_stream;
 mod temp_dir;
+use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::timeout;
 use command::annotate_fence_refusal;
 use process::{ExecCountGuard, kill_process_group, tree_cpu_secs};
-use seatbelt_stream::stream_drain;
 use std::env::var;
 use std::fs::remove_dir_all;
-use std::process::Stdio;
 use std::process::id;
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
@@ -437,10 +435,9 @@ impl MacSeatbeltSession {
             .arg(&self.shell)
             .arg("-c")
             .arg(&command)
-            .current_dir(&cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .current_dir(&cwd);
+        pipe_streams(&mut cmd);
+        cmd.kill_on_drop(true);
         // process_group(0) puts child + all descendants in a NEW process
         // group (pgid = child pid) so killpg(pgid) reaps the whole tree on
         // timeout — the direct-child-only kill leaves orphan
@@ -476,19 +473,18 @@ impl MacSeatbeltSession {
             None
         };
         let wall = Duration::from_millis(config.wall_timeout_ms);
-        // The ONLY branch that differs between exec_with_config and
-        // exec_streaming: lines None → wait_with_output (the original path,
-        // no behavior change); lines Some → stream_drain (concurrent stdout
-        // + stderr drain + live line count). Both return io::Result<Output>,
-        // so the match below is identical. The wall-timeout wraps the drain
-        // the same way it wrapped wait_with_output; on timeout tokio cancels
-        // the drain future → child drops (kill_on_drop) → _tree_guard killpg,
-        // exactly the existing timeout path.
-        let outcome = if let Some(lines) = lines.as_ref() {
-            timeout(wall, stream_drain(child, lines)).await
-        } else {
-            timeout(wall, child.wait_with_output()).await
-        };
+        // Both entry points share one drain, so what a command printed is
+        // kept on a stop either way. The streaming entry point passes a
+        // counter for the live line count; the plain one passes none. The
+        // wall-timeout wraps the drain; on timeout tokio cancels it → child
+        // drops (kill_on_drop) → _tree_guard killpg, and the bytes already
+        // read stay in collected for the caller.
+        let collected = CapturedOutput::default();
+        let outcome = timeout(
+            wall,
+            capture(child, lines.as_deref(), &collected, DRAIN_GRACE),
+        )
+        .await;
         // Measure the tree's CPU while _tree_guard still holds the group
         // alive. Drop order is reverse declaration: breaker_guard drops
         // BEFORE _tree_guard, so on the cancel path the tree is still
@@ -502,10 +498,8 @@ impl MacSeatbeltSession {
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                 exit_code: output.status.code(),
             }),
-            Ok(Err(e)) => Err(SandboxError::Io(format!("sandbox-exec wait: {e}"))),
-            Err(_elapsed) => Err(SandboxError::Timeout(timeout::message(
-                config.wall_timeout_ms,
-            ))),
+            Ok(Err(e)) => Err(SandboxError::Io(format!("sandbox-exec drain: {e}"))),
+            Err(_elapsed) => Err(collected.timeout_error(timeout::message(config.wall_timeout_ms))),
         };
         if let Ok(exec) = &mut result {
             // The narrowed root is the one the profile allows; the original
@@ -521,7 +515,7 @@ impl MacSeatbeltSession {
         if let Some(g) = breaker_guard.as_mut() {
             let exceeded_budget = matches!(
                 &result,
-                Err(SandboxError::Timeout(_) | SandboxError::ResourceLimitExceeded(_))
+                Err(SandboxError::Timeout { .. } | SandboxError::ResourceLimitExceeded(_))
             );
             g.finish(cpu_secs, exceeded_budget);
         }
@@ -553,11 +547,10 @@ impl SandboxSession for MacSeatbeltSession {
         Box::pin(async move { self.exec_inner(command, config, None).await })
     }
 
-    /// Streaming variant: the backend drains stdout incrementally + updates
-    /// the shared line counter as newlines arrive, so the host's bash chip
-    /// can show "(12s · 14 lines)" on a long-running command. Same fence +
-    /// timeout + tree-kill invariants as exec_with_config; only the stdout
-    /// collection path differs (concurrent drain vs wait_with_output).
+    /// Streaming variant: the drain updates the shared line counter as
+    /// newlines arrive, so the host's bash chip can show "(12s · 14 lines)"
+    /// on a long-running command. Same fence + timeout + tree-kill
+    /// invariants as exec_with_config; only the counter differs.
     fn exec_streaming(
         &self,
         command: &str,

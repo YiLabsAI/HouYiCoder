@@ -28,6 +28,7 @@ use std::process::Command;
 use std::process::id;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::time::sleep;
 
 #[tokio::test]
@@ -193,7 +194,11 @@ fn test_sandbox_error_variants_display() {
             "sandbox unsupported: x",
         ),
         (
-            SandboxError::Timeout("x".into()),
+            SandboxError::Timeout {
+                message: "x".into(),
+                stdout: "out".into(),
+                stderr: "err".into(),
+            },
             "timeout",
             "sandbox timeout: x",
         ),
@@ -276,7 +281,7 @@ async fn test_long_command_trips_timeout() {
         ..ExecConfig::default()
     };
     let r = s.exec_with_config("sleep 100", cfg).await;
-    let Err(SandboxError::Timeout(message)) = &r else {
+    let Err(SandboxError::Timeout { message, .. }) = &r else {
         panic!("wall-clock 200ms must trip Timeout, got {r:?}");
     };
     // The message reports seconds, and keeps the fraction so a sub-second
@@ -285,6 +290,95 @@ async fn test_long_command_trips_timeout() {
         message.contains("wall-clock 0.2s"),
         "the budget is reported in seconds, not milliseconds: {message}"
     );
+}
+
+// Live: a stopped command keeps what it printed. The output is what tells the
+// caller whether the command was working, so a stop that drops it hands the
+// next turn nothing to reason about.
+#[tokio::test]
+#[ignore]
+async fn test_timeout_keeps_printed_output() {
+    let s = MacSeatbeltSession::new().unwrap();
+    let cfg = ExecConfig {
+        wall_timeout_ms: 500,
+        ..ExecConfig::default()
+    };
+    let r = s
+        .exec_with_config("echo built; echo warn >&2; sleep 100", cfg)
+        .await;
+    let Err(SandboxError::Timeout { stdout, stderr, .. }) = &r else {
+        panic!("wall-clock 500ms must trip Timeout, got {r:?}");
+    };
+    assert!(
+        stdout.contains("built"),
+        "stdout printed before the stop is kept: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("warn"),
+        "stderr printed before the stop is kept: {stderr:?}"
+    );
+}
+
+// Live: a command that reads stdin gets end-of-input, not the terminal the
+// host is drawing into, so a filter finishes on its own instead of waiting
+// out the budget. This case cannot tell the disposition apart from a runner
+// whose own stdin is already at end of file; the disposition itself is
+// asserted where the streams are wired.
+#[tokio::test]
+#[ignore]
+async fn test_stdin_eof_ends_read() {
+    let s = MacSeatbeltSession::new().unwrap();
+    let cfg = ExecConfig {
+        wall_timeout_ms: 5_000,
+        ..ExecConfig::default()
+    };
+    let r = s
+        .exec_with_config("cat | wc -l", cfg)
+        .await
+        .expect("a reader must not wait out the budget");
+    assert_eq!(r.stdout.trim(), "0", "no input means zero lines");
+}
+
+// Live: heredoc and redirection reach the command through their own channel,
+// so closing stdin does not take them away.
+#[tokio::test]
+#[ignore]
+async fn test_heredoc_still_feeds() {
+    let s = MacSeatbeltSession::new().unwrap();
+    let cfg = ExecConfig {
+        wall_timeout_ms: 5_000,
+        ..ExecConfig::default()
+    };
+    let r = s
+        .exec_with_config("cat <<'EOF' | wc -l\none\ntwo\nEOF\n", cfg)
+        .await
+        .expect("the heredoc body reaches the command");
+    assert_eq!(r.stdout.trim(), "2", "both heredoc lines are read");
+}
+
+// Live: a background descendant holding the pipe must not keep the call
+// open. The shell exits at once; the drain stops with it rather than waiting
+// for the descendant, so the caller gets the output and the shell's exit
+// status instead of sitting to the wall budget.
+#[tokio::test]
+#[ignore]
+async fn test_shell_exit_ends_call() {
+    let s = MacSeatbeltSession::new().unwrap();
+    let cfg = ExecConfig {
+        wall_timeout_ms: 10_000,
+        ..ExecConfig::default()
+    };
+    let started = Instant::now();
+    let r = s
+        .exec_with_config("(sleep 5; echo late) & echo started", cfg)
+        .await
+        .expect("the shell's own exit ends the call");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the descendant must not extend the call: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(r.stdout, "started\n", "output printed before exit is kept");
 }
 
 // Live: a CPU spin is caught by the wall timeout, not by a kernel CPU signal.
@@ -377,7 +471,7 @@ async fn test_timeout_kills_orphan_tree() {
     };
     let cmd = "sleep 1000 & sleep 1000 & sleep 1000 & wait";
     let r = s.exec_with_config(cmd, cfg).await;
-    assert!(matches!(r, Err(SandboxError::Timeout(_))));
+    assert!(matches!(r, Err(SandboxError::Timeout { .. })));
     // Poll for the grandchildren to be reaped (10ms ticks up to 2s) — event
     // driven, not a fixed 500ms sleep.
     let mut reaped = false;

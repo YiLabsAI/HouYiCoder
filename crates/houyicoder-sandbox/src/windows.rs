@@ -26,6 +26,7 @@
 //! the session stays a no-op fence — exec runs unfenced and the
 //! application-level path resolver remains the only boundary.
 
+use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::timeout::message;
 use houyicoder_api::sandbox::{
@@ -42,7 +43,7 @@ use std::env::var;
 use std::ffi::c_void;
 use std::fs::{create_dir_all, remove_dir_all};
 use std::path::{Path, PathBuf};
-use std::process::{Stdio, id};
+use std::process::id;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Child;
@@ -404,25 +405,26 @@ impl SandboxSession for WindowsJobSession {
                 );
             }
             let mut cmd = Command::new("cmd");
-            cmd.arg("/C")
-                .arg(&command)
-                .current_dir(&cwd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
+            cmd.arg("/C").arg(&command).current_dir(&cwd);
+            pipe_streams(&mut cmd);
+            cmd.kill_on_drop(true);
             let child = cmd
                 .spawn()
                 .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
             assign_if_fenced(job_raw, &child);
-            let outcome = timeout(wall, child.wait_with_output()).await;
+            // The bytes land in collected as they arrive, so a wall-clock
+            // stop still reports what the command printed before the job
+            // object killed the tree.
+            let collected = CapturedOutput::default();
+            let outcome = timeout(wall, capture(child, None, &collected, DRAIN_GRACE)).await;
             match outcome {
                 Ok(Ok(output)) => Ok(ExecResult {
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
                     exit_code: output.status.code(),
                 }),
-                Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-                Err(_elapsed) => Err(SandboxError::Timeout(message(config.wall_timeout_ms))),
+                Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
+                Err(_elapsed) => Err(collected.timeout_error(message(config.wall_timeout_ms))),
             }
         })
     }

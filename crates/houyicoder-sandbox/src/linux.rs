@@ -7,6 +7,7 @@
 //! unfenced, exec runs directly with an audit line and the path resolver
 //! remains the boundary.
 
+use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::timeout::message;
 use houyicoder_api::sandbox::{
@@ -28,7 +29,6 @@ use std::fs::remove_dir_all;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::process::Stdio;
 use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -255,10 +255,9 @@ impl LinuxLandlockSession {
         let tmpdir_str = self.tmpdir.to_string_lossy().into_owned();
         cmd.env("TMPDIR", &tmpdir_str)
             .env("TMPPREFIX", format!("{tmpdir_str}/zsh"))
-            .current_dir(&self.workspace)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .current_dir(&self.workspace);
+        pipe_streams(&mut cmd);
+        cmd.kill_on_drop(true);
         cmd.process_group(0);
         let child = cmd
             .spawn()
@@ -269,11 +268,14 @@ impl LinuxLandlockSession {
         // dropped future would leave grandchildren running.
         let pgid = child.id().unwrap_or(0) as i32;
         let _tree_guard = TreeKillGuard { pgid };
-        let outcome = timeout(wall, child.wait_with_output()).await;
+        // The bytes land in collected as they arrive, so a wall-clock stop
+        // still reports what the command printed before it was cut off.
+        let collected = CapturedOutput::default();
+        let outcome = timeout(wall, capture(child, None, &collected, DRAIN_GRACE)).await;
         match outcome {
             Ok(Ok(output)) => Ok(exec_result_from_output(output)),
-            Ok(Err(e)) => Err(SandboxError::Io(format!("wait: {e}"))),
-            Err(_elapsed) => Err(SandboxError::Timeout(message(config.wall_timeout_ms))),
+            Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
+            Err(_elapsed) => Err(collected.timeout_error(message(config.wall_timeout_ms))),
         }
     }
 }

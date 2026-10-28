@@ -256,6 +256,32 @@ fn test_bash_success_no_exit() {
     assert!(!body.contains("Exit code"), "no exit code for success");
 }
 
+/// A command stopped at its wall-clock budget reports why it ended and what
+/// it printed, and claims no exit code: nothing exited.
+#[test]
+fn test_bash_stopped_renders_notice() {
+    let out = serde_json::json!({
+        "stdout": "compiled 3 of 40",
+        "stderr": "bash: stopped, wall-clock 120s exceeded",
+        "success": false,
+        "timed_out": true,
+    })
+    .to_string();
+    let body = extract_body(&out);
+    assert!(
+        body.contains("bash: stopped, wall-clock 120s exceeded"),
+        "the stop explains itself: {body}"
+    );
+    assert!(
+        body.contains("compiled 3 of 40"),
+        "output printed before the stop surfaces: {body}"
+    );
+    assert!(
+        !body.contains("Exit code"),
+        "nothing exited, so no code is shown: {body}"
+    );
+}
+
 /// A failed bash command with only exit code (no stdout, no stderr)
 /// still surfaces the exit code.
 #[test]
