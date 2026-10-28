@@ -28,6 +28,7 @@ use houyicoder_provider::ProviderFacts;
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
+use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_protocol::envelope::{ClientFrame, EventSeq, RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -68,6 +69,7 @@ use crate::server::recap::job::run as run_recap;
 
 /// Request routing plus the per-domain request and notification handlers.
 mod capability_handler;
+mod checkpoint_handler;
 mod context_handler;
 mod memory_handler;
 mod notification_handler;
@@ -131,6 +133,11 @@ pub struct Server {
     /// sees the new allow-paths. The gate's rule engine is a separate
     /// (tool allow/ask/deny) concern, not path access.
     sandbox_session: Option<Arc<dyn SandboxSession>>,
+    /// The write journal the session's file tools record through. Carried from
+    /// the same instance those tools hold, so a listing judges the writes this
+    /// session made. None when the store keeps no root on disk: no record
+    /// outlives the process, so there is nothing to list.
+    file_transaction: Option<Arc<FileTransaction>>,
     /// The session-indexed host a reattaching connection re-hydrates from.
     /// None on the single-shot path; Some when serve_session built this Server
     /// so permission interruptions survive a connection change.
@@ -206,6 +213,7 @@ impl Server {
             next_req_id: 0,
             gate,
             sandbox_session: None,
+            file_transaction: None,
             host: None,
             settings_path: houyicoder_config::settings_path(),
             project_path: None,
@@ -258,6 +266,13 @@ impl Server {
     /// Attach the sandbox session shared with the runner (the /permissions fence).
     pub fn with_session(mut self, session: Arc<dyn SandboxSession>) -> Self {
         self.sandbox_session = Some(session);
+        self
+    }
+
+    /// Attach the write journal the file tools record through, so the sandbox
+    /// pane lists and restores the writes this session made.
+    pub fn with_file_transaction(mut self, journal: Arc<FileTransaction>) -> Self {
+        self.file_transaction = Some(journal);
         self
     }
 

@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
+pub mod checkpoint;
 pub mod compact;
 pub mod context;
 pub mod debug;
@@ -32,6 +33,10 @@ pub mod worktree;
 use crate::frontend::debug::DebugLevel;
 use crate::frontend::model::SpeedMode;
 use crate::llm::EffortLevel;
+pub use checkpoint::{
+    CheckpointImage, CheckpointListView, CheckpointRestoreView, CheckpointState, CheckpointView,
+    FenceState, RestoreView, SandboxBoundariesView, UnreadableView,
+};
 pub use compact::CompactReply;
 pub use context::{
     CategoryBreakdown, ContextBreakdown, ContextFileEntry, ContextSkillEntry, GridCell, build_grid,
@@ -536,7 +541,22 @@ pub enum FrontendRequest {
         session_id: SessionId,
         name: String,
     },
-    SandboxStatus,
+    /// What the host can prove about the fences this session runs inside: the
+    /// kernel fence's state, the workspace root, and every directory a write
+    /// may land in. Reads host state only, so it is safe while a turn runs.
+    SandboxBoundaries,
+    /// Every file write the session recorded, with what each target holds now.
+    /// Judging a write publishes its committed record when a crash interrupted
+    /// the write before it did, so the answer is stable for the next reader.
+    SandboxCheckpoints,
+    /// Put one recorded write's earlier bytes back. The host re-reads the
+    /// target under the same lock the write path takes, so a write this
+    /// process ran in between is not undone by mistake. A target something
+    /// else changed keeps its current bytes, and the earlier ones go to a copy
+    /// beside it.
+    SandboxRestore {
+        operation: String,
+    },
     // utility
     MessageSend {
         session_id: SessionId,

@@ -119,6 +119,13 @@ impl Server {
                 self.handle_worktree_remove(io, req_id, path, token, delete_unmerged_branch)
                     .await
             }
+            FrontendRequest::SandboxBoundaries => self.handle_sandbox_boundaries(io, req_id).await,
+            FrontendRequest::SandboxCheckpoints => {
+                self.handle_sandbox_checkpoints(io, req_id).await
+            }
+            FrontendRequest::SandboxRestore { operation } => {
+                self.handle_sandbox_restore(io, req_id, operation).await
+            }
             FrontendRequest::Skills => self.dispatch_skills(io, req_id).await,
             FrontendRequest::SkillBody { name } => self.dispatch_skill_body(io, req_id, name).await,
             FrontendRequest::Undo => self.dispatch_undo(io, req_id).await,
@@ -480,7 +487,8 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
     matches!(
         payload,
         FrontendRequest::Status
-            | FrontendRequest::SandboxStatus
+            | FrontendRequest::SandboxBoundaries
+            | FrontendRequest::SandboxCheckpoints
             | FrontendRequest::Metrics
             | FrontendRequest::Context
             | FrontendRequest::Trajectory

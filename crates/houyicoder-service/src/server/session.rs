@@ -51,6 +51,11 @@ impl Server {
             next_req_id: 0,
             gate,
             sandbox_session,
+            // The journal belongs to the assembled runner, and the host keeps
+            // only what a reconnecting connection replays. A reattached
+            // connection therefore lists no writes until the host carries the
+            // journal too; the pane reports that rather than an empty list.
+            file_transaction: None,
             host: Some(host),
             settings_path: houyicoder_config::settings_path(),
             project_path: None,

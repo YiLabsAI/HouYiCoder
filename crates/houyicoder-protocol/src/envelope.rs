@@ -13,6 +13,9 @@ use crate::frontend::FrontendEvent;
 use crate::frontend::FrontendRequest;
 use crate::frontend::SessionId;
 use crate::frontend::agents::AgentEntry;
+use crate::frontend::checkpoint::CheckpointListView;
+use crate::frontend::checkpoint::CheckpointRestoreView;
+use crate::frontend::checkpoint::SandboxBoundariesView;
 use crate::frontend::compact::CompactReply;
 use crate::frontend::context::ContextBreakdown;
 use crate::frontend::debug::DebugState;
@@ -274,6 +277,16 @@ pub enum ResponsePayload {
     /// How a confirmed removal ended. The two unfinished shapes name what
     /// survived instead of reporting a clean result.
     WorktreeRemoved(WorktreeRemoveOutcome),
+    /// What the host can prove about the sandbox boundaries (/sandbox
+    /// Boundaries tab): the fence's state, the workspace root, and every
+    /// directory a write may land in.
+    SandboxBoundaries(SandboxBoundariesView),
+    /// The session's recorded file writes (/sandbox Checkpoints tab), split by
+    /// whether the host could judge each one.
+    SandboxCheckpoints(CheckpointListView),
+    /// How a restore ended, named by outcome so the terminal says what
+    /// happened rather than only that the request finished.
+    SandboxRestored(CheckpointRestoreView),
     /// The request itself was invalid for the current state or capability.
     Error(ProtocolError),
 }

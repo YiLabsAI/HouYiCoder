@@ -4,6 +4,7 @@
 
 pub(crate) mod agents;
 mod always_grant;
+pub(crate) mod checkpoint_view;
 pub(crate) mod compaction;
 pub(crate) mod hooks;
 pub(crate) mod memory_view;

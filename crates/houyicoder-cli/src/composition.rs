@@ -100,6 +100,7 @@ pub(crate) fn assemble_bundle(
         session,
         gate,
         sandbox_session,
+        file_transaction,
         append_notify,
         worktree_controller,
         bus,
@@ -138,6 +139,7 @@ pub(crate) fn assemble_bundle(
             session,
             gate,
             sandbox_session,
+            file_transaction,
             append_notify,
             worktree_controller,
             bus,
@@ -189,6 +191,7 @@ pub(crate) fn start_local_server(
         session,
         gate,
         sandbox_session,
+        file_transaction,
         append_notify,
         worktree_controller,
         bus,
@@ -260,6 +263,11 @@ pub(crate) fn start_local_server(
             .with_bus(server_bus);
     if let Some(s) = sandbox_session {
         server = server.with_session(s);
+    }
+    // The journal the file tools record through, so the sandbox pane lists and
+    // restores the writes this session made rather than a second instance.
+    if let Some(journal) = file_transaction {
+        server = server.with_file_transaction(journal);
     }
     // Gate the run loop on the startup workspace-trust prompt: an
     // unacknowledged project path asks the TUI client once (the trust card),

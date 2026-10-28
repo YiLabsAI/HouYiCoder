@@ -131,6 +131,10 @@ pub struct AssembledRunner {
     pub session: SessionId,
     pub gate: Arc<DefaultModeGate>,
     pub sandbox_session: Option<Arc<dyn SandboxSession>>,
+    /// The write journal the file tools record through. Carried here so the
+    /// server lists the same writes those tools made; None when the store
+    /// keeps no root on disk.
+    pub file_transaction: Option<Arc<FileTransaction>>,
     pub append_notify: Arc<Notify>,
     pub worktree_controller: Option<Arc<WorktreeController>>,
     /// The shared multi-agent bus; threaded to the pairing point so the
@@ -292,7 +296,7 @@ pub(crate) fn assemble(
         &gate_dyn,
     );
     let skills = SkillRuntime::new(fences.workspace.as_deref(), gate_dyn.clone());
-    let undo_handles = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn, &store);
+    let builtin = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn, &store);
     let (config, runner_settings_warnings) =
         build_runner_config(model.clone(), fences.workspace.as_deref());
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
@@ -312,6 +316,7 @@ pub(crate) fn assemble(
     let (section, effort_warnings) = load_model_section_from(&settings_path());
     let (recap, recap_warnings) = build_recap(session, &section, &store, &provider_for_extractor);
     let store_log_root = store.session_log_root();
+    let catalog_resolver = SettingsCatalogResolver::from_section(section.clone());
     let runner = Runner::new(store, provider, tools, config)
         .with_recall_meter(recall_meter)
         .with_breaker(fences.breaker)
@@ -319,9 +324,7 @@ pub(crate) fn assemble(
             Arc::clone(&provider_for_extractor),
             model.clone(),
         )))
-        .with_catalog_resolver(Arc::new(SettingsCatalogResolver::from_section(
-            section.clone(),
-        )))
+        .with_catalog_resolver(Arc::new(catalog_resolver))
         .with_model_choice(model_selection.choice)
         .with_speed_mode(section.speed_mode.unwrap_or(SpeedMode::Standard))
         .with_denied_agents(Arc::clone(&denied_agents))
@@ -343,7 +346,7 @@ pub(crate) fn assemble(
         session,
         provider_for_extractor,
         model,
-        undo_handles,
+        builtin.undo_handles,
         worktree_controller.as_ref(),
     );
     let mut startup = startup_warnings::collect_startup_warnings(
@@ -365,6 +368,7 @@ pub(crate) fn assemble(
         session,
         gate: fences.gate,
         sandbox_session: fences.sandbox_session,
+        file_transaction: builtin.file_transaction,
         append_notify,
         worktree_controller,
         bus: Some(bus),
@@ -556,22 +560,37 @@ fn file_write_journal(store: &SessionStore) -> Option<Arc<FileTransaction>> {
     ))))
 }
 
-/// Register the sandbox-backed built-in tools, and hand back the undo handles
-/// they expose so the workspace branch can attach them to the runner.
+/// What registering the built-in tools produces: the journal those tools
+/// record through, and the undo stack the workspace branch attaches.
+struct BuiltInSetup {
+    /// The journal the host lists a session's writes from.
+    file_transaction: Option<Arc<FileTransaction>>,
+    /// The undo stack and snapshot store the workspace branch attaches.
+    undo_handles: Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)>,
+}
+
+/// Register the sandbox-backed built-in tools over the write journal this call
+/// also builds, and hand back the journal so the host lists the writes those
+/// tools made. The two come from one call because a tool registered without
+/// its journal would write with no record.
 fn register_builtin_tools(
     tools: &mut ToolRegistry,
     fences: &containment::SessionFences,
     skills: &SkillRuntime,
     gate_dyn: Arc<dyn ModeGate>,
     store: &SessionStore,
-) -> Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)> {
+) -> BuiltInSetup {
+    let file_transaction = file_write_journal(store);
     let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), gate_dyn)
         .with_activator(Some(Arc::clone(&skills.conditional)))
         .with_active_skill(skills.discovery_skill())
-        .with_transaction(file_write_journal(store));
+        .with_transaction(file_transaction.clone());
     let undo_handles = builtin.undo_handles();
     register_provider_tools(tools, builtin);
-    undo_handles
+    BuiltInSetup {
+        file_transaction,
+        undo_handles,
+    }
 }
 
 /// Register the built-in tool provider and any configured MCP tool servers.
