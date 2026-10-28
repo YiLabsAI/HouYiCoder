@@ -19,6 +19,9 @@ use houyicoder_protocol::llm::OutputItem;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
+use std::fs::{read_to_string, remove_file};
+use std::process::id;
 use std::sync::Arc;
 
 fn stub_runner() -> Arc<Runner> {
@@ -493,7 +496,11 @@ async fn test_write_request_refused() {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (_client_tx, server_rx) = mpsc::channel::<String>(256);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    // The mid-run ModelSet below persists its pick. Point the server at a
+    // fixture file so the test never writes the developer's settings.
+    let settings = temp_dir().join(format!("trajectory-model-{}.json", id()));
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_settings_path(settings.clone());
     server
         .handle_request_during_run(
             &mut io,
@@ -535,4 +542,13 @@ async fn test_write_request_refused() {
         model_resp.contains("model_result"),
         "model selection returns a model result: {model_resp}"
     );
+    let persisted: serde_json::Value = serde_json::from_str(
+        &read_to_string(&settings).expect("the fixture settings were written"),
+    )
+    .expect("the fixture settings are json");
+    assert_eq!(
+        persisted["model"]["id"], "gpt-5",
+        "the pick lands in the fixture, not the developer settings"
+    );
+    remove_file(&settings).ok();
 }
