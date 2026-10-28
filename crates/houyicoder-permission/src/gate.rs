@@ -284,7 +284,7 @@ impl DefaultModeGate {
     /// snapshots its mutable state into the shared context once — the rule
     /// set, the session consent set, the mode, and the transitional toggles —
     /// then runs the validator registry lock-free against that snapshot.
-    fn decide_inner(&self, req: &ToolRequest) -> Decision {
+    fn decide_inner(&self, req: &ToolRequest) -> (Decision, PermissionMode) {
         let rules = self.rules.lock().expect("mode gate mutex");
         let raw_content = input_content(req.tool_name, req.input);
         // A shell command's environment prefix names no program, so the ladder
@@ -309,7 +309,7 @@ impl DefaultModeGate {
             egress_allow: &egress_allow,
             git_checkpoint_enabled: self.git_checkpoint_enabled(),
         };
-        self.pipeline.decide(req, &ctx)
+        (self.pipeline.decide(req, &ctx), mode)
     }
 }
 
@@ -332,10 +332,11 @@ impl ModeGate for DefaultModeGate {
             validator = Empty,
         );
         let _enter = span.enter();
-        let raw = self.decide_inner(req);
+        let (raw, mode) = self.decide_inner(req);
         let auto = self.auto_allow_fenced_exec.load(Ordering::Relaxed);
         let decision = post_transform(
             raw,
+            mode,
             self.headless.load(Ordering::Relaxed),
             self.containment.as_deref(),
             auto,

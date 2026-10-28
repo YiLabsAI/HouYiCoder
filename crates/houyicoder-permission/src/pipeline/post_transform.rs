@@ -1,21 +1,27 @@
 use crate::decision::FenceProof;
 use crate::decision::{AllowReason, AskReason, Decision, DenyReason, DenySource};
-use crate::mode::ToolRequest;
+use crate::gate::mode_default;
+use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::detection::NETWORK_EGRESS;
 use crate::pipeline::mode_default::MODE_DEFAULT;
 use crate::side_effect::side_effect_for;
-use houyicoder_api::sandbox::{Containment, SideEffect};
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 
 /// Apply the post-ladder transforms. The gate calls this on the raw ladder
 /// output before returning, so the transform is structurally unbypassable: a
 /// validator that returns early still flows through here.
 ///
-/// Three jobs, in order:
+/// Four jobs, in order:
 /// 1. Attach a containment note to an Ask when the fence is expected to
 ///    reject the call even after consent. Informational only; the gate never
 ///    turns the note into a rejection. Independent of auto_allow_fenced_exec
 ///    so the user sees the fence's verdict whether or not the relaxation is on.
-/// 2. When auto_allow_fenced_exec is on + the call is exec + the fence is
+/// 2. Withdraw the Manual read-only waiver when no fence is active. The
+///    waiver rests on the fence's read visibility: inside the fence a command
+///    reads only what the profile permits, so a proven read touches nothing
+///    else. Without a fence the same command may read anything on the machine,
+///    so the mode's own verdict comes back.
+/// 3. When auto_allow_fenced_exec is on + the call is exec + the fence is
 ///    active, upgrade a mode-default Ask to Allow(Containment(FenceProof)).
 ///    Only the mode-default verdict qualifies -- it is the single
 ///    mode-governed verdict; every immune Ask (protected path, network
@@ -23,9 +29,10 @@ use houyicoder_api::sandbox::{Containment, SideEffect};
 ///    the fence, because the fence is not an authority over those intents.
 ///    The fence is the authority over containment; the gate does not ask a
 ///    question the fence answers.
-/// 3. When headless, turn an Ask into a Deny (no human to answer).
+/// 4. When headless, turn an Ask into a Deny (no human to answer).
 pub fn post_transform(
     raw: Decision,
+    mode: PermissionMode,
     headless: bool,
     containment: Option<&dyn Containment>,
     auto_allow_fenced_exec: bool,
@@ -59,6 +66,21 @@ pub fn post_transform(
         }
         (other, _) => other,
     };
+    // The Manual read-only waiver rests on the fence's read visibility, so a
+    // session without a fence gets the mode's own verdict back. Recomputing it
+    // rather than forcing an Ask keeps the tools the mode already allows alone:
+    // a tool with no side effect is allowed either way, and only the waiver,
+    // which raises an exec call to Allow, is withdrawn.
+    if mode == PermissionMode::Manual
+        && let Decision::Allow(allow) = &raw
+        && matches!(allow, AllowReason::ModeDefault)
+        && !matches!(
+            containment.map(|c| c.coverage()),
+            Some(Coverage::Fenced { .. })
+        )
+    {
+        return mode_default(mode, req);
+    }
     // Auto-allow fenced exec -- but only the mode-default verdict. That is the
     // single mode-governed verdict (the ladder's floor), so the only one the
     // fence may relax. Every immune Ask (protected path, egress, destructive,

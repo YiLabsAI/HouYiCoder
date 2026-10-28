@@ -3,10 +3,33 @@ use crate::consent::InMemoryConsentStore;
 use crate::consent::args_key;
 use crate::decision::{Decision, Outcome};
 use crate::rule::{Effect, RuleContent};
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
+
+/// A fence that reports a covered session. The read-only waiver rests on the
+/// fence's read visibility, so the tests asserting it attach one.
+struct StubFence;
+
+impl Containment for StubFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: vec![PathBuf::from("/ws")],
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+}
+
+/// A Manual gate on a fenced session, the arrangement the waiver is written
+/// for.
+fn fenced_manual() -> DefaultModeGate {
+    DefaultModeGate::with_mode(PermissionMode::Manual).with_containment(Arc::new(StubFence))
+}
 
 fn edit_req(path: &str) -> ToolRequest<'_> {
     let v: &'static Value = Box::leak(serde_json::json!({"path": path}).into());
@@ -32,6 +55,94 @@ fn test_manual_preserves_native() {
         g.decide(&req("read", false, true, false)).outcome(),
         Outcome::Allow
     ));
+}
+
+#[test]
+fn test_manual_readonly_allows() {
+    // Manual waives its question for a shell command the read-only proof
+    // accepts: a read subcommand of git, a bounded find, a search, a pipe of
+    // reads, and a read that follows a literal move into a directory.
+    let g = fenced_manual();
+    for command in [
+        "git status",
+        "git log --oneline -5",
+        "find . -type f | wc -l",
+        "rg clippy crates/",
+        "cd crates && head -20 lib.rs",
+        "ls -la | sort | wc -l",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(command)).outcome(),
+            Outcome::Allow,
+            "{command}"
+        );
+    }
+}
+
+/// The waiver depends on the fence's read visibility, so a session without a
+/// fence keeps the mode's question for the same commands.
+#[test]
+fn test_manual_readonly_unfenced_asks() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Manual);
+    for command in [
+        "git status",
+        "rg clippy crates/",
+        "cd crates && head -20 lib.rs",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(command)).outcome(),
+            Outcome::Ask,
+            "{command}"
+        );
+    }
+}
+
+/// A read-only command that names a credential path keeps Manual's question:
+/// the proof covers what the command does, not what it would reveal.
+#[test]
+fn test_manual_secret_read_asks() {
+    let g = fenced_manual();
+    for command in [
+        "cat ~/.ssh/id_rsa",
+        "cat ~/.netrc",
+        "head -n 1 ~/.aws/credentials",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(command)).outcome(),
+            Outcome::Ask,
+            "{command}"
+        );
+    }
+}
+
+/// A command that changes something is not covered by the waiver, whether it
+/// writes a file, records a commit, or redirects a reader's output.
+#[test]
+fn test_manual_write_asks() {
+    let g = fenced_manual();
+    for command in [
+        "touch notes.md",
+        "git commit -m x",
+        "sort notes.txt -o out.txt",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(command)).outcome(),
+            Outcome::Ask,
+            "{command}"
+        );
+    }
+}
+
+/// The waiver only shortens the mode's own question. A read that leaves the
+/// workspace or reaches the network was already a question earlier in the
+/// ladder, and stays one here.
+#[test]
+fn test_manual_egress_asks() {
+    let g = fenced_manual();
+    assert_eq!(
+        g.decide(&bash_req("curl https://example.com")).outcome(),
+        Outcome::Ask
+    );
 }
 
 #[test]

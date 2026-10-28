@@ -22,13 +22,13 @@ use std::thread::sleep;
 use std::time::Duration;
 
 /// A two-response script: the first carries a bash ToolCall so the runner
-/// raises a permission ask (in Manual mode bash is guarded -> ASK; read-only
-/// tools like read/glob auto-run even in Manual, so a mutating tool is needed
-/// to fire the card). The echo hi command is non-destructive + sandbox-allowed, so it
-/// succeeds after the approve — no stale error. The second response ends the
-/// run cleanly.
+/// raises a permission ask. In Manual mode a command the read-only proof
+/// attests runs without a card, so the script redirects its output: the
+/// redirect makes the call a write, which Manual still asks about. The write
+/// lands in the scratch repo, so the call succeeds after the approve -- no
+/// stale error. The second response ends the run cleanly.
 const BASH_ASK_SCRIPT: &str = r#"[
-  [{"type":"ToolCall","id":"c1","name":"bash","input":{"command":"echo hi"}}],
+  [{"type":"ToolCall","id":"c1","name":"bash","input":{"command":"echo hi > out.txt"}}],
   [{"type":"Text","text":"done"}]
 ]"#;
 
@@ -106,8 +106,8 @@ fn test_approve_bash_no_error() {
     );
     // Default focus is Yes (index 0); Enter confirms the verdict + ships it.
     s.send_key(&Key::Enter);
-    // The verdict resumes the run: bash runs (echo hi), the second response
-    // ("done") ends the turn.
+    // The verdict resumes the run: bash runs the redirect, the second
+    // response ("done") ends the turn.
     assert!(
         s.wait_for("done", RENDER_TIMEOUT),
         "approving should resume the run + render the done reply:\n{}",
@@ -186,7 +186,7 @@ fn test_ctrl_o_expands_arguments() {
 /// take, so the block folds and offers the expansion key.
 fn crowded_command_script() -> String {
     let args: Vec<String> = (0..100).map(|i| format!("token-{i:03}-xxxxxxxx")).collect();
-    let command = format!("echo start {}", args.join(" "));
+    let command = format!("echo start {} > out.txt", args.join(" "));
     format!(
         r#"[[{{"type":"ToolCall","id":"c1","name":"bash","input":{{"command":"{command}"}}}}],[{{"type":"Text","text":"done"}}]]"#
     )

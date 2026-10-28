@@ -1,15 +1,20 @@
 //! The mode-default stage: the fallback verdict when nothing else in the
 //! ladder fired. This is the only validator classified as mode-governed, so
 //! it is the only place where a future containment relaxation may live; the
-//! pipeline itself never knows relaxation exists. The verdict is a pure
-//! function of the request and its side-effect level, dispatched to the
-//! per-mode policy that already lives in the gate module.
+//! pipeline itself never knows relaxation exists. The verdict is the per-mode
+//! policy's decision on the request's side-effect level, with one waiver in
+//! Manual: a shell command the read-only proof accepts has already passed
+//! every earlier stage, so the mode adds no question of its own.
 
+use houyicoder_api::sandbox::names_credential_path;
+
+use crate::compound::is_readonly_compound;
 use crate::decision::{AllowReason, Decision};
 use crate::egress::http_origin;
 use crate::gate::mode_default;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
+use crate::side_effect::is_shell_tool;
 
 /// The fallback verdict. Always returns a concrete Allow / Ask, so the ladder
 /// never falls off the end. Reads the mode from the shared context.
@@ -34,6 +39,9 @@ impl Validator for ModeDefaultValidator {
         true
     }
     fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
+        if ctx.mode == PermissionMode::Manual && readonly_shell(req, ctx) {
+            return Some(Decision::Allow(AllowReason::ModeDefault));
+        }
         if ctx.mode == PermissionMode::Auto
             && matches!(
                 req.tool_name.to_ascii_lowercase().as_str(),
@@ -55,4 +63,18 @@ impl Validator for ModeDefaultValidator {
         // programming error the pipeline guards against.
         Some(mode_default(ctx.mode, req))
     }
+}
+
+/// Whether a shell request proves read-only by the same rule the compound
+/// stage applies: every segment is an attested read-only program with
+/// attested arguments, and a leading move into one literal directory is
+/// transparent. The credential check is the part the proof cannot supply:
+/// reading a secret line is still the user's decision, so the mode keeps the
+/// question instead of waiving it.
+fn readonly_shell(req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> bool {
+    if !is_shell_tool(req.tool_name) {
+        return false;
+    }
+    let segments: Vec<&str> = ctx.segments.iter().map(String::as_str).collect();
+    is_readonly_compound(&segments) && !names_credential_path(ctx.content)
 }

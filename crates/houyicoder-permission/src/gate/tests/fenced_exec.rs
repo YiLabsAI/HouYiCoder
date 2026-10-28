@@ -22,16 +22,17 @@ fn test_fenced_exec_auto_allows() {
         }
     }
 
-    // In Manual mode a plain exec asks at the mode-default validator (the
-    // only mode-governed verdict). post_transform upgrades that Ask to
-    // Allow(Containment) when fenced + auto_allow is on -- the fence covers
-    // the call, so the gate does not ask a question the fence answers.
+    // In Manual mode an exec that changes something asks at the mode-default
+    // validator (the only mode-governed verdict); a command the read-only
+    // proof accepts never reaches that question. post_transform upgrades the
+    // Ask to Allow(Containment) when fenced + auto_allow is on -- the fence
+    // covers the call, so the gate does not ask a question the fence answers.
     // Relaxation is pinned explicitly ON so this test locks the mechanism,
     // not the default (the default flips to off in a later change).
     let g = DefaultModeGate::with_mode(PermissionMode::Manual)
         .with_containment(Arc::new(StubFence))
         .with_auto_allow_fenced_exec(true);
-    let d = g.decide(&bash_req("ls"));
+    let d = g.decide(&bash_req("mkdir build"));
     assert!(
         matches!(d, Decision::Allow(AllowReason::Containment(_))),
         "fenced mode-default exec should auto-allow via Containment proof"
@@ -58,7 +59,7 @@ fn test_auto_allow_off_asks() {
     let g = DefaultModeGate::with_mode(PermissionMode::Manual)
         .with_containment(Arc::new(StubFence))
         .with_auto_allow_fenced_exec(false);
-    let d = g.decide(&bash_req("ls"));
+    let d = g.decide(&bash_req("mkdir build"));
     assert!(
         matches!(d.outcome(), Outcome::Ask),
         "auto-allow off should still Ask for a mode-default exec"
@@ -86,7 +87,7 @@ fn test_auto_allow_defaults_off() {
     // the default).
     let g =
         DefaultModeGate::with_mode(PermissionMode::Manual).with_containment(Arc::new(StubFence));
-    let d = g.decide(&bash_req("ls"));
+    let d = g.decide(&bash_req("mkdir build"));
     assert!(
         matches!(d.outcome(), Outcome::Ask),
         "default auto_allow_fenced_exec must be off -- a fenced exec asks"
@@ -110,7 +111,7 @@ fn test_unfenced_exec_still_asks() {
     let g = DefaultModeGate::with_mode(PermissionMode::Manual)
         .with_containment(Arc::new(StubUnfenced))
         .with_auto_allow_fenced_exec(true);
-    let d = g.decide(&bash_req("ls"));
+    let d = g.decide(&bash_req("mkdir build"));
     assert!(
         matches!(d.outcome(), Outcome::Ask),
         "unfenced exec should Ask (no proof can be built)"

@@ -10,11 +10,13 @@
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted};
 
-/// A response that streams a reasoning item, then a bash ToolCall (the bash
-/// ASKs in Manual mode), then plain text to end the run after the approve.
+/// A response that streams a reasoning item, then a bash ToolCall, then plain
+/// text to end the run after the approve. The call redirects its output: in
+/// Manual mode a command the read-only proof attests runs without a card, and
+/// the redirect is what makes this call one Manual still asks about.
 const REASONING_THEN_BASH_SCRIPT: &str = r#"[
   [{"type":"Reasoning","text":"analyzing the request carefully step by step"},
-   {"type":"ToolCall","id":"c1","name":"bash","input":{"command":"echo hi"}}],
+   {"type":"ToolCall","id":"c1","name":"bash","input":{"command":"echo hi > out.txt"}}],
   [{"type":"Text","text":"done"}]
 ]"#;
 
