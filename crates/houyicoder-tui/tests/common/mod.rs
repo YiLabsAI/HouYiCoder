@@ -1069,9 +1069,18 @@ fn pty_session_inner(mut s: PtySession) -> PtySession {
     );
     // '3' = local mode: skips auth, no network call even if a message is sent.
     s.send_key(&Key::Char('3'));
+    // The login screen also renders the input placeholder, so it cannot prove
+    // the local-mode key landed. The permission status bar is working-screen
+    // only; retry the key once if the login screen is still standing.
+    if !s.wait_for("auto mode on", RENDER_TIMEOUT)
+        && s.screen().contents().contains("sign in to houyicoder")
+    {
+        s.send_key(&Key::Char('3'));
+    }
     assert!(
-        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
-        "working screen should render after local login"
+        s.wait_for("auto mode on", RENDER_TIMEOUT),
+        "working screen should render after local login:\n{}",
+        s.output()
     );
     s
 }

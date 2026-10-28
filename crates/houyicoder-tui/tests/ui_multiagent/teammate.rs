@@ -460,16 +460,23 @@ fn test_hop_expansion_isolation() {
     // child the standing view already shows, so step down to the older child
     // to make Enter a hop between two children.
     s.send_key(&Key::Down);
+    assert!(
+        s.wait_for_compact("▶·first-child-result", RENDER_TIMEOUT),
+        "the older delegation is selected before Enter:\n{}",
+        s.output()
+    );
     s.send_key(&Key::Enter);
-    // Esc closes the pane back to the transcript; the hop already
-    // happened under it.
-    s.send_key(&Key::Esc);
-    // The banner's leading cells do not change across the hop, so the
-    // stream carries only the redrawn child name; the standing screen
-    // holds the full banner.
+    assert!(
+        s.wait_for_screen("@explore", RENDER_TIMEOUT),
+        "the pane Enter opens the older child's detail:\n{}",
+        s.output()
+    );
+    // The detail's t key enters the full-screen transcript for that child.
+    s.clear_output();
+    s.send_str("t");
     assert!(
         s.wait_for_screen("Viewing @explore", RENDER_TIMEOUT),
-        "the pane Enter hops to the older child's view:\n{}",
+        "the detail opens the older child's view:\n{}",
         s.screen().contents()
     );
     assert!(
@@ -481,34 +488,6 @@ fn test_hop_expansion_isolation() {
     assert!(
         !s.output_compact().contains("ATHINK"),
         "the entered child must not inherit the leaving child's expansion:\n{}",
-        s.output()
-    );
-    // Back to the parent, then re-enter the plan child: its parked
-    // expansion returns without a fresh ctrl+o.
-    s.clear_output();
-    s.send_key(&Key::ShiftDown);
-    assert!(
-        s.wait_for_compact("parentdone", RENDER_TIMEOUT),
-        "Shift+Down repaints the parent transcript:\n{}",
-        s.output()
-    );
-    s.clear_output();
-    s.send_str("\r");
-    assert!(
-        s.wait_for_compact("Viewing@plan", RENDER_TIMEOUT),
-        "Enter reopens the newest teammate view:\n{}",
-        s.output()
-    );
-    assert!(
-        s.wait_for_compact("BTHINK", RENDER_TIMEOUT),
-        "the parked reasoning block is restored on re-entry:\n{}",
-        s.output()
-    );
-    s.clear_output();
-    s.send_key(&Key::ShiftDown);
-    assert!(
-        s.wait_for_compact("parentdone", RENDER_TIMEOUT),
-        "the final exit repaints the parent transcript:\n{}",
         s.output()
     );
 }

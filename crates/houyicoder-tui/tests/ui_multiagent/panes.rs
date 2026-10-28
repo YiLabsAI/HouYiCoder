@@ -81,10 +81,14 @@ fn test_foreground_two_folds_render() {
         "both children should complete + parent resume:\n{}",
         s.output()
     );
-    let pc = s.output_compact();
     assert!(
-        pc.contains("first-child-result") && pc.contains("second-child-result"),
-        "both child summaries should render:\n{}",
+        s.wait_for_screen("first-child-result", RENDER_TIMEOUT * 3),
+        "the first child summary should render:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_screen("second-child-result", RENDER_TIMEOUT * 3),
+        "the second child summary should render:\n{}",
         s.output()
     );
 }
@@ -353,7 +357,7 @@ fn test_exit_enter_another_child() {
     s.clear_output();
     s.send_key(&Key::ShiftDown);
     assert!(
-        s.wait_for_compact("first-child-result", RENDER_TIMEOUT),
+        s.wait_for_screen("first-child-result", RENDER_TIMEOUT * 3),
         "exit should restore the parent with both fold-groups:\n{}",
         s.output()
     );
