@@ -4,6 +4,7 @@
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -13,6 +14,8 @@ use tokio::sync::Notify;
 use tokio::task::spawn_blocking;
 
 use super::ChildCleanup;
+use crate::agent::worktree::cleanup::lookup_pending;
+use crate::agent::worktree::identify::listed_in_git;
 use crate::agent::worktree::session::{has_worktree_changes, remove_clean_worktree};
 
 /// What an aborted child leaves behind for the shutdown sweep: the identity a
@@ -168,25 +171,60 @@ fn panic_text(payload: &(dyn Any + Send)) -> &str {
         .unwrap_or("no message")
 }
 
+/// Whether a cleanup record lets the reclaim skip the cleanliness probe.
+///
+/// The record is written before the Git step, so it only counts once Git has
+/// stopped listing the tree: while the tree is still registered, or its listing
+/// cannot be read, the probe decides. A record takes the place of a proof the
+/// removal already made, not of the proof itself.
+pub(super) fn resumes_leftover(repo_root: &Path, worktree_path: &Path, recorded: bool) -> bool {
+    recorded && matches!(listed_in_git(repo_root, worktree_path), Ok(false))
+}
+
 /// The conservative reclaim body (sync): prove the tree clean, then remove it.
 /// A tree that still holds changes, whose baseline was never recorded, or
 /// whose remove fails is kept; only a proven-clean tree whose conservative
 /// remove succeeds reports Removed. Runs inside spawn_blocking so sync Git
 /// never touches the async worker.
+///
+/// A leftover recorded by an earlier removal is reclaimed without the
+/// cleanliness probe: that removal was already cleared to take the tree apart
+/// and it named the target, and the probe cannot read a tree whose Git
+/// registration is gone, so asking it would keep the leftover forever. The
+/// record only counts once Git has stopped listing the tree, because it is
+/// written before the Git step; a tree Git still registers, or one whose
+/// listing cannot be read, goes through the probe like any other, which is what
+/// keeps a tree holding work from being removed on the strength of a record
+/// alone.
 pub(super) fn run_conservative_reclaim(record: &WorktreeReclaimRecord) -> ChildCleanup {
-    let clean = record
-        .head_commit
-        .as_deref()
-        .is_some_and(|head| !has_worktree_changes(&record.worktree_path, head));
-    if !clean {
-        tracing::info!(
-            "child worktree {} kept: it holds work or its baseline was never read",
-            record.slug
-        );
-        return ChildCleanup::Kept {
-            worktree_path: record.worktree_path.clone(),
-            worktree_branch: record.worktree_branch.clone(),
-        };
+    let pending = match lookup_pending(&record.repo_root, &record.slug) {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!(
+                "child worktree {} kept: its cleanup record could not be read: {error}",
+                record.slug
+            );
+            return ChildCleanup::Kept {
+                worktree_path: record.worktree_path.clone(),
+                worktree_branch: record.worktree_branch.clone(),
+            };
+        }
+    };
+    if !resumes_leftover(&record.repo_root, &record.worktree_path, pending.is_some()) {
+        let clean = record
+            .head_commit
+            .as_deref()
+            .is_some_and(|head| !has_worktree_changes(&record.worktree_path, head));
+        if !clean {
+            tracing::info!(
+                "child worktree {} kept: it holds work or its baseline was never read",
+                record.slug
+            );
+            return ChildCleanup::Kept {
+                worktree_path: record.worktree_path.clone(),
+                worktree_branch: record.worktree_branch.clone(),
+            };
+        }
     }
     match remove_clean_worktree(&record.repo_root, &record.slug) {
         Ok(()) => ChildCleanup::Removed {

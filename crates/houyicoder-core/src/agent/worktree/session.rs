@@ -1,5 +1,7 @@
 //! Pure git-worktree mechanics: slug validation, path and branch derivation,
-//! get-or-create, change counting, and the creation record a new tree leaves.
+//! get-or-create, change counting, the creation record a new tree leaves, and
+//! the removal that takes one apart: its checks, and what a removal that
+//! stopped leaves for the next attempt.
 //! Boundaries kept: a per-segment slug allowlist and flattening to dodge the
 //! git directory-vs-file conflict, the -b flag so a name collision fails
 //! instead of silently clobbering, and fail-closed change counting. Fast
@@ -16,8 +18,6 @@ use super::changes::read_changes;
 use super::identify::resolve_identity;
 use super::record::ManagedWorktree;
 use super::record::RecordLookup;
-use super::record::WorktreeLease;
-use super::record::clear_managed_state;
 use super::record::lookup_record;
 use super::record::write_managed_worktree;
 #[cfg(test)]
@@ -28,6 +28,11 @@ use std::fmt::Formatter;
 use std::fs::create_dir_all;
 use std::process::Output;
 use std::process::Stdio;
+
+mod removal;
+
+pub use removal::remove_clean_worktree;
+pub use removal::remove_worktree;
 
 /// Per-segment allowlist: letters, digits, dot, underscore, dash. The
 /// allowlist is the single source — no extra chars, no path-traversal
@@ -89,6 +94,11 @@ pub enum WorktreeError {
     /// at the repository root, so the answer has to carry both facts: what
     /// stopped the removal, and that the isolation is over.
     RemovalFailed { path: PathBuf, reason: String },
+    /// Git detached the worktree's registration but the directory survived, or
+    /// a recorded leftover could not be finished. The directory and the record
+    /// naming it are kept, so running the same removal again finishes that one
+    /// target instead of leaving a directory nothing accounts for.
+    CleanupPending { path: PathBuf, reason: String },
 }
 
 impl Display for WorktreeError {
@@ -142,6 +152,11 @@ impl Display for WorktreeError {
             Self::RemovalFailed { path, reason } => write!(
                 f,
                 "{} was not removed: {reason}. The worktree session ended anyway, so the repository root is the working directory again and the worktree is still on disk",
+                path.display()
+            ),
+            Self::CleanupPending { path, reason } => write!(
+                f,
+                "{} is no longer registered as a worktree, but its directory could not be removed: {reason}. The directory and the record naming it are kept, and a later removal of this worktree finishes it",
                 path.display()
             ),
         }
@@ -463,150 +478,6 @@ pub fn has_worktree_changes(worktree_path: &Path, head_commit: &str) -> bool {
 pub struct ChangeSummary {
     pub changed_files: usize,
     pub commits: usize,
-}
-
-/// Remove a linked worktree + delete its branch (the exit remove path). The
-/// user has already accepted the loss, so Git's refusal to remove a tree with
-/// uncommitted work is overridden once; a worktree Git locked still refuses.
-/// A slug without a record this version reads, or a directory that is not the
-/// tree that record names, is refused before Git is asked.
-pub fn remove_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError> {
-    let repo_root = canonicalize(repo_root)?;
-    remove_linked(&repo_root, slug, RemovalForce::AuthorizedDiscard)
-}
-
-/// Remove a linked worktree + delete its branch, conservatively, for the
-/// child auto-reclaim path where the caller has only proven the tree clean
-/// rather than obtained an explicit discard. Git's refusals stand, branch -d
-/// refuses to delete work that is not merged, and the same record and identity
-/// checks as the exit path run before anything is removed.
-pub fn remove_clean_worktree(repo_root: &Path, slug: &str) -> Result<(), WorktreeError> {
-    let repo_root = canonicalize(repo_root)?;
-    remove_linked(&repo_root, slug, RemovalForce::Conservative)
-}
-
-/// How much of Git's own caution a removal is allowed to override.
-#[derive(Clone, Copy)]
-enum RemovalForce {
-    /// Remove only what Git removes on its own, and delete the branch only
-    /// when its work is merged.
-    Conservative,
-    /// The user accepted the loss: a tree with uncommitted work is removed,
-    /// and an unmerged branch is deleted. A worktree Git locked still refuses.
-    AuthorizedDiscard,
-}
-
-impl RemovalForce {
-    fn remove_args(self) -> Vec<&'static str> {
-        match self {
-            Self::Conservative => vec!["worktree", "remove"],
-            Self::AuthorizedDiscard => vec!["worktree", "remove", "--force"],
-        }
-    }
-
-    fn branch_delete(self) -> &'static str {
-        match self {
-            Self::Conservative => "-d",
-            Self::AuthorizedDiscard => "-D",
-        }
-    }
-}
-
-/// Remove the directory Git registered for a slug, then delete its branch,
-/// with the lease held for the whole act.
-///
-/// The lease is taken rather than asked about, so a session that acquires it
-/// after a probe cannot begin working in a tree this call is deleting. Inside
-/// it the act is verified before anything is removed: the slug has to carry a
-/// record this version reads, the directory has to resolve to the tree that
-/// record names, and Git must not have it locked. A directory at the managed
-/// path without that evidence is left alone whatever Git has registered there.
-///
-/// Each step runs only after the one before it is confirmed, and the record is
-/// cleared last. A failure before the directory is gone leaves the directory,
-/// its branch and its record together. A branch Git refuses to delete once the
-/// directory is gone is the one state left partial, and it answers
-/// RemovalIncomplete, naming what survived instead of a Git message about a
-/// step that never ran.
-fn remove_linked(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<(), WorktreeError> {
-    let lease = WorktreeLease::acquire(repo_root, slug)?;
-    match remove_verified(repo_root, slug, force) {
-        Ok(()) => {
-            // The lease is still held, so the lease file this deletes is one no
-            // other process can hold.
-            clear_managed_state(repo_root, slug);
-            Ok(())
-        }
-        Err(error) => {
-            lease.discard();
-            Err(error)
-        }
-    }
-}
-
-/// The verified part of a removal: the checks that establish the object, then
-/// the Git steps that take it apart.
-fn remove_verified(repo_root: &Path, slug: &str, force: RemovalForce) -> Result<(), WorktreeError> {
-    let record = lookup_record(repo_root, slug);
-    let expected_branch = match &record {
-        RecordLookup::Read(record) => record.branch().to_string(),
-        RecordLookup::Rejected { reason } => {
-            return Err(WorktreeError::RecordRejected {
-                slug: slug.to_string(),
-                reason: reason.clone(),
-            });
-        }
-        RecordLookup::Absent => {
-            return Err(WorktreeError::Unmanaged {
-                slug: slug.to_string(),
-            });
-        }
-    };
-    let identity = resolve_identity(repo_root, slug, &expected_branch)?;
-    // Removal already refuses a locked tree through Git's own caution. Saying
-    // so here names the reason instead of leaving a Git message about a
-    // worktree that is locked.
-    if identity.locked {
-        return Err(WorktreeError::Locked {
-            path: identity.path,
-            reason: "Git records a lock on it".to_string(),
-        });
-    }
-    let path = identity.path;
-    let path_text = path.to_string_lossy().into_owned();
-    let mut args: Vec<&str> = force.remove_args();
-    args.push(&path_text);
-    run_git(repo_root, &args)?;
-    // A stat error is not the directory being gone: the branch is deleted and
-    // the record cleared only once the directory is proven absent, so a
-    // directory that cannot be checked keeps everything.
-    match path.try_exists() {
-        Ok(false) => {}
-        Ok(true) => {
-            return Err(WorktreeError::State {
-                path,
-                reason: "git finished removing it, but the directory is still there, so its branch and record are kept"
-                    .to_string(),
-            });
-        }
-        Err(error) => {
-            return Err(WorktreeError::State {
-                path,
-                reason: format!(
-                    "git finished removing it, and whether the directory is gone could not be checked: {error}"
-                ),
-            });
-        }
-    }
-    let branch = identity.branch;
-    if let Err(error) = run_git(repo_root, &["branch", force.branch_delete(), &branch]) {
-        return Err(WorktreeError::RemovalIncomplete {
-            path,
-            branch,
-            reason: error.to_string(),
-        });
-    }
-    Ok(())
 }
 
 /// Undo a creation whose record could not be published.

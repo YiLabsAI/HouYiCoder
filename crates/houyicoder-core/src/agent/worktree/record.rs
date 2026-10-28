@@ -118,6 +118,22 @@ pub(super) fn lease_path(repo_root: &Path, slug: &str) -> PathBuf {
     state_dir(repo_root).join(format!("{}.lease", flatten_slug(slug)))
 }
 
+/// The directory holding the record of a removal that stopped with its
+/// directory still there.
+///
+/// It is a directory of its own rather than a second suffix in the state
+/// directory, because slugs may contain dots: a pending record named
+/// slug.cleanup.json would be the creation record of the worktree named
+/// slug.cleanup, and removing one would delete the other's file.
+pub(super) fn pending_dir(repo_root: &Path) -> PathBuf {
+    state_dir(repo_root).join("pending")
+}
+
+/// The pending record path for a slug.
+pub(super) fn pending_path(repo_root: &Path, slug: &str) -> PathBuf {
+    pending_dir(repo_root).join(format!("{}.json", flatten_slug(slug)))
+}
+
 /// The state directory, created when it is missing, once it is proven to
 /// resolve inside the repository it belongs to. A link standing where the
 /// directory should be would move every record this product writes, and every
@@ -130,6 +146,53 @@ fn state_dir_ready(repo_root: &Path) -> Result<PathBuf, WorktreeError> {
         reason: format!("create the state directory: {e}"),
     })?;
     state_dir_checked(&repo)
+}
+
+/// The pending record directory, when it resolves inside the worktree state
+/// directory. A directory that is not there yet answers as absent: a reader has
+/// nothing to read, and a writer creates it through the creating call.
+pub(super) fn pending_dir_checked(repo_root: &Path) -> Result<Option<PathBuf>, WorktreeError> {
+    let state = match dunce::canonicalize(state_dir(repo_root)) {
+        Ok(state) => state,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(WorktreeError::State {
+                path: state_dir(repo_root),
+                reason: format!("resolve the worktree state directory: {error}"),
+            });
+        }
+    };
+    let dir = pending_dir(repo_root);
+    match dunce::canonicalize(&dir) {
+        Ok(resolved) if resolved.starts_with(&state) => Ok(Some(dir)),
+        Ok(resolved) => Err(WorktreeError::State {
+            path: resolved,
+            reason: format!(
+                "the cleanup record directory resolves outside {}",
+                state.display()
+            ),
+        }),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(WorktreeError::State {
+            path: dir,
+            reason: format!("resolve the cleanup record directory: {error}"),
+        }),
+    }
+}
+
+/// The pending record directory, created when it is missing, once it is proven
+/// to resolve inside the worktree state directory.
+pub(super) fn pending_dir_ready(repo_root: &Path) -> Result<PathBuf, WorktreeError> {
+    state_dir_ready(repo_root)?;
+    let dir = pending_dir(repo_root);
+    create_dir_all(&dir).map_err(|e| WorktreeError::State {
+        path: dir.clone(),
+        reason: format!("create the cleanup record directory: {e}"),
+    })?;
+    pending_dir_checked(repo_root)?.ok_or_else(|| WorktreeError::State {
+        path: dir,
+        reason: "the cleanup record directory disappeared after it was created".to_string(),
+    })
 }
 
 /// The state directory, when it resolves inside the repository. A directory
@@ -172,18 +235,26 @@ pub fn write_managed_worktree(
     // trusted from the caller: a name this product cannot derive a path from
     // must not become a file in the state directory.
     validate_worktree_slug(&record.slug)?;
-    let parent = state_dir_ready(repo_root)?;
+    state_dir_ready(repo_root)?;
     let path = record_path(repo_root, &record.slug);
     let body = serde_json::to_string(record).map_err(|e| WorktreeError::State {
         path: path.clone(),
         reason: format!("encode the record: {e}"),
     })?;
+    write_state_file(&path, &body)
+}
+
+/// Write one file of the worktree state by rename, so a reader never sees a
+/// half-written one: a crash leaves the temporary file behind and the previous
+/// contents, if any, intact.
+pub(super) fn write_state_file(path: &Path, body: &str) -> Result<(), WorktreeError> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let sequence = WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(
-        ".{}.{}.{sequence}.tmp",
-        flatten_slug(&record.slug),
-        id()
-    ));
+    let temp = parent.join(format!(".{name}.{}.{sequence}.tmp", id()));
     let mut file = File::create(&temp).map_err(|e| WorktreeError::State {
         path: temp.clone(),
         reason: format!("create the temporary file: {e}"),
@@ -199,18 +270,18 @@ pub fn write_managed_worktree(
             reason: format!("write the temporary file: {error}"),
         });
     }
-    rename(&temp, &path).map_err(|e| {
+    rename(&temp, path).map_err(|e| {
         drop(remove_file(&temp));
         WorktreeError::State {
-            path: path.clone(),
-            reason: format!("publish the record into place: {e}"),
+            path: path.to_path_buf(),
+            reason: format!("publish the state file into place: {e}"),
         }
     })?;
-    // The record is published. A directory sync failure leaves it on disk and
+    // The file is published. A directory sync failure leaves it on disk and
     // only weakens its survival across a crash, so it is reported rather than
     // returned: a caller that saw an error here would roll back a tree whose
     // record already exists.
-    if let Err(error) = sync_dir(&parent) {
+    if let Err(error) = sync_dir(parent) {
         tracing::warn!(?parent, %error, "worktree state directory not synced");
     }
     Ok(())
@@ -299,10 +370,11 @@ pub fn read_managed_worktree(repo_root: &Path, slug: &str) -> Option<ManagedWork
     }
 }
 
-/// Delete the record and lease a slug leaves behind, reporting rather than
-/// returning a failure. The worktree is already gone by the time this runs, so
-/// a record that survives names a tree nothing can resolve; leaving it would
-/// grow the state directory with one dead entry per removed worktree.
+/// Delete the record, lease and cleanup record a slug leaves behind, reporting
+/// rather than returning a failure. The worktree is already gone by the time
+/// this runs, so a record that survives names a tree nothing can resolve;
+/// leaving it would grow the state directory with one dead entry per removed
+/// worktree.
 ///
 /// The caller holds the slug's lease, but the hold does not outlast the unlink:
 /// a process that creates the file again locks a new one. What makes this safe
@@ -313,7 +385,15 @@ pub(super) fn clear_managed_state(repo_root: &Path, slug: &str) {
         tracing::warn!("worktree state not cleared for {slug}: {error}");
         return;
     }
-    for path in [record_path(repo_root, slug), lease_path(repo_root, slug)] {
+    let mut paths = vec![record_path(repo_root, slug), lease_path(repo_root, slug)];
+    // The cleanup record lives one directory deeper, and its directory is
+    // proven inside the state directory before a file named there is deleted.
+    match pending_dir_checked(repo_root) {
+        Ok(Some(_)) => paths.push(pending_path(repo_root, slug)),
+        Ok(None) => {}
+        Err(error) => tracing::warn!("worktree cleanup record not cleared for {slug}: {error}"),
+    }
+    for path in paths {
         match remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}

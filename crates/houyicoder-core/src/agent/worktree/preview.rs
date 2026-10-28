@@ -129,7 +129,10 @@ pub fn preview_remove_worktree(
 /// Whether the worktree branch's commits are all reachable from the branch it
 /// was forked from. Git answers with its exit status: zero means merged, one
 /// means unmerged, and any other ending means the question could not be asked.
-fn merge_state(repo_root: &Path, record: &ManagedWorktree) -> Result<MergeState, WorktreeError> {
+pub(super) fn merge_state(
+    repo_root: &Path,
+    record: &ManagedWorktree,
+) -> Result<MergeState, WorktreeError> {
     let Some(base) = record.base_branch() else {
         return Ok(MergeState::Unknown);
     };

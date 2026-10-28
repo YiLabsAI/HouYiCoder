@@ -10,7 +10,7 @@ use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(unix)]
-use std::os::unix::fs::symlink;
+use std::{fs::rename, os::unix::fs::symlink};
 
 use super::*;
 
@@ -128,4 +128,64 @@ fn test_listing_reads_lock() {
     assert!(!entries[0].locked, "the first entry carries no lock");
     assert_eq!(entries[1].path, PathBuf::from("/c"));
     assert!(entries[1].locked, "the lock line marks the entry before it");
+}
+
+/// A path that cannot be read has no numbers to hand, which is refused rather
+/// than read as a directory that is not there.
+#[test]
+fn test_stamp_read_refuses_file() {
+    let repo = temp_repo("stamp-file");
+    let file = repo.join("plain.txt");
+    write(&file, "keep").expect("write file");
+
+    let error = TargetStamp::read(&file.join("child")).expect_err("the path cannot be read");
+
+    assert!(
+        matches!(error, WorktreeError::State { .. }),
+        "expected State, got {error:?}"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A path with nothing at it has no numbers to hand, which is what tells a
+/// removal that the directory it verified is not there any more.
+#[test]
+fn test_stamp_when_dir_gone() {
+    let repo = temp_repo("stamp-gone");
+    let path = repo.join("target");
+    create_dir_all(&path).expect("target dir");
+    let stamp = TargetStamp::read(&path)
+        .expect("read the stamp")
+        .expect("the directory is there");
+    drop(remove_dir_all(&path));
+    assert!(
+        TargetStamp::read(&path)
+            .expect("read a missing path")
+            .is_none(),
+        "a missing directory has no numbers"
+    );
+
+    assert!(stamp.verify(&path).is_err(), "the directory is gone");
+    drop(remove_dir_all(&repo));
+}
+
+/// A directory that replaces the verified one is refused: the numbers a file
+/// system gives a directory are what tell the two apart.
+#[cfg(unix)]
+#[test]
+fn test_stamp_detects_replacement() {
+    let repo = temp_repo("stamp-replaced");
+    let path = repo.join("target");
+    create_dir_all(&path).expect("target dir");
+    let stamp = TargetStamp::read(&path)
+        .expect("read the stamp")
+        .expect("the directory is there");
+    rename(&path, repo.join("moved")).expect("move the directory away");
+    create_dir_all(&path).expect("a new directory in its place");
+
+    assert!(
+        stamp.verify(&path).is_err(),
+        "the replacement is not the directory that was checked"
+    );
+    drop(remove_dir_all(&repo));
 }

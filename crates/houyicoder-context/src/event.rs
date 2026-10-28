@@ -471,9 +471,11 @@ pub enum SessionEvent {
         head_commit: Option<String>,
     },
     /// A worktree session ended (ExitWorktree). action is keep (worktree +
-    /// branch preserved), remove (both deleted), or remove-incomplete (the
+    /// branch preserved), remove (both deleted), remove-incomplete (the
     /// directory was deleted and the branch with its creation record was
-    /// kept). A replay re-narrows then restores, mirroring enter.
+    /// kept), or cleanup-pending (the registration is gone and the directory
+    /// with its branch was kept, recorded so a later removal finishes it). A
+    /// replay re-narrows then restores, mirroring enter.
     #[serde(rename = "WorktreeExit")]
     WorktreeExit {
         action: String,

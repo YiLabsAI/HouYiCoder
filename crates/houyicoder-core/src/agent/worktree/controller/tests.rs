@@ -272,6 +272,39 @@ fn exit_action(store: &SessionStore, controller: &WorktreeController) -> String 
         .expect("a worktree exit event")
 }
 
+/// The durable action names each state a stopped removal leaves, so a reader of
+/// the log can tell the directory taken with the branch kept from the
+/// registration gone with the directory and branch kept and recorded.
+#[test]
+fn test_exit_action_names_states() {
+    let path = PathBuf::from("/repo/.houyicoder/worktrees/tree");
+    let incomplete = WorktreeError::RemovalIncomplete {
+        path: path.clone(),
+        branch: "worktree-tree".into(),
+        reason: "the ref is locked".into(),
+    };
+    let pending = WorktreeError::CleanupPending {
+        path: path.clone(),
+        reason: "a file inside it is in use".into(),
+    };
+    let failed = WorktreeError::RemovalFailed {
+        path,
+        reason: "git refused".into(),
+    };
+
+    assert_eq!(
+        recorded_exit_action(Some(&incomplete), "remove"),
+        "remove-incomplete"
+    );
+    assert_eq!(
+        recorded_exit_action(Some(&pending), "remove"),
+        "cleanup-pending"
+    );
+    assert_eq!(recorded_exit_action(Some(&failed), "remove"), "keep");
+    assert_eq!(recorded_exit_action(None, "remove"), "remove");
+    assert_eq!(recorded_exit_action(None, "keep"), "keep");
+}
+
 /// A removal Git refuses still ends the session: the cwd and fence already
 /// went back to the repository root and the lease is gone, so reporting a
 /// session inside the tree would describe a hold this controller no longer

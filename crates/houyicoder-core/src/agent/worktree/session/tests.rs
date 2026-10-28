@@ -8,6 +8,8 @@ use std::env::temp_dir;
 use std::fs;
 use std::process::id;
 
+mod removal;
+
 /// A throwaway git repo with one commit, so a remove test runs its body
 /// deterministically instead of skipping outside a live work tree.
 fn make_repo(tag: &str) -> PathBuf {
@@ -315,9 +317,7 @@ fn test_removal_clears_worktree_state() {
     assert!(record_path(&repo, slug).exists(), "the record was written");
 
     remove_clean_worktree(&repo, slug).expect("remove");
-    let left: Vec<_> = fs::read_dir(state_dir(&repo))
-        .map(|entries| entries.flatten().collect())
-        .unwrap_or_default();
+    let left = state_files(&repo);
     assert!(left.is_empty(), "no record or lease left: {left:?}");
     drop(fs::remove_dir_all(&repo));
 }
@@ -333,11 +333,24 @@ fn test_user_removal_clears_state() {
 
     remove_worktree(&repo, slug).expect("remove");
 
-    let left: Vec<_> = fs::read_dir(state_dir(&repo))
-        .map(|entries| entries.flatten().collect())
-        .unwrap_or_default();
+    let left = state_files(&repo);
     assert!(left.is_empty(), "no record or lease left: {left:?}");
     drop(fs::remove_dir_all(&repo));
+}
+
+/// The files a removal leaves in the state directory. Subdirectories are not
+/// entries to clean up: the cleanup records keep a directory of their own,
+/// created once and shared by every slug.
+fn state_files(repo_root: &Path) -> Vec<PathBuf> {
+    fs::read_dir(state_dir(repo_root))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_file())
+                .map(|entry| entry.path())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A removal Git refused keeps the directory, its branch, and its record: a
@@ -711,6 +724,13 @@ fn test_errors_name_the_failure() {
                 reason: "it holds unmerged commits".into(),
             },
             "was removed, but branch worktree-tree could not be deleted",
+        ),
+        (
+            WorktreeError::CleanupPending {
+                path: path.clone(),
+                reason: "a file inside it is in use".into(),
+            },
+            "is no longer registered as a worktree, but its directory could not be removed: a file inside it is in use",
         ),
     ];
     for (error, expected) in cases {

@@ -42,6 +42,7 @@ use crate::agent::worktree::session::WorktreeError;
 use crate::agent::worktree::session::WorktreeSession;
 use houyicoder_api::sandbox::WorktreeFenceGuard;
 use std::process::id;
+use tokio::task::spawn_blocking;
 
 /// Monotonic counter for random worktree slugs (no Math.random — a random
 /// name is a nicety; here a counter + pid derives a unique slug
@@ -607,8 +608,16 @@ impl WorktreeController {
                 .as_mut()
                 .and_then(|active| active.lease.take());
             drop(lease);
-            match worktree_session::remove_worktree(&self.repo_root, &session.worktree_name) {
-                Ok(()) => {
+            // Removal walks a directory that may hold a build tree, so it runs
+            // on the blocking pool rather than on an async worker; the reclaim
+            // path runs the same act the same way.
+            let repo_root = self.repo_root.clone();
+            let slug = session.worktree_name.clone();
+            let walk_path = session.worktree_path.clone();
+            let removal =
+                spawn_blocking(move || worktree_session::remove_worktree(&repo_root, &slug)).await;
+            match removal {
+                Ok(Ok(())) => {
                     self.fire_worktree_event(
                         HookEventKind::WorktreeRemove,
                         session.worktree_path.clone(),
@@ -616,7 +625,7 @@ impl WorktreeController {
                     .await;
                     None
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     // The cwd and the fence already went back to the
                     // repository root and the lease is gone, so nothing here
                     // still describes a session inside the tree. What the
@@ -626,6 +635,10 @@ impl WorktreeController {
                     // leaves the branch and the record.
                     Some(error)
                 }
+                Err(error) => Some(WorktreeError::State {
+                    path: walk_path,
+                    reason: format!("the removal did not finish: {error}"),
+                }),
             }
         } else {
             None
@@ -653,16 +666,7 @@ impl WorktreeController {
                 tracing::warn!("{notice}");
             }
         }
-        // Record the exit event (H2). The action names the state the session
-        // ended in, not the request: a removal that stopped before the
-        // directory was gone kept the tree, and one that stopped at the branch
-        // took the directory and kept the branch, which is neither plain keep
-        // nor plain remove.
-        let recorded_action = match &removal_failed {
-            None => action_str,
-            Some(WorktreeError::RemovalIncomplete { .. }) => "remove-incomplete",
-            Some(_) => "keep",
-        };
+        let recorded_action = recorded_exit_action(removal_failed.as_ref(), action_str);
         if let Err(e) = self
             .store
             .append(SessionLogEntry {
@@ -719,6 +723,24 @@ impl WorktreeController {
             worktree_branch: session.worktree_branch,
             message,
         })
+    }
+}
+
+/// The action an exit records: the state the session ended in rather than the
+/// request, because a removal that stopped partway leaves something other than
+/// the answer the caller asked for. It names the directory taken with the
+/// branch kept, the registration gone with the directory and branch kept for a
+/// later removal, and every other failure as a removal that did not finish.
+/// That last value reports the request, not how much of the tree survived.
+fn recorded_exit_action(
+    removal_failed: Option<&WorktreeError>,
+    requested: &'static str,
+) -> &'static str {
+    match removal_failed {
+        None => requested,
+        Some(WorktreeError::RemovalIncomplete { .. }) => "remove-incomplete",
+        Some(WorktreeError::CleanupPending { .. }) => "cleanup-pending",
+        Some(_) => "keep",
     }
 }
 

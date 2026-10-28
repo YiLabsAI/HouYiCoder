@@ -6,9 +6,17 @@
 //! answer it the same way: a resume that accepted a directory the preview
 //! refuses would hand a session a tree nothing can remove.
 
+use std::fs::Metadata;
 use std::fs::metadata;
+use std::fs::symlink_metadata;
+use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
+
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::session::WorktreeError;
 use super::session::canonicalize;
@@ -147,21 +155,46 @@ struct ListedWorktree {
 /// refuses the caller rather than reading the listing as empty and refusing
 /// every registered tree for the wrong reason.
 fn listed_worktree(repo_root: &Path, path: &Path) -> Result<ListedWorktree, WorktreeError> {
-    let raw = run_git_raw(repo_root, &["worktree", "list", "--porcelain", "-z"])?;
-    for entry in parse_worktree_listing(&raw) {
-        let Ok(listed) = canonicalize(&entry.path) else {
-            continue;
-        };
-        if listed == path {
-            return Ok(ListedWorktree {
-                locked: entry.locked,
-            });
+    match listed_entry(repo_root, path)? {
+        Some(entry) => Ok(ListedWorktree {
+            locked: entry.locked,
+        }),
+        None => Err(WorktreeError::Identity {
+            path: path.to_path_buf(),
+            reason: "Git does not list it as a worktree of this repository".to_string(),
+        }),
+    }
+}
+
+/// Whether Git's own worktree record names a directory. A path that does not
+/// resolve is not listed: there is nothing for the record to name.
+///
+/// A removal asks this to tell a tree Git still registered, which it takes
+/// apart the ordinary way, from a leftover Git has already detached, which only
+/// the record of that leftover may finish.
+pub(super) fn listed_in_git(repo_root: &Path, path: &Path) -> Result<bool, WorktreeError> {
+    let Ok(resolved) = canonicalize(path) else {
+        return Ok(false);
+    };
+    Ok(listed_entry(repo_root, &resolved)?.is_some())
+}
+
+/// Git's entry for a resolved directory, when its listing carries one. An
+/// entry whose own path does not resolve names nothing this caller can compare,
+/// so it is skipped rather than treated as a match or as a failure.
+fn listed_entry(repo_root: &Path, resolved: &Path) -> Result<Option<ListedEntry>, WorktreeError> {
+    for entry in worktree_listing(repo_root)? {
+        if canonicalize(&entry.path).is_ok_and(|listed| listed == resolved) {
+            return Ok(Some(entry));
         }
     }
-    Err(WorktreeError::Identity {
-        path: path.to_path_buf(),
-        reason: "Git does not list it as a worktree of this repository".to_string(),
-    })
+    Ok(None)
+}
+
+/// Git's own worktree listing, read as NUL-separated records.
+fn worktree_listing(repo_root: &Path) -> Result<Vec<ListedEntry>, WorktreeError> {
+    let raw = run_git_raw(repo_root, &["worktree", "list", "--porcelain", "-z"])?;
+    Ok(parse_worktree_listing(&raw))
 }
 
 /// Split a NUL-separated worktree listing into its entries. Each entry starts
@@ -184,6 +217,64 @@ fn parse_worktree_listing(raw: &[u8]) -> Vec<ListedEntry> {
         }
     }
     entries
+}
+
+/// The directory a caller verified, so a path that now names a different
+/// directory is refused rather than deleted.
+///
+/// Unix exposes the numbers its file systems name a directory by, and they are
+/// carried into the record of a removal that stopped so a later attempt deletes
+/// only the directory that removal checked. Windows exposes them only through an
+/// unstable part of the standard library, so the stamp compares nothing there
+/// and a check passes; on that platform the record and identity checks around
+/// it are the ones that stand.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub(super) struct TargetStamp {
+    device: u64,
+    inode: u64,
+}
+
+impl TargetStamp {
+    /// The numbers the file system gives a directory, or None when there is no
+    /// directory at the path to take them from.
+    pub(super) fn read(path: &Path) -> Result<Option<Self>, WorktreeError> {
+        match symlink_metadata(path) {
+            Ok(meta) => {
+                let (device, inode) = stamp_of(&meta);
+                Ok(Some(Self { device, inode }))
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(WorktreeError::State {
+                path: path.to_path_buf(),
+                reason: format!("read the directory: {error}"),
+            }),
+        }
+    }
+
+    /// Answer whether the path still names the directory these numbers came
+    /// from, or the reason it no longer does. The caller decides what a
+    /// mismatch means, because what it refuses depends on how far the removal
+    /// had already gone.
+    pub(super) fn verify(self, path: &Path) -> Result<(), String> {
+        let now = Self::read(path).map_err(|error| error.to_string())?;
+        match now {
+            Some(now) if now.device == self.device && now.inode == self.inode => Ok(()),
+            _ => Err("it was replaced or removed after it was checked".to_string()),
+        }
+    }
+}
+
+/// The numbers that name a directory on its file system. Zero on a platform
+/// that does not expose them, which makes every directory compare equal.
+#[cfg(unix)]
+fn stamp_of(meta: &Metadata) -> (u64, u64) {
+    (meta.dev(), meta.ino())
+}
+
+/// See the Unix form.
+#[cfg(not(unix))]
+fn stamp_of(_meta: &Metadata) -> (u64, u64) {
+    (0, 0)
 }
 
 #[cfg(test)]

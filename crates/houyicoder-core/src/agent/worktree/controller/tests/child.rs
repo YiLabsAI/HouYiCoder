@@ -27,9 +27,16 @@ use crate::provider::test_support::FakeProvider;
 
 use super::super::ChildCleanup;
 use super::super::ExitAction;
-use super::super::child_reclaim::{WorktreeReclaimRecord, run_conservative_reclaim};
+use super::super::child_reclaim::{
+    WorktreeReclaimRecord, resumes_leftover, run_conservative_reclaim,
+};
 use super::super::tests::{make_repo, wired, wired_err};
+use crate::agent::worktree::cleanup::PendingCleanup;
+use crate::agent::worktree::cleanup::write_pending;
+use crate::agent::worktree::record::ManagedWorktree;
+use crate::agent::worktree::record::write_managed_worktree;
 use houyicoder_api::provider::ModelProvider;
+use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
 
@@ -330,6 +337,104 @@ fn test_reclaim_keeps_unproven_worktree() {
     assert!(
         run_git(&repo, &["rev-parse", "--verify", &branch_ref]).is_ok(),
         "the branch survives with the directory"
+    );
+    remove_dir_all(&repo).ok();
+}
+
+/// A leftover recorded by an earlier removal is reclaimed even though its
+/// cleanliness cannot be proven: the removal that wrote the record already
+/// proved the tree clean, and a tree Git no longer registers cannot answer the
+/// probe, so asking it would keep the leftover forever.
+#[test]
+fn test_reclaim_finishes_leftover() {
+    let repo = make_repo(33);
+    let slug = "agent-leftover";
+    let path = worktree_path_for(&repo, slug);
+    create_dir_all(path.join("nested")).expect("leftover dir");
+    write(path.join("nested").join("work.txt"), "work").expect("leftover file");
+    write_managed_worktree(&repo, &ManagedWorktree::new(slug, None)).expect("creation record");
+    run_git(&repo, &["branch", &worktree_branch_name(slug)]).expect("branch");
+    let resolved = dunce::canonicalize(&path).expect("resolve the leftover");
+    write_pending(&repo, &PendingCleanup::new(slug, &resolved, None)).expect("cleanup record");
+    let record = WorktreeReclaimRecord {
+        repo_root: repo.clone(),
+        worktree_path: path.clone(),
+        worktree_branch: worktree_branch_name(slug),
+        slug: slug.to_string(),
+        head_commit: None,
+    };
+
+    let outcome = run_conservative_reclaim(&record);
+
+    assert!(
+        matches!(outcome, ChildCleanup::Removed { .. }),
+        "a recorded leftover is reclaimed: {outcome:?}"
+    );
+    assert!(!path.exists(), "the directory is gone");
+    let branch_ref = format!("refs/heads/{}", worktree_branch_name(slug));
+    assert!(
+        run_git(&repo, &["rev-parse", "--verify", &branch_ref]).is_err(),
+        "the branch goes with it"
+    );
+    remove_dir_all(&repo).ok();
+}
+
+/// A record written before the Git step is not proof on its own: while Git
+/// still lists the tree, the cleanliness probe decides, so a tree holding work
+/// is kept even though a record names it.
+#[test]
+fn test_reclaim_probes_registered_tree() {
+    let repo = make_repo(34);
+    let slug = "agent-registered";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+    let path = dunce::canonicalize(&created.worktree_path).expect("resolve the tree");
+    write_pending(&repo, &PendingCleanup::new(slug, &path, None)).expect("cleanup record");
+    write(path.join("dirty.txt"), "work").expect("a change in the tree");
+    let record = WorktreeReclaimRecord {
+        repo_root: repo.clone(),
+        worktree_path: created.worktree_path.clone(),
+        worktree_branch: created.worktree_branch.clone(),
+        slug: slug.to_string(),
+        head_commit: created.head_commit.clone(),
+    };
+
+    let outcome = run_conservative_reclaim(&record);
+
+    assert!(
+        matches!(outcome, ChildCleanup::Kept { .. }),
+        "a registered tree holding work is kept: {outcome:?}"
+    );
+    assert!(created.worktree_path.exists(), "the directory survives");
+    remove_dir_all(&repo).ok();
+}
+
+/// A record lets the reclaim skip the probe only once Git has stopped listing
+/// the tree, because the record is written before the Git step. A directory
+/// the listing cannot resolve at all counts as unlisted; the path here is one
+/// Git removed outright, the other shape being covered by the leftover tests.
+#[test]
+fn test_reclaim_skips_only_unlisted() {
+    let repo = make_repo(35);
+    let slug = "agent-listed";
+    let created = get_or_create_worktree(&repo, slug).expect("create");
+
+    assert!(
+        !resumes_leftover(&repo, &created.worktree_path, true),
+        "a tree Git still lists goes through the probe"
+    );
+    assert!(
+        !resumes_leftover(&repo, &created.worktree_path, false),
+        "a tree with no record goes through the probe"
+    );
+    let path = created.worktree_path.to_string_lossy().into_owned();
+    run_git(&repo, &["worktree", "remove", "--force", &path]).expect("detach the registration");
+    assert!(
+        resumes_leftover(&repo, &created.worktree_path, true),
+        "a tree Git no longer lists is finished from its record"
+    );
+    assert!(
+        !resumes_leftover(&repo, &created.worktree_path, false),
+        "an unlisted tree without a record still goes through the probe"
     );
     remove_dir_all(&repo).ok();
 }
