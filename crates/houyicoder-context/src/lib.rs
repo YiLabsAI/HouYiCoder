@@ -78,6 +78,11 @@ pub use log_index::{
     SAMPLE_INTERVAL_BYTES, entry_at, entry_count, readable_len,
 };
 
+/// Publishing a small file whole, for the records a reader must be able to
+/// trust after a crash.
+mod durable;
+pub use durable::{WriteError, write_atomic};
+
 /// The append-only log's wire types (SessionLogEntry + the vocabulary of what a
 /// record can be).
 mod event;

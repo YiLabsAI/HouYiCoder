@@ -12,16 +12,13 @@ use std::fs::TryLockError;
 use std::fs::create_dir_all;
 use std::fs::read_to_string;
 use std::fs::remove_file;
-use std::fs::rename;
 use std::io::ErrorKind;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::id;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use houyicoder_context::write_atomic;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -40,10 +37,6 @@ use super::session::worktree_branch_name;
 /// reads a schema 1 record, and until it does, refusing that record is the
 /// answer the code gives.
 const RECORD_SCHEMA: u32 = 1;
-
-/// Distinguishes temporary files written by different writers, so two of them
-/// never truncate each other's half-written record.
-static WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// What a managed worktree was created as. The base branch is the ref the
 /// merge question is asked against later. The record carries no commit: the
@@ -248,62 +241,20 @@ pub fn write_managed_worktree(
 /// half-written one: a crash leaves the temporary file behind and the previous
 /// contents, if any, intact.
 pub(super) fn write_state_file(path: &Path, body: &str) -> Result<(), WorktreeError> {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let sequence = WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(".{name}.{}.{sequence}.tmp", id()));
-    let mut file = File::create(&temp).map_err(|e| WorktreeError::State {
-        path: temp.clone(),
-        reason: format!("create the temporary file: {e}"),
-    })?;
-    let written = file
-        .write_all(body.as_bytes())
-        .and_then(|()| file.sync_all());
-    drop(file);
-    if let Err(error) = written {
-        drop(remove_file(&temp));
-        return Err(WorktreeError::State {
-            path: temp,
-            reason: format!("write the temporary file: {error}"),
-        });
-    }
-    rename(&temp, path).map_err(|e| {
-        drop(remove_file(&temp));
-        WorktreeError::State {
-            path: path.to_path_buf(),
-            reason: format!("publish the state file into place: {e}"),
+    match write_atomic(path, body.as_bytes()) {
+        Ok(()) => Ok(()),
+        // The file is on disk; only its survival across a crash is weaker.
+        // Reporting it as a failed write would have the caller roll back a
+        // tree whose record already exists.
+        Err(error) if error.published() => {
+            tracing::warn!(path = %path.display(), %error, "state file not flushed");
+            Ok(())
         }
-    })?;
-    // The file is published. A directory sync failure leaves it on disk and
-    // only weakens its survival across a crash, so it is reported rather than
-    // returned: a caller that saw an error here would roll back a tree whose
-    // record already exists.
-    if let Err(error) = sync_dir(parent) {
-        tracing::warn!(?parent, %error, "worktree state directory not synced");
+        Err(error) => Err(WorktreeError::State {
+            path: error.path().to_path_buf(),
+            reason: error.to_string(),
+        }),
     }
-    Ok(())
-}
-
-/// Make a completed rename durable by syncing the directory that holds it.
-/// Windows cannot open a directory for syncing this way; there the rename is
-/// left to the file system to flush.
-#[cfg(unix)]
-fn sync_dir(parent: &Path) -> Result<(), WorktreeError> {
-    File::open(parent)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|e| WorktreeError::State {
-            path: parent.to_path_buf(),
-            reason: format!("sync the directory: {e}"),
-        })
-}
-
-/// See the Unix form; a directory handle on Windows is not opened for sync.
-#[cfg(not(unix))]
-fn sync_dir(_parent: &Path) -> Result<(), WorktreeError> {
-    Ok(())
 }
 
 /// What the record store holds for a slug.
