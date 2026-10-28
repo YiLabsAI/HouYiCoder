@@ -176,6 +176,24 @@ async fn test_read_zero_max_bytes() {
 }
 
 #[tokio::test]
+async fn test_read_offset_limit() {
+    let session = Arc::new(ContentStubSession::with(
+        "a.rs",
+        b"line1\nline2\nline3\nline4\nline5\n",
+    ));
+    let tool = ReadTool::new(session);
+    let r = tool
+        .execute(
+            ToolCtx::new("c"),
+            json!({"path": "a.rs", "offset": 2, "context": 2}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r["content"], "line2\nline3\n");
+    assert_eq!(r["truncated"], true);
+}
+
+#[tokio::test]
 async fn test_write_creates_file() {
     let session: Arc<dyn SandboxSession> = Arc::new(ContentStubSession::new());
     let r = WriteTool::new(session.clone())

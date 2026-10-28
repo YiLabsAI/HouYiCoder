@@ -68,13 +68,14 @@ fn range_field(input: &Value, key: &str) -> Option<String> {
     }
 }
 
-/// The line-window parameters of a read call. None in all three positions
-/// means an unbounded full-file read.
+/// The line-window and byte-cap parameters of a read call. None in all three
+/// positions means an unbounded full-file read.
 fn read_range(input: &Value) -> (Option<String>, Option<String>, Option<String>) {
+    let limit = range_field(input, "limit").or_else(|| range_field(input, "context"));
     (
         range_field(input, "offset"),
-        range_field(input, "limit"),
-        range_field(input, "context"),
+        limit,
+        range_field(input, "max_bytes"),
     )
 }
 
