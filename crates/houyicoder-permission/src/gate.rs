@@ -30,7 +30,7 @@ use crate::pipeline::post_transform::post_transform;
 use crate::pipeline::{GateCtx, Pipeline};
 use crate::rule::builtin_rule_id;
 use crate::rule::builtin_rules;
-use crate::rule::{Rule, evaluate, input_content};
+use crate::rule::{Effect, Rule, evaluate, input_content, root_relative_content, strictest};
 use crate::side_effect::is_shell_tool;
 use crate::side_effect::side_effect_for;
 use crate::store::RuleStore;
@@ -295,7 +295,7 @@ impl DefaultModeGate {
         } else {
             raw_content
         };
-        let effect = evaluate(&rules, req.tool_name, &content);
+        let effect = rule_effect(&rules, req, &content, self.containment.as_deref());
         let segments = split_compound(&content);
         let mode = *self.mode.lock().expect("mode gate mutex");
         let egress_allow = self.egress_allow.lock().expect("mode gate mutex").clone();
@@ -310,6 +310,31 @@ impl DefaultModeGate {
             git_checkpoint_enabled: self.git_checkpoint_enabled(),
         };
         (self.pipeline.decide(req, &ctx), mode)
+    }
+}
+
+/// The rule set's verdict for one request. A shell command that begins by
+/// moving into the session root also acts on the files a rule recorded there
+/// names, so the set is consulted a second time without that move and the
+/// stricter of the two verdicts wins. Only a move into the session root is
+/// removed; a move anywhere else stays in the text, because the rule that
+/// should match it names a different directory.
+fn rule_effect(
+    rules: &[Rule],
+    req: &ToolRequest<'_>,
+    content: &str,
+    containment: Option<&dyn Containment>,
+) -> Option<Effect> {
+    let effect = evaluate(rules, req.tool_name, content);
+    if !is_shell_tool(req.tool_name) {
+        return effect;
+    }
+    let relative = containment
+        .and_then(|c| c.boundary_root())
+        .and_then(|root| root_relative_content(content, &root));
+    match relative {
+        Some(text) => strictest(effect, evaluate(rules, req.tool_name, &text)),
+        None => effect,
     }
 }
 

@@ -19,6 +19,10 @@ use crate::mode::ModeError;
 use crate::store::Scope;
 use std::collections::HashSet;
 
+mod cwd;
+
+pub(crate) use cwd::root_relative_content;
+
 /// The effect a rule assigns to a matched tool action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
@@ -317,6 +321,19 @@ pub fn input_content(tool_name: &str, input: Option<&serde_json::Value>) -> Stri
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string()
+}
+
+/// The stricter of two verdicts for one action. A shell command is matched
+/// once as typed and once as its root-relative spelling; a rule that matches
+/// either spelling keeps its effect, so deny outranks ask and ask outranks
+/// allow.
+pub(crate) fn strictest(a: Option<Effect>, b: Option<Effect>) -> Option<Effect> {
+    match (a, b) {
+        (Some(Effect::Deny), _) | (_, Some(Effect::Deny)) => Some(Effect::Deny),
+        (Some(Effect::Ask), _) | (_, Some(Effect::Ask)) => Some(Effect::Ask),
+        (Some(Effect::Allow), _) | (_, Some(Effect::Allow)) => Some(Effect::Allow),
+        _ => None,
+    }
 }
 
 /// Evaluate the rule set against a tool name and its input string. Returns the
