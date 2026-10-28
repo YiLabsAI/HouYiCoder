@@ -5,7 +5,7 @@
 use std::fs::{create_dir_all, read_to_string, remove_file, write};
 use std::io::Error as IoError;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -892,6 +892,57 @@ async fn test_restore_reports_unknown() {
         error.to_string().contains("missing"),
         "{error} names the write it could not find"
     );
+}
+
+/// The name of a recorded write arrives from the guest and is joined into a
+/// host path. A name that climbs back to another session's journal would let
+/// one session undo another's write, so it is refused before it addresses
+/// anything rather than after the lookup misses.
+#[tokio::test]
+async fn test_restore_refuses_escaping_name() {
+    let scratch = Scratch::new("restore-escape");
+    let owner = session();
+    let stub = seed_write(&scratch, owner).await;
+    let operation = operation_of(&scratch.sessions, PREPARED_FILE);
+    let owner_dir = find_record(&scratch.sessions, PREPARED_FILE)[0]
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .expect("the on-disk name of the owner's session")
+        .to_string();
+
+    let intruder = session();
+    create_dir_all(transactions_of(&scratch.sessions, intruder)).expect("the intruder's journal");
+    let escaping = format!("../../{owner_dir}/{FILE_TRANSACTION_DIR}/{operation}");
+    let error = scratch
+        .transaction()
+        .restore(intruder, stub.as_ref(), &escaping)
+        .await
+        .expect_err("another session's write is not this session's to undo");
+
+    assert!(
+        matches!(error, RecoveryError::Unknown { .. }),
+        "got {error}"
+    );
+    assert_eq!(
+        read_to_string(scratch.file("a.txt")).expect("read"),
+        "new",
+        "the target was left as the write left it"
+    );
+
+    for name in ["", ".", "..", "/etc/passwd", "one/two"] {
+        let error = scratch
+            .transaction()
+            .restore(intruder, stub.as_ref(), name)
+            .await
+            .expect_err("only one journal entry name is a recorded write");
+        assert!(
+            matches!(error, RecoveryError::Unknown { .. }),
+            "{name:?}: got {error}"
+        );
+    }
 }
 
 #[test]

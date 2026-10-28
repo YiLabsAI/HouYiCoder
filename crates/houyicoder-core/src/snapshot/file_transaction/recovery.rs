@@ -6,11 +6,12 @@
 //! are safe to act on. The third means a later writer owns the file, and the
 //! earlier bytes go beside the target rather than over it.
 
+use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::fs::{Metadata, metadata, read, read_dir, remove_file};
 use std::io::Error as IoError;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_context::session_class::{FILE_TRANSACTION_DIR, session_dir};
@@ -284,6 +285,14 @@ impl FileTransaction {
                 operation: operation.to_string(),
             });
         };
+        // The name arrives from the guest and is joined into a host path, so
+        // it has to be a name: an absolute string would replace the journal
+        // directory and a parent component would climb out of it.
+        if !is_one_component(operation) {
+            return Err(RecoveryError::Unknown {
+                operation: operation.to_string(),
+            });
+        }
         let dir = session_dir(root, session)
             .join(FILE_TRANSACTION_DIR)
             .join(operation);
@@ -471,6 +480,17 @@ impl FileTransaction {
         Ok(RestoreOutcome::Kept {
             copy: Some(PathBuf::from(copy)),
         })
+    }
+}
+
+/// Whether a name is one ordinary path component. A journal entry is a
+/// directory named by the write it records, so a name with a root, a parent
+/// step, or a separator is not a journal entry and cannot be joined into one.
+fn is_one_component(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(part)), None) => part == OsStr::new(name),
+        _ => false,
     }
 }
 
