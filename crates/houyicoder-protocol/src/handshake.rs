@@ -27,8 +27,12 @@ use serde::{Deserialize, Serialize};
 /// waiting on a reply that cannot arrive. v9: the worktree request replaced
 /// its single variant with a preview, an enter, and a removal, and the
 /// replies gained three shapes. A same-version peer would handshake through
-/// and then fail the first worktree frame at decode.
-pub const PROTOCOL_VERSION: u16 = 9;
+/// and then fail the first worktree frame at decode. v10: the undo request
+/// and its reply are gone, replaced by the sandbox boundaries and checkpoints
+/// requests with their three replies. A same-version peer would send or
+/// expect frames the other side cannot decode, so the handshake refuses it
+/// instead of letting it half-work.
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.
