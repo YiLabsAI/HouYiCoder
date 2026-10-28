@@ -1,6 +1,6 @@
 //! /debug command: set the engine-side debug level through the server.
 
-use houyicoder_protocol::frontend::debug::DebugLevel;
+use houyicoder_protocol::frontend::debug::{DebugLevel, DebugState};
 
 use crate::agent_message::ClientCommand;
 use crate::state::App;
@@ -29,6 +29,17 @@ impl App {
         };
         if let Err(e) = self.enqueue(ClientCommand::DebugSet { req_id, level }) {
             self.system_line(Self::enqueue_failure_line("debug", e));
+        }
+    }
+
+    /// Report the level the host now records at, and where it writes. The
+    /// path travels with the answer because the user has to open that file
+    /// to read what the toggle turned on.
+    pub(crate) fn apply_debug_state(&mut self, state: DebugState) {
+        if state.enabled {
+            self.system_line(format!("debug: logging to {}", state.path));
+        } else {
+            self.system_line("debug: logging off");
         }
     }
 }

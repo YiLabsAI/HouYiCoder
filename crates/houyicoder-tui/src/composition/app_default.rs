@@ -56,6 +56,7 @@ pub fn app() -> App {
             model: ModelDraft::default(),
             trajectory: TrajectoryPaneState::default(),
             worktree_pane: Default::default(),
+            sandbox_pane: Default::default(),
             displayed_tokens: Cell::new(0),
             last_title: None,
             selection: Selections::default(),

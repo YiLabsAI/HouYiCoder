@@ -46,19 +46,20 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Pane::Tools => draw_tools(f, area, app),
         Pane::Artifact => artifact_draw(f, area, app),
         // The interactive rule manager. draw_main intercepts Pane::Permission
-        // and wraps this in the Pane frame (─ + cleared region); this arm
+        // and wraps this in the Pane frame (─ + cleared region); this branch
         // fills the content only, for any direct caller that already holds the
         // framed inner rect.
         Pane::Permission => draw_permission_content(f, area, app),
-        // Diff, Transcript, Memory, Worktree, Trajectory, Status, and Resume
-        // are handled by the working surface layout (draw_main / draw_focus_main
-        // route them to the pane template). This arm is a no-op fallback for a
-        // direct caller that already holds the framed rect — the pane template
-        // owns the real render.
+        // Diff, Transcript, Memory, Worktree, Sandbox, Trajectory, Status, and
+        // Resume are drawn by the pane template at the working area's layout
+        // (draw_main / draw_focus_main route them to it). This branch is a
+        // no-op fallback for a direct caller that already holds the framed
+        // rect; the pane template owns the real render.
         Pane::Diff
         | Pane::Transcript
         | Pane::Memory
         | Pane::Worktree
+        | Pane::Sandbox
         | Pane::Trajectory
         | Pane::Status
         | Pane::Resume

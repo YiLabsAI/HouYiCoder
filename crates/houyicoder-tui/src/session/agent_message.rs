@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 use crate::records::TranscriptLine;
 use crate::transcript::{SequencedFrame, TranscriptFrame};
 use houyicoder_protocol::frontend::agents::AgentEntry;
+use houyicoder_protocol::frontend::checkpoint::CheckpointListView;
+use houyicoder_protocol::frontend::checkpoint::CheckpointRestoreView;
+use houyicoder_protocol::frontend::checkpoint::SandboxBoundariesView;
 use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::debug::DebugLevel;
@@ -369,6 +372,13 @@ pub enum ServerResponse {
     WorktreeEntered { entered: WorktreeEnterView },
     /// How a confirmed removal ended.
     WorktreeRemoved { outcome: WorktreeRemoveOutcome },
+    /// What confines the session: the fence's state, the workspace root, and
+    /// every directory a write may land in.
+    SandboxBoundaries { view: SandboxBoundariesView },
+    /// Every write the session recorded, with what each target holds now.
+    SandboxCheckpoints { view: CheckpointListView },
+    /// What a restore did to one recorded write.
+    SandboxRestored { view: CheckpointRestoreView },
 }
 
 /// A command the TUI ships to the client-driver task. The driver owns the
@@ -552,6 +562,22 @@ pub enum ClientCommand {
         path: String,
         token: String,
         delete_unmerged_branch: bool,
+    },
+    /// Ask what confines the session (/sandbox Boundaries tab, and every
+    /// re-read of it). Reads host state only.
+    SandboxBoundariesQuery {
+        req_id: RequestId,
+    },
+    /// Ask which writes the session recorded (/sandbox Checkpoints tab, the
+    /// /rewind landing, and the re-read after a restore).
+    SandboxCheckpointsQuery {
+        req_id: RequestId,
+    },
+    /// Put one recorded write's earlier bytes back. operation names the write
+    /// the row showed.
+    SandboxRestoreQuery {
+        req_id: RequestId,
+        operation: String,
     },
     /// Switch the runner's active model (the /model pane select). The host
     /// resolves a Default sentinel, applies the model id, and persists the

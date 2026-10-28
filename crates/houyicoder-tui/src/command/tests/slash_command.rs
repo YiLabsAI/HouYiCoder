@@ -158,20 +158,25 @@ fn test_clear_resets_full_chain() {
     assert_eq!(app.sessions.current.transcript.len(), 1);
 }
 
+/// A bare /rewind opens the recorded writes and leaves the stage chain where
+/// it is: returning a file to an earlier state is a change the user confirms
+/// in the pane, never one a command performs on its own.
 #[test]
-fn test_rewind_pops_last_stage() {
+fn test_rewind_opens_writes() {
     let mut app = working();
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // design -> implement
+    let stage = app.workflow.stage;
     app.run_command(SlashCommand::Rewind);
     let out = render(&app);
     println!("--- after /rewind ---\n{out}\n--- end ---");
-    assert_eq!(
-        app.workflow.stage,
-        Stage::Design,
-        "rewind should restore design"
+    assert_eq!(app.workflow.stage, stage, "the stage chain does not move");
+    assert_eq!(app.ui.navigation.pane, Pane::Sandbox);
+    assert!(
+        out.contains("Checkpoints"),
+        "the pane opens on the recorded writes:\n{out}"
     );
-    assert!(out.contains("rewound"), "rewound system line missing");
+    assert!(!out.contains("rewound"), "no stage rewind happened:\n{out}");
 }
 
 #[test]
@@ -303,17 +308,27 @@ fn test_model_empty_catalog_guide() {
     assert!(out.contains("no catalog configured"), "guide: {out}");
 }
 
+/// /sandbox opens the boundaries tab. With no connection the host never
+/// answers, and the pane says so rather than drawing a boundary it did not
+/// measure.
 #[test]
-fn test_sandbox_shows_breaker_state() {
+fn test_sandbox_opens_boundaries_tab() {
     let mut app = working();
     app.run_command(SlashCommand::Sandbox);
     let out = render(&app);
     println!("--- /sandbox ---\n{out}\n--- end ---");
-    // The aggregate resource fence: breaker state (+ trip reason + cool-down
-    // when Open). No-runner stub path reports no breaker wired honestly
-    // rather than a canned deny-by-default string.
-    assert!(out.contains("sandbox:"), "sandbox field missing");
-    assert!(out.contains("breaker:"), "breaker field missing");
+    assert!(
+        out.contains("[Boundaries]"),
+        "boundaries tab missing: {out}"
+    );
+    assert!(
+        out.contains("Checkpoints"),
+        "the second tab is offered: {out}"
+    );
+    assert!(
+        out.contains("has not answered"),
+        "an unanswered read is stated: {out}"
+    );
 }
 
 #[test]

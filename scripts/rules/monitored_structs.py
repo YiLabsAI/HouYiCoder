@@ -20,13 +20,13 @@ REPO = Path(__file__).resolve().parent.parent
 
 ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/app/state.rs:App": {
-        # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it.
+        # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it. The broad-access budget grew by one for the sandbox pane's key dispatcher, which fans out across the pane state and the session like every other pane handler.
         "fields": 3,
-        "mut_app": 27,
+        "mut_app": 28,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
-        # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame.
-        "fields": 24,
+        # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session.
+        "fields": 25,
     },
     "crates/houyicoder-tui/src/ui/renderer.rs:Renderer": {
         # The draw pass's reusable caches: the per-line parse cache and the

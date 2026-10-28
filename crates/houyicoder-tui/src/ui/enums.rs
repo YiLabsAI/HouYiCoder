@@ -239,6 +239,12 @@ pub enum Pane {
     /// of them costs a model turn, and a directory this product did not
     /// create is refused there.
     Worktree,
+    /// The /sandbox pane: the boundaries that confine the session and the
+    /// file writes the host recorded. Two tabs, Boundaries and Checkpoints;
+    /// /rewind opens the second with its list already read. Nothing here
+    /// acts on its own: a restore is previewed and confirmed first, and each
+    /// row states what the target held before and holds now.
+    Sandbox,
     /// The /trajectory pane: a turn-organized distributed-trace view with
     /// an ASCII time axis. Shows session summary, turn list, and per-turn
     /// event details with proportional latency bars. Mock data for now —
@@ -349,6 +355,7 @@ impl Pane {
             Self::Agents => "agents",
             Self::Artifact => "artifact",
             Self::Permission => "permission",
+            Self::Sandbox => "sandbox",
             Self::Worktree => "worktrees",
             Self::Trajectory => "trajectory",
             Self::Status => "status",

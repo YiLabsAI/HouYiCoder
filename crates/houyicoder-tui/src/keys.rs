@@ -243,6 +243,7 @@ pub(crate) use approval::approval_scope;
 /// AskUserQuestion card key handlers and the /worktrees pane handler, split out
 /// to keep this module under the file-size gate.
 mod ask_question;
+mod sandbox_pane;
 mod trajectory;
 mod worktree_pane;
 

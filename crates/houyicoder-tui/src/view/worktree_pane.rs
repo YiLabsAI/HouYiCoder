@@ -4,8 +4,6 @@
 //! the confirmation are fixed blocks whose last row names the keys that act
 //! on them.
 
-use std::cell::Cell;
-
 use houyicoder_protocol::frontend::WorktreePreviewView;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -17,7 +15,7 @@ use crate::composition::WorktreeEntry;
 use crate::list_pane_state::{filter_by_query, search_hint_line, truncate_path};
 use crate::state::App;
 use crate::ui::{RemoveFocus, WorktreeLevel};
-use crate::view::navigation::{key_hint, tab_header};
+use crate::view::navigation::{block_with_keys, key_hint, key_row_height, tab_header};
 use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
 
@@ -180,7 +178,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    draw_block_with_keys(
+    block_with_keys(
         f,
         area,
         lines,
@@ -192,70 +190,6 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
         ]),
         &app.ui.worktree_pane.scroll,
     );
-}
-
-/// Render a fixed block above a key row that keeps its place at the bottom. A
-/// narrow terminal wraps the keys onto another row rather than dropping the
-/// last of them, and a small one shortens the block instead of the key row.
-///
-/// The block scrolls when it is taller than the room it has, and the position
-/// it is held at comes back through the same cell: a block that fits reads as
-/// zero, so a downward key at the end of a short block leaves the next upward
-/// key something to undo.
-fn draw_block_with_keys(
-    f: &mut Frame,
-    area: Rect,
-    body: Vec<Line>,
-    keys: Line,
-    scroll: &Cell<u16>,
-) {
-    let keys_height = key_row_height(&keys, area);
-    let keys_row = Paragraph::new(keys).wrap(Wrap { trim: false });
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(keys_height)])
-        .split(area);
-    let rows = wrapped_rows(&body, chunks[0].width);
-    let offset = scroll.get().min(rows.saturating_sub(chunks[0].height));
-    scroll.set(offset);
-    f.render_widget(
-        Paragraph::new(body)
-            .wrap(Wrap { trim: false })
-            .scroll((offset, 0)),
-        chunks[0],
-    );
-    f.render_widget(keys_row.style(Style::new().fg(Color::DarkGray)), chunks[1]);
-}
-
-/// The rows a key row occupies at this width, keeping at least two thirds of
-/// the pane for what the keys act on. Every hint stays reachable in the common
-/// case by wrapping; only a pane too short to hold both gives up a hint, and
-/// the hints are ordered so the last to go is the one for leaving.
-fn key_row_height(keys: &Line, area: Rect) -> u16 {
-    let needed = line_chars(keys).div_ceil(usize::from(area.width.max(1)));
-    needed.clamp(1, usize::from((area.height / 3).max(1))) as u16
-}
-
-/// The rows a block occupies at this width, counted from the characters its
-/// lines hold. A row carries at most a full width of them, so this is the
-/// fewest rows the wrap can use, and the one it does use for a value that is a
-/// single word or a path that breaks mid-word. A line of several words can
-/// take one row more, and its last row is then out of the reach of the
-/// position held here.
-fn wrapped_rows(body: &[Line], width: u16) -> u16 {
-    let width = usize::from(width.max(1));
-    body.iter()
-        .map(|line| u16::try_from(line_chars(line).div_ceil(width)).unwrap_or(u16::MAX))
-        .fold(0u16, u16::saturating_add)
-}
-
-/// How many characters a line holds, which its key row and its block both
-/// measure to decide how many rows they take.
-fn line_chars(line: &Line) -> usize {
-    line.spans
-        .iter()
-        .map(|span| span.content.chars().count())
-        .sum()
 }
 
 /// The removal confirmation: the focused-button row, what the preview measured
@@ -341,7 +275,7 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
     }
     keys.push(("r", "read again"));
     keys.push(("Esc", "back"));
-    draw_block_with_keys(
+    block_with_keys(
         f,
         area,
         lines,

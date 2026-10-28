@@ -44,13 +44,16 @@ fn test_auto_start_task_enters() {
     );
 }
 
+/// Rewinding to a named stage records what it did, so a reader scrolling back
+/// knows why the artifact went back to unapproved.
 #[test]
-fn test_rewind_unapproves_artifact() {
+fn test_rewind_named_logs_note() {
     let mut app = working();
     app.run_command(SlashCommand::Spec);
     app.approve_in_pane(); // Approval advances from design to planning.
     assert!(app.workflow.spec_artifact.approved);
-    app.run_command(SlashCommand::Rewind);
+    app.ui.input.editor.set("/rewind spec".to_string());
+    app.submit_input();
     assert_eq!(app.workflow.stage, Stage::Design);
     assert!(
         !app.workflow.spec_artifact.approved,

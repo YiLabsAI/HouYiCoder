@@ -17,6 +17,7 @@ use super::pane_predicates::{
     artifact_editing, pane_approvable, pane_navigable, pane_rejectable, pane_replaces_input,
     pane_reworkable,
 };
+use super::sandbox_pane;
 use super::trajectory;
 use super::worktree_pane;
 use crate::history::current_project;
@@ -216,7 +217,9 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.enter_status_name_edit();
         }
         KeyCode::Tab if app.ui.navigation.pane == Pane::Model => app.cycle_model_setting(),
-        KeyCode::Tab if !editing => cycle_pane(app),
+        // /sandbox draws its own tab bar, so its handler below reads Tab as
+        // the next tab; the pane cycle leaves the key alone there.
+        KeyCode::Tab if !editing && app.ui.navigation.pane != Pane::Sandbox => cycle_pane(app),
         // /memory pane: Up/Down move the cursor, d forgets the row under it,
         // enter shows the body, Left/Right cycle the storage-scope filter,
         // Esc clears the text filter (else leaves). Gated on the pane so the
@@ -283,6 +286,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         // /worktrees pane: delegated to keys/worktree_pane.rs.
         _ if app.ui.navigation.pane == Pane::Worktree && worktree_pane::handle(app, k) => {}
+        // /sandbox pane: delegated to keys/sandbox_pane.rs.
+        _ if app.ui.navigation.pane == Pane::Sandbox && sandbox_pane::handle(app, k) => {}
         // /status pane: Left/Right (or Tab) cycle the sub-tab (Status,
         // Config, Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.

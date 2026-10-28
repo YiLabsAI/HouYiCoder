@@ -27,8 +27,8 @@ use crate::view::pane::render;
 use crate::view::status::pane::{STATUS_PANE_HEIGHT, draw_content as status_draw_content};
 use crate::view::{
     artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
-    queue_pane, resume_picker, skill_picker, skills_pane, status, toast, trajectory_pane,
-    worktree_pane,
+    queue_pane, resume_picker, sandbox_pane, skill_picker, skills_pane, status, toast,
+    trajectory_pane, worktree_pane,
 };
 
 mod delegation_rows;
@@ -365,6 +365,7 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
         Pane::Diff => capability::draw_diff_full(f, area, app),
         Pane::Transcript => transcript::draw_transcript(f, area, app),
         Pane::Memory => draw_memory_pane(f, area, app),
+        Pane::Sandbox => draw_sandbox_pane(f, area, app),
         Pane::Worktree => draw_worktree_pane(f, area, app),
         Pane::Trajectory => draw_trajectory_pane(f, area, app),
         Pane::Status => draw_status_pane(f, area, app),
@@ -413,6 +414,13 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // the pane rect, which draw_command_pane stashes).
     if matches!(app.ui.navigation.pane, Pane::Worktree) {
         draw_worktree_pane(f, area, app);
+        return;
+    }
+    // The /sandbox pane renders inline (the Pane primitive, shared with
+    // /permissions /worktrees /memory): transcript tail above, the
+    // boundaries or the recorded checkpoints in the lower band.
+    if matches!(app.ui.navigation.pane, Pane::Sandbox) {
+        draw_sandbox_pane(f, area, app);
         return;
     }
     if matches!(app.ui.navigation.pane, Pane::Trajectory) {
@@ -726,6 +734,21 @@ fn draw_model_pane(f: &mut Frame, area: Rect, app: &App) {
 /// Default height /worktrees asks for: a header + an 8-row list + a footer
 /// hint. Capped at half the main area by the caller.
 const WORKTREE_PANE_HEIGHT: u16 = 14;
+
+fn draw_sandbox_pane(f: &mut Frame, area: Rect, app: &App) {
+    draw_command_pane(
+        f,
+        area,
+        app,
+        SANDBOX_PANE_HEIGHT,
+        sandbox_pane::draw_content,
+    );
+}
+
+/// Default height /sandbox asks for. The checkpoints list needs the most
+/// rows of the four levels it shows; the boundaries tab and the two detail
+/// levels fill what they need and leave the rest to the transcript.
+const SANDBOX_PANE_HEIGHT: u16 = 14;
 
 #[cfg(test)]
 mod tests;

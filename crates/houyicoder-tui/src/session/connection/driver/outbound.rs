@@ -94,6 +94,15 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
             request(req_id, FrontendRequest::MemoryForget { key, scope })
         }
         ClientCommand::ModelInfoQuery { req_id } => request(req_id, FrontendRequest::ModelInfo),
+        ClientCommand::SandboxBoundariesQuery { req_id } => {
+            request(req_id, FrontendRequest::SandboxBoundaries)
+        }
+        ClientCommand::SandboxCheckpointsQuery { req_id } => {
+            request(req_id, FrontendRequest::SandboxCheckpoints)
+        }
+        ClientCommand::SandboxRestoreQuery { req_id, operation } => {
+            request(req_id, FrontendRequest::SandboxRestore { operation })
+        }
         ClientCommand::WorktreePreviewQuery { req_id, path } => {
             request(req_id, FrontendRequest::WorktreePreview { path })
         }

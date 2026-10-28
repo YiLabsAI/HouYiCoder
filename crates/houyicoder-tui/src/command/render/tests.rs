@@ -88,25 +88,6 @@ fn test_context_no_window() {
     assert!(s.contains("1000 (no provider window)"), "{s}");
 }
 
-#[test]
-fn test_sandbox_reports_no_breaker() {
-    let s = render_sandbox(&snap_with_data(), "landlock");
-    assert!(s.contains("landlock"), "{s}");
-    assert!(s.contains("none connected"), "{s}");
-}
-
-#[test]
-fn test_sandbox_open_reason() {
-    let mut snap = snap_with_data();
-    snap.breaker_state = Some("Open".to_string());
-    snap.breaker_reason = Some("cpu budget exceeded".into());
-    snap.breaker_cool_down_secs = Some(30);
-    let s = render_sandbox(&snap, "landlock");
-    assert!(s.contains("Open"), "{s}");
-    assert!(s.contains("cpu budget exceeded"), "{s}");
-    assert!(s.contains("30s remaining"), "{s}");
-}
-
 fn verdict_event(tool: &str, verdict: &str, scope: &str, call_id: &str) -> PermissionDecisionEntry {
     PermissionDecisionEntry {
         tool: tool.into(),

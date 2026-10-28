@@ -422,6 +422,15 @@ async fn drive_connection(
                         ResponsePayload::ModelInfo(catalog) => {
                             Some(ServerResponse::ModelInfo { catalog })
                         }
+                        ResponsePayload::SandboxBoundaries(view) => {
+                            Some(ServerResponse::SandboxBoundaries { view })
+                        }
+                        ResponsePayload::SandboxCheckpoints(view) => {
+                            Some(ServerResponse::SandboxCheckpoints { view })
+                        }
+                        ResponsePayload::SandboxRestored(view) => {
+                            Some(ServerResponse::SandboxRestored { view })
+                        }
                         ResponsePayload::WorktreePreview(preview) => {
                             Some(ServerResponse::WorktreePreview { preview })
                         }

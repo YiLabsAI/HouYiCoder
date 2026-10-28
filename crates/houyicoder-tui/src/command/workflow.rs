@@ -3,6 +3,7 @@
 
 use crate::artifact::ArtifactSession;
 use crate::state::{App, Pane, Stage, pane_for_stage};
+use crate::ui::SandboxTab;
 
 impl App {
     /// Enter a guided stage: push the old stage onto the history, set the new
@@ -13,31 +14,16 @@ impl App {
         self.system_line(msg.to_string());
     }
 
-    /// /rewind: pop the last stage transition, land on the matching pane, and
-    /// un-approve the artifact of the restored stage so it can be re-drafted.
-    pub(crate) fn rewind(&mut self) {
-        match self.rewind_stage() {
-            Some(prev) => {
-                self.ui.navigation.pane = pane_for_stage(prev);
-                self.unapprove_artifact(prev);
-                self.system_line(format!(
-                    "rewound to {} (artifact un-approved)",
-                    prev.label()
-                ));
-            }
-            None => self.system_line("rewind: no earlier stage to return to"),
-        }
-    }
-
     /// /rewind <stage_name>: rewind to a named stage (spec, plan, implement,
     /// review, verify). Pops history until the target is on top, un-approves
     /// its artifact, and lands on the matching pane. An unknown name reports
     /// an error and returns (no fallback to a one-step rewind — a typo must
-    /// not silently rewind). The /memory sub-command (toggle / forget / show)
-    /// lives in the memory command module.
+    /// not silently rewind). The argless form opens the recorded writes
+    /// instead: returning the session to an earlier file state is a change
+    /// the user previews and confirms, never one a bare command performs.
     pub(crate) fn rewind_targeted(&mut self, name: &str) {
         if name.is_empty() {
-            self.rewind();
+            self.open_sandbox_pane(SandboxTab::Checkpoints);
             return;
         }
         let Some(target) = parse_stage_name(name) else {

@@ -14,6 +14,7 @@ use crate::agent_message::ClientCommand;
 use crate::composition;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::{App, Pane, Screen, Stage};
+use crate::ui::SandboxTab;
 use crate::view::export_log::write_atomic_0600;
 use crate::view::trajectory_pane;
 use houyicoder_protocol::llm::Usage;
@@ -32,6 +33,7 @@ mod workflow;
 mod compact;
 mod permission;
 pub(crate) mod render;
+mod sandbox;
 mod worktree;
 
 impl App {
@@ -76,12 +78,11 @@ impl App {
             | SlashCommand::Hooks
             | SlashCommand::Memory => self.open_pane_command(cmd),
             SlashCommand::Model => self.open_model_pane(),
-            SlashCommand::Sandbox => self.system_line(render::render_sandbox(
-                &self.snapshot_or_stub(),
-                &self.sessions.current.sandbox,
-            )),
+            SlashCommand::Sandbox => self.open_sandbox_pane(SandboxTab::Boundaries),
             SlashCommand::Permission => self.open_permission_pane(),
-            SlashCommand::Rewind => self.rewind(),
+            // Bare /rewind opens the recorded writes and leaves the session
+            // where it is; a named stage still rewinds through the workflow.
+            SlashCommand::Rewind => self.open_sandbox_pane(SandboxTab::Checkpoints),
             SlashCommand::Replay => {
                 self.workflow.replaying = true;
                 self.system_line("replay: entering replay mode (canned indicator on)");

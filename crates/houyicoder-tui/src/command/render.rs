@@ -318,38 +318,6 @@ fn render_provenance(p: &WireSessionProvenance) -> String {
     }
 }
 
-/// /sandbox: the aggregate resource fence. When Open, show the trip reason
-/// and the remaining cool-down so the user knows when spawns resume. When no
-/// breaker is wired (stub path), say so plainly.
-pub(crate) fn render_sandbox(snap: &StatusSnapshot, sandbox: &str) -> String {
-    let mut s = format!("sandbox: {}\n", sandbox);
-    match (
-        snap.breaker_state.as_deref(),
-        &snap.breaker_reason,
-        snap.breaker_cool_down_secs,
-    ) {
-        (Some("Open"), Some(reason), Some(remain)) => {
-            s.push_str(&format!(
-                "breaker: Open\n  reason: {}\n  cool-down: {}s remaining",
-                reason, remain,
-            ));
-        }
-        (Some("Open"), reason, None) => {
-            s.push_str(&format!(
-                "breaker: Open\n  reason: {}\n  cool-down: elapsed (probe next)",
-                reason.as_deref().unwrap_or("unknown")
-            ));
-        }
-        (Some(state), _, _) => {
-            s.push_str(&format!("breaker: {}", state));
-        }
-        (None, _, _) => {
-            s.push_str("breaker: (none connected — fence enforced by the seatbelt path)");
-        }
-    }
-    s
-}
-
 /// The breaker line for /status: state, and when Open, the reason + cool-down.
 /// The snapshot already carries render labels + a pre-rendered reason string, so
 /// this function prints and never names a resilience type — the layering stays

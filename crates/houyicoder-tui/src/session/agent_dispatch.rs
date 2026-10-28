@@ -5,6 +5,8 @@ mod run_completion;
 
 mod memory;
 
+mod sandbox;
+
 mod worktree;
 
 use std::iter;
@@ -480,13 +482,16 @@ impl App {
             ServerResponse::WorktreeRemoved { outcome } => {
                 self.apply_worktree_removed(request, outcome);
             }
-            ServerResponse::Debug { state } => {
-                if state.enabled {
-                    self.system_line(format!("debug: logging to {}", state.path));
-                } else {
-                    self.system_line("debug: logging off");
-                }
+            ServerResponse::SandboxBoundaries { view } => {
+                self.apply_sandbox_boundaries(request, view);
             }
+            ServerResponse::SandboxCheckpoints { view } => {
+                self.apply_sandbox_checkpoints(request, view);
+            }
+            ServerResponse::SandboxRestored { view } => {
+                self.apply_sandbox_restored(request, view);
+            }
+            ServerResponse::Debug { state } => self.apply_debug_state(state),
         }
     }
 
@@ -518,6 +523,9 @@ impl App {
             // The pending mark clears and the header keeps the old
             // value — nothing was applied.
             self.system_line(Self::memory_failure_line(action, &message));
+        } else if self.settle_sandbox_failure(request, &message) {
+            // The sandbox pane shows the host's reason where the read or the
+            // restore was asked for, so the retry stays one key away.
         } else if self.settle_worktree_failure(request, &message) {
             // The worktree panel shows the host's reason where the action was
             // taken, so the retry stays one key away.

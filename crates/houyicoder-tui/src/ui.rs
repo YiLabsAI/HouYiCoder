@@ -45,9 +45,11 @@ use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
 use crate::state::{ParkedViewStates, Stage, TrajectoryPaneState, ViewportMode};
 
+mod sandbox;
 mod worktree;
 
 pub use crate::ui::navigation::{Navigation, StatusPaneState};
+pub use crate::ui::sandbox::{CheckpointLevel, RestoreFocus, SandboxPaneState, SandboxTab};
 pub use crate::ui::worktree::{
     BeginOutcome, RemovalDraft, RemovalSubmission, RemoveFocus, WorktreeLevel, WorktreePaneState,
 };
@@ -131,6 +133,11 @@ pub struct Ui {
     pub trajectory: TrajectoryPaneState,
     /// The /worktrees pane list cursor, search query, and drill-down level.
     pub worktree_pane: WorktreePaneState,
+    /// The /sandbox pane's open tab, the checkpoints listing's position, and
+    /// the answers the host gave about the boundaries and the recorded
+    /// writes. Held here rather than on the session because a tab and a cursor
+    /// are where the user is looking, not what the session recorded.
+    pub sandbox_pane: SandboxPaneState,
     /// Last token count displayed by the spinner. Lerps toward the actual
     /// count each frame for a smooth increment animation.
     pub displayed_tokens: Cell<u32>,
@@ -191,9 +198,9 @@ impl Ui {
     /// Reset the session-local fields a switch must clear so the new session
     /// renders as if fresh rather than layered over the old one's pane state,
     /// caches, or selection. The navigation overlays, the transcript view, the
-    /// pane states (permission, skills, hooks, memory, model, fleet), the
-    /// trajectory and worktree cursors, the agents cursor, the selection, the
-    /// notifications, the displayed token count, the last title, the render
+    /// pane states (permission, skills, hooks, memory, model, fleet, sandbox),
+    /// the trajectory and worktree cursors, the agents cursor, the selection,
+    /// the notifications, the displayed token count, the last title, the render
     /// caches, and the last frame's measured layout all reset. The
     /// process-level resources (terminal focus, clipboard) and the
     /// render-measured frame feedback stay; the input and parked view states
@@ -204,6 +211,7 @@ impl Ui {
         self.transcript_view = Default::default();
         self.verbose = false;
         self.worktree_pane = Default::default();
+        self.sandbox_pane = Default::default();
         self.trajectory = Default::default();
         self.agents_pane = Default::default();
         self.notifications = Default::default();
