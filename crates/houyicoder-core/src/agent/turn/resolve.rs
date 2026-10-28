@@ -16,6 +16,7 @@ use houyicoder_api::skill::GrantSubject;
 use houyicoder_api::tool::Tool;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::{ENTITLEMENT_TOOL, ToolError};
+use houyicoder_protocol::frontend::permission::AskReason;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -37,8 +38,8 @@ pub(crate) struct ToolCallPlan {
     pub(crate) input: Value,
     /// May this call run beside another one (see execute_partitioned).
     pub(crate) concurrency_safe: bool,
-    /// Must the user approve this call before it runs.
-    pub(crate) needs_approval: bool,
+    /// Why the user must approve this call, when they must.
+    pub(crate) approval: Option<AskReason>,
     /// Required arguments this call does not supply. A non-empty list means
     /// the call cannot run: it is answered with the schema error instead of
     /// being executed or put to a human.
@@ -54,13 +55,22 @@ impl ToolCallPlan {
         // token cap produces exactly such calls, and interrupting a human for
         // one spends attention on a call that is already over.
         let invalid_arguments = tool.invalid_required_arguments(&input);
-        let needs_approval = invalid_arguments.is_empty() && tool.requires_approval_for(&input);
+        // The verdict and its cause come from one judgement, taken here: the
+        // loop decides whether to ask and what to tell the human from the same
+        // answer, and a second evaluation after the run parks could see a mode
+        // or rule that changed in between and describe a call the gate no
+        // longer asks about.
+        let approval = if invalid_arguments.is_empty() {
+            tool.approval_reason(&input)
+        } else {
+            None
+        };
         Self {
             id,
             tool,
             input,
             concurrency_safe,
-            needs_approval,
+            approval,
             invalid_arguments,
         }
     }
@@ -142,11 +152,16 @@ impl Runner {
                     plan.invalid_arguments.join(", ")
                 );
                 unrunnable.push((plan.id, tool_error_json(&ToolError::InvalidInput(message))));
-            } else if plan.needs_approval {
+            } else if let Some(reason) = plan.approval {
                 let ToolCallPlan {
                     id, tool, input, ..
                 } = plan;
-                approvals.push(ApprovalRequest::new(id, tool.name().to_string(), input));
+                approvals.push(ApprovalRequest::new(
+                    id,
+                    tool.name().to_string(),
+                    input,
+                    Some(reason),
+                ));
             } else {
                 exec.push(plan);
             }
@@ -275,6 +290,10 @@ fn scan_for_authorizable(
                     "services": services,
                     "command": command,
                 }),
+                // Raised from a tool result, not from a gate verdict: the
+                // sandbox reported the blocked services after the call ran,
+                // so there is no cause the gate can name.
+                None,
             ));
         }
     }

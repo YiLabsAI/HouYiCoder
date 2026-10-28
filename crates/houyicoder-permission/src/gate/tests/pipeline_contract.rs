@@ -454,6 +454,66 @@ fn test_outside_new_file_asks() {
     remove_dir_all(&outside).ok();
 }
 
+/// A glob that names two outside roots lists both in the ask reason: the
+/// remember option installs every grant, so a detail naming one would promise
+/// less than the approval grants.
+#[test]
+fn test_two_outside_roots_named() {
+    let base = temp_dir().join(format!("gate-multigrant-{}", id()));
+    let root = base.join("root");
+    let first = base.join("first");
+    let second = base.join("second");
+    create_dir_all(&root).expect("mkdir root");
+    create_dir_all(&first).expect("mkdir first");
+    create_dir_all(&second).expect("mkdir second");
+    let croot = dunce::canonicalize(&root).unwrap();
+
+    struct BoundsFence {
+        root: PathBuf,
+    }
+    impl Containment for BoundsFence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![self.root.clone()],
+            }
+        }
+        fn would_block(&self, _e: SideEffect) -> Option<String> {
+            None
+        }
+        fn boundary_root(&self) -> Option<Arc<Path>> {
+            Some(Arc::from(self.root.clone().into_boxed_path()))
+        }
+    }
+    let g = DefaultModeGate::new_without_builtins()
+        .with_containment(Arc::new(BoundsFence { root: croot }));
+
+    let v = serde_json::json!({
+        "path": first.to_string_lossy(),
+        "pattern": format!("{}/**/*.rs", second.display()),
+    });
+    let req = ToolRequest {
+        tool_name: "glob",
+        input: Some(&v),
+        is_destructive: false,
+        is_read_only: true,
+        native_requires_approval: false,
+    };
+    let Decision::Ask(reason) = g.decide(&req) else {
+        panic!("two outside roots must ask");
+    };
+    assert_eq!(reason.validator, "path-bounds");
+    for dir in [&first, &second] {
+        let named = dunce::canonicalize(dir).unwrap();
+        assert!(
+            reason.detail.contains(&named.to_string_lossy().to_string()),
+            "{named:?} must be named in the detail: {}",
+            reason.detail
+        );
+    }
+
+    remove_dir_all(&base).ok();
+}
+
 /// A blanket "allow bash" rule must not suppress the protected-path ask for a
 /// skill-directory script. The safety stage fires before rule-allow, so a user
 /// who pre-approved every bash command still re-confirms before the agent runs

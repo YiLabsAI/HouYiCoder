@@ -118,6 +118,7 @@ pub(super) async fn route_approvals_via_bus(
                 call_id: call_id.clone(),
                 tool: req.tool_name.clone(),
                 input: req.input.clone(),
+                reason: req.reason.clone(),
             },
         );
         let resp = tokio::select! {

@@ -9,6 +9,7 @@ pub mod progress;
 use houyicoder_async::{CancellationToken, PFut};
 use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -210,10 +211,26 @@ pub trait Tool: Send + Sync {
         self.requires_approval()
     }
 
+    /// Why this call needs a human verdict, when it does, in the form the
+    /// approval card renders. The loop asks once per call and carries the
+    /// answer to the frontend, so the card shows the cause the gate found
+    /// instead of a second evaluation that may disagree with it. A tool
+    /// without a gate has nothing finer to report than its own declaration,
+    /// which is what the default supplies; the guarded wrapper overrides this
+    /// with the verdict its gate produced.
+    fn approval_reason(&self, input: &Value) -> Option<AskReason> {
+        self.requires_approval_for(input).then(|| AskReason {
+            source: AskSource::ToolNative,
+            validator: "tool_native".to_string(),
+            detail: format!("{} asks before this call runs", self.name()),
+            containment_note: None,
+        })
+    }
+
     /// The required arguments this input does not supply in a usable form:
     /// absent, null, an empty string, or a value of a different JSON type than
-    /// the schema declares, each named with its declared type. Empty means the
-    /// call can run.
+    /// the schema declares, each named with its declared type. An empty result
+    /// means the call can run.
     ///
     /// A model reply cut at the token cap streams its arguments mid-object and
     /// arrives empty or partial, so this is how a caller tells a call the model
@@ -230,27 +247,44 @@ pub trait Tool: Send + Sync {
             Some(kind) => format!("{name} ({kind})"),
             None => name.to_string(),
         };
+        let empty_usable = self.empty_usable_arguments();
         let required = required.iter().filter_map(Value::as_str);
         let Some(object) = input.as_object() else {
             // An input that is not an object supplies none of them.
             return required.map(describe).collect();
         };
         required
-            .filter(|name| !is_usable(object.get(*name), declared_type(&schema, name)))
+            .filter(|name| {
+                !is_usable(
+                    object.get(*name),
+                    declared_type(&schema, name),
+                    empty_usable.contains(name),
+                )
+            })
             .map(describe)
             .collect()
+    }
+
+    /// Required string arguments this tool accepts as empty. A field named here
+    /// is empty on purpose when the caller clears text, so it is a usable value
+    /// rather than the shape a cut reply leaves behind. Default: none, because
+    /// an empty command or path is never a call the model meant to make.
+    fn empty_usable_arguments(&self) -> &'static [&'static str] {
+        &[]
     }
 }
 
 /// Whether a required argument's value is one the call can use: present, not
-/// null, not the empty string, and of the JSON type the schema declares when
-/// it declares one.
-fn is_usable(value: Option<&Value>, declared: Option<&str>) -> bool {
+/// null, an empty string only when the tool accepts that form here, and of the
+/// JSON type the schema declares when it declares one.
+fn is_usable(value: Option<&Value>, declared: Option<&str>, empty_usable: bool) -> bool {
     let Some(value) = value else {
         return false;
     };
     match declared {
-        Some("string") => value.as_str().is_some_and(|text| !text.is_empty()),
+        Some("string") => value
+            .as_str()
+            .is_some_and(|text| empty_usable || !text.is_empty()),
         Some("integer") => value.is_i64() || value.is_u64(),
         Some("number") => value.is_number(),
         Some("boolean") => value.is_boolean(),

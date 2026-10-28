@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_api::sandbox::{BoundaryAccess, BoundaryGrant};
 use houyicoder_context::PermissionVerdict;
 use houyicoder_context::RecapSource;
 use houyicoder_context::RecapUsage;
@@ -7,15 +8,13 @@ use houyicoder_context::{EventId, SessionId, SessionLogEntry};
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::RunError;
 use houyicoder_permission::PermissionMode as E;
-use houyicoder_permission::{
-    AskReason, AskSource, Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest,
-};
+use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acpx::AcpxMethod;
-use houyicoder_protocol::frontend::permission::RuleDestination;
+use houyicoder_protocol::frontend::permission::{AskSource, RuleDestination};
 use houyicoder_protocol::llm::ProviderError;
 use serde_json::Value;
-use std::path::Path;
+use std::path::PathBuf;
 use std::slice::from_ref;
 
 #[test]
@@ -32,14 +31,14 @@ fn test_file_output_once() {
         native_requires_approval: true,
     };
     let reason = match gate.decide(&request) {
-        Decision::Ask(reason) => reason,
+        Decision::Ask(reason) => AskReason::from(&reason),
         other => panic!("expected file output approval: {other:?}"),
     };
     assert!(matches!(
-        always_grant("bash", &input, Some(&reason), false),
+        always_grant("bash", &input, Some(&reason), false, &[]),
         AlwaysGrant::Once
     ));
-    let options = approval_options("bash", &input, Some(&reason), false);
+    let options = approval_options("bash", &input, Some(&reason), false, &[]);
     let ids: Vec<&str> = options.iter().map(|o| o.option_id.as_str()).collect();
     assert_eq!(ids, ["allow_once", "reject_once"]);
     gate.add_egress_allow("curl https://example.test");
@@ -60,10 +59,10 @@ fn test_read_scope_remember() {
         native_requires_approval: true,
     };
     let reason = match gate.decide(&request) {
-        Decision::Ask(reason) => reason,
+        Decision::Ask(reason) => AskReason::from(&reason),
         other => panic!("expected origin approval: {other:?}"),
     };
-    let scopes = match always_grant("bash", &input, Some(&reason), false) {
+    let scopes = match always_grant("bash", &input, Some(&reason), false, &[]) {
         AlwaysGrant::Network(scopes) => scopes,
         _ => panic!("expected origin scopes"),
     };
@@ -71,7 +70,7 @@ fn test_read_scope_remember() {
         scopes,
         ["curl https://one.example", "curl https://two.example"]
     );
-    let options = approval_options("bash", &input, Some(&reason), false);
+    let options = approval_options("bash", &input, Some(&reason), false, &[]);
     assert!(options.iter().any(|o| o.option_id == "allow_always"));
     for scope in scopes {
         gate.add_egress_allow(&scope);
@@ -79,50 +78,101 @@ fn test_read_scope_remember() {
     assert_eq!(gate.decide(&request).outcome(), Outcome::Allow);
 }
 
+/// The remember option for a directory ask names the directory the approval
+/// would install, and that directory comes from the grant rather than from
+/// the reason's sentence. The call's own path names a different directory, so
+/// a card that read either the prose or the input back instead of the grant
+/// would print the wrong one.
 #[test]
-fn test_path_bounds_grants_dir() {
-    let gate = DefaultModeGate::with_mode(E::Auto);
+fn test_remember_names_grant_dir() {
     let input = serde_json::json!({
         "path": "/work/repo/wiki/review/bug-log.md"
     });
+    let grants = [BoundaryGrant {
+        directory: PathBuf::from("/data/granted"),
+        access: BoundaryAccess::ReadWrite,
+    }];
     let reason = AskReason {
         source: AskSource::Detection,
-        validator: "path-bounds",
+        validator: "path-bounds".to_string(),
         detail: "path outside the workspace; approval authorizes parent directory /work/repo/wiki/review with read-write access; choosing always persists it".into(),
         containment_note: None,
     };
-    let dir = match always_grant("write", &input, Some(&reason), true) {
-        AlwaysGrant::Directory(dir) => dir,
-        _ => panic!("expected directory grant for path-bounds ask"),
-    };
-    assert_eq!(dir, "/work/repo/wiki/review");
-    let options = approval_options("write", &input, Some(&reason), true);
+    assert!(matches!(
+        always_grant("write", &input, Some(&reason), true, &grants),
+        AlwaysGrant::Directories
+    ));
+    let options = approval_options("write", &input, Some(&reason), true, &grants);
     let always = options
         .iter()
         .find(|o| o.option_id == "allow_always")
         .expect("allow_always option present");
-    assert_eq!(always.name, "/work/repo/wiki/review");
+    assert_eq!(always.name, "/data/granted");
 
-    // Fallback when the detail does not name the directory explicitly.
-    let bare_reason = AskReason {
-        source: AskSource::Detection,
-        validator: "path-bounds",
-        detail: "outside workspace".into(),
-        containment_note: None,
-    };
-    let fallback_dir = match always_grant("write", &input, Some(&bare_reason), true) {
-        AlwaysGrant::Directory(dir) => dir,
-        _ => panic!("expected fallback directory grant"),
-    };
-    assert_eq!(fallback_dir, "/work/repo/wiki/review");
-    gate.add_directory(Path::new(&fallback_dir), Scope::Local);
-
-    // An ask with neither a directory in the detail nor a path input falls back
-    // to Once so the card never offers an empty directory grant.
+    // An ask with no grant offers no remember option: the card cannot promise
+    // a scope the durable store would never receive.
     assert!(matches!(
-        always_grant("write", &serde_json::json!({}), Some(&bare_reason), true),
+        always_grant("write", &input, Some(&reason), true, &[]),
         AlwaysGrant::Once
     ));
+    let ungranted = approval_options("write", &input, Some(&reason), true, &[]);
+    let ids: Vec<&str> = ungranted.iter().map(|o| o.option_id.as_str()).collect();
+    assert_eq!(ids, ["allow_once", "reject_once"]);
+}
+
+/// Two grants are both named on the card: the remember option installs every
+/// grant, so a label naming one would promise less than the approval grants.
+#[test]
+fn test_remember_names_both_dirs() {
+    let input = serde_json::json!({"path": "/data/a", "pattern": "/data/b/**/*.rs"});
+    let grants = [
+        BoundaryGrant {
+            directory: PathBuf::from("/data/a"),
+            access: BoundaryAccess::ReadOnly,
+        },
+        BoundaryGrant {
+            directory: PathBuf::from("/data/b"),
+            access: BoundaryAccess::ReadOnly,
+        },
+    ];
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds".to_string(),
+        detail: "path outside the workspace".into(),
+        containment_note: None,
+    };
+    let options = approval_options("glob", &input, Some(&reason), false, &grants);
+    let always = options
+        .iter()
+        .find(|o| o.option_id == "allow_always")
+        .expect("allow_always option present");
+    assert_eq!(always.name, "/data/a, /data/b");
+}
+
+/// A recovered ask carries no gate reason, so the disclosure writes one from
+/// the grants. That sentence mentions a directory as well; the remember
+/// option must still name the granted directory instead of a fragment of the
+/// sentence the card itself wrote. The sentence here names a decoy directory,
+/// so reading it back would print the wrong one.
+#[test]
+fn test_recovered_ask_names_dir() {
+    let input = serde_json::json!({"path": "/data/outside/report.txt"});
+    let grants = [BoundaryGrant {
+        directory: PathBuf::from("/data/outside"),
+        access: BoundaryAccess::ReadOnly,
+    }];
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "directory-capability".to_string(),
+        detail: "external path requires a sandbox directory capability; approval also authorizes read-only directory /data/decoy for this session; choosing always persists it".into(),
+        containment_note: None,
+    };
+    let options = approval_options("read", &input, Some(&reason), false, &grants);
+    let always = options
+        .iter()
+        .find(|o| o.option_id == "allow_always")
+        .expect("the disclosed directory can be remembered");
+    assert_eq!(always.name, "/data/outside");
 }
 
 /// Every durable turn-event kind maps to a session update, an ACPX
@@ -280,6 +330,7 @@ fn test_approval_maps_acp_permission() {
         "call_1".into(),
         "bash".into(),
         serde_json::json!({"cmd": "ls"}),
+        None,
     );
     let ask = approval_to_acp_permission(&req, "01S".into());
     assert_eq!(ask.session_id, "01S");

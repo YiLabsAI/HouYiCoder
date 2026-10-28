@@ -2,15 +2,14 @@
 //! implements Tool so the runner sees a plain dyn Tool — the core runner and
 //! Tool trait stay untouched, the permission layer plugs in at registration.
 //!
-//! Decision mapping: requires_approval returns true iff the gate says Ask (the
-//! runner then pauses for a human). Allow and Deny both return false so the
-//! runner calls execute inline; execute re-checks the gate with the real input
-//! and refuses on Deny or Ask (Ask here is a misuse guard — the inline path
-//! only runs when the gate said Allow or Deny, so a plain execute hitting Ask
-//! means a caller skipped the resume contract; fail-closed). The re-check with
-//! the real input is what lets content, safety, and compound rules fire at the
-//! enforcement point; it is fail-closed: if the mode tightened to Deny between
-//! the ask and execution, the call is denied rather than running stale.
+//! Decision mapping: requires_approval reports whether the gate asks about the
+//! tool itself; requires_approval_for asks about one call with the model's
+//! input and can also escalate on the tool's own per-input declaration. Allow
+//! and Deny return false and execute re-checks the gate with the real input,
+//! refusing on Deny or Ask. That re-check is where content, safety, and
+//! compound rules fire, and it is fail-closed: a mode that tightened to Deny
+//! between the ask and execution denies the call rather than running it stale.
+//! A call that misses a required argument never reaches the human.
 //!
 //! execute_authorized is the resume-path bridge: the human already answered
 //! Yes to the popup, so Ask proceeds (authorized) while Deny still blocks.
@@ -22,6 +21,7 @@ use std::sync::Arc;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::permission::AskReason;
 use serde_json::Value;
 
 use crate::decision::{Decision, Outcome};
@@ -73,13 +73,18 @@ impl<T: Tool> Tool for GuardedTool<T> {
         self.gate.decide(&req).outcome() == Outcome::Ask
     }
     fn requires_approval_for(&self, input: &Value) -> bool {
-        // Route an Ask-gated call to the approval flow at the pre-check. The
-        // gate does not model a tool's per-input native approval, so forward
-        // the inner per-input verdict on Allow — but only as a strict
-        // escalation (per-input asks AND native did not), so the default
-        // (which delegates to native) does not re-ask native-approval exec
-        // tools the gate already allowed. Deny wins (false -> inline-execute
-        // + fail-closed at the enforcement point).
+        self.approval_reason(input).is_some()
+    }
+    fn approval_reason(&self, input: &Value) -> Option<AskReason> {
+        // The gate judges the call once, here, and the loop carries this
+        // answer to the card: a second evaluation after the run parked could
+        // see a mode or rule that changed in between and describe a call the
+        // gate no longer asks about. A call whose input misses required
+        // arguments is not put to anyone — the tool layer reports the schema
+        // error and the model corrects itself.
+        if !self.inner.invalid_required_arguments(input).is_empty() {
+            return None;
+        }
         let req = ToolRequest {
             tool_name: self.inner.name(),
             input: Some(input),
@@ -88,11 +93,17 @@ impl<T: Tool> Tool for GuardedTool<T> {
             native_requires_approval: self.inner.requires_approval(),
         };
         match self.gate.decide(&req) {
-            Decision::Ask(_) => true,
-            Decision::Allow(_) => {
-                self.inner.requires_approval_for(input) && !self.inner.requires_approval()
+            Decision::Ask(reason) => Some(AskReason::from(&reason)),
+            // The gate does not model a tool's per-input native approval, so
+            // the inner per-input verdict is forwarded on Allow — but only as
+            // a strict escalation (per-input asks AND native did not), so the
+            // default (which delegates to native) does not re-ask
+            // native-approval exec tools the gate already allowed. Deny wins
+            // (None -> inline execute + fail-closed at the enforcement point).
+            Decision::Allow(_) if !self.inner.requires_approval() => {
+                Tool::approval_reason(self.inner.as_ref(), input)
             }
-            Decision::Deny(_) => false,
+            Decision::Allow(_) | Decision::Deny(_) => None,
         }
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {

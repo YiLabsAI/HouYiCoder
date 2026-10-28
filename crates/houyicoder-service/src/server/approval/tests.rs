@@ -1,4 +1,4 @@
-//! Unit contracts for permission requests, reason reconstruction, scoped
+//! Unit contracts for permission requests, the carried ask cause, scoped
 //! consent routing, and approval-card detail.
 
 use super::*;
@@ -14,10 +14,12 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ApprovalRequest, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{
-    AskReason, AskSource, DefaultModeGate, Effect, FileRuleStore, RuleStore,
+    Decision, DefaultModeGate, Effect, FileRuleStore, RuleStore, ToolRequest,
 };
 use houyicoder_protocol::acp_wire::AcpNotification;
-use houyicoder_protocol::envelope::{ClientResponseEnvelope, RequestEnvelope, RequestId};
+use houyicoder_protocol::envelope::{
+    ClientResponseEnvelope, RequestEnvelope, RequestId, ServerRequestPayload,
+};
 use houyicoder_protocol::framing;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::{self, ApprovalDecision};
@@ -37,32 +39,31 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// build_approval_request carries the structured Ask reason the gate
-/// produced onto the request form, and drops it to None when the
-/// composition root could not reconstruct one, so the card renders a
-/// generic prompt.
+/// build_approval_request carries the structured Ask reason onto the request
+/// form, and drops it to None when the ask names no cause, so the card
+/// renders a generic prompt.
 #[test]
 fn test_build_request_carries_reason() {
-    let req = ApprovalRequest::new("call-1".into(), "bash".into(), json!({"cmd": "rm"}));
+    let req = ApprovalRequest::new("call-1".into(), "bash".into(), json!({"cmd": "rm"}), None);
     let reason = AskReason {
         source: AskSource::Detection,
-        validator: "destructive_command",
+        validator: "destructive_command".to_string(),
         detail: "rm needs confirmation".into(),
         containment_note: None,
     };
-    let wired = build_approval_request(&req, Some(&reason), None, true);
-    assert_eq!(wired.call_id, "call-1");
-    assert_eq!(wired.tool_name, "bash");
-    let carried = wired.reason.as_ref().expect("reason carried");
+    let request = build_approval_request(&req, Some(&reason), None, true, &[]);
+    assert_eq!(request.call_id, "call-1");
+    assert_eq!(request.tool_name, "bash");
+    let carried = request.reason.as_ref().expect("reason carried");
     assert_eq!(carried.detail, "rm needs confirmation");
     assert_eq!(carried.validator, "destructive_command");
     // The request form round-trips so the frontend reads the same reason.
-    let json = serde_json::to_string(&wired).unwrap();
+    let json = serde_json::to_string(&request).unwrap();
     let back: run::ApprovalRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(back.reason.unwrap().detail, "rm needs confirmation");
 
     // None reason: the card falls back to a generic prompt.
-    let no_reason = build_approval_request(&req, None, None, true);
+    let no_reason = build_approval_request(&req, None, None, true, &[]);
     assert!(no_reason.reason.is_none());
     let json = serde_json::to_string(&no_reason).unwrap();
     assert!(
@@ -71,13 +72,73 @@ fn test_build_request_carries_reason() {
     );
 }
 
-/// reconstruct_reason returns the gate's protected-path ask for a Bash
-/// command that runs a script from a discovered skill's directory, and
-/// augment_skill_script_reason then replaces the generic detail with the
-/// script's path so the approval card shows what would execute. The two
-/// steps mirror handle_approval's order.
+/// The card explains the call with the cause the gate reported when it judged
+/// the call, even for a call the gate would not stop now: the verdict travels
+/// on the request instead of being taken a second time when the card is
+/// built.
+#[tokio::test]
+async fn test_card_carries_gate_reason() {
+    let mut server = ask_wait_server();
+    let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let reason = AskReason {
+        source: AskSource::SystemSafety,
+        validator: "path-bounds".to_string(),
+        detail: "the gate named this path".to_string(),
+        containment_note: None,
+    };
+    // A harmless command the gate allows: only a carried verdict can explain
+    // why the card is up at all.
+    let approval = ApprovalRequest::new(
+        "c1".into(),
+        "bash".into(),
+        json!({"command": "echo hi"}),
+        Some(reason),
+    );
+    let feeder = tokio::spawn(async move {
+        for _ in 0..16 {
+            let line = client_rx.next().await.expect("server frame");
+            let Ok(ServerFrame::Request(req)) = serde_json::from_str::<ServerFrame>(&line) else {
+                continue;
+            };
+            let ServerRequestPayload::Permission(card) = req.payload else {
+                panic!("expected a permission ask");
+            };
+            let resp = ClientFrame::Response(ClientResponseEnvelope::new(
+                req.req_id,
+                ClientResponsePayload::Permission(ApprovalDecision {
+                    call_id: "c1".into(),
+                    approved: false,
+                    updated_input: None,
+                    scope: "once".to_string(),
+                }),
+            ));
+            client_tx
+                .send(encode_line(&resp))
+                .await
+                .expect("send response");
+            return card;
+        }
+        panic!("no permission ask reached the client");
+    });
+    let decision = server
+        .handle_approval(&mut io, &approval, None)
+        .await
+        .expect("handle_approval completes");
+    assert!(!decision.approved, "the verdict reaches the engine");
+    let card = feeder.await.expect("feeder done");
+    let carried = card.reason.expect("the card carries the gate's cause");
+    assert_eq!(carried.detail, "the gate named this path");
+    assert_eq!(carried.validator, "path-bounds");
+}
+
+/// The gate's protected-path ask for a Bash command that runs a script from a
+/// discovered skill's directory arrives with a generic detail;
+/// augment_skill_script_reason replaces it with the script's path so the
+/// approval card shows what would execute.
 #[test]
-fn test_reconstruct_skill_script() {
+fn test_augment_skill_script() {
     let tmp = env::temp_dir().join(format!("recon-{}-{}", process::id(), line!()));
     drop(fs::remove_dir_all(&tmp));
     let skill_dir = tmp.join(".houyicoder").join("skills").join("deploy");
@@ -108,9 +169,17 @@ fn test_reconstruct_skill_script() {
         format!("python {}/scripts/deploy.py", canon.to_string_lossy())
     };
     let input = json!({"command": cmd});
-    let mut reason = server
-        .reconstruct_reason("bash", &input)
-        .expect("gate asked on the skill-script path");
+    let judged = ToolRequest {
+        tool_name: "bash",
+        input: Some(&input),
+        is_destructive: false,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let Decision::Ask(engine_reason) = server.gate.decide(&judged) else {
+        panic!("gate asked on the skill-script path");
+    };
+    let mut reason = AskReason::from(&engine_reason);
     // Before the augment the detail is the generic protected-path
     // sentence; the augment replaces it with the script path.
     assert!(
@@ -186,7 +255,7 @@ fn test_augment_skips_non_shell() {
     // A non-shell tool: the detail stays as the gate wrote it.
     let mut reason = AskReason {
         source: AskSource::SystemSafety,
-        validator: "protected_path",
+        validator: "protected_path".to_string(),
         detail: "original".into(),
         containment_note: None,
     };
@@ -339,7 +408,7 @@ fn test_consent_grants_by_location() {
     let input = json!({"path": outside.to_string_lossy(), "pattern": "x"});
     let path_bounds = AskReason {
         source: AskSource::Detection,
-        validator: "path-bounds",
+        validator: "path-bounds".to_string(),
         detail: "path outside the workspace".into(),
         containment_note: None,
     };
@@ -361,7 +430,7 @@ fn test_consent_grants_by_location() {
     // widens, the store does not, and no rule is persisted.
     let user_ask = AskReason {
         source: AskSource::UserRule,
-        validator: "some-rule",
+        validator: "some-rule".to_string(),
         detail: "user rule fired".into(),
         containment_note: None,
     };
@@ -438,7 +507,7 @@ fn test_safety_skips_rule() {
     let input = json!({"path": settings.to_string_lossy()});
     let reason = AskReason {
         source: AskSource::SystemSafety,
-        validator: "protected_path",
+        validator: "protected_path".to_string(),
         detail: "protected path".into(),
         containment_note: None,
     };
@@ -495,12 +564,12 @@ impl SandboxSession for GrantFence {
     }
 }
 
-/// A None reason, meaning the re-decide could not reproduce why the gate
-/// asked, must never reach the rule path: its non-bash terminal is a
-/// contentless tool-level allow that would shadow every later ask. The
-/// second call targets a path already inside the fence after the first
-/// grant, so the location check skips the directory too and the None route
-/// persists nothing.
+/// A None reason, meaning the ask named no cause, must never reach the rule
+/// path: its non-bash terminal is a contentless tool-level allow that would
+/// shadow every later ask. The second call targets a path already inside the
+/// fence after the first grant, which is where a cause is easiest to lose:
+/// the location check skips the granted directory, so nothing broad may be
+/// installed on the strength of a missing reason.
 #[test]
 fn test_none_reason_no_rule() {
     let root = env::temp_dir().join(format!("none-{}-{}", process::id(), line!()));
@@ -537,7 +606,7 @@ fn test_none_reason_no_rule() {
     let outside_input = json!({"path": outside.to_string_lossy(), "pattern": "x"});
     let path_bounds = AskReason {
         source: AskSource::Detection,
-        validator: "path-bounds",
+        validator: "path-bounds".to_string(),
         detail: "path outside the workspace".into(),
         containment_note: None,
     };
@@ -545,8 +614,9 @@ fn test_none_reason_no_rule() {
         .route_consent("grep", &outside_input, "always", Some(&path_bounds))
         .expect("route outside consent");
 
-    // Second approval: the path is now inside the granted directory, so the
-    // re-decide returns Allow and the reason is None.
+    // Second approval with no cause carried: the nested path is already inside
+    // the granted directory, so the location check skips it and the reason is
+    // None.
     let nested_input = json!({"path": nested.to_string_lossy(), "pattern": "y"});
     server
         .route_consent("grep", &nested_input, "always", None)
@@ -610,7 +680,12 @@ async fn test_handle_drops_non_matching() {
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let approval = ApprovalRequest::new("c1".into(), "bash".into(), json!({"command": "echo hi"}));
+    let approval = ApprovalRequest::new(
+        "c1".into(),
+        "bash".into(),
+        json!({"command": "echo hi"}),
+        None,
+    );
     let feeder = tokio::spawn(async move {
         // Read the Permission ask to learn its req_id.
         let mut ask_id = None;
@@ -666,7 +741,12 @@ async fn test_handle_cancel_returns_deny() {
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let approval = ApprovalRequest::new("c1".into(), "bash".into(), json!({"command": "echo hi"}));
+    let approval = ApprovalRequest::new(
+        "c1".into(),
+        "bash".into(),
+        json!({"command": "echo hi"}),
+        None,
+    );
     let feeder = tokio::spawn(async move {
         // Read the Permission ask (a ServerFrame::Request), then send
         // session/cancel.
@@ -702,7 +782,12 @@ async fn test_handle_rejects_wrong_payload() {
     let (mut client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
     let mut io = FrameCarrier::new(server_tx, server_rx);
-    let approval = ApprovalRequest::new("c1".into(), "bash".into(), json!({"command": "echo hi"}));
+    let approval = ApprovalRequest::new(
+        "c1".into(),
+        "bash".into(),
+        json!({"command": "echo hi"}),
+        None,
+    );
     let feeder = tokio::spawn(async move {
         let mut ask_id = None;
         for _ in 0..16 {
@@ -731,4 +816,7 @@ async fn test_handle_rejects_wrong_payload() {
     assert_eq!(err.message, "expected a permission reverse response");
 }
 
+/// The chain tests build a real platform sandbox session, so the whole
+/// submodule is platform-gated rather than each test inside it.
+#[cfg(target_os = "macos")]
 mod consent_chain;

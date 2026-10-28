@@ -167,6 +167,12 @@ impl Runner {
                     call_id.clone(),
                     tool.clone(),
                     input.clone(),
+                    // Recovered from the log: the gate's verdict for this call
+                    // happened in an earlier process, and the record does not
+                    // store it, so the card offers a generic prompt rather
+                    // than a verdict taken now against a call it no longer
+                    // judges.
+                    None,
                 ));
             }
         }

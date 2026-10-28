@@ -60,6 +60,10 @@ impl Tool for WriteTool {
             "required": ["path", "content"]
         })
     }
+    fn empty_usable_arguments(&self) -> &'static [&'static str] {
+        // Empty content writes an empty file.
+        &["content"]
+    }
     fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
         let activator = self.activator.clone();

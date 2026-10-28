@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::records::Approval;
 
-use super::line_wrap::wrap_line;
+use super::line_wrap::{truncate_width, wrap_line};
 use crate::state::App;
 use houyicoder_protocol::frontend::permission::AskSource;
 
@@ -323,18 +323,23 @@ fn wrapped_rows(text: &str, width: u16) -> Vec<Line<'static>> {
 /// Yes-don't-ask then No; the selected index keeps its internal mapping
 /// (0=Yes, 1=No, 2=Yes-don't-ask). A two-option card (protected-path or
 /// entitlement) hides Yes-don't-ask and renumbers No to 2.
+///
+/// The remember option names every directory a yes installs, which can be
+/// wider than a narrow card. It is clipped with an ellipsis rather than left
+/// to the frame edge, so a row that continues still says so.
 fn render_options(f: &mut Frame, a: &Approval, rows: &mut CardRows) {
     for selected in option_order(a) {
         let focused = a.selected == selected;
         let marker = if focused { "❯" } else { " " };
+        let row = format!(
+            " {marker} {}. {}",
+            option_number(a, selected),
+            option_label(a, selected),
+        );
+        let slot = rows.take(1);
         f.render_widget(
-            Paragraph::new(format!(
-                " {marker} {}. {}",
-                option_number(a, selected),
-                option_label(a, selected),
-            ))
-            .style(option_style(focused)),
-            rows.take(1),
+            Paragraph::new(truncate_width(&row, slot.width as usize)).style(option_style(focused)),
+            slot,
         );
     }
 }

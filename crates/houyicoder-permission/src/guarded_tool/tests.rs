@@ -44,6 +44,37 @@ fn guarded(mode: PermissionMode) -> (Arc<DangerTool>, Arc<dyn Tool>) {
     (inner, wrapped)
 }
 
+/// A destructive tool declaring one required argument, so a call that omits it
+/// fails the schema check the way a truncated model reply does.
+struct CmdTool {
+    ran: Mutex<bool>,
+}
+impl Tool for CmdTool {
+    fn name(&self) -> &str {
+        "cmd"
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "required": ["command"],
+            "properties": {"command": {"type": "string"}},
+        })
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        *self.ran.lock().unwrap() = true;
+        Box::pin(async { Ok(Value::Null) })
+    }
+    fn is_destructive(&self) -> bool {
+        true
+    }
+    fn requires_approval(&self) -> bool {
+        true
+    }
+}
+
 #[test]
 fn test_manual_asks_before_destructive() {
     let (_inner, tool) = guarded(PermissionMode::Manual);
@@ -317,34 +348,6 @@ fn test_auto_allows_native_exec() {
 /// so the schema error is the answer, and the tool is not invoked at all.
 #[test]
 fn test_manual_reports_missing_argument() {
-    struct CmdTool {
-        ran: Mutex<bool>,
-    }
-    impl Tool for CmdTool {
-        fn name(&self) -> &str {
-            "cmd"
-        }
-        fn description(&self) -> &str {
-            ""
-        }
-        fn input_schema(&self) -> Value {
-            json!({
-                "type": "object",
-                "required": ["command"],
-                "properties": {"command": {"type": "string"}},
-            })
-        }
-        fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
-            *self.ran.lock().unwrap() = true;
-            Box::pin(async { Ok(Value::Null) })
-        }
-        fn is_destructive(&self) -> bool {
-            true
-        }
-        fn requires_approval(&self) -> bool {
-            true
-        }
-    }
     let inner = Arc::new(CmdTool {
         ran: Mutex::new(false),
     });
@@ -362,4 +365,26 @@ fn test_manual_reports_missing_argument() {
         other => panic!("expected the schema error, got {other:?}"),
     }
     assert!(!*inner.ran.lock().unwrap(), "the tool must not run");
+}
+
+/// A call missing its required argument raises no card: it cannot run, so it
+/// never spends the human's attention, while a complete call still does.
+#[test]
+fn test_missing_argument_withholds_card() {
+    let inner = Arc::new(CmdTool {
+        ran: Mutex::new(false),
+    });
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Manual));
+    let tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(inner, gate));
+    assert!(
+        tool.approval_reason(&json!({})).is_none(),
+        "a call missing its required argument is not put to a human"
+    );
+    let reason = tool
+        .approval_reason(&json!({"command": "ls"}))
+        .expect("a complete call is put to the human");
+    assert!(
+        !reason.detail.is_empty(),
+        "the card explains the call it asks about"
+    );
 }

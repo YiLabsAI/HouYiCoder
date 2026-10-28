@@ -17,8 +17,9 @@ use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;
 pub(crate) use always_grant::{AlwaysGrant, always_grant, approval_options};
+use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_context::SessionEvent;
-use houyicoder_core::agent::StatusSnapshot;
+use houyicoder_core::agent::{ApprovalRequest as EngineApprovalRequest, StatusSnapshot};
 use houyicoder_permission::PermissionMode as M;
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acp_wire::{
@@ -113,20 +114,23 @@ pub(crate) fn map_run_result(run: &houyicoder_core::agent::RunResult) -> RunResu
 /// Build the wire form of an approval request the engine surfaced. The input
 /// the model passed travels verbatim so the frontend can render it or inject
 /// an answer-populated updated_input on resume. The reason is the structured
-/// Ask the gate produced; None only when the composition root could not
-/// reconstruct one, in which case the card renders a generic prompt.
+/// Ask the gate produced; None only when the call was raised without one, in
+/// which case the card renders a generic prompt. The grants are the directory
+/// capabilities the same verdict would install, so the remember option and
+/// its installation read one decision.
 pub(crate) fn build_approval_request(
-    req: &houyicoder_core::agent::ApprovalRequest,
-    reason: Option<&houyicoder_permission::AskReason>,
+    req: &EngineApprovalRequest,
+    reason: Option<&AskReason>,
     delegation: Option<&DelegationSource>,
     fenced: bool,
+    grants: &[BoundaryGrant],
 ) -> ApprovalRequest {
     ApprovalRequest {
         call_id: req.call_id.clone(),
         tool_name: req.tool_name.clone(),
         input: req.input.clone(),
-        options: approval_options(&req.tool_name, &req.input, reason, fenced),
-        reason: reason.map(AskReason::from),
+        options: approval_options(&req.tool_name, &req.input, reason, fenced, grants),
+        reason: reason.cloned(),
         delegation: delegation.cloned(),
     }
 }

@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionMode};
@@ -283,6 +284,116 @@ fn entitlement_approval() -> Approval {
         options: Vec::new(),
         ..Default::default()
     }
+}
+
+/// A card carrying the three options the server offers when it can install a
+/// durable scope. The remember row names that scope.
+fn scoped_approval() -> Approval {
+    Approval {
+        tool: "bash".into(),
+        args: r#"{"command":"npm test"}"#.into(),
+        reason: "this command reaches the network".into(),
+        selected: 0,
+        call_id: "c1".into(),
+        options: vec![
+            PermissionOption {
+                option_id: "allow_once".into(),
+                name: "Allow once".into(),
+                kind: PermissionOptionKind::AllowOnce,
+                meta: None,
+            },
+            PermissionOption {
+                option_id: "allow_always".into(),
+                name: "npm test *".into(),
+                kind: PermissionOptionKind::AllowAlways,
+                meta: None,
+            },
+            PermissionOption {
+                option_id: "reject_once".into(),
+                name: "Reject once".into(),
+                kind: PermissionOptionKind::RejectOnce,
+                meta: None,
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+fn approval_app(approval: Approval) -> App {
+    let mut app = build_app_for_test(None);
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), approval));
+    app
+}
+
+fn press(app: &mut App, c: char) {
+    handle_working(app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+}
+
+/// The card prints Yes, don't-ask, No as rows 1, 2, 3 while the record keeps
+/// the focus index 0, 2, 1. The first Yes is a one-shot verdict: the durable
+/// scope the server named belongs to the second Yes alone.
+#[test]
+fn test_first_yes_selects_once() {
+    let mut app = approval_app(scoped_approval());
+    press(&mut app, '1');
+    let a = app.approval().expect("approval");
+    assert_eq!(a.selected, 0, "1 focuses Yes");
+    assert_eq!(
+        approval_scope(a),
+        "once",
+        "the first Yes covers the call under review only"
+    );
+    let text = render_text(&app, 100, 32);
+    assert!(text.contains("❯ 1. Yes"), "Yes is the focused row:\n{text}");
+    assert!(
+        text.contains("2. Yes, and don't ask again for npm test *"),
+        "the durable row names the scope the server would install:\n{text}"
+    );
+}
+
+/// The second Yes is the durable verdict: it carries the scope the server
+/// named, and it is the row the user sees focused.
+#[test]
+fn test_second_yes_selects_always() {
+    let mut app = approval_app(scoped_approval());
+    press(&mut app, '2');
+    let a = app.approval().expect("approval");
+    assert_eq!(a.selected, 2, "2 focuses the durable verdict, not No");
+    assert_eq!(approval_scope(a), "always");
+    let text = render_text(&app, 100, 32);
+    assert!(
+        text.contains("❯ 2. Yes, and don't ask again for npm test *"),
+        "the durable row is the focused one:\n{text}"
+    );
+    assert!(text.contains("3. No"), "No keeps row 3:\n{text}");
+}
+
+/// When the server can install no durable scope, the card offers two rows and
+/// the second key means No. There is no hidden durable verdict to reach.
+#[test]
+fn test_two_option_second_rejects() {
+    let mut approval = scoped_approval();
+    approval
+        .options
+        .retain(|o| o.kind != PermissionOptionKind::AllowAlways);
+    let mut app = approval_app(approval);
+    press(&mut app, '2');
+    let a = app.approval().expect("approval");
+    assert_eq!(a.selected, 1, "the second row is No");
+    assert_eq!(approval_scope(a), "once", "no durable scope can be sent");
+    let text = render_text(&app, 100, 32);
+    assert!(text.contains("❯ 2. No"), "No is the focused row:\n{text}");
+    assert!(
+        !text.contains("don't ask again"),
+        "no remember row on this card:\n{text}"
+    );
+    press(&mut app, '3');
+    assert_eq!(
+        app.approval().expect("approval").selected,
+        1,
+        "3 stays on No instead of reaching a hidden choice"
+    );
 }
 
 #[test]

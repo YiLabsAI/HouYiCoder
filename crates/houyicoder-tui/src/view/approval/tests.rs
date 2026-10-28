@@ -672,6 +672,38 @@ fn test_card_names_destination() {
     );
 }
 
+/// A remember option wide enough for a desktop card still fits a narrow one:
+/// the row is clipped with an ellipsis instead of running past the frame edge.
+#[test]
+fn test_narrow_label_ellipsis() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let label = "/Users/von/workspace/repo/alpha, /Users/von/workspace/repo/beta";
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "write".into(),
+            args: json!({ "path": "/tmp/x" }).to_string(),
+            reason: "path outside the workspace".into(),
+            source: Some(AskSource::Detection),
+            selected: 2,
+            call_id: String::new(),
+            options: scoped_options(label),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 40, 24);
+    let row = out
+        .lines()
+        .find(|line| line.contains("2. Yes"))
+        .expect("remember option row");
+    assert!(
+        row.ends_with('…'),
+        "clipped row must say it continues: {row:?}"
+    );
+    assert!(row.chars().count() <= 40, "row must fit the card: {row:?}");
+}
+
 /// A command whose destination cannot be named: the server sends no remember
 /// option, so the card renders two choices instead of promising one it cannot
 /// install.

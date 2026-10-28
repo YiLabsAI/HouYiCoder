@@ -2,6 +2,10 @@
 
 use super::*;
 use houyicoder_api::skill::{SkillFamily, SkillProvenance, SkillSource};
+use houyicoder_api::tool::ToolCtx;
+use houyicoder_async::PFut;
+use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::permission::AskSource;
 
 fn subject(skill: &str) -> GrantSubject {
     SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome).grant_subject(skill)
@@ -117,4 +121,67 @@ fn test_scan_no_field() {
         )
         .is_none()
     );
+}
+
+/// A tool standing in for a guarded one: it names a cause for its ask and
+/// declares one required argument, the way a real tool's gate does.
+struct AskingTool;
+
+impl Tool for AskingTool {
+    fn name(&self) -> &str {
+        "ask_tool"
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string"}},
+        })
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(Value::Null) })
+    }
+    /// Names a cause for every input, including one that cannot run: the
+    /// plan, not the tool, is what withholds the ask.
+    fn approval_reason(&self, _input: &Value) -> Option<AskReason> {
+        Some(AskReason {
+            source: AskSource::Detection,
+            validator: "path-bounds".to_string(),
+            detail: "outside the workspace".to_string(),
+            containment_note: None,
+        })
+    }
+}
+
+/// The plan carries the cause the tool reported, so the approval card built
+/// from the interruption explains the call without judging it again.
+#[test]
+fn test_plan_carries_ask_reason() {
+    let plan = ToolCallPlan::new(
+        "call-1".into(),
+        Arc::new(AskingTool),
+        serde_json::json!({"path": "/etc/hosts"}),
+    );
+    let approval = plan.approval.expect("the plan carries the ask");
+    assert_eq!(approval.detail, "outside the workspace");
+    assert_eq!(approval.validator, "path-bounds");
+}
+
+/// A call that misses its required argument is answered with the schema error
+/// instead of being put to a human, so it reaches no approval request even
+/// when the tool names a cause for every input. An empty string counts as
+/// missing unless the tool declares that field as one it accepts empty.
+#[test]
+fn test_plan_withholds_ask_missing() {
+    for input in [serde_json::json!({}), serde_json::json!({"path": ""})] {
+        let plan = ToolCallPlan::new("call-1".into(), Arc::new(AskingTool), input.clone());
+        assert!(
+            plan.approval.is_none(),
+            "a call that cannot run is not put to a human: {input}"
+        );
+        assert_eq!(plan.invalid_arguments, ["path (string)"], "{input}");
+    }
 }

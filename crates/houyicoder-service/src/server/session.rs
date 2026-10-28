@@ -174,13 +174,14 @@ async fn reemit_and_settle_ask(
     io: &mut FrameCarrier,
     ask_perm: &PendingPermission,
 ) -> Result<(ApprovalDecision, bool), ProtocolError> {
-    let mut reason = server.reconstruct_reason(&ask_perm.tool, &ask_perm.input);
+    let mut reason = ask_perm.reason.clone();
     let directory_grants = server.approval_directory_grants(&ask_perm.tool, &ask_perm.input);
     disclose_directory_grants(&mut reason, &directory_grants);
     let engine_approval = ApprovalRequest::new(
         ask_perm.call_id.clone(),
         ask_perm.tool.clone(),
         ask_perm.input.clone(),
+        ask_perm.reason.clone(),
     );
     let ask_id = server.mint_req_id();
     let ask = ServerRequestEnvelope::new(
@@ -190,6 +191,7 @@ async fn reemit_and_settle_ask(
             reason.as_ref(),
             None,
             server.gate.fence_active(),
+            &directory_grants,
         )),
     );
     Server::send_typed(io, &ServerFrame::Request(ask)).await?;
@@ -288,6 +290,7 @@ pub(crate) async fn resume_pending(
                             call_id: a.call_id.clone(),
                             tool: a.tool_name.clone(),
                             input: a.input.clone(),
+                            reason: a.reason.clone(),
                         })
                         .collect::<Vec<_>>();
                     host.store().set_pending(

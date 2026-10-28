@@ -32,6 +32,7 @@ fn record_with_pending(sid: SessionId) -> SessionRecord {
                 call_id: "call_1".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({"cmd": "ls"}),
+                reason: None,
             }],
             decided: Vec::new(),
         }),

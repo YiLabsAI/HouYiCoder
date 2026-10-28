@@ -6,12 +6,12 @@
 //! derived offers no remember option: a choice the gate would ignore is worse
 //! than no choice.
 
-use std::path::Path;
-
+use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_permission::{
-    AskSource, Effect, NETWORK_EGRESS, Rule, RuleContent, Scope, egress_outputs_safe,
+    Effect, NETWORK_EGRESS, Rule, RuleContent, Scope, egress_outputs_safe,
 };
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 
 use super::consent_rule_for;
 
@@ -21,8 +21,10 @@ use super::consent_rule_for;
 pub(crate) enum AlwaysGrant {
     /// Network destinations remembered for the session.
     Network(Vec<String>),
-    /// A directory authorized for path-bounds checks.
-    Directory(String),
+    /// A directory capability. The directories themselves are the grants the
+    /// caller installs; this branch says the verdict has one to install and
+    /// the card may therefore offer it.
+    Directories,
     /// A durable rule.
     Rule(houyicoder_permission::Rule),
     /// Nothing durable: the call must be answered once.
@@ -38,11 +40,17 @@ pub(crate) enum AlwaysGrant {
 /// command whose file output is only safe because the fence bounds it cannot
 /// be remembered when the fence is absent: the gate would ask again, so the
 /// card must not offer the choice.
+///
+/// A directory-bounds ask takes its directories from the grants the caller is
+/// about to install, not from the reason text: the card writes that text, and
+/// reading a path back out of prose installs whatever the wording happens to
+/// contain. Every grant is listed, because the install covers all of them.
 pub(crate) fn always_grant(
     tool_name: &str,
     input: &serde_json::Value,
-    reason: Option<&houyicoder_permission::AskReason>,
+    reason: Option<&AskReason>,
     fenced: bool,
+    grants: &[BoundaryGrant],
 ) -> AlwaysGrant {
     let Some(reason) = reason else {
         return AlwaysGrant::Once;
@@ -50,10 +58,14 @@ pub(crate) fn always_grant(
     if reason.source == AskSource::SystemSafety {
         return AlwaysGrant::Once;
     }
-    if matches!(reason.validator, "path-bounds" | "directory-capability") {
-        return match extract_boundary_directory(&reason.detail, input) {
-            Some(dir) => AlwaysGrant::Directory(dir),
-            None => AlwaysGrant::Once,
+    if matches!(
+        reason.validator.as_str(),
+        "path-bounds" | "directory-capability"
+    ) {
+        return if grants.is_empty() {
+            AlwaysGrant::Once
+        } else {
+            AlwaysGrant::Directories
         };
     }
     if matches!(
@@ -94,8 +106,28 @@ pub(crate) fn always_grant(
     }
 }
 
-/// The text the approval card shows after "don't ask again for".
-fn always_label(grant: &AlwaysGrant) -> Option<String> {
+/// The directories a remember option names, taken from every grant the
+/// verdict would install. One grant is listed in full; a longer list keeps
+/// its first two and counts the rest, so the row stays one line while the
+/// count still says the install reaches further.
+fn directory_label(grants: &[BoundaryGrant]) -> Option<String> {
+    let listed: Vec<String> = grants
+        .iter()
+        .map(|grant| grant.directory.display().to_string())
+        .collect();
+    match listed.split_first() {
+        None => None,
+        Some((first, [])) => Some(first.clone()),
+        Some((first, [second])) => Some(format!("{first}, {second}")),
+        Some((first, [second, rest @ ..])) => {
+            Some(format!("{first}, {second} (+{} more)", rest.len()))
+        }
+    }
+}
+
+/// The text the approval card shows after "don't ask again for". Every
+/// directory grant is named, because the install covers all of them.
+fn always_label(grant: &AlwaysGrant, grants: &[BoundaryGrant]) -> Option<String> {
     match grant {
         AlwaysGrant::Once => None,
         AlwaysGrant::Network(scopes) => match scopes.as_slice() {
@@ -106,7 +138,7 @@ fn always_label(grant: &AlwaysGrant) -> Option<String> {
                 Some(format!("{first}, {second} (+{} more) *", rest.len()))
             }
         },
-        AlwaysGrant::Directory(dir) => Some(dir.clone()),
+        AlwaysGrant::Directories => directory_label(grants),
         AlwaysGrant::Rule(rule) => Some(match &rule.content {
             Some(RuleContent::Prefix(prefix)) => format!("{prefix} *"),
             Some(RuleContent::Exact(value)) => value.clone(),
@@ -122,8 +154,9 @@ fn always_label(grant: &AlwaysGrant) -> Option<String> {
 pub(crate) fn approval_options(
     tool_name: &str,
     input: &serde_json::Value,
-    reason: Option<&houyicoder_permission::AskReason>,
+    reason: Option<&AskReason>,
     fenced: bool,
+    grants: &[BoundaryGrant],
 ) -> Vec<PermissionOption> {
     let mut options = vec![PermissionOption {
         option_id: "allow_once".into(),
@@ -131,7 +164,10 @@ pub(crate) fn approval_options(
         kind: PermissionOptionKind::AllowOnce,
         meta: None,
     }];
-    if let Some(label) = always_label(&always_grant(tool_name, input, reason, fenced)) {
+    if let Some(label) = always_label(
+        &always_grant(tool_name, input, reason, fenced, grants),
+        grants,
+    ) {
         options.push(PermissionOption {
             option_id: "allow_always".into(),
             name: label,
@@ -146,25 +182,4 @@ pub(crate) fn approval_options(
         meta: None,
     });
     options
-}
-
-/// Extract the directory named by a path-bounds or directory-capability reason,
-/// falling back to the parent directory of the tool's path input.
-fn extract_boundary_directory(detail: &str, input: &serde_json::Value) -> Option<String> {
-    if let Some((_, after)) = detail.split_once("directory ") {
-        let dir = [" with ", "; choosing", " and ", " for this session"]
-            .iter()
-            .fold(after, |acc, sep| acc.split(sep).next().unwrap_or(acc))
-            .trim();
-        if !dir.is_empty() {
-            return Some(dir.to_string());
-        }
-    }
-    let raw = input.get("path").and_then(|v| v.as_str())?;
-    let path = Path::new(raw);
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(path);
-    Some(dir.to_string_lossy().into_owned())
 }

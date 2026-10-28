@@ -5,6 +5,7 @@
 //! that plugs into it: BusMessage, ChildStatus, and the topic naming scheme.
 
 use houyicoder_async::bus::InProcBus;
+use houyicoder_protocol::frontend::permission::AskReason;
 use serde::{Deserialize, Serialize};
 
 /// Whether a child blocks its parent turn or continues independently.
@@ -74,6 +75,11 @@ pub enum BusMessage {
         call_id: String,
         tool: String,
         input: serde_json::Value,
+        /// Why the child's gate asked, carried so the parent's card explains
+        /// the call with the cause the child's gate found rather than a
+        /// second evaluation in the parent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<AskReason>,
     },
     /// The parent's decision for a child's permission ask. Published on the
     /// per-request response topic the child subscribed to before it

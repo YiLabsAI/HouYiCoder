@@ -31,6 +31,7 @@ pub mod repair;
 
 use houyicoder_async::PFut;
 use houyicoder_context::{EventId, SessionId};
+use houyicoder_protocol::frontend::permission::AskReason;
 use houyicoder_protocol::frontend::run::ApprovalDecision;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,6 +95,12 @@ pub struct PendingPermission {
     pub tool: String,
     /// The tool input the ask carries (may be edited by the human).
     pub input: Value,
+    /// Why the call needs a verdict, as the gate reported it when the call was
+    /// judged. Retained so the re-emitted card explains the call with the cause
+    /// that produced the ask; a record written before this field existed
+    /// deserializes to None, and the card falls back to a generic prompt.
+    #[serde(default)]
+    pub reason: Option<AskReason>,
 }
 
 /// The full half-live turn parked at an interruption: the asks still awaiting a

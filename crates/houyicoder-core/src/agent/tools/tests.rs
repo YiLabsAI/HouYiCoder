@@ -326,3 +326,29 @@ async fn test_multiedit_errors_missing_path() {
         .unwrap_err();
     assert!(err.to_string().contains("path"));
 }
+
+/// Clearing text is a real edit and an empty file is a real write, so neither
+/// is answered as if the reply had been cut: each tool names the field it
+/// accepts empty. A field it does not name stays unusable when empty.
+#[test]
+fn test_empty_field_usable() {
+    let session: Arc<dyn SandboxSession> = Arc::new(StubSession);
+    let edit = EditTool::new(session.clone());
+    let deletion = json!({"path": "a.rs", "old_string": "x", "new_string": ""});
+    assert!(
+        edit.invalid_required_arguments(&deletion).is_empty(),
+        "an empty replacement deletes text"
+    );
+    let no_path = json!({"path": "", "old_string": "x", "new_string": "y"});
+    assert_eq!(
+        edit.invalid_required_arguments(&no_path),
+        ["path (string)"],
+        "an empty path is still a missing argument"
+    );
+    let write = WriteTool::new(session);
+    let empty_file = json!({"path": "a.rs", "content": ""});
+    assert!(
+        write.invalid_required_arguments(&empty_file).is_empty(),
+        "empty content writes an empty file"
+    );
+}

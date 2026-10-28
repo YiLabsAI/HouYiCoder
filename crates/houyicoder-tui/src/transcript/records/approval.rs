@@ -16,8 +16,7 @@ pub struct Approval {
     /// Serialized arguments (placeholder).
     pub args: String,
     /// Why the tool wants to run: the structured AskReason detail the gate
-    /// produced, or a generic prompt when the composition root could not
-    /// reconstruct one.
+    /// produced, or a generic prompt when the ask carried no reason.
     pub reason: String,
     /// The source of the ask, when the wire carried a reason. Drives the
     /// card: a SystemSafety source hides the "remember" option because

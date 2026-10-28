@@ -71,6 +71,10 @@ impl Tool for EditTool {
             "required": ["path", "old_string", "new_string"]
         })
     }
+    fn empty_usable_arguments(&self) -> &'static [&'static str] {
+        // An empty replacement deletes the matched text.
+        &["new_string"]
+    }
     fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let session = self.session.clone();
         let activator = self.activator.clone();

@@ -2,12 +2,14 @@
 
 use super::*;
 use houyicoder_async::CancellationToken;
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use std::sync::Arc;
 use tokio::task::yield_now;
 
 /// route_approvals_via_bus round-trips a permission ask to a parent
-/// responder and collects the decision. drive_child_to_terminal relies
-/// on subscribe-before-publish for the per-call response topic so no
+/// responder and collects the decision, with the child's cause travelling
+/// on the message so the parent's card explains the call. drive_child_to_terminal
+/// relies on subscribe-before-publish for the per-call response topic so no
 /// broadcast lag drops the decision.
 #[tokio::test]
 async fn test_route_approvals_via_bus() {
@@ -17,11 +19,16 @@ async fn test_route_approvals_via_bus() {
     let parent = tokio::spawn(async move {
         let req = parent_rx.recv().await.expect("parent got the ask");
         let BusMessage::PermissionRequest {
-            child_id, call_id, ..
+            child_id,
+            call_id,
+            reason,
+            ..
         } = req
         else {
             panic!("expected PermissionRequest")
         };
+        let carried = reason.expect("the child's cause travels with the ask");
+        assert_eq!(carried.detail, "outside the workspace");
         bus_for_parent.publish(
             &permission_response_topic(&child_id, &call_id),
             BusMessage::PermissionResponse {
@@ -33,10 +40,17 @@ async fn test_route_approvals_via_bus() {
         );
     });
     let cancel = CancellationToken::new();
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds".to_string(),
+        detail: "outside the workspace".to_string(),
+        containment_note: None,
+    };
     let approvals = vec![ApprovalRequest::new(
         "call-1".into(),
         "bash".into(),
         serde_json::json!({"command": "echo hi"}),
+        Some(reason),
     )];
     let decisions = route_approvals_via_bus(&bus, "child-1", "explore", approvals, &cancel)
         .await
@@ -57,6 +71,7 @@ async fn test_route_approvals_cancel_none() {
         "call-1".into(),
         "bash".into(),
         serde_json::json!({}),
+        None,
     )];
     let cancel_for_task = cancel.clone();
     let task = tokio::spawn(async move {

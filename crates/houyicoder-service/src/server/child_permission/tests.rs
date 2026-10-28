@@ -91,6 +91,7 @@ async fn test_handle_routes_ask_response() {
         call_id: "call-1".into(),
         tool: "bash".into(),
         input: serde_json::json!({"command": "echo hi"}),
+        reason: None,
     };
     handle(&mut server, &mut io, req).await.expect("handle ok");
     feeder.await.expect("feeder done");

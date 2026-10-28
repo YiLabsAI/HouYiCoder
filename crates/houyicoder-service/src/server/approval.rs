@@ -9,13 +9,14 @@ use houyicoder_context::{EventId, PermissionVerdict, SandboxError, SessionEvent,
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest,
 };
-use houyicoder_permission::{AskReason, AskSource, Decision, Scope, ToolRequest};
+use houyicoder_permission::Scope;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, DelegationSource};
 
 use crate::composition::ContainmentAdapter;
@@ -24,15 +25,14 @@ use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use super::{Server, frame_carrier::FrameCarrier, now_millis};
 
 impl Server {
-    /// Drive one approval request to a human answer. Reconstructs the Ask
-    /// reason the gate produced by re-running the ladder with the request the
-    /// engine surfaced (the gate already decided Ask to get here, so the
-    /// re-decide is a display-only reconstruction; no state mutates between the
-    /// two calls except an intervening /mode or rule change, which is an
-    /// accepted race (the state can change between the check and the use). Sends the wire ask, reads the
-    /// matching reverse response, records the durable verdict audit, applies
-    /// a scoped consent rule on yes-always, advances the parked-turn cursor,
-    /// and returns the engine decision the runner resumes with.
+    /// Drive one approval request to a human answer. The cause travels with
+    /// the request: the gate judged the call once, when the turn resolved, and
+    /// the card shows that verdict. Re-deciding here would let a mode or rule
+    /// change between the ask and the card describe a call the gate no longer
+    /// asks about, and would judge the same call twice. Sends the ask frame,
+    /// reads the matching answer frame, records the durable verdict audit,
+    /// applies a scoped consent rule on yes-always, advances the parked-turn
+    /// cursor, and returns the engine decision the runner resumes with.
     pub(super) async fn handle_approval(
         &mut self,
         io: &mut FrameCarrier,
@@ -40,14 +40,7 @@ impl Server {
         delegation: Option<DelegationSource>,
     ) -> Result<EngineApprovalDecision, ProtocolError> {
         let is_entitlement = approval.tool_name == ENTITLEMENT_TOOL;
-        let mut reason = if is_entitlement {
-            // The entitlement ask is not a gate decision — reconstructing a
-            // ladder reason for a host-generated tool would mislead the card.
-            // The deny-log scan is the reason.
-            None
-        } else {
-            self.reconstruct_reason(&approval.tool_name, &approval.input)
-        };
+        let mut reason = approval.reason.clone();
         let directory_grants = self.approval_directory_grants(&approval.tool_name, &approval.input);
         if let Some(ref mut current) = reason {
             self.augment_skill_script_reason(current, &approval.tool_name, &approval.input);
@@ -62,6 +55,7 @@ impl Server {
                 reason.as_ref(),
                 delegation.as_ref(),
                 self.gate.fence_active(),
+                &directory_grants,
             )),
         );
         Self::send_typed(io, &ServerFrame::Request(ask)).await?;
@@ -172,54 +166,12 @@ impl Server {
         Ok(parse_approval_decision(decision))
     }
 
-    /// Re-run the ladder to reconstruct the Ask reason the gate attached when
-    /// it surfaced this approval, so the consent router can decide WHICH
-    /// durable authorization (directory grant vs rule) to apply. The gate
-    /// already decided Ask to get here; this re-decide is best-effort: state
-    /// CAN shift between the original ask and this call — a prior approval in
-    /// the same batch may have granted a directory to the fence, a /mode may
-    /// have cycled, a rule may have been added — and a shift can return Allow
-    /// (reason None) for a call the gate originally asked on. route_consent
-    /// treats None as fail-closed (persist nothing) precisely because this
-    /// re-decide is not authoritative. The carry-reason follow-up threads the
-    /// original AskReason through the engine's ApprovalRequest so the consent
-    /// path stops re-deciding and reads the reason the gate actually produced;
-    /// that also removes the metrics double-count this re-decide incurs.
-    pub(crate) fn reconstruct_reason(
-        &self,
-        tool_name: &str,
-        input: &serde_json::Value,
-    ) -> Option<AskReason> {
-        // is_destructive is unused by the ladder; is_read_only is hardcoded
-        // false so a surfaced ask reproduces as the write-guarded case it
-        // was (a read-only call passes the protected-path stage, so no
-        // protected-path ask surfaces here; a rule, detection, or mode ask
-        // still can). native_requires_approval is set true so a
-        // mode-default ToolNative ask reproduces. A rule, safety, or
-        // detection ask fires before the mode default regardless of the
-        // flag, so every Ask path reconstructs.
-        let req = ToolRequest {
-            tool_name,
-            input: Some(input),
-            is_destructive: false,
-            is_read_only: false,
-            native_requires_approval: true,
-        };
-        match self.gate.decide(&req) {
-            Decision::Ask(r) => Some(r),
-            // Defensive: the engine only surfaces an approval when the gate
-            // said Ask, so reaching Allow / Deny here means mode or rule state
-            // shifted between the ask and this reconstruction. The ask still
-            // goes out; the card renders a generic prompt.
-            _ => None,
-        }
-    }
-
     /// When the ask is about a Bash command that runs a skill-directory
     /// script, replace the generic protected-path detail with the script's
-    /// path so the approval card shows what would run. The detection is re-derived from the command because the gate's reason
-    /// carries no skill context; no registry, no command field, or no skill
-    /// script leaves the original detail untouched.
+    /// path so the approval card shows what would run. The skill is resolved
+    /// from the command because an Ask reason names a validator, not a
+    /// script; no registry, no command field, or no script leaves the
+    /// original detail untouched.
     fn augment_skill_script_reason(
         &self,
         reason: &mut AskReason,
@@ -303,7 +255,7 @@ impl Server {
             && reason.is_some()
             && scope == "always"
         {
-            self.apply_consent_rule(tool_name, input, reason);
+            self.apply_consent_rule(tool_name, input, reason, grants);
         }
         Ok(())
     }
@@ -396,7 +348,10 @@ fn rollback_directory_grants(session: &dyn SandboxSession, grants: &[&BoundaryGr
     }
 }
 
-/// Add the effective directory capability to the approval reason.
+/// Add the effective directory capability to the approval reason, so a call
+/// refused for another cause still says which outside directory a yes
+/// authorizes. A path-bounds reason already names every grant, so it is left
+/// as it is; otherwise the first directory is named and the rest counted.
 pub(crate) fn disclose_directory_grants(reason: &mut Option<AskReason>, grants: &[BoundaryGrant]) {
     if grants.is_empty()
         || reason
@@ -407,7 +362,7 @@ pub(crate) fn disclose_directory_grants(reason: &mut Option<AskReason>, grants: 
     }
     let current = reason.get_or_insert_with(|| AskReason {
         source: AskSource::Detection,
-        validator: "directory-capability",
+        validator: "directory-capability".to_string(),
         detail: "external path requires a sandbox directory capability".into(),
         containment_note: None,
     });
@@ -450,9 +405,5 @@ fn format_skill_script_detail(scripts: &[SkillScriptRef]) -> String {
     }
 }
 
-// Every test in this module exercises the macOS sandbox consent chain,
-// so the whole module compiles only on macOS. Gating the module keeps
-// its imports from turning unused on other platforms.
-#[cfg(all(test, target_os = "macos"))]
 #[cfg(test)]
 mod tests;

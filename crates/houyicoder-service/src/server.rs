@@ -47,15 +47,15 @@ use crate::protocol_adapter::{AlwaysGrant, always_grant};
 pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
-use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::sandbox::{BoundaryGrant, SandboxSession};
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
     RunOutcome, RunResult,
 };
-use houyicoder_permission::{AskReason, Scope};
 use houyicoder_protocol::acp_wire::AcpNotification;
-use std::path::{Path, PathBuf};
+use houyicoder_protocol::frontend::permission::AskReason;
+use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast::error::RecvError;
@@ -302,23 +302,25 @@ impl Server {
     /// reference's session rule source); a remembered network destination
     /// becomes a session entry in the gate's egress allowlist; everything else
     /// becomes a durable allow rule. A compound/un-scopable bash command yields
-    /// no rule (approved once only).
+    /// no rule (approved once only). A directory grant is installed and
+    /// persisted by the caller, which holds the capabilities the card named.
     fn apply_consent_rule(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
         reason: Option<&AskReason>,
+        grants: &[BoundaryGrant],
     ) {
-        match always_grant(tool_name, input, reason, self.gate.fence_active()) {
+        match always_grant(tool_name, input, reason, self.gate.fence_active(), grants) {
             AlwaysGrant::Once => {}
             AlwaysGrant::Network(scopes) => {
                 for scope in scopes {
                     self.gate.add_egress_allow(&scope);
                 }
             }
-            AlwaysGrant::Directory(dir) => {
-                self.gate.add_directory(Path::new(&dir), Scope::Local);
-            }
+            // The caller installs and persists a directory capability with
+            // the access the card disclosed; there is no rule left to save.
+            AlwaysGrant::Directories => {}
             AlwaysGrant::Rule(rule) => self.gate.add_rule(rule),
         }
     }
@@ -685,6 +687,7 @@ impl Server {
                     call_id: a.call_id.clone(),
                     tool: a.tool_name.clone(),
                     input: a.input.clone(),
+                    reason: a.reason.clone(),
                 })
                 .collect::<Vec<_>>();
             host.store().set_pending(

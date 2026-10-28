@@ -164,6 +164,7 @@ fn test_take_control_reports_pending() {
                 call_id: "toolu_1".into(),
                 tool: "bash".into(),
                 input: serde_json::json!({}),
+                reason: None,
             }],
             decided: Vec::new(),
         }),

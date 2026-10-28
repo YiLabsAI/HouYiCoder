@@ -31,6 +31,27 @@ fn invalid(schema: Value, input: Value) -> Vec<String> {
     SchemaTool(schema).invalid_required_arguments(&input)
 }
 
+/// A tool that accepts one declared field as empty.
+struct EmptyTool(Value);
+
+impl Tool for EmptyTool {
+    fn name(&self) -> &str {
+        "empty"
+    }
+    fn description(&self) -> &str {
+        "accepts one field empty"
+    }
+    fn input_schema(&self) -> Value {
+        self.0.clone()
+    }
+    fn empty_usable_arguments(&self) -> &'static [&'static str] {
+        &["note"]
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(Value::Null) })
+    }
+}
+
 fn string_schema() -> Value {
     json!({
         "type": "object",
@@ -79,6 +100,25 @@ fn test_declared_types_accepted() {
             "{kind}"
         );
     }
+}
+
+/// A tool that names a field as one it accepts empty: clearing that field is a
+/// real call, while every other required string still needs a value.
+#[test]
+fn test_empty_usable_field_accepted() {
+    let schema = json!({
+        "required": ["note", "cmd"],
+        "properties": {"note": {"type": "string"}, "cmd": {"type": "string"}},
+    });
+    let tool = EmptyTool(schema);
+    assert!(
+        tool.invalid_required_arguments(&json!({"note": "", "cmd": "ls"}))
+            .is_empty()
+    );
+    assert_eq!(
+        tool.invalid_required_arguments(&json!({"note": "", "cmd": ""})),
+        ["cmd (string)"]
+    );
 }
 
 /// A tool that declares no required arguments, or an empty list, accepts any

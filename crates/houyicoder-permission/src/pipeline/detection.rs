@@ -4,7 +4,9 @@
 //! preserved exactly; the validators are thin adapters over the shared
 //! context, not a re-derivation of the rules.
 
-use houyicoder_api::sandbox::{BoundaryAccess, Containment, Coverage, boundary_grants_for};
+use houyicoder_api::sandbox::{
+    BoundaryAccess, BoundaryGrant, Containment, Coverage, boundary_grants_for,
+};
 use std::sync::Arc;
 
 use crate::compound::{
@@ -464,20 +466,13 @@ impl Validator for PathBoundsValidator {
             &containment.boundary_dirs(),
             &containment.boundary_write_dirs(),
         );
-        let grant = grants.first()?;
+        let authorized = authorized_dirs(&grants)?;
         if consent_allows(req, _ctx) {
             return None;
         }
-        let detail = match grant.access {
-            BoundaryAccess::ReadOnly => format!(
-                "path outside the workspace; approval authorizes read-only directory {}; choosing always persists it",
-                grant.directory.display()
-            ),
-            BoundaryAccess::ReadWrite => format!(
-                "path outside the workspace; approval authorizes parent directory {} with read-write access; choosing always persists it",
-                grant.directory.display()
-            ),
-        };
+        let detail = format!(
+            "path outside the workspace; approval authorizes {authorized}; choosing always persists it"
+        );
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),
@@ -485,4 +480,22 @@ impl Validator for PathBoundsValidator {
             containment_note: None,
         }))
     }
+}
+
+/// The directories an approval authorizes, as the card states them. Every
+/// grant is named: the remember option installs them all, so a reason that
+/// named one would describe less than the approval grants.
+fn authorized_dirs(grants: &[BoundaryGrant]) -> Option<String> {
+    let access = grants.first()?.access;
+    let names: Vec<String> = grants
+        .iter()
+        .map(|grant| grant.directory.display().to_string())
+        .collect();
+    let joined = names.join(", ");
+    Some(match (access, names.len()) {
+        (BoundaryAccess::ReadOnly, 1) => format!("read-only directory {joined}"),
+        (BoundaryAccess::ReadOnly, _) => format!("read-only directories {joined}"),
+        (_, 1) => format!("parent directory {joined} with read-write access"),
+        (_, _) => format!("parent directories {joined} with read-write access"),
+    })
 }

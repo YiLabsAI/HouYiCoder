@@ -17,6 +17,7 @@
 //! makes a persisted-item counter unnecessary).
 
 use houyicoder_context::AgentId;
+use houyicoder_protocol::frontend::permission::AskReason;
 use houyicoder_protocol::llm::OutputItem;
 
 /// What the loop does next, computed once per turn by resolve_turn. A
@@ -47,14 +48,25 @@ pub struct ApprovalRequest {
     pub call_id: String,
     pub tool_name: String,
     pub input: serde_json::Value,
+    /// Why the call needs a verdict, as the tool's gate reported it when the
+    /// call was judged. Carried so the card explains the call with the cause
+    /// that produced the ask; a call that was never put to the gate (an ask
+    /// recovered from the log, a host-raised tool) has none.
+    pub reason: Option<AskReason>,
 }
 
 impl ApprovalRequest {
-    pub fn new(call_id: String, tool_name: String, input: serde_json::Value) -> Self {
+    pub fn new(
+        call_id: String,
+        tool_name: String,
+        input: serde_json::Value,
+        reason: Option<AskReason>,
+    ) -> Self {
         Self {
             call_id,
             tool_name,
             input,
+            reason,
         }
     }
 }

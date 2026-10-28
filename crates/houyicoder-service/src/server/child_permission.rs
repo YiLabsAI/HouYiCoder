@@ -41,13 +41,13 @@ pub(crate) async fn handle(
         call_id,
         tool,
         input,
-        ..
+        reason,
     } = req
     else {
         // A non-request message on the permission topic: ignore.
         return Ok(());
     };
-    let approval = ApprovalRequest::new(call_id.clone(), tool.clone(), input.clone());
+    let approval = ApprovalRequest::new(call_id.clone(), tool.clone(), input.clone(), reason);
     // Label the ask with its origin so the TUI card shows which delegation
     // the ask belongs to (a child ask vs the parent's own tool call).
     let delegation = DelegationSource {

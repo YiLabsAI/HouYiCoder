@@ -12,12 +12,12 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{EditTool, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{
-    AskReason, AskSource, Decision, DefaultModeGate, FileRuleStore, GuardedTool, ModeGate,
-    RuleStore, ToolRequest,
+    Decision, DefaultModeGate, FileRuleStore, GuardedTool, ModeGate, RuleStore, ToolRequest,
 };
 use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
@@ -214,7 +214,7 @@ async fn test_new_file_consent_writes() {
     // The routed consent widens the real fence and the new file is writable.
     let reason = AskReason {
         source: AskSource::Detection,
-        validator: "path-bounds",
+        validator: "path-bounds".to_string(),
         detail: "path outside the workspace".into(),
         containment_note: None,
     };
@@ -350,7 +350,7 @@ fn test_resume_server_restores_sandbox() {
     let input = json!({"path": target.to_string_lossy()});
     let reason = AskReason {
         source: AskSource::SystemSafety,
-        validator: "protected_path",
+        validator: "protected_path".to_string(),
         detail: "protected path".into(),
         containment_note: None,
     };

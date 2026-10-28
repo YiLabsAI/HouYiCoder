@@ -61,6 +61,7 @@ async fn test_child_receives_permission_reply() {
             call_id: call_id.into(),
             tool: "bash".into(),
             input: serde_json::json!({"command": "rm -rf x"}),
+            reason: None,
         },
     );
     // Parent receives the ask.

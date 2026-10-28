@@ -11,8 +11,9 @@ use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::ModeGate;
-use houyicoder_permission::{AskReason, AskSource, DefaultModeGate, Outcome, ToolRequest};
+use houyicoder_permission::{DefaultModeGate, Outcome, ToolRequest};
 use houyicoder_protocol::envelope::ResponsePayload;
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
@@ -58,7 +59,7 @@ fn test_git_ops_query_set() {
 fn detection_reason() -> AskReason {
     AskReason {
         source: AskSource::Detection,
-        validator: "destructive_command",
+        validator: "destructive_command".to_string(),
         detail: "destructive pattern needs confirmation".into(),
         containment_note: None,
     }
@@ -68,7 +69,7 @@ fn detection_reason() -> AskReason {
 fn network_reason() -> AskReason {
     AskReason {
         source: AskSource::Detection,
-        validator: "network_egress",
+        validator: "network_egress".to_string(),
         detail: "this command reaches the network".into(),
         containment_note: None,
     }
@@ -87,6 +88,7 @@ fn test_git_consent_skips_rule() {
         "bash",
         &serde_json::json!({"command": "git commit -m x"}),
         Some(&detection_reason()),
+        &[],
     );
     assert_eq!(
         durable(&gate),
@@ -98,6 +100,7 @@ fn test_git_consent_skips_rule() {
         "bash",
         &serde_json::json!({"command": "npm install"}),
         Some(&detection_reason()),
+        &[],
     );
     assert_eq!(durable(&gate), 1, "non-git command becomes a durable rule");
 }
@@ -130,6 +133,7 @@ fn test_network_consent_remembers_host() {
         "bash",
         &serde_json::json!({"command": first}),
         Some(&network_reason()),
+        &[],
     );
     assert_eq!(decide(first), Outcome::Allow);
     assert_eq!(decide(second), Outcome::Allow);
@@ -140,6 +144,7 @@ fn test_network_consent_remembers_host() {
         "bash",
         &serde_json::json!({"command": download}),
         Some(&network_reason()),
+        &[],
     );
     assert_eq!(decide(download), Outcome::Ask);
 }
@@ -157,6 +162,7 @@ fn test_card_offers_destination() {
         &serde_json::json!({"command": command}),
         Some(&network_reason()),
         false,
+        &[],
     );
     let always = options
         .iter()
@@ -171,6 +177,7 @@ fn test_card_offers_destination() {
         }),
         Some(&network_reason()),
         false,
+        &[],
     );
     assert!(
         options.iter().all(|o| o.option_id != "allow_always"),
@@ -185,6 +192,7 @@ fn test_card_offers_destination() {
         }),
         Some(&network_reason()),
         true,
+        &[],
     );
     assert!(
         options.iter().any(|o| o.option_id == "allow_always"),
@@ -197,6 +205,7 @@ fn test_card_offers_destination() {
         &serde_json::json!({"command": "curl \"$URL\""}),
         Some(&network_reason()),
         true,
+        &[],
     );
     assert!(
         options.iter().all(|o| o.option_id != "allow_always"),
@@ -210,7 +219,7 @@ fn test_card_offers_destination() {
 fn test_card_safety_hides_remember() {
     let reason = AskReason {
         source: AskSource::SystemSafety,
-        validator: "protected_path",
+        validator: "protected_path".to_string(),
         detail: "accessing a protected path needs confirmation".into(),
         containment_note: None,
     };
@@ -219,6 +228,7 @@ fn test_card_safety_hides_remember() {
         &serde_json::json!({"path": ".git/config", "content": "x"}),
         Some(&reason),
         true,
+        &[],
     );
     assert!(
         options.iter().all(|o| o.option_id != "allow_always"),
