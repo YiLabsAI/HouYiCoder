@@ -16,11 +16,13 @@ use houyicoder_core::agent::{
     HookPayload, HookVerdict, SkillHookRegistrar, SkillReloadGuard, SkillTool, ToolRegistry,
 };
 use houyicoder_permission::{Effect, ModeGate, Rule, RuleContent, Scope};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
+use std::fs::{metadata, read_to_string};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, SystemTime};
 
 use super::reloader::SkillReloader;
 use super::skill::SkillRegistryImpl;
@@ -49,8 +51,23 @@ pub(crate) fn build_hook_registry(
         return None;
     }
     let registry = Arc::new(HookRegistry::with_policy(policy));
-    // Later sources replace equivalent earlier hooks. Indices preserve source
-    // order when the winners are registered.
+    install_configured_hooks(&registry, specs, &launcher, None);
+    if registry.is_empty() {
+        None
+    } else {
+        Some(registry)
+    }
+}
+
+/// Deduplicate and install settings-configured command hooks into the target
+/// registry, replacing any earlier configured hooks while keeping built-in and
+/// skill hooks in place.
+fn install_configured_hooks(
+    registry: &Arc<HookRegistry>,
+    specs: &[(HookSpec, HookSource)],
+    launcher: &Arc<dyn ProcessLauncher>,
+    workspace: Option<&Path>,
+) {
     let mut dedup: HashMap<HookDedupKey, usize> = HashMap::new();
     for (i, (spec, _source)) in specs.iter().enumerate() {
         let mut events = Vec::with_capacity(spec.events.len());
@@ -87,10 +104,10 @@ pub(crate) fn build_hook_registry(
         }
         dedup.insert(dedup_key, i);
     }
-    // Register the winners in spec order so registration order follows
-    // the original source priority (env, user, project, local).
     let mut winner_indices: Vec<usize> = dedup.into_values().collect();
     winner_indices.sort_unstable();
+    let mut cmd_hooks: Vec<Arc<CommandHook>> = Vec::with_capacity(winner_indices.len());
+    let mut dyn_hooks: Vec<Arc<dyn Hook>> = Vec::with_capacity(winner_indices.len());
     for i in winner_indices {
         let (spec, source) = &specs[i];
         let mut events = Vec::with_capacity(spec.events.len());
@@ -107,33 +124,212 @@ pub(crate) fn build_hook_registry(
             launcher.clone(),
             source.clone(),
         );
+        if let Some(ws) = workspace {
+            hook = hook.with_workspace(ws.to_path_buf());
+        }
         if let Some(m) = &spec.matcher {
             hook = hook.with_matcher(m.clone());
         }
         if let Some(cond) = &spec.if_condition {
             hook = hook.with_if_condition(cond.clone());
         }
-        if let Some(secs) = spec.timeout_secs {
-            // A timeout of 0 means "no per-hook timeout" (use the
-            // registry default), not "timeout immediately". A user
-            // setting 0 likely means "disable the per-hook override".
-            if secs > 0 {
-                hook = hook.with_timeout(Duration::from_secs(secs));
-            }
+        if let Some(secs) = spec.timeout_secs
+            && secs > 0
+        {
+            hook = hook.with_timeout(Duration::from_secs(secs));
         }
         if spec.once {
-            hook = hook.with_once().with_registry(Arc::clone(&registry));
+            hook = hook.with_once().with_registry(Arc::clone(registry));
         }
         let hook = Arc::new(hook);
-        let id = registry.register(hook.clone());
+        dyn_hooks.push(Arc::clone(&hook) as Arc<dyn Hook>);
+        cmd_hooks.push(hook);
+    }
+    let ids = registry.replace_configured(&dyn_hooks);
+    for (id, hook) in ids.into_iter().zip(cmd_hooks) {
         if hook.once() {
             hook.bind_hook_id(id);
         }
     }
-    if registry.is_empty() {
-        None
+}
+
+/// Resolve the main repository checkout when the given workspace is a linked
+/// worktree. A linked worktree has a .git file pointing to
+/// <main>/.git/worktrees/<name>; reading it avoids spawning a git subprocess on
+/// the hot dispatch path.
+fn linked_worktree_main_root(workspace: &Path) -> Option<PathBuf> {
+    let dot_git = workspace.join(".git");
+    let text = read_to_string(&dot_git).ok()?;
+    let raw = text.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let gitdir = if Path::new(raw).is_absolute() {
+        PathBuf::from(raw)
     } else {
-        Some(registry)
+        workspace.join(raw)
+    };
+    let worktrees_dir = gitdir.parent()?;
+    if worktrees_dir.file_name()?.to_str()? != "worktrees" {
+        return None;
+    }
+    let common_git = worktrees_dir.parent()?;
+    let main_root = common_git.parent()?;
+    (main_root != workspace && main_root.is_dir()).then(|| main_root.to_path_buf())
+}
+
+/// Expand project-root environment placeholders and rewrite inherited
+/// main-checkout paths so a hook command runs against the active worktree.
+fn rewrite_hook_spec(
+    mut spec: HookSpec,
+    active_ws: &Path,
+    inherited_from: Option<&Path>,
+) -> HookSpec {
+    let ws_str = active_ws.to_string_lossy();
+    let main_str = inherited_from.map(|p| p.to_string_lossy().into_owned());
+    for arg in &mut spec.args {
+        *arg = arg
+            .replace("${HOUYI_PROJECT_DIR}", &ws_str)
+            .replace("$HOUYI_PROJECT_DIR", &ws_str)
+            .replace("${CLAUDE_PROJECT_DIR}", &ws_str)
+            .replace("$CLAUDE_PROJECT_DIR", &ws_str);
+        if let Some(main) = &main_str {
+            *arg = arg.replace(main, &ws_str);
+        }
+    }
+    spec
+}
+
+/// Candidate settings files that supply hooks for the given workspace, in
+/// precedence order (user, inherited main checkout when in a linked worktree,
+/// then the active workspace's project and local settings).
+fn candidate_settings_files(workspace: Option<&Path>) -> Vec<PathBuf> {
+    let mut files = vec![settings_path()];
+    if let Some(ws) = workspace {
+        if let Some(main_root) = linked_worktree_main_root(ws) {
+            files.push(main_root.join(".claude").join("settings.json"));
+            files.push(main_root.join(".houyicoder").join("settings.json"));
+        }
+        files.push(ws.join(".claude").join("settings.json"));
+        files.push(ws.join(".houyicoder").join("settings.json"));
+        files.push(ws.join(".claude").join("settings.local.json"));
+        files.push(ws.join(".houyicoder").join("settings.local.json"));
+    }
+    files
+}
+
+fn collect_configured_specs(
+    user_settings: &Value,
+    workspace: Option<&Path>,
+) -> Vec<(HookSpec, HookSource)> {
+    let mut all_specs: Vec<(HookSpec, HookSource)> = Vec::new();
+    for spec in resolve_hooks() {
+        all_specs.push((spec, HookSource::User));
+    }
+    for spec in parse_hooks_from_settings(user_settings) {
+        all_specs.push((spec, HookSource::User));
+    }
+    if let Some(ws) = workspace {
+        if let Some(main_root) = linked_worktree_main_root(ws) {
+            for dir in [".claude", ".houyicoder"] {
+                let path = main_root.join(dir).join("settings.json");
+                for spec in parse_hooks_from_settings(&read_settings_value(&path)) {
+                    all_specs.push((
+                        rewrite_hook_spec(spec, ws, Some(&main_root)),
+                        HookSource::Project,
+                    ));
+                }
+            }
+        }
+        for (dir, file, source) in [
+            (".claude", "settings.json", HookSource::Project),
+            (".houyicoder", "settings.json", HookSource::Project),
+            (".claude", "settings.local.json", HookSource::Local),
+            (".houyicoder", "settings.local.json", HookSource::Local),
+        ] {
+            let path = ws.join(dir).join(file);
+            for spec in parse_hooks_from_settings(&read_settings_value(&path)) {
+                all_specs.push((rewrite_hook_spec(spec, ws, None), source.clone()));
+            }
+        }
+    }
+    all_specs
+}
+
+type FileStamp = (PathBuf, Option<(SystemTime, u64)>);
+
+/// Tracks the active working directory and settings file timestamps so
+/// configured hooks reload on the spot when entering a worktree or laying down
+/// a settings file, without requiring an exit-and-reenter cycle.
+pub(super) struct ConfigHookReloader {
+    registry: Weak<HookRegistry>,
+    launcher: Arc<dyn ProcessLauncher>,
+    fallback_cwd: Option<PathBuf>,
+    runner_cwd: Mutex<Option<Arc<RwLock<PathBuf>>>>,
+    snapshot: Mutex<Option<(Option<PathBuf>, Vec<FileStamp>)>>,
+}
+
+impl ConfigHookReloader {
+    fn new(
+        registry: &Arc<HookRegistry>,
+        launcher: Arc<dyn ProcessLauncher>,
+        workspace: Option<&Path>,
+    ) -> Arc<Self> {
+        let ws = workspace.map(PathBuf::from);
+        let stamps = Self::read_stamps(ws.as_deref());
+        Arc::new(Self {
+            registry: Arc::downgrade(registry),
+            launcher,
+            fallback_cwd: ws.clone(),
+            runner_cwd: Mutex::new(None),
+            snapshot: Mutex::new(Some((ws, stamps))),
+        })
+    }
+
+    fn bind_runner_cwd(&self, cwd: Arc<RwLock<PathBuf>>) {
+        *self.runner_cwd.lock().unwrap_or_else(|e| e.into_inner()) = Some(cwd);
+    }
+
+    fn active_cwd(&self) -> Option<PathBuf> {
+        if let Some(handle) = self
+            .runner_cwd
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return Some(handle.read().unwrap_or_else(|e| e.into_inner()).clone());
+        }
+        self.fallback_cwd.clone()
+    }
+
+    fn read_stamps(workspace: Option<&Path>) -> Vec<FileStamp> {
+        candidate_settings_files(workspace)
+            .into_iter()
+            .map(|path| {
+                let stamp = metadata(&path)
+                    .ok()
+                    .and_then(|m| Some((m.modified().ok()?, m.len())));
+                (path, stamp)
+            })
+            .collect()
+    }
+
+    fn refresh(&self) {
+        let Some(registry) = self.registry.upgrade() else {
+            return;
+        };
+        let cwd = self.active_cwd();
+        let stamps = Self::read_stamps(cwd.as_deref());
+        {
+            let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            if guard
+                .as_ref()
+                .is_some_and(|(prev_cwd, prev_stamps)| prev_cwd == &cwd && prev_stamps == &stamps)
+            {
+                return;
+            }
+            *guard = Some((cwd.clone(), stamps));
+        }
+        let user_settings = read_settings_value(&settings_path());
+        let specs = collect_configured_specs(&user_settings, cwd.as_deref());
+        install_configured_hooks(&registry, &specs, &self.launcher, cwd.as_deref());
     }
 }
 
@@ -145,29 +341,17 @@ pub(crate) fn build_session_registry(
     launcher: Arc<dyn ProcessLauncher>,
     workspace: Option<&Path>,
 ) -> Arc<HookRegistry> {
-    let mut all_specs: Vec<(HookSpec, HookSource)> = Vec::new();
-    // Env-var hooks: user source (the user set them in their own shell).
-    for spec in resolve_hooks() {
-        all_specs.push((spec, HookSource::User));
-    }
-    // User settings hooks: user source.
+    let (reg, _) = build_session_registry_with_reloader(gate, launcher, workspace);
+    reg
+}
+
+fn build_session_registry_with_reloader(
+    gate: Arc<dyn ModeGate>,
+    launcher: Arc<dyn ProcessLauncher>,
+    workspace: Option<&Path>,
+) -> (Arc<HookRegistry>, Arc<ConfigHookReloader>) {
     let user_settings = read_settings_value(&settings_path());
-    for spec in parse_hooks_from_settings(&user_settings) {
-        all_specs.push((spec, HookSource::User));
-    }
-    // Project and local settings hooks: project and local sources.
-    if let Some(ws) = workspace {
-        let project_path = ws.join(".houyicoder").join("settings.json");
-        let local_path = ws.join(".houyicoder").join("settings.local.json");
-        let project_value = read_settings_value(&project_path);
-        let local_value = read_settings_value(&local_path);
-        for spec in parse_hooks_from_settings(&project_value) {
-            all_specs.push((spec, HookSource::Project));
-        }
-        for spec in parse_hooks_from_settings(&local_value) {
-            all_specs.push((spec, HookSource::Local));
-        }
-    }
+    let all_specs = collect_configured_specs(&user_settings, workspace);
     // Only user settings control hook policy. Repository settings cannot
     // weaken or disable the user's hook posture.
     let policy_settings = resolve_hook_policy_settings(&user_settings);
@@ -178,12 +362,13 @@ pub(crate) fn build_session_registry(
     } else {
         HookPolicy::AllEnabled
     };
-    let reg: Arc<HookRegistry> = match build_hook_registry(&all_specs, launcher, policy.clone()) {
-        Some(r) => r,
-        None => Arc::new(HookRegistry::with_policy(policy)),
-    };
+    let reg = Arc::new(HookRegistry::with_policy(policy));
+    install_configured_hooks(&reg, &all_specs, &launcher, workspace);
     reg.register(Arc::new(SkillGrantHook::new(gate)));
-    reg
+    let reloader = ConfigHookReloader::new(&reg, launcher, workspace);
+    let reloader_cb = Arc::clone(&reloader);
+    reg.set_reloader(Arc::new(move |_| reloader_cb.refresh()));
+    (reg, reloader)
 }
 
 /// Build the session-scoped paths-skill activator. One Arc shared by the
@@ -208,6 +393,7 @@ pub(super) struct SkillRuntime {
     pub(super) active_skill: Arc<Mutex<Option<String>>>,
     pub(super) grants: Option<Arc<SkillGrantStore>>,
     pub(super) hook_registry: Arc<HookRegistry>,
+    pub(super) hook_reloader: Arc<ConfigHookReloader>,
     pub(super) registrar: Arc<SkillHookRegistrar>,
 }
 
@@ -218,7 +404,8 @@ impl SkillRuntime {
         let active_skill = Arc::new(Mutex::new(None));
         let grants = build_skill_grants();
         let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
-        let hook_registry = build_session_registry(gate, Arc::clone(&launcher), workspace);
+        let (hook_registry, hook_reloader) =
+            build_session_registry_with_reloader(gate, Arc::clone(&launcher), workspace);
         let trust_state = Arc::new(RwLock::new(TrustState::Untrusted));
         let registrar = Arc::new(SkillHookRegistrar::new(
             Arc::clone(&hook_registry),
@@ -231,6 +418,7 @@ impl SkillRuntime {
             active_skill,
             grants,
             hook_registry,
+            hook_reloader,
             registrar,
         }
     }
@@ -256,6 +444,10 @@ impl SkillRuntime {
     }
 
     pub(super) fn attach_to_runner(&self, runner: Runner, workspace: Option<PathBuf>) -> Runner {
+        if let Some(ws) = &workspace {
+            *runner.cwd_handle().write().expect("cwd lock") = ws.clone();
+        }
+        self.hook_reloader.bind_runner_cwd(runner.cwd_handle());
         let mut runner = runner
             .with_skill_registry(Arc::clone(&self.registry) as Arc<dyn SkillRegistry>)
             .with_skill_grants(self.grants.clone())

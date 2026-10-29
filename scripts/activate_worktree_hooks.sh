@@ -4,10 +4,43 @@
 # Tracked scripts (hook_rust.py etc.) are already in the worktree checkout.
 set -euo pipefail
 MAIN_CHECKOUT="/Users/von/workspace/hicoder"
+WORKTREE="$(pwd)"
 
-# Copy settings.json (gitignored, per-worktree)
-mkdir -p .claude
-cp "$MAIN_CHECKOUT/.claude/settings.json" .claude/settings.json
+# Write-time hooks are configured per settings file, and this product reads
+# two of them: its own .houyicoder/settings.json plus the harness
+# .claude/settings.json. Which one a session obeys is decided at assembly
+# from its workspace root, so both are laid down rather than assuming one
+# surface. A settings file the main checkout does not have is skipped, not an
+# error: a checkout without one is a checkout that never configured that
+# surface.
+lay_down() {
+  local rel="$1"
+  local src="$MAIN_CHECKOUT/$rel"
+  local dst="$WORKTREE/$rel"
+  if [ ! -f "$src" ]; then
+    echo "skipped $rel (absent in the main checkout)"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  # The copy can be refused (the settings paths are fenced) and cp reports
+  # that only through its exit status, so the landed bytes are what says
+  # whether the hook is configured. An empty or missing file would leave the
+  # hook silently inert, which is the failure this script exists to prevent.
+  if [ ! -s "$dst" ]; then
+    echo "FAILED to lay down $rel" >&2
+    return 1
+  fi
+  # A copied command that names the main checkout would run the gate against
+  # the wrong tree, so the worktree path is substituted in.
+  if grep -q "$MAIN_CHECKOUT" "$dst" 2>/dev/null; then
+    sed -i.bak "s|$MAIN_CHECKOUT|$WORKTREE|g" "$dst" && rm -f "$dst.bak"
+  fi
+  echo "laid down $rel"
+}
+
+lay_down ".houyicoder/settings.json"
+lay_down ".claude/settings.json"
 
 # Copy the product-name wordlist (in scripts/ but not tracked). It feeds the
 # .rs-comment product-name check; without the wordlist that check is inert and

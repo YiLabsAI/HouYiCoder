@@ -166,6 +166,53 @@ def main() -> int:
             f"adjust PHASE_REF_BASELINE to match"
         )
 
+    # Payload shapes. This product's PreToolUse context puts the tool in
+    # tool_name (lowercase, its own schema keys) and the arguments under
+    # input; the external harness shape puts them under tool_input and
+    # file_path. Both must gate: a gate that reads only one shape allows
+    # every write when the other is wired, with no error to show for it.
+    import hook_rust as hr
+
+    bad = "// 中文注释\n"
+    case = [
+        ("product shape, write", "write", {"path": "/tmp/p.rs", "content": bad}),
+        ("product shape, edit", "edit", {"path": "/tmp/p.rs", "new_string": bad}),
+        (
+            "product shape, multiedit",
+            "multiedit",
+            {"path": "/tmp/p.rs", "edits": [{"new_string": bad}]},
+        ),
+        ("harness shape, write", "Write", {"file_path": "/tmp/p.rs", "content": bad}),
+        ("harness shape, edit", "Edit", {"file_path": "/tmp/p.rs", "new_string": bad}),
+    ]
+    for label, tool, args in case:
+        container = "input" if "file_path" not in args else "tool_input"
+        payload = {"tool_name": tool, container: args}
+        normalized = hr._normalize(payload)
+        if normalized is None:
+            failures.append(f"payload shape unresolved: {label}")
+            continue
+        got_tool, got_args, got_path = normalized
+        if got_tool != tool.lower():
+            failures.append(f"{label}: tool read as {got_tool!r}, want {tool.lower()!r}")
+        if got_path != "/tmp/p.rs":
+            failures.append(f"{label}: path read as {got_path!r}")
+        # Content rides in a top-level key except for multiedit, where each
+        # edit carries its own new_string.
+        if "edits" in args:
+            carried = bool(got_args.get("edits"))
+        else:
+            carried = got_args.get("content", got_args.get("new_string")) is not None
+        if not carried:
+            failures.append(f"{label}: content not carried through")
+    # A covered tool carrying no locatable path is blocked, not allowed; a
+    # tool outside the write set is skipped so every other tool is untouched.
+    if hr._normalize({"tool_name": "read", "input": {"path": "/x"}}) is not None:
+        failures.append("a read payload must not resolve as a write")
+    empty = hr._normalize({"tool_name": "write", "input": {}})
+    if empty is None or empty[2] != "":
+        failures.append("a pathless write must resolve with an empty path to block")
+
     # Product-name arm: fires when a wordlist resolves, skips when absent.
     # Uses a temp wordlist (monkeypatched) so the test does not depend on the
     # real gitignored list being present (a clean clone has none).

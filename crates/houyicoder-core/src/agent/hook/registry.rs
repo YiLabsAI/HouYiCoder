@@ -35,6 +35,7 @@ struct PendingHook {
 struct HookInner {
     hooks: HashMap<HookId, Arc<dyn Hook>>,
     order: Vec<HookId>,
+    configured: Vec<HookId>,
     by_event: HashMap<HookEvent, Vec<HookId>>,
     next_id: u64,
 }
@@ -44,11 +45,16 @@ impl HookInner {
         Self {
             hooks: HashMap::new(),
             order: Vec::new(),
+            configured: Vec::new(),
             by_event: HashMap::new(),
             next_id: 0,
         }
     }
 }
+
+/// Callback invoked before dispatch or listing so settings-backed hooks can
+/// refresh in place when the active working directory or settings files change.
+pub type HookReloader = Arc<dyn Fn(&HookRegistry) + Send + Sync>;
 
 pub struct HookRegistry {
     inner: RwLock<HookInner>,
@@ -56,6 +62,7 @@ pub struct HookRegistry {
     trust: TrustState,
     timeout_ms: u64,
     pending_skip_notice: Mutex<Option<Vec<String>>>,
+    reloader: Mutex<Option<HookReloader>>,
 }
 
 impl HookRegistry {
@@ -68,6 +75,7 @@ impl HookRegistry {
             trust: TrustState::Trusted,
             timeout_ms: 5000,
             pending_skip_notice: Mutex::new(None),
+            reloader: Mutex::new(None),
         }
     }
 
@@ -78,6 +86,7 @@ impl HookRegistry {
             trust: TrustState::Trusted,
             timeout_ms: 5000,
             pending_skip_notice: Mutex::new(None),
+            reloader: Mutex::new(None),
         }
     }
 
@@ -88,7 +97,63 @@ impl HookRegistry {
             trust,
             timeout_ms: 5000,
             pending_skip_notice: Mutex::new(None),
+            reloader: Mutex::new(None),
         }
+    }
+
+    /// Attach a live reloader that refreshes configured hooks when the
+    /// session changes worktrees or a settings file changes on disk.
+    pub fn set_reloader(&self, reloader: HookReloader) {
+        *self.reloader.lock().unwrap_or_else(|e| e.into_inner()) = Some(reloader);
+    }
+
+    fn refresh_configured(&self) {
+        let reloader = self
+            .reloader
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(reloader) = reloader {
+            reloader(self);
+        }
+    }
+
+    /// Replace all settings-configured hooks atomically under one write lock,
+    /// keeping built-in and skill-registered hooks intact. Returns the minted
+    /// HookIds in the same order as the supplied slice.
+    pub fn replace_configured(&self, hooks: &[Arc<dyn Hook>]) -> Vec<HookId> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let old: Vec<HookId> = inner.configured.drain(..).collect();
+        for id in &old {
+            inner.hooks.remove(id);
+        }
+        if !old.is_empty() {
+            inner.order.retain(|id| !old.contains(id));
+            for ids in inner.by_event.values_mut() {
+                ids.retain(|id| !old.contains(id));
+            }
+        }
+        let mut minted = Vec::with_capacity(hooks.len());
+        let tail: Vec<HookId> = inner.order.drain(..).collect();
+        for hook in hooks {
+            let id = HookId(inner.next_id);
+            inner.next_id += 1;
+            for ev in hook.events() {
+                inner.by_event.entry(*ev).or_default().push(id);
+            }
+            inner.order.push(id);
+            inner.configured.push(id);
+            inner.hooks.insert(id, Arc::clone(hook));
+            minted.push(id);
+        }
+        inner.order.extend(tail);
+        // Rebuild per-event lists in registration order so configured hooks
+        // precede trailing built-in hooks after a reload.
+        let order = inner.order.clone();
+        for ids in inner.by_event.values_mut() {
+            ids.sort_by_key(|id| order.iter().position(|x| x == id).unwrap_or(usize::MAX));
+        }
+        minted
     }
 
     /// Set the registry-wide evaluate timeout. This is the default for
@@ -138,6 +203,7 @@ impl HookRegistry {
             return false;
         }
         inner.order.retain(|x| *x != id);
+        inner.configured.retain(|x| *x != id);
         for ids in inner.by_event.values_mut() {
             ids.retain(|x| *x != id);
         }
@@ -156,6 +222,7 @@ impl HookRegistry {
         if self.policy == HookPolicy::Disabled {
             return Vec::new();
         }
+        self.refresh_configured();
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let Some(ids) = inner.by_event.get(&ctx.event) else {
             return Vec::new();
@@ -297,6 +364,7 @@ impl HookRegistry {
 
     /// How many hooks are registered.
     pub fn len(&self) -> usize {
+        self.refresh_configured();
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -312,6 +380,7 @@ impl HookRegistry {
     /// Each entry carries the hook name, subscribed events, and config
     /// source.
     pub fn list(&self) -> Vec<HookEntry> {
+        self.refresh_configured();
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner
             .order

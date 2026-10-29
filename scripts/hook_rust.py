@@ -4,7 +4,12 @@ content violates the .rs comment rules (backticks, CJK, codenames,
 design-doc refs) BEFORE the write lands. This is write-time intercept —
 the violating content never reaches disk, no wasted turn.
 
-Reads JSON from stdin: {"tool_name": ..., "tool_input": {...}}.
+Reads JSON from stdin. Two payload shapes reach this script and both must
+gate: this product's own PreToolUse context names the tool in tool_name and
+carries its arguments under input, with the tool's own schema keys (path,
+content, old_string, edits); the external harness shape carries tool_input
+with file_path. The arguments container and the path key are the only
+differences, so one normalizer covers both.
 Exit 0 = allow. Exit 2 = block (stderr shown to the model so it can rewrite).
 
 The comment-rule detector is shared with the check-time gate
@@ -155,31 +160,86 @@ def _baseline_comment_violation(text: str):
             yield ("baseline bump must not add a trailing comment", line)
 
 
+# Tool names the gate covers, in both spellings that reach it: this product's
+# tools are lowercase (write, edit, multiedit) and the external harness
+# capitalizes them. Keying on the lowercased name keeps one set.
+_WRITE_TOOLS = {"write", "edit", "multiedit", "notebookedit"}
+
+# Path key candidates in order: this product's schema uses path, the external
+# harness uses file_path (notebook_path for a notebook).
+_PATH_KEYS = ("path", "file_path", "notebook_path")
+
+
+def _text(value) -> str:
+    """The content field as text, whatever the payload put there."""
+    return value if isinstance(value, str) else ""
+
+
+def _normalize(payload: dict):
+    """Return (tool, args, path) for either payload shape, or None to skip.
+
+    The arguments container differs (input here, tool_input externally) and
+    so does the path key, so both are resolved here rather than at each use.
+    A payload naming no tool is not a write an editor issued, so it is
+    skipped; one naming a covered tool but carving out no path is blocked by
+    the caller instead, since a write the gate cannot locate is the case it
+    must not wave through.
+    """
+    tool = str(payload.get("tool_name") or "").lower()
+    if tool not in _WRITE_TOOLS:
+        return None
+    args = payload.get("input")
+    if not isinstance(args, dict):
+        args = payload.get("tool_input")
+    if not isinstance(args, dict):
+        args = {}
+    path = ""
+    for key in _PATH_KEYS:
+        value = args.get(key)
+        if isinstance(value, str) and value:
+            path = value
+            break
+    return tool, args, path
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)
-    tool = payload.get("tool_name", "")
-    if tool not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+    if not isinstance(payload, dict):
         sys.exit(0)
-    ti = payload.get("tool_input", {})
-    path = ti.get("file_path") or ti.get("notebook_path") or ""
+    normalized = _normalize(payload)
+    if normalized is None:
+        sys.exit(0)
+    tool, ti, path = normalized
+    if not path:
+        # A covered tool with no locatable target: the file the rules apply to
+        # is unknown, so allowing would be a silent hole.
+        print(
+            f"blocked {tool}: no path in the hook payload, so the comment "
+            "rules cannot be applied",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     is_rs = str(path).endswith(".rs")
     is_baseline_py = Path(path).name in _BASELINE_FILES
     if not is_rs and not is_baseline_py:
         sys.exit(0)
-    # Gather the new content being written.
+    # Gather the new content being written. The tool name is already lowercased
+    # by the normalizer, so one branch set covers both payload shapes.
     chunks = []
-    if tool == "Write":
-        chunks.append(ti.get("content", ""))
-    elif tool == "Edit":
-        chunks.append(ti.get("new_string", ""))
-    elif tool == "MultiEdit":
-        for e in ti.get("edits", []):
-            chunks.append(e.get("new_string", ""))
-    elif tool == "NotebookEdit":
-        chunks.append(ti.get("new_source", ""))
+    if tool == "write":
+        chunks.append(_text(ti.get("content")))
+    elif tool == "edit":
+        chunks.append(_text(ti.get("new_string")))
+    elif tool == "multiedit":
+        edits = ti.get("edits")
+        for e in edits if isinstance(edits, list) else []:
+            if isinstance(e, dict):
+                chunks.append(_text(e.get("new_string")))
+    elif tool == "notebookedit":
+        chunks.append(_text(ti.get("new_source")))
     seen = set()
     # The lines and deep paths already on disk, so a carried-over violation is
     # not reported as a new one.

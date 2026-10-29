@@ -19,11 +19,13 @@
 //! project keeps wire mappings separate from core runtime types). The
 //! verdict the command returns is a small tagged JSON.
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use houyicoder_api::launcher::{ProcessLauncher, SpawnPolicy, SpawnRequest};
 
@@ -45,6 +47,7 @@ pub struct CommandHook {
     args: Vec<String>,
     launcher: Arc<dyn ProcessLauncher>,
     source: HookSource,
+    workspace: Option<PathBuf>,
     matcher: Option<String>,
     matcher_regex: Option<regex::Regex>,
     if_condition: Option<String>,
@@ -75,6 +78,7 @@ impl CommandHook {
             args,
             launcher,
             source,
+            workspace: None,
             matcher: None,
             matcher_regex: None,
             if_condition: None,
@@ -85,6 +89,14 @@ impl CommandHook {
             hook_reg: None,
             hook_id: OnceLock::new(),
         }
+    }
+
+    /// Pin the working directory the command runs in. When set, the spawned
+    /// process starts in this directory so relative paths in the hook resolve
+    /// against the active worktree rather than the host process startup dir.
+    pub fn with_workspace(mut self, workspace: PathBuf) -> Self {
+        self.workspace = Some(workspace);
+        self
     }
 
     /// Attach a matcher pattern. The hook is skipped (returns Allow)
@@ -151,9 +163,12 @@ impl CommandHook {
         let payload_json = serde_json::to_string(&payload).map_err(|e| HookError::ConfigError {
             detail: format!("hook context encode: {e}"),
         })?;
-        let req = SpawnRequest::new(&self.program)
+        let mut req = SpawnRequest::new(&self.program)
             .with_args(&self.args)
             .interactive();
+        if let Some(ws) = &self.workspace {
+            req = req.with_workspace(ws.clone());
+        }
         // A user-configured hook command is a trusted spawn (no kernel
         // fence: the hook is a program the operator chose to wire). Every
         // hook spawn is audited through the launcher chokepoint so an
@@ -172,12 +187,16 @@ impl CommandHook {
             reason: "launcher returned no stdio pipes for an interactive spawn".into(),
         })?;
         if let Some(stdin) = pipes.stdin.as_mut() {
-            stdin
-                .write_all(payload_json.as_bytes())
-                .map_err(|e| HookError::ProcessError {
+            // A hook that exits without reading its input closes the pipe early;
+            // its exit status and output still decide the verdict.
+            if let Err(e) = stdin.write_all(payload_json.as_bytes())
+                && e.kind() != ErrorKind::BrokenPipe
+            {
+                return Err(HookError::ProcessError {
                     hook_name: self.name.clone(),
                     reason: format!("stdin write: {e}"),
-                })?;
+                });
+            }
             stdin.flush().ok();
         }
         // Drop the stdin handle so the child sees EOF and exits.
@@ -346,7 +365,8 @@ struct HookContextJson {
     event: String,
     session: String,
     tool_name: Option<String>,
-    input: Option<serde_json::Value>,
+    input: Option<Value>,
+    tool_input: Option<Value>,
     result: Option<String>,
     error: Option<String>,
 }
@@ -385,15 +405,30 @@ impl HookContextJson {
             }
             _ => {}
         }
+        let tool_input = input.as_ref().map(mirror_file_path);
         Self {
             event,
             session: ctx.session.to_string(),
             tool_name,
             input,
+            tool_input,
             result,
             error,
         }
     }
+}
+
+/// Mirror the path field onto file_path inside tool_input so external hook
+/// scripts written for either key convention receive the target file path.
+fn mirror_file_path(value: &Value) -> Value {
+    let mut cloned = value.clone();
+    if let Value::Object(map) = &mut cloned
+        && !map.contains_key("file_path")
+        && let Some(path) = map.get("path").cloned()
+    {
+        map.insert("file_path".to_string(), path);
+    }
+    cloned
 }
 
 /// The verdict JSON a hook command writes to stdout. Unknown verdict

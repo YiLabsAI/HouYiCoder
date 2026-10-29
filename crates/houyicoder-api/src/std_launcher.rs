@@ -294,7 +294,7 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
     } else {
         None
     };
-    let killer = KillOnDrop(Some(child));
+    let mut killer = KillOnDrop(Some(child));
     Ok(LauncherChild::with_pipes(
         Some(pid),
         StdioPipes {
@@ -302,12 +302,21 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
             stdout,
             stderr,
         },
-        // The wait future is a no-op: the on-drop kill on the captured killer
-        // terminates the process. A future cut can surface the real exit code
-        // by blocking on the child here; the first cut does not need it.
+        // When the caller awaits the child, take it out of the drop killer and
+        // wait for its real exit status; when the handle is dropped without
+        // awaiting, the killer still terminates and reaps the process.
         Box::pin(async move {
-            drop(killer);
-            Ok(LauncherExit::default())
+            let status = killer
+                .0
+                .take()
+                .ok_or_else(|| SpawnError::Io("child already taken".into()))?
+                .wait()
+                .map_err(|e| SpawnError::Io(e.to_string()))?;
+            Ok(LauncherExit {
+                exit_code: status.code(),
+                stdout: None,
+                stderr: None,
+            })
         }),
     ))
 }

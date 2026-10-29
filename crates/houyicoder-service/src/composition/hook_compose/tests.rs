@@ -10,13 +10,18 @@ use houyicoder_api::skill::{
 };
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_config::HookSpec;
+use houyicoder_config::parse_hooks_from_settings;
+use houyicoder_config::settings_merge::read_settings_value;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::{
-    HookContext, HookEvent, HookPayload, HookPolicy, HookSource, SkillTool, ToolResult,
+    HookContext, HookEvent, HookPayload, HookPolicy, HookSource, HookVerdict, SkillTool, ToolResult,
 };
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_permission::{Effect, Scope};
+use std::env::temp_dir;
+use std::fs::{create_dir_all, remove_dir_all, write};
 use std::path::Path;
+use std::process::id;
 use std::sync::Arc;
 
 fn launcher() -> Arc<dyn ProcessLauncher> {
@@ -543,4 +548,138 @@ async fn test_ecosystem_tools_stay_gated() {
             .iter()
             .any(|rule| rule.action == "Bash" && rule.scope == Scope::Session)
     );
+}
+
+/// A project's own settings file is a hook source, and the workspace root is
+/// what decides which file that is. This verifies the path from the project
+/// settings file on disk to a fired verdict: the entry is read from that file,
+/// dispatched through the registry, and the matcher decides whether the
+/// command runs.
+///
+/// The command is false, which exits non-zero, so a dispatched hook answers
+/// with a non-Allow verdict while a matcher-skipped one answers Allow. That
+/// is what distinguishes "the file was read and the gate ran" from "nothing
+/// was configured", which a bare dispatch count cannot tell apart.
+#[test]
+fn test_project_settings_hook_fires() {
+    let root = temp_dir().join(format!("houyi-hooksrc-{}", id()));
+    drop(remove_dir_all(&root));
+    let ws = root.join("with-hooks");
+    create_dir_all(ws.join(".houyicoder")).expect("mk workspace settings dir");
+    let settings = ws.join(".houyicoder").join("settings.json");
+    write(
+        &settings,
+        r#"{"hooks":{"PreToolUse":[{"matcher":"write","hooks":[{"type":"command","command":"false"}]}]}}"#,
+    )
+    .expect("write settings");
+
+    let ctx = |tool: &str| HookContext {
+        event: HookEvent::PreToolUse,
+        payload: HookPayload::PreToolUse {
+            tool_name: tool.into(),
+            input: serde_json::json!({}),
+            backfilled_input: None,
+        },
+        session: SessionId::new(),
+    };
+
+    let parsed = parse_hooks_from_settings(&read_settings_value(&settings));
+    assert_eq!(parsed.len(), 1, "the project settings file names one hook");
+    let tagged: Vec<(HookSpec, HookSource)> = parsed
+        .into_iter()
+        .map(|s| (s, HookSource::Project))
+        .collect();
+    let reg = build_hook_registry(&tagged, launcher(), HookPolicy::AllEnabled)
+        .expect("project hook registers");
+
+    let ran = |tool: &str| {
+        reg.dispatch(&ctx(tool))
+            .first()
+            .map(|o| !matches!(o.result, Ok(HookVerdict::Allow)))
+            .unwrap_or(false)
+    };
+    assert!(
+        ran("write"),
+        "the matcher selects write, so the command runs"
+    );
+    assert!(
+        !ran("read"),
+        "the matcher skips read, so the command does not run"
+    );
+
+    drop(remove_dir_all(&root));
+}
+
+/// A linked worktree without its own settings file inherits the main
+/// checkout's hooks through its .git worktree pointer, and when a settings
+/// file is written inside the worktree later the registry reloads it on the
+/// spot without requiring an exit-and-reenter cycle.
+#[test]
+fn test_worktree_inherits_and_reload() {
+    let root = temp_dir().join(format!("houyi-wthook-{}", id()));
+    drop(remove_dir_all(&root));
+    let main_repo = root.join("main");
+    let wt_git = main_repo.join(".git").join("worktrees").join("wt-a");
+    let wt_dir = root.join("wt-a");
+    create_dir_all(&wt_git).expect("mk git worktrees dir");
+    create_dir_all(main_repo.join(".houyicoder")).expect("mk main settings dir");
+    create_dir_all(&wt_dir).expect("mk worktree dir");
+    write(
+        wt_dir.join(".git"),
+        format!("gitdir: {}\n", wt_git.display()),
+    )
+    .expect("write worktree .git pointer");
+    write(
+        main_repo.join(".houyicoder").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"edit","hooks":[{"type":"command","command":"exit 2"}]}]}}"#,
+    )
+    .expect("write main settings");
+
+    let gate = Arc::new(DefaultModeGate::new());
+    let reg = build_session_registry(gate, launcher(), Some(&wt_dir));
+
+    let ctx_for = |tool: &str| HookContext {
+        event: HookEvent::PreToolUse,
+        payload: HookPayload::PreToolUse {
+            tool_name: tool.into(),
+            input: serde_json::json!({"path": "src/lib.rs"}),
+            backfilled_input: None,
+        },
+        session: SessionId::new(),
+    };
+
+    let edit_outcomes = reg.dispatch(&ctx_for("edit"));
+    assert!(
+        edit_outcomes
+            .iter()
+            .any(|o| matches!(o.result, Ok(HookVerdict::Deny(_)))),
+        "linked worktree inherits main checkout PreToolUse hook immediately, got: {edit_outcomes:?}"
+    );
+    assert!(
+        reg.dispatch(&ctx_for("write")).is_empty()
+            || reg
+                .dispatch(&ctx_for("write"))
+                .iter()
+                .all(|o| matches!(o.result, Ok(HookVerdict::Allow))),
+        "write is not gated before worktree settings are written"
+    );
+
+    // Lay down a worktree-local settings file mid-session and verify the next
+    // dispatch picks it up with zero exit/re-enter.
+    create_dir_all(wt_dir.join(".houyicoder")).expect("mk wt settings dir");
+    write(
+        wt_dir.join(".houyicoder").join("settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"write","hooks":[{"type":"command","command":"exit 2"}]}]}}"#,
+    )
+    .expect("write wt settings");
+
+    let write_outcomes = reg.dispatch(&ctx_for("write"));
+    assert!(
+        write_outcomes
+            .iter()
+            .any(|o| matches!(o.result, Ok(HookVerdict::Deny(_)))),
+        "newly laid down worktree settings file takes effect on the very next dispatch"
+    );
+
+    drop(remove_dir_all(&root));
 }
