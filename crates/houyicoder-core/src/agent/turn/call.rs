@@ -453,6 +453,22 @@ impl Runner {
                     }
                     ev = stream.next() => match ev {
                         Some(Ok(e)) => e,
+                        Some(Err(e)) if e.retryable() && state.assistant_text.is_empty() && attempts + 1 < max_attempts => {
+                            attempts += 1;
+                            let wait = self.config.retry.delay_for(attempts, e.retry_after_delay());
+                            sleep(wait).await;
+                            state = StreamFold::default();
+                            blocks = BlockSpans::default();
+                            first_token_elapsed = None;
+                            stream = provider.stream(request.clone());
+                            continue;
+                        }
+                        Some(Err(e)) if e.retryable() && !state.assistant_text.is_empty() && length_retries < MAX_LENGTH_RETRIES => {
+                            let wait = self.config.retry.delay_for(1, e.retry_after_delay());
+                            sleep(wait).await;
+                            state.finish_reason = Some("length".to_string());
+                            break;
+                        }
                         Some(Err(e)) => return Err(RunError::ProviderFatal(e)),
                         None => break,
                     },

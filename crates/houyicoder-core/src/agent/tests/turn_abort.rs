@@ -18,6 +18,7 @@ use super::runner_with;
 use crate::agent::{RunError, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 use futures::StreamExt;
+use futures::stream::iter;
 use futures::stream::pending;
 use futures::stream::unfold;
 use std::time::Duration;
@@ -353,4 +354,58 @@ async fn test_lifecycle_abort_wins_race() {
             result.outcome
         );
     }
+}
+
+/// A provider whose first stream emits a reasoning chunk and then drops with a
+/// transient network error; the second stream finishes cleanly.
+struct MidStreamDropProvider {
+    inner: Arc<FakeProvider>,
+    calls: AtomicU32,
+}
+
+impl ModelProvider for MidStreamDropProvider {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        self.inner.complete(req)
+    }
+
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let items = vec![
+                Ok(LlmEvent::ReasoningDelta {
+                    id: "r1".into(),
+                    text: "thinking...".into(),
+                }),
+                Err(ProviderError::Network),
+            ];
+            Box::pin(iter(items))
+        } else {
+            self.inner.stream(req)
+        }
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+#[tokio::test]
+async fn test_mid_stream_drop_recovers() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(MidStreamDropProvider {
+        inner: Arc::new(FakeProvider::text("recovered answer")),
+        calls: AtomicU32::new(0),
+    });
+    let runner = runner_with(provider, ToolRegistry::new());
+    let session = SessionId::new();
+    let result = runner
+        .run(session, "hi".into())
+        .await
+        .expect("mid-stream network drop recovers automatically");
+    assert!(
+        matches!(result.outcome, RunOutcome::FinalOutput(ref s) if s == "recovered answer"),
+        "expected recovered answer, got {:?}",
+        result.outcome
+    );
 }

@@ -63,8 +63,10 @@ impl OpenAiCompatibleProvider {
     /// Construct a provider over an OpenAI-compatible endpoint.
     pub fn new(base_url: String, api_key: String) -> Self {
         let http = Client::builder()
-            .timeout(Duration::from_secs(180))
+            .read_timeout(Duration::from_secs(90))
             .connect_timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(30))
+            .tcp_keepalive(Duration::from_secs(30))
             .build()
             .expect("reqwest client build");
         Self {
