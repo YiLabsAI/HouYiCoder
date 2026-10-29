@@ -12,7 +12,7 @@ use crate::runtime_dirs::RuntimeDirs;
 use crate::shell_selection::ShellProgram;
 use crate::timeout::message;
 use houyicoder_api::sandbox::{
-    Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+    Containment, Coverage, FenceCapability, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     normalize_tool_path,
 };
 use houyicoder_async::PFut;
@@ -54,6 +54,11 @@ pub struct LinuxLandlockSession {
     /// Runtime directory grants, re-read at every spawn so a consent given
     /// mid-session widens the next command's fence.
     dirs: RuntimeDirs,
+    /// Advances when a directory grant changes the set the fence confines.
+    /// A caller that installs a grant reads it before and after, so an
+    /// install the fence did not apply is caught rather than reported as
+    /// saved.
+    revision: AtomicU64,
 }
 
 /// Mint the per-session scratch dir under the system temp root. The leaf is
@@ -93,6 +98,7 @@ impl LinuxLandlockSession {
             fence,
             tmpdir: session_tmpdir()?,
             dirs: RuntimeDirs::default(),
+            revision: AtomicU64::new(0),
         })
     }
 
@@ -122,6 +128,7 @@ impl LinuxLandlockSession {
             fence,
             tmpdir: session_tmpdir()?,
             dirs: RuntimeDirs::default(),
+            revision: AtomicU64::new(0),
         })
     }
 
@@ -438,15 +445,23 @@ impl SandboxSession for LinuxLandlockSession {
     }
 
     fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
-        self.dirs.add_write(path)
+        if self.dirs.add_write(path)? {
+            self.revision.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
     }
 
     fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
-        self.dirs.add_read(path)
+        if self.dirs.add_read(path)? {
+            self.revision.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
     }
 
     fn remove_working_dir(&self, path: &str) {
-        self.dirs.remove(path);
+        if self.dirs.remove(path) {
+            self.revision.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     fn working_dirs(&self) -> Vec<String> {
@@ -497,6 +512,23 @@ impl Containment for LinuxLandlockSession {
     /// not contained.
     fn coverage(&self) -> Coverage {
         coverage_for(&self.fence, &self.workspace, &self.dirs)
+    }
+
+    /// Landlock is a path-based ruleset: it confines where a process reads
+    /// and writes, and imposes no network ruleset at all. The network axis
+    /// therefore stays open here even while the filesystem axes are
+    /// confined, so no gate premise may rest on the fence for egress.
+    fn capability(&self) -> FenceCapability {
+        let enforced = matches!(self.fence, FenceStatus::Enforced);
+        FenceCapability {
+            writes: enforced,
+            reads: enforced,
+            network: false,
+        }
+    }
+
+    fn capability_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
     }
 
     fn would_block(&self, _effect: SideEffect) -> Option<String> {

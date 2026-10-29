@@ -3,10 +3,14 @@
 
 use super::*;
 use crate::composition::SkillRegistryImpl;
+use crate::protocol_adapter::{CardFence, FENCED};
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use houyicoder_api::provider::ModelProvider;
-use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::sandbox::{
+    BoundaryAccess, BoundaryGrant, Containment, Coverage, FenceCapability, SandboxSession,
+    SideEffect,
+};
 use houyicoder_api::skill::{SkillRegistry, SkillScriptRef};
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError, SessionId};
@@ -14,7 +18,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ApprovalRequest, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{
-    Decision, DefaultModeGate, Effect, FileRuleStore, RuleStore, ToolRequest,
+    Decision, DefaultModeGate, Effect, FileRuleStore, ModeGate, RuleStore, ToolRequest,
 };
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
@@ -36,7 +40,10 @@ use std::{
     env, fs,
     path::Path,
     process,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// build_approval_request carries the structured Ask reason onto the request
@@ -51,7 +58,7 @@ fn test_build_request_carries_reason() {
         detail: "rm needs confirmation".into(),
         containment_note: None,
     };
-    let request = build_approval_request(&req, Some(&reason), None, true, &[]);
+    let request = build_approval_request(&req, Some(&reason), None, FENCED, &[]);
     assert_eq!(request.call_id, "call-1");
     assert_eq!(request.tool_name, "bash");
     let carried = request.reason.as_ref().expect("reason carried");
@@ -63,7 +70,7 @@ fn test_build_request_carries_reason() {
     assert_eq!(back.reason.unwrap().detail, "rm needs confirmation");
 
     // None reason: the card falls back to a generic prompt.
-    let no_reason = build_approval_request(&req, None, None, true, &[]);
+    let no_reason = build_approval_request(&req, None, None, FENCED, &[]);
     assert!(no_reason.reason.is_none());
     let json = serde_json::to_string(&no_reason).unwrap();
     assert!(
@@ -814,6 +821,366 @@ async fn test_handle_rejects_wrong_payload() {
     feeder.await.expect("feeder done");
     assert_eq!(err.category, ErrorCategory::InvalidFrame);
     assert_eq!(err.message, "expected a permission reverse response");
+}
+
+/// A fence whose directory grants may or may not move its capability
+/// revision, so one install path can be driven both ways.
+struct RevisionFence {
+    root: Arc<Path>,
+    granted: Mutex<Vec<String>>,
+    revision: AtomicU64,
+    advance_on_grant: bool,
+}
+
+impl Containment for RevisionFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: vec![self.root.to_path_buf()],
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+    fn capability_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+}
+
+impl SandboxSession for RevisionFence {
+    fn workspace_root(&self) -> Arc<Path> {
+        self.root.clone()
+    }
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+    fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
+        self.granted
+            .lock()
+            .expect("grant lock")
+            .push(path.to_string());
+        if self.advance_on_grant {
+            self.revision.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+    fn remove_working_dir(&self, path: &str) {
+        self.granted
+            .lock()
+            .expect("grant lock")
+            .retain(|granted| granted != path);
+    }
+    fn working_dirs(&self) -> Vec<String> {
+        self.granted.lock().expect("grant lock").clone()
+    }
+    fn as_containment(&self) -> Option<&dyn Containment> {
+        Some(self)
+    }
+}
+
+/// A grant the fence accepts without moving its own revision did not take
+/// effect, so the install fails and the runtime change is rolled back rather
+/// than reported as saved. The control with a fence that widens shows the
+/// check follows the revision and not the count of grants.
+#[test]
+fn test_grant_requires_fence_widening() {
+    let root = env::temp_dir().join(format!("revision-{}", process::id()));
+    drop(fs::remove_dir_all(&root));
+    let outside = root.join("outside");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let input = json!({"path": outside.to_string_lossy(), "pattern": "x"});
+
+    let inert = Arc::new(RevisionFence {
+        root: Arc::from(repo.as_path()),
+        granted: Mutex::new(Vec::new()),
+        revision: AtomicU64::new(3),
+        advance_on_grant: false,
+    });
+    let server = server_over_fence(inert.clone());
+    let err = server
+        .apply_consent_directory("grep", &input, "once")
+        .expect_err("an install the fence did not apply must fail");
+    assert!(matches!(err, SandboxError::Unsupported(_)));
+    assert!(
+        inert.working_dirs().is_empty(),
+        "the failed install is rolled back: {:?}",
+        inert.working_dirs()
+    );
+
+    let growing = Arc::new(RevisionFence {
+        root: Arc::from(repo.as_path()),
+        granted: Mutex::new(Vec::new()),
+        revision: AtomicU64::new(3),
+        advance_on_grant: true,
+    });
+    let server = server_over_fence(growing.clone());
+    server
+        .apply_consent_directory("grep", &input, "once")
+        .expect("a widening fence keeps the grant");
+    assert_eq!(growing.working_dirs().len(), 1);
+
+    // A grant the session already holds changes nothing, so a fence that
+    // does not move its revision must not fail the repeat install.
+    let again = server.apply_consent_directory("grep", &input, "once");
+    assert!(again.is_ok(), "a repeated grant is not a failed install");
+    drop(fs::remove_dir_all(&root));
+}
+
+fn server_over_fence(session: Arc<RevisionFence>) -> Server {
+    let gate = Arc::new(DefaultModeGate::new());
+    let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
+    let runner = Runner::new(
+        sess_store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    Server::new(Arc::new(runner), SessionId::new(), gate).with_session(session)
+}
+
+/// A fence that reports one writes axis and one egress verdict, so the card
+/// facts can be read off without depending on what the host platform
+/// enforces.
+struct AxisFence {
+    writes: bool,
+    egress: Option<&'static str>,
+}
+
+impl Containment for AxisFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: Vec::new(),
+        }
+    }
+    fn capability(&self) -> FenceCapability {
+        FenceCapability {
+            writes: self.writes,
+            reads: false,
+            network: false,
+        }
+    }
+    fn would_block(&self, effect: SideEffect) -> Option<String> {
+        match effect {
+            SideEffect::Network => self.egress.map(str::to_string),
+            _ => None,
+        }
+    }
+}
+
+/// A session that keeps read and write grants apart and canonicalizes on
+/// the way in, the way a real runtime fence stores them.
+struct SplitGrantFence {
+    root: Arc<Path>,
+    reads: Mutex<Vec<String>>,
+    writes: Mutex<Vec<String>>,
+}
+
+impl SplitGrantFence {
+    fn canonical(path: &str) -> Option<String> {
+        dunce::canonicalize(path)
+            .ok()
+            .map(|canonical| canonical.to_string_lossy().into_owned())
+    }
+}
+
+impl Containment for SplitGrantFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: Vec::new(),
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+}
+
+impl SandboxSession for SplitGrantFence {
+    fn workspace_root(&self) -> Arc<Path> {
+        self.root.clone()
+    }
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+    fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
+        let Some(canonical) = Self::canonical(path) else {
+            return Err(SandboxError::NotFound(path.to_string()));
+        };
+        let writes = self.writes.lock().expect("write lock");
+        if writes.contains(&canonical) {
+            return Ok(());
+        }
+        drop(writes);
+        let mut reads = self.reads.lock().expect("read lock");
+        if !reads.contains(&canonical) {
+            reads.push(canonical);
+        }
+        Ok(())
+    }
+    fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
+        let Some(canonical) = Self::canonical(path) else {
+            return Err(SandboxError::NotFound(path.to_string()));
+        };
+        self.reads
+            .lock()
+            .expect("read lock")
+            .retain(|held| held != &canonical);
+        let mut writes = self.writes.lock().expect("write lock");
+        if !writes.contains(&canonical) {
+            writes.push(canonical);
+        }
+        Ok(())
+    }
+    fn remove_working_dir(&self, path: &str) {
+        let Some(canonical) = Self::canonical(path) else {
+            return;
+        };
+        self.reads
+            .lock()
+            .expect("read lock")
+            .retain(|held| held != &canonical);
+        self.writes
+            .lock()
+            .expect("write lock")
+            .retain(|held| held != &canonical);
+    }
+    fn reading_dirs(&self) -> Vec<String> {
+        self.reads.lock().expect("read lock").clone()
+    }
+    fn working_dirs(&self) -> Vec<String> {
+        let mut all = self.reading_dirs();
+        all.extend(self.writing_dirs());
+        all
+    }
+    fn writing_dirs(&self) -> Vec<String> {
+        self.writes.lock().expect("write lock").clone()
+    }
+    fn as_containment(&self) -> Option<&dyn Containment> {
+        Some(self)
+    }
+}
+
+/// A failed install must undo what it added and nothing else. The directory
+/// below held a read grant before the install asked for read-write, so the
+/// rollback restores the read grant; removing the directory outright would
+/// revoke an authorization the user made earlier.
+#[test]
+fn test_rollback_restores_read_grant() {
+    let root = env::temp_dir().join(format!("rollback-{}", process::id()));
+    drop(fs::remove_dir_all(&root));
+    let held = root.join("held-read");
+    fs::create_dir_all(&held).expect("mkdir held");
+    let missing = root.join("missing");
+    let session = Arc::new(SplitGrantFence {
+        root: Arc::from(root.as_path()),
+        reads: Mutex::new(Vec::new()),
+        writes: Mutex::new(Vec::new()),
+    });
+    let held_text = held.to_string_lossy().into_owned();
+    session
+        .add_reading_dir(&held_text)
+        .expect("seed read grant");
+    let server = server_over_gate(Arc::new(DefaultModeGate::new()))
+        .with_session(session.clone() as Arc<dyn SandboxSession>);
+
+    let grants = [
+        BoundaryGrant {
+            directory: held.clone(),
+            access: BoundaryAccess::ReadWrite,
+        },
+        BoundaryGrant {
+            directory: missing,
+            access: BoundaryAccess::ReadOnly,
+        },
+    ];
+    server
+        .install_directory_grants(&grants, "once")
+        .expect_err("a missing directory fails the install");
+
+    let canonical = dunce::canonicalize(&held).expect("canonicalize held");
+    let canonical = canonical.to_string_lossy().into_owned();
+    assert!(
+        session.reading_dirs().contains(&canonical),
+        "the earlier read grant is restored: {:?}",
+        session.reading_dirs()
+    );
+    assert!(
+        !session.writing_dirs().contains(&canonical),
+        "the upgrade is undone: {:?}",
+        session.writing_dirs()
+    );
+    drop(fs::remove_dir_all(&root));
+}
+
+fn server_over_gate(gate: Arc<dyn ModeGate>) -> Server {
+    let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
+    let runner = Runner::new(
+        sess_store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    Server::new(Arc::new(runner), SessionId::new(), gate)
+}
+
+/// Each card fact is taken from the axis it belongs to, so a fence that does
+/// not confine writes cannot offer a remembered command and a fence that
+/// always refuses egress cannot offer a remembered destination. Deriving
+/// either fact from coverage alone, or swapping the two, reopens a card that
+/// promises more than the kernel keeps.
+#[test]
+fn test_card_fence_reads_axes() {
+    let withdrawn = server_over_gate(Arc::new(DefaultModeGate::new().with_containment(Arc::new(
+        AxisFence {
+            writes: false,
+            egress: Some("the network policy denies egress"),
+        },
+    ))));
+    let facts = withdrawn.card_fence();
+    assert_eq!(
+        facts,
+        CardFence {
+            writes_confined: false,
+            egress_blocked: true,
+        }
+    );
+
+    let confined = server_over_gate(Arc::new(DefaultModeGate::new().with_containment(Arc::new(
+        AxisFence {
+            writes: true,
+            egress: None,
+        },
+    ))));
+    let facts = confined.card_fence();
+    assert_eq!(
+        facts,
+        CardFence {
+            writes_confined: true,
+            egress_blocked: false,
+        }
+    );
 }
 
 /// The chain tests build a real platform sandbox session, so the whole

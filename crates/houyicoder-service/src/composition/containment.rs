@@ -10,7 +10,7 @@ use super::degrade_with_notice;
 use super::resolve_project_workspace;
 use super::worktree::git_common_dir;
 use crate::sandbox_policy::{SandboxWarnings, network_policy_from, shell_program_from};
-use houyicoder_api::sandbox::{Containment, Coverage, SandboxSession, SideEffect};
+use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SandboxSession, SideEffect};
 use houyicoder_permission::{DefaultModeGate, RuleStore};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
 use houyicoder_sandbox::PlatformSession;
@@ -111,6 +111,20 @@ impl Containment for ContainmentAdapter {
     }
     fn would_block(&self, effect: SideEffect) -> Option<String> {
         self.0.as_containment().and_then(|c| c.would_block(effect))
+    }
+
+    fn capability(&self) -> FenceCapability {
+        self.0
+            .as_containment()
+            .map(|c| c.capability())
+            .unwrap_or(FenceCapability::NONE)
+    }
+
+    fn capability_revision(&self) -> u64 {
+        self.0
+            .as_containment()
+            .map(|c| c.capability_revision())
+            .unwrap_or(0)
     }
 
     fn denies_control_writes(&self) -> bool {

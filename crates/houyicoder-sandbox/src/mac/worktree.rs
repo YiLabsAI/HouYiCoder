@@ -9,6 +9,7 @@ use houyicoder_context::SandboxError;
 use std::fs::read_to_string;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use super::MacSeatbeltSession;
 
@@ -60,6 +61,10 @@ pub(super) fn narrow_to_worktree(
         .narrow_git_common
         .lock()
         .expect("narrow git common lock") = Some(git_common.clone());
+    // The effective workspace changed, so the capability did too. The two
+    // grants above already advanced the counter through the session's own
+    // dir methods; this records the workspace change itself.
+    session.note_capability_change();
     // The restore closure reverts the narrow state + drops the .git
     // allow-back. It captures Arc clones of the shared Mutex fields so it
     // can revert through the original session (the Arc-clone points at the
@@ -67,6 +72,7 @@ pub(super) fn narrow_to_worktree(
     let narrow_ws = Arc::clone(&session.narrow_workspace);
     let narrow_git = Arc::clone(&session.narrow_git_common);
     let dirs = session.dirs.clone();
+    let revision = Arc::clone(&session.revision);
     let git_common_for_restore = git_common.clone();
     let repo_for_restore = session.workspace.clone();
     Ok(WorktreeFenceGuard::new(Box::new(move || {
@@ -74,6 +80,7 @@ pub(super) fn narrow_to_worktree(
         *narrow_git.lock().expect("restore: narrow git lock") = None;
         dirs.remove_write(&git_common_for_restore);
         dirs.remove_read(&repo_for_restore);
+        revision.fetch_add(1, Ordering::SeqCst);
         Ok(())
     })))
 }

@@ -36,7 +36,7 @@ use crate::side_effect::side_effect_for;
 use crate::store::RuleStore;
 use crate::store::Scope;
 use houyicoder_api::sandbox::SideEffect;
-use houyicoder_api::sandbox::{Containment, Coverage};
+use houyicoder_api::sandbox::{Containment, FenceCapability};
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::field::Empty;
@@ -80,12 +80,18 @@ pub trait ModeGate: Send + Sync {
     fn set_git_checkpoint_enabled(&self, enabled: bool);
     /// Whether the git-checkpoint builtin rules are currently enabled.
     fn git_checkpoint_enabled(&self) -> bool;
-    /// Whether an execution fence is active for this gate's session. A caller
-    /// that is about to promise a reusable authorization reads this first: a
-    /// grant the fence cannot honour would be a promise the gate breaks on the
-    /// next call. Default false for gates built without a fence.
-    fn fence_active(&self) -> bool {
-        false
+    /// What the session's fence contains, axis by axis. A caller that is about
+    /// to promise a reusable authorization reads this first: a grant the fence
+    /// cannot honour would be a promise the gate breaks on the next call.
+    /// Default contains nothing, for gates built without a fence.
+    fn fence_capability(&self) -> FenceCapability {
+        FenceCapability::NONE
+    }
+    /// Why the fence will refuse this side effect, when it will. The approval
+    /// card uses it to withhold a remember option for a call the kernel is
+    /// about to refuse anyway. Default none: no fence, nothing to refuse.
+    fn fence_would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
     }
     /// A snapshot of the in-process decision counter, bucketed by (outcome,
     /// source, validator), for the inspect / status surface and the harvest
@@ -604,10 +610,17 @@ impl ModeGate for DefaultModeGate {
         !ids.iter().any(|id| disabled.contains(id))
     }
 
-    fn fence_active(&self) -> bool {
+    fn fence_capability(&self) -> FenceCapability {
         self.containment
             .as_ref()
-            .is_some_and(|c| matches!(c.coverage(), Coverage::Fenced { .. }))
+            .map(|c| c.capability())
+            .unwrap_or(FenceCapability::NONE)
+    }
+
+    fn fence_would_block(&self, effect: SideEffect) -> Option<String> {
+        self.containment
+            .as_ref()
+            .and_then(|c| c.would_block(effect))
     }
 
     fn decision_metrics(&self) -> Vec<DecisionBucket> {

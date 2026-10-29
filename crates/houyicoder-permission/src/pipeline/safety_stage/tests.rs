@@ -10,7 +10,7 @@ use crate::Decision;
 use crate::decision::{DenySource, Outcome};
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::{DefaultModeGate, ModeGate};
-use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SideEffect};
 use serde_json::Value;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
@@ -53,6 +53,35 @@ impl Containment for FencedRoot {
     }
     fn boundary_root(&self) -> Option<Arc<Path>> {
         Some(Arc::from(self.0.as_path()))
+    }
+    fn denies_control_writes(&self) -> bool {
+        true
+    }
+}
+
+/// A fence that closes control paths but confines only reads: its path rules
+/// cover the session, and a write to a closed control file is not among the
+/// things the kernel refuses only because those rules exist.
+struct ControlClosedReadsOnly(PathBuf);
+
+impl Containment for ControlClosedReadsOnly {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: vec![self.0.clone()],
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+    fn boundary_root(&self) -> Option<Arc<Path>> {
+        Some(Arc::from(self.0.as_path()))
+    }
+    fn capability(&self) -> FenceCapability {
+        FenceCapability {
+            writes: false,
+            reads: true,
+            network: false,
+        }
     }
     fn denies_control_writes(&self) -> bool {
         true
@@ -137,6 +166,11 @@ impl Workspace {
 
     fn permissive_gate(&self, mode: PermissionMode) -> DefaultModeGate {
         DefaultModeGate::with_mode(mode).with_containment(Arc::new(PermissiveFence(self.0.clone())))
+    }
+
+    fn reads_only_control_gate(&self) -> DefaultModeGate {
+        DefaultModeGate::with_mode(PermissionMode::Auto)
+            .with_containment(Arc::new(ControlClosedReadsOnly(self.0.clone())))
     }
 }
 
@@ -288,6 +322,27 @@ fn test_fenced_control_write_denied() {
             other => panic!("expected a fence deny, got {other:?}"),
         }
     }
+}
+
+/// A fence that closes control paths without confining writes cannot make the
+/// refusal certain: the write could still land, so the command keeps the
+/// question instead of being refused on a promise the kernel does not keep.
+#[test]
+fn test_control_write_asks_unconfined() {
+    let ws = Workspace::new(line!());
+    let command = "echo x >> ~/.houyicoder/settings.json";
+    assert_eq!(
+        ws.fenced_gate().decide(&bash_req(command)).outcome(),
+        Outcome::Deny,
+        "a writes-confined fence refuses the write outright"
+    );
+    assert_eq!(
+        ws.reads_only_control_gate()
+            .decide(&bash_req(command))
+            .outcome(),
+        Outcome::Ask,
+        "without the writes axis the refusal is a promise the fence does not keep"
+    );
 }
 
 /// A command that only mentions a control path is not writing it. The fence

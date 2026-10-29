@@ -45,8 +45,9 @@ const CONTROL_CHILDREN: &[&str] = &[
 
 /// The control children the execution fence refuses to let any process write,
 /// keyed by the configuration directory that holds them. A command that would
-/// write one cannot succeed while the fence is active, so the gate refuses it
-/// outright instead of asking for an approval the kernel then overrules.
+/// write one cannot succeed while the fence confines writes, so the gate
+/// refuses it outright instead of asking for an approval the kernel then
+/// overrules.
 ///
 /// The pairs are listed per directory because the fence's deny list is not a
 /// cross product: it names the settings and permission stores of the directories

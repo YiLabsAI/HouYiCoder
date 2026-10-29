@@ -31,6 +31,8 @@ pub(crate) fn bash_req(command: &str) -> ToolRequest<'static> {
 #[cfg(test)]
 mod egress;
 #[cfg(test)]
+mod fence_axes;
+#[cfg(test)]
 mod fenced_exec;
 #[cfg(test)]
 mod git_ops;

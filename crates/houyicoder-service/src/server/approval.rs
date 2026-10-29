@@ -1,8 +1,11 @@
 //! Mid-run permission requests, verdict auditing, and scoped consent
 //! capabilities applied before execution resumes.
 
+use std::path::Path;
+
 use houyicoder_api::sandbox::{
-    BoundaryAccess, BoundaryGrant, Containment, SandboxSession, boundary_grants_for,
+    BoundaryAccess, BoundaryGrant, Containment, FenceAxis, SandboxSession, SideEffect,
+    boundary_grants_for,
 };
 use houyicoder_api::skill::SkillScriptRef;
 use houyicoder_context::{EventId, PermissionVerdict, SandboxError, SessionEvent, SessionLogEntry};
@@ -20,11 +23,24 @@ use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, DelegationSource};
 
 use crate::composition::ContainmentAdapter;
-use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
+use crate::protocol_adapter::{CardFence, build_approval_request, parse_approval_decision};
 
 use super::{Server, frame_carrier::FrameCarrier, now_millis};
 
 impl Server {
+    /// The two fence facts an approval card's option list reads, each taken
+    /// from the axis it belongs to: a remembered command rests on bounded
+    /// writes, and a remembered destination rests on the fence not refusing
+    /// the egress. The first card, the re-emitted card, and the consent
+    /// routing all call this one method, so every card about one call lists
+    /// the options the same fence can keep.
+    pub(crate) fn card_fence(&self) -> CardFence {
+        CardFence {
+            writes_confined: self.gate.fence_capability().confines(FenceAxis::Writes),
+            egress_blocked: self.gate.fence_would_block(SideEffect::Network).is_some(),
+        }
+    }
+
     /// Drive one approval request to a human answer. The cause travels with
     /// the request: the gate judged the call once, when the turn resolved, and
     /// the card shows that verdict. Re-deciding here would let a mode or rule
@@ -48,13 +64,14 @@ impl Server {
         disclose_directory_grants(&mut reason, &directory_grants);
 
         let ask_id = self.mint_req_id();
+        let fence = self.card_fence();
         let ask = ServerRequestEnvelope::new(
             ask_id,
             ServerRequestPayload::Permission(build_approval_request(
                 approval,
                 reason.as_ref(),
                 delegation.as_ref(),
-                self.gate.fence_active(),
+                fence,
                 &directory_grants,
             )),
         );
@@ -294,7 +311,8 @@ impl Server {
     }
 
     /// Install runtime grants before persisting them. A partial runtime update
-    /// is rolled back when a later grant fails.
+    /// is rolled back when a later grant fails, restoring the access each
+    /// directory had before this install rather than simply removing it.
     fn install_directory_grants(
         &self,
         grants: &[BoundaryGrant],
@@ -306,7 +324,12 @@ impl Server {
         let session = self.sandbox_session.as_ref().ok_or_else(|| {
             SandboxError::SandboxUnavailable("no sandbox session for directory grant".into())
         })?;
-        let mut installed: Vec<&BoundaryGrant> = Vec::new();
+        let fence = session.as_containment();
+        let revision_before = fence.map(|f| f.capability_revision());
+        // What each grant changed, so a rollback restores that state. A grant
+        // the session already holds is left out: removing it would revoke an
+        // authorization the user made earlier rather than undo this install.
+        let mut installed: Vec<(&BoundaryGrant, PriorAccess)> = Vec::new();
         for grant in grants {
             if !grant.directory.is_dir() {
                 rollback_directory_grants(session.as_ref(), &installed);
@@ -315,6 +338,9 @@ impl Server {
                     grant.directory.display()
                 )));
             }
+            let Some(prior) = access_change(session.as_ref(), grant) else {
+                continue;
+            };
             let path = grant.directory.to_string_lossy();
             let result = match grant.access {
                 BoundaryAccess::ReadOnly => session.add_reading_dir(&path),
@@ -324,7 +350,19 @@ impl Server {
                 rollback_directory_grants(session.as_ref(), &installed);
                 return Err(error);
             }
-            installed.push(grant);
+            installed.push((grant, prior));
+        }
+        // The fence reports a revision that moves when its capability moves.
+        // An install it accepted without moving that revision did not take
+        // effect, so the caller must not report the grant as saved.
+        if !installed.is_empty()
+            && let (Some(f), Some(before)) = (fence, revision_before)
+            && f.capability_revision() <= before
+        {
+            rollback_directory_grants(session.as_ref(), &installed);
+            return Err(SandboxError::Unsupported(
+                "the fence accepted a directory grant without widening its capability".into(),
+            ));
         }
         if scope == "always" {
             for grant in grants {
@@ -342,10 +380,72 @@ impl Server {
     }
 }
 
-fn rollback_directory_grants(session: &dyn SandboxSession, grants: &[&BoundaryGrant]) {
-    for grant in grants {
-        session.remove_working_dir(&grant.directory.to_string_lossy());
+/// What the session granted a directory before this install touched it.
+/// A rollback restores this state rather than removing every grant, because
+/// a read grant the user made earlier is not this install's to revoke.
+#[derive(Clone, Copy)]
+enum PriorAccess {
+    /// The directory was outside the fence.
+    Absent,
+    /// The directory was granted for reading only.
+    ReadOnly,
+}
+
+/// The state to restore if this grant is rolled back, or none when the
+/// session already grants the requested access and the install changes
+/// nothing.
+fn access_change(session: &dyn SandboxSession, grant: &BoundaryGrant) -> Option<PriorAccess> {
+    match grant.access {
+        BoundaryAccess::ReadOnly => {
+            if grant_already_held(&session.working_dirs(), &grant.directory) {
+                None
+            } else {
+                Some(PriorAccess::Absent)
+            }
+        }
+        BoundaryAccess::ReadWrite => {
+            if grant_already_held(&session.writing_dirs(), &grant.directory) {
+                None
+            } else if grant_already_held(&session.reading_dirs(), &grant.directory) {
+                Some(PriorAccess::ReadOnly)
+            } else {
+                Some(PriorAccess::Absent)
+            }
+        }
     }
+}
+
+/// Undo the grants this install added, most recent first: a directory that
+/// had read access before keeps it, and one that was outside the fence is
+/// removed again. A backend that cannot restore the read grant says so, so a
+/// failed restore is never silent.
+fn rollback_directory_grants(
+    session: &dyn SandboxSession,
+    installed: &[(&BoundaryGrant, PriorAccess)],
+) {
+    for (grant, prior) in installed.iter().rev() {
+        let path = grant.directory.to_string_lossy();
+        session.remove_working_dir(&path);
+        if matches!(prior, PriorAccess::ReadOnly)
+            && let Err(error) = session.add_reading_dir(&path)
+        {
+            tracing::warn!(
+                "directory grant rollback could not restore read access to {}: {error}",
+                grant.directory.display()
+            );
+        }
+    }
+}
+
+/// Whether the session already holds this grant, compared in the form the
+/// fence stores: canonicalized on both sides, so a symlinked spelling of one
+/// directory is not mistaken for a new grant that must widen the capability.
+fn grant_already_held(held: &[String], directory: &Path) -> bool {
+    let canonical = dunce::canonicalize(directory).ok();
+    held.iter().any(|current| match &canonical {
+        Some(target) => Path::new(current) == target,
+        None => Path::new(current) == directory,
+    })
 }
 
 /// Add the effective directory capability to the approval reason, so a call

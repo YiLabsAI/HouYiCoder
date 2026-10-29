@@ -1,6 +1,8 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_async::PFut;
+use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_permission::{FileRuleStore, Scope};
 use houyicoder_sandbox::PlatformSession;
 use std::env::temp_dir;
@@ -283,4 +285,70 @@ fn test_containment_reports_bounds() {
         "a runtime-added dir must be in the bounds the gate sees: {dirs:?}"
     );
     fs::remove_dir_all(&root).ok();
+}
+
+/// A session that reports a capability and a revision of its own, so the
+/// pass-through can be read off without depending on what the host platform
+/// enforces.
+struct CapableSession;
+
+impl Containment for CapableSession {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: Vec::new(),
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+    fn capability(&self) -> FenceCapability {
+        FenceCapability {
+            writes: true,
+            reads: false,
+            network: true,
+        }
+    }
+    fn capability_revision(&self) -> u64 {
+        42
+    }
+}
+
+impl SandboxSession for CapableSession {
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(Path::new("/ws"))
+    }
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+    fn as_containment(&self) -> Option<&dyn Containment> {
+        Some(self)
+    }
+}
+
+/// The gate reads the capability and its revision through the adapter, so a
+/// fallback that reported a different fence than the session enforces would
+/// either relax what the session never earned or ask against a fence that is
+/// in place. The axes and the counter both travel unchanged.
+#[test]
+fn test_adapter_reports_capability() {
+    let adapter = ContainmentAdapter(Arc::new(CapableSession));
+    assert_eq!(
+        adapter.capability(),
+        FenceCapability {
+            writes: true,
+            reads: false,
+            network: true
+        }
+    );
+    assert_eq!(adapter.capability_revision(), 42);
 }

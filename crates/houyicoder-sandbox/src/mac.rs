@@ -13,7 +13,7 @@
 
 use crate::{ProfileSpec, ShellSnapshot, render};
 use houyicoder_api::sandbox::{
-    Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
+    Containment, Coverage, FenceCapability, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     WorktreeFenceGuard, normalize_tool_path,
 };
 use houyicoder_async::PFut;
@@ -106,6 +106,13 @@ pub struct MacSeatbeltSession {
     /// life of the session, so a settings edit mid-session cannot silently widen
     /// the fence under a running agent.
     network: NetworkPolicy,
+    /// Advances whenever the effective capability changes: a directory
+    /// grant is added or revoked, or the fence narrows to a worktree and is
+    /// restored. Shared so the worktree restore closure advances it through
+    /// a clone. A caller that installs a grant reads it before and after, so
+    /// an install the fence did not apply is caught rather than reported as
+    /// saved.
+    revision: Arc<AtomicU64>,
     /// Login-shell env snapshot: captures PATH/aliases/functions once per
     /// session by running the user's login shell, then sources the snapshot
     /// into each sandboxed command so the non-login shell still sees the
@@ -152,6 +159,7 @@ impl MacSeatbeltSession {
             owned: true,
             breaker: None,
             network: NetworkPolicy::contained(),
+            revision: Arc::new(AtomicU64::new(0)),
             shell_snapshot: Mutex::new(ShellSnapshot::new(snapshot_shell, PathBuf::from(&home))),
             shell,
         })
@@ -191,6 +199,7 @@ impl MacSeatbeltSession {
             owned: false,
             breaker: None,
             network: NetworkPolicy::contained(),
+            revision: Arc::new(AtomicU64::new(0)),
             shell_snapshot: Mutex::new(ShellSnapshot::new(snapshot_shell, PathBuf::from(&home))),
             shell,
         })
@@ -371,6 +380,22 @@ impl Containment for MacSeatbeltSession {
         }
     }
 
+    /// The seatbelt profile carries file rules for both filesystem axes.
+    /// The network axis follows the session policy: a contained policy emits
+    /// the deny, so the kernel decides egress; an open policy leaves every
+    /// destination reachable and therefore contains nothing on that axis.
+    fn capability(&self) -> FenceCapability {
+        FenceCapability {
+            writes: true,
+            reads: true,
+            network: !self.network.allows_egress(),
+        }
+    }
+
+    fn capability_revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
     /// The profile carries explicit write denies for the settings and
     /// permission stores, the credential files, and the skill and hook
     /// directories, emitted after every allow, so the kernel refuses those
@@ -395,6 +420,13 @@ impl Drop for MacSeatbeltSession {
 }
 
 impl MacSeatbeltSession {
+    /// Record that the fence now contains a different set of paths. Only a
+    /// grant that actually changed the set advances the counter, so a
+    /// repeated install does not look like a fresh capability.
+    fn note_capability_change(&self) {
+        self.revision.fetch_add(1, Ordering::SeqCst);
+    }
+
     #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
     async fn exec_inner(
         &self,
@@ -616,15 +648,23 @@ impl SandboxSession for MacSeatbeltSession {
     }
 
     fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
-        self.dirs.add_write(path)
+        if self.dirs.add_write(path)? {
+            self.note_capability_change();
+        }
+        Ok(())
     }
 
     fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
-        self.dirs.add_read(path)
+        if self.dirs.add_read(path)? {
+            self.note_capability_change();
+        }
+        Ok(())
     }
 
     fn remove_working_dir(&self, path: &str) {
-        self.dirs.remove(path);
+        if self.dirs.remove(path) {
+            self.note_capability_change();
+        }
     }
 
     fn working_dirs(&self) -> Vec<String> {

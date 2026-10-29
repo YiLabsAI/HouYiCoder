@@ -15,6 +15,34 @@ use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 
 use super::consent_rule_for;
 
+/// What the session fence will do to the call the card describes, reduced to
+/// the two facts the option list needs. Writes confinement decides whether a
+/// command whose local output is bounded can be remembered at all; an egress
+/// refusal decides whether a remembered destination is a promise the kernel
+/// keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CardFence {
+    /// Whether the fence confines where writes land.
+    pub writes_confined: bool,
+    /// Whether the fence will refuse the egress this call asks for.
+    pub egress_blocked: bool,
+}
+
+/// A fence that confines both filesystem axes and permits egress: the state
+/// every path fence reports.
+#[cfg(test)]
+pub(crate) const FENCED: CardFence = CardFence {
+    writes_confined: true,
+    egress_blocked: false,
+};
+
+/// A fence that confines neither axis.
+#[cfg(test)]
+pub(crate) const UNFENCED: CardFence = CardFence {
+    writes_confined: false,
+    egress_blocked: false,
+};
+
 /// What an "always" verdict on one ask can durably authorize. The approval
 /// card and the consent router both read this, so what the card promises is
 /// what gets installed.
@@ -36,10 +64,12 @@ pub(crate) enum AlwaysGrant {
 /// cannot tell what the user is being asked about, so it must not promise a
 /// durable grant.
 ///
-/// The fenced flag reports whether the session's execution fence is active. A
-/// command whose file output is only safe because the fence bounds it cannot
-/// be remembered when the fence is absent: the gate would ask again, so the
-/// card must not offer the choice.
+/// A command whose local file output is only safe because the fence bounds it
+/// cannot be remembered when the fence does not bound writes: the gate would
+/// ask again, so the card must not offer the choice. A destination the fence
+/// will refuse is refused here as well, for the same reason one step later:
+/// the remembered entry would change nothing at execution time, so the card
+/// would collect an answer the kernel overrules.
 ///
 /// A directory-bounds ask takes its directories from the grants the caller is
 /// about to install, not from the reason text: the card writes that text, and
@@ -49,7 +79,7 @@ pub(crate) fn always_grant(
     tool_name: &str,
     input: &serde_json::Value,
     reason: Option<&AskReason>,
-    fenced: bool,
+    fence: CardFence,
     grants: &[BoundaryGrant],
 ) -> AlwaysGrant {
     let Some(reason) = reason else {
@@ -75,11 +105,15 @@ pub(crate) fn always_grant(
     {
         // A destination is not a command rule: the network check recognizes
         // programs, not hosts, so a remembered destination is its own entry.
-        let command = houyicoder_permission::input_content(tool_name, Some(input));
-        if !egress_outputs_safe(&command, fenced) {
+        // A fence that refuses the egress keeps the ask single-shot.
+        if fence.egress_blocked {
             return AlwaysGrant::Once;
         }
-        return match houyicoder_permission::egress_scope_list(&command, fenced) {
+        let command = houyicoder_permission::input_content(tool_name, Some(input));
+        if !egress_outputs_safe(&command, fence.writes_confined) {
+            return AlwaysGrant::Once;
+        }
+        return match houyicoder_permission::egress_scope_list(&command, fence.writes_confined) {
             Some(scopes) if !scopes.is_empty() => AlwaysGrant::Network(scopes),
             _ => AlwaysGrant::Once,
         };
@@ -155,7 +189,7 @@ pub(crate) fn approval_options(
     tool_name: &str,
     input: &serde_json::Value,
     reason: Option<&AskReason>,
-    fenced: bool,
+    fence: CardFence,
     grants: &[BoundaryGrant],
 ) -> Vec<PermissionOption> {
     let mut options = vec![PermissionOption {
@@ -165,7 +199,7 @@ pub(crate) fn approval_options(
         meta: None,
     }];
     if let Some(label) = always_label(
-        &always_grant(tool_name, input, reason, fenced, grants),
+        &always_grant(tool_name, input, reason, fence, grants),
         grants,
     ) {
         options.push(PermissionOption {

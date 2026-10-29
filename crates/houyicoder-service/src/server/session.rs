@@ -190,7 +190,7 @@ async fn reemit_and_settle_ask(
             &engine_approval,
             reason.as_ref(),
             None,
-            server.gate.fence_active(),
+            server.card_fence(),
             &directory_grants,
         )),
     );

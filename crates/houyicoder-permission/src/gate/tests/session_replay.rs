@@ -6,7 +6,7 @@ use crate::compound::{is_effect_safe, reads_only_protected, removes_only_temp};
 use crate::decision::{Decision, Outcome};
 use crate::egress::{egress_destination, egress_scope_list, trusted_hosts};
 use crate::rule::{Effect, Rule, RuleContent};
-use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SideEffect};
 use std::collections::HashSet;
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all};
@@ -26,6 +26,29 @@ impl Containment for ScratchFence {
     }
     fn would_block(&self, _effect: SideEffect) -> Option<String> {
         None
+    }
+}
+
+/// The same path coverage without the writes axis: the shape under test when
+/// a candidate's allow must be shown to rest on the fence rather than on the
+/// name or suffix of the file it touches.
+struct ScratchReadsFence;
+
+impl Containment for ScratchReadsFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: Vec::new(),
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+    fn capability(&self) -> FenceCapability {
+        FenceCapability {
+            writes: false,
+            reads: true,
+            network: false,
+        }
     }
 }
 
@@ -446,4 +469,58 @@ fn test_dangerous_variants_ask() {
             "dangerous variant must Ask: {dangerous}"
         );
     }
+}
+
+/// The five asks a session may be tempted to suppress on the strength of a
+/// file name or a suffix. Each one needs a condition this run cannot prove,
+/// so each stays a question: a probe file in the workspace is allowed only
+/// while the fence bounds writes, an eval of a repository script is not made
+/// safe by a file-write fence, a scratch deletion that also reads another
+/// tree is two effects, a reset only changes the index for some of its
+/// forms, and a write to the repository outside the workspace is not a
+/// workspace write.
+#[test]
+fn test_unproven_candidates_ask() {
+    let scratch = temp_dir().join(format!("hy-candidates-{}", id()));
+    create_dir_all(&scratch).expect("mkdir scratch");
+    let fenced = DefaultModeGate::with_mode(PermissionMode::Auto)
+        .with_trusted_hosts()
+        .with_containment(Arc::new(ScratchFence {
+            scratch: scratch.clone(),
+        }));
+    let reads_only = DefaultModeGate::with_mode(PermissionMode::Auto)
+        .with_trusted_hosts()
+        .with_containment(Arc::new(ScratchReadsFence));
+
+    // The session's own staging run: it clears a directory under the scratch
+    // root, recreates it, and writes the index there. It is allowed while the
+    // fence bounds writes, and asked again without that axis, so the allow
+    // rests on the fence and not on the scratch name. The command stays in
+    // the corpus rather than being restated here.
+    let probe = SESSION_CORPUS[41];
+    assert_eq!(fenced.decide(&bash_req(probe)).outcome(), Outcome::Allow);
+    assert_eq!(reads_only.decide(&bash_req(probe)).outcome(), Outcome::Ask);
+
+    for command in [
+        // An eval of a repository script runs whatever that file holds.
+        "eval \"$(RUSTC_WRAPPER= python3 scripts/cov_lcov.py --env)\"",
+        // Two effects in one command: delete here, read another tree's git.
+        "rm -rf \"$TMPDIR/existing-link/src\"",
+        // Only some reset forms touch the index alone, and the index state is
+        // not recoverable from here.
+        "git reset -q",
+        "cd /work/repo && git reset -q",
+        // A scratch removal that widens to the scratch root itself.
+        "rm -rf \"$TMPDIR/\"",
+        // A write to the repository through a path outside the workspace is
+        // still a write outside the workspace.
+        "cd /work/repo && printf 'x' > wiki/.probe",
+    ] {
+        assert_eq!(
+            fenced.decide(&bash_req(command)).outcome(),
+            Outcome::Ask,
+            "{command}"
+        );
+    }
+    drop(remove_dir_all(&scratch));
 }

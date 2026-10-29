@@ -1,6 +1,6 @@
 use super::super::{
-    BoundaryAccess, Containment, Coverage, SideEffect, WorktreeFenceGuard, boundary_grants_for,
-    normalize_tool_path, path_args_for_boundary,
+    BoundaryAccess, Containment, Coverage, FenceAxis, FenceCapability, SideEffect,
+    WorktreeFenceGuard, boundary_grants_for, normalize_tool_path, path_args_for_boundary,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,6 +53,36 @@ fn test_stub_blocks_network_only() {
 #[test]
 fn test_stub_is_dyn_safe() {
     assert_dyn_safe(&StubFence);
+}
+
+/// A fence that reports coverage without declaring which axes it enforces
+/// gets the path fence's capability: both filesystem axes, no network. The
+/// network axis is absent on purpose -- path containment imposes no egress
+/// rule, so silence there is the honest answer, not an implied block.
+#[test]
+fn test_coverage_fence_confines_paths() {
+    let capability = StubFence.capability();
+    assert!(capability.confines(FenceAxis::Writes));
+    assert!(capability.confines(FenceAxis::Reads));
+    assert!(!capability.confines(FenceAxis::Network));
+    assert_eq!(StubFence.capability_revision(), 0);
+}
+
+/// No coverage contains nothing: every axis asks. A session with no fence
+/// must not inherit a default that claims confinement.
+#[test]
+fn test_unfenced_coverage_confines_nothing() {
+    struct Unfenced;
+    impl Containment for Unfenced {
+        fn coverage(&self) -> Coverage {
+            Coverage::Unfenced
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+    }
+    assert_eq!(Unfenced.capability(), FenceCapability::NONE);
+    assert!(!Unfenced.capability().confines(FenceAxis::Writes));
 }
 
 /// An existing path canonicalizes directly.

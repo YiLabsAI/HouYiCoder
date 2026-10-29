@@ -5,7 +5,7 @@
 //! context, not a re-derivation of the rules.
 
 use houyicoder_api::sandbox::{
-    BoundaryAccess, BoundaryGrant, Containment, Coverage, boundary_grants_for,
+    BoundaryAccess, BoundaryGrant, Containment, FenceAxis, boundary_grants_for,
 };
 use std::sync::Arc;
 
@@ -20,14 +20,15 @@ use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::{Effect, evaluate};
 
-/// Whether the session's execution fence is active. A fence that reports
-/// coverage over writable roots makes the kernel the authority over where a
-/// write lands, so the gate only has to reason about constructs that change
-/// what the kernel is asked to open.
-pub(crate) fn fence_active(containment: &Option<Arc<dyn Containment>>) -> bool {
+/// Whether the session's fence confines writes. Where the kernel decides
+/// where a write lands, the gate only has to reason about constructs that
+/// change what the kernel is asked to open. The axis is named rather than
+/// inferred from coverage: a fence that confines reads or the network does
+/// not thereby confine writes, and every relaxation below rests on writes.
+pub(crate) fn writes_confined(containment: &Option<Arc<dyn Containment>>) -> bool {
     containment
         .as_ref()
-        .is_some_and(|c| matches!(c.coverage(), Coverage::Fenced { .. }))
+        .is_some_and(|c| c.capability().confines(FenceAxis::Writes))
 }
 
 /// Destructive verbs (rm, sudo, dd, …) escalate to Ask even when the mode
@@ -231,7 +232,7 @@ impl Validator for DestructiveCommandValidator {
         }
         if ctx.mode == PermissionMode::Auto
             && interpreter_inline_code(ctx.content).is_none()
-            && removes_only_temp(ctx.content, fence_active(&self.containment))
+            && removes_only_temp(ctx.content, writes_confined(&self.containment))
         {
             return None;
         }
@@ -348,9 +349,9 @@ impl Validator for NetworkEgressValidator {
         if !should_ask_egress(req.tool_name, ctx.content) {
             return None;
         }
-        let outputs_safe = egress_outputs_safe(ctx.content, fence_active(&self.containment));
+        let outputs_safe = egress_outputs_safe(ctx.content, writes_confined(&self.containment));
         if outputs_safe
-            && let Some(scopes) = egress_scope_list(ctx.content, fence_active(&self.containment))
+            && let Some(scopes) = egress_scope_list(ctx.content, writes_confined(&self.containment))
             && !scopes.is_empty()
             && scopes
                 .iter()
@@ -411,7 +412,7 @@ impl Validator for CompoundCommandValidator {
         if compound_safe(&refs)
             || is_readonly_compound(&refs)
             || (ctx.mode == PermissionMode::Auto
-                && is_effect_safe(ctx.content, fence_active(&self.containment)))
+                && is_effect_safe(ctx.content, writes_confined(&self.containment)))
         {
             return None;
         }

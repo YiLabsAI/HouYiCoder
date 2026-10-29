@@ -3,7 +3,7 @@
 //! Extracted from server.rs to keep the file under the size gate.
 
 use super::super::Server;
-use crate::protocol_adapter::approval_options;
+use crate::protocol_adapter::{FENCED, UNFENCED, approval_options};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
@@ -161,7 +161,7 @@ fn test_card_offers_destination() {
         "bash",
         &serde_json::json!({"command": command}),
         Some(&network_reason()),
-        false,
+        UNFENCED,
         &[],
     );
     let always = options
@@ -176,7 +176,7 @@ fn test_card_offers_destination() {
             "command": "curl https://api.github.com/x -o \"$TMPDIR/result.json\""
         }),
         Some(&network_reason()),
-        false,
+        UNFENCED,
         &[],
     );
     assert!(
@@ -191,7 +191,7 @@ fn test_card_offers_destination() {
             "command": "curl https://api.github.com/x -o \"$TMPDIR/result.json\""
         }),
         Some(&network_reason()),
-        true,
+        FENCED,
         &[],
     );
     assert!(
@@ -204,7 +204,7 @@ fn test_card_offers_destination() {
         "bash",
         &serde_json::json!({"command": "curl \"$URL\""}),
         Some(&network_reason()),
-        true,
+        FENCED,
         &[],
     );
     assert!(
@@ -227,7 +227,7 @@ fn test_card_safety_hides_remember() {
         "write",
         &serde_json::json!({"path": ".git/config", "content": "x"}),
         Some(&reason),
-        true,
+        FENCED,
         &[],
     );
     assert!(

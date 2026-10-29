@@ -472,11 +472,11 @@ impl SandboxSession for WindowsJobSession {
     }
 
     fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {
-        self.dirs.add_write(path)
+        self.dirs.add_write(path).map(|_| ())
     }
 
     fn add_reading_dir(&self, path: &str) -> Result<(), SandboxError> {
-        self.dirs.add_read(path)
+        self.dirs.add_read(path).map(|_| ())
     }
 
     fn remove_working_dir(&self, path: &str) {

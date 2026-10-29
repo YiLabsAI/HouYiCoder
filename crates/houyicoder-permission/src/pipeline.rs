@@ -177,9 +177,9 @@ impl Pipeline {
     /// resolve a write target, so a symlink cannot spell its way around the
     /// markers; that stage keeps its supplied-string check either way, so a
     /// ladder built without a fence loses no coverage. The destructive,
-    /// network, and compound stages read only the coverage verdict, which
-    /// decides whether a temporary-path write or removal is already bounded by
-    /// the kernel.
+    /// network, and compound stages read only the writes axis of the
+    /// capability, which decides whether a temporary-path write or removal is
+    /// already bounded by the kernel.
     pub fn with_containment(containment: Arc<dyn Containment>) -> Self {
         let mut p = Self::standard();
         p.validators.retain(|v| {

@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use houyicoder_api::sandbox::{Containment, Coverage, names_credential_path};
+use houyicoder_api::sandbox::{Containment, FenceAxis, names_credential_path};
 
 use crate::compound::{reads_only_protected, writes_fence_denied_path};
 use crate::decision::{AskReason, AskSource, Decision, DenyReason, DenySource};
@@ -59,14 +59,14 @@ impl ProtectedPathValidator {
     /// answers that rest on the kernel -- the outright refusal and the
     /// exemption for a command that only names such a path -- are taken here.
     ///
-    /// An active fence is necessary but not sufficient: a backend that grants
-    /// writable roots without nested denies leaves a control file inside a
-    /// granted root writable, and a verdict built on a refusal that never
-    /// comes would either promise a block that does not happen or wave through
-    /// a write that lands.
+    /// A fence that confines writes is necessary but not sufficient: a backend
+    /// that grants writable roots without nested denies leaves a control file
+    /// inside a granted root writable, and a verdict built on a refusal that
+    /// never comes would either promise a block that does not happen or wave
+    /// through a write that lands.
     fn fence_denies_control_writes(&self) -> bool {
         self.containment.as_ref().is_some_and(|containment| {
-            matches!(containment.coverage(), Coverage::Fenced { .. })
+            containment.capability().confines(FenceAxis::Writes)
                 && containment.denies_control_writes()
         })
     }

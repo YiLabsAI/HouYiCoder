@@ -181,10 +181,72 @@ impl SideEffect {
 #[non_exhaustive]
 pub enum Coverage {
     /// The fence is active and covers the call; the writable roots are the
-    /// paths inside the fence the agent may write.
+    /// paths inside the fence the agent may write. This variant also asserts
+    /// that the kernel decides what the process may read: a backend that
+    /// bounds writes without hiding reads, or the reverse, reports this
+    /// coverage but must override the capability query rather than inherit
+    /// the default.
     Fenced { writable_roots: Vec<PathBuf> },
     /// No fence is active (the session has no kernel sandbox).
     Unfenced,
+}
+
+/// One axis a fence can contain. The axes are separate because a backend
+/// rarely contains all of them: a path-based fence bounds where a process
+/// reads and writes while imposing no ruleset on its sockets. A caller that
+/// lets the first stand for the second hands out a permission the kernel
+/// never promised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FenceAxis {
+    /// Where the process may write.
+    Writes,
+    /// What the process may read.
+    Reads,
+    /// What the process may reach over the network.
+    Network,
+}
+
+/// What a fence contains, axis by axis. A relaxed verdict may rest on an
+/// axis only when that axis is contained; naming the axis at the call site
+/// keeps the premise reviewable, and a missing axis keeps the question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FenceCapability {
+    /// Where the process may write.
+    pub writes: bool,
+    /// What the process may read.
+    pub reads: bool,
+    /// What the process may reach over the network.
+    pub network: bool,
+}
+
+impl FenceCapability {
+    /// No axis contained.
+    pub const NONE: Self = Self {
+        writes: false,
+        reads: false,
+        network: false,
+    };
+
+    /// The filesystem axes contained and the network axis open. This is what
+    /// a path-only fence provides. The network axis stays open until a
+    /// backend declares it, because assuming it would turn an untested
+    /// promise into a remembered permission.
+    pub const fn filesystem() -> Self {
+        Self {
+            writes: true,
+            reads: true,
+            network: false,
+        }
+    }
+
+    /// Whether the fence contains this axis.
+    pub const fn confines(self, axis: FenceAxis) -> bool {
+        match axis {
+            FenceAxis::Writes => self.writes,
+            FenceAxis::Reads => self.reads,
+            FenceAxis::Network => self.network,
+        }
+    }
 }
 
 /// The query interface a fence exposes to the permission gate BEFORE the gate
@@ -202,6 +264,28 @@ pub trait Containment: Send + Sync {
     /// What the fence covers right now. The gate builds a FenceProof from this
     /// when the side effect is Exec (the proof token's eligibility check).
     fn coverage(&self) -> Coverage;
+
+    /// What the fence contains, axis by axis. The default follows the
+    /// fenced-coverage contract: both filesystem axes are kernel decisions
+    /// and the network axis stays open because a path fence imposes no
+    /// ruleset on sockets. A backend that contains only one path axis, or
+    /// that controls egress, reports its own axes here instead of inheriting
+    /// an axis it does not enforce.
+    fn capability(&self) -> FenceCapability {
+        match self.coverage() {
+            Coverage::Fenced { .. } => FenceCapability::filesystem(),
+            Coverage::Unfenced => FenceCapability::NONE,
+        }
+    }
+
+    /// A counter that advances when the effective capability changes: a
+    /// directory grant is added or revoked, or the fence narrows to a
+    /// worktree and is restored. A caller that installs a grant reads it
+    /// before and after, so an install the fence did not apply is caught
+    /// instead of reported as saved.
+    fn capability_revision(&self) -> u64 {
+        0
+    }
 
     /// Whether the fence would reject this side effect, and a human-readable
     /// note explaining why. None when the fence permits the effect. The gate

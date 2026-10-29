@@ -3,9 +3,9 @@
 //! Two questions live here. Whether a compound command only writes or removes
 //! paths inside the session temporary directory, and whether a command that
 //! reads a protected marker only inspects it. The first question is answered
-//! against the execution fence: when the fence is active the kernel decides
-//! where a write lands, so the gate only has to exclude constructs that can
-//! change what the fence is asked to open.
+//! against the execution fence: when the fence confines writes the kernel
+//! decides where a write lands, so the gate only has to exclude constructs
+//! that can change what the fence is asked to open.
 
 use super::readonly::{command_reads_only, find_matching_paren};
 use super::{

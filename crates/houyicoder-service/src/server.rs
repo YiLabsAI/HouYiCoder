@@ -311,7 +311,7 @@ impl Server {
         reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
     ) {
-        match always_grant(tool_name, input, reason, self.gate.fence_active(), grants) {
+        match always_grant(tool_name, input, reason, self.card_fence(), grants) {
             AlwaysGrant::Once => {}
             AlwaysGrant::Network(scopes) => {
                 for scope in scopes {

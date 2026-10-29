@@ -35,10 +35,10 @@ fn test_file_output_once() {
         other => panic!("expected file output approval: {other:?}"),
     };
     assert!(matches!(
-        always_grant("bash", &input, Some(&reason), false, &[]),
+        always_grant("bash", &input, Some(&reason), UNFENCED, &[]),
         AlwaysGrant::Once
     ));
-    let options = approval_options("bash", &input, Some(&reason), false, &[]);
+    let options = approval_options("bash", &input, Some(&reason), UNFENCED, &[]);
     let ids: Vec<&str> = options.iter().map(|o| o.option_id.as_str()).collect();
     assert_eq!(ids, ["allow_once", "reject_once"]);
     gate.add_egress_allow("curl https://example.test");
@@ -62,7 +62,7 @@ fn test_read_scope_remember() {
         Decision::Ask(reason) => AskReason::from(&reason),
         other => panic!("expected origin approval: {other:?}"),
     };
-    let scopes = match always_grant("bash", &input, Some(&reason), false, &[]) {
+    let scopes = match always_grant("bash", &input, Some(&reason), UNFENCED, &[]) {
         AlwaysGrant::Network(scopes) => scopes,
         _ => panic!("expected origin scopes"),
     };
@@ -70,7 +70,7 @@ fn test_read_scope_remember() {
         scopes,
         ["curl https://one.example", "curl https://two.example"]
     );
-    let options = approval_options("bash", &input, Some(&reason), false, &[]);
+    let options = approval_options("bash", &input, Some(&reason), UNFENCED, &[]);
     assert!(options.iter().any(|o| o.option_id == "allow_always"));
     for scope in scopes {
         gate.add_egress_allow(&scope);
@@ -99,10 +99,10 @@ fn test_remember_names_grant_dir() {
         containment_note: None,
     };
     assert!(matches!(
-        always_grant("write", &input, Some(&reason), true, &grants),
+        always_grant("write", &input, Some(&reason), FENCED, &grants),
         AlwaysGrant::Directories
     ));
-    let options = approval_options("write", &input, Some(&reason), true, &grants);
+    let options = approval_options("write", &input, Some(&reason), FENCED, &grants);
     let always = options
         .iter()
         .find(|o| o.option_id == "allow_always")
@@ -112,10 +112,10 @@ fn test_remember_names_grant_dir() {
     // An ask with no grant offers no remember option: the card cannot promise
     // a scope the durable store would never receive.
     assert!(matches!(
-        always_grant("write", &input, Some(&reason), true, &[]),
+        always_grant("write", &input, Some(&reason), FENCED, &[]),
         AlwaysGrant::Once
     ));
-    let ungranted = approval_options("write", &input, Some(&reason), true, &[]);
+    let ungranted = approval_options("write", &input, Some(&reason), FENCED, &[]);
     let ids: Vec<&str> = ungranted.iter().map(|o| o.option_id.as_str()).collect();
     assert_eq!(ids, ["allow_once", "reject_once"]);
 }
@@ -141,7 +141,7 @@ fn test_remember_names_both_dirs() {
         detail: "path outside the workspace".into(),
         containment_note: None,
     };
-    let options = approval_options("glob", &input, Some(&reason), false, &grants);
+    let options = approval_options("glob", &input, Some(&reason), UNFENCED, &grants);
     let always = options
         .iter()
         .find(|o| o.option_id == "allow_always")
@@ -167,7 +167,7 @@ fn test_recovered_ask_names_dir() {
         detail: "external path requires a sandbox directory capability; approval also authorizes read-only directory /data/decoy for this session; choosing always persists it".into(),
         containment_note: None,
     };
-    let options = approval_options("read", &input, Some(&reason), false, &grants);
+    let options = approval_options("read", &input, Some(&reason), UNFENCED, &grants);
     let always = options
         .iter()
         .find(|o| o.option_id == "allow_always")
@@ -656,4 +656,51 @@ fn test_timing_cleared_name() {
     assert_eq!(event_name(&t), "timing");
     let c = SessionEvent::ContextCleared { prior_turn: 1 };
     assert_eq!(event_name(&c), "cleared");
+}
+
+/// A fence that refuses egress cannot keep a remembered destination, so the
+/// card offers no remember option: the saved entry would change nothing at
+/// execution time and the kernel would overrule the answer. Without the
+/// refusal the same ask still names the destination, so the option is hidden
+/// by the fence fact alone.
+#[test]
+fn test_blocked_egress_hides_remember() {
+    let gate = DefaultModeGate::with_mode(E::Auto).with_trusted_hosts();
+    // Two destinations under an untrusted host: the mode asks, and the ask's
+    // cause is the destination, which is the branch a remembered scope comes
+    // from.
+    let input = serde_json::json!({
+        "command": "curl https://one.example/a https://two.example/b"
+    });
+    let request = ToolRequest {
+        tool_name: "bash",
+        input: Some(&input),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let reason = match gate.decide(&request) {
+        Decision::Ask(reason) => AskReason::from(&reason),
+        other => panic!("expected an egress approval: {other:?}"),
+    };
+    let blocked = CardFence {
+        writes_confined: true,
+        egress_blocked: true,
+    };
+    assert!(matches!(
+        always_grant("bash", &input, Some(&reason), blocked, &[]),
+        AlwaysGrant::Once
+    ));
+    let blocked_options = approval_options("bash", &input, Some(&reason), blocked, &[]);
+    let ids: Vec<&str> = blocked_options
+        .iter()
+        .map(|o| o.option_id.as_str())
+        .collect();
+    assert_eq!(ids, ["allow_once", "reject_once"]);
+
+    let offered = approval_options("bash", &input, Some(&reason), FENCED, &[]);
+    assert!(
+        offered.iter().any(|o| o.option_id == "allow_always"),
+        "an egress-permitting fence can remember the destination: {offered:?}"
+    );
 }

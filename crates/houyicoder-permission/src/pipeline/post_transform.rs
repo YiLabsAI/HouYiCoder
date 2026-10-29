@@ -5,7 +5,7 @@ use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::detection::NETWORK_EGRESS;
 use crate::pipeline::mode_default::MODE_DEFAULT;
 use crate::side_effect::side_effect_for;
-use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use houyicoder_api::sandbox::{Containment, FenceAxis, SideEffect};
 
 /// Apply the post-ladder transforms. The gate calls this on the raw ladder
 /// output before returning, so the transform is structurally unbypassable: a
@@ -16,11 +16,11 @@ use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 ///    reject the call even after consent. Informational only; the gate never
 ///    turns the note into a rejection. Independent of auto_allow_fenced_exec
 ///    so the user sees the fence's verdict whether or not the relaxation is on.
-/// 2. Withdraw the Manual read-only waiver when no fence is active. The
-///    waiver rests on the fence's read visibility: inside the fence a command
-///    reads only what the profile permits, so a proven read touches nothing
-///    else. Without a fence the same command may read anything on the machine,
-///    so the mode's own verdict comes back.
+/// 2. Withdraw the Manual read-only waiver when the fence does not confine
+///    reads. The waiver rests on the fence's read visibility: inside such a
+///    fence a command reads only what the profile permits, so a proven read
+///    touches nothing else. Without that axis the same command may read
+///    anything on the machine, so the mode's own verdict comes back.
 /// 3. When auto_allow_fenced_exec is on + the call is exec + the fence is
 ///    active, upgrade a mode-default Ask to Allow(Containment(FenceProof)).
 ///    Only the mode-default verdict qualifies -- it is the single
@@ -67,17 +67,16 @@ pub fn post_transform(
         (other, _) => other,
     };
     // The Manual read-only waiver rests on the fence's read visibility, so a
-    // session without a fence gets the mode's own verdict back. Recomputing it
-    // rather than forcing an Ask keeps the tools the mode already allows alone:
-    // a tool with no side effect is allowed either way, and only the waiver,
-    // which raises an exec call to Allow, is withdrawn.
+    // session whose fence does not confine reads gets the mode's own verdict
+    // back. Recomputing it rather than forcing an Ask keeps the tools the mode
+    // already allows alone: a tool with no side effect is allowed either way,
+    // and only the waiver, which raises an exec call to Allow, is withdrawn.
     if mode == PermissionMode::Manual
         && let Decision::Allow(allow) = &raw
         && matches!(allow, AllowReason::ModeDefault)
-        && !matches!(
-            containment.map(|c| c.coverage()),
-            Some(Coverage::Fenced { .. })
-        )
+        && !containment
+            .map(|c| c.capability().confines(FenceAxis::Reads))
+            .unwrap_or(false)
     {
         return mode_default(mode, req);
     }
