@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::sandbox::SandboxSession;
+use houyicoder_api::shell::ShellCommand;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::{Value, json};
@@ -324,6 +325,24 @@ impl Tool for BashTool {
     }
     fn requires_approval(&self) -> bool {
         true
+    }
+    /// The command the session's shell will actually read. A Git Bash host
+    /// runs a POSIX shell, so a command that names the command interpreter's
+    /// null device would write a file named nul instead of discarding the
+    /// stream; the translated text is what the gate judges and what runs.
+    fn resolved_input(&self, input: &Value) -> Option<Value> {
+        let command = input.get("command")?.as_str()?;
+        let translated = ShellCommand::for_shell(command, self.session.shell());
+        if !translated.changed() {
+            return None;
+        }
+        let mut effective = input.clone();
+        let object = effective.as_object_mut()?;
+        object.insert(
+            "command".to_string(),
+            Value::String(translated.into_actual()),
+        );
+        Some(effective)
     }
 }
 

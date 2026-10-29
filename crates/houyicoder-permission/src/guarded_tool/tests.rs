@@ -388,3 +388,43 @@ fn test_missing_argument_withholds_card() {
         "the card explains the call it asks about"
     );
 }
+
+/// A tool whose host runs a translated command keeps that translation through
+/// the wrapper. The wrapper is what the engine registers, so a translation it
+/// dropped would be invisible to the verdict and to execution alike.
+#[test]
+fn test_wrapper_forwards_translation() {
+    struct TranslatingTool;
+    impl Tool for TranslatingTool {
+        fn name(&self) -> &str {
+            "translating"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn input_schema(&self) -> Value {
+            Value::Object(Map::new())
+        }
+        fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+        fn resolved_input(&self, input: &Value) -> Option<Value> {
+            input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .filter(|c| c.contains(">nul"))
+                .map(|c| json!({"command": c.replace(">nul", ">/dev/null")}))
+        }
+    }
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
+    let tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(Arc::new(TranslatingTool), gate));
+    let effective = tool
+        .resolved_input(&json!({"command": "echo hi >nul"}))
+        .expect("the translation survives the wrapper");
+    assert_eq!(effective["command"], "echo hi >/dev/null");
+    assert!(
+        tool.resolved_input(&json!({"command": "echo hi"}))
+            .is_none(),
+        "a command with nothing to translate reports none"
+    );
+}

@@ -46,8 +46,22 @@ pub(crate) struct ToolCallPlan {
     pub(crate) invalid_arguments: Vec<String>,
 }
 
+/// The input a call runs, given the tool that runs it: the tool's own
+/// resolution of the model's text, or that text when the tool resolves
+/// nothing. One reading for every entry point, so a call planned now and the
+/// same call resumed later cannot run different text.
+pub(crate) fn resolved_input(tool: Option<&Arc<dyn Tool>>, input: &Value) -> Value {
+    tool.and_then(|tool| tool.resolved_input(input))
+        .unwrap_or_else(|| input.clone())
+}
+
 impl ToolCallPlan {
     fn new(id: String, tool: Arc<dyn Tool>, input: Value) -> Self {
+        // The text the host runs may differ from the one the model wrote (a
+        // shell translation). It resolves before the call is judged, so the
+        // verdict, the approval card, and the execution all address the same
+        // command; the transcript keeps the model's own call.
+        let input = resolved_input(Some(&tool), &input);
         let concurrency_safe = tool.is_concurrency_safe();
         // A call that fails its own required-argument check cannot run, so it
         // is neither executed nor put to a human. The model corrects itself on

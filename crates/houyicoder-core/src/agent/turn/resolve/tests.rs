@@ -6,6 +6,7 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::permission::AskSource;
+use std::sync::Mutex;
 
 fn subject(skill: &str) -> GrantSubject {
     SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome).grant_subject(skill)
@@ -184,4 +185,64 @@ fn test_plan_withholds_ask_missing() {
         );
         assert_eq!(plan.invalid_arguments, ["path (string)"], "{input}");
     }
+}
+
+/// A tool whose host runs a translated command: the stub records what its
+/// approval question was asked about, standing in for the gate a real tool
+/// consults.
+struct TranslatingTool {
+    judged: Mutex<Option<Value>>,
+}
+
+impl Tool for TranslatingTool {
+    fn name(&self) -> &str {
+        "translating_tool"
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(Value::Null) })
+    }
+    fn resolved_input(&self, _input: &Value) -> Option<Value> {
+        Some(serde_json::json!({"command": "run >/dev/null"}))
+    }
+    fn approval_reason(&self, input: &Value) -> Option<AskReason> {
+        *self.judged.lock().expect("judged lock") = Some(input.clone());
+        None
+    }
+}
+
+/// The translation resolves before the call is judged: the approval question
+/// and the execution both address the text the host runs. A translation
+/// applied after the verdict would leave the gate judging text the shell never
+/// receives, so this asserts what the tool's question saw, not only what the
+/// plan carries.
+#[test]
+fn test_plan_judges_translated_input() {
+    let tool = Arc::new(TranslatingTool {
+        judged: Mutex::new(None),
+    });
+    let plan = ToolCallPlan::new(
+        "call-1".into(),
+        tool.clone(),
+        serde_json::json!({"command": "run >nul"}),
+    );
+    let judged = tool
+        .judged
+        .lock()
+        .expect("judged lock")
+        .clone()
+        .expect("the tool was asked about its call");
+    assert_eq!(
+        judged["command"], "run >/dev/null",
+        "the verdict addresses the command the host runs"
+    );
+    assert_eq!(
+        plan.input["command"], "run >/dev/null",
+        "execution runs the command the verdict addressed"
+    );
 }

@@ -33,6 +33,7 @@ use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     normalize_tool_path,
 };
+use houyicoder_api::shell::Shell;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
@@ -382,6 +383,10 @@ impl WindowsJobSession {
 // ----------------------------------------------------------------------------
 
 impl SandboxSession for WindowsJobSession {
+    fn shell(&self) -> Shell {
+        Shell::Cmd
+    }
+
     fn fence_status(&self) -> FenceStatus {
         self.fence.clone()
     }

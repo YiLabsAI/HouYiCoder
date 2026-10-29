@@ -156,6 +156,17 @@ pub trait Tool: Send + Sync {
     /// an error payload (the model sees it, the loop continues).
     fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>>;
 
+    /// The input the host will actually run, when a translation stands
+    /// between the model's proposal and execution. The engine resolves it
+    /// before each judging point — when the call is planned, and again when an
+    /// approved call resumes from the log — so the verdict, the approval card,
+    /// and the execution all address the same text; the transcript keeps the
+    /// model's own call. None means the input runs as written.
+    fn resolved_input(&self, input: &Value) -> Option<Value> {
+        let _ = input;
+        None
+    }
+
     /// Run the tool after a human approved it on the resume path. Default
     /// delegates to execute (non-guarded tools have no gate to skip). A
     /// guarded tool overrides this to honor the human decision: the gate

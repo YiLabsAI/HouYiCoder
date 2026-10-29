@@ -14,6 +14,7 @@
 //! kill, plus resource caps where the platform has a per-tree primitive) is
 //! enforced per-call by the backend; a Tool overrides the per-call ExecConfig.
 
+use crate::shell::Shell;
 use houyicoder_async::PFut;
 use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
 use std::path::{Path, PathBuf};
@@ -295,6 +296,14 @@ impl FenceStatus {
 /// application-level path resolver and the kernel fence (the kernel fence is
 /// the real boundary).
 pub trait SandboxSession: Send + Sync {
+    /// The shell this backend starts for a command. A unix backend runs a
+    /// POSIX shell; the Windows backend reports the interpreter it actually
+    /// starts, which is what decides whether a command written for another
+    /// shell needs translating before it is judged and run.
+    fn shell(&self) -> Shell {
+        Shell::Posix
+    }
+
     /// The kernel fence status after construction. The composition root
     /// checks this once to surface a user-visible notice when the fence
     /// did not engage. Default returns Unavailable for backends that do

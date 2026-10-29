@@ -65,6 +65,9 @@ impl<T: Tool> Tool for GuardedTool<T> {
     fn is_read_only(&self) -> bool {
         self.inner.is_read_only()
     }
+    fn resolved_input(&self, input: &Value) -> Option<Value> {
+        self.inner.resolved_input(input)
+    }
     fn is_destructive(&self) -> bool {
         self.inner.is_destructive()
     }

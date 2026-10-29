@@ -18,6 +18,7 @@ pub mod memory;
 pub mod provider;
 pub mod sandbox;
 pub mod session;
+pub mod shell;
 pub mod skill;
 pub mod spawn;
 pub mod tool;

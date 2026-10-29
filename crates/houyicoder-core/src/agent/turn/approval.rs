@@ -10,6 +10,7 @@ use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::fallback::FallbackToolOutcome;
+use crate::agent::turn::resolve::resolved_input;
 use crate::agent::{ApprovalDecision, ApprovalRequest, RunError, Runner};
 use std::collections::{HashMap, HashSet};
 
@@ -163,10 +164,14 @@ impl Runner {
             } = &e.event
                 && !answered.contains(call_id)
             {
+                // A recovered call is resolved to the text the host runs, the
+                // same way it is resolved before a call is judged, so the
+                // approval on resume offers the command that will execute.
+                let input = resolved_input(self.tools.get(tool), input);
                 pending.push(ApprovalRequest::new(
                     call_id.clone(),
                     tool.clone(),
-                    input.clone(),
+                    input,
                     // Recovered from the log: the gate's verdict for this call
                     // happened in an earlier process, and the record does not
                     // store it, so the card offers a generic prompt rather

@@ -2,6 +2,8 @@ mod bash_cancel;
 
 mod bash_bound;
 
+mod bash_shell;
+
 mod bash_timeout;
 
 use std::path::Path;
