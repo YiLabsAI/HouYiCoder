@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 
@@ -352,6 +352,66 @@ fn test_directory_persists_and_hydrates() {
         "removed directory must not re-hydrate"
     );
     fs::remove_dir_all(&target).ok();
+}
+
+/// A directory added through the gate is written to the store, and one
+/// removed through the gate is dropped from it, so the pane's list and the
+/// grants a restart hydrates stay one list.
+#[test]
+fn test_gate_persists_directory() {
+    let dir = tempdir();
+    let store = Arc::new(tmp_store(&dir, "gate-dir")) as Arc<dyn RuleStore>;
+    let gate = DefaultModeGate::new_without_builtins().with_store(store);
+    let target = dir.join("granted");
+    fs::create_dir_all(&target).expect("mkdir target");
+    let canonical = dunce::canonicalize(&target).expect("canonicalize target");
+
+    gate.add_directory(&target, Scope::Local);
+    let fresh = tmp_store(&dir, "gate-dir");
+    assert!(
+        fresh.load_directories().contains(&canonical),
+        "a directory added through the gate must hydrate on the next start"
+    );
+
+    // The pane names whatever the user typed, which may not be the canonical
+    // spelling, so the removal resolves the path the same way the add did.
+    let spelled = format!("{}{}", target.display(), MAIN_SEPARATOR);
+    gate.remove_directory(Path::new(&spelled));
+    let after = tmp_store(&dir, "gate-dir");
+    assert!(
+        after.load_directories().is_empty(),
+        "a directory removed through the gate must not hydrate on the next start"
+    );
+}
+
+/// A grant typed with a leading tilde is stored under the directory it names,
+/// so the removal the pane sends afterward, which carries the expanded path,
+/// still matches the record.
+#[test]
+fn test_directory_expands_typed_tilde() {
+    let Some(home) = home_directory() else {
+        return;
+    };
+    let dir = tempdir();
+    let store = tmp_store(&dir, "tilde-dir");
+    let leaf = format!("houyi-tilde-{}", process::id());
+    let typed = PathBuf::from("~").join(&leaf);
+    let expanded = home.join(&leaf);
+
+    store.add_directory(&typed, Scope::Local).expect("add");
+    let stored = tmp_store(&dir, "tilde-dir").load_directories();
+    assert!(
+        stored.iter().all(|path| !path.starts_with("~")),
+        "a typed tilde must be stored expanded: {stored:?}"
+    );
+
+    store
+        .remove_directory(&expanded, Scope::Local)
+        .expect("remove");
+    assert!(
+        tmp_store(&dir, "tilde-dir").load_directories().is_empty(),
+        "the expanded spelling must remove the grant the tilde added"
+    );
 }
 
 /// A directory an older writer persisted in the Windows verbatim form

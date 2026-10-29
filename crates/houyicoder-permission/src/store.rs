@@ -27,6 +27,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::rule::Rule;
+use houyicoder_api::path::{expand_home, home_directory};
 use std::env::current_dir;
 use std::env::var_os;
 use std::error::Error;
@@ -442,7 +443,7 @@ impl RuleStore for FileRuleStore {
     fn add_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
-        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical = canonical_dir(dir);
         if env.directories.iter().all(|d| d != &canonical) {
             env.read_directories.retain(|path| path != &canonical);
             env.directories.push(canonical);
@@ -462,7 +463,7 @@ impl RuleStore for FileRuleStore {
     fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
-        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical = canonical_dir(dir);
         if env.directories.iter().any(|path| path == &canonical) {
             return Ok(());
         }
@@ -476,10 +477,11 @@ impl RuleStore for FileRuleStore {
     fn remove_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
         let _guard = self.lock.lock().expect("rule store lock");
         let mut env = self.read_envelope(scope);
-        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let canonical = canonical_dir(dir);
         let before = env.directories.len() + env.read_directories.len();
-        env.directories.retain(|path| path != &canonical);
-        env.read_directories.retain(|path| path != &canonical);
+        env.directories.retain(|path| !same_dir(path, &canonical));
+        env.read_directories
+            .retain(|path| !same_dir(path, &canonical));
         if env.directories.len() + env.read_directories.len() == before {
             return Ok(());
         }
@@ -495,6 +497,44 @@ fn home_dir() -> PathBuf {
     var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Whether two spellings name the same granted directory. Windows compares
+/// paths without regard to case, so a removal typed in another case still
+/// matches the record; elsewhere two spellings that differ in case name two
+/// directories, and clearing the wrong grant would revoke access the user did
+/// not ask to lose.
+fn same_dir(stored: &Path, target: &Path) -> bool {
+    if stored == target {
+        return true;
+    }
+    if !cfg!(windows) {
+        return false;
+    }
+    stored
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&target.to_string_lossy())
+}
+
+/// The directory a typed path names. A directory grant is compared on a later
+/// removal against the path the caller reads back from the file system, so
+/// the stored spelling has to be the expanded one: a tilde kept as typed
+/// names a directory the removal can never match.
+fn canonical_dir(dir: &Path) -> PathBuf {
+    let expanded = expand_home(dir, home_directory().as_deref());
+    if let Ok(canonical) = dunce::canonicalize(&expanded) {
+        return canonical;
+    }
+    // A directory removed from the file system still has to match the record
+    // that granted it, so resolve the parent and keep the leaf as written
+    // rather than comparing a possibly unnormalized spelling.
+    match (expanded.parent(), expanded.file_name()) {
+        (Some(parent), Some(leaf)) => match dunce::canonicalize(parent) {
+            Ok(parent) => parent.join(leaf),
+            Err(_) => expanded,
+        },
+        _ => expanded,
+    }
 }
 
 #[cfg(test)]

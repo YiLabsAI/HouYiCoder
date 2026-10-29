@@ -1,8 +1,10 @@
 //! Handlers for permission requests in the server dispatch.
 
+use houyicoder_permission::Scope;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::permission::PermissionRule;
+use std::path::Path;
 
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
@@ -115,7 +117,14 @@ impl Server {
     ) -> Result<(), ProtocolError> {
         let resp = match &self.sandbox_session {
             Some(s) => match s.add_working_dir(&path) {
-                Ok(()) => ResponsePayload::PermissionWorkingDirs(self.working_directories()),
+                Ok(()) => {
+                    // The entry the pane shows is also the grant the fence
+                    // hydrates on the next start, so this write is what keeps
+                    // the two the same list. It follows the fence: a path the
+                    // fence refused must not be stored.
+                    self.gate.add_directory(Path::new(&path), Scope::Local);
+                    ResponsePayload::PermissionWorkingDirs(self.working_directories())
+                }
                 Err(e) => ResponsePayload::Error(ProtocolError::new(
                     ErrorCategory::InvalidRequest,
                     e.to_string(),
@@ -140,6 +149,9 @@ impl Server {
         if let Some(s) = &self.sandbox_session {
             s.remove_working_dir(&path);
         }
+        // The durable grant goes with the runtime one, or the directory would
+        // be granted again on the next start and the removal would not hold.
+        self.gate.remove_directory(Path::new(&path));
         self.send_response(
             io,
             req_id,
