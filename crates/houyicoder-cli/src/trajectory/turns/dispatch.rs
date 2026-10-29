@@ -212,7 +212,7 @@ pub(in crate::trajectory) fn apply_turn_content(
                 ev.ts,
             );
         }
-        SessionEvent::RunCompleted { ms: Some(ms) } => {
+        SessionEvent::RunCompleted { ms: Some(ms), .. } => {
             builder.run_completed_ms = *ms;
         }
         _ => {}

@@ -25,9 +25,9 @@ use crate::protocol_adapter::{
 };
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
-use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::RunResult;
-use houyicoder_core::agent::{RunOutcome, Runner};
+use houyicoder_core::agent::{ApprovalRequest, RunOutcome, Runner};
 use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
     PromptRequest, PromptResponse, RequestPermissionResponse,
@@ -88,6 +88,25 @@ impl AcpServer {
         let id = self.next_req_id as i64;
         self.next_req_id += 1;
         id
+    }
+
+    /// Append the durable record of one approval card this transport sent. A
+    /// failed write is logged rather than failing the ask: the user still
+    /// needs the question, and the fold reports the cards it did see.
+    async fn record_asked(&self, approval: &ApprovalRequest) {
+        let record = SessionLogEntry {
+            id: EventId::new(),
+            session: self.session,
+            ts: now_millis(),
+            prev_hash: None,
+            event: SessionEvent::PermissionAsked {
+                call_id: approval.call_id.clone(),
+                tool: approval.tool_name.clone(),
+            },
+        };
+        if let Err(e) = self.runner.store().append(record).await {
+            tracing::warn!("permission-asked audit append failed: {e}");
+        }
     }
 
     /// Run the connection: receive frames until the client closes. Each frame
@@ -269,6 +288,12 @@ impl AcpServer {
                             let ask =
                                 AcpRequest::new(ask_id, "session/request_permission", params_value);
                             self.send_typed(io, &ask).await?;
+                            // The card is on the durable trail from the moment
+                            // the client received it: an ask abandoned or
+                            // cancelled at the client records no verdict, and
+                            // the audit must still hold the question rather
+                            // than report that none was ever asked.
+                            self.record_asked(&approval).await;
                             // Read the matching reverse response.
                             let frame = match io.next_frame().await {
                                 Some(f) => f,
@@ -306,34 +331,33 @@ impl AcpServer {
                                     )
                                 })?;
                             // Record the durable PermissionDecision audit event
-                            // before resume applies the decision.
-                            let decision = acp_permission_response_to_decision(
+                            // before resume applies the decision. A cancelled
+                            // response carries no verdict, so the card stays
+                            // on the trail as an outcome nobody stated.
+                            let reply = acp_permission_response_to_decision(
                                 perm_resp,
                                 approval.call_id.clone(),
                             );
-                            let verdict = if decision.approved {
-                                PermissionVerdict::Approved
-                            } else {
-                                PermissionVerdict::Denied
-                            };
-                            let audit = SessionLogEntry {
-                                id: EventId::new(),
-                                session: self.session,
-                                ts: now_millis(),
-                                prev_hash: None,
-                                event: SessionEvent::PermissionDecision {
-                                    call_id: approval.call_id.clone(),
-                                    tool: approval.tool_name.clone(),
-                                    verdict,
-                                    scope: "once".into(),
-                                    validator: None,
-                                    reason: None,
-                                },
-                            };
-                            if let Err(e) = self.runner.store().append(audit).await {
-                                tracing::warn!("permission-decision audit append failed: {e}");
+                            if let Some(verdict) = reply.verdict {
+                                let audit = SessionLogEntry {
+                                    id: EventId::new(),
+                                    session: self.session,
+                                    ts: now_millis(),
+                                    prev_hash: None,
+                                    event: SessionEvent::PermissionDecision {
+                                        call_id: approval.call_id.clone(),
+                                        tool: approval.tool_name.clone(),
+                                        verdict,
+                                        scope: "once".into(),
+                                        validator: None,
+                                        reason: None,
+                                    },
+                                };
+                                if let Err(e) = self.runner.store().append(audit).await {
+                                    tracing::warn!("permission-decision audit append failed: {e}");
+                                }
                             }
-                            decisions.push(decision);
+                            decisions.push(reply.decision);
                         }
                         result = {
                             let resume_fut = self.runner.resume(self.session, &decisions);

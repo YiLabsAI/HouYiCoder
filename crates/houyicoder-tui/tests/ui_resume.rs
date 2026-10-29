@@ -1679,7 +1679,10 @@ fn switch_session_events() -> Vec<SessionEvent> {
         SessionEvent::CacheBreak {
             cause: "model-switch".into(),
         },
-        SessionEvent::RunCompleted { ms: Some(1_000) },
+        SessionEvent::RunCompleted {
+            ms: Some(1_000),
+            outcome: None,
+        },
     ];
     events
 }

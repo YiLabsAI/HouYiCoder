@@ -267,6 +267,7 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
         | SessionEvent::AssistantTextDelta { .. }
         | SessionEvent::CompactionBoundary { .. }
         | SessionEvent::CacheBreak { .. }
+        | SessionEvent::PermissionAsked { .. }
         | SessionEvent::PermissionDecision { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::TurnUsage { .. }

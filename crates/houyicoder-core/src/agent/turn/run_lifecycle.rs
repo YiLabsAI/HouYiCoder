@@ -14,6 +14,7 @@ use crate::agent::runner_config::{
     DEFAULT_SNAPSHOT_SIZE_CAP_BYTES, DEFAULT_SNAPSHOT_TTL_SECS, RunnerConfig,
 };
 use crate::agent::skill_slash::SkillSlashOutcome;
+use crate::agent::turn::result::run_completion_status;
 use crate::agent::*;
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::cache_policy::AutoCachePolicy;
@@ -377,7 +378,13 @@ impl Runner {
         };
         if let Err(e) = self
             .store
-            .append(new_event(session, SessionEvent::RunCompleted { ms }))
+            .append(new_event(
+                session,
+                SessionEvent::RunCompleted {
+                    ms,
+                    outcome: Some(run_completion_status(result)),
+                },
+            ))
             .await
         {
             tracing::warn!("run completion record failed: {e}");

@@ -299,6 +299,17 @@ fn allow_once(ask_id: AcpRequestId) -> AcpResponse {
     )
 }
 
+fn cancelled(ask_id: AcpRequestId) -> AcpResponse {
+    AcpResponse::ok(
+        ask_id,
+        serde_json::to_value(RequestPermissionResponse {
+            outcome: RequestPermissionOutcome::Cancelled,
+            meta: None,
+        })
+        .expect("permission response serializes"),
+    )
+}
+
 /// The prompt happy path: the run streams its turn events and the request id
 /// is answered with a typed PromptResponse carrying the EndTurn stop reason.
 #[tokio::test]
@@ -516,6 +527,32 @@ async fn test_permission_allow_completes() {
     handle.await.expect("join").expect("clean close");
 }
 
+/// An ask the client abandons is still a card on the durable trail: the
+/// question reached the client, so the audit holds it with no verdict rather
+/// than reporting that nothing was ever asked.
+#[tokio::test]
+async fn test_abandoned_ask_counts_card() {
+    let session = SessionId::new();
+    let runner = guarded_runner();
+    let inspector = runner.clone();
+    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+
+    send(&mut tx, &prompt_request(session, 1)).await;
+    let _ask = recv_ask(&mut rx).await;
+    drop(tx);
+    drop(rx);
+    let failed = handle.await.expect("join");
+    assert!(
+        failed.is_err(),
+        "closing during the ask fails the serve loop"
+    );
+
+    let approvals = inspector.store().trajectory_head(session).summary.approvals;
+    assert_eq!(approvals.cards, 1, "the client received the question");
+    assert_eq!(approvals.unknown_outcome, 1, "and gave no verdict");
+    assert_eq!(approvals.denied, 0, "abandoning a card is not a refusal");
+}
+
 /// A non-cancel frame arriving while the resume is active is the same
 /// protocol violation as during the run: the serve loop fails closed and the
 /// client reads the exact ACP error response.
@@ -570,4 +607,30 @@ async fn test_client_closed_during_resume() {
     assert_eq!(err.category, ErrorCategory::Unavailable);
     assert_eq!(err.message, "client closed mid-resume");
     drop(release_tx);
+}
+
+/// A cancelled ask is a card nobody answered: the run still stops at the
+/// veto, while the audit holds the question as an unknown outcome rather
+/// than reporting a denial the client never stated.
+#[tokio::test]
+async fn test_cancelled_ask_counts_unknown() {
+    let session = SessionId::new();
+    let runner = guarded_runner();
+    let inspector = runner.clone();
+    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+
+    send(&mut tx, &prompt_request(session, 1)).await;
+    let ask = recv_ask(&mut rx).await;
+    send(&mut tx, &cancelled(ask.id.clone())).await;
+    drop(tx);
+    drop(rx);
+    let _served = handle.await.expect("join");
+
+    let approvals = inspector.store().trajectory_head(session).summary.approvals;
+    assert_eq!(approvals.cards, 1, "the client received the question");
+    assert_eq!(
+        approvals.unknown_outcome, 1,
+        "a cancelled card states no outcome"
+    );
+    assert_eq!(approvals.denied, 0, "cancelling is not refusing");
 }

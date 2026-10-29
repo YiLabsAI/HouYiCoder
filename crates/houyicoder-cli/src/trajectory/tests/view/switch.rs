@@ -66,7 +66,13 @@ fn test_intra_turn_switch_stated() {
                 cause: "model-switch".into(),
             },
         ),
-        ev(150, SessionEvent::RunCompleted { ms: Some(100) }),
+        ev(
+            150,
+            SessionEvent::RunCompleted {
+                ms: Some(100),
+                outcome: None,
+            },
+        ),
     ];
     let view = build_view(&events, "test", 0);
     assert_eq!(
@@ -139,7 +145,13 @@ fn test_switch_states_empty_summary() {
             },
         ),
         usage(140, "flash"),
-        ev(150, SessionEvent::RunCompleted { ms: Some(100) }),
+        ev(
+            150,
+            SessionEvent::RunCompleted {
+                ms: Some(100),
+                outcome: None,
+            },
+        ),
     ];
     let records = records_of(&events, 1);
     let switched = records
@@ -208,7 +220,13 @@ fn test_switch_roundtrip_chain() {
             ));
         }
     }
-    events.push(ev(200, SessionEvent::RunCompleted { ms: Some(100) }));
+    events.push(ev(
+        200,
+        SessionEvent::RunCompleted {
+            ms: Some(100),
+            outcome: None,
+        },
+    ));
     let view = build_view(&events, "test", 0);
     let turn = match &view.rows[0] {
         TrajectoryRow::Turn(t) => t,

@@ -409,9 +409,19 @@ fn test_event_variants_round_trip() {
         event(
             s,
             EventId::new(),
-            SessionEvent::RunCompleted { ms: Some(620) },
+            SessionEvent::RunCompleted {
+                ms: Some(620),
+                outcome: Some(RunCompletionStatus::Completed),
+            },
         ),
-        event(s, EventId::new(), SessionEvent::RunCompleted { ms: None }),
+        event(
+            s,
+            EventId::new(),
+            SessionEvent::RunCompleted {
+                ms: None,
+                outcome: None,
+            },
+        ),
         event(
             s,
             EventId::new(),
@@ -470,7 +480,7 @@ fn test_event_variants_round_trip() {
     // Both read as unknown, never as a turn that took no time.
     let untimed = cases
         .iter()
-        .find(|e| matches!(e.event, SessionEvent::RunCompleted { ms: None }))
+        .find(|e| matches!(e.event, SessionEvent::RunCompleted { ms: None, .. }))
         .expect("unmeasured record case present");
     let json = serde_json::to_string(untimed).unwrap();
     assert!(
@@ -483,7 +493,7 @@ fn test_event_variants_round_trip() {
     }
     let older: SessionLogEntry = serde_json::from_value(v).expect("legacy deserialize");
     match older.event {
-        SessionEvent::RunCompleted { ms: None } => {}
+        SessionEvent::RunCompleted { ms: None, .. } => {}
         other => panic!("expected RunCompleted with no duration, got {other:?}"),
     }
     // A line written while the field was still named secs. The stored bytes
@@ -494,7 +504,7 @@ fn test_event_variants_round_trip() {
     let legacy: SessionEvent =
         serde_json::from_str(r#"{"type":"RunCompleted","secs":7}"#).expect("an old line decodes");
     match legacy {
-        SessionEvent::RunCompleted { ms: None } => {}
+        SessionEvent::RunCompleted { ms: None, .. } => {}
         other => panic!("expected a duration under the old name to read as unknown, got {other:?}"),
     }
 }

@@ -3,8 +3,9 @@
 //! The trajectory header counts failures, and the transcript colors a tool
 //! chip, so both must read the same rule: an error key or success false is a
 //! failure, and a bash command whose non-zero exit is its own verdict is not.
-//! Keeping the rule here, beside the event types it reads, means the two
-//! consumers cannot drift apart.
+//! A result the runner wrote for a call that never ran is neither, and the
+//! marker it carries says so. Keeping the rule here, beside the event types it
+//! reads, means the consumers cannot drift apart.
 
 use serde_json::Value;
 
@@ -23,6 +24,9 @@ use super::bash_command::simple_command_word;
 /// consult; callers pass an empty tool name and a null input, which applies
 /// the plain rule.
 pub fn tool_result_failed(output: &Value, tool_name: &str, call_input: &Value) -> bool {
+    if tool_result_not_run(output) {
+        return false;
+    }
     let has_error = output.get("error").is_some();
     let success_false = output.get("success").and_then(|v| v.as_bool()) == Some(false);
     if !has_error && !success_false {
@@ -42,6 +46,17 @@ pub fn tool_result_failed(output: &Value, tool_name: &str, call_input: &Value) -
         }
     }
     true
+}
+
+/// Whether a durable tool result says its call never ran.
+///
+/// The runner answers a call it did not execute — the turn ended while the
+/// call was pending, the user rejected it, the tool is gone — with a result
+/// that names the reason. That text is a fact about the call, not a verdict
+/// on an execution: nothing ran, so the result is neither a success nor a
+/// failure and a count of either must leave it out.
+pub fn tool_result_not_run(output: &Value) -> bool {
+    output.get("not_run").and_then(Value::as_bool) == Some(true)
 }
 
 /// Whether a bash command's non-zero exit is a semantic success (the command

@@ -109,16 +109,29 @@ impl Server {
         // background accounts belong to the session total: a reader comparing
         // the figures against the rows that split them must find the split
         // already inside.
-        let background = self
-            .runner
-            .store()
-            .trajectory_head(self.session)
-            .summary
-            .usage;
+        let head = self.runner.store().trajectory_head(self.session);
+        let background = head.summary.usage;
         snapshot.cumulative_usage = snapshot
             .cumulative_usage
             .saturating_add(&background.subagent.to_usage())
             .saturating_add(&background.recap.to_usage());
+        snapshot.session_audit = pa::map_session_audit(&head.summary);
+        // Execution results are durable too: the fold counts every call and
+        // judges every result from the log, so the row reports the session
+        // rather than what this process ran. The runner's own counters start
+        // at zero after a reopen. Delegated calls are inside these figures,
+        // the same ones the trajectory header reports.
+        let calls = u32::try_from(head.summary.usage.tool_calls).unwrap_or(u32::MAX);
+        let failures = u32::try_from(head.summary.usage.failures)
+            .unwrap_or(u32::MAX)
+            .min(calls);
+        // Successes are counted from the results, not derived by subtracting
+        // from the calls: a call whose turn ended before its result arrived
+        // has no known outcome, and the subtraction would report one.
+        let successes = u32::try_from(head.summary.usage.successes).unwrap_or(u32::MAX);
+        snapshot.tool_calls = calls;
+        snapshot.tool_errors = failures;
+        snapshot.tool_success = successes;
         if let Some(store) = self.descriptor_store.as_ref()
             && let Some(mut descriptor) = store.read_descriptor(self.session)
         {

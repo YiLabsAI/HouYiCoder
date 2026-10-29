@@ -4,8 +4,9 @@ use super::*;
 use crate::composition::BuildRunnerOptions;
 use crate::composition::build_runner;
 use houyicoder_context::{
-    EventId, NameSource, PromptCoverage, PromptRecord, RecapSource, RecapUsage, SessionDescriptor,
-    SessionDescriptorStore, SessionEvent, SessionId, SessionLogEntry, SessionProvenance,
+    EventId, NameSource, PermissionVerdict, PromptCoverage, PromptRecord, RecapSource, RecapUsage,
+    RunCompletionStatus, SessionDescriptor, SessionDescriptorStore, SessionEvent, SessionId,
+    SessionLogEntry, SessionProvenance,
 };
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;
@@ -236,5 +237,85 @@ fn test_snapshot_keeps_user_name() {
         snapshot.descriptor.and_then(|descriptor| descriptor.name),
         Some("cache work".to_string()),
         "the name the user chose is the name status reports"
+    );
+}
+
+/// The audit rows read the durable log, not the runner's live counters: this
+/// runner never drove a turn, so a snapshot built after a reopen still reports
+/// the calls, failures, approvals, and turn outcomes the log holds.
+#[tokio::test]
+async fn test_snapshot_reports_session_audit() {
+    let session = SessionId::new();
+    let log = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let entries = [
+        SessionEvent::UserInput {
+            text: "run the tests".into(),
+        },
+        SessionEvent::PermissionAsked {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+        },
+        SessionEvent::PermissionDecision {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            verdict: PermissionVerdict::Approved,
+            scope: "session".into(),
+            validator: None,
+            reason: None,
+        },
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        },
+        SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: serde_json::json!({ "error": "exit code 1" }),
+            duration_ms: 0,
+        },
+        // A call whose turn ended before its result arrived. It is a call
+        // with no known result, not a success.
+        SessionEvent::ToolCall {
+            call_id: "c2".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": "cargo build" }),
+        },
+        SessionEvent::ToolCall {
+            call_id: "c3".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": "cargo fmt" }),
+        },
+        SessionEvent::ToolResult {
+            call_id: "c3".into(),
+            output: serde_json::json!({ "ok": true }),
+            duration_ms: 0,
+        },
+        SessionEvent::RunCompleted {
+            ms: Some(20),
+            outcome: Some(RunCompletionStatus::Completed),
+        },
+    ];
+    for event in entries {
+        log.append(SessionLogEntry {
+            id: EventId::new(),
+            session,
+            ts: 0,
+            prev_hash: None,
+            event,
+        })
+        .await
+        .expect("append audit event");
+    }
+    let server = Server::new(runner_over(log), session, Arc::new(DefaultModeGate::new()));
+    let snapshot = server.build_status_snapshot();
+    assert_eq!(snapshot.session_audit.approvals.cards, 1);
+    assert_eq!(snapshot.session_audit.approvals.approved_session, 1);
+    assert_eq!(snapshot.session_audit.approvals.unknown_outcome, 0);
+    assert_eq!(snapshot.session_audit.turns.completed, 1);
+    assert_eq!(snapshot.tool_calls, 3, "the calls are counted from the log");
+    assert_eq!(snapshot.tool_errors, 1);
+    assert_eq!(
+        snapshot.tool_success, 1,
+        "only the call whose result came back clean is a success"
     );
 }

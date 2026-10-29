@@ -416,6 +416,7 @@ fn estimate_event_tokens(event: &SessionLogEntry, tokenizer: &Tokenizer) -> usiz
         | SessionEvent::CompactionBoundary { .. }
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::Summary { .. }
+        | SessionEvent::PermissionAsked { .. }
         | SessionEvent::PermissionDecision { .. }
         | SessionEvent::TurnAborted { .. } => 0,
         SessionEvent::TruncationVerdict { .. } => 0,

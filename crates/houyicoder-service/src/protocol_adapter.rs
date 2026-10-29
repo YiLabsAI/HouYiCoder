@@ -2,6 +2,7 @@
 //! protocol types — no I/O, no state — so the server loop stays decoupled
 //! from serialization.
 
+mod acp_permission;
 pub(crate) mod agents;
 mod always_grant;
 pub(crate) mod checkpoint_view;
@@ -16,20 +17,18 @@ pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;
+pub(crate) use acp_permission::{acp_permission_response_to_decision, approval_to_acp_permission};
 pub(crate) use always_grant::{
     AlwaysGrant, CardFence, always_grant, approval_options, installed_scope,
 };
 #[cfg(test)]
 pub(crate) use always_grant::{FENCED, UNFENCED};
 use houyicoder_api::sandbox::BoundaryGrant;
+use houyicoder_api::session::TrajectorySummary;
 use houyicoder_context::SessionEvent;
 use houyicoder_core::agent::{ApprovalRequest as EngineApprovalRequest, StatusSnapshot};
 use houyicoder_permission::PermissionMode as M;
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
-use houyicoder_protocol::acp_wire::{
-    PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome,
-};
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::context::{
     CategoryBreakdown as ProtocolCategoryBreakdown, ContextBreakdown as ProtocolContextBreakdown,
@@ -50,7 +49,9 @@ use houyicoder_protocol::frontend::run::{
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
-use houyicoder_protocol::frontend::status::StatusSnapshot as ProtocolStatusSnapshot;
+use houyicoder_protocol::frontend::status::{
+    ApprovalAuditView, SessionAuditView, StatusSnapshot as ProtocolStatusSnapshot, TurnAuditView,
+};
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 use houyicoder_protocol::frontend::trajectory::TrajectoryUsage;
 use houyicoder_protocol::llm::ProviderError;
@@ -176,6 +177,30 @@ pub(crate) fn map_status_snapshot(s: &StatusSnapshot) -> ProtocolStatusSnapshot 
         // setting_sources) attach server-side; the engine snapshot has none.
         // ..Default fills them.
         ..Default::default()
+    }
+}
+
+/// Map the session's folded audit figures to the protocol form. The counts
+/// are the session's, not a process's: the fold reads the durable log, so a
+/// restart or a reconnect reports the same figures. A count that outgrew the
+/// field's 32 bits saturates rather than wrapping to a small number.
+pub(crate) fn map_session_audit(summary: &TrajectorySummary) -> SessionAuditView {
+    let wide = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    SessionAuditView {
+        approvals: ApprovalAuditView {
+            cards: wide(summary.approvals.cards),
+            approved_once: wide(summary.approvals.approved_once),
+            approved_session: wide(summary.approvals.approved_session),
+            approved_workspace: wide(summary.approvals.approved_workspace),
+            denied: wide(summary.approvals.denied),
+            unknown_outcome: wide(summary.approvals.unknown_outcome),
+        },
+        turns: TurnAuditView {
+            completed: wide(summary.turns.completed),
+            interrupted: wide(summary.turns.interrupted),
+            unfinished: wide(summary.turns.unfinished),
+            unknown: wide(summary.turns.unknown),
+        },
     }
 }
 
@@ -523,6 +548,7 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::SkillBody { .. }
         | SessionEvent::CompactionBoundary { .. }
         | SessionEvent::Summary { .. }
+        | SessionEvent::PermissionAsked { .. }
         | SessionEvent::PermissionDecision { .. }
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::TruncationVerdict { .. }
@@ -594,7 +620,7 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         SessionEvent::Summary { text } => {
             AcpxNotification::new(ContextSummary, serde_json::json!({ "text": text }))
         }
-        SessionEvent::RunCompleted { ms } => {
+        SessionEvent::RunCompleted { ms, .. } => {
             AcpxNotification::new(ContextRunCompleted, serde_json::json!({ "ms": ms }))
         }
         SessionEvent::PermissionDecision {
@@ -628,7 +654,11 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         SessionEvent::TurnAborted { .. } => {
             AcpxNotification::new(ContextTurnInterrupted, serde_json::json!({}))
         }
-        SessionEvent::RecapAttempt { .. }
+        // An ask is the durable half of the card, and the card itself is
+        // the reverse request the client answers; nothing rides the
+        // notification stream for it.
+        SessionEvent::PermissionAsked { .. }
+        | SessionEvent::RecapAttempt { .. }
         | SessionEvent::TruncationVerdict { .. }
         | SessionEvent::WorktreeEnter { .. }
         | SessionEvent::WorktreeExit { .. }
@@ -654,93 +684,6 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         | SessionEvent::RewardObservation { .. } => return None,
         SessionEvent::Unknown => return None,
     })
-}
-
-/// The four verdict options the agent offers on every permission ask. The
-/// option ids are stable strings so the server maps a selected id back to an
-/// approved/rejected verdict without stashing the offered list per ask. The
-/// names track the wire wording so a stock client renders them verbatim. No
-/// option states a lifetime: this set is built without the ask's plan, and a
-/// client that picks the remember option leaves the lifetime to the server,
-/// which keeps it no longer than the plan allows.
-pub(crate) fn standard_permission_options() -> Vec<PermissionOption> {
-    vec![
-        PermissionOption {
-            option_id: "allow_once".into(),
-            name: "Allow once".into(),
-            kind: PermissionOptionKind::AllowOnce,
-            scope: None,
-            meta: None,
-        },
-        PermissionOption {
-            option_id: "allow_always".into(),
-            name: "Always allow".into(),
-            kind: PermissionOptionKind::AllowAlways,
-            scope: None,
-            meta: None,
-        },
-        PermissionOption {
-            option_id: "reject_once".into(),
-            name: "Reject once".into(),
-            kind: PermissionOptionKind::RejectOnce,
-            scope: None,
-            meta: None,
-        },
-        PermissionOption {
-            option_id: "reject_always".into(),
-            name: "Always reject".into(),
-            kind: PermissionOptionKind::RejectAlways,
-            scope: None,
-            meta: None,
-        },
-    ]
-}
-
-/// Map an engine approval request to the ACP reverse-request shape the agent
-/// sends to the client mid-turn. The tool call under review rides a
-/// ToolCallUpdate (call id plus raw input); the options are the four standard
-/// verdicts. session_id is the display string of the session the ask is for.
-pub(crate) fn approval_to_acp_permission(
-    req: &houyicoder_core::agent::ApprovalRequest,
-    session_id: String,
-) -> RequestPermissionRequest {
-    let tool_call = ToolCallUpdate {
-        tool_call_id: req.call_id.clone().into(),
-        fields: ToolCallUpdateFields {
-            raw_input: Some(req.input.clone()),
-            ..Default::default()
-        },
-    };
-    RequestPermissionRequest {
-        session_id,
-        tool_call,
-        options: standard_permission_options(),
-        meta: None,
-    }
-}
-
-/// Map the client's permission response back to the engine decision the
-/// resume path consumes. Selected maps the option id to approved/rejected
-/// (allow options approve; reject options deny). Cancelled is a reap (the run
-/// was cancelled, not answered) — treat as denied so the tool sees a veto and
-/// the turn can end. updated_input is None in the first cut: the ACP outcome
-/// carries a verdict only, not an edited input (the answer-populated input
-/// path is a frontend-dialect feature that lands with acpx/elicitation).
-pub(crate) fn acp_permission_response_to_decision(
-    resp: RequestPermissionResponse,
-    call_id: String,
-) -> houyicoder_core::agent::ApprovalDecision {
-    let approved = match resp.outcome {
-        RequestPermissionOutcome::Cancelled => false,
-        RequestPermissionOutcome::Selected(SelectedPermissionOutcome { option_id, .. }) => {
-            matches!(option_id.as_str(), "allow_once" | "allow_always")
-        }
-    };
-    houyicoder_core::agent::ApprovalDecision {
-        call_id,
-        approved,
-        updated_input: None,
-    }
 }
 
 #[cfg(test)]

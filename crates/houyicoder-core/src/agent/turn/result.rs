@@ -11,6 +11,16 @@ use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
+/// How a whole run results ended: a leg that returned names its own state
+/// through the one classification, and a leg that failed before producing an
+/// outcome is a failure rather than an unknown.
+pub(crate) fn run_completion_status(result: &Result<RunResult, RunError>) -> RunCompletionStatus {
+    match result {
+        Ok(run) => run.outcome.completion_status(),
+        Err(_) => RunCompletionStatus::Failed,
+    }
+}
+
 /// How a run ended.
 #[derive(Debug)]
 pub enum RunOutcome {
@@ -41,19 +51,37 @@ pub enum RunOutcome {
 }
 
 impl RunOutcome {
+    /// Which terminal state this outcome is, without the summary string. The
+    /// durable terminal record and every reader of the completion rate ask
+    /// this, so the classification has one definition rather than one per
+    /// reader.
+    ///
+    /// A paused run classifies as interrupted: a pause reaches a caller that
+    /// settles it as an end, and that caller's settled end was a cancellation.
+    pub fn completion_status(&self) -> RunCompletionStatus {
+        match self {
+            Self::FinalOutput(_) => RunCompletionStatus::Completed,
+            Self::Interrupted(_) | Self::Interruption(_) => RunCompletionStatus::Interrupted,
+            Self::Handoff(_) => RunCompletionStatus::HandedOff,
+            Self::VerifyFailed(_) => RunCompletionStatus::VerificationFailed,
+            Self::MaxTurnsReached { .. } => RunCompletionStatus::TurnLimitReached,
+        }
+    }
+
     /// Coarse terminal status + a summary string for a watcher that does
     /// not read the session log. The status names match the spawn runtime's
     /// terminal_summary; the summary is the FinalOutput text (or empty for
     /// non-text terminals — the precise partial lives in the log).
     pub fn terminal_status(&self) -> (RunCompletionStatus, String) {
-        match self {
-            Self::FinalOutput(text) => (RunCompletionStatus::Completed, text.clone()),
-            Self::MaxTurnsReached { .. } => (RunCompletionStatus::TurnLimitReached, String::new()),
-            Self::Interrupted(reason) => (RunCompletionStatus::Interrupted, reason.clone()),
-            Self::Interruption(_) => (RunCompletionStatus::Interrupted, String::new()),
-            Self::VerifyFailed(_) => (RunCompletionStatus::VerificationFailed, String::new()),
-            Self::Handoff(agent) => (RunCompletionStatus::HandedOff, agent.0.clone()),
-        }
+        let summary = match self {
+            Self::FinalOutput(text) => text.clone(),
+            Self::Interrupted(reason) => reason.clone(),
+            Self::Handoff(agent) => agent.0.clone(),
+            Self::Interruption(_) | Self::VerifyFailed(_) | Self::MaxTurnsReached { .. } => {
+                String::new()
+            }
+        };
+        (self.completion_status(), summary)
     }
 }
 
@@ -142,3 +170,6 @@ impl From<ContextError> for RunError {
         Self::Context(e)
     }
 }
+
+#[cfg(test)]
+mod tests;

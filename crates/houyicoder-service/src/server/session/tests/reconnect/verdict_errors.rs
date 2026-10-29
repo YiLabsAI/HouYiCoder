@@ -50,6 +50,60 @@ async fn test_mid_reemit_disconnect_errors() {
     assert!(parked.decided.is_empty(), "no verdict advanced");
 }
 
+/// Esc on a re-emitted card cancels the resumed run but records no verdict:
+/// the card stays an unanswered ask in the durable audit rather than becoming
+/// a refusal the user never gave.
+#[tokio::test]
+async fn test_reemit_cancel_skips_verdict() {
+    let (runner, session, host) = runner_and_host();
+    park_first_connection(&host, session).await;
+
+    let (mut client2, serve2) = attach_client(host.clone(), session);
+    client2.connect().await.expect("second handshake");
+    let mut asked = false;
+    for _ in 0..64 {
+        match client2.next_frame().await.expect("server 2 frame") {
+            ServerFrame::Event(_) => {}
+            ServerFrame::Request(_) => {
+                asked = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(asked, "reattach re-emitted the ask");
+    client2
+        .send_notification(AcpNotification::new(
+            "session/cancel",
+            serde_json::json!({}),
+        ))
+        .await
+        .expect("send cancel");
+    // The barrier request is answered from the main loop, which the serve
+    // reaches only after the resumed run has finished, so its reply proves
+    // the cancel did not hang the session.
+    await_inject_dispatch(&mut client2).await;
+    drop(client2);
+    timeout(Duration::from_secs(2), serve2)
+        .await
+        .expect("the cancelled run finishes instead of hanging")
+        .expect("serve task");
+
+    let events = runner.store().replay(session).await.expect("replay");
+    let verdicts = events
+        .iter()
+        .filter(|entry| matches!(entry.event, SessionEvent::PermissionDecision { .. }))
+        .count();
+    assert_eq!(verdicts, 0, "a cancel records no verdict");
+    // The ask is written for the first card and again for the re-emit; the
+    // audit counts one card per question, and the cancel leaves it without
+    // an answer rather than among the denials.
+    let audit = runner.store().trajectory_head(session).summary.approvals;
+    assert_eq!(audit.cards, 1, "one question, one card: {events:?}");
+    assert_eq!(audit.unknown_outcome, 1, "the cancelled card is unanswered");
+    assert_eq!(audit.denied, 0, "a cancel is not a denial");
+}
+
 /// A reattaching connection ignores an unrelated reverse response and keeps
 /// waiting for the verdict correlated with its permission request.
 #[tokio::test]

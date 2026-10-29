@@ -26,6 +26,31 @@ pub struct SessionLogEntry {
     pub event: SessionEvent,
 }
 
+/// How a run ended, as its terminal record states it. A finished run and a
+/// cancelled one both write a terminal record, so the record alone cannot say
+/// whether the work was done; this is what lets a completion rate count a
+/// cancelled run as cancelled rather than as work that finished.
+///
+/// The durable log records it on every finished run, so the definition lives
+/// beside the event that carries it: the log, the run observer events, and the
+/// status pane report one taxonomy rather than three interpretations of the
+/// same terminals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunCompletionStatus {
+    /// The run produced its final output.
+    Completed,
+    /// The run transferred control to another agent.
+    HandedOff,
+    /// The run was cancelled while it was running.
+    Interrupted,
+    /// The run failed before producing final output.
+    Failed,
+    /// Post-run verification rejected the output.
+    VerificationFailed,
+    /// The run exhausted its configured turn limit.
+    TurnLimitReached,
+}
+
 /// The outcome of a human permission verdict on a tool call. The durable
 /// companion to the transient approval popup: every approve / deny decision is
 /// appended to the session log so the audit trail is replayable and queryable
@@ -380,6 +405,17 @@ pub enum SessionEvent {
     Summary {
         text: String,
     },
+    /// An approval card was shown to the user. call_id links to the ToolCall
+    /// the card asks about. A card the user answers is followed by a
+    /// PermissionDecision; a card cancelled with Esc or abandoned at a
+    /// disconnect leaves no verdict, so the ask alone is what keeps that
+    /// outcome on the audit trail instead of vanishing with the connection.
+    /// Audit-only: nothing acts on it, and the audit log lists it beside the
+    /// verdict it pairs with.
+    PermissionAsked {
+        call_id: String,
+        tool: String,
+    },
     /// A durable permission verdict: the human approved or denied a tool call.
     /// call_id links to the ToolCall the verdict answers. scope is the lifetime
     /// the answer kept (once / session / workspace), so the audit trail records
@@ -422,6 +458,11 @@ pub enum SessionEvent {
     RunCompleted {
         #[serde(default)]
         ms: Option<u64>,
+        /// How the turn ended. Absent in logs written before the outcome was
+        /// recorded, where the only honest reading is that the turn closed
+        /// without a stated result.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<RunCompletionStatus>,
     },
     /// The per-turn truncation verdict. Persisted so the session log carries
     /// trajectory-grade data: every completed turn and every recovery

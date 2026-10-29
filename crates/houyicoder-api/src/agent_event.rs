@@ -49,21 +49,11 @@ pub enum ToolExecutionEvent {
 }
 
 /// Typed terminal state for an agent run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunCompletionStatus {
-    /// The run produced its final output.
-    Completed,
-    /// The run transferred control to another agent.
-    HandedOff,
-    /// The run was interrupted externally.
-    Interrupted,
-    /// The run failed before producing final output.
-    Failed,
-    /// Post-run verification rejected the output.
-    VerificationFailed,
-    /// The run exhausted its configured turn limit.
-    TurnLimitReached,
-}
+///
+/// The durable log records this value on every finished run, so the definition
+/// lives with the event that carries it and observers report the same taxonomy
+/// the log holds rather than a parallel one.
+pub use houyicoder_context::RunCompletionStatus;
 
 /// Coarse lifecycle events for run observers.
 #[derive(Debug, Clone, PartialEq, Eq)]

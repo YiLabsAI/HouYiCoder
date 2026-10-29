@@ -347,6 +347,11 @@ pub struct TrajectoryUsageSummary {
     /// as one.
     pub provenance: UsageProvenance,
     pub failures: usize,
+    /// Tool results that came back without an error payload, counted from the
+    /// results themselves. A call whose turn ended before its result arrived
+    /// has no known outcome, so it appears in tool_calls and in neither this
+    /// count nor failures.
+    pub successes: usize,
     /// Tool calls the session issued, counted from the calls themselves so a
     /// header can report the session rather than the page it has loaded.
     pub tool_calls: usize,
@@ -380,6 +385,53 @@ pub struct TrajectoryTimingSummary {
     pub tool_ms: u64,
 }
 
+/// What the session's approval cards asked and how each was answered.
+///
+/// One card is one ask, so a card re-drawn for a reconnecting client is still
+/// one card. A card whose answer never arrived keeps its own count: a
+/// cancellation is not a denial, and reporting it as one would claim a
+/// refusal the user never gave.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ApprovalAudit {
+    /// Cards shown to the user.
+    pub cards: usize,
+    /// Cards answered yes, by the scope the grant actually got. A save
+    /// the store refused shortens the record to the session, so this reports
+    /// what exists rather than what was asked for.
+    pub approved_once: usize,
+    /// Cards answered yes for the rest of this session.
+    pub approved_session: usize,
+    /// Cards answered yes, saved for the next start.
+    pub approved_workspace: usize,
+    /// Cards answered no.
+    pub denied: usize,
+    /// Cards that ended without a recorded verdict: cancelled with Esc,
+    /// abandoned at a disconnect, or interrupted before an answer.
+    pub unknown_outcome: usize,
+}
+
+/// How the session's turns ended, one count per turn.
+///
+/// A turn counts by its last terminal record: a recovery that re-drives an
+/// interrupted turn writes a second record for the same turn, so the turn is
+/// counted as that later record ended it rather than once per record. A
+/// finished turn and a cancelled one both write a terminal record, so the
+/// outcomes are counted apart: a cancel is not work that finished, and an
+/// unreadable outcome is unknown rather than a success.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnAudit {
+    /// Turns whose last terminal record states the model produced its answer.
+    pub completed: usize,
+    /// Turns whose last terminal record states they were cancelled.
+    pub interrupted: usize,
+    /// Turns that ended in another stated way: handed off, failed, rejected
+    /// by the verify gate, or out of turn budget.
+    pub unfinished: usize,
+    /// Turns whose last terminal record states no outcome, which is every
+    /// turn written before the outcome was recorded.
+    pub unknown: usize,
+}
+
 /// The whole-session figures the trajectory header and the status pane report.
 ///
 /// These cannot come from a loaded window: a session's turn count, its token
@@ -401,6 +453,14 @@ pub struct TrajectorySummary {
     pub single_model: Option<Arc<str>>,
     /// The span of the session's own events, which is what the user waited.
     pub duration_ms: u64,
+    /// The approval audit, folded from the ask and verdict records so it
+    /// survives a restart and never counts one card twice.
+    pub approvals: ApprovalAudit,
+    /// How the turns ended, which is what a completion rate divides. The
+    /// share is completed over the turns that ended in a readable way;
+    /// unknown endings sit outside it, because a turn whose outcome this
+    /// build cannot read is not a turn that failed to finish.
+    pub turns: TurnAudit,
 }
 
 /// One consistent read of a session's trajectory state.

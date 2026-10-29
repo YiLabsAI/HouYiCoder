@@ -10,11 +10,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use houyicoder_api::session::{
-    RecapSpend, SubagentUsage, TrajectorySummary, TrajectoryTimingSummary, TrajectoryUsageSummary,
+    ApprovalAudit, RecapSpend, SubagentUsage, TrajectorySummary, TrajectoryTimingSummary,
+    TrajectoryUsageSummary, TurnAudit,
 };
-use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_context::{PermissionVerdict, RunCompletionStatus, SessionEvent, SessionLogEntry};
+use houyicoder_protocol::frontend::run::ApprovalScope;
 use houyicoder_protocol::llm::UsageProvenance;
-use houyicoder_protocol::tool::{simple_command_word, tool_result_failed};
+use houyicoder_protocol::tool::{simple_command_word, tool_result_failed, tool_result_not_run};
 use serde_json::Value;
 
 /// Buckets for the fine range, 50 ms each up to 10 s.
@@ -125,6 +127,233 @@ struct ToolCallFacts {
     command_word: Option<String>,
 }
 
+/// How many approval calls the fold remembers while counting each card and
+/// each verdict once. A resumed turn re-asks a call right after the records
+/// of the turn it was interrupted in, so a recent window covers every
+/// duplicate a replay can produce; the bound keeps a long session's memory
+/// flat. A session that draws more cards than the window holds and then
+/// re-asks one from before it counts that card twice; reaching that needs a
+/// session long enough to evict the record and a reconnect onto the old card.
+const APPROVAL_CALLS_CAP: usize = 512;
+
+/// Which of one call's approval records were counted. A reconnect re-emits
+/// an open card and records that ask again, while a resume after a restart
+/// asks the same call anew; without this ledger the same card or verdict
+/// would be counted twice on the second path.
+#[derive(Default)]
+struct ApprovalCall {
+    asked: bool,
+    answered: bool,
+}
+
+/// The approval half of the summary: how many cards the session drew, how
+/// each was answered, and the ledger that keeps a replay from counting one
+/// card twice.
+///
+/// Cards and answers are counted apart so a card with no verdict stays an
+/// unknown outcome rather than being read as a denial.
+#[derive(Default)]
+struct ApprovalFold {
+    cards: usize,
+    answers: usize,
+    approved_once: usize,
+    approved_session: usize,
+    approved_workspace: usize,
+    denied: usize,
+    calls: HashMap<String, ApprovalCall>,
+    order: VecDeque<String>,
+}
+
+impl ApprovalFold {
+    /// Count one ask unless this call was already counted. A reconnect
+    /// re-emits an open card and records that ask again, so the second one
+    /// adds nothing.
+    fn record_ask(&mut self, call_id: &str) {
+        let entry = self.touch(call_id);
+        if entry.asked {
+            return;
+        }
+        entry.asked = true;
+        self.cards = self.cards.saturating_add(1);
+    }
+
+    /// Fold one verdict unless this call's verdict was already counted.
+    ///
+    /// A verdict whose call has no recorded ask still counts that call as a
+    /// card: the answer proves the card was shown, and a log written before
+    /// asks were recorded holds exactly this shape. Counting it here keeps
+    /// the card total equal to the distinct calls the log answers for, so an
+    /// unanswered card elsewhere in the same log is still visible.
+    fn record_verdict(&mut self, call_id: &str, verdict: PermissionVerdict, scope: &str) {
+        let (first, had_ask) = {
+            let entry = self.touch(call_id);
+            let first = !entry.answered;
+            let had_ask = entry.asked;
+            entry.answered = true;
+            (first, had_ask)
+        };
+        if !first {
+            return;
+        }
+        if !had_ask {
+            self.cards = self.cards.saturating_add(1);
+        }
+        self.answers = self.answers.saturating_add(1);
+        if verdict == PermissionVerdict::Denied {
+            self.denied = self.denied.saturating_add(1);
+        } else if scope == ApprovalScope::Session.as_str() {
+            self.approved_session = self.approved_session.saturating_add(1);
+        } else if scope == ApprovalScope::Workspace.as_str() {
+            self.approved_workspace = self.approved_workspace.saturating_add(1);
+        } else {
+            // The scope names the grant the answer actually bought, not the
+            // one the client asked for. A spelling this build does not know
+            // counts as the shortest-lived scope rather than reporting a
+            // consent nobody granted.
+            self.approved_once = self.approved_once.saturating_add(1);
+        }
+    }
+
+    /// The ledger entry for one call, recording the call and releasing the
+    /// oldest entry once the ledger is at its cap.
+    fn touch(&mut self, call_id: &str) -> &mut ApprovalCall {
+        if !self.calls.contains_key(call_id) {
+            if self.calls.len() >= APPROVAL_CALLS_CAP
+                && let Some(oldest) = self.order.pop_front()
+            {
+                self.calls.remove(&oldest);
+            }
+            self.order.push_back(call_id.to_string());
+            self.calls
+                .insert(call_id.to_string(), ApprovalCall::default());
+        }
+        // The insert above ran when the entry was absent and nothing removes
+        // it in between, so the lookup cannot miss.
+        self.calls
+            .get_mut(call_id)
+            .expect("ledger entry inserted when absent")
+    }
+
+    /// The audit as the summary reports it. Cards counts the distinct calls
+    /// that were asked about or answered, so the cards without an answer are
+    /// exactly the outcomes nobody recorded.
+    fn audit(&self) -> ApprovalAudit {
+        ApprovalAudit {
+            cards: self.cards,
+            approved_once: self.approved_once,
+            approved_session: self.approved_session,
+            approved_workspace: self.approved_workspace,
+            denied: self.denied,
+            unknown_outcome: self.cards.saturating_sub(self.answers),
+        }
+    }
+}
+
+/// The bucket one turn's last terminal record puts it in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TurnBucket {
+    Completed,
+    Interrupted,
+    Unfinished,
+    Unknown,
+}
+
+/// Which bucket one terminal record's stated outcome belongs to. The match
+/// lists every state rather than sending the remainder to one bucket, so a
+/// state added later is classified on purpose instead of inflating the
+/// finished count.
+///
+/// A handoff counts as unfinished here: the turn was picked up by another
+/// agent and did not finish in this session, so it is no more a completed
+/// turn here than a failed one is.
+fn turn_bucket(outcome: Option<RunCompletionStatus>) -> TurnBucket {
+    match outcome {
+        Some(RunCompletionStatus::Completed) => TurnBucket::Completed,
+        Some(RunCompletionStatus::Interrupted) => TurnBucket::Interrupted,
+        Some(
+            RunCompletionStatus::HandedOff
+            | RunCompletionStatus::Failed
+            | RunCompletionStatus::VerificationFailed
+            | RunCompletionStatus::TurnLimitReached,
+        ) => TurnBucket::Unfinished,
+        None => TurnBucket::Unknown,
+    }
+}
+
+/// The settled tally of turns by bucket.
+#[derive(Clone, Copy, Default)]
+struct TurnCounts {
+    completed: usize,
+    interrupted: usize,
+    unfinished: usize,
+    unknown: usize,
+}
+
+impl TurnCounts {
+    fn count(&mut self, bucket: TurnBucket) {
+        let slot = match bucket {
+            TurnBucket::Completed => &mut self.completed,
+            TurnBucket::Interrupted => &mut self.interrupted,
+            TurnBucket::Unfinished => &mut self.unfinished,
+            TurnBucket::Unknown => &mut self.unknown,
+        };
+        *slot = slot.saturating_add(1);
+    }
+
+    fn audit(&self) -> TurnAudit {
+        TurnAudit {
+            completed: self.completed,
+            interrupted: self.interrupted,
+            unfinished: self.unfinished,
+            unknown: self.unknown,
+        }
+    }
+}
+
+/// How the session's turns ended, one count per turn rather than per terminal
+/// record. A recovery that re-drives an interrupted turn writes a second
+/// terminal for the same turn, so the later record replaces the earlier one:
+/// the turn counts by how it finally ended, not by an interruption it
+/// recovered from, and the share a reader derives stays between zero and one.
+#[derive(Default)]
+struct TurnEnds {
+    counts: TurnCounts,
+    /// The newest turn's ending, held as a replacement target until that
+    /// turn's boundary arrives.
+    last: Option<TurnBucket>,
+}
+
+impl TurnEnds {
+    /// One turn's terminal record. A later record for the same turn replaces
+    /// this one, which is how a re-driven turn keeps a single ending.
+    fn record(&mut self, outcome: Option<RunCompletionStatus>) {
+        self.last = Some(turn_bucket(outcome));
+    }
+
+    /// A turn the log says was aborted rather than one whose result was
+    /// recorded: the crash-recovery boundary and the per-turn cancel.
+    fn record_aborted(&mut self) {
+        self.last = Some(TurnBucket::Interrupted);
+    }
+
+    /// Settle the newest turn once a later one opens, or at a context clear.
+    fn close(&mut self) {
+        if let Some(bucket) = self.last.take() {
+            self.counts.count(bucket);
+        }
+    }
+
+    /// The tally including the newest turn, which stays a replacement target
+    /// until its boundary arrives.
+    fn audit(&self) -> TurnAudit {
+        let mut counts = self.counts;
+        if let Some(bucket) = self.last {
+            counts.count(bucket);
+        }
+        counts.audit()
+    }
+}
+
 /// How many call facts are held. A result normally lands before the turn that
 /// issued its call ends, so a small window covers every real ordering while
 /// keeping a session's memory flat. A result whose call has been evicted is
@@ -159,9 +388,18 @@ pub(crate) struct TrajectorySummaryState {
     /// owner and no reader combines the two itself.
     turn_provenance: Option<UsageProvenance>,
     failures: usize,
+    /// Results that came back without an error payload. Counted from the
+    /// results rather than derived from the calls, because a call whose turn
+    /// ended before its result arrived has no known outcome and must not be
+    /// reported as one.
+    successes: usize,
     tool_calls: usize,
     subagent: SubagentUsage,
     recap: RecapSpend,
+
+    /// What the session asked the user and how much of the work finished.
+    approvals: ApprovalFold,
+    turn_ends: TurnEnds,
 
     first_ts: Option<u64>,
     last_ts: Option<u64>,
@@ -275,8 +513,16 @@ impl TrajectorySummaryState {
                 tool_failures,
                 ..
             } => {
-                self.tool_calls = self.tool_calls.saturating_add(*tool_calls as usize);
-                self.failures = self.failures.saturating_add(*tool_failures as usize);
+                let calls = *tool_calls as usize;
+                let failures = *tool_failures as usize;
+                self.tool_calls = self.tool_calls.saturating_add(calls);
+                self.failures = self.failures.saturating_add(failures);
+                // The child's return reports its totals rather than its
+                // individual results, so the remainder stands for the calls
+                // that came back clean.
+                self.successes = self
+                    .successes
+                    .saturating_add(calls.saturating_sub(failures));
                 self.subagent.record(event);
             }
             // A recap runs between turns, so its spend joins the session's own
@@ -284,15 +530,34 @@ impl TrajectorySummaryState {
             // not added to the models the session ran: the user never switched
             // to it.
             SessionEvent::AwayRecap { .. } => self.recap.record(event),
-            SessionEvent::TurnAborted { .. }
-            | SessionEvent::RunCompleted { .. }
-            | SessionEvent::ContextCleared { .. } => self.close_turn(),
+            SessionEvent::PermissionAsked { call_id, .. } => self.approvals.record_ask(call_id),
+            SessionEvent::PermissionDecision {
+                call_id,
+                verdict,
+                scope,
+                ..
+            } => self.approvals.record_verdict(call_id, *verdict, scope),
+            SessionEvent::TurnAborted { .. } => {
+                self.turn_ends.record_aborted();
+                self.close_turn();
+            }
+            SessionEvent::RunCompleted { outcome, .. } => {
+                self.turn_ends.record(*outcome);
+                self.close_turn();
+            }
+            SessionEvent::ContextCleared { .. } => {
+                // A clear ends whatever turn was newest: nothing after it can
+                // be that turn's later terminal record.
+                self.turn_ends.close();
+                self.close_turn();
+            }
             _ => {}
         }
     }
 
     /// A new user input ends the previous turn and opens the next.
     fn open_turn(&mut self) {
+        self.turn_ends.close();
         self.close_turn();
         self.user_inputs = self.user_inputs.saturating_add(1);
         self.turn_open = true;
@@ -386,8 +651,14 @@ impl TrajectorySummaryState {
             // plain error-or-success rule still applies.
             None => ("", &Value::Null),
         };
+        // A call the runner answered without executing it — the turn ended
+        // while it was pending, the user rejected it — is neither outcome, so
+        // it stays outside both counts and a reader sees it as a call with no
+        // result.
         if tool_result_failed(output, tool, input) {
             self.failures = self.failures.saturating_add(1);
+        } else if !tool_result_not_run(output) {
+            self.successes = self.successes.saturating_add(1);
         }
         self.tool_ms = self.tool_ms.saturating_add(duration_ms);
     }
@@ -461,6 +732,7 @@ impl TrajectorySummaryState {
                     .merge(self.subagent.provenance)
                     .merge(self.recap.provenance),
                 failures: self.failures,
+                successes: self.successes,
                 tool_calls: self.tool_calls,
                 subagent: self.subagent,
                 subagent_unmeasured,
@@ -487,6 +759,8 @@ impl TrajectorySummaryState {
                 (Some(first), Some(last)) => last.saturating_sub(first),
                 _ => 0,
             },
+            approvals: self.approvals.audit(),
+            turns: self.turn_ends.audit(),
         }
     }
 }

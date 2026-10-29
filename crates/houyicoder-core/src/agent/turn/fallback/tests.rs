@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_protocol::tool::{tool_result_failed, tool_result_not_run};
 
 #[test]
 fn test_tool_error_carries_prefix() {
@@ -9,30 +10,35 @@ fn test_tool_error_carries_prefix() {
     assert_eq!(v, serde_json::json!({"error": "tool error: boom"}));
 }
 
+/// Every fallback payload names why the call did not run and marks itself as
+/// unexecuted, so no reader counts it as a verdict on an execution. The
+/// reason text stays bare: a real tool error carries a prefix, these do not.
 #[test]
-fn test_outcomes_have_no_prefix() {
-    assert_eq!(
+fn test_outcomes_mark_not_run() {
+    let cases = [
         FallbackToolOutcome::UnknownTool {
             name: "x".into(),
-            on_resume: false
-        }
-        .to_json(),
-        serde_json::json!({"error": "unknown tool: x"})
-    );
-    assert_eq!(
+            on_resume: false,
+        },
         FallbackToolOutcome::UnknownTool {
             name: "x".into(),
-            on_resume: true
-        }
-        .to_json(),
-        serde_json::json!({"error": "unknown tool on resume"})
-    );
-    assert_eq!(
-        FallbackToolOutcome::Rejected.to_json(),
-        serde_json::json!({"error": "rejected by user"})
-    );
-    assert_eq!(
-        FallbackToolOutcome::Interrupted.to_json(),
-        serde_json::json!({"error": "interrupted by user"})
-    );
+            on_resume: true,
+        },
+        FallbackToolOutcome::Rejected,
+        FallbackToolOutcome::Interrupted,
+    ];
+    for outcome in cases {
+        let value = outcome.to_json();
+        let reason = value.get("error").and_then(Value::as_str).unwrap_or("");
+        assert!(!reason.is_empty(), "{value} names the reason");
+        assert!(
+            !reason.starts_with("tool error:"),
+            "{value} carries no error prefix"
+        );
+        assert!(tool_result_not_run(&value), "{value} marks the call unrun");
+        assert!(
+            !tool_result_failed(&value, "", &Value::Null),
+            "{value} is not a failure"
+        );
+    }
 }

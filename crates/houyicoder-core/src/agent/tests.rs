@@ -651,7 +651,10 @@ async fn test_resume_emits_final_completion() {
     });
     assert_eq!(
         c2_outcome,
-        Some(serde_json::json!({"error": "rejected by user"}))
+        Some(serde_json::json!({
+            "error": "rejected by user",
+            "not_run": true
+        }))
     );
 }
 
@@ -917,7 +920,10 @@ async fn test_abort_reconciles_orphan_results() {
     } = orphan_results[0]
     {
         assert_eq!(call_id, "c1");
-        assert_eq!(output, &serde_json::json!({"error": "interrupted by user"}));
+        assert_eq!(
+            output,
+            &serde_json::json!({"error": "interrupted by user", "not_run": true})
+        );
     } else {
         unreachable!();
     }

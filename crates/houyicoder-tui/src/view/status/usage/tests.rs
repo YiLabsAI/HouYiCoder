@@ -10,7 +10,9 @@ use crate::view::trajectory_pane::TrajectoryDetailView;
 use crate::view::trajectory_pane::{
     RecapSpend, SessionTiming, SubagentUsage, TrajectoryLog, TrajectoryView,
 };
-use houyicoder_protocol::frontend::status::ModelUsageView;
+use houyicoder_protocol::frontend::status::{
+    ApprovalAuditView, ModelUsageView, SessionAuditView, TurnAuditView,
+};
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
 use std::sync::Arc;
 
@@ -918,4 +920,182 @@ fn test_recap_row_stays_visible() {
         screen.contains("4.1k input"),
         "the figures are on screen: {screen}"
     );
+}
+
+/// The audit rows state how many approval cards the session drew, the
+/// scope each yes bought, and how many of the turns it opened reached
+/// their end.
+#[test]
+fn test_usage_tab_shows_audit() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.session_audit = SessionAuditView {
+        approvals: ApprovalAuditView {
+            cards: 4,
+            approved_once: 1,
+            approved_session: 1,
+            approved_workspace: 1,
+            denied: 1,
+            unknown_outcome: 0,
+        },
+        turns: TurnAuditView {
+            completed: 9,
+            interrupted: 1,
+            ..TurnAuditView::default()
+        },
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+
+    let screen = render_text(&app, 120, 30);
+    assert!(
+        screen.contains("4 cards · 3 approved · 1 denied (1 once · 1 session · 1 workspace)"),
+        "the card row is on screen: {screen}"
+    );
+    assert!(
+        !screen.contains("no verdict"),
+        "every card was answered: {screen}"
+    );
+    assert!(
+        screen.contains("9/10 completed (90%) · 1 interrupted"),
+        "the turn row is on screen: {screen}"
+    );
+}
+
+/// A card the user cancelled left no verdict, so the row states it as such
+/// instead of counting it among the denials the user gave.
+#[test]
+fn test_cancelled_ask_reported() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.session_audit = SessionAuditView {
+        approvals: ApprovalAuditView {
+            cards: 1,
+            denied: 0,
+            unknown_outcome: 1,
+            ..ApprovalAuditView::default()
+        },
+        ..SessionAuditView::default()
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+
+    let screen = render_text(&app, 80, 24);
+    assert!(
+        screen.contains("1 card · 0 approved · 0 denied · 1 no verdict"),
+        "the cancelled card is stated: {screen}"
+    );
+    assert!(
+        !screen.contains("turns:"),
+        "no turn ended, so the turn row is absent: {screen}"
+    );
+}
+
+/// The pane clips a row that outgrows the terminal rather than folding it, so
+/// the adverse counts come before the scope breakdown: at the smallest
+/// common width the reader still learns how many cards were refused and how
+/// many never got an answer.
+#[test]
+fn test_audit_rows_survive_clipping() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.session_audit = SessionAuditView {
+        approvals: ApprovalAuditView {
+            cards: 13,
+            approved_once: 9,
+            approved_session: 1,
+            denied: 2,
+            unknown_outcome: 1,
+            ..ApprovalAuditView::default()
+        },
+        turns: TurnAuditView {
+            completed: 7,
+            interrupted: 1,
+            unfinished: 1,
+            unknown: 1,
+        },
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+
+    let screen = render_text(&app, 80, 24);
+    assert!(
+        screen.contains("13 cards · 10 approved · 2 denied · 1 no verdict"),
+        "the counts lead the row: {screen}"
+    );
+    assert!(
+        screen.contains("7/9 completed (78%) · 1 unknown"),
+        "the share and the ending that qualifies it lead the row: {screen}"
+    );
+
+    let wide = render_text(&app, 120, 24);
+    assert!(
+        wide.contains("7/9 completed (78%) · 1 unknown · 1 interrupted · 1 unfinished"),
+        "the full breakdown fits a wide terminal: {wide}"
+    );
+}
+
+/// An ending this build cannot read is neither a finished turn nor a lost
+/// one: the row states the count and computes no share, so a log written
+/// before endings were recorded never reads as a measured zero percent.
+#[test]
+fn test_unknown_endings_show_count() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.session_audit = SessionAuditView {
+        turns: TurnAuditView {
+            unknown: 3,
+            ..TurnAuditView::default()
+        },
+        ..SessionAuditView::default()
+    };
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+
+    let screen = render_text(&app, 80, 24);
+    assert!(
+        screen.contains("3 unknown"),
+        "the unreadable endings are stated: {screen}"
+    );
+    assert!(
+        !screen.contains("completed"),
+        "no share is computed over them: {screen}"
+    );
+}
+
+/// A call whose turn ended before its result arrived has no outcome, so the
+/// row states it: the parts of the total then add up instead of leaving the
+/// reader to wonder where one call went.
+#[test]
+fn test_tool_row_states_unresolved() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.tool_calls = 3;
+    snap.tool_success = 1;
+    snap.tool_errors = 1;
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+
+    let screen = render_text(&app, 80, 24);
+    assert!(
+        screen.contains("3 (1 ok · 1 failed · 1 no result)"),
+        "the call without a result is stated: {screen}"
+    );
+}
+
+/// A session that answered nothing shows neither row: an empty audit is not
+/// a zero the reader has to interpret.
+#[test]
+fn test_empty_audit_omitted() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let screen = render_text(&app, 80, 24);
+    assert!(!screen.contains("approvals:"), "no rows yet: {screen}");
+    assert!(!screen.contains("turns:"), "no rows yet: {screen}");
 }

@@ -30,22 +30,24 @@ pub(crate) enum FallbackToolOutcome {
 }
 
 impl FallbackToolOutcome {
-    /// The model-visible tool_result payload for this outcome. No tool-error
-    /// prefix: these are not tool errors.
+    /// The model-visible tool_result payload for this outcome.
+    ///
+    /// Every outcome carries the not-run marker: the reason text explains why
+    /// the call never executed, and the marker keeps a reader from counting
+    /// that text as a verdict on an execution that did not happen.
     pub(crate) fn to_json(&self) -> Value {
-        match self {
+        let error = match self {
             Self::UnknownTool {
                 on_resume: true, ..
-            } => serde_json::json!({ "error": "unknown tool on resume" }),
+            } => "unknown tool on resume".to_string(),
             Self::UnknownTool {
                 name,
                 on_resume: false,
-            } => {
-                serde_json::json!({ "error": format!("unknown tool: {name}") })
-            }
-            Self::Rejected => serde_json::json!({ "error": "rejected by user" }),
-            Self::Interrupted => serde_json::json!({ "error": "interrupted by user" }),
-        }
+            } => format!("unknown tool: {name}"),
+            Self::Rejected => "rejected by user".to_string(),
+            Self::Interrupted => "interrupted by user".to_string(),
+        };
+        serde_json::json!({ "error": error, "not_run": true })
     }
 }
 

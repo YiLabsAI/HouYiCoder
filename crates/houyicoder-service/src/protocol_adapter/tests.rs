@@ -1,5 +1,6 @@
 use super::*;
 use houyicoder_api::sandbox::{BoundaryAccess, BoundaryGrant};
+use houyicoder_api::session::{ApprovalAudit, TurnAudit};
 use houyicoder_context::PermissionVerdict;
 use houyicoder_context::RecapSource;
 use houyicoder_context::RecapUsage;
@@ -10,6 +11,9 @@ use houyicoder_core::agent::RunError;
 use houyicoder_permission::PermissionMode as E;
 use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
+use houyicoder_protocol::acp_wire::{
+    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome,
+};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::{AskSource, RuleDestination};
 use houyicoder_protocol::frontend::run::ApprovalScope;
@@ -330,7 +334,10 @@ fn test_permission_decision_maps_acpx() {
 /// this pins the emitting half of the agreement.
 #[test]
 fn test_run_completed_maps_duration() {
-    let record = SessionEvent::RunCompleted { ms: Some(620) };
+    let record = SessionEvent::RunCompleted {
+        ms: Some(620),
+        outcome: None,
+    };
     let n = map_acpx_notification(&record).expect("the record maps");
     assert_eq!(n.method, AcpxMethod::ContextRunCompleted);
     assert_eq!(n.params["ms"], 620);
@@ -340,7 +347,10 @@ fn test_run_completed_maps_duration() {
 /// no duration rather than a zero it would read as a span.
 #[test]
 fn test_run_completed_maps_unmeasured() {
-    let record = SessionEvent::RunCompleted { ms: None };
+    let record = SessionEvent::RunCompleted {
+        ms: None,
+        outcome: None,
+    };
     let n = map_acpx_notification(&record).expect("the record maps");
     assert!(
         n.params["ms"].is_null(),
@@ -387,21 +397,36 @@ fn test_allow_approves_reject_denies() {
             }),
             meta: None,
         };
-        let d = acp_permission_response_to_decision(resp, call_id.clone());
+        let reply = acp_permission_response_to_decision(resp, call_id.clone());
+        let d = reply.decision;
         assert_eq!(d.approved, approved, "option {option_id}");
         assert_eq!(d.call_id, "c");
         assert!(d.updated_input.is_none());
+        assert!(
+            reply.verdict.is_some(),
+            "an answer is recorded: {option_id}"
+        );
     }
 }
 
+/// A cancelled response still vetoes the call, but the user never answered,
+/// so no verdict reaches the audit: the card must stay an unknown outcome
+/// rather than be reported as a denial.
 #[test]
-fn test_cancelled_permission_denies() {
+fn test_cancel_denies_without_verdict() {
     let resp = RequestPermissionResponse {
         outcome: RequestPermissionOutcome::Cancelled,
         meta: None,
     };
-    let d = acp_permission_response_to_decision(resp, "c".into());
-    assert!(!d.approved, "a cancelled ask must deny the tool");
+    let reply = acp_permission_response_to_decision(resp, "c".into());
+    assert!(
+        !reply.decision.approved,
+        "a cancelled ask must deny the tool"
+    );
+    assert!(
+        reply.verdict.is_none(),
+        "nobody answered the card, so no verdict is recorded"
+    );
 }
 
 #[test]
@@ -727,4 +752,39 @@ fn test_blocked_egress_hides_remember() {
         offered.iter().any(|o| o.option_id == "allow_always"),
         "an egress-permitting fence can remember the destination: {offered:?}"
     );
+}
+
+/// Every audit figure reaches the status view unchanged: a field the mapping
+/// forgot would read as zero in the status pane while the durable fold holds
+/// the real count.
+#[test]
+fn test_session_audit_maps_figures() {
+    let summary = TrajectorySummary {
+        approvals: ApprovalAudit {
+            cards: 9,
+            approved_once: 1,
+            approved_session: 2,
+            approved_workspace: 3,
+            denied: 2,
+            unknown_outcome: 1,
+        },
+        turns: TurnAudit {
+            completed: 4,
+            interrupted: 2,
+            unfinished: 1,
+            unknown: 3,
+        },
+        ..TrajectorySummary::default()
+    };
+    let view = map_session_audit(&summary);
+    assert_eq!(view.approvals.cards, 9);
+    assert_eq!(view.approvals.approved_once, 1);
+    assert_eq!(view.approvals.approved_session, 2);
+    assert_eq!(view.approvals.approved_workspace, 3);
+    assert_eq!(view.approvals.denied, 2);
+    assert_eq!(view.approvals.unknown_outcome, 1);
+    assert_eq!(view.turns.completed, 4);
+    assert_eq!(view.turns.interrupted, 2);
+    assert_eq!(view.turns.unfinished, 1);
+    assert_eq!(view.turns.unknown, 3);
 }

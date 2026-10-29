@@ -95,6 +95,59 @@ pub struct StatusSnapshot {
     /// (no pricing source; see the observability design's cost decision).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub by_model: Vec<ModelUsageView>,
+    /// The session's durable audit figures, folded from the session log so a
+    /// restart or a reconnect reports the whole session rather than this
+    /// process. All zero for a snapshot built without a session store.
+    #[serde(default)]
+    pub session_audit: SessionAuditView,
+}
+
+/// The session's approval and turn figures: what the session asked the user
+/// and how much of the work finished. Execution results travel in the
+/// snapshot's tool-call fields, which the server fills from the same durable
+/// fold, so an execution block here would be a second copy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAuditView {
+    pub approvals: ApprovalAuditView,
+    pub turns: TurnAuditView,
+}
+
+/// What the session's approval cards asked and how each was answered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalAuditView {
+    /// Cards shown to the user, counted once per ask.
+    pub cards: u32,
+    /// Cards answered yes for the call they described only.
+    pub approved_once: u32,
+    /// Cards answered yes for the rest of this session.
+    pub approved_session: u32,
+    /// Cards answered yes and saved for the next start.
+    pub approved_workspace: u32,
+    /// Cards answered no.
+    pub denied: u32,
+    /// Cards that ended without a verdict: cancelled with Esc, abandoned at
+    /// a disconnect, or interrupted before an answer. Not a denial, and
+    /// reported apart so it cannot be read as one.
+    pub unknown_outcome: u32,
+}
+
+/// How the session's turns ended, one count per turn. A turn counts by its
+/// last terminal record, so a recovery that re-drives an interrupted turn is
+/// counted as the way that later record ended it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnAuditView {
+    /// Turns whose last terminal record states the model produced its answer.
+    pub completed: u32,
+    /// Turns whose last terminal record states they were cancelled.
+    pub interrupted: u32,
+    /// Turns that ended in another stated way: handed off, failed, rejected
+    /// by the verify gate, or out of turn budget.
+    pub unfinished: u32,
+    /// Turns whose last terminal record states no outcome.
+    pub unknown: u32,
 }
 
 /// Per-model token counts, wire form. A trimmed view of the engine

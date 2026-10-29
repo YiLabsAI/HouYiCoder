@@ -268,11 +268,11 @@ async fn test_abort_stops_approved_batch() {
     // reported as an interruption.
     assert_eq!(
         result_for("c1"),
-        serde_json::json!({"error": "interrupted by user"})
+        serde_json::json!({"error": "interrupted by user", "not_run": true})
     );
     assert_eq!(
         result_for("c2"),
-        serde_json::json!({"error": "interrupted by user"}),
+        serde_json::json!({"error": "interrupted by user", "not_run": true}),
         "the call behind the stopped one is reported interrupted"
     );
     assert!(

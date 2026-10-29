@@ -118,7 +118,10 @@ fn test_snapshot_record_row() {
         ev_session(
             SessionId::new(),
             closing,
-            SessionEvent::RunCompleted { ms: Some(4_000) },
+            SessionEvent::RunCompleted {
+                ms: Some(4_000),
+                outcome: None,
+            },
         ),
         ev(SessionEvent::UserInput { text: "two".into() }),
         ev(SessionEvent::AssistantMessage {
@@ -168,7 +171,10 @@ fn test_named_frames_slot_sequence() {
         ev_session(
             SessionId::new(),
             closing,
-            SessionEvent::RunCompleted { ms: Some(1_000) },
+            SessionEvent::RunCompleted {
+                ms: Some(1_000),
+                outcome: None,
+            },
         ),
     ];
     let (_frames, names) = SessionLogSnapshot::named_frames(events.iter());
@@ -219,7 +225,10 @@ fn test_doubled_payload_names_agree() {
         ev_session(
             SessionId::new(),
             closing,
-            SessionEvent::RunCompleted { ms: Some(4_000) },
+            SessionEvent::RunCompleted {
+                ms: Some(4_000),
+                outcome: None,
+            },
         ),
     ];
     let mut log: Vec<SequencedFrame> = Vec::new();
@@ -294,7 +303,10 @@ fn test_snapshot_live_names_agree() {
         ev_session(
             SessionId::new(),
             closing,
-            SessionEvent::RunCompleted { ms: Some(4_000) },
+            SessionEvent::RunCompleted {
+                ms: Some(4_000),
+                outcome: None,
+            },
         ),
     ];
     let row_name = |lines: &[TranscriptLine]| -> Option<RowId> {
@@ -352,7 +364,10 @@ fn test_live_snapshot_parity() {
             text: "first answer".into(),
             thinking: None,
         }),
-        ev(SessionEvent::RunCompleted { ms: Some(4_000) }),
+        ev(SessionEvent::RunCompleted {
+            ms: Some(4_000),
+            outcome: None,
+        }),
     ];
     let mut live = Vec::new();
     for event in events {
@@ -443,7 +458,10 @@ fn test_window_mid_turn_row() {
     events.push(ev_session(
         session,
         EventId::new(),
-        SessionEvent::RunCompleted { ms: Some(7_000) },
+        SessionEvent::RunCompleted {
+            ms: Some(7_000),
+            outcome: None,
+        },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -511,7 +529,10 @@ fn test_window_at_record_row() {
     events.push(ev_session(
         session,
         EventId::new(),
-        SessionEvent::RunCompleted { ms: Some(7_000) },
+        SessionEvent::RunCompleted {
+            ms: Some(7_000),
+            outcome: None,
+        },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -575,7 +596,10 @@ fn test_window_long_turn_row() {
     events.push(ev_session(
         session,
         EventId::new(),
-        SessionEvent::RunCompleted { ms: Some(9_000) },
+        SessionEvent::RunCompleted {
+            ms: Some(9_000),
+            outcome: None,
+        },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -643,7 +667,10 @@ fn test_turn_names_durable() {
         ev_session(
             session,
             first_close,
-            SessionEvent::RunCompleted { ms: Some(5_000) },
+            SessionEvent::RunCompleted {
+                ms: Some(5_000),
+                outcome: None,
+            },
         ),
         ev_session(
             session,
@@ -666,7 +693,10 @@ fn test_turn_names_durable() {
     events.push(ev_session(
         session,
         closing,
-        SessionEvent::RunCompleted { ms: Some(6_000) },
+        SessionEvent::RunCompleted {
+            ms: Some(6_000),
+            outcome: None,
+        },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;
@@ -741,7 +771,10 @@ fn test_lookback_finds_opener() {
     events.push(ev_session(
         session,
         closing,
-        SessionEvent::RunCompleted { ms: Some(5_000) },
+        SessionEvent::RunCompleted {
+            ms: Some(5_000),
+            outcome: None,
+        },
     ));
     let (snap, _s, root) = bridge_with_log(&events);
     let mut steps = 0;

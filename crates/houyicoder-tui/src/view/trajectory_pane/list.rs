@@ -6,7 +6,7 @@
 //! the detail and record_detail modules.
 
 use super::*;
-use crate::command::render::format_tokens;
+use crate::command::render::{count_label, format_tokens};
 use crate::view::relative_time::{format_span_ms, session_span_label};
 
 // Rendering
@@ -99,16 +99,6 @@ const TOKENS_FIXED_W: usize = " in ".len() + " out".len();
 /// grew by two columns, so the row holding every column needs two more.
 const CALLS_MIN_WIDTH: usize = 96;
 const MODEL_MIN_WIDTH: usize = 124;
-
-/// A count with its noun, singular at one: a single call reads as a count, not
-/// as the plural template with the number dropped into it.
-fn count_label(n: usize, noun: &str) -> String {
-    if n == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{n} {noun}s")
-    }
-}
 
 /// The share of this turn's input that came from the cache, or nothing when the
 /// turn states no share. The turn's own derivation decides that: a count the

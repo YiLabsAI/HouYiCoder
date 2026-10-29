@@ -73,7 +73,13 @@ fn test_totals_fold() {
         entry(0, SessionEvent::UserInput { text: "a".into() }),
         usage(10, 100, 20, "m"),
         usage(20, 50, 5, "m"),
-        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+        entry(
+            30,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: None,
+            },
+        ),
     ];
     let summary = fold(&events);
     assert_eq!(summary.total_turns, 1);
@@ -96,7 +102,13 @@ fn test_missing_usage_unknown() {
         usage(10, 100, 20, "m"),
         usage(11, 100, 20, "m"),
         entry(20, SessionEvent::UserInput { text: "b".into() }),
-        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+        entry(
+            30,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: None,
+            },
+        ),
     ];
     let summary = fold(&events);
     assert_eq!(summary.total_turns, 2);
@@ -300,6 +312,31 @@ fn test_plain_failure_counts() {
     assert_eq!(fold(&events).usage.failures, 1);
 }
 
+/// A call the runner answered without executing it is neither a success nor
+/// a failure: the interruption text names why nothing ran, and counting it
+/// as a failure would report an error that never happened.
+#[test]
+fn test_not_run_result_uncounted() {
+    let events = vec![
+        entry(
+            0,
+            SessionEvent::ToolCall {
+                call_id: "c1".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({"command": "cargo test"}),
+            },
+        ),
+        result(
+            "c1",
+            serde_json::json!({"error": "interrupted by user", "not_run": true}),
+            0,
+        ),
+    ];
+    let usage = fold(&events).usage;
+    assert_eq!(usage.failures, 0);
+    assert_eq!(usage.successes, 0, "nothing ran, so nothing succeeded");
+}
+
 /// A result whose call the fold never saw is judged on the output alone, the
 /// same rule the trajectory view applies to a windowed read.
 #[test]
@@ -356,7 +393,13 @@ fn test_late_result_keeps_exemption() {
         },
     ));
     // The turn closes before the result lands.
-    state.record(&entry(2, SessionEvent::RunCompleted { ms: Some(1) }));
+    state.record(&entry(
+        2,
+        SessionEvent::RunCompleted {
+            ms: Some(1),
+            outcome: None,
+        },
+    ));
     state.record(&result(
         "c1",
         serde_json::json!({"success": false, "exit_code": 1}),
@@ -475,7 +518,13 @@ fn test_unmeasured_child_breaks_totals() {
                 duration_ms: 0,
             },
         ),
-        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+        entry(
+            30,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: None,
+            },
+        ),
     ];
     let summary = fold(&events);
     assert!(summary.usage.subagent_unmeasured);
@@ -494,7 +543,13 @@ fn test_total_includes_delegated() {
         entry(0, SessionEvent::UserInput { text: "a".into() }),
         usage(10, 1_000, 100, "m"),
         child_return(20, 500, 50, true),
-        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+        entry(
+            30,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: None,
+            },
+        ),
     ];
     let summary = fold(&events);
     assert_eq!(
@@ -520,7 +575,13 @@ fn test_unreported_child_hides_share() {
         entry(0, SessionEvent::UserInput { text: "a".into() }),
         usage(10, 1_000, 100, "m"),
         child_return(20, 0, 0, false),
-        entry(30, SessionEvent::RunCompleted { ms: Some(1) }),
+        entry(
+            30,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: None,
+            },
+        ),
     ];
     let summary = fold(&events);
     assert!(
@@ -691,4 +752,188 @@ fn test_delta_moves_span_only() {
     assert_eq!(after.usage.input_tokens, before.usage.input_tokens);
     assert_eq!(after.timing.model_ms, before.timing.model_ms);
     assert_eq!(after.total_turns, before.total_turns);
+}
+
+fn asked(ts: u64, call_id: &str) -> SessionLogEntry {
+    entry(
+        ts,
+        SessionEvent::PermissionAsked {
+            call_id: call_id.to_string(),
+            tool: "bash".to_string(),
+        },
+    )
+}
+
+fn verdict(ts: u64, call_id: &str, answer: PermissionVerdict, scope: &str) -> SessionLogEntry {
+    entry(
+        ts,
+        SessionEvent::PermissionDecision {
+            call_id: call_id.to_string(),
+            tool: "bash".to_string(),
+            verdict: answer,
+            scope: scope.to_string(),
+            validator: None,
+            reason: None,
+        },
+    )
+}
+
+#[test]
+fn test_approval_distribution_folds() {
+    let events = vec![
+        asked(10, "a"),
+        verdict(11, "a", PermissionVerdict::Approved, "once"),
+        asked(20, "b"),
+        verdict(21, "b", PermissionVerdict::Approved, "session"),
+        asked(30, "c"),
+        verdict(31, "c", PermissionVerdict::Approved, "workspace"),
+        asked(40, "d"),
+        verdict(41, "d", PermissionVerdict::Denied, "once"),
+    ];
+    let audit = fold(&events).approvals;
+    assert_eq!(audit.cards, 4);
+    assert_eq!(audit.approved_once, 1);
+    assert_eq!(audit.approved_session, 1);
+    assert_eq!(audit.approved_workspace, 1);
+    assert_eq!(audit.denied, 1);
+    assert_eq!(audit.unknown_outcome, 0);
+}
+
+/// A resumed session re-asks a call the user never answered, and a reconnect
+/// re-draws the card of one that is still open. Neither is a second card, so
+/// the count follows the call identity rather than the ask records.
+#[test]
+fn test_repeated_ask_counts_once() {
+    let events = vec![
+        asked(10, "a"),
+        asked(20, "a"),
+        verdict(21, "a", PermissionVerdict::Approved, "once"),
+    ];
+    let audit = fold(&events).approvals;
+    assert_eq!(audit.cards, 1);
+    assert_eq!(audit.approved_once, 1);
+    assert_eq!(audit.unknown_outcome, 0);
+}
+
+#[test]
+fn test_unanswered_ask_is_unknown() {
+    let audit = fold(&[asked(10, "a")]).approvals;
+    assert_eq!(audit.cards, 1);
+    assert_eq!(audit.unknown_outcome, 1, "no verdict followed the card");
+}
+
+/// A log written before asks were recorded holds verdicts whose card record
+/// is missing. The answer proves a card was drawn, so it counts as one and
+/// never as an unknown outcome.
+#[test]
+fn test_verdict_without_ask_counts() {
+    let audit = fold(&[verdict(10, "a", PermissionVerdict::Denied, "once")]).approvals;
+    assert_eq!(audit.cards, 1);
+    assert_eq!(audit.denied, 1);
+    assert_eq!(audit.unknown_outcome, 0);
+}
+
+/// A verdict for one call must not stand in for another call's card: in a log
+/// that mixes verdict-only records with recorded asks, the later unanswered
+/// card is still a card, and still an outcome nobody stated.
+#[test]
+fn test_verdict_keeps_unanswered_card() {
+    let events = vec![
+        verdict(10, "a", PermissionVerdict::Denied, "once"),
+        asked(20, "b"),
+    ];
+    let audit = fold(&events).approvals;
+    assert_eq!(audit.cards, 2, "each call drew its own card");
+    assert_eq!(audit.denied, 1);
+    assert_eq!(
+        audit.unknown_outcome, 1,
+        "the later card was never answered"
+    );
+}
+
+#[test]
+fn test_turn_ends_classified() {
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "a".into() }),
+        entry(
+            1,
+            SessionEvent::RunCompleted {
+                ms: Some(5),
+                outcome: Some(RunCompletionStatus::Completed),
+            },
+        ),
+        entry(2, SessionEvent::UserInput { text: "b".into() }),
+        entry(
+            3,
+            SessionEvent::TurnAborted {
+                reason: "crash".into(),
+            },
+        ),
+        entry(4, SessionEvent::UserInput { text: "c".into() }),
+        entry(
+            5,
+            SessionEvent::RunCompleted {
+                ms: Some(2),
+                outcome: Some(RunCompletionStatus::Interrupted),
+            },
+        ),
+        entry(6, SessionEvent::UserInput { text: "d".into() }),
+        entry(
+            7,
+            SessionEvent::RunCompleted {
+                ms: None,
+                outcome: None,
+            },
+        ),
+        entry(8, SessionEvent::UserInput { text: "e".into() }),
+        entry(
+            9,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: Some(RunCompletionStatus::TurnLimitReached),
+            },
+        ),
+    ];
+    let summary = fold(&events);
+    assert_eq!(summary.total_turns, 5);
+    let turns = summary.turns;
+    // A cancelled turn writes a terminal record too, so the record type
+    // alone cannot put it in the completion count; the stated ending does.
+    assert_eq!(turns.completed, 1);
+    assert_eq!(turns.interrupted, 2, "the abort and the recorded cancel");
+    assert_eq!(turns.unfinished, 1, "a turn that stopped at the limit");
+    assert_eq!(
+        turns.unknown, 1,
+        "a record with no stated ending is not a completion"
+    );
+}
+
+/// A recovery re-drives an interrupted turn and writes a second terminal for
+/// it, so the turn counts once, by the way it finally ended. Counting both
+/// records would put the completed share over the turns that ran.
+#[test]
+fn test_redriven_turn_counts_completed() {
+    let events = vec![
+        entry(0, SessionEvent::UserInput { text: "a".into() }),
+        entry(
+            1,
+            SessionEvent::TurnAborted {
+                reason: "process restart".into(),
+            },
+        ),
+        entry(
+            2,
+            SessionEvent::RunCompleted {
+                ms: Some(9),
+                outcome: Some(RunCompletionStatus::Completed),
+            },
+        ),
+        entry(3, SessionEvent::UserInput { text: "b".into() }),
+    ];
+    let turns = fold(&events).turns;
+    assert_eq!(turns.completed, 1);
+    assert_eq!(
+        turns.interrupted, 0,
+        "the interruption the turn recovered from is not a lost turn"
+    );
 }

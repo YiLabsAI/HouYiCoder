@@ -18,7 +18,8 @@ pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use houyicoder_api::agent_event::{AgentEventHandlers, RunCompletionStatus, RunLifecycleEvent};
+use crate::agent::turn::result::run_completion_status;
+use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
 use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::llm::{OutputItem, Usage};
@@ -74,7 +75,7 @@ impl Runner {
                 }
                 run.outcome.terminal_status()
             }
-            Err(error) => (RunCompletionStatus::Failed, error.to_string()),
+            Err(error) => (run_completion_status(result), error.to_string()),
         };
         self.events
             .emit_run_lifecycle(RunLifecycleEvent::Completed { status, summary });

@@ -193,7 +193,18 @@ async fn reemit_and_settle_ask(
         )),
     );
     Server::send_typed(io, &ServerFrame::Request(ask)).await?;
+    // Recording satisfies the card audit for asks that reached the client
+    // only through a re-emit, and the fold counts one card per call id, so a
+    // card the first connection already recorded is not counted twice.
+    server.record_card(&engine_approval).await;
     let (decision, cancelled) = await_reemit_verdict(server, io, ask_id, &ask_perm.call_id).await?;
+    if cancelled {
+        // Esc on a re-emitted card: the run resumes with a deny so it does
+        // not hang, but the user gave no verdict, so none is recorded and
+        // the card stays an unknown outcome rather than becoming a refusal
+        // the user never gave.
+        return Ok((decision, cancelled));
+    }
     // A re-emitted card settles through the same router as the first card:
     // one place derives the plan, caps the lifetime, records the verdict, and
     // installs the grant, so a reconnecting client cannot end up with a

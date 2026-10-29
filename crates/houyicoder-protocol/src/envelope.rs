@@ -393,6 +393,9 @@ impl ClientResponseEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
+// One frame is alive at a time, built to be serialized and dropped, so the
+// size difference between the event and response shapes costs nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum ServerFrame {
     Event(EventEnvelope),
     Response(ResponseEnvelope),

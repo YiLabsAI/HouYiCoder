@@ -6,10 +6,11 @@
 //! count is a floor on what was reused, while a quotient over a partial
 //! account can read higher than the truth.
 
+use houyicoder_protocol::frontend::status::StatusSnapshot;
 use houyicoder_protocol::llm::UsageProvenance;
 use unicode_width::UnicodeWidthStr;
 
-use crate::command::render::{field, format_tokens};
+use crate::command::render::{count_label, field, format_tokens, tool_outcome_breakdown};
 use crate::view::relative_time::span_label;
 use crate::view::trajectory_pane::TrajectoryView;
 
@@ -169,6 +170,83 @@ fn spend_row(parts: &[String], one: &str, calls: usize, unmeasured: usize) -> St
     format!("{counted} (included above) · {}", parts.join(" · "))
 }
 
+/// The session's approval and turn audit, folded by the host from the
+/// durable log: the cards it asked, how each was answered, and how much of
+/// the work finished. A row appears only once there is something to report,
+/// so a session that asked nothing and closed no turn does not grow two
+/// empty lines.
+///
+/// The completed share divides by the turns that ended in a readable way.
+/// Turns whose outcome this build cannot read are reported beside it and
+/// never divide it: an unreadable ending is not a turn that failed to
+/// finish, and a share taken over it would read as a measured drop.
+fn render_session_audit(snap: &StatusSnapshot, f: &impl Fn(&str, &str) -> String, s: &mut String) {
+    let audit = &snap.session_audit;
+    let approvals = audit.approvals;
+    if approvals.cards > 0 {
+        let approved = approvals
+            .approved_once
+            .saturating_add(approvals.approved_session)
+            .saturating_add(approvals.approved_workspace);
+        // The totals and the adverse counts lead and the scope breakdown
+        // trails: the pane clips a row that outgrows the terminal rather than
+        // folding it, so the order puts what the reader can act on first.
+        let mut row = format!(
+            "{} · {approved} approved · {} denied",
+            count_label(approvals.cards as usize, "card"),
+            approvals.denied
+        );
+        if approvals.unknown_outcome > 0 {
+            // A cancelled ask got no answer: reporting it as a denial would
+            // claim a refusal the user never gave.
+            row.push_str(&format!(" · {} no verdict", approvals.unknown_outcome));
+        }
+        if approved > 0 {
+            row.push_str(&format!(
+                " ({} once · {} session · {} workspace)",
+                approvals.approved_once, approvals.approved_session, approvals.approved_workspace
+            ));
+        }
+        s.push_str(&f("approvals", &row));
+    }
+    let turns = audit.turns;
+    let ended = turns
+        .completed
+        .saturating_add(turns.interrupted)
+        .saturating_add(turns.unfinished);
+    let mut parts: Vec<String> = Vec::new();
+    if ended > 0 {
+        let share = 100.0 * f64::from(turns.completed) / f64::from(ended);
+        parts.push(format!(
+            "{}/{ended} completed ({share:.0}%)",
+            turns.completed
+        ));
+    }
+    // An unreadable ending qualifies the share above, so it comes before
+    // the other adverse counts: a row that has to stop early must not drop
+    // the term that explains why the share is what it is.
+    if turns.unknown > 0 {
+        parts.push(format!("{} unknown", turns.unknown));
+    }
+    if turns.interrupted > 0 {
+        parts.push(format!("{} interrupted", turns.interrupted));
+    }
+    if turns.unfinished > 0 {
+        parts.push(format!("{} unfinished", turns.unfinished));
+    }
+    if !parts.is_empty() {
+        s.push_str(&f("turns", &parts.join(" · ")));
+    }
+}
+
+/// The tool-call row: the session's calls and how they were judged. A call
+/// whose turn ended before its result arrived has no outcome, so the
+/// remainder is stated rather than left for the reader to derive from a
+/// total that does not equal its parts.
+fn tool_call_row(snap: &StatusSnapshot) -> String {
+    format!("{} ({})", snap.tool_calls, tool_outcome_breakdown(snap))
+}
+
 pub(super) fn render_usage(app: &App) -> String {
     let f = field;
     let snap = app.snapshot_or_stub();
@@ -202,13 +280,8 @@ pub(super) fn render_usage(app: &App) -> String {
     if u.cache_write_input_tokens > 0 {
         s.push_str(&f("cache creation", &ft(u.cache_write_input_tokens as u64)));
     }
-    s.push_str(&f(
-        "tool calls",
-        &format!(
-            "{} ({} ok / {} err)",
-            snap.tool_calls, snap.tool_success, snap.tool_errors
-        ),
-    ));
+    s.push_str(&f("tool calls", &tool_call_row(&snap)));
+    render_session_audit(&snap, &f, &mut s);
     // One read of the session's typed summary serves both the split and the
     // latency rows, so a frame pays for it once.
     let trajectory = app

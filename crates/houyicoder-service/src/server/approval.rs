@@ -80,6 +80,9 @@ impl Server {
             )),
         );
         Self::send_typed(io, &ServerFrame::Request(ask)).await?;
+        // Recorded after the send: a card the connection never received was
+        // never shown, so a failed send must leave no card in the audit.
+        self.record_card(approval).await;
         // Read the matching reverse response. Loop, not a single read, so a
         // non-matching frame mid-ask does not fatal: a reconnecting client's
         // first status tick, a racing poll, a session/cancel, or a mode-cycle
@@ -209,6 +212,27 @@ impl Server {
         self.record_verdict(approval, decision, reason, committed)
             .await;
         Ok(())
+    }
+
+    /// Append the durable record that a card was shown. An ask the connection
+    /// abandons keeps its record, which is what leaves it counted as a card
+    /// with no verdict instead of vanishing. A re-emitted card records again
+    /// and the fold counts one card per call id, so a reconnect neither
+    /// double counts the card nor loses an ask whose first send never landed.
+    pub(super) async fn record_card(&self, approval: &EngineApprovalRequest) {
+        let audit = SessionLogEntry {
+            id: EventId::new(),
+            session: self.session,
+            ts: now_millis(),
+            prev_hash: None,
+            event: SessionEvent::PermissionAsked {
+                call_id: approval.call_id.clone(),
+                tool: approval.tool_name.clone(),
+            },
+        };
+        if let Err(error) = self.runner.store().append(audit).await {
+            tracing::warn!("permission-asked audit append failed: {error}");
+        }
     }
 
     /// Append the durable PermissionDecision for one answered ask. The engine

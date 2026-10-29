@@ -196,7 +196,7 @@ fn event_byte_len(event: &SessionLogEntry) -> usize {
         SessionEvent::CompactionBoundary { .. } => 0,
         SessionEvent::CacheBreak { .. } => 0,
         SessionEvent::Summary { text } => text.len(),
-        SessionEvent::PermissionDecision { .. } => 0,
+        SessionEvent::PermissionAsked { .. } | SessionEvent::PermissionDecision { .. } => 0,
         SessionEvent::TurnAborted { reason } => reason.len(),
         SessionEvent::TruncationVerdict { .. } => 0,
         SessionEvent::WorktreeEnter { .. } | SessionEvent::WorktreeExit { .. } => 0,

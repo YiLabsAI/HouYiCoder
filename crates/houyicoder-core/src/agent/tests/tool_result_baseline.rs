@@ -39,6 +39,12 @@ fn expected_error_object(message: &str) -> Value {
     serde_json::json!({ "error": message })
 }
 
+/// The payload for a call the runner answered without executing it: the
+/// reason text plus the marker that tells a reader no execution happened.
+fn expected_fallback_object(message: &str) -> Value {
+    serde_json::json!({ "error": message, "not_run": true })
+}
+
 async fn tool_result_output(runner: &Runner, session: SessionId, call_id: &str) -> Value {
     let events = runner.store().replay(session).await.expect("replay");
     for event in &events {
@@ -114,7 +120,7 @@ async fn test_unknown_tool_error_object() {
     let output = tool_result_output(&runner, session, "c1").await;
     assert_eq!(
         output,
-        expected_error_object(MSG_UNKNOWN_TOOL),
+        expected_fallback_object(MSG_UNKNOWN_TOOL),
         "unknown tool must produce the exact fallback string, no prefix"
     );
 }
@@ -192,7 +198,7 @@ async fn test_baseline_rejected_approval() {
     let output = tool_result_output(&runner, session, "c1").await;
     assert_eq!(
         output,
-        expected_error_object(MSG_REJECTED),
+        expected_fallback_object(MSG_REJECTED),
         "rejected approval must produce the exact fallback string, no prefix"
     );
 }
@@ -221,7 +227,7 @@ async fn test_baseline_interrupted_orphan() {
     let output = tool_result_output(&runner, session, "c1").await;
     assert_eq!(
         output,
-        expected_error_object(MSG_INTERRUPTED),
+        expected_fallback_object(MSG_INTERRUPTED),
         "interrupted orphan must produce the exact fallback string, no prefix"
     );
 }
@@ -243,8 +249,8 @@ fn test_all_seven_strings_documented() {
         serde_json::json!({"error": "tool error: baseline tool failure"})
     );
     assert_eq!(
-        expected_error_object(MSG_REJECTED),
-        serde_json::json!({"error": "rejected by user"})
+        expected_fallback_object(MSG_REJECTED),
+        serde_json::json!({"error": "rejected by user", "not_run": true})
     );
 }
 

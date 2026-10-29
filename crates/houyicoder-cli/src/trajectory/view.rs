@@ -628,7 +628,7 @@ fn active_turn_ms(events: &[SessionLogEntry]) -> Option<u64> {
             | SessionEvent::CompactionBoundary { .. }
             | SessionEvent::RecapAttempt { .. }
             | SessionEvent::AwayRecap { .. } => {}
-            SessionEvent::RunCompleted { ms: Some(ms) } => {
+            SessionEvent::RunCompleted { ms: Some(ms), .. } => {
                 let entry = open.get_or_insert((ev.ts, ev.ts, 0));
                 entry.2 = *ms;
             }

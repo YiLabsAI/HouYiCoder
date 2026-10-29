@@ -124,7 +124,13 @@ fn test_seed_log_without_usage() {
                 text: "first".into(),
             },
         ),
-        new_event(session, SessionEvent::RunCompleted { ms: Some(5) }),
+        new_event(
+            session,
+            SessionEvent::RunCompleted {
+                ms: Some(5),
+                outcome: None,
+            },
+        ),
     ];
     let mut acc = UsageAccumulator::default();
     acc.seed_from_events(&log);

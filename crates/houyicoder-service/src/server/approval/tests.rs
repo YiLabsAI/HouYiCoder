@@ -916,6 +916,21 @@ async fn test_handle_cancel_returns_deny() {
         !decision.approved,
         "cancel mid-ask returns a deny, not a hang"
     );
+    // The card is recorded once its send succeeded, and the cancellation
+    // leaves no verdict: the audit keeps the card as an unknown outcome
+    // instead of losing it with the connection.
+    let session = server.session;
+    let events = server.runner.store().replay(session).await.expect("replay");
+    let asked = events
+        .iter()
+        .filter(|entry| matches!(entry.event, SessionEvent::PermissionAsked { .. }))
+        .count();
+    let decided = events
+        .iter()
+        .filter(|entry| matches!(entry.event, SessionEvent::PermissionDecision { .. }))
+        .count();
+    assert_eq!(asked, 1, "the card is recorded once: {events:?}");
+    assert_eq!(decided, 0, "a cancelled ask records no verdict");
 }
 
 /// A reverse response with the wrong payload shape fails closed: the ask

@@ -76,10 +76,27 @@ pub(crate) fn render_context(snap: &StatusSnapshot) -> String {
     s.push_str(&format!("  cache_write  {}\n", u.cache_write_input_tokens));
     s.push_str(&format!("  total        {}\n", u.total_tokens));
     s.push_str(&format!(
-        "tools         {} calls  ({} ok · {} errored)",
-        snap.tool_calls, snap.tool_success, snap.tool_errors
+        "tools         {} calls  ({})",
+        snap.tool_calls,
+        tool_outcome_breakdown(snap)
     ));
     s
+}
+
+/// How the session's tool calls ended, shared by the status text view and
+/// the Usage tab so both state the same three figures. A call whose result
+/// never arrived is named rather than left to be read as a success: the two
+/// counts do not add up to the calls, and the row says why.
+pub(crate) fn tool_outcome_breakdown(snap: &StatusSnapshot) -> String {
+    let unresolved = snap
+        .tool_calls
+        .saturating_sub(snap.tool_success)
+        .saturating_sub(snap.tool_errors);
+    let mut row = format!("{} ok · {} failed", snap.tool_success, snap.tool_errors);
+    if unresolved > 0 {
+        row.push_str(&format!(" · {unresolved} no result"));
+    }
+    row
 }
 
 /// Render one memory's full body (the /memory <key> show reply): the
@@ -231,6 +248,16 @@ pub(crate) fn render_permission_view(
 /// blank fields.
 pub(crate) fn field(label: &str, value: &str) -> String {
     format!("{:<22}{value}\n", format!("{label}:"))
+}
+
+/// A count with its noun, singular at one: a single call reads as a count, not
+/// as the plural template with the number dropped into it.
+pub(crate) fn count_label(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
 }
 
 /// Compact token count with k/m suffixes (1.3k / 1.6m) so the Usage tab's

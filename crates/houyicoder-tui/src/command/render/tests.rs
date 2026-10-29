@@ -48,7 +48,7 @@ fn test_context_renders_data() {
     assert!(s.contains("non_cached 300"), "{s}");
     assert!(s.contains("15 calls"), "{s}");
     assert!(s.contains("12 ok"), "{s}");
-    assert!(s.contains("3 errored"), "{s}");
+    assert!(s.contains("3 failed"), "{s}");
     assert!(s.contains("1000/8000"), "{s}");
     assert!(s.contains("12.5%"), "{s}");
 }
@@ -72,7 +72,7 @@ fn test_context_zero_stub() {
     });
     assert!(s.contains("0 calls"), "{s}");
     assert!(s.contains("0 ok"), "{s}");
-    assert!(s.contains("0 errored"), "{s}");
+    assert!(s.contains("0 failed"), "{s}");
     // Nothing has been assembled yet, so the window line says so rather than
     // reporting an empty context as a measured zero.
     assert!(s.contains("not measured"), "{s}");

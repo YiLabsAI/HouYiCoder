@@ -23,7 +23,7 @@ mod bash_command;
 mod failure;
 pub use ansi::strip_ansi;
 pub use bash_command::simple_command_word;
-pub use failure::tool_result_failed;
+pub use failure::{tool_result_failed, tool_result_not_run};
 
 /// The untruncated call-line argument for a tool call. Known tools pick the
 /// scalar field the chip already shows; unknown tools keep the full input so

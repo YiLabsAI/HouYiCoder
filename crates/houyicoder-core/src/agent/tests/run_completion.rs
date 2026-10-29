@@ -19,8 +19,8 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionEvent,
-    SessionId, SessionLogEntry,
+    CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, RunCompletionStatus,
+    SessionEvent, SessionId, SessionLogEntry,
 };
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
@@ -35,7 +35,18 @@ fn recorded_ms(events: &[houyicoder_context::SessionLogEntry]) -> Vec<Option<u64
     events
         .iter()
         .filter_map(|e| match &e.event {
-            SessionEvent::RunCompleted { ms } => Some(*ms),
+            SessionEvent::RunCompleted { ms, .. } => Some(*ms),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The outcome of every completion record in the log, in order.
+fn recorded_outcomes(events: &[SessionLogEntry]) -> Vec<Option<RunCompletionStatus>> {
+    events
+        .iter()
+        .filter_map(|e| match &e.event {
+            SessionEvent::RunCompleted { outcome, .. } => Some(*outcome),
             _ => None,
         })
         .collect()
@@ -109,6 +120,11 @@ async fn test_finished_run_records_end() {
     assert!(
         matches!(recorded_ms(&events).as_slice(), [Some(_)]),
         "one turn, one record: {events:?}"
+    );
+    assert_eq!(
+        recorded_outcomes(&events),
+        [Some(RunCompletionStatus::Completed)],
+        "the record states how the run ended: {events:?}"
     );
 }
 
@@ -383,6 +399,11 @@ async fn test_failed_recall_records_end() {
     assert!(
         matches!(recorded_ms(&events).as_slice(), [None]),
         "the failed recall closes the turn unmeasured: {events:?}"
+    );
+    assert_eq!(
+        recorded_outcomes(&events),
+        [Some(RunCompletionStatus::Failed)],
+        "a leg that failed outright records that ending: {events:?}"
     );
 }
 

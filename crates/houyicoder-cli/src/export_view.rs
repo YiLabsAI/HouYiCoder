@@ -319,6 +319,7 @@ fn collect_checkpoints_and_errors(
             | SessionEvent::TurnUsage { .. }
             | SessionEvent::RewardObservation { .. }
             | SessionEvent::Reasoning { .. }
+            | SessionEvent::PermissionAsked { .. }
             | SessionEvent::PermissionDecision { .. }
             | SessionEvent::TruncationVerdict { .. }
             | SessionEvent::WorktreeEnter { .. }
