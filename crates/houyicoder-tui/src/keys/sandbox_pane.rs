@@ -25,10 +25,6 @@ enum SandboxAction {
     ToggleFocus,
     /// Act on the focused button of the confirmation.
     Confirm,
-    /// Read the open tab again.
-    Reread,
-    /// Open the permission rule manager, where a refused write is granted.
-    OpenPermissions,
     /// Return one level, or close the pane at the listing.
     Back,
 }
@@ -39,14 +35,12 @@ impl App {
     /// holds text, which keeps bare letters for the message being written.
     fn sandbox_action(&self, k: KeyEvent, typing: bool) -> Option<SandboxAction> {
         let pane = &self.ui.sandbox_pane;
-        if pane.tab.get() == SandboxTab::Boundaries {
+        if pane.tab.get() == SandboxTab::Sandbox {
             return Some(match k.code {
                 KeyCode::Up => SandboxAction::Scroll(-1),
                 KeyCode::Down => SandboxAction::Scroll(1),
                 KeyCode::Left => SandboxAction::SwitchTab(-1),
                 KeyCode::Right | KeyCode::Tab => SandboxAction::SwitchTab(1),
-                KeyCode::Char('r') if bare(k) && !typing => SandboxAction::Reread,
-                KeyCode::Char('p') if bare(k) && !typing => SandboxAction::OpenPermissions,
                 KeyCode::Esc => SandboxAction::Back,
                 _ => return None,
             });
@@ -107,8 +101,6 @@ pub fn handle(app: &mut App, k: KeyEvent) -> bool {
             RestoreFocus::Cancel => app.close_checkpoint_restore(),
             RestoreFocus::Restore => app.confirm_checkpoint_restore(),
         },
-        SandboxAction::Reread => app.refresh_sandbox_tab(),
-        SandboxAction::OpenPermissions => app.open_permission_pane(),
         SandboxAction::Back => app.sandbox_back(),
     }
     true

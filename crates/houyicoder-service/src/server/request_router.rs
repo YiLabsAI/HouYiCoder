@@ -125,6 +125,9 @@ impl Server {
             FrontendRequest::SandboxRestore { operation } => {
                 self.handle_sandbox_restore(io, req_id, operation).await
             }
+            FrontendRequest::SandboxTexts { operation } => {
+                self.handle_sandbox_texts(io, req_id, operation).await
+            }
             FrontendRequest::Skills => self.dispatch_skills(io, req_id).await,
             FrontendRequest::SkillBody { name } => self.dispatch_skill_body(io, req_id, name).await,
             FrontendRequest::ModelInfo => self.handle_model_info(io, req_id).await,
@@ -473,6 +476,7 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
         FrontendRequest::Status
             | FrontendRequest::SandboxBoundaries
             | FrontendRequest::SandboxCheckpoints
+            | FrontendRequest::SandboxTexts { .. }
             | FrontendRequest::Metrics
             | FrontendRequest::Context
             | FrontendRequest::Trajectory

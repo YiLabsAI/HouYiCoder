@@ -47,6 +47,33 @@ fn test_diff_preview_malformed_none() {
     assert!(diff_preview("edit", &json!({"path": "a.rs"})).is_none());
 }
 
+/// The card a write is approved on shows every kept line of the pair it asks
+/// about. A count would ask the user to consent to lines the card did not
+/// print, including any line the write leaves unchanged in the middle of the
+/// region it replaces.
+#[test]
+fn test_diff_preview_keeps_lines() {
+    let old = (0..12)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new = format!("{old}\nline 12");
+    let lines = diff_preview(
+        "edit",
+        &json!({"path": "a.rs", "old_string": old, "new_string": new}),
+    )
+    .expect("preview");
+    let shown: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    assert!(
+        shown.iter().any(|line| line.contains(" line 5")),
+        "a kept line in the middle of the pair is on the card: {shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|line| line.contains("unchanged")),
+        "no kept line stands behind a count: {shown:?}"
+    );
+}
+
 #[test]
 fn test_cap_first_uppercases() {
     assert_eq!(cap_first("bash"), "Bash");

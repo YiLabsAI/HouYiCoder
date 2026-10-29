@@ -308,19 +308,16 @@ fn test_model_empty_catalog_guide() {
     assert!(out.contains("no catalog configured"), "guide: {out}");
 }
 
-/// /sandbox opens the boundaries tab. With no connection the host never
+/// /sandbox opens the sandbox tab. With no connection the host never
 /// answers, and the pane says so rather than drawing a boundary it did not
 /// measure.
 #[test]
-fn test_sandbox_opens_boundaries_tab() {
+fn test_sandbox_opens_sandbox_tab() {
     let mut app = working();
     app.run_command(SlashCommand::Sandbox);
     let out = render(&app);
     println!("--- /sandbox ---\n{out}\n--- end ---");
-    assert!(
-        out.contains("[Boundaries]"),
-        "boundaries tab missing: {out}"
-    );
+    assert!(out.contains("[Sandbox]"), "sandbox tab missing: {out}");
     assert!(
         out.contains("Checkpoints"),
         "the second tab is offered: {out}"

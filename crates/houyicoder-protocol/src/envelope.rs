@@ -15,6 +15,7 @@ use crate::frontend::SessionId;
 use crate::frontend::agents::AgentEntry;
 use crate::frontend::checkpoint::CheckpointListView;
 use crate::frontend::checkpoint::CheckpointRestoreView;
+use crate::frontend::checkpoint::CheckpointTextView;
 use crate::frontend::checkpoint::SandboxBoundariesView;
 use crate::frontend::compact::CompactReply;
 use crate::frontend::context::ContextBreakdown;
@@ -275,7 +276,7 @@ pub enum ResponsePayload {
     /// survived instead of reporting a clean result.
     WorktreeRemoved(WorktreeRemoveOutcome),
     /// What the host can prove about the sandbox boundaries (/sandbox
-    /// Boundaries tab): the fence's state, the workspace root, and every
+    /// Sandbox tab): the fence's state, the workspace root, and every
     /// directory a write may land in.
     SandboxBoundaries(SandboxBoundariesView),
     /// The session's recorded file writes (/sandbox Checkpoints tab), split by
@@ -284,6 +285,8 @@ pub enum ResponsePayload {
     /// How a restore ended, named by outcome so the terminal says what
     /// happened rather than only that the request finished.
     SandboxRestored(CheckpointRestoreView),
+    /// Both sides of one recorded write, as text, for its detail to compare.
+    SandboxTexts(CheckpointTextView),
     /// The request itself was invalid for the current state or capability.
     Error(ProtocolError),
 }

@@ -240,7 +240,7 @@ pub enum Pane {
     /// create is refused there.
     Worktree,
     /// The /sandbox pane: the boundaries that confine the session and the
-    /// file writes the host recorded. Two tabs, Boundaries and Checkpoints;
+    /// file writes the host recorded. Two tabs, Sandbox and Checkpoints;
     /// /rewind opens the second with its list already read. Nothing here
     /// acts on its own: a restore is previewed and confirmed first, and each
     /// row states what the target held before and holds now.

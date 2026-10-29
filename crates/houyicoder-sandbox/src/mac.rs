@@ -598,6 +598,10 @@ impl SandboxSession for MacSeatbeltSession {
         Arc::from(self.effective_workspace())
     }
 
+    fn scratch_dir(&self) -> Option<PathBuf> {
+        Some(self.tmpdir.clone())
+    }
+
     fn active_exec_count(&self) -> usize {
         self.exec_count.load(Ordering::SeqCst) as usize
     }

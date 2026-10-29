@@ -83,7 +83,7 @@ fn test_arrows_switch_tab() {
     handle_working(&mut app, key(KeyCode::Left));
     assert_eq!(
         app.ui.sandbox_pane.tab.get(),
-        SandboxTab::Boundaries,
+        SandboxTab::Sandbox,
         "Left reaches the other tab"
     );
     handle_working(&mut app, key(KeyCode::Right));
@@ -98,7 +98,7 @@ fn test_tab_switches_tabs() {
     handle_working(&mut app, key(KeyCode::Tab));
     assert_eq!(
         app.ui.sandbox_pane.tab.get(),
-        SandboxTab::Boundaries,
+        SandboxTab::Sandbox,
         "Tab reaches the other tab"
     );
     handle_working(&mut app, key(KeyCode::Tab));
@@ -169,14 +169,18 @@ fn test_typing_keeps_letters() {
     );
 }
 
-/// The boundaries screen names the place a refused write is granted, and the
-/// key that goes there.
+/// The sandbox tab names only the keys it acts on. A letter it does not act
+/// on leaves the pane where it is, so the footer never offers a key that
+/// opens another screen.
 #[test]
-fn test_p_opens_permissions() {
+fn test_sandbox_tab_ignores_letters() {
     let (mut app, _events) = sandbox_app();
-    app.ui.sandbox_pane.set_tab(SandboxTab::Boundaries);
+    app.ui.sandbox_pane.set_tab(SandboxTab::Sandbox);
     handle_working(&mut app, key(KeyCode::Char('p')));
-    assert_eq!(app.ui.navigation.pane, Pane::Permission);
+    handle_working(&mut app, key(KeyCode::Char('r')));
+    assert_eq!(app.ui.navigation.pane, Pane::Sandbox);
+    assert_eq!(app.ui.sandbox_pane.tab.get(), SandboxTab::Sandbox);
+    assert_eq!(app.ui.sandbox_pane.level.get(), CheckpointLevel::List);
 }
 
 #[test]

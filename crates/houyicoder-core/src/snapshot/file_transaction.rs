@@ -32,8 +32,8 @@ mod record;
 mod recovery;
 
 pub use self::recovery::{
-    ImageSummary, RecoveredWrite, RecoveryError, RecoveryReport, RestoreOutcome, UnreadableWrite,
-    WriteState,
+    ImageSummary, RecoveredWrite, RecoveryError, RecoveryReport, RestoreOutcome, SideText,
+    UnreadableWrite, WriteState, WriteText,
 };
 
 #[cfg(test)]

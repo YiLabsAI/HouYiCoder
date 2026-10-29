@@ -425,6 +425,10 @@ impl SandboxSession for LinuxLandlockSession {
         Arc::from(self.workspace.clone())
     }
 
+    fn scratch_dir(&self) -> Option<PathBuf> {
+        Some(self.tmpdir.clone())
+    }
+
     fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {
         self.resolve_path(path, true)
     }

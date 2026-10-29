@@ -431,6 +431,9 @@ async fn drive_connection(
                         ResponsePayload::SandboxRestored(view) => {
                             Some(ServerResponse::SandboxRestored { view })
                         }
+                        ResponsePayload::SandboxTexts(view) => {
+                            Some(ServerResponse::SandboxTexts { view })
+                        }
                         ResponsePayload::WorktreePreview(preview) => {
                             Some(ServerResponse::WorktreePreview { preview })
                         }

@@ -178,18 +178,13 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    block_with_keys(
-        f,
-        area,
-        lines,
-        key_hint(&[
-            ("Up/Down", "scroll"),
-            ("e", "enter"),
-            ("d", "remove"),
-            ("Esc", "back"),
-        ]),
-        &app.ui.worktree_pane.scroll,
-    );
+    let keys = vec![
+        ("Up/Down", "scroll"),
+        ("e", "enter"),
+        ("d", "remove"),
+        ("Esc", "back"),
+    ];
+    block_with_keys(f, area, lines, &keys, &app.ui.worktree_pane.scroll);
 }
 
 /// The removal confirmation: the focused-button row, what the preview measured
@@ -279,7 +274,7 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
         f,
         area,
         lines,
-        key_hint(&keys),
+        &keys,
         &app.ui.worktree_pane.scroll,
     );
 }

@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::records::Approval;
 
+use crate::view::diff::full_lines;
 use crate::view::line_wrap::{wrap_line, wrap_styled_line};
 
 /// The most rows the arguments block may take. A long command or a large edit
@@ -232,8 +233,6 @@ fn truncate_tail(s: &str, max: usize) -> String {
 /// red (-), each new line green (+). Returns None for other tools or malformed
 /// input (caller falls back to raw args). Multi-line strings split on \n.
 pub(super) fn diff_preview(tool: &str, input: &Value) -> Option<Vec<Line<'static>>> {
-    let red = Style::new().fg(Color::Rgb(255, 107, 128));
-    let green = Style::new().fg(Color::Rgb(78, 186, 101));
     let dim = Style::new().fg(Color::DarkGray);
     let pairs: Vec<(&str, &str)> = match tool {
         "edit" => {
@@ -261,18 +260,7 @@ pub(super) fn diff_preview(tool: &str, input: &Value) -> Option<Vec<Line<'static
         if pairs.len() > 1 {
             lines.push(Line::from(Span::styled(format!("edit {}:", i + 1), dim)));
         }
-        for l in old.split('\n') {
-            lines.push(Line::from(vec![
-                Span::styled("-", red),
-                Span::raw(l.to_string()),
-            ]));
-        }
-        for l in new.split('\n') {
-            lines.push(Line::from(vec![
-                Span::styled("+", green),
-                Span::raw(l.to_string()),
-            ]));
-        }
+        lines.extend(full_lines(Some(old), Some(new)));
     }
     Some(lines)
 }

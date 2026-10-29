@@ -6,10 +6,11 @@
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::checkpoint::{
-    CheckpointListView, CheckpointRestoreView, SandboxBoundariesView,
+    CheckpointListView, CheckpointRestoreView, CheckpointTextView, SandboxBoundariesView,
 };
 
 use crate::state::App;
+use crate::ui::CheckpointLevel;
 use crate::ui::SandboxTab;
 use crate::view::sandbox_pane::restore_sentence;
 
@@ -40,6 +41,15 @@ impl App {
         self.ui.sandbox_pane.accept_checkpoints(view);
     }
 
+    /// Show the two sides the host read, when the pane still waits on that
+    /// request.
+    pub(crate) fn apply_sandbox_texts(&mut self, request: RequestId, view: CheckpointTextView) {
+        if self.ui.sandbox_pane.texts_request() != Some(request) {
+            return;
+        }
+        self.ui.sandbox_pane.accept_texts(view);
+    }
+
     /// Show what a restore did. The answer always reaches the transcript,
     /// whether or not the pane still waits on it, because a file changed and
     /// the sentence has to outlive the pane. The confirmation then closes back
@@ -50,7 +60,16 @@ impl App {
         request: RequestId,
         view: CheckpointRestoreView,
     ) {
-        let sentence = restore_sentence(&view.operation, &view.outcome);
+        let target = {
+            let listing = self.ui.sandbox_pane.checkpoints();
+            listing.as_ref().and_then(|list| {
+                list.checkpoints
+                    .iter()
+                    .find(|write| write.operation == view.operation)
+                    .map(|write| write.target.clone())
+            })
+        };
+        let sentence = restore_sentence(target.as_deref(), &view.outcome);
         self.system_line(sentence);
         if self.ui.sandbox_pane.restore_request() != Some(request) {
             return;
@@ -60,6 +79,9 @@ impl App {
         self.ui.sandbox_pane.set_level(back);
         if self.ui.sandbox_pane.tab.get() == SandboxTab::Checkpoints {
             self.refresh_sandbox_tab();
+            if back == CheckpointLevel::Detail {
+                self.reread_checkpoint_texts();
+            }
         }
     }
 
@@ -78,6 +100,11 @@ impl App {
         if pane.list_request() == Some(request) {
             pane.abandon_list();
             pane.set_notice(format!("cannot list the checkpoints: {message}"));
+            return true;
+        }
+        if pane.texts_request() == Some(request) {
+            pane.abandon_texts();
+            pane.set_notice(format!("cannot read the recorded sides: {message}"));
             return true;
         }
         if pane.boundaries_request() == Some(request) {

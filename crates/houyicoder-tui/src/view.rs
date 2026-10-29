@@ -12,6 +12,7 @@ pub mod capability;
 pub mod components;
 pub mod console;
 pub mod context_view;
+pub mod diff;
 pub mod export_log;
 pub mod hooks_pane;
 pub mod input_bar;

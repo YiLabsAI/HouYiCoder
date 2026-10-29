@@ -789,7 +789,7 @@ fn draw_sandbox_pane(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Default height /sandbox asks for. The checkpoints list needs the most
-/// rows of the four levels it shows; the boundaries tab and the two detail
+/// rows of the four levels it shows; the Sandbox tab and the two detail
 /// levels fill what they need and leave the rest to the transcript.
 const SANDBOX_PANE_HEIGHT: u16 = 14;
 

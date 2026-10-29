@@ -34,8 +34,9 @@ use crate::frontend::debug::DebugLevel;
 use crate::frontend::model::SpeedMode;
 use crate::llm::EffortLevel;
 pub use checkpoint::{
-    CheckpointImage, CheckpointListView, CheckpointRestoreView, CheckpointState, CheckpointView,
-    FenceState, RestoreView, SandboxBoundariesView, UnreadableView,
+    CheckpointImage, CheckpointListView, CheckpointRestoreView, CheckpointSide, CheckpointState,
+    CheckpointTextView, CheckpointView, FenceState, RestoreView, SandboxBoundariesView,
+    UnreadableView,
 };
 pub use compact::CompactReply;
 pub use context::{
@@ -547,6 +548,12 @@ pub enum FrontendRequest {
     /// else changed keeps its current bytes, and the earlier ones go to a copy
     /// beside it.
     SandboxRestore {
+        operation: String,
+    },
+    /// Both sides of one recorded write, as text, for its detail to compare.
+    /// The stored images are opened for the row the user opened, so the
+    /// listing stays cheap however many writes the session recorded.
+    SandboxTexts {
         operation: String,
     },
     // utility

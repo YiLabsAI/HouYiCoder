@@ -491,6 +491,9 @@ impl App {
             ServerResponse::SandboxRestored { view } => {
                 self.apply_sandbox_restored(request, view);
             }
+            ServerResponse::SandboxTexts { view } => {
+                self.apply_sandbox_texts(request, view);
+            }
             ServerResponse::Debug { state } => self.apply_debug_state(state),
         }
     }

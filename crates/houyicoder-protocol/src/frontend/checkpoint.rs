@@ -31,6 +31,12 @@ pub struct SandboxBoundariesView {
     /// Every directory a write may land in: the workspace root plus the ones
     /// the user added beyond it.
     pub writable_roots: Vec<String>,
+    /// The session's own scratch directory, when it creates one. The child
+    /// runs with it as TMPDIR, so it is writable without the user granting
+    /// it; it is reported apart from writable_roots because the pane labels
+    /// it as the session's own and the user never chose it.
+    #[serde(default)]
+    pub scratch_root: Option<String>,
 }
 
 /// What a recorded write's target holds now.
@@ -76,6 +82,37 @@ pub struct CheckpointView {
     pub before: CheckpointImage,
     /// What the write left.
     pub after: CheckpointImage,
+}
+
+/// One side of a recorded write, as the detail can show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CheckpointSide {
+    /// The bytes, as text, within the room the detail shows them in.
+    Text {
+        /// The bytes as text.
+        text: String,
+        /// Whether more bytes were held back.
+        truncated: bool,
+    },
+    /// The file was not there on this side of the write.
+    Absent,
+    /// The record kept no bytes for this side.
+    NotKept,
+    /// The bytes are not text, so there is nothing to set beside each other.
+    NotText,
+}
+
+/// Both sides of one recorded write, for its detail to compare.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointTextView {
+    /// The name the write recorded itself under.
+    pub operation: String,
+    /// The workspace path the write targeted.
+    pub target: String,
+    /// What the target held before the write.
+    pub before: CheckpointSide,
+    /// What the write left.
+    pub after: CheckpointSide,
 }
 
 /// A recorded write the host could not judge.

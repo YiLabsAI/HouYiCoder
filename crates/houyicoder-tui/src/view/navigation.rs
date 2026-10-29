@@ -70,15 +70,27 @@ pub(crate) fn key_hint(pairs: &[(&str, &str)]) -> Line<'static> {
 /// not a count of how many widths of text the block holds: a word-wrapped
 /// line can take one row more than its columns divide into, and a limit short
 /// by that row leaves the last line of the block out of reach.
+///
+/// The scroll hint belongs to the row only while there is something to scroll
+/// to. A key named on a block that fits moves nothing, and a row that names it
+/// there teaches the user a key that does not work.
 pub(crate) fn block_with_keys(
     f: &mut Frame,
     area: Rect,
     body: Vec<Line<'static>>,
-    keys: Line,
+    keys: &[(&'static str, &'static str)],
     scroll: &Cell<u16>,
 ) {
-    let keys_height = key_row_height(&keys, area);
-    let keys_row = Paragraph::new(keys).wrap(Wrap { trim: false });
+    let mut pairs = keys.to_vec();
+    let mut keys_line = key_hint(&pairs);
+    let mut keys_height = key_row_height(&keys_line, area);
+    let room = area.height.saturating_sub(keys_height);
+    if max_scroll_offset(&body, area.width, room) > 0 {
+        pairs.insert(0, ("Up/Down", "scroll"));
+        keys_line = key_hint(&pairs);
+        keys_height = key_row_height(&keys_line, area);
+    }
+    let keys_row = Paragraph::new(keys_line).wrap(Wrap { trim: false });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(keys_height)])

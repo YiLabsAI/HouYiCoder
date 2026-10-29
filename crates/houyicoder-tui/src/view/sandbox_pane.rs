@@ -7,9 +7,15 @@
 //! two levels below it all count the same rows. A write the host could not
 //! judge is listed with its reason instead of being left out or guessed at.
 
+//! The detail compares the two sides the record kept, line by line, and says
+//! which side it could not read rather than setting an empty one beside it.
+
+use std::collections::HashSet;
+use std::path::Path;
+
 use houyicoder_protocol::frontend::checkpoint::{
-    CheckpointImage, CheckpointListView, CheckpointState, CheckpointView, FenceState, RestoreView,
-    UnreadableView,
+    CheckpointImage, CheckpointListView, CheckpointSide, CheckpointState, CheckpointTextView,
+    CheckpointView, FenceState, RestoreView, UnreadableView,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -19,13 +25,14 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::state::App;
 use crate::ui::{CheckpointLevel, RestoreFocus, SandboxTab};
+use crate::view::diff::changed_lines;
 use crate::view::line_wrap::{elide_start, pad_width, truncate_width};
 use crate::view::navigation::{block_with_keys, key_hint, key_row_height, tab_header};
 use crate::view::relative_time::{now_epoch_secs, relative_time};
 
 /// The two tabs, in the order the left and right keys walk them.
 const TABS: [(SandboxTab, &str); 2] = [
-    (SandboxTab::Boundaries, "Boundaries"),
+    (SandboxTab::Sandbox, "Sandbox"),
     (SandboxTab::Checkpoints, "Checkpoints"),
 ];
 
@@ -71,28 +78,28 @@ pub(crate) fn row_at(list: &CheckpointListView, index: usize) -> Option<Checkpoi
     }
 }
 
-/// What a restore answer says, wherever the pane shows it.
-pub(crate) fn restore_sentence(operation: &str, outcome: &RestoreView) -> String {
+/// What a restore answer says in the transcript, wherever the pane is. The
+/// target is named when the listing still holds it, because the name the
+/// record is stored under says nothing about which file changed.
+pub(crate) fn restore_sentence(target: Option<&str>, outcome: &RestoreView) -> String {
+    let what = target.unwrap_or("the target");
     match outcome {
-        RestoreView::Unchanged => format!("checkpoint: {operation} already held the earlier bytes"),
-        RestoreView::Restored => format!("checkpoint: restored {operation}"),
-        RestoreView::Kept { copy: Some(copy) } => format!(
-            "checkpoint: the target changed since the write; the earlier bytes went to {copy}"
+        RestoreView::Unchanged => format!("checkpoint: {what} already held the earlier bytes"),
+        RestoreView::Restored => format!("checkpoint: restored {what}"),
+        RestoreView::Kept { copy: Some(copy) } => {
+            format!("checkpoint: {what} changed since the write; the earlier bytes went to {copy}")
+        }
+        RestoreView::Kept { copy: None } => format!(
+            "checkpoint: {what} changed since the write, which created it; nothing was put back"
         ),
-        RestoreView::Kept { copy: None } => {
-            "checkpoint: the target changed since the write, which created it; nothing was put back"
-                .to_string()
-        }
-        RestoreView::Unbacked => {
-            format!("checkpoint: the earlier bytes of {operation} were never kept")
-        }
+        RestoreView::Unbacked => format!("checkpoint: the earlier bytes of {what} were never kept"),
     }
 }
 
 pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
     let pane = &app.ui.sandbox_pane;
     match (pane.tab.get(), pane.level.get()) {
-        (SandboxTab::Boundaries, _) => draw_boundaries(f, area, app),
+        (SandboxTab::Sandbox, _) => draw_boundaries(f, area, app),
         (SandboxTab::Checkpoints, CheckpointLevel::Detail) => draw_detail(f, area, app),
         (SandboxTab::Checkpoints, CheckpointLevel::Restore) => draw_restore(f, area, app),
         (SandboxTab::Checkpoints, CheckpointLevel::List) => draw_list(f, area, app),
@@ -107,29 +114,38 @@ fn draw_boundaries(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![tab_header(pane.tab.get(), &TABS)];
     match pane.boundaries() {
         Some(view) => {
-            let (label, color) = fence_label(&view.fence);
+            let (label, color) = status_label(&view.fence);
             lines.push(Line::from(vec![
-                Span::raw("Fence:     "),
+                Span::raw("  Status:    "),
                 Span::styled(label, Style::new().fg(color)),
             ]));
-            lines.push(Line::from(format!("Workspace: {}", view.workspace_root)));
-            if view.writable_roots.is_empty() {
-                lines.push(Line::from("Writable:  nothing outside the workspace"));
-            } else {
-                let mut roots = view.writable_roots.iter();
-                if let Some(first) = roots.next() {
-                    lines.push(Line::from(format!("Writable:  {first}")));
+            lines.push(Line::from(format!("  Workspace: {}", view.workspace_root)));
+            let mut roots = view.writable_roots.iter();
+            if let Some(first) = roots.next() {
+                lines.push(Line::from(format!("  Writable:  {first}")));
+                if let Some(scratch) = &view.scratch_root {
+                    lines.push(Line::from(format!(
+                        "             {scratch} (session TMPDIR)"
+                    )));
                 }
                 for root in roots {
-                    lines.push(Line::from(format!("           {root}")));
+                    lines.push(Line::from(format!("             {root}")));
                 }
+            } else if let Some(scratch) = &view.scratch_root {
+                lines.push(Line::from(format!(
+                    "  Writable:  {scratch} (session TMPDIR)"
+                )));
+            } else {
+                lines.push(Line::from("  Writable:  nothing outside the workspace"));
             }
         }
         None if pane.reading_boundaries() => {
-            lines.push(Line::from("Reading the boundaries from the host…"));
+            lines.push(Line::from(
+                "  Reading the fence and the roots from the host…",
+            ));
         }
         None => lines.push(Line::from(
-            "The host has not answered; r reads the boundaries again",
+            "  The host has not answered; reopening the pane reads again",
         )),
     }
     if let Some(notice) = pane.notice() {
@@ -142,12 +158,7 @@ fn draw_boundaries(f: &mut Frame, area: Rect, app: &App) {
         f,
         area,
         lines,
-        key_hint(&[
-            ("Left/Right", "switch tab"),
-            ("r", "read again"),
-            ("p", "permissions"),
-            ("Esc", "close"),
-        ]),
+        &[("Tab/Left/Right", "switch tab"), ("Esc", "close")],
         &pane.scroll,
     );
 }
@@ -155,19 +166,19 @@ fn draw_boundaries(f: &mut Frame, area: Rect, app: &App) {
 /// The fence's state in the words the user acts on. A fence that failed says
 /// why, because the list of writable roots below then describes a boundary
 /// nothing enforces.
-fn fence_label(fence: &FenceState) -> (String, Color) {
+fn status_label(fence: &FenceState) -> (String, Color) {
     match fence {
         FenceState::Enforced => (
-            "enforced: writes outside the roots below are refused".to_string(),
+            "Enforced (writes outside the roots below are refused)".to_string(),
             Color::Green,
         ),
         FenceState::NotEnforced => (
-            "not enforced: the session can write anywhere its user can".to_string(),
+            "Not enforced (the session can write anywhere its user can)".to_string(),
             Color::Yellow,
         ),
-        FenceState::Failed(reason) => (format!("could not be set up: {reason}"), Color::Red),
+        FenceState::Failed(reason) => (format!("Could not be set up: {reason}"), Color::Red),
         FenceState::Unavailable => (
-            "not offered on this platform: writes follow its permission".to_string(),
+            "Not offered on this platform (writes follow its permission)".to_string(),
             Color::Yellow,
         ),
     }
@@ -181,13 +192,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
     let listing = pane.checkpoints();
     let notice = pane.notice();
     let rows = listing.as_ref().map(row_count).unwrap_or(0);
-    let footer = key_hint(&[
-        ("Up/Down", "select"),
-        ("Enter", "open"),
-        ("r", "restore"),
-        ("Left/Right", "switch tab"),
-        ("Esc", "close"),
-    ]);
+    let footer = list_footer(listing.as_ref(), pane.cursor.get());
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -217,7 +222,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
         let message = if pane.reading_checkpoints() {
             "Reading the recorded writes from the host…"
         } else {
-            "The host has not answered; r reads the checkpoints again"
+            "The host has not answered; reopening the pane reads again"
         };
         f.render_widget(
             Paragraph::new(message).style(Style::new().fg(Color::DarkGray)),
@@ -233,17 +238,12 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             chunks[2],
         );
     } else {
-        let items = list_items(list, chunks[2].width);
+        let cursor = pane.cursor.get().min(rows - 1);
+        let items = list_items(list, chunks[2].width, cursor);
         let mut state = ListState::default();
-        state.select(Some(pane.cursor.get().min(rows - 1)));
+        state.select(Some(cursor));
         f.render_stateful_widget(
-            List::new(items)
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .highlight_symbol("❯ "),
+            List::new(items).highlight_symbol("\u{276f} "),
             chunks[2],
             &mut state,
         );
@@ -251,19 +251,50 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
     render_keys(f, chunks[3], footer);
 }
 
-/// One write's detail: what it targeted, what the target holds now, when it
-/// landed, and both images the record kept.
+/// The keys that act on this listing. Selecting and opening need a row to act
+/// on, and restoring needs one a restore could be measured against. An empty
+/// list and a row the host could not judge leave both groups off, since the
+/// row on screen is not one the keys can act on.
+fn list_footer(listing: Option<&CheckpointListView>, cursor: usize) -> Line<'static> {
+    let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
+    let row = listing
+        .filter(|list| row_count(list) > 0)
+        .and_then(|list| row_at(list, cursor));
+    if let Some(CheckpointRow::Write(view)) = row {
+        keys.push(("Up/Down", "select"));
+        keys.push(("Enter", "open"));
+        if restorable(view) {
+            keys.push(("r", "restore"));
+        }
+    }
+    keys.push(("Left/Right", "switch tab"));
+    keys.push(("Esc", "close"));
+    key_hint(&keys)
+}
+
+/// One write's detail: the file it targeted and when, the state its target is
+/// in, and the two sides the record kept set beside each other.
 fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
     let pane = &app.ui.sandbox_pane;
     let listing = pane.checkpoints();
-    let row = listing
+    let index = pane.cursor.get();
+    let row = listing.as_ref().and_then(|list| row_at(list, index));
+    let superseded = listing
         .as_ref()
-        .and_then(|list| row_at(list, pane.cursor.get()));
+        .and_then(|list| superseded_rows(list).get(index).copied())
+        .unwrap_or(false);
+    let texts = pane.texts();
     let (mut lines, openable) = match row {
         Some(CheckpointRow::Write(view)) => {
             let mut lines = vec![tab_header(pane.tab.get(), &TABS)];
-            lines.extend(write_lines(view));
-            (lines, true)
+            let shown = texts
+                .as_ref()
+                .filter(|shown| shown.operation == view.operation);
+            lines.extend(write_lines(view, superseded, shown, pane.reading_texts()));
+            // A record whose earlier bytes were never kept has nothing to put
+            // back, so its detail offers no key for it. The state row already
+            // says which record this is.
+            (lines, restorable(view))
         }
         Some(CheckpointRow::Unreadable(view)) => {
             let mut lines = vec![tab_header(pane.tab.get(), &TABS)];
@@ -284,31 +315,117 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    let mut keys = vec![("Up/Down", "scroll")];
+    let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
     if openable {
         keys.push(("r", "restore"));
     }
     keys.push(("Esc", "back"));
-    block_with_keys(f, area, lines, key_hint(&keys), &pane.scroll);
+    block_with_keys(f, area, lines, &keys, &pane.scroll);
 }
 
-/// A write the host judged, as the detail shows it.
-fn write_lines(view: &CheckpointView) -> Vec<Line<'static>> {
-    let (label, color) = state_label(view.state);
-    vec![
-        Line::from(vec![Span::styled(
-            format!("Checkpoint: {}", view.operation),
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(format!("Target:     {}", view.target)),
+/// A write the host judged, as the detail shows it. The title names the file
+/// and when the write landed, which is how a user tells one record from
+/// another; the name the record is stored under stays off the screen.
+fn write_lines(
+    view: &CheckpointView,
+    superseded: bool,
+    texts: Option<&CheckpointTextView>,
+    reading: bool,
+) -> Vec<Line<'static>> {
+    let (label, color) = state_label(view.state, superseded);
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                target_name(&view.target),
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" \u{00b7} {}", written_label(view.written_ms)),
+                Style::new().fg(Color::DarkGray),
+            ),
+        ]),
         Line::from(vec![
             Span::raw("State:      "),
             Span::styled(label, Style::new().fg(color)),
         ]),
-        Line::from(format!("Written:    {}", written_label(view.written_ms))),
-        Line::from(format!("Before:     {}", image_label(&view.before))),
-        Line::from(format!("After:      {}", image_label(&view.after))),
-    ]
+        Line::from(Span::styled(
+            format!("Target:     {}", view.target),
+            Style::new().fg(Color::DarkGray),
+        )),
+    ];
+    match texts {
+        Some(texts) => lines.extend(side_lines(texts)),
+        None if reading => lines.push(Line::from(Span::styled(
+            "Reading both sides from the host…",
+            Style::new().fg(Color::DarkGray),
+        ))),
+        None => lines.push(Line::from(Span::styled(
+            "Both sides are not shown; reopening this row reads them again",
+            Style::new().fg(Color::DarkGray),
+        ))),
+    }
+    lines
+}
+
+/// Both sides as the detail compares them: the lines that left and the lines
+/// that took their place, and a row naming any side that could not be set
+/// beside the other. A side the record kept no bytes for is said rather than
+/// drawn as an empty file, because an empty file is a different fact.
+///
+/// A side that cannot be compared in full stops the comparison altogether.
+/// Two halves of a large file differ at the cut even when the file did not
+/// change there, and a side with no kept bytes would make every line of the
+/// other side read as if it had just arrived.
+fn side_lines(texts: &CheckpointTextView) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut compares = true;
+    for (name, side) in [("Before", &texts.before), ("After", &texts.after)] {
+        match side {
+            CheckpointSide::NotKept => {
+                compares = false;
+                lines.push(note(format!("{name}: the record kept none of these bytes")))
+            }
+            CheckpointSide::NotText => {
+                compares = false;
+                lines.push(note(format!(
+                    "{name}: these bytes are not text, so the sides cannot be compared line by line"
+                )))
+            }
+            CheckpointSide::Text {
+                truncated: true, ..
+            } => {
+                compares = false;
+                lines.push(note(format!(
+                    "{name}: the file is larger than this view holds, so the sides are not compared"
+                )))
+            }
+            CheckpointSide::Text { .. } | CheckpointSide::Absent => {}
+        }
+    }
+    if !compares {
+        return lines;
+    }
+    let changed = changed_lines(side_text(&texts.before), side_text(&texts.after));
+    if changed.is_empty() {
+        lines.push(note("Neither side held anything to show".to_string()));
+    }
+    lines.extend(changed);
+    lines
+}
+
+/// The text one side holds, when it holds text. An absent side, a side the
+/// record kept no bytes for, and one holding bytes that are not text all
+/// contribute no line to the comparison.
+fn side_text(side: &CheckpointSide) -> Option<&str> {
+    match side {
+        CheckpointSide::Text { text, .. } => Some(text),
+        CheckpointSide::Absent | CheckpointSide::NotKept | CheckpointSide::NotText => None,
+    }
+}
+
+/// A row that explains a side of the comparison rather than showing one.
+fn note(text: String) -> Line<'static> {
+    Line::from(Span::styled(text, Style::new().fg(Color::DarkGray)))
 }
 
 /// A record the host could not judge, as the detail shows it.
@@ -316,7 +433,7 @@ fn unreadable_lines(view: &UnreadableView) -> Vec<Line<'static>> {
     let name = view.operation.as_deref().unwrap_or("(unnamed record)");
     vec![
         Line::from(vec![Span::styled(
-            format!("Checkpoint: {name}"),
+            name.to_string(),
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )]),
         Line::from(Span::styled(
@@ -345,9 +462,19 @@ fn draw_restore(f: &mut Frame, area: Rect, app: &App) {
     )];
     match row {
         Some(CheckpointRow::Write(view)) => {
-            lines.push(Line::from(format!(
-                "Checkpoint: {} ({})",
-                view.operation, view.target
+            lines.push(Line::from(vec![
+                Span::styled(
+                    target_name(&view.target),
+                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" \u{00b7} {}", written_label(view.written_ms)),
+                    Style::new().fg(Color::DarkGray),
+                ),
+            ]));
+            lines.push(Line::from(Span::styled(
+                format!("Target:     {}", view.target),
+                Style::new().fg(Color::DarkGray),
             )));
             lines.push(Line::from(format!(
                 "Before:     {}",
@@ -373,12 +500,11 @@ fn draw_restore(f: &mut Frame, area: Rect, app: &App) {
         f,
         area,
         lines,
-        key_hint(&[
+        &[
             ("Left/Right", "choose"),
-            ("Up/Down", "scroll"),
             ("Enter", "confirm"),
             ("Esc", "back"),
-        ]),
+        ],
         &pane.scroll,
     );
 }
@@ -410,13 +536,14 @@ fn restore_effect(view: &CheckpointView) -> String {
     }
     match view.state {
         CheckpointState::Applied => {
-            "Restore:    puts the bytes from Before back into the target".to_string()
+            "Restore:    puts the bytes the write found back into the target".to_string()
         }
         CheckpointState::NotApplied => {
-            "Restore:    changes nothing; the target already holds Before".to_string()
+            "Restore:    changes nothing; the target already holds the bytes the write found"
+                .to_string()
         }
         CheckpointState::Conflict => {
-            "Restore:    the target changed since the write, so it keeps its bytes and Before goes to a copy beside it"
+            "Restore:    the target changed since the write, so it keeps its bytes and the earlier ones go to a copy beside it"
                 .to_string()
         }
         CheckpointState::Unverified => {
@@ -425,27 +552,61 @@ fn restore_effect(view: &CheckpointView) -> String {
     }
 }
 
-/// The state a write's target is in, in the words the user acts on.
-fn state_label(state: CheckpointState) -> (&'static str, Color) {
+/// The state a write's target is in, in the words the user acts on. A write a
+/// later write to the same file left behind is superseded whatever its own
+/// state says: the target now holds the later write's bytes.
+fn state_label(state: CheckpointState, superseded: bool) -> (&'static str, Color) {
+    if superseded {
+        return ("superseded", Color::DarkGray);
+    }
     match state {
-        CheckpointState::Applied => ("ready", Color::Green),
-        CheckpointState::NotApplied => ("not applied", Color::DarkGray),
-        CheckpointState::Conflict => ("conflict", Color::Yellow),
+        CheckpointState::Applied => ("active", Color::Green),
+        CheckpointState::NotApplied => ("reverted", Color::DarkGray),
+        CheckpointState::Conflict => ("modified", Color::Yellow),
         CheckpointState::Unverified => ("unverified", Color::Yellow),
     }
 }
 
-/// One side of a write, as a sentence. A file that was not there says so; a
-/// side whose bytes were not kept says that rather than naming no size.
+/// Whether a restore can act on this record. The host puts the earlier bytes
+/// back, and a record that kept none of them has nothing to put.
+fn restorable(view: &CheckpointView) -> bool {
+    view.state != CheckpointState::Unverified
+}
+
+/// Which writes a later write to the same target left behind. A later write
+/// that was itself undone hands the file back, so it supersedes nothing; a
+/// later write that still stands supersedes every write before it.
+fn superseded_rows(list: &CheckpointListView) -> Vec<bool> {
+    let mut standing: HashSet<&str> = HashSet::new();
+    let mut superseded = vec![false; list.checkpoints.len()];
+    for (index, view) in list.checkpoints.iter().enumerate().rev() {
+        superseded[index] = standing.contains(view.target.as_str());
+        if view.state != CheckpointState::NotApplied {
+            standing.insert(view.target.as_str());
+        }
+    }
+    superseded
+}
+
+/// The file a target names, which is what tells one record from another on
+/// screen. A target that ends in no file name is shown whole.
+fn target_name(target: &str) -> String {
+    Path::new(target)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| target.to_string())
+}
+
+/// One side of a write, as the restore page states it. The name the stored
+/// bytes are kept under stays off the screen; how many bytes the file held is
+/// what the user judges the restore by.
 fn image_label(image: &CheckpointImage) -> String {
     if !image.present {
         return "absent".to_string();
     }
-    match (&image.hash, image.bytes) {
-        (Some(hash), Some(bytes)) => format!("{bytes} bytes, kept as {hash}"),
-        (Some(hash), None) => format!("kept as {hash}"),
-        (None, Some(bytes)) => format!("{bytes} bytes, not kept"),
-        (None, None) => "not kept".to_string(),
+    match image.bytes {
+        Some(bytes) => format!("{bytes} bytes"),
+        None => "not kept".to_string(),
     }
 }
 
@@ -458,20 +619,42 @@ fn written_label(written_ms: Option<u64>) -> String {
     }
 }
 
-fn list_items(list: &CheckpointListView, width: u16) -> Vec<ListItem<'static>> {
+fn list_items(list: &CheckpointListView, width: u16, cursor: usize) -> Vec<ListItem<'static>> {
     let now = now_epoch_secs();
     let columns = RowColumns::for_width(width);
+    let superseded = superseded_rows(list);
     let mut items: Vec<ListItem<'static>> = list
         .checkpoints
         .iter()
-        .map(|view| ListItem::new(write_row(view, now, columns)))
+        .enumerate()
+        .map(|(index, view)| {
+            let mark = RowMark {
+                selected: index == cursor,
+                superseded: superseded[index],
+                now,
+            };
+            ListItem::new(write_row(view, mark, columns))
+        })
         .collect();
-    items.extend(
-        list.unreadable
-            .iter()
-            .map(|view| ListItem::new(unreadable_row(view, columns))),
-    );
+    items.extend(list.unreadable.iter().enumerate().map(|(offset, view)| {
+        let mark = RowMark {
+            selected: list.checkpoints.len() + offset == cursor,
+            superseded: false,
+            now,
+        };
+        ListItem::new(unreadable_row(view, mark, columns))
+    }));
     items
+}
+
+/// What the listing knows about a row beyond the record itself: whether it is
+/// under the cursor, whether a later write left it behind, and the clock the
+/// age is counted against.
+#[derive(Clone, Copy)]
+struct RowMark {
+    selected: bool,
+    superseded: bool,
+    now: u64,
 }
 
 /// What each part of a row may take. The listing draws the cursor marker in
@@ -494,15 +677,15 @@ impl RowColumns {
     }
 }
 
-fn write_row(view: &CheckpointView, now: u64, columns: RowColumns) -> Line<'static> {
-    let (label, color) = state_label(view.state);
+fn write_row(view: &CheckpointView, mark: RowMark, columns: RowColumns) -> Line<'static> {
+    let (label, color) = state_label(view.state, mark.superseded);
     let mut spans = vec![Span::styled(
         format!("{label:<STATE_COLUMNS$}"),
         Style::new().fg(color),
     )];
     if let Some(width) = columns.second {
         let when = match view.written_ms {
-            Some(ms) => relative_time(now, ms / 1_000),
+            Some(ms) => relative_time(mark.now, ms / 1_000),
             None => "never landed".to_string(),
         };
         spans.push(Span::styled(
@@ -512,12 +695,12 @@ fn write_row(view: &CheckpointView, now: u64, columns: RowColumns) -> Line<'stat
     }
     spans.push(Span::styled(
         elide_start(&view.target, columns.target),
-        Style::new().fg(Color::White),
+        target_style(mark.selected),
     ));
     Line::from(spans)
 }
 
-fn unreadable_row(view: &UnreadableView, columns: RowColumns) -> Line<'static> {
+fn unreadable_row(view: &UnreadableView, mark: RowMark, columns: RowColumns) -> Line<'static> {
     let name = view.operation.as_deref().unwrap_or("(unnamed record)");
     let mut spans = vec![Span::styled(
         cell_text("unreadable", STATE_COLUMNS),
@@ -531,9 +714,20 @@ fn unreadable_row(view: &UnreadableView, columns: RowColumns) -> Line<'static> {
     }
     spans.push(Span::styled(
         elide_start(&view.reason, columns.target),
-        Style::new().fg(Color::DarkGray),
+        target_style(mark.selected),
     ));
     Line::from(spans)
+}
+
+/// The target under the cursor is the one thing the cursor recolours, so the
+/// row keeps the colour of its state and the selection adds weight to the
+/// part the user is choosing.
+fn target_style(selected: bool) -> Style {
+    if selected {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::White)
+    }
 }
 
 /// A value held to a fixed column count, so the column after it starts at the

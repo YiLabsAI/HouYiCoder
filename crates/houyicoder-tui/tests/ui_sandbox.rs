@@ -95,7 +95,7 @@ fn session_with_one_write(slug: &str, file: &str) -> (PtySession, PathBuf) {
     (s, abs)
 }
 
-/// The pane opens on the boundaries tab, Tab walks to the checkpoints tab and
+/// The pane opens on the sandbox tab, Tab walks to the checkpoints tab and
 /// back, Esc closes it at the root, and /rewind opens the checkpoints tab
 /// directly. Opening the recorded writes changes nothing on disk, since a
 /// rollback is only ever the confirmation the user picks.
@@ -106,8 +106,8 @@ fn test_tabs_and_rewind() {
     let (mut s, abs) = session_with_one_write("sandbox-tabs", &file);
     run_slash_command(&mut s, "sandbox");
     assert!(
-        s.wait_for_screen("[Boundaries]", RENDER_TIMEOUT),
-        "/sandbox should open the boundaries tab:\n{}",
+        s.wait_for_screen("[Sandbox]", RENDER_TIMEOUT),
+        "/sandbox should open the sandbox tab:\n{}",
         s.screen().contents()
     );
     s.send_key(&Key::Tab);
@@ -118,14 +118,14 @@ fn test_tabs_and_rewind() {
     );
     s.send_key(&Key::Tab);
     assert!(
-        s.wait_for_screen("[Boundaries]", RENDER_TIMEOUT),
-        "Tab should walk back to the boundaries tab:\n{}",
+        s.wait_for_screen("[Sandbox]", RENDER_TIMEOUT),
+        "Tab should walk back to the sandbox tab:\n{}",
         s.screen().contents()
     );
     s.send_key(&Key::Esc);
     assert!(
         wait_absent(&mut s, "switch tab", RENDER_TIMEOUT),
-        "Esc at the boundaries root should close the pane:\n{}",
+        "Esc at the sandbox root should close the pane:\n{}",
         s.screen().contents()
     );
     run_slash_command(&mut s, "rewind");
@@ -135,8 +135,8 @@ fn test_tabs_and_rewind() {
         s.screen().contents()
     );
     assert!(
-        !s.screen().contents().contains("[Boundaries]"),
-        "/rewind reads the checkpoints tab, not the boundaries one:\n{}",
+        !s.screen().contents().contains("[Sandbox]"),
+        "/rewind reads the checkpoints tab, not the sandbox one:\n{}",
         s.screen().contents()
     );
     assert!(
@@ -156,7 +156,7 @@ fn test_restore_default_cancel() {
     let (mut s, abs) = session_with_one_write("sandbox-cancel", &file);
     run_slash_command(&mut s, "sandbox");
     assert!(
-        s.wait_for_screen("[Boundaries]", RENDER_TIMEOUT),
+        s.wait_for_screen("[Sandbox]", RENDER_TIMEOUT),
         "{}",
         s.screen().contents()
     );
@@ -202,7 +202,7 @@ fn test_restore_removes_new_file() {
     let (mut s, abs) = session_with_one_write("sandbox-remove", &file);
     run_slash_command(&mut s, "sandbox");
     assert!(
-        s.wait_for_screen("[Boundaries]", RENDER_TIMEOUT),
+        s.wait_for_screen("[Sandbox]", RENDER_TIMEOUT),
         "{}",
         s.screen().contents()
     );

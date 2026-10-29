@@ -144,6 +144,7 @@ fn test_boundaries_clears_notice() {
         fence: FenceState::Enforced,
         workspace_root: "/w".to_string(),
         writable_roots: vec!["/w".to_string()],
+        scratch_root: None,
     });
     assert_eq!(pane.notice(), None);
 }
@@ -155,11 +156,12 @@ fn test_reset_drops_answers() {
         fence: FenceState::Enforced,
         workspace_root: "/w".to_string(),
         writable_roots: vec!["/w".to_string()],
+        scratch_root: None,
     });
     pane.expect_list(RequestId(2));
     pane.set_tab(SandboxTab::Checkpoints);
     pane.reset();
-    assert_eq!(pane.tab.get(), SandboxTab::Boundaries);
+    assert_eq!(pane.tab.get(), SandboxTab::Sandbox);
     assert!(pane.boundaries().is_none());
     assert!(!pane.reading_checkpoints());
     assert_eq!(pane.cursor.get(), 0);

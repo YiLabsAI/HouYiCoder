@@ -19,6 +19,7 @@ use crate::transcript::{SequencedFrame, TranscriptFrame};
 use houyicoder_protocol::frontend::agents::AgentEntry;
 use houyicoder_protocol::frontend::checkpoint::CheckpointListView;
 use houyicoder_protocol::frontend::checkpoint::CheckpointRestoreView;
+use houyicoder_protocol::frontend::checkpoint::CheckpointTextView;
 use houyicoder_protocol::frontend::checkpoint::SandboxBoundariesView;
 use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
@@ -379,6 +380,8 @@ pub enum ServerResponse {
     SandboxCheckpoints { view: CheckpointListView },
     /// What a restore did to one recorded write.
     SandboxRestored { view: CheckpointRestoreView },
+    /// Both sides of one recorded write, as text, for its detail to compare.
+    SandboxTexts { view: CheckpointTextView },
 }
 
 /// A command the TUI ships to the client-driver task. The driver owns the
@@ -563,8 +566,8 @@ pub enum ClientCommand {
         token: String,
         delete_unmerged_branch: bool,
     },
-    /// Ask what confines the session (/sandbox Boundaries tab, and every
-    /// re-read of it). Reads host state only.
+    /// Ask what confines the session (/sandbox opens on this tab, and every
+    /// switch back to it reads again). Reads host state only.
     SandboxBoundariesQuery {
         req_id: RequestId,
     },
@@ -576,6 +579,12 @@ pub enum ClientCommand {
     /// Put one recorded write's earlier bytes back. operation names the write
     /// the row showed.
     SandboxRestoreQuery {
+        req_id: RequestId,
+        operation: String,
+    },
+    /// Read both sides of one recorded write as text, for its detail to
+    /// compare.
+    SandboxTextsQuery {
         req_id: RequestId,
         operation: String,
     },

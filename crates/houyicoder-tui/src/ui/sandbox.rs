@@ -6,7 +6,9 @@
 use std::cell::{Cell, Ref, RefCell};
 
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::checkpoint::{CheckpointListView, SandboxBoundariesView};
+use houyicoder_protocol::frontend::checkpoint::{
+    CheckpointListView, CheckpointTextView, SandboxBoundariesView,
+};
 
 use crate::ui::enums::CyclicTab;
 
@@ -15,13 +17,13 @@ use crate::ui::enums::CyclicTab;
 pub enum SandboxTab {
     /// What confines the session: the fence and the writable roots.
     #[default]
-    Boundaries,
+    Sandbox,
     /// Every write the session recorded, and the restore of one.
     Checkpoints,
 }
 
 impl CyclicTab for SandboxTab {
-    const ORDER: &'static [Self] = &[Self::Boundaries, Self::Checkpoints];
+    const ORDER: &'static [Self] = &[Self::Sandbox, Self::Checkpoints];
 }
 
 /// How far into the checkpoints listing the pane has drilled down.
@@ -65,26 +67,30 @@ pub struct SandboxPaneState {
     restore_from: Cell<CheckpointLevel>,
     boundaries: RefCell<Option<SandboxBoundariesView>>,
     checkpoints: RefCell<Option<CheckpointListView>>,
+    texts: RefCell<Option<CheckpointTextView>>,
     boundaries_request: Cell<Option<RequestId>>,
     list_request: Cell<Option<RequestId>>,
+    texts_request: Cell<Option<RequestId>>,
     restore_request: Cell<Option<RequestId>>,
     notice: RefCell<Option<String>>,
 }
 
 impl SandboxPaneState {
-    /// Leave whatever the pane was showing and start again on the boundaries
+    /// Leave whatever the pane was showing and start again on the sandbox
     /// tab. An answer still on its way is dropped with the views, so it cannot
     /// land on the fresh screen.
     pub fn reset(&self) {
-        self.tab.set(SandboxTab::Boundaries);
+        self.tab.set(SandboxTab::Sandbox);
         self.set_level(CheckpointLevel::List);
         self.cursor.set(0);
         self.focus.set(RestoreFocus::Cancel);
         self.restore_from.set(CheckpointLevel::List);
         self.boundaries.replace(None);
         self.checkpoints.replace(None);
+        self.texts.replace(None);
         self.boundaries_request.set(None);
         self.list_request.set(None);
+        self.texts_request.set(None);
         self.restore_request.set(None);
         self.notice.replace(None);
     }
@@ -101,10 +107,16 @@ impl SandboxPaneState {
     }
 
     /// Move to another level of the listing, which starts its block at the
-    /// top: a scroll position belongs to the block it was made in.
+    /// top: a scroll position belongs to the block it was made in. The text a
+    /// detail compared belongs to the row it was read for, so leaving the
+    /// detail drops it and any answer still on its way.
     pub fn set_level(&self, level: CheckpointLevel) {
         self.level.set(level);
         self.scroll.set(0);
+        if level != CheckpointLevel::Detail {
+            self.texts.replace(None);
+            self.texts_request.set(None);
+        }
     }
 
     /// Open the restore confirmation for the row under the cursor, remembering
@@ -227,6 +239,46 @@ impl SandboxPaneState {
             self.cursor.set(rows.saturating_sub(1));
         }
         self.checkpoints.replace(Some(view));
+    }
+
+    /// Whether a read of the open row's two sides is still out.
+    pub fn reading_texts(&self) -> bool {
+        self.texts_request.get().is_some()
+    }
+
+    /// The request the pane waits on for the open row's two sides.
+    pub fn texts_request(&self) -> Option<RequestId> {
+        self.texts_request.get()
+    }
+
+    /// Record the request a text read went out under.
+    pub fn expect_texts(&self, request: RequestId) {
+        self.texts_request.set(Some(request));
+    }
+
+    /// Drop the two sides and any read of them still out, so a fresh read
+    /// starts from nothing.
+    pub fn forget_texts(&self) {
+        self.texts.replace(None);
+        self.texts_request.set(None);
+    }
+
+    /// A text read ended without an answer: the pane stops waiting.
+    pub fn abandon_texts(&self) {
+        self.texts_request.set(None);
+    }
+
+    /// Take a text answer. The caller has already matched it to the request
+    /// the pane sent.
+    pub fn accept_texts(&self, view: CheckpointTextView) {
+        self.texts_request.set(None);
+        self.texts.replace(Some(view));
+    }
+
+    /// The two sides the host last answered, borrowed so a render of the
+    /// detail copies none of their bytes.
+    pub fn texts(&self) -> Ref<'_, Option<CheckpointTextView>> {
+        self.texts.borrow()
     }
 
     /// Record the request a restore went out under, and that nothing else may

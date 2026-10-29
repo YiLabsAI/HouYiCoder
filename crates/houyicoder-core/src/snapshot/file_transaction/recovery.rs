@@ -529,5 +529,9 @@ fn record_error(error: RecordError) -> RecoveryError {
     }
 }
 
+mod text;
+
 #[cfg(test)]
 mod tests;
+
+pub use self::text::{SideText, WriteText};

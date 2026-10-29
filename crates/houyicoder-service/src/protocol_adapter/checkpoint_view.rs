@@ -9,22 +9,29 @@
 use houyicoder_api::sandbox::FenceStatus;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_core::snapshot::file_transaction::{
-    ImageSummary, RecoveredWrite, RecoveryReport, RestoreOutcome, WriteState,
+    ImageSummary, RecoveredWrite, RecoveryReport, RestoreOutcome, SideText, WriteState, WriteText,
 };
 use houyicoder_protocol::frontend::checkpoint::{
-    CheckpointImage, CheckpointListView, CheckpointRestoreView, CheckpointState, CheckpointView,
-    FenceState, RestoreView, SandboxBoundariesView, UnreadableView,
+    CheckpointImage, CheckpointListView, CheckpointRestoreView, CheckpointSide, CheckpointState,
+    CheckpointTextView, CheckpointView, FenceState, RestoreView, SandboxBoundariesView,
+    UnreadableView,
 };
 
-/// Map the boundaries this session runs inside.
+/// Map the boundaries this session runs inside. The scratch directory is
+/// reported apart from the granted roots: the child runs with it as TMPDIR,
+/// so the fence opens it, but the user never chose it and the pane says so.
 pub(crate) fn map_boundaries(sandbox: &dyn SandboxSession) -> SandboxBoundariesView {
     let workspace_root = sandbox.workspace_root().to_string_lossy().into_owned();
     let mut writable_roots = vec![workspace_root.clone()];
     writable_roots.extend(sandbox.writing_dirs());
+    let scratch_root = sandbox
+        .scratch_dir()
+        .map(|path| path.to_string_lossy().into_owned());
     SandboxBoundariesView {
         fence: map_fence(sandbox.fence_status()),
         workspace_root,
         writable_roots,
+        scratch_root,
     }
 }
 
@@ -78,6 +85,25 @@ fn map_image(image: ImageSummary) -> CheckpointImage {
         present: image.present,
         hash: image.hash,
         bytes: image.bytes,
+    }
+}
+
+/// Map one recorded write's two sides, as its detail shows them.
+pub(crate) fn map_texts(write: WriteText) -> CheckpointTextView {
+    CheckpointTextView {
+        operation: write.operation,
+        target: write.target,
+        before: map_side(write.before),
+        after: map_side(write.after),
+    }
+}
+
+fn map_side(side: SideText) -> CheckpointSide {
+    match side {
+        SideText::Text { text, truncated } => CheckpointSide::Text { text, truncated },
+        SideText::Absent => CheckpointSide::Absent,
+        SideText::NotKept => CheckpointSide::NotKept,
+        SideText::NotText => CheckpointSide::NotText,
     }
 }
 

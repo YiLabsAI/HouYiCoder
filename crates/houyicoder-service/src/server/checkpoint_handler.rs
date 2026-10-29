@@ -51,6 +51,28 @@ impl Server {
         }
     }
 
+    /// Answer both sides of one recorded write, as text, for its detail. Only
+    /// that row's stored images are opened, so the listing stays cheap however
+    /// many writes the session recorded.
+    pub(super) async fn handle_sandbox_texts(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        operation: String,
+    ) -> Result<(), ProtocolError> {
+        let Some(journal) = self.file_transaction.clone() else {
+            return self.refuse_sandbox(io, req_id, NO_JOURNAL).await;
+        };
+        match journal.text(self.session, &operation).await {
+            Ok(write) => {
+                let view = checkpoint_view::map_texts(write);
+                self.send_response(io, req_id, ResponsePayload::SandboxTexts(view))
+                    .await
+            }
+            Err(error) => self.fail_sandbox(io, req_id, &error.to_string()).await,
+        }
+    }
+
     /// Put one recorded write's earlier bytes back.
     pub(super) async fn handle_sandbox_restore(
         &mut self,

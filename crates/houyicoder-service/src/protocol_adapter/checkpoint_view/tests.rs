@@ -12,19 +12,20 @@ use houyicoder_context::ExecConfig;
 use houyicoder_context::ExecResult;
 use houyicoder_context::SandboxError;
 use houyicoder_core::snapshot::file_transaction::{
-    ImageSummary, RecoveredWrite, RecoveryError, RecoveryReport, RestoreOutcome, UnreadableWrite,
-    WriteState,
+    ImageSummary, RecoveredWrite, RecoveryError, RecoveryReport, RestoreOutcome, SideText,
+    UnreadableWrite, WriteState, WriteText,
 };
 use houyicoder_protocol::frontend::checkpoint::{
-    CheckpointImage, CheckpointState, FenceState, RestoreView,
+    CheckpointImage, CheckpointSide, CheckpointState, FenceState, RestoreView,
 };
 
-use super::{map_boundaries, map_checkpoints, map_fence, map_restore};
+use super::{map_boundaries, map_checkpoints, map_fence, map_restore, map_texts};
 
-/// A sandbox naming one workspace root and one directory the user added
-/// beyond it.
+/// A sandbox naming one workspace root, its scratch directory, and one
+/// directory the user added beyond them.
 struct Boundaries {
     root: PathBuf,
+    scratch: Option<PathBuf>,
     writing: Vec<String>,
 }
 
@@ -42,6 +43,9 @@ impl SandboxSession for Boundaries {
     }
     fn workspace_root(&self) -> Arc<Path> {
         Arc::from(self.root.clone())
+    }
+    fn scratch_dir(&self) -> Option<PathBuf> {
+        self.scratch.clone()
     }
     fn writing_dirs(&self) -> Vec<String> {
         self.writing.clone()
@@ -123,11 +127,15 @@ fn test_checkpoints_keep_unreadable() {
     );
 }
 
+/// The scratch directory is a writable root of the session even though the
+/// user never granted it: the child runs with it as TMPDIR, so a boundary
+/// report that left it out would name a narrower fence than the one enforced.
 #[test]
 fn test_boundaries_list_writable_roots() {
     let sandbox = Boundaries {
         root: PathBuf::from("/work/repo"),
-        writing: vec!["/tmp/scratch".into()],
+        scratch: Some(PathBuf::from("/var/folders/hy-tmp-501-0")),
+        writing: vec!["/tmp/deps".into()],
     };
     let view = map_boundaries(&sandbox);
 
@@ -137,9 +145,33 @@ fn test_boundaries_list_writable_roots() {
     );
     assert_eq!(
         view.writable_roots,
-        vec!["/work/repo".to_string(), "/tmp/scratch".to_string()],
-        "the workspace root comes first, then the added directories"
+        vec!["/work/repo".to_string(), "/tmp/deps".to_string()],
+        "the root comes first, then the added directories"
     );
+    assert_eq!(
+        view.scratch_root.as_deref(),
+        Some("/var/folders/hy-tmp-501-0"),
+        "the scratch dir is reported apart from the granted roots"
+    );
+}
+
+/// A backend that creates no scratch directory reports only what it holds, so
+/// the mapping does not invent a path the fence never opened.
+#[test]
+fn test_boundaries_without_scratch() {
+    let sandbox = Boundaries {
+        root: PathBuf::from("/work/repo"),
+        scratch: None,
+        writing: Vec::new(),
+    };
+    let view = map_boundaries(&sandbox);
+
+    assert_eq!(
+        view.writable_roots,
+        vec!["/work/repo".to_string()],
+        "no scratch dir means no row for it"
+    );
+    assert_eq!(view.scratch_root, None, "the mapping invents no path");
 }
 
 #[test]
@@ -165,6 +197,38 @@ fn test_restore_names_each_outcome() {
         let view = map_restore("op".into(), core_outcome);
         assert_eq!(view.operation, "op");
         assert_eq!(view.outcome, wire_outcome, "the outcome crosses unchanged");
+    }
+}
+
+/// Every side a record can report crosses unchanged, so the detail states
+/// what the host knows instead of comparing a gap to an empty file.
+#[test]
+fn test_texts_map_each_side() {
+    let cases = [
+        (
+            SideText::Text {
+                text: "x".into(),
+                truncated: false,
+            },
+            CheckpointSide::Text {
+                text: "x".into(),
+                truncated: false,
+            },
+        ),
+        (SideText::Absent, CheckpointSide::Absent),
+        (SideText::NotKept, CheckpointSide::NotKept),
+        (SideText::NotText, CheckpointSide::NotText),
+    ];
+    for (side, expected) in cases {
+        let view = map_texts(WriteText {
+            operation: "op".into(),
+            target: "a.txt".into(),
+            before: side,
+            after: SideText::Absent,
+        });
+        assert_eq!(view.operation, "op");
+        assert_eq!(view.target, "a.txt");
+        assert_eq!(view.before, expected);
     }
 }
 

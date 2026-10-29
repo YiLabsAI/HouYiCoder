@@ -103,6 +103,9 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
         ClientCommand::SandboxRestoreQuery { req_id, operation } => {
             request(req_id, FrontendRequest::SandboxRestore { operation })
         }
+        ClientCommand::SandboxTextsQuery { req_id, operation } => {
+            request(req_id, FrontendRequest::SandboxTexts { operation })
+        }
         ClientCommand::WorktreePreviewQuery { req_id, path } => {
             request(req_id, FrontendRequest::WorktreePreview { path })
         }
