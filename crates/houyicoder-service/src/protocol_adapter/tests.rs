@@ -633,7 +633,7 @@ fn test_skill_rule_scoped() {
     let gate = DefaultModeGate::new();
     let rule =
         super::consent_rule_for("skill", &serde_json::json!({"skill": "deploy"})).expect("rule");
-    gate.add_rule(rule);
+    gate.add_rule(rule).expect("saved");
 
     // Same skill: the rule matches at RuleAllow -> Allow.
     let deploy = serde_json::json!({"skill": "deploy"});

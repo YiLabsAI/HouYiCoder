@@ -7,6 +7,7 @@
 
 use super::super::*;
 use crate::composition::SkillRegistryImpl;
+use crate::server::tests::NoticeLog;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::sandbox::{SandboxSession, WorktreeFenceGuard};
@@ -17,7 +18,10 @@ use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError, Session
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
-use houyicoder_permission::DefaultModeGate;
+use houyicoder_permission::{
+    Decision, DefaultModeGate, ModeError, ModeGate, PermissionMode, Rule, Scope, StoreError,
+    ToolRequest,
+};
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
 };
@@ -126,16 +130,70 @@ impl SandboxSession for RecordingFence {
     }
 }
 
+/// A gate whose every durable write is refused. A real store only refuses
+/// when the filesystem does, so the dispatch arms that report a grant the
+/// next start will not see need this stub to be reachable.
+struct RefusingSaveGate {
+    inner: DefaultModeGate,
+}
+
+impl ModeGate for RefusingSaveGate {
+    fn decide(&self, req: &ToolRequest) -> Decision {
+        self.inner.decide(req)
+    }
+    fn current(&self) -> PermissionMode {
+        self.inner.current()
+    }
+    fn set_mode(&self, new: PermissionMode, reason: &str) {
+        self.inner.set_mode(new, reason);
+    }
+    fn tab_cycle(&self) -> Result<PermissionMode, ModeError> {
+        self.inner.tab_cycle()
+    }
+    fn rules(&self) -> Vec<Rule> {
+        self.inner.rules()
+    }
+    fn add_rule(&self, _rule: Rule) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn add_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn add_read_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn remove_directory(&self, _dir: &Path) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn remove_rule(&self, index: usize) -> bool {
+        self.inner.remove_rule(index)
+    }
+    fn set_git_checkpoint_enabled(&self, enabled: bool) {
+        self.inner.set_git_checkpoint_enabled(enabled);
+    }
+    fn git_checkpoint_enabled(&self) -> bool {
+        self.inner.git_checkpoint_enabled()
+    }
+}
+
 fn runner_with_tool() -> Arc<Runner> {
+    runner_with_tool_noted(None)
+}
+
+fn runner_with_tool_noted(notice: Option<&NoticeLog>) -> Arc<Runner> {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(ListedTool));
-    Arc::new(Runner::new(
+    let mut runner = Runner::new(
         store,
         Arc::new(FakeProvider::text("x")),
         tools,
         RunnerConfig::default(),
-    ))
+    );
+    if let Some(log) = notice {
+        log.attach(&mut runner);
+    }
+    Arc::new(runner)
 }
 
 fn plain_server() -> Server {
@@ -143,6 +201,20 @@ fn plain_server() -> Server {
         runner_with_tool(),
         SessionId::new(),
         Arc::new(DefaultModeGate::new()),
+    )
+}
+
+fn refusing_gate_server() -> Server {
+    refusing_gate_server_noted(None)
+}
+
+fn refusing_gate_server_noted(notice: Option<&NoticeLog>) -> Server {
+    Server::new(
+        runner_with_tool_noted(notice),
+        SessionId::new(),
+        Arc::new(RefusingSaveGate {
+            inner: DefaultModeGate::new(),
+        }),
     )
 }
 
@@ -362,4 +434,96 @@ async fn test_working_dir_add_remove() {
         }
         other => panic!("expected PermissionWorkingDirs after remove, got {other:?}"),
     }
+}
+
+/// A rule the store refuses replies with an error instead of the rule set, so
+/// the picker never shows a rule the next start would not hold.
+#[tokio::test]
+async fn test_rule_save_failure_reply() {
+    let payloads = dispatch_responses(
+        refusing_gate_server(),
+        vec![FrontendRequest::PermissionAddRule {
+            rule: PermissionRule {
+                action: "Bash".into(),
+                content: None,
+                effect: PermissionEffect::Allow,
+                destination: RuleDestination::Project,
+            },
+        }],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::Error(err) => {
+            assert_eq!(err.category, ErrorCategory::Unavailable);
+            assert!(
+                err.message.contains("could not be saved"),
+                "the failure names the missing durable rule: {}",
+                err.message
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+/// A working dir the fence accepts but the store refuses still reaches the
+/// pane's list, because the fence grants it for this session; the shorter
+/// lifetime is delivered as a notice instead of an error that would leave the
+/// list disagreeing with the fence.
+#[tokio::test]
+async fn test_working_dir_grant_unsaved() {
+    let notices = NoticeLog::new();
+    let server =
+        refusing_gate_server_noted(Some(&notices)).with_session(Arc::new(RecordingFence::new()));
+    let payloads = dispatch_responses(
+        server,
+        vec![FrontendRequest::PermissionAddWorkingDir {
+            path: "/workspace/extra".into(),
+        }],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::PermissionWorkingDirs(dirs) => assert_eq!(
+            dirs,
+            &["/workspace/extra".to_string()],
+            "the granted dir is listed because the fence holds it"
+        ),
+        other => panic!("expected PermissionWorkingDirs, got {other:?}"),
+    }
+    let told = notices.messages();
+    assert_eq!(told.len(), 1, "the unsaved grant is said once: {told:?}");
+    assert!(
+        told[0].contains("for the next start"),
+        "the notice names the restart it will not survive: {}",
+        told[0]
+    );
+}
+
+/// Dropping a working dir whose saved grant will not go still reports the
+/// fence's list, and a notice says the removal may not survive a restart, so
+/// the removal is never presented as complete.
+#[tokio::test]
+async fn test_dir_remove_failure_reply() {
+    let notices = NoticeLog::new();
+    let server =
+        refusing_gate_server_noted(Some(&notices)).with_session(Arc::new(RecordingFence::new()));
+    let payloads = dispatch_responses(
+        server,
+        vec![FrontendRequest::PermissionRemoveWorkingDir {
+            path: "/workspace/extra".into(),
+        }],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::PermissionWorkingDirs(dirs) => {
+            assert!(dirs.is_empty(), "the fence no longer grants it: {dirs:?}");
+        }
+        other => panic!("expected PermissionWorkingDirs, got {other:?}"),
+    }
+    let told = notices.messages();
+    assert_eq!(told.len(), 1, "the unsaved removal is said once: {told:?}");
+    assert!(
+        told[0].contains("may return on the next start"),
+        "the notice names when the grant could come back: {}",
+        told[0]
+    );
 }

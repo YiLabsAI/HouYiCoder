@@ -78,10 +78,17 @@ impl Server {
         rule: PermissionRule,
     ) -> Result<(), ProtocolError> {
         let resp = match pa::permission_rule_from_wire(&rule) {
-            Ok(r) => {
-                self.gate.add_rule(r);
-                ResponsePayload::PermissionRules(self.permission_rules())
-            }
+            Ok(r) => match self.gate.add_rule(r) {
+                Ok(()) => ResponsePayload::PermissionRules(self.permission_rules()),
+                // The rule did not enter the live set either, so reporting
+                // the failure leaves no rule behind that a listing would
+                // have to disown.
+                Err(e) => ResponsePayload::Error(ProtocolError::new(
+                    ErrorCategory::Unavailable,
+                    format!("the rule could not be saved: {e}"),
+                    false,
+                )),
+            },
             Err(e) => ResponsePayload::Error(ProtocolError::new(
                 ErrorCategory::InvalidRequest,
                 e.to_string(),
@@ -122,8 +129,23 @@ impl Server {
                     // hydrates on the next start, so this write is what keeps
                     // the two the same list. It follows the fence: a path the
                     // fence refused must not be stored.
-                    self.gate.add_directory(Path::new(&path), Scope::Local);
-                    ResponsePayload::PermissionWorkingDirs(self.working_directories())
+                    match self.gate.add_directory(Path::new(&path), Scope::Local) {
+                        Ok(()) => {
+                            ResponsePayload::PermissionWorkingDirs(self.working_directories())
+                        }
+                        // The fence accepted the path for this session; only
+                        // the copy that outlives it is missing. The reply still
+                        // carries the fence's list, because the pane must show
+                        // what is granted right now; the short lifetime is
+                        // said out loud as a notice instead of being hidden
+                        // behind a list that looks durable.
+                        Err(e) => {
+                            self.notify_user(format!(
+                                "{path} is granted for this session, but it could not be saved for the next start: {e}"
+                            ));
+                            ResponsePayload::PermissionWorkingDirs(self.working_directories())
+                        }
+                    }
                 }
                 Err(e) => ResponsePayload::Error(ProtocolError::new(
                     ErrorCategory::InvalidRequest,
@@ -151,7 +173,15 @@ impl Server {
         }
         // The durable grant goes with the runtime one, or the directory would
         // be granted again on the next start and the removal would not hold.
-        self.gate.remove_directory(Path::new(&path));
+        if let Err(e) = self.gate.remove_directory(Path::new(&path)) {
+            // The fence no longer grants it; the saved copy is what failed to
+            // go. The reply carries the fence's list because the pane must
+            // show what is granted right now, and the notice says the removal
+            // may not survive a restart.
+            self.notify_user(format!(
+                "{path} is no longer granted for this session, but its saved grant could not be dropped, so it may return on the next start: {e}"
+            ));
+        }
         self.send_response(
             io,
             req_id,

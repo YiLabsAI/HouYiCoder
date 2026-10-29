@@ -43,20 +43,17 @@ use crate::diagnostics::DiagnosticsHandle;
 use crate::diagnostics::handle;
 use crate::lifecycle::PendingPermission;
 use crate::lifecycle::PendingTurn;
-use crate::protocol_adapter::{AlwaysGrant, always_grant, installed_scope};
 pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
-use houyicoder_api::sandbox::{BoundaryGrant, SandboxSession};
+use houyicoder_api::agent_event::UserNoticeEvent;
+use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
     RunOutcome, RunResult,
 };
-use houyicoder_permission::Scope;
 use houyicoder_protocol::acp_wire::AcpNotification;
-use houyicoder_protocol::frontend::permission::AskReason;
-use houyicoder_protocol::frontend::run::ApprovalScope;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -288,62 +285,20 @@ impl Server {
         self
     }
 
+    /// Tell the user a fact with a consequence they can see. The notice lands
+    /// in the transcript, which survives the session, unlike a terminal write
+    /// that would be painted over whatever is on screen.
+    pub(super) fn notify_user(&self, message: String) {
+        self.runner
+            .event_handlers()
+            .emit_user_notice(UserNoticeEvent { message });
+    }
+
     /// Mint a fresh reverse-request id for a mid-turn server-to-client ask.
     fn mint_req_id(&mut self) -> RequestId {
         let id = RequestId(self.next_req_id);
         self.next_req_id += 1;
         id
-    }
-
-    /// Apply whatever a remembered verdict authorizes, bounded by the lifetime
-    /// the client chose. The server owns the approval (tool name + input Value
-    /// the engine raised the interruption with), so the command is classified
-    /// here, not in the frontend. git-checkpoint ops (git commit/rebase/reset/
-    /// tag) route to a session-scope allow rule that shadows the builtin ask
-    /// rule for that subcommand this session; a remembered network destination
-    /// becomes an entry in the gate's egress allowlist; everything else becomes
-    /// an allow rule in the store the workspace lifetime restores. A compound
-    /// command yields no rule, so it is approved once only. A choice shorter
-    /// than the plan installs the shorter lifetime, and a once choice installs
-    /// nothing. A directory grant is installed by the caller, which holds the
-    /// capabilities the card named.
-    fn apply_consent_rule(
-        &self,
-        tool_name: &str,
-        input: &serde_json::Value,
-        reason: Option<&AskReason>,
-        grants: &[BoundaryGrant],
-        choice: ApprovalScope,
-    ) {
-        let grant = always_grant(tool_name, input, reason, self.card_fence(), grants);
-        self.apply_install(&grant, installed_scope(&grant, choice));
-    }
-
-    /// Install the rule or destinations a grant plan keeps, at the lifetime
-    /// the caller already reduced to what the plan allows. A directory plan
-    /// installs nothing here: its capability is the fence, and the caller
-    /// installs it directly.
-    fn apply_install(&self, grant: &AlwaysGrant, lifetime: ApprovalScope) {
-        match lifetime {
-            ApprovalScope::Once => {}
-            _ => match grant {
-                AlwaysGrant::Once | AlwaysGrant::Directories => {}
-                AlwaysGrant::Network(destinations) => {
-                    for destination in destinations {
-                        self.gate.add_egress_allow(destination);
-                    }
-                }
-                AlwaysGrant::Rule(rule) => {
-                    // The plan chose the store the rule belongs in; the
-                    // client's session choice keeps it in memory instead.
-                    let scope = match lifetime {
-                        ApprovalScope::Session => Scope::Session,
-                        _ => rule.scope,
-                    };
-                    self.gate.add_rule(rule.clone().with_scope(scope));
-                }
-            },
-        }
     }
 
     /// Build the /permission git reply: set the toggle when enabled is Some,

@@ -141,7 +141,7 @@ fn test_gate_persists_allow_rule() {
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     let rule =
         Rule::with_content("bash", RuleContent::Prefix("npm".into()), Effect::Allow).unwrap();
-    gate.add_rule(rule.clone());
+    gate.add_rule(rule.clone()).expect("saved");
 
     // A fresh gate pointing at the same files hydrates the persisted rule
     // and grants the matching call without re-asking.
@@ -174,7 +174,8 @@ fn test_gate_persists_deny() {
     // A rule is an always-X directive, not a one-time verdict, so EVERY effect
     // (allow/deny/ask) persists to its chosen scope. The store holds the
     // deny rule; load() re-hydrates it on restart.
-    gate.add_rule(Rule::new("bash", Effect::Deny).unwrap());
+    gate.add_rule(Rule::new("bash", Effect::Deny).unwrap())
+        .expect("saved");
     assert_eq!(store.load().len(), 1);
 }
 
@@ -192,7 +193,8 @@ fn test_remove_rule_deletes_store() {
         Rule::new("bash", Effect::Allow)
             .unwrap()
             .with_scope(Scope::User),
-    );
+    )
+    .expect("saved");
     assert_eq!(store.load().len(), 1, "added user-scope rule persists");
     assert!(gate.remove_rule(0), "remove by index succeeds");
     assert!(
@@ -220,10 +222,12 @@ fn test_remove_keeps_sibling() {
     let gate = DefaultModeGate::new_without_builtins().with_store(store.clone());
     gate.add_rule(
         Rule::with_content("bash", RuleContent::Prefix("npm".into()), Effect::Allow).unwrap(),
-    );
+    )
+    .expect("saved");
     gate.add_rule(
         Rule::with_content("bash", RuleContent::Prefix("git".into()), Effect::Allow).unwrap(),
-    );
+    )
+    .expect("saved");
     assert_eq!(store.load().len(), 2, "both same-action rules persist");
     // Remove index 0 (the npm rule). The git rule must survive.
     assert!(gate.remove_rule(0));
@@ -266,7 +270,8 @@ impl RuleStore for FailingStore {
 fn test_remove_rule_persist_failure() {
     let store = Arc::new(FailingStore) as Arc<dyn RuleStore>;
     let gate = DefaultModeGate::new_without_builtins().with_store(store);
-    gate.add_rule(Rule::new("bash", Effect::Allow).unwrap());
+    gate.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
     assert_eq!(gate.rules().len(), 1);
     // remove_rule returns true (in-memory deletion succeeded) even though the
     // persistence write failed; the eprintln surfaces the disk divergence.
@@ -274,6 +279,94 @@ fn test_remove_rule_persist_failure() {
     assert!(
         gate.rules().is_empty(),
         "in-memory rule still gone despite disk failure"
+    );
+}
+
+/// A store whose every rule and directory write fails, so a durable grant
+/// cannot land while the in-memory one can.
+struct RefusingAddStore;
+impl RuleStore for RefusingAddStore {
+    fn load(&self) -> Vec<Rule> {
+        Vec::new()
+    }
+    fn add(&self, _rule: &Rule) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn remove(&self, _rule: &Rule) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn clear(&self) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn add_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn add_read_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+    fn remove_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Err(StoreError::Io)
+    }
+}
+
+#[test]
+fn test_save_failure_no_rule() {
+    let store = Arc::new(RefusingAddStore) as Arc<dyn RuleStore>;
+    let gate = DefaultModeGate::new_without_builtins().with_store(store);
+    let error = gate
+        .add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect_err("a rule the store refused must not report success");
+    assert!(matches!(error, StoreError::Io));
+    assert!(
+        gate.rules().is_empty(),
+        "a rule the store refused must not enter the live set either"
+    );
+}
+
+/// A directory grant the store refuses reaches the caller as an error, while
+/// a gate with no store accepts it: without a store the grant only has to
+/// hold for this session, so there is nothing that could fail.
+#[test]
+fn test_directory_save_failure_reported() {
+    let dir = tempdir();
+    let target = dir.join("target");
+    fs::create_dir_all(&target).expect("mkdir target");
+
+    let session_gate = DefaultModeGate::new_without_builtins();
+    assert!(
+        session_gate.add_directory(&target, Scope::Local).is_ok(),
+        "no store means nothing to save, so the add succeeds"
+    );
+    assert!(
+        session_gate
+            .add_read_directory(&target, Scope::Local)
+            .is_ok(),
+        "the read-only add behaves the same way"
+    );
+    assert!(
+        session_gate.remove_directory(&target).is_ok(),
+        "dropping a grant from a storeless gate is a no-op"
+    );
+
+    let store = Arc::new(RefusingAddStore) as Arc<dyn RuleStore>;
+    let gate = DefaultModeGate::new_without_builtins().with_store(store);
+    assert!(
+        matches!(
+            gate.add_directory(&target, Scope::Local),
+            Err(StoreError::Io)
+        ),
+        "the refused write is reported, not swallowed"
+    );
+    assert!(
+        matches!(
+            gate.add_read_directory(&target, Scope::Local),
+            Err(StoreError::Io)
+        ),
+        "the refused read-only write is reported too"
+    );
+    assert!(
+        matches!(gate.remove_directory(&target), Err(StoreError::Io)),
+        "a removal the store cannot persist is reported"
     );
 }
 
@@ -312,7 +405,8 @@ fn test_gate_without_store_unchanged() {
     // A gate with no store attached behaves exactly as before: rules live
     // only in memory and a fresh gate starts empty.
     let gate = DefaultModeGate::new_without_builtins();
-    gate.add_rule(Rule::new("bash", Effect::Allow).unwrap());
+    gate.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
     assert_eq!(gate.rules().len(), 1);
 
     let gate2 = DefaultModeGate::new_without_builtins();
@@ -366,7 +460,7 @@ fn test_gate_persists_directory() {
     fs::create_dir_all(&target).expect("mkdir target");
     let canonical = dunce::canonicalize(&target).expect("canonicalize target");
 
-    gate.add_directory(&target, Scope::Local);
+    gate.add_directory(&target, Scope::Local).expect("saved");
     let fresh = tmp_store(&dir, "gate-dir");
     assert!(
         fresh.load_directories().contains(&canonical),
@@ -376,7 +470,7 @@ fn test_gate_persists_directory() {
     // The pane names whatever the user typed, which may not be the canonical
     // spelling, so the removal resolves the path the same way the add did.
     let spelled = format!("{}{}", target.display(), MAIN_SEPARATOR);
-    gate.remove_directory(Path::new(&spelled));
+    gate.remove_directory(Path::new(&spelled)).expect("saved");
     let after = tmp_store(&dir, "gate-dir");
     assert!(
         after.load_directories().is_empty(),

@@ -13,6 +13,7 @@ use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest,
 };
 use houyicoder_permission::Scope;
+use houyicoder_permission::StoreError;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponsePayload, ServerFrame, ServerRequestEnvelope, ServerRequestPayload,
@@ -156,13 +157,13 @@ impl Server {
         Ok(parse_approval_decision(decision))
     }
 
-    /// Record the durable verdict and install what the answer keeps. The
-    /// lifetime decided here is the one both the record and the install use:
-    /// the client's choice can shorten the plan the ask derived but never
-    /// lengthen it, so recording the raw choice would claim a grant the
-    /// install did not make. A denial keeps nothing, and an entitlement names
-    /// its own grant in the engine's apply path, which this router does not
-    /// run.
+    /// Install what the answer keeps, then record the durable verdict at the
+    /// lifetime the install committed. The client's choice can shorten the
+    /// plan the ask derived but never lengthen it, and a save the store
+    /// rejects shortens it further to the session, so the record states the
+    /// grant that exists rather than the one that was asked for. A denial
+    /// keeps nothing, and an entitlement names its own grant in the engine's
+    /// apply path, which this router does not run.
     pub(super) async fn settle_answer(
         &self,
         approval: &EngineApprovalRequest,
@@ -172,17 +173,56 @@ impl Server {
         is_entitlement: bool,
     ) -> Result<(), ProtocolError> {
         let grant = self.consent_plan(&approval.tool_name, &approval.input, reason, grants);
-        let lifetime = if !decision.approved {
+        let chosen = if !decision.approved {
             ApprovalScope::Once
         } else if is_entitlement {
             decision.scope
         } else {
             installed_scope(&grant, decision.scope)
         };
-        // Record the durable PermissionDecision ahead of the resume. The
-        // engine resume path appends only the ToolResult, never the verdict,
-        // so the verdict trail would be lost over the wire without this
-        // append. The tool name + call_id come from the ask the server sent.
+        // Entitlement consent skips the rule and directory paths: the
+        // grant-store write in the engine's apply path IS the persistence, and
+        // a rule for the host-generated tool would pollute the store with one
+        // nothing reads.
+        let committed = if decision.approved && !is_entitlement {
+            match self.install_approved_consent(&grant, chosen, grants) {
+                Ok(install) => {
+                    if let Some(error) = install.save_error() {
+                        self.notify_unsaved_grant(error);
+                    }
+                    install.lifetime()
+                }
+                Err(error) => {
+                    // Nothing was installed, so the record must not claim a
+                    // grant the session does not hold. The install failure
+                    // also aborts the run before the frozen call executes, so
+                    // the approved Once record below is the whole trail: no
+                    // ToolResult follows it.
+                    self.record_verdict(approval, decision, reason, ApprovalScope::Once)
+                        .await;
+                    return Err(error);
+                }
+            }
+        } else {
+            chosen
+        };
+        self.record_verdict(approval, decision, reason, committed)
+            .await;
+        Ok(())
+    }
+
+    /// Append the durable PermissionDecision for one answered ask. The engine
+    /// resume path appends only the ToolResult, never the verdict, so without
+    /// this append the session log would hold a result whose authorization
+    /// was never recorded. The tool name and call id come from the ask the
+    /// server sent.
+    async fn record_verdict(
+        &self,
+        approval: &EngineApprovalRequest,
+        decision: &ApprovalDecision,
+        reason: Option<&AskReason>,
+        lifetime: ApprovalScope,
+    ) {
         let verdict = if decision.approved {
             PermissionVerdict::Approved
         } else {
@@ -202,20 +242,22 @@ impl Server {
                 reason: reason.map(|r| r.detail.clone()),
             },
         };
-        if let Err(e) = self.runner.store().append(audit).await {
+        if let Err(error) = self.runner.store().append(audit).await {
             // Best-effort audit: a failed append does not fail the run (the
             // verdict still reaches the engine via resume), only the durable
             // trail.
-            tracing::warn!("permission-decision audit append failed: {e}");
+            tracing::warn!("permission-decision audit append failed: {error}");
         }
-        // Entitlement consent skips the rule and directory paths: the
-        // grant-store write in the engine's apply path IS the persistence, and
-        // a rule for the host-generated tool would pollute the store with one
-        // nothing reads.
-        if decision.approved && !is_entitlement {
-            self.install_approved_consent(&grant, lifetime, grants)?;
-        }
-        Ok(())
+    }
+
+    /// Tell the user a remembered authorization did not reach the store, so
+    /// it lasts only until this session ends. Silence here would let the card
+    /// promise a grant the next start does not have.
+    fn notify_unsaved_grant(&self, error: &StoreError) {
+        tracing::warn!("an approved authorization could not be saved: {error}");
+        self.notify_user(format!(
+            "The authorization could not be saved for this workspace ({error}); it stays in effect until this session ends."
+        ));
     }
 
     /// When the ask is about a Bash command that runs a skill-directory
@@ -255,7 +297,7 @@ impl Server {
         grant: &AlwaysGrant,
         lifetime: ApprovalScope,
         grants: &[BoundaryGrant],
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<ConsentInstall, ProtocolError> {
         self.install_consent(grant, lifetime, grants)
             .map_err(|error| {
                 ProtocolError::new(
@@ -266,6 +308,79 @@ impl Server {
             })
     }
 
+    /// Apply whatever a remembered verdict authorizes, bounded by the lifetime
+    /// the client chose. The server owns the approval (tool name + input Value
+    /// the engine raised the interruption with), so the command is classified
+    /// here, not in the frontend. git-checkpoint ops (git commit/rebase/reset/
+    /// tag) route to a session-scope allow rule that shadows the builtin ask
+    /// rule for that subcommand this session; a remembered network destination
+    /// becomes an entry in the gate's egress allowlist; everything else becomes
+    /// an allow rule in the store the workspace lifetime restores. A compound
+    /// command yields no rule, so it is approved once only. A choice shorter
+    /// than the plan installs the shorter lifetime, and a once choice installs
+    /// nothing. A directory grant is installed by the caller, which holds the
+    /// capabilities the card named.
+    pub(crate) fn apply_consent_rule(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+        reason: Option<&AskReason>,
+        grants: &[BoundaryGrant],
+        choice: ApprovalScope,
+    ) -> Result<(), StoreError> {
+        let grant = always_grant(tool_name, input, reason, self.card_fence(), grants);
+        self.apply_install(&grant, installed_scope(&grant, choice))
+    }
+
+    /// Install the rule or destinations a grant plan keeps, at the lifetime
+    /// the caller already reduced to what the plan allows. A directory plan
+    /// installs nothing here: its capability is the fence, and the caller
+    /// installs it directly.
+    ///
+    /// Returns why a durable rule could not be saved. The approval still
+    /// holds for this session in that case: the rule is retried at the
+    /// session lifetime, which lives in memory, so the caller can report a
+    /// session-length grant rather than claiming a saved one.
+    fn apply_install(
+        &self,
+        grant: &AlwaysGrant,
+        lifetime: ApprovalScope,
+    ) -> Result<(), StoreError> {
+        if lifetime == ApprovalScope::Once {
+            return Ok(());
+        }
+        match grant {
+            AlwaysGrant::Once | AlwaysGrant::Directories => Ok(()),
+            AlwaysGrant::Network(destinations) => {
+                for destination in destinations {
+                    self.gate.add_egress_allow(destination);
+                }
+                Ok(())
+            }
+            AlwaysGrant::Rule(rule) => {
+                // The plan chose the store the rule belongs in; the
+                // client's session choice keeps it in memory instead.
+                let scope = match lifetime {
+                    ApprovalScope::Session => Scope::Session,
+                    _ => rule.scope,
+                };
+                match self.gate.add_rule(rule.clone().with_scope(scope)) {
+                    Ok(()) => Ok(()),
+                    Err(failure) => {
+                        if let Err(error) =
+                            self.gate.add_rule(rule.clone().with_scope(Scope::Session))
+                        {
+                            tracing::warn!(
+                                "an approved rule could not be kept even for this session: {error}"
+                            );
+                        }
+                        Err(failure)
+                    }
+                }
+            }
+        }
+    }
+
     /// Route an approved call to the directory capability required by its
     /// target and to whatever the chosen lifetime remembers.
     pub(crate) fn route_consent(
@@ -274,7 +389,7 @@ impl Server {
         input: &serde_json::Value,
         choice: ApprovalScope,
         reason: Option<&AskReason>,
-    ) -> Result<(), SandboxError> {
+    ) -> Result<ConsentInstall, SandboxError> {
         let grants = self.approval_directory_grants(tool_name, input);
         self.route_consent_with_grants(tool_name, input, choice, reason, &grants)
     }
@@ -305,7 +420,7 @@ impl Server {
         choice: ApprovalScope,
         reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
-    ) -> Result<(), SandboxError> {
+    ) -> Result<ConsentInstall, SandboxError> {
         let grant = self.consent_plan(tool_name, input, reason, grants);
         let lifetime = installed_scope(&grant, choice);
         self.install_consent(&grant, lifetime, grants)
@@ -317,16 +432,31 @@ impl Server {
     /// has to run now; the lifetime decides only what outlives it. A once
     /// answer therefore widens this session's fence and saves nothing, a
     /// session answer keeps the grant until the session ends, and a workspace
-    /// answer saves it for the next start.
+    /// answer saves it for the next start. A save that fails keeps the fence
+    /// grant and reports the shorter lifetime it really has.
+    ///
+    /// A plan holds either directory grants or a rule, never both: the
+    /// directory capability covers a structured file target, the rule covers
+    /// a remembered command. Both halves run anyway, so a plan that grows a
+    /// second kind is installed whole rather than half.
     pub(crate) fn install_consent(
         &self,
         grant: &AlwaysGrant,
         lifetime: ApprovalScope,
         grants: &[BoundaryGrant],
-    ) -> Result<(), SandboxError> {
-        self.install_directory_grants(grants, lifetime)?;
-        self.apply_install(grant, lifetime);
-        Ok(())
+    ) -> Result<ConsentInstall, SandboxError> {
+        let mut save_error = self.install_directory_grants(grants, lifetime)?;
+        if let Err(error) = self.apply_install(grant, lifetime) {
+            save_error.get_or_insert(error);
+        }
+        Ok(ConsentInstall {
+            lifetime: if save_error.is_some() {
+                ApprovalScope::Session
+            } else {
+                lifetime
+            },
+            save_error,
+        })
     }
 
     /// Analyze directory capabilities required by one approved target.
@@ -358,21 +488,34 @@ impl Server {
         tool_name: &str,
         input: &serde_json::Value,
         lifetime: ApprovalScope,
-    ) -> Result<(), SandboxError> {
+    ) -> Result<ConsentInstall, SandboxError> {
         let grants = self.approval_directory_grants(tool_name, input);
-        self.install_directory_grants(&grants, lifetime)
+        let save_error = self.install_directory_grants(&grants, lifetime)?;
+        Ok(ConsentInstall {
+            lifetime: if save_error.is_some() {
+                ApprovalScope::Session
+            } else {
+                lifetime
+            },
+            save_error,
+        })
     }
 
     /// Install runtime grants before persisting them. A partial runtime update
     /// is rolled back when a later grant fails, restoring the access each
     /// directory had before this install rather than simply removing it.
+    ///
+    /// A save the store rejects does not undo the fence grant: the approved
+    /// call has to run now, so the access stands for this session and only
+    /// the copy that would survive a restart is missing. The error is
+    /// returned for the caller to report the shorter lifetime it really has.
     fn install_directory_grants(
         &self,
         grants: &[BoundaryGrant],
         lifetime: ApprovalScope,
-    ) -> Result<(), SandboxError> {
+    ) -> Result<Option<StoreError>, SandboxError> {
         if grants.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let session = self.sandbox_session.as_ref().ok_or_else(|| {
             SandboxError::SandboxUnavailable("no sandbox session for directory grant".into())
@@ -420,19 +563,48 @@ impl Server {
         // Only the workspace lifetime has somewhere to be saved: the store
         // path is resolved per workspace, and the next start re-attaches what
         // it finds there. A session grant lives in the fence and ends with it.
+        // The remaining grants are still attempted after one save fails, so a
+        // single unwritable record does not cost the others their grant; the
+        // first failure is what the caller reports.
+        let mut save_error = None;
         if lifetime == ApprovalScope::Workspace {
             for grant in grants {
-                match grant.access {
+                let saved = match grant.access {
                     BoundaryAccess::ReadOnly => {
                         self.gate.add_read_directory(&grant.directory, Scope::Local)
                     }
                     BoundaryAccess::ReadWrite => {
                         self.gate.add_directory(&grant.directory, Scope::Local)
                     }
+                };
+                if let Err(error) = saved {
+                    save_error.get_or_insert(error);
                 }
             }
         }
-        Ok(())
+        Ok(save_error)
+    }
+}
+
+/// The outcome of installing an approved authorization: the lifetime the
+/// grant actually keeps, plus why it keeps less than the card stated when a
+/// save failed.
+#[derive(Debug)]
+pub(crate) struct ConsentInstall {
+    lifetime: ApprovalScope,
+    save_error: Option<StoreError>,
+}
+
+impl ConsentInstall {
+    /// The lifetime the grant really has, which is the one to report: a
+    /// workspace grant whose save failed lasts only until the session ends.
+    pub(crate) fn lifetime(&self) -> ApprovalScope {
+        self.lifetime
+    }
+
+    /// Why the grant keeps less than the card stated, when it does.
+    pub(crate) fn save_error(&self) -> Option<&StoreError> {
+        self.save_error.as_ref()
     }
 }
 

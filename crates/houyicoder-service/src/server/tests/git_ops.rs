@@ -85,26 +85,30 @@ fn test_git_consent_skips_rule() {
     assert_eq!(durable(&gate), 0, "no durable rules at start");
     // A git commit approval routes to a session-scope allow rule (in-memory,
     // not durable), shadowing the builtin ask rule this session.
-    server.apply_consent_rule(
-        "bash",
-        &serde_json::json!({"command": "git commit -m x"}),
-        Some(&detection_reason()),
-        &[],
-        ApprovalScope::Workspace,
-    );
+    server
+        .apply_consent_rule(
+            "bash",
+            &serde_json::json!({"command": "git commit -m x"}),
+            Some(&detection_reason()),
+            &[],
+            ApprovalScope::Workspace,
+        )
+        .expect("consent rule installed");
     assert_eq!(
         durable(&gate),
         0,
         "git op consent stays session-scoped, no durable rule"
     );
     // A non-git command takes the durable-rule path (contrast).
-    server.apply_consent_rule(
-        "bash",
-        &serde_json::json!({"command": "npm install"}),
-        Some(&detection_reason()),
-        &[],
-        ApprovalScope::Workspace,
-    );
+    server
+        .apply_consent_rule(
+            "bash",
+            &serde_json::json!({"command": "npm install"}),
+            Some(&detection_reason()),
+            &[],
+            ApprovalScope::Workspace,
+        )
+        .expect("consent rule installed");
     assert_eq!(durable(&gate), 1, "non-git command becomes a durable rule");
 }
 
@@ -132,25 +136,29 @@ fn test_network_consent_remembers_host() {
         .outcome()
     };
     assert_eq!(decide(first), Outcome::Ask);
-    server.apply_consent_rule(
-        "bash",
-        &serde_json::json!({"command": first}),
-        Some(&network_reason()),
-        &[],
-        ApprovalScope::Workspace,
-    );
+    server
+        .apply_consent_rule(
+            "bash",
+            &serde_json::json!({"command": first}),
+            Some(&network_reason()),
+            &[],
+            ApprovalScope::Workspace,
+        )
+        .expect("consent rule installed");
     assert_eq!(decide(first), Outcome::Allow);
     assert_eq!(decide(second), Outcome::Allow);
     // A different origin is still a new decision.
     assert_eq!(decide("curl https://evil.test/x"), Outcome::Ask);
     let download = "curl https://api.github.com/x -o \"$TMPDIR/result.json\"";
-    server.apply_consent_rule(
-        "bash",
-        &serde_json::json!({"command": download}),
-        Some(&network_reason()),
-        &[],
-        ApprovalScope::Workspace,
-    );
+    server
+        .apply_consent_rule(
+            "bash",
+            &serde_json::json!({"command": download}),
+            Some(&network_reason()),
+            &[],
+            ApprovalScope::Workspace,
+        )
+        .expect("consent rule installed");
     assert_eq!(decide(download), Outcome::Ask);
 }
 

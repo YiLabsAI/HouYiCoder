@@ -3,3 +3,6 @@
 mod ask_rule;
 mod connection_failure;
 mod git_ops;
+mod notice_log;
+
+pub(super) use notice_log::NoticeLog;

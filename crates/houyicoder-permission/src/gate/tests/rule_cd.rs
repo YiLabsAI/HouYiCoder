@@ -45,7 +45,8 @@ fn scratch_root(label: &str) -> PathBuf {
 fn manual_gate(root: &Path, rule: Rule) -> DefaultModeGate {
     let gate = DefaultModeGate::with_mode(PermissionMode::Manual)
         .with_containment(Arc::new(RootFence(Arc::from(root.to_path_buf()))));
-    gate.add_rule(rule.with_scope(Scope::Session));
+    gate.add_rule(rule.with_scope(Scope::Session))
+        .expect("saved");
     gate
 }
 

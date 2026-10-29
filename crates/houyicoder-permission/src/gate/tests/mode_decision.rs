@@ -268,7 +268,8 @@ fn test_auto_compound_destructive_ask() {
 #[test]
 fn test_rule_whitelist_auto_allows() {
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::new("bash", Effect::Allow).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&req("bash", true, false, true)).outcome(),
         Outcome::Allow
@@ -290,7 +291,8 @@ fn test_allow_rule_blocks_destructive() {
     // an Allow rule matches. Before the pipeline reorder, the rule fired
     // first and rm -rf sailed through.
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::new("bash", Effect::Allow).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("rm -rf /tmp/x")).outcome(),
         Outcome::Ask
@@ -308,7 +310,8 @@ fn test_deny_rule_beats_destructive() {
     // A Deny rule is stricter than the destructive Ask, so deny short-
     // circuits: rm under a bash Deny rule is Deny, not Ask.
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::new("bash", Effect::Deny).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Deny).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("rm -rf /tmp/x")).outcome(),
         Outcome::Deny
@@ -325,7 +328,8 @@ fn test_destructive_consent_under_allow() {
     let v: &'static Value = Box::leak(serde_json::json!({"command": "rm -rf /tmp/x"}).into());
     cs.record("bash", &args_key(Some(v)));
     let g = DefaultModeGate::with_mode(PermissionMode::Auto).with_consent(cs);
-    g.add_rule(Rule::new("bash", Effect::Allow).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("rm -rf /tmp/x")).outcome(),
         Outcome::Allow
@@ -339,7 +343,8 @@ fn test_destructive_consent_under_allow() {
 #[test]
 fn test_rule_deny_overrides_mode() {
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::new("bash", Effect::Deny).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Deny).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&req("bash", true, false, true)).outcome(),
         Outcome::Deny
@@ -538,7 +543,8 @@ fn test_consent_upgrades_ask() {
 fn test_consent_upgrades_rule_ask() {
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::new().with_consent(cs);
-    g.add_rule(Rule::new("bash", Effect::Ask).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Ask).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&req("bash", true, false, true)).outcome(),
         Outcome::Ask
@@ -554,7 +560,8 @@ fn test_consent_upgrades_rule_ask() {
 fn test_consent_no_override_deny() {
     let cs = Arc::new(InMemoryConsentStore::non_expiring());
     let g = DefaultModeGate::new().with_consent(cs);
-    g.add_rule(Rule::new("bash", Effect::Deny).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Deny).unwrap())
+        .expect("saved");
     g.consent().unwrap().record("bash", "");
     assert!(matches!(
         g.decide(&req("bash", true, false, true)).outcome(),
@@ -621,7 +628,8 @@ fn test_content_rule_allows_specific() {
     let g = DefaultModeGate::new();
     g.add_rule(
         Rule::with_content("bash", RuleContent::Prefix("npm".into()), Effect::Allow).unwrap(),
-    );
+    )
+    .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("npm install")).outcome(),
         Outcome::Allow
@@ -635,8 +643,10 @@ fn test_content_deny_wins_specific() {
     // A tool-level allow plus a content-scoped deny: the deny wins for the
     // matching command, allow for the rest.
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::new("bash", Effect::Allow).unwrap());
-    g.add_rule(Rule::with_content("bash", RuleContent::Prefix("rm".into()), Effect::Deny).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
+    g.add_rule(Rule::with_content("bash", RuleContent::Prefix("rm".into()), Effect::Deny).unwrap())
+        .expect("saved");
     assert_eq!(g.decide(&bash_req("rm -rf /")).outcome(), Outcome::Deny);
     assert_eq!(g.decide(&bash_req("ls")).outcome(), Outcome::Allow);
 }
@@ -696,7 +706,8 @@ fn test_compound_unsafe_escalates_allow() {
     // An allow-rule on bash does not auto-allow an un-attestable compound
     // command; the gate escalates to Ask.
     let g = DefaultModeGate::with_mode(PermissionMode::Manual);
-    g.add_rule(Rule::new("bash", Effect::Allow).unwrap());
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("ls && echo hi > /tmp/x")).outcome(),
         Outcome::Ask
@@ -748,7 +759,8 @@ fn test_auto_respects_ask_rule() {
     // An explicit content-scoped ask rule fires Ask even in Auto — a
     // content-specific ask rule takes precedence over the mode default.
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::with_content("bash", RuleContent::Prefix("rm".into()), Effect::Ask).unwrap());
+    g.add_rule(Rule::with_content("bash", RuleContent::Prefix("rm".into()), Effect::Ask).unwrap())
+        .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("rm -rf /tmp/foo")).outcome(),
         Outcome::Ask

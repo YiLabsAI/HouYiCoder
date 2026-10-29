@@ -108,8 +108,11 @@ fn test_immune_stages_ignore_mode() {
     let req = bash_req("ls -la");
     let manual = DefaultModeGate::with_mode(PermissionMode::Manual);
     let auto = DefaultModeGate::with_mode(PermissionMode::Auto);
-    manual.add_rule(Rule::new("bash", Effect::Deny).unwrap());
-    auto.add_rule(Rule::new("bash", Effect::Deny).unwrap());
+    manual
+        .add_rule(Rule::new("bash", Effect::Deny).unwrap())
+        .expect("saved");
+    auto.add_rule(Rule::new("bash", Effect::Deny).unwrap())
+        .expect("saved");
     assert_eq!(
         manual.decide(&req).outcome(),
         auto.decide(&req).outcome(),
@@ -524,7 +527,8 @@ fn test_two_outside_roots_named() {
 #[test]
 fn test_skill_ask_survives_allow() {
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    g.add_rule(Rule::new("bash", Effect::Allow).expect("allow rule"));
+    g.add_rule(Rule::new("bash", Effect::Allow).expect("allow rule"))
+        .expect("saved");
     for cmd in [
         "python /srv/repo/.houyicoder/skills/deploy/scripts/deploy.py",
         "bash /home/u/.claude/skills/deploy/scripts/run.sh",

@@ -61,7 +61,8 @@ fn test_git_session_consent_skips() {
         )
         .unwrap()
         .with_scope(Scope::Session),
-    );
+    )
+    .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("git commit -m anything")).outcome(),
         Outcome::Allow
@@ -96,7 +97,8 @@ fn test_git_allow_rule_skips() {
             Effect::Allow,
         )
         .unwrap(),
-    );
+    )
+    .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("git commit -m x")).outcome(),
         Outcome::Allow
@@ -121,7 +123,8 @@ fn test_consent_via_trait_arc() {
         )
         .unwrap()
         .with_scope(Scope::Session),
-    );
+    )
+    .expect("saved");
     assert!(matches!(
         g.decide(&bash_req("git commit -m anything")).outcome(),
         Outcome::Allow

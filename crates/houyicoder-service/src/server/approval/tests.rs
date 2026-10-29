@@ -4,6 +4,7 @@
 use super::*;
 use crate::composition::SkillRegistryImpl;
 use crate::protocol_adapter::{CardFence, FENCED};
+use crate::server::tests::NoticeLog;
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use houyicoder_api::provider::ModelProvider;
@@ -13,7 +14,7 @@ use houyicoder_api::sandbox::{
 };
 use houyicoder_api::skill::{SkillRegistry, SkillScriptRef};
 use houyicoder_async::PFut;
-use houyicoder_context::{ExecConfig, ExecResult, SandboxError, SessionId};
+use houyicoder_context::{ExecConfig, ExecResult, SandboxError, SessionEvent, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ApprovalRequest, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -1074,16 +1075,235 @@ fn test_grant_requires_fence_widening() {
     drop(fs::remove_dir_all(&root));
 }
 
+/// A workspace grant the store cannot save keeps the fence for this session
+/// and reports the shorter lifetime. The card promised a grant that outlives
+/// the session; reporting the workspace lifetime would claim one the next
+/// start does not have, and dropping the fence grant would refuse the call
+/// the user just approved.
+#[test]
+fn test_unsaved_grant_keeps_session() {
+    let root = env::temp_dir().join(format!("unsaved-grant-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir root");
+    // A regular file where the store keeps its state: every write below it
+    // fails, the way an unwritable settings path does.
+    let blocked = root.join("state");
+    fs::write(&blocked, b"not a directory").expect("write blocker");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        blocked.join("user.json"),
+        blocked.join("project.json"),
+        blocked.join("local.json"),
+    ));
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let fence = Arc::new(RevisionFence {
+        root: Arc::from(repo.as_path()),
+        granted: Mutex::new(Vec::new()),
+        revision: AtomicU64::new(1),
+        advance_on_grant: true,
+    });
+    let gate = Arc::new(DefaultModeGate::new().with_store(store));
+    let server = server_over_fence_with(fence.clone(), gate);
+
+    let outside = root.join("outside");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    let target = outside.join("report.txt");
+    fs::write(&target, b"x").expect("write target");
+    let input = json!({"path": target.to_string_lossy(), "pattern": "x"});
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds".to_string(),
+        detail: "path outside the workspace".into(),
+        containment_note: None,
+    };
+    let install = server
+        .route_consent("grep", &input, ApprovalScope::Workspace, Some(&reason))
+        .expect("the fence takes the grant even when the store refuses it");
+    assert!(
+        install.save_error().is_some(),
+        "the refused save must be reported, not swallowed"
+    );
+    assert_eq!(
+        install.lifetime(),
+        ApprovalScope::Session,
+        "the grant keeps the session lifetime it really has"
+    );
+    let coutside = dunce::canonicalize(&outside).expect("canonicalize outside");
+    assert!(
+        fence
+            .working_dirs()
+            .iter()
+            .any(|dir| Path::new(dir) == coutside),
+        "the approved call still has its directory this session"
+    );
+    drop(fs::remove_dir_all(&root));
+}
+
+/// A rule the store refuses to save keeps the approval for this session, and
+/// the durable verdict records the lifetime it really has. Recording the
+/// workspace lifetime would claim a rule the next start does not have.
+#[tokio::test]
+async fn test_unsaved_rule_keeps_session() {
+    let root = env::temp_dir().join(format!("unsaved-rule-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir root");
+    let blocked = root.join("state");
+    fs::write(&blocked, b"not a directory").expect("write blocker");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        blocked.join("user.json"),
+        blocked.join("project.json"),
+        blocked.join("local.json"),
+    ));
+    let gate = Arc::new(DefaultModeGate::new().with_store(store));
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let fence = Arc::new(RevisionFence {
+        root: Arc::from(repo.as_path()),
+        granted: Mutex::new(Vec::new()),
+        revision: AtomicU64::new(1),
+        advance_on_grant: true,
+    });
+    let notices = NoticeLog::new();
+    let server = server_over_fence_noted(fence, gate.clone(), Some(&notices));
+    let session = server.session;
+    let approval = ApprovalRequest::new(
+        "call-1".into(),
+        "bash".into(),
+        json!({"command": "npm install"}),
+        None,
+    );
+    let decision = ApprovalDecision {
+        call_id: "call-1".into(),
+        approved: true,
+        updated_input: None,
+        scope: ApprovalScope::Workspace,
+    };
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "destructive_command".to_string(),
+        detail: "destructive pattern needs confirmation".into(),
+        containment_note: None,
+    };
+    server
+        .settle_answer(&approval, &decision, Some(&reason), &[], false)
+        .await
+        .expect("the approval still holds for this session");
+    assert!(
+        gate.rules()
+            .iter()
+            .any(|rule| rule.action == "bash" && rule.scope == Scope::Session),
+        "the refused save degrades the rule to the session lifetime"
+    );
+    let events = server.runner.store().replay(session).await.expect("replay");
+    let recorded = events
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.event {
+            SessionEvent::PermissionDecision { scope, .. } => Some(scope.clone()),
+            _ => None,
+        })
+        .expect("the verdict is recorded");
+    assert_eq!(
+        recorded, "session",
+        "the record states the lifetime the install kept"
+    );
+    let told = notices.messages();
+    assert_eq!(
+        told.len(),
+        1,
+        "the shortened grant is said out loud once: {told:?}"
+    );
+    assert!(
+        told[0].contains("until this session ends"),
+        "the notice names when the grant stops: {}",
+        told[0]
+    );
+    drop(fs::remove_dir_all(&root));
+}
+
+/// The saved counterpart: a rule the store accepts is installed at the
+/// lifetime the user chose and no notice is raised, because nothing about the
+/// grant is shorter than what the card promised.
+#[tokio::test]
+async fn test_saved_rule_no_notice() {
+    let root = env::temp_dir().join(format!("saved-rule-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir root");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        root.join("user.json"),
+        root.join("project.json"),
+        root.join("local.json"),
+    ));
+    let gate = Arc::new(DefaultModeGate::new().with_store(store));
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let fence = Arc::new(RevisionFence {
+        root: Arc::from(repo.as_path()),
+        granted: Mutex::new(Vec::new()),
+        revision: AtomicU64::new(1),
+        advance_on_grant: true,
+    });
+    let notices = NoticeLog::new();
+    let server = server_over_fence_noted(fence, gate.clone(), Some(&notices));
+    let approval = ApprovalRequest::new(
+        "call-1".into(),
+        "bash".into(),
+        json!({"command": "npm install"}),
+        None,
+    );
+    let decision = ApprovalDecision {
+        call_id: "call-1".into(),
+        approved: true,
+        updated_input: None,
+        scope: ApprovalScope::Workspace,
+    };
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "destructive_command".to_string(),
+        detail: "destructive pattern needs confirmation".into(),
+        containment_note: None,
+    };
+    server
+        .settle_answer(&approval, &decision, Some(&reason), &[], false)
+        .await
+        .expect("the saved rule is installed");
+    assert!(
+        gate.rules().iter().any(|rule| rule.action == "bash"
+            && rule.scope != Scope::Session
+            && rule.scope.is_writable()),
+        "the accepted rule keeps the lifetime the user chose: {:?}",
+        gate.rules()
+    );
+    let told = notices.messages();
+    assert!(told.is_empty(), "a saved grant raises no notice: {told:?}");
+    drop(fs::remove_dir_all(&root));
+}
+
 fn server_over_fence(session: Arc<RevisionFence>) -> Server {
-    let gate = Arc::new(DefaultModeGate::new());
+    server_over_fence_with(session, Arc::new(DefaultModeGate::new()))
+}
+
+fn server_over_fence_with(session: Arc<RevisionFence>, gate: Arc<DefaultModeGate>) -> Server {
+    server_over_fence_noted(session, gate, None)
+}
+
+fn server_over_fence_noted(
+    session: Arc<RevisionFence>,
+    gate: Arc<DefaultModeGate>,
+    notice: Option<&NoticeLog>,
+) -> Server {
+    let gate = gate as Arc<dyn ModeGate>;
     let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("test"));
-    let runner = Runner::new(
+    let mut runner = Runner::new(
         sess_store,
         provider,
         ToolRegistry::new(),
         RunnerConfig::default(),
     );
+    if let Some(log) = notice {
+        log.attach(&mut runner);
+    }
     Server::new(Arc::new(runner), SessionId::new(), gate).with_session(session)
 }
 

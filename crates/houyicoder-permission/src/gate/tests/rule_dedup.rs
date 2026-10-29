@@ -12,16 +12,18 @@ fn npm_allow(action: &str, scope: Scope) -> Rule {
 fn test_same_rule_dedups() {
     let gate = DefaultModeGate::new_without_builtins();
     let rule = npm_allow("bash", Scope::Session);
-    gate.add_rule(rule.clone());
-    gate.add_rule(rule);
+    gate.add_rule(rule.clone()).expect("saved");
+    gate.add_rule(rule).expect("saved");
     assert_eq!(gate.rules().len(), 1, "dedup: in-memory should have 1 rule");
 }
 
 #[test]
 fn test_case_insensitive_dedups() {
     let gate = DefaultModeGate::new_without_builtins();
-    gate.add_rule(npm_allow("Bash", Scope::Session));
-    gate.add_rule(npm_allow("bash", Scope::Session));
+    gate.add_rule(npm_allow("Bash", Scope::Session))
+        .expect("saved");
+    gate.add_rule(npm_allow("bash", Scope::Session))
+        .expect("saved");
     assert_eq!(
         gate.rules().len(),
         1,
@@ -47,7 +49,9 @@ fn test_scope_distinguishes_rules() {
     // authorization would silently never take effect — with no UI row to
     // signal it.
     let gate = DefaultModeGate::new_without_builtins();
-    gate.add_rule(npm_allow("bash", Scope::Session));
-    gate.add_rule(npm_allow("bash", Scope::Builtin));
+    gate.add_rule(npm_allow("bash", Scope::Session))
+        .expect("saved");
+    gate.add_rule(npm_allow("bash", Scope::Builtin))
+        .expect("saved");
     assert_eq!(gate.rules().len(), 2, "scope is part of rule identity");
 }

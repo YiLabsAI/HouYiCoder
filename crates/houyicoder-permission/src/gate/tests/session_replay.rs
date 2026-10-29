@@ -163,7 +163,8 @@ fn test_session_corpus_decisions() {
                         )
                         .expect("git commit rule")
                         .with_scope(Scope::Session),
-                    );
+                    )
+                    .expect("saved");
                 }
             }
             Decision::Deny(reason) => {
@@ -213,7 +214,8 @@ fn test_git_checkpoint_specific_detail() {
         )
         .expect("rule")
         .with_scope(Scope::Session),
-    );
+    )
+    .expect("saved");
     assert_eq!(
         gate.decide(&bash_req("cd /tmp && git stash pop")).outcome(),
         Outcome::Ask,
@@ -227,7 +229,8 @@ fn test_git_checkpoint_specific_detail() {
         )
         .expect("commit rule")
         .with_scope(Scope::Session),
-    );
+    )
+    .expect("saved");
     for piggybacked in [
         "cd /work/repo && git commit -m x; git stash pop",
         "cd /work/repo && git commit -m x; git sta'sh' pop",

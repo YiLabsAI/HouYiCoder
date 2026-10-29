@@ -194,8 +194,8 @@ fn test_fenced_never_relaxes_immune() {
     let ask_rule = Rule::with_content("bash", RuleContent::Prefix("deploy".into()), Effect::Ask)
         .unwrap()
         .with_scope(Scope::Session);
-    fenced.add_rule(ask_rule.clone());
-    unfenced.add_rule(ask_rule);
+    fenced.add_rule(ask_rule.clone()).expect("saved");
+    unfenced.add_rule(ask_rule).expect("saved");
 
     let corpus: [(&str, Outcome); 12] = [
         ("cat file", Outcome::Allow),

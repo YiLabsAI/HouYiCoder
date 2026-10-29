@@ -16,13 +16,11 @@ use crate::composition::SessionHost;
 use crate::diagnostics::handle;
 use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
-use crate::protocol_adapter::{build_approval_request, installed_scope, parse_approval_decision};
+use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use crate::server::approval::disclose_directory_grants;
 use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, FrameCarrier, Server};
-use houyicoder_context::{
-    EventId, PermissionVerdict, SessionDescriptorStore, SessionEvent, SessionLogEntry,
-};
+use houyicoder_context::SessionDescriptorStore;
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::RunOutcome;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
@@ -196,55 +194,19 @@ async fn reemit_and_settle_ask(
     );
     Server::send_typed(io, &ServerFrame::Request(ask)).await?;
     let (decision, cancelled) = await_reemit_verdict(server, io, ask_id, &ask_perm.call_id).await?;
-    // The lifetime this answer keeps, capped by the plan the ask derived, so
-    // the durable record states the grant the install makes rather than the
-    // one the client asked for.
-    let grant = server.consent_plan(
-        &ask_perm.tool,
-        &ask_perm.input,
-        reason.as_ref(),
-        &directory_grants,
-    );
-    let lifetime = if !decision.approved {
-        ApprovalScope::Once
-    } else if ask_perm.tool == ENTITLEMENT_TOOL {
-        decision.scope
-    } else {
-        installed_scope(&grant, decision.scope)
-    };
-    let verdict = if decision.approved {
-        PermissionVerdict::Approved
-    } else {
-        PermissionVerdict::Denied
-    };
-    let audit = SessionLogEntry {
-        id: EventId::new(),
-        session: server.session,
-        ts: super::now_millis(),
-        prev_hash: None,
-        event: SessionEvent::PermissionDecision {
-            call_id: ask_perm.call_id.clone(),
-            tool: ask_perm.tool.clone(),
-            verdict,
-            scope: lifetime.as_str().to_string(),
-            validator: reason.as_ref().map(|r| r.validator.to_string()),
-            reason: reason.as_ref().map(|r| r.detail.clone()),
-        },
-    };
-    if let Err(e) = server.runner.store().append(audit).await {
-        tracing::warn!("permission-decision audit append failed: {e}");
-    }
-    if decision.approved && ask_perm.tool != ENTITLEMENT_TOOL {
-        server
-            .install_consent(&grant, lifetime, &directory_grants)
-            .map_err(|error| {
-                ProtocolError::new(
-                    ErrorCategory::Unavailable,
-                    format!("approved directory capability could not be installed: {error}"),
-                    false,
-                )
-            })?;
-    }
+    // A re-emitted card settles through the same router as the first card:
+    // one place derives the plan, caps the lifetime, records the verdict, and
+    // installs the grant, so a reconnecting client cannot end up with a
+    // different grant than a connected one.
+    server
+        .settle_answer(
+            &engine_approval,
+            &decision,
+            reason.as_ref(),
+            &directory_grants,
+            ask_perm.tool == ENTITLEMENT_TOOL,
+        )
+        .await?;
     Ok((decision, cancelled))
 }
 

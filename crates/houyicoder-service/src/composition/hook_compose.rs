@@ -601,8 +601,12 @@ impl Hook for SkillGrantHook {
                         Some(content) => Rule::with_content(&action, content, Effect::Allow),
                         None => Rule::new(&action, Effect::Allow),
                     };
-                    if let Ok(rule) = rule {
-                        self.gate.add_rule(rule.with_scope(Scope::Session));
+                    if let Ok(rule) = rule
+                        && let Err(error) = self.gate.add_rule(rule.with_scope(Scope::Session))
+                    {
+                        tracing::warn!(
+                            "a trusted skill's allowed tool could not be granted: {error}"
+                        );
                     }
                 }
             }

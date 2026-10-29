@@ -17,7 +17,8 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{
-    Decision, DefaultModeGate, ModeError, ModeGate, PermissionMode, Rule, ToolRequest,
+    Decision, DefaultModeGate, ModeError, ModeGate, PermissionMode, Rule, Scope, StoreError,
+    ToolRequest,
 };
 use houyicoder_protocol::envelope::{
     ClientFrame, RequestEnvelope, RequestId, ResponsePayload, ServerFrame,
@@ -58,8 +59,17 @@ impl ModeGate for FailingCycleGate {
     fn rules(&self) -> Vec<Rule> {
         self.inner.rules()
     }
-    fn add_rule(&self, rule: Rule) {
-        self.inner.add_rule(rule);
+    fn add_rule(&self, rule: Rule) -> Result<(), StoreError> {
+        self.inner.add_rule(rule)
+    }
+    fn add_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn add_read_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
+        Ok(())
+    }
+    fn remove_directory(&self, _dir: &Path) -> Result<(), StoreError> {
+        Ok(())
     }
     fn remove_rule(&self, index: usize) -> bool {
         self.inner.remove_rule(index)

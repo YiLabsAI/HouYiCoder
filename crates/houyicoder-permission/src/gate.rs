@@ -35,6 +35,7 @@ use crate::side_effect::is_shell_tool;
 use crate::side_effect::side_effect_for;
 use crate::store::RuleStore;
 use crate::store::Scope;
+use crate::store::StoreError;
 use houyicoder_api::sandbox::SideEffect;
 use houyicoder_api::sandbox::{Containment, FenceCapability};
 use std::collections::HashSet;
@@ -52,8 +53,10 @@ pub trait ModeGate: Send + Sync {
     fn tab_cycle(&self) -> Result<PermissionMode, ModeError>;
     /// The durable rule set. Used by the wire server to project /rules.
     fn rules(&self) -> Vec<Rule>;
-    /// Add a durable rule (AllowAlways persists when a store is attached).
-    fn add_rule(&self, rule: Rule);
+    /// Add a durable rule. A rule whose scope is writable is saved before it
+    /// enters the live rule set, so a failed save leaves neither: reporting a
+    /// rule the next start would not have is worse than reporting the failure.
+    fn add_rule(&self, rule: Rule) -> Result<(), StoreError>;
     /// Remember one network destination for this session, as the scope string
     /// the egress derivation produces. A destination is not a command rule:
     /// the network check recognizes programs, not destinations, so it reads
@@ -61,16 +64,15 @@ pub trait ModeGate: Send + Sync {
     /// keep one.
     fn add_egress_allow(&self, _destination: &str) {}
     /// Persist a directory authorization (a path-bounds approval the user
-    /// marked "always") to the durable store at the given scope, so the fence
-    /// rehydrates it on restart. Default no-op (no store / a test gate). The
+    /// remembered) to the durable store at the given scope, so the fence
+    /// rehydrates it on restart. A gate that keeps no store answers Ok. The
     /// fence's additional_dirs is updated separately by the caller.
-    fn add_directory(&self, _dir: &Path, _scope: Scope) {}
+    fn add_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError>;
     /// Persist a read-only directory authorization.
-    fn add_read_directory(&self, _dir: &Path, _scope: Scope) {}
+    fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError>;
     /// Drop a directory authorization from every writable scope, so a
     /// directory the user removed is not granted again on the next start.
-    /// Default no-op (no store / a test gate).
-    fn remove_directory(&self, _dir: &Path) {}
+    fn remove_directory(&self, dir: &Path) -> Result<(), StoreError>;
     /// Remove a rule by index. Returns true if the index was in range.
     fn remove_rule(&self, index: usize) -> bool;
     /// Enable or disable the git-checkpoint builtin rules (git commit / rebase
@@ -425,27 +427,19 @@ impl ModeGate for DefaultModeGate {
         self.rules.lock().expect("mode gate mutex").clone()
     }
 
-    fn add_rule(&self, rule: Rule) {
-        // Persist every durable rule (allow/deny/ask) to its chosen scope —
-        // a rule is an always-X directive, not a one-time verdict, so all
-        // effects survive restart. The destination the user picked is honored
-        // for every effect (no silent session-only drop for deny/ask). Log
-        // (don't silently drop) a store failure: the in-memory rule is added
-        // but the disk write failed, so it will NOT survive restart — the
-        // signal (an eprintln here) is a first step; TODO route the failure
-        // back through the server as a ResponsePayload::Error so the TUI can
-        // surface it (eprintln is invisible under the TUI's raw-mode alt
-        // screen, but it at least leaves a trace in the launching shell).
-        // Builtin-scoped rules are seeded at construction, not writable, so a
-        // caller adding one never persists it (only the in-memory push).
+    fn add_rule(&self, rule: Rule) -> Result<(), StoreError> {
+        // Save every durable rule (allow/deny/ask) to its chosen scope before
+        // it enters the live set: a rule is an always-X directive, not a
+        // one-time verdict, so all effects survive restart, and the
+        // destination the user picked is honored for every effect (no silent
+        // session-only drop for deny/ask). A failed save returns here without
+        // the push, so the caller reports the failure instead of a rule the
+        // next start would not have. Builtin-scoped rules are seeded at
+        // construction, not writable, so a caller adding one never saves it.
         if rule.scope.is_writable()
             && let Some(store) = &self.store
-            && let Err(e) = store.add(&rule)
         {
-            tracing::warn!(
-                "[permission] add_rule: in-memory rule added but the \
-                 persistence write failed; it will not survive restart: {e}"
-            );
+            store.add(&rule)?;
         }
         // Dedup-push: the in-memory list is the single source of truth for
         // the live process (the UI reads it, remove_rule indexes into it,
@@ -462,46 +456,45 @@ impl ModeGate for DefaultModeGate {
                 "[permission] add_rule: duplicate rule skipped in memory (no push)"
             );
         }
+        Ok(())
     }
 
-    fn add_directory(&self, dir: &Path, scope: Scope) {
-        if scope.is_writable()
-            && let Some(store) = &self.store
-            && let Err(error) = store.add_directory(dir, scope)
-        {
-            tracing::warn!(
-                "[permission] add_directory: persistence write failed; the \
-                 directory auth will not survive restart: {error}"
-            );
+    fn add_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
+        match &self.store {
+            Some(store) if scope.is_writable() => store.add_directory(dir, scope),
+            _ => Ok(()),
         }
     }
 
-    fn add_read_directory(&self, dir: &Path, scope: Scope) {
-        if scope.is_writable()
-            && let Some(store) = &self.store
-            && let Err(error) = store.add_read_directory(dir, scope)
-        {
-            tracing::warn!(
-                "[permission] add_read_directory: persistence write failed; the \
-                 directory auth will not survive restart: {error}"
-            );
+    fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
+        match &self.store {
+            Some(store) if scope.is_writable() => store.add_read_directory(dir, scope),
+            _ => Ok(()),
         }
     }
 
-    fn remove_directory(&self, dir: &Path) {
+    fn remove_directory(&self, dir: &Path) -> Result<(), StoreError> {
         // Every writable scope is cleared because the pane shows one list and
         // does not know which scope granted the entry; leaving a copy behind
-        // would grant the directory again on the next start.
+        // would grant the directory again on the next start. The first failed
+        // write is returned after the remaining scopes are attempted, so one
+        // unreadable scope does not leave another holding the entry.
         let Some(store) = &self.store else {
-            return;
+            return Ok(());
         };
+        let mut failure = None;
         for scope in [Scope::Local, Scope::Project, Scope::User] {
             if let Err(error) = store.remove_directory(dir, scope) {
                 tracing::warn!(
                     "[permission] remove_directory: persistence write failed for \
                      {scope:?}; the directory may be granted again on restart: {error}"
                 );
+                failure.get_or_insert(error);
             }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 

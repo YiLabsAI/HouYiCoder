@@ -95,7 +95,8 @@ fn test_whitelist_rule_auto_allows() {
         ran: Mutex::new(false),
     });
     let gate = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
-    gate.add_rule(Rule::new("danger", Effect::Allow).unwrap());
+    gate.add_rule(Rule::new("danger", Effect::Allow).unwrap())
+        .expect("saved");
     let tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(inner.clone(), gate));
     assert!(!tool.requires_approval());
     block_on(tool.execute(ToolCtx::new("test"), Value::Null)).unwrap();
@@ -108,7 +109,8 @@ fn test_deny_rule_blocks_run() {
         ran: Mutex::new(false),
     });
     let gate = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
-    gate.add_rule(Rule::new("danger", Effect::Deny).unwrap());
+    gate.add_rule(Rule::new("danger", Effect::Deny).unwrap())
+        .expect("saved");
     let tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(inner.clone(), gate));
     let err = block_on(tool.execute(ToolCtx::new("test"), Value::Null)).unwrap_err();
     assert!(err.to_string().contains("denied"));
@@ -282,7 +284,9 @@ fn test_auto_forwards_input_approval() {
         ran: Mutex::new(false),
     });
     let deny_gate = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
-    deny_gate.add_rule(Rule::new("danger", Effect::Deny).unwrap());
+    deny_gate
+        .add_rule(Rule::new("danger", Effect::Deny).unwrap())
+        .expect("saved");
     let deny_tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(deny_inner, deny_gate));
     assert!(!deny_tool.requires_approval_for(&Value::Null));
 }
