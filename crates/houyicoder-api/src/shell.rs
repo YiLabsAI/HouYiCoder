@@ -5,7 +5,9 @@
 //! spelling by creating a file named nul, while the caller meant to discard
 //! the stream. The translation is a lexical scan: a token is rewritten only
 //! when it directly follows a redirection operator, outside quotes and
-//! heredoc bodies, so the same word as an operand keeps its meaning.
+//! heredoc bodies, so the same word as an operand keeps its meaning. A test
+//! or arithmetic expression spells a comparison the same way, so it is read
+//! as an expression rather than a command and left alone.
 
 /// The shell a sandbox backend starts for one command.
 ///
@@ -75,13 +77,29 @@ struct Heredoc {
     strip_tabs: bool,
 }
 
-/// Where the scan is reading.
-enum Mode {
-    /// Unquoted command text: quotes, heredoc operators, and redirections
-    /// start here.
-    Plain,
+/// Where the scan is reading. Frames nest, so a quoted string inside a
+/// substitution inside a quoted string returns to the right place.
+#[derive(Clone, Copy)]
+enum Frame {
+    /// Unquoted command text: quotes, substitutions, heredoc operators, and
+    /// redirections start here.
+    Command,
+    /// Command text inside a command substitution. It ends at the parenthesis
+    /// that closes it, and a group inside it opens one more.
+    Substitution {
+        parens: usize,
+    },
+    /// Command text inside backticks, which ends at the next unescaped one.
+    Backtick,
     SingleQuoted,
     DoubleQuoted,
+    /// A conditional test expression, where a comparison is spelled the way a
+    /// redirection is and nothing is one.
+    Conditional,
+    /// An arithmetic expression, where the same comparison spelling appears.
+    Arithmetic {
+        parens: usize,
+    },
     /// A heredoc body: program text, never a command line.
     Body,
 }
@@ -90,85 +108,260 @@ enum Mode {
 /// None when no target qualified, so a caller can tell an untouched command
 /// from a rewritten one without comparing strings.
 fn rewrite_null_redirects(command: &str) -> Option<String> {
-    let text = command.as_bytes();
-    let mut pending: Vec<Heredoc> = Vec::new();
-    let mut mode = Mode::Plain;
-    let mut out: Option<String> = None;
-    let mut copied = 0;
-    let mut i = 0;
-    while i < text.len() {
-        match mode {
-            Mode::SingleQuoted => {
-                if text[i] == b'\'' {
-                    mode = Mode::Plain;
-                }
-                i += 1;
-            }
-            Mode::DoubleQuoted => match text[i] {
-                b'\\' => i = (i + 2).min(text.len()),
-                b'"' => {
-                    mode = Mode::Plain;
-                    i += 1;
-                }
-                _ => i += 1,
-            },
-            Mode::Body => {
-                if pending.is_empty() {
-                    mode = Mode::Plain;
-                    continue;
-                }
-                let end = line_end(text, i);
-                let line = command[i..end]
-                    .strip_suffix('\r')
-                    .unwrap_or(&command[i..end]);
-                let heredoc = pending.first().expect("checked above");
-                let candidate = if heredoc.strip_tabs {
-                    line.trim_start_matches('\t')
-                } else {
-                    line
-                };
-                if candidate == heredoc.delimiter {
-                    pending.remove(0);
-                }
-                i = after_line(text, end);
-            }
-            Mode::Plain => match text[i] {
-                b'\\' => i = (i + 2).min(text.len()),
-                b'\'' => {
-                    mode = Mode::SingleQuoted;
-                    i += 1;
-                }
-                b'"' => {
-                    mode = Mode::DoubleQuoted;
-                    i += 1;
-                }
-                b'#' if starts_word(text, i) => i = line_end(text, i),
-                b'<' if starts_heredoc(text, i) => {
-                    i = read_heredoc(command, i, &mut pending);
-                }
-                b'\n' if !pending.is_empty() => {
-                    mode = Mode::Body;
-                    i += 1;
-                }
-                b'>' => {
-                    let (next, target) = redirect_target(text, i);
-                    match target {
-                        Some((start, end)) => {
-                            let buffer = out.get_or_insert_with(String::new);
-                            buffer.push_str(&command[copied..start]);
-                            buffer.push_str(POSIX_NULL_DEVICE);
-                            copied = end;
-                            i = end;
-                        }
-                        None => i = next,
-                    }
-                }
-                _ => i += 1,
-            },
+    Scan::new(command).run()
+}
+
+/// One walk over a command line.
+///
+/// A command line is a stack of contexts -- quoting, substitutions, test and
+/// arithmetic expressions, heredoc bodies -- and a redirect counts only at the
+/// command level, so the walk keeps that stack and reads each byte under the
+/// context it is currently in. The output buffer stays None until a target
+/// actually qualifies, which is what lets the caller tell the two outcomes
+/// apart.
+struct Scan<'a> {
+    command: &'a str,
+    text: &'a [u8],
+    frames: Vec<Frame>,
+    pending: Vec<Heredoc>,
+    out: Option<String>,
+    copied: usize,
+}
+
+impl<'a> Scan<'a> {
+    fn new(command: &'a str) -> Self {
+        Scan {
+            command,
+            text: command.as_bytes(),
+            frames: vec![Frame::Command],
+            pending: Vec::new(),
+            out: None,
+            copied: 0,
         }
     }
-    out.as_mut()?.push_str(&command[copied..]);
-    out
+
+    /// Walk to the end and return the rewritten line, or None when nothing was
+    /// replaced.
+    fn run(mut self) -> Option<String> {
+        let mut i = 0;
+        while i < self.text.len() {
+            let Some(frame) = self.frames.last().copied() else {
+                break;
+            };
+            i = self.step(frame, i);
+        }
+        self.out.as_mut()?.push_str(&self.command[self.copied..]);
+        self.out
+    }
+
+    /// Advance one step under the innermost context.
+    fn step(&mut self, frame: Frame, i: usize) -> usize {
+        match frame {
+            Frame::SingleQuoted => self.single_quoted(i),
+            Frame::DoubleQuoted => self.double_quoted(i),
+            Frame::Conditional => self.conditional(i),
+            Frame::Arithmetic { parens } => self.arithmetic(parens, i),
+            Frame::Body => self.body(i),
+            Frame::Command | Frame::Substitution { .. } | Frame::Backtick => self.command(frame, i),
+        }
+    }
+
+    /// A single-quoted string ends only at its closing quote.
+    fn single_quoted(&mut self, i: usize) -> usize {
+        let text = self.text;
+        if text[i] == b'\'' {
+            self.frames.pop();
+        }
+        i + 1
+    }
+
+    /// A double-quoted string ends at its closing quote but still nests
+    /// substitutions, which run as commands and may redirect.
+    fn double_quoted(&mut self, i: usize) -> usize {
+        let text = self.text;
+        match text[i] {
+            b'\\' => (i + 2).min(text.len()),
+            b'"' => {
+                self.frames.pop();
+                i + 1
+            }
+            b'$' if starts_arithmetic(text, i + 1) => {
+                self.frames.push(Frame::Arithmetic { parens: 0 });
+                i + 3
+            }
+            b'$' if text.get(i + 1) == Some(&b'(') => {
+                self.frames.push(Frame::Substitution { parens: 0 });
+                i + 2
+            }
+            b'`' => {
+                self.frames.push(Frame::Backtick);
+                i + 1
+            }
+            _ => i + 1,
+        }
+    }
+
+    /// A test expression ends at the closing double bracket; it may contain
+    /// quoted text and substitutions but never a redirect.
+    fn conditional(&mut self, i: usize) -> usize {
+        let text = self.text;
+        match text[i] {
+            b'\\' => (i + 2).min(text.len()),
+            b'\'' => {
+                self.frames.push(Frame::SingleQuoted);
+                i + 1
+            }
+            b'"' => {
+                self.frames.push(Frame::DoubleQuoted);
+                i + 1
+            }
+            b'$' if starts_arithmetic(text, i + 1) => {
+                self.frames.push(Frame::Arithmetic { parens: 0 });
+                i + 3
+            }
+            b'$' if text.get(i + 1) == Some(&b'(') => {
+                self.frames.push(Frame::Substitution { parens: 0 });
+                i + 2
+            }
+            b']' if text.get(i + 1) == Some(&b']') => {
+                self.frames.pop();
+                i + 2
+            }
+            _ => i + 1,
+        }
+    }
+
+    /// An arithmetic expression ends at the closing paren that matches the one
+    /// that opened it, so the depth is counted.
+    fn arithmetic(&mut self, parens: usize, i: usize) -> usize {
+        let text = self.text;
+        match text[i] {
+            b'(' => {
+                self.depth(1);
+                i + 1
+            }
+            b')' if parens == 0 => {
+                self.frames.pop();
+                i + 1
+            }
+            b')' => {
+                self.depth(-1);
+                i + 1
+            }
+            _ => i + 1,
+        }
+    }
+
+    /// A heredoc body is program text, not a command line, and ends at the line
+    /// that matches the delimiter.
+    fn body(&mut self, i: usize) -> usize {
+        let text = self.text;
+        if self.pending.is_empty() {
+            self.frames.pop();
+            return i;
+        }
+        let end = line_end(text, i);
+        let line = self.command[i..end]
+            .strip_suffix('\r')
+            .unwrap_or(&self.command[i..end]);
+        let heredoc = &self.pending[0];
+        let candidate = if heredoc.strip_tabs {
+            line.trim_start_matches('\t')
+        } else {
+            line
+        };
+        let matches_delimiter = candidate == heredoc.delimiter;
+        if matches_delimiter {
+            self.pending.remove(0);
+        }
+        after_line(text, end)
+    }
+
+    /// Command context: the only place a redirect is read, and the place every
+    /// nested context opens from.
+    fn command(&mut self, frame: Frame, i: usize) -> usize {
+        let text = self.text;
+        match text[i] {
+            b'\\' => (i + 2).min(text.len()),
+            b'\'' => {
+                self.frames.push(Frame::SingleQuoted);
+                i + 1
+            }
+            b'"' => {
+                self.frames.push(Frame::DoubleQuoted);
+                i + 1
+            }
+            b'`' if matches!(frame, Frame::Backtick) => {
+                self.frames.pop();
+                i + 1
+            }
+            b'`' => {
+                self.frames.push(Frame::Backtick);
+                i + 1
+            }
+            b'$' if starts_arithmetic(text, i + 1) => {
+                self.frames.push(Frame::Arithmetic { parens: 0 });
+                i + 3
+            }
+            b'$' if text.get(i + 1) == Some(&b'(') => {
+                self.frames.push(Frame::Substitution { parens: 0 });
+                i + 2
+            }
+            b'(' if starts_arithmetic(text, i) && starts_word(text, i) => {
+                self.frames.push(Frame::Arithmetic { parens: 0 });
+                i + 2
+            }
+            b'(' => {
+                self.depth(1);
+                i + 1
+            }
+            b')' => {
+                let closes = matches!(self.frames.last(), Some(Frame::Substitution { parens: 0 }));
+                if closes {
+                    self.frames.pop();
+                } else {
+                    self.depth(-1);
+                }
+                i + 1
+            }
+            b'[' if text.get(i + 1) == Some(&b'[') && starts_word(text, i) => {
+                self.frames.push(Frame::Conditional);
+                i + 2
+            }
+            b'#' if starts_word(text, i) => line_end(text, i),
+            b'<' if starts_heredoc(text, i) => read_heredoc(self.command, i, &mut self.pending),
+            b'\n' if !self.pending.is_empty() => {
+                self.frames.push(Frame::Body);
+                i + 1
+            }
+            b'>' => self.redirect(i),
+            _ => i + 1,
+        }
+    }
+
+    /// Move the enclosing group one level deeper or shallower.
+    fn depth(&mut self, delta: isize) {
+        if let Some(Frame::Substitution { parens } | Frame::Arithmetic { parens }) =
+            self.frames.last_mut()
+        {
+            *parens = parens.saturating_add_signed(delta);
+        }
+    }
+
+    /// Rewrite the target of the redirect starting here when it is a proven
+    /// null device, and return the offset to continue from.
+    fn redirect(&mut self, i: usize) -> usize {
+        let closes_backtick = matches!(self.frames.last(), Some(Frame::Backtick));
+        let (next, target) = redirect_target(self.text, i, closes_backtick);
+        let Some((start, end)) = target else {
+            return next;
+        };
+        let buffer = self.out.get_or_insert_with(String::new);
+        buffer.push_str(&self.command[self.copied..start]);
+        buffer.push_str(POSIX_NULL_DEVICE);
+        self.copied = end;
+        end
+    }
 }
 
 /// The byte offset of the newline ending the line that starts at offset.
@@ -201,6 +394,12 @@ fn starts_word(text: &[u8], at: usize) -> bool {
 /// bracket is a here string, and a single one is an input redirection.
 fn starts_heredoc(text: &[u8], at: usize) -> bool {
     text.get(at + 1) == Some(&b'<') && text.get(at + 2) != Some(&b'<')
+}
+
+/// Whether the opening parenthesis at this offset begins an arithmetic
+/// expression, whose comparison operators are not redirections.
+fn starts_arithmetic(text: &[u8], at: usize) -> bool {
+    text.get(at) == Some(&b'(') && text.get(at + 1) == Some(&b'(')
 }
 
 /// Read a heredoc operator and its delimiter, recording the body that starts
@@ -245,7 +444,9 @@ fn read_heredoc(command: &str, operator: usize, pending: &mut Vec<Heredoc>) -> u
     }
 }
 
-/// The bytes that end a shell word.
+/// The bytes that end a shell word. A backtick is absent on purpose: whether
+/// it ends the word depends on the context, and the redirect reader decides
+/// that from the frame it is reading under.
 fn is_token_boundary(byte: u8) -> bool {
     matches!(
         byte,
@@ -253,11 +454,29 @@ fn is_token_boundary(byte: u8) -> bool {
     )
 }
 
+/// Whether this byte ends a shell word at offset end, counting a backtick only
+/// when it closes the backtick substitution the command is inside.
+fn ends_word(text: &[u8], end: usize, closes_backtick: bool) -> bool {
+    match text.get(end) {
+        None => true,
+        Some(b'`') => closes_backtick,
+        Some(byte) => is_token_boundary(*byte),
+    }
+}
+
 /// Read an output redirection at this offset. Returns where scanning continues
 /// and, when the target is a proven null device, the byte range of that
 /// target. A token qualifies only when it is exactly the device name followed
 /// by a word boundary: anything that continues the same word is a file name.
-fn redirect_target(text: &[u8], operator: usize) -> (usize, Option<(usize, usize)>) {
+///
+/// A quoted target that is not the device name is reported as no match with
+/// the scan resuming at the quote, because a substitution written inside the
+/// quotes still runs a command whose own redirects have to be read.
+fn redirect_target(
+    text: &[u8],
+    operator: usize,
+    closes_backtick: bool,
+) -> (usize, Option<(usize, usize)>) {
     let mut i = operator + 1;
     if text.get(i) == Some(&b'>') {
         i += 1;
@@ -265,17 +484,40 @@ fn redirect_target(text: &[u8], operator: usize) -> (usize, Option<(usize, usize
     while matches!(text.get(i), Some(b' ' | b'\t')) {
         i += 1;
     }
+    if matches!(text.get(i), Some(b'\'' | b'"')) {
+        let quote = text[i];
+        return quoted_target(text, i, quote, closes_backtick);
+    }
     let end = i + WINDOWS_NULL_DEVICE.len();
     let named =
         text.len() >= end && text[i..end].eq_ignore_ascii_case(WINDOWS_NULL_DEVICE.as_bytes());
-    let bounded = match text.get(end) {
-        None => true,
-        Some(byte) => is_token_boundary(*byte),
-    };
-    if named && bounded {
+    if named && ends_word(text, end, closes_backtick) {
         (end, Some((i, end)))
     } else {
         (i, None)
+    }
+}
+
+/// Read a redirect target the caller wrote in quotes. The quotes are the
+/// shell's syntax rather than part of the name it opens, so a quoted device
+/// name is the same device; the whole quoted token is the range replaced.
+fn quoted_target(
+    text: &[u8],
+    start: usize,
+    quote: u8,
+    closes_backtick: bool,
+) -> (usize, Option<(usize, usize)>) {
+    let body = start + 1;
+    let Some(offset) = text[body..].iter().position(|byte| *byte == quote) else {
+        return (text.len(), None);
+    };
+    let end = body + offset;
+    let after = end + 1;
+    let named = text[body..end].eq_ignore_ascii_case(WINDOWS_NULL_DEVICE.as_bytes());
+    if named && ends_word(text, after, closes_backtick) {
+        (after, Some((start, after)))
+    } else {
+        (start, None)
     }
 }
 

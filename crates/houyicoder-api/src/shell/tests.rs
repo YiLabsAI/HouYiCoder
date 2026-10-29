@@ -24,6 +24,11 @@ fn test_null_redirect_rewritten() {
         ("echo a >nul;", "echo a >/dev/null;"),
         ("(echo a >nul)", "(echo a >/dev/null)"),
         ("echo $(run >nul)", "echo $(run >/dev/null)"),
+        ("echo \"$(run >nul)\"", "echo \"$(run >/dev/null)\""),
+        ("echo `run >nul`", "echo `run >/dev/null`"),
+        ("echo x >'nul'", "echo x >/dev/null"),
+        ("echo x >\"nul\"", "echo x >/dev/null"),
+        ("echo >\"$(run >nul)\"", "echo >\"$(run >/dev/null)\""),
         ("find . | xargs cat >nul", "find . | xargs cat >/dev/null"),
         ("echo a >nul\r\n", "echo a >/dev/null\r\n"),
         ("echo a >nul>nul", "echo a >/dev/null>/dev/null"),
@@ -34,7 +39,8 @@ fn test_null_redirect_rewritten() {
 
 /// The same word where it is not a redirect target is data or a file name and
 /// keeps its spelling: an operand, a longer word that starts with it, a quoted
-/// target, an escaped operator, or a comment.
+/// word that is not the device name, a word a substitution continues, an
+/// escaped operator, or a comment.
 #[test]
 fn test_null_operand_untouched() {
     for command in [
@@ -43,8 +49,9 @@ fn test_null_operand_untouched() {
         "mv nul elsewhere",
         "echo x >nul.txt",
         "echo x > nul.log",
-        "echo x >'nul'",
-        "echo x >\"nul\"",
+        "echo x >'nul.txt'",
+        "echo x >\"nul log\"",
+        "echo >nul`date`",
         "echo \\>nul",
         "echo hi # >nul",
         "cmd 2>&1",
@@ -65,6 +72,52 @@ fn test_quoted_text_untouched() {
         ("echo \"a >nul b\" >nul", "echo \"a >nul b\" >/dev/null"),
     ] {
         assert_eq!(git_bash(command), expected, "for {command:?}");
+    }
+}
+
+/// A conditional test writes a comparison with the same operator a
+/// redirection uses, and the word after it is an operand, not a device.
+#[test]
+fn test_conditional_comparison_untouched() {
+    for command in ["[[ $a > nul ]]", "[[ $a >nul ]]", "[[ $a > \"nul\" ]]"] {
+        assert_eq!(git_bash(command), command, "for {command:?}");
+    }
+}
+
+/// The expression ends with its own delimiter; the command that follows it is
+/// command text again, and a device there is a target.
+#[test]
+fn test_scan_resumes_after_expression() {
+    for (command, expected) in [
+        (
+            "if [[ $a > nul ]]; then run >nul; fi",
+            "if [[ $a > nul ]]; then run >/dev/null; fi",
+        ),
+        ("[[ -n $(run >nul) ]]", "[[ -n $(run >/dev/null) ]]"),
+        (
+            "(( a > nul )) && run >nul",
+            "(( a > nul )) && run >/dev/null",
+        ),
+        (
+            "echo $(( (a + b) > nul )) >nul",
+            "echo $(( (a + b) > nul )) >/dev/null",
+        ),
+    ] {
+        assert_eq!(git_bash(command), expected, "for {command:?}");
+    }
+}
+
+/// An arithmetic expression spells a comparison the same way and is not a
+/// command line at all, wherever it appears.
+#[test]
+fn test_arithmetic_comparison_untouched() {
+    for command in [
+        "(( a > nul ))",
+        "echo $((a > nul))",
+        "echo \"$((a > nul))\"",
+        "[[ $((a > nul)) -gt 0 ]]",
+    ] {
+        assert_eq!(git_bash(command), command, "for {command:?}");
     }
 }
 
