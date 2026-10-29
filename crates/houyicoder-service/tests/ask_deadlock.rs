@@ -30,7 +30,7 @@ use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::run::{
-    ApprovalDecision, ApprovalRequest, ContentBlock, RunOutcome, StopReason,
+    ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock, RunOutcome, StopReason,
 };
 use houyicoder_protocol::llm::CompletionRequest;
 use houyicoder_protocol::llm::LlmEvent;
@@ -193,7 +193,7 @@ async fn test_reverse_request_permission_flow() {
                             call_id: ask_call_id,
                             approved: true,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await
@@ -324,7 +324,7 @@ async fn test_mid_ask_survives_status() {
                             call_id: ask_call_id,
                             approved: true,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await

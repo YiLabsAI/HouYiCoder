@@ -12,6 +12,7 @@ use houyicoder_permission::{
 };
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
+use houyicoder_protocol::frontend::run::ApprovalScope;
 
 use super::consent_rule_for;
 
@@ -57,6 +58,50 @@ pub(crate) enum AlwaysGrant {
     Rule(houyicoder_permission::Rule),
     /// Nothing durable: the call must be answered once.
     Once,
+}
+
+impl AlwaysGrant {
+    /// The lifetime the card states and the install keeps. A destination or a
+    /// git history rule lasts this session: the approval was about the work
+    /// in progress, and the git rule already carries that scope. A directory
+    /// capability outlives the session because the fence rehydrates it on the
+    /// next start, and the restore drops it once the directory no longer
+    /// names the same place. An ordinary command rule lands in the
+    /// machine-local store, where the workspace lifetime restores it and a
+    /// different checkout never inherits it.
+    pub(crate) fn scope(&self) -> Option<ApprovalScope> {
+        match self {
+            Self::Once => None,
+            Self::Network(_) => Some(ApprovalScope::Session),
+            Self::Directories => Some(ApprovalScope::Workspace),
+            Self::Rule(rule) => Some(match rule.scope {
+                Scope::Session => ApprovalScope::Session,
+                _ => ApprovalScope::Workspace,
+            }),
+        }
+    }
+}
+
+/// The shorter of two lifetimes. The client's choice decides the lifetime the
+/// install keeps, and it can only shorten what the grant plan allows; a client
+/// that names a longer one than the plan supports still installs the plan's
+/// lifetime.
+fn shorter(choice: ApprovalScope, allowed: ApprovalScope) -> ApprovalScope {
+    match (choice, allowed) {
+        (ApprovalScope::Once, _) | (_, ApprovalScope::Once) => ApprovalScope::Once,
+        (ApprovalScope::Session, _) | (_, ApprovalScope::Session) => ApprovalScope::Session,
+        _ => ApprovalScope::Workspace,
+    }
+}
+
+/// The lifetime an install keeps for this grant when the client chose choice:
+/// nothing when the choice is once or the grant has no lifetime, otherwise the
+/// shorter of the choice and the plan.
+pub(crate) fn installed_scope(grant: &AlwaysGrant, choice: ApprovalScope) -> ApprovalScope {
+    match grant.scope() {
+        Some(allowed) => shorter(choice, allowed),
+        None => ApprovalScope::Once,
+    }
 }
 
 /// The durable authorization an "always" verdict on this ask would install.
@@ -134,8 +179,12 @@ pub(crate) fn always_grant(
         }
         return AlwaysGrant::Once;
     }
+    // A remembered command is a preference about this machine's workspace,
+    // not a policy the repository should carry: it lands in the machine-local
+    // store, where the workspace lifetime can restore it and where a different
+    // checkout never inherits it.
     match consent_rule_for(tool_name, input) {
-        Some(rule) => AlwaysGrant::Rule(rule),
+        Some(rule) => AlwaysGrant::Rule(rule.with_scope(Scope::Local)),
         None => AlwaysGrant::Once,
     }
 }
@@ -159,27 +208,36 @@ fn directory_label(grants: &[BoundaryGrant]) -> Option<String> {
     }
 }
 
-/// The text the approval card shows after "don't ask again for". Every
-/// directory grant is named, because the install covers all of them.
+/// The text the approval card shows after "don't ask again for": the effect
+/// the choice authorizes and the lifetime it lasts. Every directory grant is
+/// named, because the install covers all of them. Naming the lifetime is what
+/// lets the user tell a session-long preference from a workspace-long one
+/// without knowing which store each lands in.
 fn always_label(grant: &AlwaysGrant, grants: &[BoundaryGrant]) -> Option<String> {
-    match grant {
-        AlwaysGrant::Once => None,
+    let effect = match grant {
+        AlwaysGrant::Once => return None,
         AlwaysGrant::Network(scopes) => match scopes.as_slice() {
-            [] => None,
-            [one] => Some(format!("{one} *")),
-            [first, second] => Some(format!("{first}, {second} *")),
+            [] => return None,
+            [one] => format!("{one} *"),
+            [first, second] => format!("{first}, {second} *"),
             [first, second, rest @ ..] => {
-                Some(format!("{first}, {second} (+{} more) *", rest.len()))
+                format!("{first}, {second} (+{} more) *", rest.len())
             }
         },
-        AlwaysGrant::Directories => directory_label(grants),
-        AlwaysGrant::Rule(rule) => Some(match &rule.content {
+        AlwaysGrant::Directories => directory_label(grants)?,
+        AlwaysGrant::Rule(rule) => match &rule.content {
             Some(RuleContent::Prefix(prefix)) => format!("{prefix} *"),
             Some(RuleContent::Exact(value)) => value.clone(),
             Some(RuleContent::Glob(pattern)) => pattern.clone(),
             None => rule.action.clone(),
-        }),
-    }
+        },
+    };
+    let lifetime = match grant.scope()? {
+        ApprovalScope::Session => "this session",
+        ApprovalScope::Workspace => "this workspace",
+        ApprovalScope::Once => return None,
+    };
+    Some(format!("{effect} ({lifetime})"))
 }
 
 /// The verdict options the card offers for this ask. The remember option is
@@ -196,16 +254,16 @@ pub(crate) fn approval_options(
         option_id: "allow_once".into(),
         name: "Allow once".into(),
         kind: PermissionOptionKind::AllowOnce,
+        scope: None,
         meta: None,
     }];
-    if let Some(label) = always_label(
-        &always_grant(tool_name, input, reason, fence, grants),
-        grants,
-    ) {
+    let grant = always_grant(tool_name, input, reason, fence, grants);
+    if let Some(label) = always_label(&grant, grants) {
         options.push(PermissionOption {
             option_id: "allow_always".into(),
             name: label,
             kind: PermissionOptionKind::AllowAlways,
+            scope: grant.scope(),
             meta: None,
         });
     }
@@ -213,6 +271,7 @@ pub(crate) fn approval_options(
         option_id: "reject_once".into(),
         name: "Reject once".into(),
         kind: PermissionOptionKind::RejectOnce,
+        scope: None,
         meta: None,
     });
     options

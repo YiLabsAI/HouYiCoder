@@ -16,7 +16,7 @@
 //! The submit view has a Submit-answers/Cancel select.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use serde_json::Value;
 
 use crate::ask_question_model::AskQuestion;
@@ -225,7 +225,7 @@ impl AskQuestion {
             call_id: self.call_id.clone(),
             approved: true,
             updated_input: Some(self.build_updated_input()),
-            scope: "once".to_string(),
+            scope: ApprovalScope::Once,
         })
     }
 
@@ -241,7 +241,7 @@ impl AskQuestion {
             call_id: self.call_id.clone(),
             approved: true,
             updated_input: Some(input),
-            scope: "once".to_string(),
+            scope: ApprovalScope::Once,
         })
     }
 }

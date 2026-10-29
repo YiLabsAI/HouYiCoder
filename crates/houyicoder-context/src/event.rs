@@ -381,9 +381,9 @@ pub enum SessionEvent {
         text: String,
     },
     /// A durable permission verdict: the human approved or denied a tool call.
-    /// call_id links to the ToolCall the verdict answers. scope describes the
-    /// breadth of the approval (once / prefix:* / session) so the audit trail
-    /// records not just the yes/no but how far the consent reaches. This event
+    /// call_id links to the ToolCall the verdict answers. scope is the lifetime
+    /// the answer kept (once / session / workspace), so the audit trail records
+    /// not just the yes/no but how far the consent reaches. This event
     /// is audit-only: readers skip it (the approval popup + its resolution
     /// are already visible in the transcript; this is the durable record).
     PermissionDecision {

@@ -33,7 +33,7 @@ use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::run::DelegationSource;
 use houyicoder_protocol::frontend::run::StopReason;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest};
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ApprovalScope};
 use houyicoder_protocol::frontend::run::{ContentBlock, RunError, RunOutcome, RunResult};
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use houyicoder_protocol::frontend::trust::TrustPrompt;
@@ -298,7 +298,7 @@ fn test_approve_yes_executes_tool() {
         call_id,
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
 
     let mut settled = false;
@@ -355,7 +355,7 @@ fn test_reject_does_not_execute() {
         call_id,
         approved: false,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
 
     let mut settled = false;
@@ -691,7 +691,7 @@ fn test_resume_after_approval() {
         call_id,
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
     let mut got2 = false;
     for _ in 0..200 {
@@ -727,7 +727,7 @@ fn test_resolve_clears_thinking_window() {
         call_id: "c1".into(),
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
     let p = app.run_progress().expect("active run");
     assert_eq!(p.live_block, LiveBlock::None);

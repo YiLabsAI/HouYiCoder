@@ -7,7 +7,7 @@ use crate::frontend::model::{
     FastModeAvailability, ModelCatalog, ModelCatalogEntry, ModelChoice, ModelDisplayCapabilities,
     PersistenceOutcome, ResolvedModel, SpeedMode,
 };
-use crate::frontend::run::{ApprovalDecision, ApprovalRequest};
+use crate::frontend::run::{ApprovalDecision, ApprovalRequest, ApprovalScope};
 use crate::frontend::trust::TrustAccept;
 use crate::frontend::trust::TrustPrompt;
 use crate::frontend::trust::TrustRisk;
@@ -30,7 +30,7 @@ fn sample_decision() -> ApprovalDecision {
         call_id: "toolu_1".into(),
         approved: true,
         updated_input: None,
-        scope: "once".into(),
+        scope: ApprovalScope::Once,
     }
 }
 

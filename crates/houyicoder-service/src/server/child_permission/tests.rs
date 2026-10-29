@@ -19,7 +19,7 @@ use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::framing::encode;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ async fn test_handle_routes_ask_response() {
                 call_id: "call-1".into(),
                 approved: true,
                 updated_input: None,
-                scope: "once".to_string(),
+                scope: ApprovalScope::Once,
             }),
         ));
         client_tx

@@ -30,7 +30,9 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::permission::PermissionMode as ProtocolPermissionMode;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
+use houyicoder_protocol::frontend::run::{
+    ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock,
+};
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, ModelCapabilities, OutputItem, ProviderError, Usage,
@@ -336,7 +338,7 @@ async fn test_cycle_during_resume() {
             call_id: ask_call_id,
             approved: true,
             updated_input: None,
-            scope: "once".to_string(),
+            scope: ApprovalScope::Once,
         }),
     );
     send_frame(&mut client_tx, &ClientFrame::Response(decision)).await;

@@ -8,7 +8,7 @@ use crate::records::APPROVAL_OPTIONS;
 use crate::records::Approval;
 use crate::state::App;
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 
 /// Display order of the three built-in approval options, the canonical
 /// layout: Yes, then Yes-don't-ask, then No. The selected index
@@ -28,14 +28,21 @@ pub(super) fn option_count(a: &Approval) -> usize {
     }
 }
 
-/// The wire scope of the focused approval choice. Entitlement approval
-/// always persists to the user grant store, so its allow choice must not
-/// claim one-shot scope.
-pub(crate) fn approval_scope(a: &Approval) -> &'static str {
+/// The lifetime the focused approval choice asks for. The server declared one
+/// on the options it offered, and that declaration is the authority: it was
+/// computed from what the ask can actually install. The card built without a
+/// server list falls back to the workspace lifetime for its remember option,
+/// which the server then keeps no longer than its plan allows. An entitlement
+/// approval writes the user grant store, so its approving choice keeps the
+/// widest lifetime as well.
+pub(crate) fn approval_scope(a: &Approval) -> ApprovalScope {
+    if let Some(declared) = a.focused_scope() {
+        return declared;
+    }
     if a.focused_persists() || (a.is_entitlement() && a.focused_approves()) {
-        "always"
+        ApprovalScope::Workspace
     } else {
-        "once"
+        ApprovalScope::Once
     }
 }
 
@@ -127,15 +134,15 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
             if app.sessions.current.connection.is_some() {
                 // Ship the verdict over the wire as a reverse response; the
                 // server drives runner.resume, records the audit event, and,
-                // when scope is "always", computes the bash command prefix
-                // from the approval's own tool and input, and applies a scoped
-                // always-allow rule to the gate. The prefix scoping lives
+                // when the scope outlives the call, computes the bash command
+                // prefix from the approval's own tool and input, and applies
+                // a scoped allow rule to the gate. The prefix scoping lives
                 // server-side so the TUI never imports the permission crate.
                 app.resolve_current_approval(ApprovalDecision {
                     call_id,
                     approved,
                     updated_input: None,
-                    scope: scope.to_string(),
+                    scope,
                 });
             } else {
                 app.sessions.current.clear_prompt();
@@ -162,7 +169,7 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
                     call_id,
                     approved: false,
                     updated_input: None,
-                    scope: "once".to_string(),
+                    scope: ApprovalScope::Once,
                 });
             } else {
                 app.sessions.current.clear_prompt();

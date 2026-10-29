@@ -19,6 +19,7 @@ use super::line_wrap::{truncate_width, wrap_line};
 use super::navigation::key_hint;
 use crate::state::App;
 use houyicoder_protocol::frontend::permission::AskSource;
+use houyicoder_protocol::frontend::run::ApprovalScope;
 
 mod args;
 
@@ -341,12 +342,49 @@ fn render_options(f: &mut Frame, a: &Approval, rows: &mut CardRows) {
             option_number(a, selected),
             option_label(a, selected),
         );
+        let suffix = if selected == 2 {
+            remember_lifetime(a)
+        } else {
+            None
+        };
         let slot = rows.take(1);
         f.render_widget(
-            Paragraph::new(truncate_width(&row, slot.width as usize)).style(option_style(focused)),
+            Paragraph::new(fit_option_row(&row, suffix, slot.width as usize))
+                .style(option_style(focused)),
             slot,
         );
     }
+}
+
+/// The lifetime the remember option states, spelled as the server spells it
+/// on the label. The client renders this tail itself so the clipping below can
+/// reserve its width; a card from a server that declared no lifetime has no
+/// tail to keep.
+fn remember_lifetime(a: &Approval) -> Option<&'static str> {
+    match a.remember_scope()? {
+        ApprovalScope::Session => Some(" (this session)"),
+        ApprovalScope::Workspace => Some(" (this workspace)"),
+        ApprovalScope::Once => None,
+    }
+}
+
+/// Clip an option row to its slot while keeping the declared lifetime whole.
+/// The lifetime is the one part of the remember row the user has to read to
+/// choose it, and the tail is what clipping drops first; shortening the
+/// effect instead leaves both the scope and the fact that the row continues.
+fn fit_option_row(row: &str, suffix: Option<&str>, width: usize) -> String {
+    let Some(suffix) = suffix.filter(|tail| row.ends_with(tail)) else {
+        return truncate_width(row, width);
+    };
+    let tail_width = suffix.chars().count();
+    let Some(head_width) = width.checked_sub(tail_width) else {
+        return truncate_width(row, width);
+    };
+    if head_width == 0 {
+        return truncate_width(row, width);
+    }
+    let head = &row[..row.len() - suffix.len()];
+    format!("{}{suffix}", truncate_width(head, head_width))
 }
 
 /// The option indexes in the order the card prints them. The entrance

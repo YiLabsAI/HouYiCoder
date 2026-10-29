@@ -14,6 +14,7 @@ use houyicoder_permission::ModeGate;
 use houyicoder_permission::{DefaultModeGate, Outcome, ToolRequest};
 use houyicoder_protocol::envelope::ResponsePayload;
 use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
+use houyicoder_protocol::frontend::run::ApprovalScope;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
@@ -89,6 +90,7 @@ fn test_git_consent_skips_rule() {
         &serde_json::json!({"command": "git commit -m x"}),
         Some(&detection_reason()),
         &[],
+        ApprovalScope::Workspace,
     );
     assert_eq!(
         durable(&gate),
@@ -101,6 +103,7 @@ fn test_git_consent_skips_rule() {
         &serde_json::json!({"command": "npm install"}),
         Some(&detection_reason()),
         &[],
+        ApprovalScope::Workspace,
     );
     assert_eq!(durable(&gate), 1, "non-git command becomes a durable rule");
 }
@@ -134,6 +137,7 @@ fn test_network_consent_remembers_host() {
         &serde_json::json!({"command": first}),
         Some(&network_reason()),
         &[],
+        ApprovalScope::Workspace,
     );
     assert_eq!(decide(first), Outcome::Allow);
     assert_eq!(decide(second), Outcome::Allow);
@@ -145,6 +149,7 @@ fn test_network_consent_remembers_host() {
         &serde_json::json!({"command": download}),
         Some(&network_reason()),
         &[],
+        ApprovalScope::Workspace,
     );
     assert_eq!(decide(download), Outcome::Ask);
 }
@@ -168,7 +173,8 @@ fn test_card_offers_destination() {
         .iter()
         .find(|o| o.option_id == "allow_always")
         .expect("remember option offered");
-    assert_eq!(always.name, "curl https://api.github.com *");
+    assert_eq!(always.name, "curl https://api.github.com * (this session)");
+    assert_eq!(always.scope, Some(ApprovalScope::Session));
 
     let options = approval_options(
         "bash",

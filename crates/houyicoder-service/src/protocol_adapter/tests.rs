@@ -12,6 +12,7 @@ use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRe
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::{AskSource, RuleDestination};
+use houyicoder_protocol::frontend::run::ApprovalScope;
 use houyicoder_protocol::llm::ProviderError;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -95,7 +96,7 @@ fn test_remember_names_grant_dir() {
     let reason = AskReason {
         source: AskSource::Detection,
         validator: "path-bounds".to_string(),
-        detail: "path outside the workspace; approval authorizes parent directory /work/repo/wiki/review with read-write access; choosing always persists it".into(),
+        detail: "path outside the workspace; approval authorizes parent directory /work/repo/wiki/review with read-write access".into(),
         containment_note: None,
     };
     assert!(matches!(
@@ -107,7 +108,28 @@ fn test_remember_names_grant_dir() {
         .iter()
         .find(|o| o.option_id == "allow_always")
         .expect("allow_always option present");
-    assert_eq!(always.name, "/data/granted");
+    assert_eq!(always.name, "/data/granted (this workspace)");
+    assert_eq!(always.scope, Some(ApprovalScope::Workspace));
+
+    // A client's choice can shorten the lifetime the ask offers, never lengthen
+    // it: a workspace answer on a session-scoped plan keeps the session, and a
+    // workspace answer on a plan with no durable grant keeps nothing.
+    let session_plan = AlwaysGrant::Network(vec!["api.github.com *".into()]);
+    assert_eq!(
+        installed_scope(&session_plan, ApprovalScope::Workspace),
+        ApprovalScope::Session,
+        "a workspace answer cannot outlive a session-scoped plan"
+    );
+    assert_eq!(
+        installed_scope(&session_plan, ApprovalScope::Once),
+        ApprovalScope::Once,
+        "a once answer keeps nothing"
+    );
+    assert_eq!(
+        installed_scope(&AlwaysGrant::Once, ApprovalScope::Workspace),
+        ApprovalScope::Once,
+        "a plan with no durable grant keeps nothing at any choice"
+    );
 
     // An ask with no grant offers no remember option: the card cannot promise
     // a scope the durable store would never receive.
@@ -146,7 +168,8 @@ fn test_remember_names_both_dirs() {
         .iter()
         .find(|o| o.option_id == "allow_always")
         .expect("allow_always option present");
-    assert_eq!(always.name, "/data/a, /data/b");
+    assert_eq!(always.name, "/data/a, /data/b (this workspace)");
+    assert_eq!(always.scope, Some(ApprovalScope::Workspace));
 }
 
 /// A recovered ask carries no gate reason, so the disclosure writes one from
@@ -172,7 +195,8 @@ fn test_recovered_ask_names_dir() {
         .iter()
         .find(|o| o.option_id == "allow_always")
         .expect("the disclosed directory can be remembered");
-    assert_eq!(always.name, "/data/outside");
+    assert_eq!(always.name, "/data/outside (this workspace)");
+    assert_eq!(always.scope, Some(ApprovalScope::Workspace));
 }
 
 /// Every durable turn-event kind maps to a session update, an ACPX

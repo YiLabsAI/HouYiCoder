@@ -43,7 +43,7 @@ use crate::diagnostics::DiagnosticsHandle;
 use crate::diagnostics::handle;
 use crate::lifecycle::PendingPermission;
 use crate::lifecycle::PendingTurn;
-use crate::protocol_adapter::{AlwaysGrant, always_grant};
+use crate::protocol_adapter::{AlwaysGrant, always_grant, installed_scope};
 pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
@@ -53,8 +53,10 @@ use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
     RunOutcome, RunResult,
 };
+use houyicoder_permission::Scope;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::frontend::permission::AskReason;
+use houyicoder_protocol::frontend::run::ApprovalScope;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -293,35 +295,54 @@ impl Server {
         id
     }
 
-    /// Apply a Yes-don't-ask consent when the client approves a tool call with
-    /// scope "always". The server owns the approval (tool name + input Value
+    /// Apply whatever a remembered verdict authorizes, bounded by the lifetime
+    /// the client chose. The server owns the approval (tool name + input Value
     /// the engine raised the interruption with), so the command is classified
-    /// here — not in the frontend. git-checkpoint ops (git commit/rebase/reset/
+    /// here, not in the frontend. git-checkpoint ops (git commit/rebase/reset/
     /// tag) route to a session-scope allow rule that shadows the builtin ask
-    /// rule for that subcommand this session (cleared on restart, like the
-    /// reference's session rule source); a remembered network destination
-    /// becomes a session entry in the gate's egress allowlist; everything else
-    /// becomes a durable allow rule. A compound/un-scopable bash command yields
-    /// no rule (approved once only). A directory grant is installed and
-    /// persisted by the caller, which holds the capabilities the card named.
+    /// rule for that subcommand this session; a remembered network destination
+    /// becomes an entry in the gate's egress allowlist; everything else becomes
+    /// an allow rule in the store the workspace lifetime restores. A compound
+    /// command yields no rule, so it is approved once only. A choice shorter
+    /// than the plan installs the shorter lifetime, and a once choice installs
+    /// nothing. A directory grant is installed by the caller, which holds the
+    /// capabilities the card named.
     fn apply_consent_rule(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
         reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
+        choice: ApprovalScope,
     ) {
-        match always_grant(tool_name, input, reason, self.card_fence(), grants) {
-            AlwaysGrant::Once => {}
-            AlwaysGrant::Network(scopes) => {
-                for scope in scopes {
-                    self.gate.add_egress_allow(&scope);
+        let grant = always_grant(tool_name, input, reason, self.card_fence(), grants);
+        self.apply_install(&grant, installed_scope(&grant, choice));
+    }
+
+    /// Install the rule or destinations a grant plan keeps, at the lifetime
+    /// the caller already reduced to what the plan allows. A directory plan
+    /// installs nothing here: its capability is the fence, and the caller
+    /// installs it directly.
+    fn apply_install(&self, grant: &AlwaysGrant, lifetime: ApprovalScope) {
+        match lifetime {
+            ApprovalScope::Once => {}
+            _ => match grant {
+                AlwaysGrant::Once | AlwaysGrant::Directories => {}
+                AlwaysGrant::Network(destinations) => {
+                    for destination in destinations {
+                        self.gate.add_egress_allow(destination);
+                    }
                 }
-            }
-            // The caller installs and persists a directory capability with
-            // the access the card disclosed; there is no rule left to save.
-            AlwaysGrant::Directories => {}
-            AlwaysGrant::Rule(rule) => self.gate.add_rule(rule),
+                AlwaysGrant::Rule(rule) => {
+                    // The plan chose the store the rule belongs in; the
+                    // client's session choice keeps it in memory instead.
+                    let scope = match lifetime {
+                        ApprovalScope::Session => Scope::Session,
+                        _ => rule.scope,
+                    };
+                    self.gate.add_rule(rule.clone().with_scope(scope));
+                }
+            },
         }
     }
 

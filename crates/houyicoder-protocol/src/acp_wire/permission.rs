@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::Meta;
+use crate::frontend::run::ApprovalScope;
 use crate::frontend::session_update::ToolCallUpdate;
 
 /// The kind of a permission option a client may pick: allow/reject, once or
@@ -31,6 +32,13 @@ pub struct PermissionOption {
     pub option_id: String,
     pub name: String,
     pub kind: PermissionOptionKind,
+    /// The lifetime choosing this option installs, when it installs one. Once
+    /// and reject options carry none, and an option produced by a peer that
+    /// predates this field decodes as none, so a client never reads a lifetime
+    /// out of the label text. Additive: a peer that does not know the field
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ApprovalScope>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<Meta>,
 }

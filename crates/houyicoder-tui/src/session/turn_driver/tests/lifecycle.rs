@@ -19,7 +19,9 @@ use futures::stream::iter;
 use futures::stream::pending;
 use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, StopReason};
+use houyicoder_protocol::frontend::run::{
+    ApprovalDecision, ApprovalRequest, ApprovalScope, StopReason,
+};
 use houyicoder_protocol::llm::CompletionRequest;
 use houyicoder_protocol::llm::LlmEvent;
 use houyicoder_protocol::llm::ModelCapabilities;
@@ -110,7 +112,7 @@ fn test_one_at_a_time() {
         call_id: first_id.clone(),
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
 
     // Wait for the second approval card (the core re-interrupts).
@@ -141,7 +143,7 @@ fn test_one_at_a_time() {
         call_id: second_id,
         approved: false,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
 
     // Wait for the run to finish (model emits the final text).
@@ -775,7 +777,7 @@ fn test_ask_preserves_start() {
         call_id: "c1".into(),
         approved: true,
         updated_input: None,
-        scope: "once".into(),
+        scope: ApprovalScope::Once,
     });
     assert_eq!(
         app.run_started(),
@@ -804,7 +806,7 @@ fn test_resolve_resumes_run() {
         call_id: "c1".into(),
         approved: true,
         updated_input: None,
-        scope: "once".into(),
+        scope: ApprovalScope::Once,
     });
     assert!(
         app.agent_busy(),
@@ -833,7 +835,7 @@ fn test_ask_preserves_progress() {
         call_id: "c2".into(),
         approved: true,
         updated_input: None,
-        scope: "once".into(),
+        scope: ApprovalScope::Once,
     });
 
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
@@ -987,7 +989,7 @@ fn test_cycles_preserve_start() {
             call_id: format!("c{round}"),
             approved: true,
             updated_input: None,
-            scope: "once".into(),
+            scope: ApprovalScope::Once,
         });
         assert_eq!(
             app.run_started(),

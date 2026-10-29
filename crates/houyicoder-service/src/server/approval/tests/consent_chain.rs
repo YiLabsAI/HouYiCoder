@@ -18,7 +18,9 @@ use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
 use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
+use houyicoder_protocol::frontend::run::{
+    ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock,
+};
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId as WireSessionId};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_provider::FakeProvider;
@@ -143,7 +145,7 @@ async fn approve_once_and_finish(
                             call_id,
                             approved: true,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await
@@ -219,7 +221,7 @@ async fn test_new_file_consent_writes() {
         containment_note: None,
     };
     server
-        .route_consent("write", &input, "once", Some(&reason))
+        .route_consent("write", &input, ApprovalScope::Once, Some(&reason))
         .expect("install write capability");
     session
         .write_file(&target.to_string_lossy(), b"{\"model\":{}}".to_vec())
@@ -232,7 +234,7 @@ async fn test_new_file_consent_writes() {
     let deep = other.join("new-dir/sub/deep.json");
     let deep_input = json!({"path": deep.to_string_lossy()});
     let error = server
-        .route_consent("write", &deep_input, "once", Some(&reason))
+        .route_consent("write", &deep_input, ApprovalScope::Once, Some(&reason))
         .expect_err("a missing parent cannot receive a directory capability");
     assert!(matches!(error, SandboxError::NotFound(_)));
     assert!(
@@ -355,7 +357,7 @@ fn test_resume_server_restores_sandbox() {
         containment_note: None,
     };
     server
-        .route_consent("edit", &input, "once", Some(&reason))
+        .route_consent("edit", &input, ApprovalScope::Once, Some(&reason))
         .expect("reattached server installs the directory capability");
     sandbox
         .resolve_write(&target.to_string_lossy())

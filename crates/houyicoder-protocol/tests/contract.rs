@@ -16,7 +16,7 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::{FrameDecoder, encode};
 use houyicoder_protocol::frontend::{
     FrontendEvent, FrontendRequest, SessionId,
-    run::{ApprovalDecision, ApprovalRequest, ContentBlock},
+    run::{ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock},
 };
 use houyicoder_protocol::handshake::{Hello, PROTOCOL_VERSION, negotiate};
 use serde::de::DeserializeOwned;
@@ -38,7 +38,7 @@ fn sample_approval_decision() -> ApprovalDecision {
         call_id: "toolu_1".into(),
         approved: true,
         updated_input: None,
-        scope: "once".into(),
+        scope: ApprovalScope::Once,
     }
 }
 
@@ -60,6 +60,25 @@ where
     let back: T = serde_json::from_str(frame1.strip_suffix('\n').unwrap()).expect("decode");
     let frame2 = encode(&back).expect("re-encode");
     assert_eq!(frame1, frame2, "{label}: re-encode must be bit-identical");
+}
+
+/// An approval decision answers with one of the three lifetimes. The
+/// free-form spellings a previous protocol version accepted do not decode,
+/// which is why the wire version advanced with this change: a peer that still
+/// sends them is refused at the handshake instead of having its answer
+/// dropped while the ask waits.
+#[test]
+fn test_legacy_approval_scope_rejected() {
+    let legacy = serde_json::json!({
+        "type": "permission",
+        "call_id": "toolu_1",
+        "approved": true,
+        "scope": "always",
+    });
+    assert!(
+        serde_json::from_value::<ApprovalDecision>(legacy).is_err(),
+        "a free-form scope must not decode into a lifetime"
+    );
 }
 
 /// The Hello frame round-trips, and a matching peer negotiates cleanly. A

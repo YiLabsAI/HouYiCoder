@@ -16,7 +16,9 @@ pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;
-pub(crate) use always_grant::{AlwaysGrant, CardFence, always_grant, approval_options};
+pub(crate) use always_grant::{
+    AlwaysGrant, CardFence, always_grant, approval_options, installed_scope,
+};
 #[cfg(test)]
 pub(crate) use always_grant::{FENCED, UNFENCED};
 use houyicoder_api::sandbox::BoundaryGrant;
@@ -360,10 +362,11 @@ pub(crate) fn permission_mode_from_wire(
     }
 }
 
-/// Build a Yes-don't-ask consent rule when the human approves with scope
-/// "always". Bash-family tools scope to a command prefix (compound/destructive
-/// commands → None, approved this once only); the skill tool scopes to the
-/// skill name at Local scope; other tools get a content-less rule.
+/// Build the durable rule a remember answer on this call installs. Bash-family
+/// tools scope to a command prefix (compound or destructive commands yield
+/// None, so the call is approved this once only); the skill tool scopes to the
+/// skill name; other tools get a content-less rule. The caller decides the
+/// lifetime and the store, not this function.
 pub(crate) fn consent_rule_for(
     tool_name: &str,
     input: &serde_json::Value,
@@ -656,31 +659,38 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
 /// The four verdict options the agent offers on every permission ask. The
 /// option ids are stable strings so the server maps a selected id back to an
 /// approved/rejected verdict without stashing the offered list per ask. The
-/// names track the wire wording so a stock client renders them verbatim.
+/// names track the wire wording so a stock client renders them verbatim. No
+/// option states a lifetime: this set is built without the ask's plan, and a
+/// client that picks the remember option leaves the lifetime to the server,
+/// which keeps it no longer than the plan allows.
 pub(crate) fn standard_permission_options() -> Vec<PermissionOption> {
     vec![
         PermissionOption {
             option_id: "allow_once".into(),
             name: "Allow once".into(),
             kind: PermissionOptionKind::AllowOnce,
+            scope: None,
             meta: None,
         },
         PermissionOption {
             option_id: "allow_always".into(),
             name: "Always allow".into(),
             kind: PermissionOptionKind::AllowAlways,
+            scope: None,
             meta: None,
         },
         PermissionOption {
             option_id: "reject_once".into(),
             name: "Reject once".into(),
             kind: PermissionOptionKind::RejectOnce,
+            scope: None,
             meta: None,
         },
         PermissionOption {
             option_id: "reject_always".into(),
             name: "Always reject".into(),
             kind: PermissionOptionKind::RejectAlways,
+            scope: None,
             meta: None,
         },
     ]

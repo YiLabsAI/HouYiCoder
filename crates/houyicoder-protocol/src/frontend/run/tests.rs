@@ -109,7 +109,7 @@ fn test_decision_round_trips() {
         call_id: "c1".to_string(),
         approved: false,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     };
     let json = serde_json::to_string(&d).expect("serialize");
     let back: ApprovalDecision = serde_json::from_str(&json).expect("deserialize");

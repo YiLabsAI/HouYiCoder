@@ -26,8 +26,8 @@ use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
 use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
@@ -310,7 +310,7 @@ async fn test_client_closed_during_resume() {
                 call_id,
                 approved: true,
                 updated_input: None,
-                scope: "once".to_string(),
+                scope: ApprovalScope::Once,
             }),
         )),
     );

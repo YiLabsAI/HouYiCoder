@@ -14,6 +14,7 @@ use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::{PermissionEffect, PermissionMode};
+use houyicoder_protocol::frontend::run::ApprovalScope;
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
@@ -268,10 +269,12 @@ fn test_entitlement_r_rejects() {
     );
 }
 
+/// An entitlement card carries no option that declares a lifetime; answering
+/// it yes persists the service grant, so the derived scope is the workspace.
 #[test]
-fn test_entitlement_scope_always() {
+fn test_entitlement_yes_persists_grant() {
     let approval = entitlement_approval();
-    assert_eq!(approval_scope(&approval), "always");
+    assert_eq!(approval_scope(&approval), ApprovalScope::Workspace);
 }
 
 fn entitlement_approval() -> Approval {
@@ -300,18 +303,21 @@ fn scoped_approval() -> Approval {
                 option_id: "allow_once".into(),
                 name: "Allow once".into(),
                 kind: PermissionOptionKind::AllowOnce,
+                scope: None,
                 meta: None,
             },
             PermissionOption {
                 option_id: "allow_always".into(),
                 name: "npm test *".into(),
                 kind: PermissionOptionKind::AllowAlways,
+                scope: Some(ApprovalScope::Session),
                 meta: None,
             },
             PermissionOption {
                 option_id: "reject_once".into(),
                 name: "Reject once".into(),
                 kind: PermissionOptionKind::RejectOnce,
+                scope: None,
                 meta: None,
             },
         ],
@@ -341,7 +347,7 @@ fn test_first_yes_selects_once() {
     assert_eq!(a.selected, 0, "1 focuses Yes");
     assert_eq!(
         approval_scope(a),
-        "once",
+        ApprovalScope::Once,
         "the first Yes covers the call under review only"
     );
     let text = render_text(&app, 100, 32);
@@ -352,15 +358,15 @@ fn test_first_yes_selects_once() {
     );
 }
 
-/// The second Yes is the durable verdict: it carries the scope the server
+/// The second Yes is the durable verdict: it carries the lifetime the server
 /// named, and it is the row the user sees focused.
 #[test]
-fn test_second_yes_selects_always() {
+fn test_second_yes_keeps_scope() {
     let mut app = approval_app(scoped_approval());
     press(&mut app, '2');
     let a = app.approval().expect("approval");
     assert_eq!(a.selected, 2, "2 focuses the durable verdict, not No");
-    assert_eq!(approval_scope(a), "always");
+    assert_eq!(approval_scope(a), ApprovalScope::Session);
     let text = render_text(&app, 100, 32);
     assert!(
         text.contains("❯ 2. Yes, and don't ask again for npm test *"),
@@ -381,7 +387,11 @@ fn test_two_option_second_rejects() {
     press(&mut app, '2');
     let a = app.approval().expect("approval");
     assert_eq!(a.selected, 1, "the second row is No");
-    assert_eq!(approval_scope(a), "once", "no durable scope can be sent");
+    assert_eq!(
+        approval_scope(a),
+        ApprovalScope::Once,
+        "no durable scope can be sent"
+    );
     let text = render_text(&app, 100, 32);
     assert!(text.contains("❯ 2. No"), "No is the focused row:\n{text}");
     assert!(

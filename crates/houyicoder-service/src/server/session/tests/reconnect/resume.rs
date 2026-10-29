@@ -48,12 +48,12 @@ async fn test_reconnect_resumes_interruption() {
                     _ => panic!("expected the re-emitted ask"),
                 };
                 answered_call_ids.push(call_id.clone());
-                // First verdict carries scope=always so the consent rule runs;
-                // the second is a plain once-scope approve.
+                // First verdict carries the workspace lifetime so the consent
+                // rule runs; the second is a plain once-scope approve.
                 let scope = if answered_call_ids.len() == 1 {
-                    "always"
+                    ApprovalScope::Workspace
                 } else {
-                    "once"
+                    ApprovalScope::Once
                 };
                 client2
                     .send_reverse_response(
@@ -62,7 +62,7 @@ async fn test_reconnect_resumes_interruption() {
                             call_id,
                             approved: true,
                             updated_input: None,
-                            scope: scope.to_string(),
+                            scope,
                         }),
                     )
                     .await
@@ -145,7 +145,7 @@ async fn test_deny_verdict_completes_run() {
                             call_id,
                             approved: false,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await

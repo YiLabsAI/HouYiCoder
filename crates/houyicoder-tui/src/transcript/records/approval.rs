@@ -3,7 +3,7 @@
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::AskSource;
-use houyicoder_protocol::frontend::run::DelegationSource;
+use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
 
 /// Tool-approval prompt state. Three options: approve, reject, or
 /// always-allow (approve + add a permission rule so the same tool no
@@ -123,6 +123,28 @@ impl Approval {
             1 => PermissionOptionKind::RejectOnce,
             _ => PermissionOptionKind::AllowAlways,
         }
+    }
+
+    /// The lifetime the server declared for the focused option, when it
+    /// declared one. The server computed it from the ask's plan, so a client
+    /// reads it instead of guessing; a card the server did not fill in has no
+    /// declaration and the caller falls back to its own reading.
+    pub fn focused_scope(&self) -> Option<ApprovalScope> {
+        let kind = self.focused_kind();
+        self.options
+            .iter()
+            .find(|option| option.kind == kind)
+            .and_then(|option| option.scope)
+    }
+
+    /// The lifetime the remember option declares, independent of which row is
+    /// focused. The card prints it as a tail on that row and must keep it
+    /// readable when the row is clipped.
+    pub fn remember_scope(&self) -> Option<ApprovalScope> {
+        self.options
+            .iter()
+            .find(|option| matches!(option.kind, PermissionOptionKind::AllowAlways))
+            .and_then(|option| option.scope)
     }
 
     /// The built-in 3-option index whose kind matches.

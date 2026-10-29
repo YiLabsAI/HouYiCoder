@@ -49,7 +49,7 @@ async fn test_reconnect_replays_queued_input() {
 
     let (mut client2, serve2) = attach_client(host.clone(), session);
     client2.connect().await.expect("second handshake");
-    approve_reemit_ask(&mut client2, "once").await;
+    approve_reemit_ask(&mut client2, ApprovalScope::Once).await;
 
     timeout(Duration::from_secs(2), entered.notified())
         .await

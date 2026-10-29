@@ -20,10 +20,13 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
-use houyicoder_protocol::frontend::run::{ApprovalDecision, DelegationSource};
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope, DelegationSource};
 
 use crate::composition::ContainmentAdapter;
-use crate::protocol_adapter::{CardFence, build_approval_request, parse_approval_decision};
+use crate::protocol_adapter::{
+    AlwaysGrant, CardFence, always_grant, build_approval_request, installed_scope,
+    parse_approval_decision,
+};
 
 use super::{Server, frame_carrier::FrameCarrier, now_millis};
 
@@ -136,12 +139,50 @@ impl Server {
                 ));
             }
         };
-        // Record the durable PermissionDecision audit event before resume
-        // applies the decision. The engine resume path appends only the
-        // ToolResult, never the verdict, so the verdict trail would be lost
-        // over the wire without this append. The scope the client chose rides
-        // the wire decision; the tool name + call_id come from the ask the
-        // server sent.
+        self.settle_answer(
+            approval,
+            &decision,
+            reason.as_ref(),
+            &directory_grants,
+            is_entitlement,
+        )
+        .await?;
+        // Move this ask from remaining into decided so a mid-batch disconnect
+        // re-emits only the tail and the runner resumes with the full decided
+        // set.
+        if let Some(host) = &self.host {
+            host.store().advance_pending(self.session, decision.clone());
+        }
+        Ok(parse_approval_decision(decision))
+    }
+
+    /// Record the durable verdict and install what the answer keeps. The
+    /// lifetime decided here is the one both the record and the install use:
+    /// the client's choice can shorten the plan the ask derived but never
+    /// lengthen it, so recording the raw choice would claim a grant the
+    /// install did not make. A denial keeps nothing, and an entitlement names
+    /// its own grant in the engine's apply path, which this router does not
+    /// run.
+    pub(super) async fn settle_answer(
+        &self,
+        approval: &EngineApprovalRequest,
+        decision: &ApprovalDecision,
+        reason: Option<&AskReason>,
+        grants: &[BoundaryGrant],
+        is_entitlement: bool,
+    ) -> Result<(), ProtocolError> {
+        let grant = self.consent_plan(&approval.tool_name, &approval.input, reason, grants);
+        let lifetime = if !decision.approved {
+            ApprovalScope::Once
+        } else if is_entitlement {
+            decision.scope
+        } else {
+            installed_scope(&grant, decision.scope)
+        };
+        // Record the durable PermissionDecision ahead of the resume. The
+        // engine resume path appends only the ToolResult, never the verdict,
+        // so the verdict trail would be lost over the wire without this
+        // append. The tool name + call_id come from the ask the server sent.
         let verdict = if decision.approved {
             PermissionVerdict::Approved
         } else {
@@ -156,9 +197,9 @@ impl Server {
                 call_id: approval.call_id.clone(),
                 tool: approval.tool_name.clone(),
                 verdict,
-                scope: decision.scope.clone(),
-                validator: reason.as_ref().map(|r| r.validator.to_string()),
-                reason: reason.as_ref().map(|r| r.detail.clone()),
+                scope: lifetime.as_str().to_string(),
+                validator: reason.map(|r| r.validator.to_string()),
+                reason: reason.map(|r| r.detail.clone()),
             },
         };
         if let Err(e) = self.runner.store().append(audit).await {
@@ -167,20 +208,14 @@ impl Server {
             // trail.
             tracing::warn!("permission-decision audit append failed: {e}");
         }
+        // Entitlement consent skips the rule and directory paths: the
+        // grant-store write in the engine's apply path IS the persistence, and
+        // a rule for the host-generated tool would pollute the store with one
+        // nothing reads.
         if decision.approved && !is_entitlement {
-            // Entitlement consent skips the rule/directory paths: the
-            // grant-store write in the engine's apply path IS the
-            // persistence. Persisting a rule for the host-generated tool would
-            // pollute the store with a rule nothing reads.
-            self.install_approved_consent(approval, &decision, reason.as_ref(), &directory_grants)?;
+            self.install_approved_consent(&grant, lifetime, grants)?;
         }
-        // Move this ask from remaining into decided so a mid-batch disconnect
-        // re-emits only the tail and the runner resumes with the full decided
-        // set.
-        if let Some(host) = &self.host {
-            host.store().advance_pending(self.session, decision.clone());
-        }
-        Ok(parse_approval_decision(decision))
+        Ok(())
     }
 
     /// When the ask is about a Bash command that runs a skill-directory
@@ -217,63 +252,80 @@ impl Server {
 
     fn install_approved_consent(
         &self,
-        approval: &EngineApprovalRequest,
-        decision: &ApprovalDecision,
-        reason: Option<&AskReason>,
+        grant: &AlwaysGrant,
+        lifetime: ApprovalScope,
         grants: &[BoundaryGrant],
     ) -> Result<(), ProtocolError> {
-        self.route_consent_with_grants(
-            &approval.tool_name,
-            &approval.input,
-            &decision.scope,
-            reason,
-            grants,
-        )
-        .map_err(|error| {
-            ProtocolError::new(
-                ErrorCategory::Unavailable,
-                format!("approved directory capability could not be installed: {error}"),
-                false,
-            )
-        })
+        self.install_consent(grant, lifetime, grants)
+            .map_err(|error| {
+                ProtocolError::new(
+                    ErrorCategory::Unavailable,
+                    format!("approved directory capability could not be installed: {error}"),
+                    false,
+                )
+            })
     }
 
     /// Route an approved call to the directory capability required by its
-    /// target and to any durable rule selected by the approval scope.
+    /// target and to whatever the chosen lifetime remembers.
     pub(crate) fn route_consent(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
-        scope: &str,
+        choice: ApprovalScope,
         reason: Option<&AskReason>,
     ) -> Result<(), SandboxError> {
         let grants = self.approval_directory_grants(tool_name, input);
-        self.route_consent_with_grants(tool_name, input, scope, reason, &grants)
+        self.route_consent_with_grants(tool_name, input, choice, reason, &grants)
     }
 
-    /// Apply the exact directory grants disclosed on the approval card.
+    /// Analyze a call and derive the durable authorization an approved answer
+    /// on it may keep. The card and the install both read this plan, so the
+    /// lifetime the card states is the lifetime the install gives.
+    pub(crate) fn consent_plan(
+        &self,
+        tool_name: &str,
+        input: &serde_json::Value,
+        reason: Option<&AskReason>,
+        grants: &[BoundaryGrant],
+    ) -> AlwaysGrant {
+        always_grant(tool_name, input, reason, self.card_fence(), grants)
+    }
+
+    /// Apply the exact directory grants disclosed on the approval card, then
+    /// install the authorization the chosen lifetime keeps.
+    ///
+    /// The lifetime is reduced against the plan before anything is installed:
+    /// a choice can ask for less than the ask offers, never for more, so a
+    /// guest cannot persist an authorization the card never offered.
     pub(crate) fn route_consent_with_grants(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
-        scope: &str,
+        choice: ApprovalScope,
         reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
     ) -> Result<(), SandboxError> {
-        self.install_directory_grants(grants, scope)?;
-        let is_path_bounds = reason.is_some_and(|current| current.validator == "path-bounds");
-        let is_directory_capability =
-            reason.is_some_and(|current| current.validator == "directory-capability");
-        let is_system_safety =
-            reason.is_some_and(|current| current.source == AskSource::SystemSafety);
-        let boundary_needs_gate = (is_path_bounds || is_directory_capability) && grants.is_empty();
-        if (!is_path_bounds && !is_directory_capability || boundary_needs_gate)
-            && !is_system_safety
-            && reason.is_some()
-            && scope == "always"
-        {
-            self.apply_consent_rule(tool_name, input, reason, grants);
-        }
+        let grant = self.consent_plan(tool_name, input, reason, grants);
+        let lifetime = installed_scope(&grant, choice);
+        self.install_consent(&grant, lifetime, grants)
+    }
+
+    /// Install a derived plan at the lifetime it keeps.
+    ///
+    /// The fence install happens at every lifetime, because the frozen call
+    /// has to run now; the lifetime decides only what outlives it. A once
+    /// answer therefore widens this session's fence and saves nothing, a
+    /// session answer keeps the grant until the session ends, and a workspace
+    /// answer saves it for the next start.
+    pub(crate) fn install_consent(
+        &self,
+        grant: &AlwaysGrant,
+        lifetime: ApprovalScope,
+        grants: &[BoundaryGrant],
+    ) -> Result<(), SandboxError> {
+        self.install_directory_grants(grants, lifetime)?;
+        self.apply_install(grant, lifetime);
         Ok(())
     }
 
@@ -299,15 +351,16 @@ impl Server {
         )
     }
 
-    /// Install directory grants derived from a structured tool target.
+    /// Install directory grants derived from a structured tool target, for
+    /// exactly the lifetime the caller names.
     pub(crate) fn apply_consent_directory(
         &self,
         tool_name: &str,
         input: &serde_json::Value,
-        scope: &str,
+        lifetime: ApprovalScope,
     ) -> Result<(), SandboxError> {
         let grants = self.approval_directory_grants(tool_name, input);
-        self.install_directory_grants(&grants, scope)
+        self.install_directory_grants(&grants, lifetime)
     }
 
     /// Install runtime grants before persisting them. A partial runtime update
@@ -316,7 +369,7 @@ impl Server {
     fn install_directory_grants(
         &self,
         grants: &[BoundaryGrant],
-        scope: &str,
+        lifetime: ApprovalScope,
     ) -> Result<(), SandboxError> {
         if grants.is_empty() {
             return Ok(());
@@ -364,7 +417,10 @@ impl Server {
                 "the fence accepted a directory grant without widening its capability".into(),
             ));
         }
-        if scope == "always" {
+        // Only the workspace lifetime has somewhere to be saved: the store
+        // path is resolved per workspace, and the next start re-attaches what
+        // it finds there. A session grant lives in the fence and ends with it.
+        if lifetime == ApprovalScope::Workspace {
             for grant in grants {
                 match grant.access {
                     BoundaryAccess::ReadOnly => {
@@ -477,7 +533,7 @@ pub(crate) fn disclose_directory_grants(reason: &mut Option<AskReason>, grants: 
         String::new()
     };
     current.detail.push_str(&format!(
-        "; approval also authorizes {capability} {}{remaining} for this session; choosing always persists it",
+        "; approval also authorizes {capability} {}{remaining}; the remember option states how long it lasts",
         first.directory.display()
     ));
 }

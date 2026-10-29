@@ -17,7 +17,7 @@ use houyicoder_core::agent::{RunOutcome, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::ModeGate;
 use houyicoder_permission::PermissionMode;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::build_runner;
@@ -162,7 +162,7 @@ fn test_live_bash_tool_roundtrip() {
         call_id,
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
     assert!(
         drain(&mut app, 90_000),

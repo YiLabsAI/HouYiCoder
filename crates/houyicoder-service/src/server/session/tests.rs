@@ -19,7 +19,9 @@ use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ServerFrame, ServerRequestPayload,
 };
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
+use houyicoder_protocol::frontend::run::{
+    ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock,
+};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, ModelCapabilities, OutputItem, ProviderError, Usage,
 };
@@ -210,7 +212,7 @@ async fn test_serve_drives_parked_turn() {
                             call_id: ask_call_id,
                             approved: true,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await
@@ -349,7 +351,7 @@ async fn test_reconnect_replays_pending_ask() {
                             call_id,
                             approved: true,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await
@@ -462,7 +464,7 @@ async fn test_reconnect_batch_preserves_decided() {
                                 call_id,
                                 approved: true,
                                 updated_input: None,
-                                scope: "once".to_string(),
+                                scope: ApprovalScope::Once,
                             }),
                         )
                         .await
@@ -517,7 +519,7 @@ async fn test_reconnect_batch_preserves_decided() {
                             call_id,
                             approved: true,
                             updated_input: None,
-                            scope: "once".to_string(),
+                            scope: ApprovalScope::Once,
                         }),
                     )
                     .await

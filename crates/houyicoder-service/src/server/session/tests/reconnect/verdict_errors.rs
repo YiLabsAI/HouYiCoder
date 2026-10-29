@@ -81,7 +81,7 @@ async fn test_reconnect_drops_wrong_response() {
                 call_id: "toolu_1".to_string(),
                 approved: true,
                 updated_input: None,
-                scope: "once".to_string(),
+                scope: ApprovalScope::Once,
             }),
         )
         .await
@@ -93,7 +93,7 @@ async fn test_reconnect_drops_wrong_response() {
                 call_id: "toolu_1".to_string(),
                 approved: true,
                 updated_input: None,
-                scope: "once".to_string(),
+                scope: ApprovalScope::Once,
             }),
         )
         .await
@@ -250,7 +250,7 @@ async fn test_client_closed_during_resume() {
         call_id,
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
     client_tx2
         .send(reconnect_encode(&ClientFrame::Response(

@@ -18,7 +18,7 @@ use crate::state::Screen;
 use crate::test_harness::connection_lost_app;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 fn last_line(app: &App) -> String {
@@ -182,7 +182,7 @@ fn test_verdict_refused() {
         call_id: "c1".into(),
         approved: true,
         updated_input: None,
-        scope: "once".into(),
+        scope: ApprovalScope::Once,
     });
     assert!(
         app.approval().is_some(),

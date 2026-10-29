@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::AskDecision;
 use crate::ask_question_model::AskQuestion;
+use houyicoder_protocol::frontend::run::ApprovalScope;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -120,7 +121,7 @@ fn test_single_question_submits() {
     };
     assert!(verdict.approved, "choosing an option approves");
     assert_eq!(verdict.call_id, "call-1");
-    assert_eq!(verdict.scope, "once");
+    assert_eq!(verdict.scope, ApprovalScope::Once);
     let input = verdict.updated_input.expect("answers ride the verdict");
     assert!(
         input.to_string().contains("alpha"),

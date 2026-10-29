@@ -90,19 +90,49 @@ pub struct DelegationSource {
     pub subagent_type: String,
 }
 
+/// How long an approval lasts, which is also how long the server keeps a grant
+/// it remembers for that approval. Once covers the frozen call the card
+/// described and nothing after it; Session lasts until the session ends, so a
+/// restart forgets it; Workspace lasts for this workspace on this machine and
+/// is restored on the next start while it still names the same directory. A
+/// spelling this build does not know fails to decode rather than widening to a
+/// longer lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalScope {
+    #[default]
+    Once,
+    Session,
+    Workspace,
+}
+
+impl ApprovalScope {
+    /// The wire spelling, also the label the durable decision record stores.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::Session => "session",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
 /// A caller decision on one approval. A rejected call gets a rejected-by-user
 /// tool result so the model sees the veto; updated_input carries an answer-
 /// populated input the human-in-the-loop UI injected (None for a plain
-/// approve or reject). scope is the consent breadth the client chose (once /
-/// prefix / session); the server records it on the durable PermissionDecision
-/// audit event so the verdict trail survives the wire path (the engine
-/// ApprovalDecision carries no scope — it is consumed at the boundary).
+/// approve or reject). scope is the lifetime the client chose. The server
+/// reduces it against what the ask can keep, installs the grant at that
+/// lifetime, and records the kept lifetime on the durable PermissionDecision
+/// audit event, because the verdict trail would otherwise be lost over the
+/// wire (the engine ApprovalDecision carries no scope — it is consumed at the
+/// boundary).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalDecision {
     pub call_id: String,
     pub approved: bool,
     pub updated_input: Option<Value>,
-    pub scope: String,
+    #[serde(default)]
+    pub scope: ApprovalScope,
 }
 
 /// How a run ended, wire form. The engine RunOutcome carries a VerifyFailure

@@ -14,7 +14,7 @@ use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::permission::PermissionEffect;
 use houyicoder_protocol::frontend::permission::PermissionRule;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use std::sync::Mutex;
@@ -149,7 +149,7 @@ fn test_option3_no_duplicate_result() {
         call_id,
         approved: true,
         updated_input: None,
-        scope: "once".to_string(),
+        scope: ApprovalScope::Once,
     });
 
     let mut settled = false;

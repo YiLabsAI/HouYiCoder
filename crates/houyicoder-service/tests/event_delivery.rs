@@ -21,7 +21,9 @@ use houyicoder_protocol::envelope::{
     ClientResponsePayload, EventEnvelope, RequestId, ServerFrame, ServerRequestPayload,
 };
 use houyicoder_protocol::extension::ToolError;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ContentBlock};
+use houyicoder_protocol::frontend::run::{
+    ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock,
+};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::frontend::{FrontendEvent, QueuedInput};
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessionId};
@@ -626,7 +628,7 @@ async fn test_resume_orders_queued_input() {
                 call_id,
                 approved: true,
                 updated_input: None,
-                scope: "once".into(),
+                scope: ApprovalScope::Once,
             }),
         )
         .await

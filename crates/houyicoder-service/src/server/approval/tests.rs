@@ -18,7 +18,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{ApprovalRequest, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{
-    Decision, DefaultModeGate, Effect, FileRuleStore, ModeGate, RuleStore, ToolRequest,
+    Decision, DefaultModeGate, Effect, FileRuleStore, ModeGate, RuleStore, Scope, ToolRequest,
 };
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
@@ -26,12 +26,12 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::framing;
 use houyicoder_protocol::frontend::FrontendRequest;
-use houyicoder_protocol::frontend::run::{self, ApprovalDecision};
+use houyicoder_protocol::frontend::run::{self, ApprovalDecision, ApprovalScope};
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_provider::FakeProvider;
 // Only the macOS-gated consent tests build a real platform session; the
-// cross-platform rule test below uses a stub fence instead, so on other
-// platforms this import would be unused.
+// cross-platform tests drive the gate through a stub fence or read it
+// directly, so on other platforms this import would be unused.
 #[cfg(target_os = "macos")]
 use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
@@ -118,7 +118,7 @@ async fn test_card_carries_gate_reason() {
                     call_id: "c1".into(),
                     approved: false,
                     updated_input: None,
-                    scope: "once".to_string(),
+                    scope: ApprovalScope::Once,
                 }),
             ));
             client_tx
@@ -316,7 +316,7 @@ async fn test_consent_reaches_both_layers() {
         Server::new(Arc::new(runner), SessionId::new(), gate).with_session(session.clone());
     let input = json!({"path": outside.to_string_lossy(), "pattern": "x"});
     server
-        .apply_consent_directory("grep", &input, "always")
+        .apply_consent_directory("grep", &input, ApprovalScope::Workspace)
         .expect("grant read directory");
     let coutside = dunce::canonicalize(&outside).unwrap();
     let dirs = session.working_dirs();
@@ -346,7 +346,7 @@ async fn test_consent_reaches_both_layers() {
     fs::write(&file_path, b"{}").expect("write file");
     let input = json!({"path": file_path.to_string_lossy()});
     server
-        .apply_consent_directory("edit", &input, "once")
+        .apply_consent_directory("edit", &input, ApprovalScope::Once)
         .expect("grant write directory");
     let canonical_config = dunce::canonicalize(&config_dir).unwrap();
     assert!(
@@ -420,7 +420,7 @@ fn test_consent_grants_by_location() {
         containment_note: None,
     };
     server
-        .route_consent("grep", &input, "always", Some(&path_bounds))
+        .route_consent("grep", &input, ApprovalScope::Workspace, Some(&path_bounds))
         .expect("route path-bounds consent");
     let coutside = dunce::canonicalize(&outside).unwrap();
     assert!(
@@ -443,7 +443,7 @@ fn test_consent_grants_by_location() {
     };
     let second_input = json!({"path": second.to_string_lossy(), "pattern": "x"});
     server
-        .route_consent("grep", &second_input, "once", Some(&user_ask))
+        .route_consent("grep", &second_input, ApprovalScope::Once, Some(&user_ask))
         .expect("route one-time consent");
     let csecond = dunce::canonicalize(&second).unwrap();
     assert!(
@@ -468,7 +468,12 @@ fn test_consent_grants_by_location() {
     fs::write(&inner, b"x").expect("write inner");
     let inner_input = json!({"path": inner.to_string_lossy(), "pattern": "x"});
     server
-        .route_consent("grep", &inner_input, "always", Some(&user_ask))
+        .route_consent(
+            "grep",
+            &inner_input,
+            ApprovalScope::Workspace,
+            Some(&user_ask),
+        )
         .expect("route inside consent");
     assert_eq!(
         store.load_read_directories(),
@@ -483,11 +488,125 @@ fn test_consent_grants_by_location() {
     fs::remove_dir_all(&root).ok();
 }
 
-/// A system-safety approval grants the disclosed directory without turning
-/// one protected edit into a blanket allow rule for every edit.
+/// A session-lifetime answer keeps the rule in the running gate and writes
+/// nothing to a store, so the next start inherits no preference this session
+/// did not outlive. The choice decides, not the grant plan: this ask could
+/// have kept a workspace lifetime, and a session choice narrows it.
+#[test]
+fn test_session_rule_not_stored() {
+    let root = env::temp_dir().join(format!("session-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir root");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        root.join("user.json"),
+        root.join("project.json"),
+        root.join("local.json"),
+    ));
+    let gate = Arc::new(DefaultModeGate::new().with_store(store.clone()));
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("test")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let server = Server::new(Arc::new(runner), SessionId::new(), gate.clone());
+
+    let inner = repo.join("inner.txt");
+    fs::write(&inner, b"x").expect("write inner");
+    let input = json!({"path": inner.to_string_lossy(), "pattern": "x"});
+    let reason = AskReason {
+        source: AskSource::UserRule,
+        validator: "some-rule".to_string(),
+        detail: "user rule fired".into(),
+        containment_note: None,
+    };
+    server
+        .route_consent("grep", &input, ApprovalScope::Session, Some(&reason))
+        .expect("route session consent");
+    assert!(
+        gate.rules()
+            .iter()
+            .any(|rule| rule.action == "grep" && rule.scope == Scope::Session),
+        "the session answer takes effect in the running gate"
+    );
+    assert!(
+        store.load().is_empty(),
+        "a session-lifetime rule reaches no store"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A session-lifetime directory answer widens this session's fence and
+/// writes nothing to the store, so a later start neither re-attaches the
+/// directory nor remembers a decision the session ended with. Widening a live
+/// fence is Seatbelt-only.
 #[cfg(target_os = "macos")]
 #[test]
-fn test_safety_skips_rule() {
+fn test_session_grant_not_stored() {
+    let root = env::temp_dir().join(format!("session-dir-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    let outside = root.join("outside");
+    let repo = root.join("repo");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        root.join("user.json"),
+        root.join("project.json"),
+        root.join("local.json"),
+    ));
+    let gate = Arc::new(DefaultModeGate::new().with_store(store.clone()));
+    let session: Arc<dyn SandboxSession> =
+        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("test")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let server =
+        Server::new(Arc::new(runner), SessionId::new(), gate).with_session(session.clone());
+    let target = outside.join("report.txt");
+    fs::write(&target, b"x").expect("write target");
+    let input = json!({"path": target.to_string_lossy(), "pattern": "x"});
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds".to_string(),
+        detail: "path outside the workspace".into(),
+        containment_note: None,
+    };
+    server
+        .route_consent("grep", &input, ApprovalScope::Session, Some(&reason))
+        .expect("route session directory consent");
+    let coutside = dunce::canonicalize(&outside).unwrap();
+    assert!(
+        session
+            .working_dirs()
+            .iter()
+            .any(|dir| Path::new(dir) == coutside),
+        "the session answer widens this session's fence"
+    );
+    assert!(
+        store.load_read_directories().is_empty(),
+        "a session-lifetime directory grant reaches no store"
+    );
+    assert!(
+        store.load().iter().all(|rule| rule.action != "grep"),
+        "a path-bounds answer persists no tool rule at any lifetime"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A system-safety approval lets the frozen call through and persists
+/// nothing, even when the client answers with the workspace lifetime: the ask
+/// offers no remember option, so a guest cannot widen it into a saved grant
+/// for every later protected edit.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_safety_persists_nothing() {
     let root = env::temp_dir().join(format!("safety-{}-{}", process::id(), line!()));
     drop(fs::remove_dir_all(&root));
     let repo = root.join("repo");
@@ -520,10 +639,23 @@ fn test_safety_skips_rule() {
     };
 
     server
-        .route_consent("edit", &input, "always", Some(&reason))
+        .route_consent("edit", &input, ApprovalScope::Workspace, Some(&reason))
         .expect("route protected consent");
     let canonical = dunce::canonicalize(&protected).unwrap();
-    assert!(store.load_directories().contains(&canonical));
+    assert!(
+        server
+            .sandbox_session
+            .as_ref()
+            .expect("session")
+            .working_dirs()
+            .iter()
+            .any(|dir| Path::new(dir) == canonical),
+        "the frozen call can reach the directory it was approved for"
+    );
+    assert!(
+        store.load_directories().is_empty(),
+        "a system-safety ask keeps no durable directory grant"
+    );
     assert!(store.load().iter().all(|rule| rule.action != "edit"));
 
     fs::remove_dir_all(&root).ok();
@@ -618,7 +750,12 @@ fn test_none_reason_no_rule() {
         containment_note: None,
     };
     server
-        .route_consent("grep", &outside_input, "always", Some(&path_bounds))
+        .route_consent(
+            "grep",
+            &outside_input,
+            ApprovalScope::Workspace,
+            Some(&path_bounds),
+        )
         .expect("route outside consent");
 
     // Second approval with no cause carried: the nested path is already inside
@@ -626,7 +763,7 @@ fn test_none_reason_no_rule() {
     // None.
     let nested_input = json!({"path": nested.to_string_lossy(), "pattern": "y"});
     server
-        .route_consent("grep", &nested_input, "always", None)
+        .route_consent("grep", &nested_input, ApprovalScope::Workspace, None)
         .expect("route nested consent");
 
     let blanket_grep_allow = store
@@ -720,7 +857,7 @@ async fn test_handle_drops_non_matching() {
                 call_id: "c1".into(),
                 approved: true,
                 updated_input: None,
-                scope: "once".to_string(),
+                scope: ApprovalScope::Once,
             }),
         ));
         client_tx
@@ -909,7 +1046,7 @@ fn test_grant_requires_fence_widening() {
     });
     let server = server_over_fence(inert.clone());
     let err = server
-        .apply_consent_directory("grep", &input, "once")
+        .apply_consent_directory("grep", &input, ApprovalScope::Once)
         .expect_err("an install the fence did not apply must fail");
     assert!(matches!(err, SandboxError::Unsupported(_)));
     assert!(
@@ -926,13 +1063,13 @@ fn test_grant_requires_fence_widening() {
     });
     let server = server_over_fence(growing.clone());
     server
-        .apply_consent_directory("grep", &input, "once")
+        .apply_consent_directory("grep", &input, ApprovalScope::Once)
         .expect("a widening fence keeps the grant");
     assert_eq!(growing.working_dirs().len(), 1);
 
     // A grant the session already holds changes nothing, so a fence that
     // does not move its revision must not fail the repeat install.
-    let again = server.apply_consent_directory("grep", &input, "once");
+    let again = server.apply_consent_directory("grep", &input, ApprovalScope::Once);
     assert!(again.is_ok(), "a repeated grant is not a failed install");
     drop(fs::remove_dir_all(&root));
 }
@@ -1115,7 +1252,7 @@ fn test_rollback_restores_read_grant() {
         },
     ];
     server
-        .install_directory_grants(&grants, "once")
+        .install_directory_grants(&grants, ApprovalScope::Once)
         .expect_err("a missing directory fails the install");
 
     let canonical = dunce::canonicalize(&held).expect("canonicalize held");

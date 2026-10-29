@@ -31,8 +31,13 @@ use serde::{Deserialize, Serialize};
 /// and its reply are gone, replaced by the sandbox boundaries and checkpoints
 /// requests with their three replies. A same-version peer would send or
 /// expect frames the other side cannot decode, so the handshake refuses it
-/// instead of letting it half-work.
-pub const PROTOCOL_VERSION: u16 = 10;
+/// instead of letting it half-work. v11: an approval decision carries a typed
+/// lifetime (once / session / workspace) in place of the free-form scope
+/// string a v10 client sent as "once" or "always". An old client's answer
+/// fails decode here and would have to be dropped, which strands the ask it
+/// was answering; an old host reads the new spellings as neither of the two
+/// it knows, installs the runtime grant, and silently persists nothing.
+pub const PROTOCOL_VERSION: u16 = 11;
 
 /// Capabilities a peer advertises in Hello. Added only when a real optional
 /// feature needs negotiation; absent means the peer does not support it.

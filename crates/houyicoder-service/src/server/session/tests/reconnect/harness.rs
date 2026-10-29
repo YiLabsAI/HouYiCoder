@@ -114,7 +114,7 @@ pub(super) fn attach_client(
 }
 
 /// Receive the re-emitted permission ask from a reattached client and approve it.
-pub(super) async fn approve_reemit_ask(client: &mut Client, scope: &str) -> String {
+pub(super) async fn approve_reemit_ask(client: &mut Client, scope: ApprovalScope) -> String {
     loop {
         let frame = timeout(Duration::from_secs(2), client.next_frame())
             .await
@@ -132,7 +132,7 @@ pub(super) async fn approve_reemit_ask(client: &mut Client, scope: &str) -> Stri
                         call_id: call_id.clone(),
                         approved: true,
                         updated_input: None,
-                        scope: scope.into(),
+                        scope,
                     }),
                 )
                 .await

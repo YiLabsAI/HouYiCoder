@@ -58,8 +58,8 @@ pub use permission::{
 pub use queue::{PendingInputId, QueuedInput};
 pub use recap::{FocusReport, RecapNotice};
 pub use run::{
-    ApprovalDecision, ApprovalRequest, ContentBlock, DelegationSource, RunError, RunOutcome,
-    RunResult, StopReason,
+    ApprovalDecision, ApprovalRequest, ApprovalScope, ContentBlock, DelegationSource, RunError,
+    RunOutcome, RunResult, StopReason,
 };
 use std::collections::HashSet;
 use std::fmt::Display;

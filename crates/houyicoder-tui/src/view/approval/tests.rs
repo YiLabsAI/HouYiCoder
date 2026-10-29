@@ -2,7 +2,7 @@
 //! production file stays under the file-size gate.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use houyicoder_protocol::frontend::run::DelegationSource;
+use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
 
 use super::args::{diff_preview, entitlement_detail};
 use super::cap_first;
@@ -656,18 +656,21 @@ fn scoped_options(label: &str) -> Vec<PermissionOption> {
             option_id: "allow_once".into(),
             name: "Allow once".into(),
             kind: PermissionOptionKind::AllowOnce,
+            scope: None,
             meta: None,
         },
         PermissionOption {
             option_id: "allow_always".into(),
             name: label.into(),
             kind: PermissionOptionKind::AllowAlways,
+            scope: Some(ApprovalScope::Session),
             meta: None,
         },
         PermissionOption {
             option_id: "reject_once".into(),
             name: "Reject once".into(),
             kind: PermissionOptionKind::RejectOnce,
+            scope: None,
             meta: None,
         },
     ]
@@ -739,6 +742,39 @@ fn test_narrow_label_ellipsis() {
     assert!(row.chars().count() <= 40, "row must fit the card: {row:?}");
 }
 
+/// The remember row keeps the lifetime it states when the card is narrow: the
+/// effect is shortened, the tail the user chooses by is not. The tail is what
+/// tells a session preference from a workspace one.
+#[test]
+fn test_narrow_row_keeps_lifetime() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let label = "/Users/von/workspace/repo/alpha, /Users/von/workspace/repo/beta (this session)";
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "write".into(),
+            args: json!({ "path": "/tmp/x" }).to_string(),
+            reason: "path outside the workspace".into(),
+            source: Some(AskSource::Detection),
+            selected: 2,
+            call_id: String::new(),
+            options: scoped_options(label),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 40, 24);
+    let row = out
+        .lines()
+        .find(|line| line.contains("2. Yes"))
+        .expect("remember option row");
+    assert!(
+        row.ends_with("(this session)"),
+        "the lifetime must survive clipping: {row:?}"
+    );
+    assert!(row.chars().count() <= 40, "row must fit the card: {row:?}");
+}
+
 /// A command whose destination cannot be named: the server sends no remember
 /// option, so the card renders two choices instead of promising one it cannot
 /// install.
@@ -760,12 +796,14 @@ fn test_no_destination_hides_remember() {
                     option_id: "allow_once".into(),
                     name: "Allow once".into(),
                     kind: PermissionOptionKind::AllowOnce,
+                    scope: None,
                     meta: None,
                 },
                 PermissionOption {
                     option_id: "reject_once".into(),
                     name: "Reject once".into(),
                     kind: PermissionOptionKind::RejectOnce,
+                    scope: None,
                     meta: None,
                 },
             ],

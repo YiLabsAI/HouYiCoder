@@ -18,7 +18,7 @@ use houyicoder_protocol::envelope::{
     ClientFrame, ClientResponseEnvelope, ClientResponsePayload, ServerFrame,
 };
 use houyicoder_protocol::framing::encode;
-use houyicoder_protocol::frontend::run::ApprovalDecision;
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
@@ -289,7 +289,7 @@ async fn test_wrong_payload_rejected() {
             call_id: "c1".into(),
             approved: true,
             updated_input: None,
-            scope: "once".to_string(),
+            scope: ApprovalScope::Once,
         }),
     ));
     client_tx

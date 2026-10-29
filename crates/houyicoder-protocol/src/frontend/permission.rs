@@ -127,7 +127,7 @@ pub struct PermissionDecisionEntry {
     /// "deny"). A string, not an enum, because the server emits the engine
     /// verdict's own label and the TUI renders it verbatim.
     pub verdict: String,
-    /// The scope string the decision covered (a command prefix, a path, ...).
+    /// The lifetime the approval covered: once, session, or workspace.
     pub scope: String,
     /// The tool-call id the decision attached to, linking back to the
     /// trajectory tool_call row.
