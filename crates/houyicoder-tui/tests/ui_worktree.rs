@@ -130,18 +130,20 @@ fn wait_for_screen_gone(s: &mut PtySession, marker: &str, timeout: Duration) -> 
     !s.screen().contents().contains(marker)
 }
 
-/// A run that only moves the session into a worktree, so the pane below has a
-/// managed tree to open.
-const ENTER_ONLY_SCRIPT: &str = r#"[
+/// A run that creates a worktree and then leaves it in place, so the pane
+/// below holds one tree it may act on besides the repository's own: a tree the
+/// session still occupies is refused before any removal can be previewed.
+const CREATE_AND_LEAVE_SCRIPT: &str = r#"[
   [{"type":"ToolCall","id":"c1","name":"enter_worktree","input":{"name":"u8p"}}],
+  [{"type":"ToolCall","id":"c2","name":"exit_worktree","input":{"action":"keep"}}],
   [{"type":"Text","text":"moved"}]
 ]"#;
 
 /// The confirmation's keys through a real terminal: d opens it on the row
 /// under the cursor with the host's measured preview, b flips what happens to
 /// the branch, and Esc returns to the list without closing the pane. The row
-/// for the main checkout answers the host's refusal instead, because this
-/// product did not create it.
+/// for the main checkout answers with the refusal in the list instead, since
+/// the repository's own tree is not something a removal can take away.
 #[test]
 #[ignore]
 #[expect(
@@ -150,7 +152,7 @@ const ENTER_ONLY_SCRIPT: &str = r#"[
 )]
 fn test_terminal_routes_confirm_keys() {
     let repo = make_temp_repo(3);
-    let mut s = pty_session_in_repo(repo.clone(), ENTER_ONLY_SCRIPT);
+    let mut s = pty_session_in_repo(repo.clone(), CREATE_AND_LEAVE_SCRIPT);
     s.resize(40, COLS);
     s.send_str("go");
     s.send_key(&Key::Enter);
@@ -182,18 +184,21 @@ fn test_terminal_routes_confirm_keys() {
         "the entered worktree and the main one are both listed:\n{}",
         s.output()
     );
-    // The cursor sits on the main checkout, which this product did not
-    // create: the host refuses it rather than removing the user's tree.
+    // The cursor sits on the main checkout, which no removal from here can
+    // take away: the list says why, and no confirmation opens on a row whose
+    // only possible answer would be that refusal.
     s.send_key(&Key::Char('d'));
     assert!(
-        s.wait_for_screen("not a worktree this product created", RENDER_TIMEOUT),
-        "the host refuses a directory it did not create:\n{}",
+        s.wait_for_screen(
+            "main working tree; it cannot be removed from here",
+            RENDER_TIMEOUT
+        ),
+        "the list answers the refusal:\n{}",
         s.output()
     );
-    s.send_key(&Key::Esc);
     assert!(
-        wait_for_screen_gone(&mut s, "Remove worktree", RENDER_TIMEOUT),
-        "Esc returns to the list:\n{}",
+        !s.screen().contents().contains("Remove worktree"),
+        "no confirmation opens on a row that cannot be removed:\n{}",
         s.output()
     );
     s.send_key(&Key::Down);

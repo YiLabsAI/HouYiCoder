@@ -8,9 +8,10 @@
 //!
 //! The controller is the single owner of the live worktree session state
 //! (an Arc-shared struct so both tools see the same session). enter refuses a
-//! second enter (scope guard) and refuses while a sandbox exec is in flight
-//! (a backgrounded command would keep its wide-fence profile alive and could
-//! still write the main tree after the narrow). exit is fail-closed on
+//! second enter (scope guard) and refuses while a sandboxed command is still
+//! running (a backgrounded command would keep its profile over the wider fence
+//! alive and could still write the main tree after the fence moved). exit is
+//! fail-closed on
 //! discard: a remove with uncommitted changes + discard_changes=false refuses
 //! and lists the work so the user confirms before re-invoking with true.
 //!
@@ -36,12 +37,19 @@ use houyicoder_context::{
     EventId, HookEventKind, HookFirePayload, SessionEvent, SessionId, SessionLogEntry,
 };
 
+use crate::agent::worktree::identify::WorktreeRole;
+use crate::agent::worktree::identify::WorktreeTarget;
+use crate::agent::worktree::identify::directory_name;
+use crate::agent::worktree::identify::resolve_target;
 use crate::agent::worktree::preview::WorktreePreview;
-use crate::agent::worktree::preview::preview_remove_worktree;
+use crate::agent::worktree::preview::preview_target;
 use crate::agent::worktree::record::WorktreeLease;
 use crate::agent::worktree::session as worktree_session;
 use crate::agent::worktree::session::WorktreeError;
 use crate::agent::worktree::session::WorktreeSession;
+use crate::agent::worktree::session::canonicalize;
+use crate::agent::worktree::session::remove_target;
+use crate::agent::worktree::session::remove_target_previewed;
 use houyicoder_api::sandbox::WorktreeFenceGuard;
 use std::process::id;
 use tokio::task::spawn_blocking;
@@ -74,7 +82,10 @@ pub struct EnterResult {
 /// first.
 #[derive(Debug)]
 pub struct PreparedEnter {
-    slug: String,
+    /// The name the session records the tree under: the slug for a tree this
+    /// product created, and the directory name for one it entered from
+    /// elsewhere.
+    name: String,
     path: PathBuf,
     branch: String,
     head_commit: Option<String>,
@@ -213,49 +224,57 @@ impl WorktreeController {
         self.session.lock().expect("session lock").is_some()
     }
 
-    /// What removing a managed worktree would discard, and the token naming
-    /// that state. Nothing is written and nothing is deleted.
+    /// The worktree a directory names, refused when a verb may not act on it.
     ///
-    /// The repository this controller was built for is the one asked about, so
-    /// a caller names a slug rather than a path it composed itself.
-    pub fn preview_remove(&self, slug: &str) -> Result<WorktreePreview, WorktreeError> {
-        preview_remove_worktree(&self.repo_root, slug)
-    }
-
-    /// The slug of the managed worktree a directory names, for a caller that
-    /// has a path rather than a name.
-    pub fn slug_for_path(&self, path: &Path) -> Result<String, WorktreeError> {
-        worktree_session::managed_slug_for_path(&self.repo_root, path)
-    }
-
-    /// Remove a worktree the user confirmed from its preview.
-    ///
-    /// The tree this session works in is refused before its lease is tried:
-    /// the session's own hold would otherwise fail the removal's acquisition,
-    /// which reads as another process using the tree rather than as the one
-    /// thing the user cannot remove from inside it.
-    pub fn remove_previewed(
-        &self,
-        slug: &str,
-        token: &str,
-        delete_unmerged_branch: bool,
-    ) -> Result<(), WorktreeError> {
+    /// The tree this session works in is refused here, before any lease is
+    /// tried: the session's own hold would otherwise fail a removal's
+    /// acquisition, which reads as another process using the tree rather than
+    /// as the one thing the user cannot take away from inside it. The main
+    /// working tree is refused for the same reason a removal never acts on it:
+    /// taking it apart would take the repository with it.
+    pub fn target_at(&self, path: &Path) -> Result<WorktreeTarget, WorktreeError> {
+        let target = resolve_target(&self.repo_root, path)?;
+        if target.is_main() {
+            return Err(WorktreeError::MainCheckout {
+                path: target.path().to_path_buf(),
+            });
+        }
         let active = self.session.lock().expect("session lock");
         if let Some(active) = active.as_ref()
-            && active.session.worktree_name == slug
+            && canonicalize(&active.session.worktree_path).is_ok_and(|at| at == target.path())
         {
-            return Err(WorktreeError::Leased {
-                slug: slug.to_string(),
-                reason: "this session is working in it".to_string(),
+            return Err(WorktreeError::ActiveTree {
+                path: target.path().to_path_buf(),
             });
         }
         drop(active);
-        worktree_session::remove_previewed_worktree(
-            &self.repo_root,
-            slug,
-            token,
-            delete_unmerged_branch,
-        )
+        Ok(target)
+    }
+
+    /// What removing a worktree would discard, and the token naming that state.
+    /// Nothing is written and nothing is deleted.
+    ///
+    /// The resolved worktree comes back with the preview because the preview
+    /// is reported under the name the worktree has: a slug for one this
+    /// product created, and a directory name for one it did not.
+    pub fn preview_at(
+        &self,
+        path: &Path,
+    ) -> Result<(WorktreeTarget, WorktreePreview), WorktreeError> {
+        let target = self.target_at(path)?;
+        let preview = preview_target(&self.repo_root, &target)?;
+        Ok((target, preview))
+    }
+
+    /// Remove a worktree the user confirmed from its preview.
+    pub fn remove_at_previewed(
+        &self,
+        path: &Path,
+        token: &str,
+        delete_unmerged_branch: bool,
+    ) -> Result<(), WorktreeError> {
+        let target = self.target_at(path)?;
+        remove_target_previewed(&self.repo_root, &target, token, delete_unmerged_branch)
     }
 
     /// Fire the removal hook for a tree the pane removed. The exit path fires
@@ -267,9 +286,9 @@ impl WorktreeController {
     }
 
     /// Enter a worktree session (EnterWorktree tool body). Creates or resumes
-    /// the worktree, narrows the fence + cwd, records the main ref + a
-    /// WorktreeEnter event. Refuses a second enter, including one that arrives
-    /// while this one is running, and refuses while an exec is in flight.
+    /// the worktree, restricts the fence to it + moves the cwd, records the main
+    /// ref + a WorktreeEnter event. Refuses a second enter, including one that
+    /// arrives while this one is running, and refuses while a command runs.
     pub async fn enter(&self, slug: Option<String>) -> Result<EnterResult, WorktreeError> {
         let prepared = self.enter_prepared(slug)?;
         self.finish_enter(prepared).await
@@ -286,23 +305,32 @@ impl WorktreeController {
     /// another is entering waits for it and then sees the session installed.
     pub fn enter_prepared(&self, slug: Option<String>) -> Result<PreparedEnter, WorktreeError> {
         let _entering = self.enter_lock.lock().expect("enter lock");
-        {
-            let s = self.session.lock().expect("session lock");
-            if s.is_some() {
-                return Err(WorktreeError::Git {
-                    stderr: "already in a worktree session".into(),
-                });
-            }
+        self.enter_checked(slug)
+    }
+
+    /// Enter the worktree a directory names, whoever created it.
+    ///
+    /// A tree this product created is entered through its slug, which reads
+    /// the creation record and refuses a directory that is not the tree the
+    /// record describes. Any other tree is adopted as it stands: the session
+    /// works in the directory Git lists, takes a lease on it, and leaves its
+    /// branch alone when the session ends.
+    pub fn enter_at_prepared(&self, path: &Path) -> Result<PreparedEnter, WorktreeError> {
+        let target = resolve_target(&self.repo_root, path)?;
+        let _entering = self.enter_lock.lock().expect("enter lock");
+        match &target.role {
+            WorktreeRole::Linked { slug: Some(slug) } => self.enter_checked(Some(slug.clone())),
+            WorktreeRole::MainCheckout => Err(WorktreeError::MainCheckout {
+                path: target.path().to_path_buf(),
+            }),
+            WorktreeRole::Linked { slug: None } => self.adopt_checked(target),
         }
-        // H10: refuse while a sandbox exec is in flight — a backgrounded
-        // command keeps its wide-fence profile alive and could write the main
-        // tree after the narrow.
-        if self.sandbox.active_exec_count() > 0 {
-            return Err(WorktreeError::Git {
-                stderr: "worktree enter refused: a sandbox exec is in flight; wait or cancel first"
-                    .into(),
-            });
-        }
+    }
+
+    /// The checks every enter stands behind, then the enter itself.
+    fn enter_checked(&self, slug: Option<String>) -> Result<PreparedEnter, WorktreeError> {
+        self.ensure_no_session()?;
+        self.ensure_idle_sandbox()?;
         let slug = slug.unwrap_or_else(|| {
             let n = SLUG_COUNTER.fetch_add(1, Ordering::Relaxed);
             format!("wt-{}-{}", id(), n)
@@ -322,20 +350,86 @@ impl WorktreeController {
                 return Err(error);
             }
         };
+        self.install(
+            Some(slug),
+            created.worktree_path,
+            created.worktree_branch,
+            created.head_commit,
+            lease,
+        )
+    }
+
+    /// Enter a tree this product did not create. Nothing is created: the tree
+    /// is the directory Git lists, its branch is the one it is checked out on,
+    /// and the lease is the one its own state key names.
+    fn adopt_checked(&self, target: WorktreeTarget) -> Result<PreparedEnter, WorktreeError> {
+        self.ensure_no_session()?;
+        self.ensure_idle_sandbox()?;
+        let lease = WorktreeLease::acquire_for(&self.repo_root, &target)?;
+        let head = Some(target.identity.head.clone());
+        self.install(
+            None,
+            target.identity.path.clone(),
+            target.identity.branch.clone(),
+            head,
+            lease,
+        )
+    }
+
+    /// Refuse a second enter.
+    fn ensure_no_session(&self) -> Result<(), WorktreeError> {
+        if self.session.lock().expect("session lock").is_some() {
+            return Err(WorktreeError::Git {
+                stderr: "already in a worktree session".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Refuse an enter while a sandboxed command is still running: a
+    /// backgrounded command keeps its profile over the wider fence alive and
+    /// could write the main tree after the fence moved.
+    fn ensure_idle_sandbox(&self) -> Result<(), WorktreeError> {
+        if self.sandbox.active_exec_count() > 0 {
+            return Err(WorktreeError::Git {
+                stderr: "worktree enter refused: a sandboxed command is still running; wait or cancel first"
+                    .into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Move the session into a tree: record the main branch ref, restrict the
+    /// fence to it, switch the working directory, and install the session
+    /// holding the lease.
+    fn install(
+        &self,
+        slug: Option<String>,
+        path: PathBuf,
+        branch: String,
+        head_commit: Option<String>,
+        lease: WorktreeLease,
+    ) -> Result<PreparedEnter, WorktreeError> {
         let original_branch = worktree_session::current_branch(&self.repo_root);
         // H5: record the main branch ref so exit can warn if it moved.
         let main_ref = original_branch
             .as_deref()
             .and_then(|b| worktree_session::rev_parse(&self.repo_root, &format!("refs/heads/{b}")));
-        *self.original_main_ref.lock().expect("main ref lock") = main_ref.clone();
+        *self.original_main_ref.lock().expect("main ref lock") = main_ref;
         // Narrow the fence to the worktree + .git allow-back. The guard
         // restores on drop.
-        let guard = self
-            .sandbox
-            .narrow_to_worktree(&created.worktree_path, &self.git_common_dir)
-            .map_err(|e| WorktreeError::Git {
-                stderr: format!("narrow_to_worktree: {e}"),
-            })?;
+        let guard = match self.sandbox.narrow_to_worktree(&path, &self.git_common_dir) {
+            Ok(guard) => guard,
+            Err(error) => {
+                // The lease guarded an enter that stopped here, so its file
+                // would keep every later preview and session out of a tree
+                // nobody is in.
+                lease.discard();
+                return Err(WorktreeError::Git {
+                    stderr: format!("narrow_to_worktree: {error}"),
+                });
+            }
+        };
         *self.fence_guard.lock().expect("fence guard lock") = Some(guard);
         // Switch the cwd (system prompt project-context walk-up). The sandbox
         // exec cwd already followed the narrow; this repoints the
@@ -343,14 +437,15 @@ impl WorktreeController {
         // reflect the worktree.
         let cwd_handle = self.cwd_handle.lock().expect("cwd handle lock").clone();
         let original_cwd = cwd_handle.read().expect("cwd lock").clone();
-        *cwd_handle.write().expect("cwd lock") = created.worktree_path.clone();
+        *cwd_handle.write().expect("cwd lock") = path.clone();
+        let name = slug.clone().unwrap_or_else(|| directory_name(&path));
         let session = WorktreeSession {
             original_cwd,
-            worktree_path: created.worktree_path.clone(),
-            worktree_name: slug.clone(),
-            worktree_branch: Some(created.worktree_branch.clone()),
+            worktree_path: path.clone(),
+            worktree_slug: slug,
+            worktree_branch: Some(branch.clone()),
             original_branch,
-            original_head_commit: created.head_commit.clone(),
+            original_head_commit: head_commit.clone(),
             session_id: self.session_id,
         };
         *self.session.lock().expect("session lock") = Some(ActiveWorktree {
@@ -358,10 +453,10 @@ impl WorktreeController {
             lease: Some(lease),
         });
         Ok(PreparedEnter {
-            slug,
-            path: created.worktree_path,
-            branch: created.worktree_branch,
-            head_commit: created.head_commit,
+            name,
+            path,
+            branch,
+            head_commit,
         })
     }
 
@@ -381,7 +476,7 @@ impl WorktreeController {
                 ts: 0,
                 prev_hash: None,
                 event: SessionEvent::WorktreeEnter {
-                    slug: prepared.slug,
+                    slug: prepared.name,
                     path: prepared.path.to_string_lossy().into_owned(),
                     branch: prepared.branch.clone(),
                     head_commit: prepared.head_commit,
@@ -511,10 +606,18 @@ impl WorktreeController {
             // on the blocking pool rather than on an async worker; the reclaim
             // path runs the same act the same way.
             let repo_root = self.repo_root.clone();
-            let slug = session.worktree_name.clone();
+            let slug = session.worktree_slug.clone();
             let walk_path = session.worktree_path.clone();
-            let removal =
-                spawn_blocking(move || worktree_session::remove_worktree(&repo_root, &slug)).await;
+            let tree_path = walk_path.clone();
+            let removal = spawn_blocking(move || match slug {
+                Some(slug) => worktree_session::remove_worktree(&repo_root, &slug),
+                // An adopted tree is resolved again from the directory the
+                // session worked in: the session holds no creation record for
+                // it, and the directory Git lists is what the removal acts on.
+                None => resolve_target(&repo_root, &tree_path)
+                    .and_then(|target| remove_target(&repo_root, &target)),
+            })
+            .await;
             match removal {
                 Ok(Ok(())) => {
                     self.fire_worktree_event(

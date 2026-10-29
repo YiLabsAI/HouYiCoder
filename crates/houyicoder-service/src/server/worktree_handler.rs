@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use houyicoder_core::agent::worktree::controller::WorktreeController;
+use houyicoder_core::agent::worktree::session::WorktreeError;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::worktree::WorktreeRemoveOutcome;
@@ -33,15 +34,13 @@ impl Server {
             return self.refuse_worktree(io, req_id, NO_REPOSITORY).await;
         };
         let preview = spawn_blocking(move || {
-            let slug = controller.slug_for_path(Path::new(&path))?;
-            controller
-                .preview_remove(&slug)
-                .map(|preview| (slug, preview))
+            let (target, preview) = controller.preview_at(Path::new(&path))?;
+            Ok::<_, WorktreeError>((target.name(), preview))
         })
         .await;
         match preview {
-            Ok(Ok((slug, preview))) => {
-                let view = worktree_view::map_preview(&slug, preview);
+            Ok(Ok((name, preview))) => {
+                let view = worktree_view::map_preview(&name, preview);
                 self.send_response(io, req_id, ResponsePayload::WorktreePreview(view))
                     .await
             }
@@ -66,11 +65,7 @@ impl Server {
             return self.refuse_worktree(io, req_id, NO_REPOSITORY).await;
         };
         let worker: Arc<WorktreeController> = Arc::clone(&controller);
-        let prepared = spawn_blocking(move || {
-            let slug = worker.slug_for_path(Path::new(&path))?;
-            worker.enter_prepared(Some(slug))
-        })
-        .await;
+        let prepared = spawn_blocking(move || worker.enter_at_prepared(Path::new(&path))).await;
         let prepared = match prepared {
             Ok(Ok(prepared)) => prepared,
             Ok(Err(error)) => return self.refuse_worktree(io, req_id, &error.to_string()).await,
@@ -108,8 +103,7 @@ impl Server {
         let tree = PathBuf::from(&path);
         let worker: Arc<WorktreeController> = Arc::clone(&controller);
         let removal = spawn_blocking(move || {
-            let slug = worker.slug_for_path(Path::new(&path))?;
-            worker.remove_previewed(&slug, &token, delete_unmerged_branch)
+            worker.remove_at_previewed(Path::new(&path), &token, delete_unmerged_branch)
         })
         .await;
         match removal {

@@ -14,7 +14,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 use crate::composition::WorktreeEntry;
 use crate::list_pane_state::{filter_by_query, search_hint_line, truncate_path};
 use crate::state::App;
-use crate::ui::{RemoveFocus, WorktreeLevel};
+use crate::ui::{RemovalDraft, RemoveFocus, WorktreeLevel};
 use crate::view::navigation::{block_with_keys, key_hint, key_row_height, tab_header};
 use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
@@ -37,28 +37,39 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
     let n = entries.len();
     let searching = app.ui.worktree_pane.search.get() || app.ui.worktree_pane.list.searching();
     let search_h: u16 = if searching { 1 } else { 0 };
-    let footer = key_hint(&[
-        ("Up/Down", "select"),
-        ("Enter", "open"),
-        ("e", "enter"),
-        ("d", "remove"),
-        ("/", "search"),
-        ("Esc", "close"),
-    ]);
+    let notice = app.ui.worktree_pane.notice();
+    let notice_h: u16 = if notice.is_some() { 1 } else { 0 };
+    let filtered_idx: Vec<usize> = filter_by_query(
+        entries,
+        &app.ui.worktree_pane.list.query,
+        |e: &WorktreeEntry| vec![&e.path, &e.branch],
+    );
+    let cur = app.ui.worktree_pane.list.cursor.min(n.saturating_sub(1));
+    // The cursor's row may be filtered out, in which case nothing is selected
+    // and no row action applies.
+    let selected = filtered_idx
+        .contains(&cur)
+        .then(|| entries.get(cur))
+        .flatten();
+    let footer = key_hint(&list_keys(selected));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Length(search_h),
+            Constraint::Length(notice_h),
             Constraint::Min(0),
             Constraint::Length(key_row_height(&footer, area)),
         ])
         .split(area);
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            format!("worktrees — {n} listed"),
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )])),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!("worktrees — {n} listed"),
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" (* current · ! dirty)", Style::new().fg(Color::DarkGray)),
+        ])),
         chunks[0],
     );
     if searching {
@@ -68,12 +79,12 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
             chunks[1],
         );
     }
-    let filtered_idx: Vec<usize> = filter_by_query(
-        entries,
-        &app.ui.worktree_pane.list.query,
-        |e: &WorktreeEntry| vec![&e.path, &e.branch],
-    );
-    let cur = app.ui.worktree_pane.list.cursor.min(n.saturating_sub(1));
+    if let Some(notice) = notice {
+        f.render_widget(
+            Paragraph::new(format!("  {notice}")).style(Style::new().fg(Color::Yellow)),
+            chunks[2],
+        );
+    }
     if filtered_idx.is_empty() {
         let msg = if entries.is_empty() {
             "  (no worktrees; run from a git repo or add one with enter_worktree)"
@@ -82,7 +93,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
         };
         f.render_widget(
             Paragraph::new(msg).style(Style::new().fg(Color::DarkGray)),
-            chunks[2],
+            chunks[3],
         );
     } else {
         let cursor_pos = filtered_idx.iter().position(|&i| i == cur);
@@ -97,7 +108,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol("❯ "),
-            chunks[2],
+            chunks[3],
             &mut state,
         );
     }
@@ -105,7 +116,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(footer)
             .wrap(Wrap { trim: false })
             .style(Style::new().fg(Color::DarkGray)),
-        chunks[3],
+        chunks[4],
     );
 }
 
@@ -138,10 +149,11 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
         Line::from(format!("Branch:   {} ({})", entry.branch, entry.head)),
         Line::from(format!(
             "State:    {}",
-            if entry.is_current {
-                "current worktree"
-            } else {
-                "linked worktree"
+            match (entry.is_main, entry.is_current) {
+                (true, true) => "main working tree (current)",
+                (true, false) => "main working tree",
+                (false, true) => "current worktree",
+                (false, false) => "linked worktree",
             }
         )),
     ];
@@ -178,12 +190,15 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    let keys = vec![
-        ("Up/Down", "scroll"),
-        ("e", "enter"),
-        ("d", "remove"),
-        ("Esc", "back"),
-    ];
+    // Only a key that can act on this tree is named: the main working tree is
+    // never entered or removed, and the tree the session already works in
+    // cannot be entered or removed either.
+    let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
+    if !entry.is_main && !entry.is_current {
+        keys.push(("e", "enter"));
+        keys.push(("d", "remove"));
+    }
+    keys.push(("Esc", "back"));
     block_with_keys(f, area, lines, &keys, &app.ui.worktree_pane.scroll);
 }
 
@@ -192,6 +207,10 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
 /// confirmation submits nothing while a removal is already out.
 fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
     let draft = app.ui.worktree_pane.draft.borrow();
+    let Some(preview) = draft.preview() else {
+        draw_unmeasured(f, area, app, &draft);
+        return;
+    };
     let focus = draft.focus();
     let mut lines = vec![tab_header(
         focus,
@@ -200,52 +219,42 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
             (RemoveFocus::Remove, "Remove worktree"),
         ],
     )];
-    match draft.preview() {
-        Some(preview) => {
-            lines.push(Line::from(format!(
-                "Worktree: {} ({})",
-                preview.slug, preview.path
-            )));
-            lines.push(Line::from(format!(
-                "Branch:   {} · {}",
-                preview.branch,
-                merge_label(preview)
-            )));
-            lines.push(Line::from(format!(
-                "Changes:  {} tracked dirty · {} untracked",
-                preview.tracked_dirty, preview.untracked
-            )));
-            lines.push(Line::from(format!(
-                "Ignored:  {}",
-                ignored_summary(preview)
-            )));
-            if preview.leased || preview.locked {
-                lines.push(Line::from(Span::styled(
-                    format!("Blocked:  {}", use_state(preview)),
-                    Style::new().fg(Color::Yellow),
-                )));
-            }
-            let discarded_commits = !preview.merged && draft.delete_unmerged_branch();
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "Removal:  {}",
-                    branch_disposition(preview, draft.delete_unmerged_branch())
-                ),
-                if discarded_commits {
-                    Style::new().fg(Color::Yellow)
-                } else {
-                    Style::new()
-                },
-            )));
-        }
-        None => {
-            // Only a read still out is "reading"; a read that ended without a
-            // preview states its reason in the notice below.
-            if draft.preview_request().is_some() {
-                lines.push(Line::from("Reading what a removal would discard…"));
-            }
-        }
+    lines.push(Line::from(format!(
+        "Worktree: {} ({})",
+        preview.name, preview.path
+    )));
+    lines.push(Line::from(format!(
+        "Branch:   {} · {}",
+        preview.branch,
+        merge_label(preview)
+    )));
+    lines.push(Line::from(format!(
+        "Changes:  {} tracked dirty · {} untracked",
+        preview.tracked_dirty, preview.untracked
+    )));
+    lines.push(Line::from(format!(
+        "Ignored:  {}",
+        ignored_summary(preview)
+    )));
+    if preview.leased || preview.locked {
+        lines.push(Line::from(Span::styled(
+            format!("Blocked:  {}", use_state(preview)),
+            Style::new().fg(Color::Yellow),
+        )));
     }
+    let discarded_commits =
+        preview.branch_deletable && !preview.merged && draft.delete_unmerged_branch();
+    lines.push(Line::from(Span::styled(
+        format!(
+            "Removal:  {}",
+            branch_disposition(preview, draft.delete_unmerged_branch())
+        ),
+        if discarded_commits {
+            Style::new().fg(Color::Yellow)
+        } else {
+            Style::new()
+        },
+    )));
     if draft.removing() {
         lines.push(Line::from(Span::styled(
             "Removing…",
@@ -258,33 +267,63 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    let mut keys: Vec<(&str, &str)> = vec![
-        ("Left/Right", "choose"),
-        ("Up/Down", "scroll"),
-        ("Enter", "confirm"),
-    ];
-    // A merged branch goes with the tree whatever the choice says, so the key
-    // that changes the choice is not offered where it would change nothing.
-    if draft.preview().is_none_or(|preview| !preview.merged) {
+    let mut keys: Vec<(&'static str, &'static str)> =
+        vec![("Left/Right", "choose"), ("Enter", "confirm")];
+    // A merged branch goes with the tree and a tree this product did not
+    // create keeps its branch whatever the choice says, so the key that
+    // changes the choice is not offered where it would change nothing.
+    if preview.branch_deletable && !preview.merged {
         keys.push(("b", "branch choice"));
     }
     keys.push(("r", "read again"));
     keys.push(("Esc", "back"));
-    block_with_keys(
-        f,
-        area,
-        lines,
-        &keys,
-        &app.ui.worktree_pane.scroll,
-    );
+    block_with_keys(f, area, lines, &keys, &app.ui.worktree_pane.scroll);
 }
 
-/// What the removal does with the worktree's branch. A merged branch is
-/// deleted whatever the toggle says, because its commits are already in the
-/// base; the toggle decides only whether an unmerged branch's commits survive.
-/// A branch Git counted no commits for is not the same as one holding none, so
-/// the row says what it does not know instead of counting to zero.
+/// A confirmation the host gave no preview for. Nothing can be removed from a
+/// page that does not know what a removal would discard, so it offers no
+/// button and no choice: it says what it waits on, or why the read ended
+/// without an answer, and leaves only the read that would fill it.
+fn draw_unmeasured(f: &mut Frame, area: Rect, app: &App, draft: &RemovalDraft) {
+    let reading = draft.preview_request().is_some();
+    let mut lines = Vec::new();
+    match (reading, draft.notice()) {
+        (true, _) => lines.push(Line::from("Reading what a removal would discard…")),
+        (false, Some(notice)) => lines.push(Line::from(Span::styled(
+            notice.to_string(),
+            Style::new().fg(Color::Yellow),
+        ))),
+        (false, None) => lines.push(Line::from(Span::styled(
+            "No preview was read, so nothing can be removed from here",
+            Style::new().fg(Color::Yellow),
+        ))),
+    }
+    let keys: &[(&'static str, &'static str)] = if reading {
+        &[("Esc", "back")]
+    } else {
+        &[("r", "read again"), ("Esc", "back")]
+    };
+    block_with_keys(f, area, lines, keys, &app.ui.worktree_pane.scroll);
+}
+
+/// What the removal does with the worktree's branch. A tree this product did
+/// not create is removed as a directory only, so its branch stays in the
+/// repository whatever the toggle says. A merged branch is deleted whatever
+/// the toggle says, because its commits are already in the base; the toggle
+/// decides only whether an unmerged branch's commits survive. A branch Git
+/// counted no commits for is not the same as one holding none, so the row says
+/// what it does not know instead of counting to zero.
 fn branch_disposition(preview: &WorktreePreviewView, delete_unmerged: bool) -> String {
+    if !preview.branch_deletable {
+        let held = match preview.unmerged_commits {
+            Some(_) => "unmerged commits kept",
+            None => "no count of what it holds",
+        };
+        return format!(
+            "the directory goes, branch {} kept in the repository, {held}",
+            preview.branch
+        );
+    }
     if preview.merged {
         let base = preview.base_branch.as_deref().unwrap_or("its base");
         return format!("deleted with the worktree, already merged into {base}");
@@ -352,6 +391,24 @@ fn use_state(preview: &WorktreePreviewView) -> &'static str {
     }
 }
 
+/// The keys the list can act with. An action is named only where a row the
+/// host would accept sits under the cursor: an empty or filtered-out list has
+/// nothing to open, and the main working tree is entered by nobody and
+/// removed by nobody.
+fn list_keys(selected: Option<&WorktreeEntry>) -> Vec<(&'static str, &'static str)> {
+    let mut keys = vec![("Up/Down", "select")];
+    if selected.is_some() {
+        keys.push(("Enter", "open"));
+    }
+    if selected.is_some_and(|entry| !entry.is_main && !entry.is_current) {
+        keys.push(("e", "enter"));
+        keys.push(("d", "remove"));
+    }
+    keys.push(("/", "search"));
+    keys.push(("Esc", "close"));
+    keys
+}
+
 /// Build the list rows (one per filtered worktree). The cursor is an index
 /// into the session's worktree rows (not the filtered list); when search is
 /// active the cursor's item may be filtered out, in which case no row is
@@ -366,12 +423,16 @@ fn worktree_items(
         .map(|&idx| {
             let e = &entries[idx];
             let is_cursor = idx == cur;
-            let cur_marker = if e.is_current {
-                " * "
+            // The marker says which tree this session works in, or failing
+            // that, that the tree holds uncommitted work. Two different facts
+            // take two colours: the current tree is the normal state, a dirty
+            // one is a warning.
+            let (cur_marker, marker_style) = if e.is_current {
+                (" * ", Style::new().fg(Color::Green))
             } else if !e.dirty_summary.is_empty() {
-                " ! "
+                (" ! ", Style::new().fg(Color::Yellow))
             } else {
-                "   "
+                ("   ", Style::new())
             };
             let path_style = if is_cursor {
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
@@ -386,7 +447,7 @@ fn worktree_items(
                 e.branch.clone()
             };
             let mut spans: Vec<Span> = vec![
-                Span::styled(cur_marker, Style::new().fg(Color::Green)),
+                Span::styled(cur_marker, marker_style),
                 Span::styled(format!("{:<width$}", path, width = PATH_WIDTH), path_style),
                 Span::styled(
                     format!(" {} [{}]", e.head, branch),

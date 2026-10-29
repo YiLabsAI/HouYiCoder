@@ -59,6 +59,11 @@ pub struct WorktreePaneState {
     /// block. A block that fits reads as zero; the renderer holds it at the
     /// last row that still fills the block.
     pub scroll: Cell<u16>,
+    /// What the list has to say about the last gesture on it, shown under the
+    /// header until the pane moves to another level. A refusal that opens no
+    /// page lands here, so the user reads why from the list instead of landing
+    /// on a page that cannot act.
+    pub notice: RefCell<Option<String>>,
     /// The removal confirmation the pane is holding.
     pub draft: RefCell<RemovalDraft>,
 }
@@ -73,10 +78,21 @@ impl WorktreePaneState {
     }
 
     /// Move to another level, which starts that level's block at its top: a
-    /// scroll position belongs to the block it was made in.
+    /// scroll position and a notice belong to the level they were made in.
     pub fn set_level(&self, level: WorktreeLevel) {
         self.level.set(level);
         self.scroll.set(0);
+        self.notice.replace(None);
+    }
+
+    /// Record what the list has to say about the last gesture.
+    pub fn set_notice(&self, notice: String) {
+        self.notice.replace(Some(notice));
+    }
+
+    /// What the list says about the last gesture.
+    pub fn notice(&self) -> Option<String> {
+        self.notice.borrow().clone()
     }
 }
 
@@ -104,15 +120,26 @@ pub struct RemovalDraft {
     enter_request: Option<RequestId>,
     delete_unmerged_branch: bool,
     return_level: WorktreeLevel,
+    open_on_preview: Option<WorktreeLevel>,
     notice: Option<String>,
 }
 
 impl RemovalDraft {
-    /// Point the draft at a worktree and name the level it returns to. A
-    /// preview already held for the same worktree is kept, and so is a read
-    /// already on its way, so moving between the levels does not read the
-    /// tree twice.
-    pub fn begin(&mut self, path: &str, return_level: WorktreeLevel) -> BeginOutcome {
+    /// Point the draft at a worktree, name the level it returns to, and name
+    /// the level to open once its preview lands. A preview already held for
+    /// the same worktree is kept, and so is a read already on its way, so
+    /// moving between the levels does not read the tree twice.
+    ///
+    /// The level to open afterwards is what keeps the confirmation off the
+    /// screen until the host has said what a removal would discard: a page
+    /// that held no preview would offer a removal whose only answer is a
+    /// refusal.
+    pub fn begin(
+        &mut self,
+        path: &str,
+        return_level: WorktreeLevel,
+        open_on: Option<WorktreeLevel>,
+    ) -> BeginOutcome {
         if self.path.as_deref() != Some(path) {
             if self.request.is_some() {
                 return BeginOutcome::Busy;
@@ -124,10 +151,20 @@ impl RemovalDraft {
         self.focus = RemoveFocus::Cancel;
         self.notice = None;
         if self.preview.is_some() {
+            self.open_on_preview = None;
             BeginOutcome::Ready
         } else {
+            self.open_on_preview = open_on;
             BeginOutcome::Reading
         }
+    }
+
+    /// Take the level to open now that the preview has landed, so the jump
+    /// happens once. A level held before the answer is not handed out: the
+    /// page it names would have nothing to show.
+    pub fn take_open_on_preview(&mut self) -> Option<WorktreeLevel> {
+        self.preview.as_ref()?;
+        self.open_on_preview.take()
     }
 
     /// The worktree directory this draft acts on.
@@ -210,8 +247,17 @@ impl RemovalDraft {
         self.delete_unmerged_branch
     }
 
-    /// Choose whether an unmerged branch goes with the tree.
+    /// Choose whether an unmerged branch goes with the tree. A branch the host
+    /// keeps whatever the order says cannot be chosen, so the toggle leaves
+    /// the state it cannot reach.
     pub fn toggle_branch_deletion(&mut self) {
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|preview| !preview.branch_deletable)
+        {
+            return;
+        }
         self.delete_unmerged_branch = !self.delete_unmerged_branch;
     }
 
@@ -273,6 +319,7 @@ impl RemovalDraft {
         self.enter_request = None;
         self.delete_unmerged_branch = false;
         self.return_level = WorktreeLevel::List;
+        self.open_on_preview = None;
         self.notice = None;
     }
 }

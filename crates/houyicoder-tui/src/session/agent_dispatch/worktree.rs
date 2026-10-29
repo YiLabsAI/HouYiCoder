@@ -15,18 +15,25 @@ use crate::ui::WorktreeLevel;
 
 impl App {
     /// Show a preview the host measured, when the pane still waits on that
-    /// request and on that worktree.
+    /// request and on that worktree. A gesture that aimed at the confirmation
+    /// opens it here, because until this answer there was nothing to confirm.
     pub(crate) fn apply_worktree_preview(
         &mut self,
         request: RequestId,
         preview: WorktreePreviewView,
     ) {
-        let mut draft = self.ui.worktree_pane.draft.borrow_mut();
-        if draft.preview_request() != Some(request) {
-            return;
+        let open = {
+            let mut draft = self.ui.worktree_pane.draft.borrow_mut();
+            if draft.preview_request() != Some(request) {
+                return;
+            }
+            draft.finish_preview();
+            draft.accept(preview);
+            draft.take_open_on_preview()
+        };
+        if let Some(level) = open {
+            self.ui.worktree_pane.set_level(level);
         }
-        draft.finish_preview();
-        draft.accept(preview);
     }
 
     /// The session moved into a worktree. Wherever the pane was, the
@@ -137,7 +144,15 @@ impl App {
             }
             if draft.preview_request() == Some(request) {
                 draft.finish_preview();
-                draft.set_notice(format!("cannot read the worktree: {message}"));
+                let sentence = format!("cannot read the worktree: {message}");
+                // The gesture may never have left the list, so the reason has
+                // to land on the level that asked rather than on a page the
+                // pane never opened.
+                if self.ui.worktree_pane.level.get() == WorktreeLevel::List {
+                    self.ui.worktree_pane.set_notice(sentence);
+                } else {
+                    draft.set_notice(sentence);
+                }
                 return true;
             }
             if draft.enter_request() == Some(request) {

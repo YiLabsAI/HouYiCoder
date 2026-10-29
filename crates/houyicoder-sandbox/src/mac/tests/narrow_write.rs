@@ -171,3 +171,80 @@ async fn test_worktree_refuses_main_write() {
     drop(s);
     remove_dir_all(&parent).ok();
 }
+
+/// A linked worktree may sit outside the checkout: Git records the link in the
+/// worktree's own .git file, and that record is what shows the directory is a
+/// checkout of this repository. Worktrees outside the checkout are ordinary,
+/// so refusing them refused a legitimate enter.
+#[test]
+fn test_narrow_admits_linked_tree() {
+    let parent = temp_dir().join(format!(
+        "houyi-narrow-linked-{}-{}",
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    create_dir_all(&parent).expect("mkdir parent");
+    let repo = parent.join("repo");
+    create_dir_all(&repo).expect("mkdir repo");
+    let run = |args: &[&str]| Command::new("git").arg("-C").arg(&repo).args(args).status();
+    assert!(run(&["init", "-q"]).unwrap().success(), "git init");
+    let _ = run(&["config", "user.email", "t@x"]).unwrap();
+    let _ = run(&["config", "user.name", "t"]).unwrap();
+    write(repo.join("README.md"), "main\n").expect("write readme");
+    assert!(run(&["add", "README.md"]).unwrap().success(), "git add");
+    assert!(
+        run(&["commit", "-m", "init", "-q"]).unwrap().success(),
+        "init commit"
+    );
+    let wt = parent.join("sibling-wt");
+    assert!(
+        run(&["worktree", "add", &wt.to_string_lossy(), "-q"])
+            .unwrap()
+            .success(),
+        "worktree add"
+    );
+
+    let s = MacSeatbeltSession::new_in_cwd(&repo).expect("session");
+    let guard = s
+        .narrow_to_worktree(&wt, &repo.join(".git"))
+        .expect("a linked worktree outside the checkout must be admitted");
+    guard.restore().expect("restore");
+    let _cleanup = remove_dir_all(&parent);
+}
+
+/// A directory outside the checkout that Git does not link as a worktree is
+/// still refused, so admitting linked trees does not admit an arbitrary path.
+#[test]
+fn test_narrow_refuses_outside_dir() {
+    let parent = temp_dir().join(format!(
+        "houyi-narrow-outside-{}-{}",
+        id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    create_dir_all(&parent).expect("mkdir parent");
+    let repo = parent.join("repo");
+    create_dir_all(&repo).expect("mkdir repo");
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success(),
+        "git init"
+    );
+    let outside = parent.join("outside");
+    create_dir_all(&outside).expect("mkdir outside");
+
+    let s = MacSeatbeltSession::new_in_cwd(&repo).expect("session");
+    let error = s
+        .narrow_to_worktree(&outside, &repo.join(".git"))
+        .err()
+        .expect("an unrelated outside directory must be refused");
+    assert!(
+        matches!(error, SandboxError::PathTraversal(_)),
+        "expected a path-traversal refusal, got {error:?}"
+    );
+    let _cleanup = remove_dir_all(&parent);
+}

@@ -15,6 +15,7 @@ use std::{fs::rename, os::unix::fs::symlink};
 
 use super::super::changes::WorktreeChanges;
 use super::super::identify::WorktreeIdentity;
+use super::super::identify::resolve_target;
 use super::super::record::ManagedWorktree;
 use super::super::record::WorktreeLease;
 use super::super::record::read_managed_worktree;
@@ -586,6 +587,111 @@ fn test_preview_rejects_other_branch() {
     assert!(
         matches!(preview, Err(WorktreeError::Identity { .. })),
         "{preview:?}"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A tree another tool made is previewed from Git's own record: its changes and
+/// its lease are measured, and the questions only a creation record could
+/// answer are reported unanswered rather than guessed. Its branch is not the
+/// removal's to delete.
+#[test]
+fn test_foreign_preview_reports_unanswered() {
+    let repo = make_repo("foreign");
+    let path = repo.join(".claude").join("worktrees").join("feat");
+    create_dir_all(path.parent().expect("tree parent")).expect("tree parent");
+    git(
+        &repo,
+        &["worktree", "add", "-b", "feat", &path.to_string_lossy()],
+    );
+    write(path.join("draft.txt"), "work\n").expect("write a change");
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+
+    let preview = preview_target(&repo, &target).expect("preview the tree");
+
+    assert_eq!(preview.changes.untracked, 1);
+    assert!(
+        !preview.branch_deletable,
+        "a branch this product did not create stays"
+    );
+    assert_eq!(preview.merge, MergeState::Unknown { base: None });
+    assert_eq!(
+        preview.unmerged_commits, None,
+        "no base was recorded, so no count is claimed"
+    );
+    assert!(!preview.leased, "nobody holds it");
+    assert_eq!(preview.token.len(), 16);
+    drop(remove_dir_all(&repo));
+}
+
+/// A session at a tree gives the preview a lease, and that lease is what
+/// refuses the removal rather than the token.
+#[test]
+fn test_foreign_preview_reads_lease() {
+    let repo = make_repo("foreign-lease");
+    let path = repo.join(".claude").join("worktrees").join("held");
+    create_dir_all(path.parent().expect("tree parent")).expect("tree parent");
+    git(
+        &repo,
+        &["worktree", "add", "-b", "held", &path.to_string_lossy()],
+    );
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+    let lease = WorktreeLease::acquire_for(&repo, &target).expect("take the lease");
+
+    let preview = preview_target(&repo, &target).expect("preview the tree");
+
+    assert!(preview.leased, "a lease held elsewhere is reported");
+    lease.discard();
+    drop(remove_dir_all(&repo));
+}
+
+/// Previews of a tree nobody changed agree, and the digest separates two trees
+/// that differ only in where they sit.
+#[test]
+fn test_foreign_token_tracks_state() {
+    let repo = make_repo("foreign-token");
+    let first = repo.join(".claude").join("worktrees").join("one");
+    create_dir_all(first.parent().expect("tree parent")).expect("tree parent");
+    git(
+        &repo,
+        &["worktree", "add", "-b", "one", &first.to_string_lossy()],
+    );
+    let target = resolve_target(&repo, &first).expect("resolve the tree");
+
+    let before = preview_target(&repo, &target).expect("preview").token;
+    let again = preview_target(&repo, &target).expect("preview again").token;
+    assert_eq!(before, again, "an unchanged tree previews to one token");
+
+    write(first.join("new.txt"), "x\n").expect("write a change");
+    let after = preview_target(&repo, &target).expect("preview").token;
+    assert_ne!(before, after, "a change moves the token");
+
+    let second = repo.join(".claude").join("worktrees").join("two");
+    git(
+        &repo,
+        &["worktree", "add", "-b", "two", &second.to_string_lossy()],
+    );
+    let other = resolve_target(&repo, &second).expect("resolve the other tree");
+    assert_ne!(
+        after,
+        preview_target(&repo, &other).expect("preview").token,
+        "two trees that differ only in their path hash apart"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// The repository's own working tree is refused before anything is read, so no
+/// page offers to take it apart.
+#[test]
+fn test_preview_refuses_main_checkout() {
+    let repo = make_repo("main");
+    let target = resolve_target(&repo, &repo).expect("resolve the repository itself");
+
+    let preview = preview_target(&repo, &target);
+
+    assert!(
+        matches!(preview, Err(WorktreeError::MainCheckout { .. })),
+        "the main tree is refused: {preview:?}"
     );
     drop(remove_dir_all(&repo));
 }

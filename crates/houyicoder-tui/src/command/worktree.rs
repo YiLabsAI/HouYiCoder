@@ -54,7 +54,12 @@ impl App {
         if filtered.is_empty() {
             return;
         }
-        let cur = self.ui.worktree_pane.list.cursor.min(entries.len());
+        let cur = self
+            .ui
+            .worktree_pane
+            .list
+            .cursor
+            .min(entries.len().saturating_sub(1));
         let pos = filtered.iter().position(|&i| i == cur).unwrap_or(0) as i32;
         let next = (pos + delta).clamp(0, (filtered.len() - 1) as i32) as usize;
         self.ui.worktree_pane.list.cursor = filtered[next];
@@ -81,60 +86,135 @@ impl App {
             .get(self.ui.worktree_pane.list.cursor)
     }
 
-    /// Open the detail view for the worktree under the cursor. The pane shows
-    /// the fields the listing already holds and asks the host what a removal
-    /// would discard, which the detail shows once it lands.
-    pub fn open_worktree_detail(&mut self) {
-        let Some(path) = self.worktree_at_cursor().map(|entry| entry.path.clone()) else {
-            return;
-        };
-        let outcome = self
-            .ui
-            .worktree_pane
-            .draft
-            .borrow_mut()
-            .begin(&path, WorktreeLevel::List);
-        self.show_worktree_target(path, WorktreeLevel::Detail, outcome);
+    /// The listing row for a worktree directory, when the listing still holds
+    /// it. A tree that stopped being listed can still be on screen in a draft,
+    /// so a missing row means no known standing rather than a removable tree.
+    fn worktree_entry(&self, path: &str) -> Option<&WorktreeEntry> {
+        self.sessions
+            .current
+            .capabilities
+            .worktree
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
     }
 
-    /// Open the removal confirmation for the worktree the pane is looking at,
-    /// reading its state from the host first when the pane holds no preview
-    /// for it. The confirmation backs out to the level it was opened from.
+    /// Say something on the level the user is looking at. The list keeps its
+    /// notice on the pane and the other levels keep theirs on the draft, so a
+    /// refusal has to be placed where it will be drawn.
+    fn worktree_notice(&mut self, notice: String) {
+        if self.ui.worktree_pane.level.get() == WorktreeLevel::List {
+            self.ui.worktree_pane.set_notice(notice);
+        } else {
+            self.ui.worktree_pane.draft.borrow_mut().set_notice(notice);
+        }
+    }
+
+    /// Open the detail view for the worktree under the cursor. The pane shows
+    /// the fields the listing already holds and asks the host what a removal
+    /// would discard, which the detail shows once it lands. The main working
+    /// tree is not a worktree the host can measure for removal, so entering
+    /// its detail sends no read: the answer would only be the refusal.
+    pub fn open_worktree_detail(&mut self) {
+        let Some(entry) = self.worktree_at_cursor() else {
+            return;
+        };
+        let path = entry.path.clone();
+        let is_main = entry.is_main;
+        let outcome =
+            self.ui
+                .worktree_pane
+                .draft
+                .borrow_mut()
+                .begin(&path, WorktreeLevel::List, None);
+        match outcome {
+            BeginOutcome::Busy => self.removal_already_out(),
+            BeginOutcome::Ready => self.ui.worktree_pane.set_level(WorktreeLevel::Detail),
+            BeginOutcome::Reading => {
+                self.ui.worktree_pane.set_level(WorktreeLevel::Detail);
+                if !is_main {
+                    self.start_preview_read(&path);
+                }
+            }
+        }
+    }
+
+    /// Open the removal confirmation for the worktree the pane is looking at.
+    ///
+    /// The confirmation opens only once the host has answered what a removal
+    /// would discard, so a tree that cannot be removed never reaches a page
+    /// whose only possible answer is a refusal: this level says why instead.
+    /// The main working tree and the tree the session is working in are both
+    /// refused here, whichever level the gesture came from, so no level can
+    /// send a request the host is certain to reject. The confirmation backs
+    /// out to the level it was opened from.
     pub fn begin_worktree_removal(&mut self) {
         let from = self.ui.worktree_pane.level.get();
         let Some(path) = self.viewed_worktree_path() else {
             return;
         };
-        let outcome = self.ui.worktree_pane.draft.borrow_mut().begin(&path, from);
-        self.show_worktree_target(path, WorktreeLevel::Confirm, outcome);
+        let refusal = self.worktree_entry(&path).and_then(|entry| {
+            if entry.is_main {
+                Some(format!(
+                    "{} is the repository's main working tree; it cannot be removed from here",
+                    entry.path
+                ))
+            } else if entry.is_current {
+                Some(format!(
+                    "{} is the worktree this session works in; enter another one before removing it",
+                    entry.path
+                ))
+            } else {
+                None
+            }
+        });
+        if let Some(refusal) = refusal {
+            self.worktree_notice(refusal);
+            return;
+        }
+        let outcome = self.ui.worktree_pane.draft.borrow_mut().begin(
+            &path,
+            from,
+            Some(WorktreeLevel::Confirm),
+        );
+        match outcome {
+            BeginOutcome::Busy => self.removal_already_out(),
+            BeginOutcome::Ready => self.ui.worktree_pane.set_level(WorktreeLevel::Confirm),
+            BeginOutcome::Reading => self.start_preview_read(&path),
+        }
     }
 
-    /// Show a worktree at a level, asking the host for its preview when the
-    /// pane holds none. A draft holding another worktree's removal stays as it
-    /// is, and the transcript says why, so the answer the user waits for still
-    /// lands on the screen that asked for it.
-    fn show_worktree_target(&mut self, path: String, level: WorktreeLevel, outcome: BeginOutcome) {
-        match outcome {
-            BeginOutcome::Busy => {
-                self.system_line(
-                    "worktree: a removal is still with the host; its answer comes first"
-                        .to_string(),
-                );
-            }
-            BeginOutcome::Ready => self.ui.worktree_pane.set_level(level),
-            BeginOutcome::Reading => {
-                self.ui.worktree_pane.set_level(level);
-                if self
-                    .ui
+    /// Say where a gesture that could not start went instead of dropping it.
+    fn removal_already_out(&mut self) {
+        self.system_line(
+            "worktree: a removal is still with the host; its answer comes first".to_string(),
+        );
+    }
+
+    /// Ask the host what a removal would discard, and say on the level the
+    /// gesture came from that the answer is on its way. The page the gesture
+    /// aimed at opens when the answer lands, so the wait is short enough to
+    /// read as part of the same gesture.
+    fn start_preview_read(&mut self, path: &str) {
+        if self
+            .ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .preview_request()
+            .is_none()
+        {
+            const READING: &str = "reading what a removal would discard…";
+            if self.ui.worktree_pane.level.get() == WorktreeLevel::List {
+                self.ui.worktree_pane.set_notice(READING.to_string());
+            } else {
+                self.ui
                     .worktree_pane
                     .draft
-                    .borrow()
-                    .preview_request()
-                    .is_none()
-                {
-                    self.request_worktree_preview(&path);
-                }
+                    .borrow_mut()
+                    .set_notice(READING.to_string());
             }
+            self.request_worktree_preview(path);
         }
     }
 
@@ -156,8 +236,14 @@ impl App {
     }
 
     /// Read the worktree again, so a confirmation whose answer went stale
-    /// shows what the tree holds now.
+    /// shows what the tree holds now. A removal already with the host is not
+    /// disturbed: its answer comes first, and a read would only blank the
+    /// page that states where the removal stands.
     pub fn retry_worktree_preview(&mut self) {
+        if self.ui.worktree_pane.draft.borrow().removing() {
+            self.removal_already_out();
+            return;
+        }
         let Some(path) = self.viewed_worktree_path() else {
             return;
         };
@@ -174,6 +260,29 @@ impl App {
         let Some(path) = self.viewed_worktree_path() else {
             return;
         };
+        // Entering the tree the session already works in would ask the host
+        // for a move to where it already is, and the host answers that with an
+        // error. The pane knows the answer, so it says it here.
+        if self
+            .worktree_entry(&path)
+            .is_some_and(|entry| entry.is_current)
+        {
+            self.worktree_notice(format!(
+                "{path} is already the worktree this session works in"
+            ));
+            return;
+        }
+        // The host refuses to enter the main working tree, so the pane says so
+        // here rather than sending a request whose answer is certain.
+        if self
+            .worktree_entry(&path)
+            .is_some_and(|entry| entry.is_main)
+        {
+            self.worktree_notice(format!(
+                "{path} is the main working tree; enter a linked worktree instead"
+            ));
+            return;
+        }
         if self
             .ui
             .worktree_pane

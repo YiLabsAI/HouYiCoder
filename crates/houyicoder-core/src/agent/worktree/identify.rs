@@ -1,6 +1,6 @@
-//! What directory a managed worktree path actually is: the checks that decide
-//! whether the thing on disk is the worktree this product created, read from
-//! the directory itself rather than from the slug that named it.
+//! What directory a worktree path actually is: the checks that decide whether
+//! the thing on disk is a worktree of this repository, read from the directory
+//! itself rather than from the name that led there.
 //!
 //! Resuming a tree and previewing its removal ask the same question, and must
 //! answer it the same way: a resume that accepted a directory the preview
@@ -21,6 +21,7 @@ use serde::Serialize;
 use super::session::WorktreeError;
 use super::session::canonicalize;
 use super::session::flatten_slug;
+use super::session::managed_slug_for_path;
 use super::session::run_git;
 use super::session::run_git_raw;
 use super::session::worktree_path_for;
@@ -42,6 +43,139 @@ pub struct WorktreeIdentity {
     /// Whether Git records the worktree as locked, which refuses removal until
     /// the lock is cleared or a second force is given.
     pub locked: bool,
+}
+
+/// The part a directory plays among the worktrees of one repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorktreeRole {
+    /// The repository's main working tree. A removal never acts on it: taking
+    /// it apart would take the repository with it.
+    MainCheckout,
+    /// A linked worktree. Its slug is Some when the directory sits where this
+    /// product creates its own trees, and None for one that came from
+    /// elsewhere, such as a tree another tool made.
+    Linked {
+        /// The slug this product would record the tree under.
+        slug: Option<String>,
+    },
+}
+
+/// A worktree of this repository, resolved from the directory a caller named.
+///
+/// A caller names a directory and Git's own worktree record says whether the
+/// repository owns it; nothing derives a worktree from a name the caller
+/// composed. Where the directory sits decides only whether this product
+/// created it, which is what the lease and the branch depend on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeTarget {
+    /// What Git reports about the directory.
+    pub identity: WorktreeIdentity,
+    /// The part the directory plays in the repository.
+    pub role: WorktreeRole,
+}
+
+impl WorktreeTarget {
+    /// The directory, resolved through every link on its path.
+    pub fn path(&self) -> &Path {
+        &self.identity.path
+    }
+
+    /// Whether this is the repository's main working tree.
+    pub fn is_main(&self) -> bool {
+        matches!(self.role, WorktreeRole::MainCheckout)
+    }
+
+    /// The name the pane shows for this worktree: the last segment of its
+    /// directory, since a linked tree from elsewhere has no slug.
+    pub fn name(&self) -> String {
+        directory_name(&self.identity.path)
+    }
+
+    /// The name this worktree's state files carry. A tree this product created
+    /// is named by its slug. Any other tree has none, so the directory it
+    /// resolved to is folded into a digest; the at-sign it starts with cannot
+    /// appear in a slug, so the two names never collide.
+    pub fn state_key(&self) -> String {
+        match &self.role {
+            WorktreeRole::Linked { slug: Some(slug) } => flatten_slug(slug),
+            WorktreeRole::MainCheckout | WorktreeRole::Linked { slug: None } => {
+                let bytes = self.identity.path.as_os_str().as_encoded_bytes();
+                format!("@{:016x}", fnv1a(bytes))
+            }
+        }
+    }
+}
+
+/// The name a directory is shown by: its last segment, or the whole path when
+/// it has none, so a worktree at a file-system root still has something to
+/// call it.
+pub(super) fn directory_name(path: &Path) -> String {
+    match path.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// The worktree the directory at a path is, refused unless Git lists the
+/// directory among the worktrees of the repository the caller works in.
+///
+/// The checks answer in the order that costs least and proves most: the
+/// directory has to resolve, be a directory, and belong to the same Git common
+/// directory as the repository; then Git's own worktree record has to name it.
+/// A directory that passes all four is a worktree of this repository whatever
+/// it holds and whoever made it, so the caller may read and take it apart. The
+/// first entry of Git's listing is the main working tree, which is reported as
+/// such rather than refused, because a caller that shows the list still has to
+/// name that row.
+pub fn resolve_target(repo_root: &Path, path: &Path) -> Result<WorktreeTarget, WorktreeError> {
+    let repo_root = canonicalize(repo_root)?;
+    let path = dunce::canonicalize(path).map_err(|e| WorktreeError::Identity {
+        path: path.to_path_buf(),
+        reason: format!("it could not be resolved: {e}"),
+    })?;
+    if !metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+        return Err(WorktreeError::Identity {
+            path,
+            reason: "it is not a directory".to_string(),
+        });
+    }
+    let not_a_worktree = |error: WorktreeError| WorktreeError::Identity {
+        path: path.clone(),
+        reason: format!("it is not a Git worktree: {error}"),
+    };
+    let head = run_git(&path, &["rev-parse", "HEAD"]).map_err(not_a_worktree)?;
+    let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).map_err(not_a_worktree)?;
+    let common_dir = common_dir_of(&path)?;
+    if common_dir != common_dir_of(&repo_root)? {
+        return Err(WorktreeError::Identity {
+            path,
+            reason: format!("it belongs to the repository at {}", common_dir.display()),
+        });
+    }
+    let listing = worktree_listing(&repo_root)?;
+    let Some(entry) = listing.iter().find(|entry| listed_at(entry, &path)) else {
+        return Err(WorktreeError::Identity {
+            path,
+            reason: "Git does not list it as a worktree of this repository".to_string(),
+        });
+    };
+    let role = if listing.first().is_some_and(|entry| listed_at(entry, &path)) {
+        WorktreeRole::MainCheckout
+    } else {
+        WorktreeRole::Linked {
+            slug: managed_slug_for_path(&repo_root, &path).ok(),
+        }
+    };
+    Ok(WorktreeTarget {
+        identity: WorktreeIdentity {
+            path,
+            common_dir,
+            branch,
+            head,
+            locked: entry.locked,
+        },
+        role,
+    })
 }
 
 /// The directory a slug names, checked against the managed root, the
@@ -179,6 +313,13 @@ pub(super) fn listed_in_git(repo_root: &Path, path: &Path) -> Result<bool, Workt
     Ok(listed_entry(repo_root, &resolved)?.is_some())
 }
 
+/// Whether Git's entry names the resolved directory at this path. An entry
+/// whose own path does not resolve names nothing the caller can compare, so it
+/// stays out of the comparison rather than matching or failing.
+fn listed_at(entry: &ListedEntry, path: &Path) -> bool {
+    canonicalize(&entry.path).is_ok_and(|at| at == path)
+}
+
 /// Git's entry for a resolved directory, when its listing carries one. An
 /// entry whose own path does not resolve names nothing this caller can compare,
 /// so it is skipped rather than treated as a match or as a failure.
@@ -217,6 +358,17 @@ fn parse_worktree_listing(raw: &[u8]) -> Vec<ListedEntry> {
         }
     }
     entries
+}
+
+/// FNV-1a over a byte sequence. Both uses here separate one value from another
+/// rather than resist an attacker, so a short non-cryptographic hash is enough.
+pub(super) fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// The directory a caller verified, so a path that now names a different

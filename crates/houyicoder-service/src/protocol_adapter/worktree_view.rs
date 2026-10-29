@@ -13,15 +13,17 @@ use houyicoder_protocol::frontend::worktree::WorktreeEnterView;
 use houyicoder_protocol::frontend::worktree::WorktreePreviewView;
 use houyicoder_protocol::frontend::worktree::WorktreeRemoveOutcome;
 
-/// Map a preview to the form the pane reads.
-pub(crate) fn map_preview(slug: &str, preview: WorktreePreview) -> WorktreePreviewView {
+/// Map a preview to the form the pane reads. The name is the slug of a tree
+/// this product created and the directory name of one it entered from
+/// elsewhere, so it is passed in rather than read from the preview.
+pub(crate) fn map_preview(name: &str, preview: WorktreePreview) -> WorktreePreviewView {
     let (merged, base_branch) = match &preview.merge {
         MergeState::Merged { base } => (true, Some(base.clone())),
         MergeState::NotMerged { base } => (false, Some(base.clone())),
         MergeState::Unknown { base } => (false, base.clone()),
     };
     WorktreePreviewView {
-        slug: slug.to_string(),
+        name: name.to_string(),
         path: preview.identity.path.to_string_lossy().into_owned(),
         branch: preview.identity.branch,
         head: preview.identity.head,
@@ -34,6 +36,7 @@ pub(crate) fn map_preview(slug: &str, preview: WorktreePreview) -> WorktreePrevi
         unmerged_commits: preview.unmerged_commits.map(u64::from),
         leased: preview.leased,
         locked: preview.locked,
+        branch_deletable: preview.branch_deletable,
         token: preview.token,
     }
 }

@@ -26,6 +26,9 @@ pub struct WorktreeEntry {
     pub head: String,
     pub branch: String,
     pub is_current: bool,
+    /// Whether this is the repository's main working tree. Git lists it first,
+    /// and it is the one row no removal ever acts on.
+    pub is_main: bool,
     pub last_modified: u64,
     /// Empty when clean; otherwise a breakdown like "3 modified, 1 untracked".
     pub dirty_summary: String,
@@ -85,6 +88,8 @@ pub fn parse_worktrees(repo_root: Option<&str>, working_dir: &str) -> Vec<Worktr
             cur.head.clear();
             cur.branch.clear();
             cur.is_current = false;
+            // Git lists the main working tree first, before any linked one.
+            cur.is_main = entries.is_empty();
             have = true;
         } else if let Some(head) = line.strip_prefix("HEAD ") {
             cur.head = head[..head.len().min(7)].to_string();

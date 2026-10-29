@@ -22,6 +22,7 @@ use houyicoder_context::write_atomic;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::identify::WorktreeTarget;
 use super::session::WorktreeError;
 use super::session::canonicalize;
 use super::session::flatten_slug;
@@ -106,9 +107,13 @@ pub(super) fn record_path(repo_root: &Path, slug: &str) -> PathBuf {
     state_dir(repo_root).join(format!("{}.json", flatten_slug(slug)))
 }
 
-/// The lease path for a slug.
-pub(super) fn lease_path(repo_root: &Path, slug: &str) -> PathBuf {
-    state_dir(repo_root).join(format!("{}.lease", flatten_slug(slug)))
+/// The lease path for a state key. The key is a slug for a tree this product
+/// created and a digest of the resolved directory for any other, which is why
+/// it is taken as the name it already is rather than flattened again: a
+/// digest holds no separator, so the two forms share one directory without
+/// one overwriting the other.
+pub(super) fn lease_path(repo_root: &Path, key: &str) -> PathBuf {
+    state_dir(repo_root).join(format!("{key}.lease"))
 }
 
 /// The directory holding the record of a removal that stopped with its
@@ -336,7 +341,10 @@ pub(super) fn clear_managed_state(repo_root: &Path, slug: &str) {
         tracing::warn!("worktree state not cleared for {slug}: {error}");
         return;
     }
-    let mut paths = vec![record_path(repo_root, slug), lease_path(repo_root, slug)];
+    let mut paths = vec![
+        record_path(repo_root, slug),
+        lease_path(repo_root, &flatten_slug(slug)),
+    ];
     // The cleanup record lives one directory deeper, and its directory is
     // proven inside the state directory before a file named there is deleted.
     match pending_dir_checked(repo_root) {
@@ -419,35 +427,52 @@ impl WorktreeLease {
     /// outside the allowlist is refused before a path is derived from it.
     pub fn acquire(repo_root: &Path, slug: &str) -> Result<Self, WorktreeError> {
         validate_worktree_slug(slug)?;
+        Self::acquire_key(repo_root, &flatten_slug(slug), slug)
+    }
+
+    /// Take the lease for a resolved worktree, whatever created it. A linked
+    /// tree from elsewhere has no slug, so its state key is what the lease
+    /// file is named after; the name it was listed under is what a refusal
+    /// shows the user.
+    pub(super) fn acquire_for(
+        repo_root: &Path,
+        target: &WorktreeTarget,
+    ) -> Result<Self, WorktreeError> {
+        Self::acquire_key(repo_root, &target.state_key(), &target.name())
+    }
+
+    /// Take the lease for a state key, creating its file when absent.
+    fn acquire_key(repo_root: &Path, key: &str, name: &str) -> Result<Self, WorktreeError> {
         state_dir_ready(repo_root)?;
-        let path = lease_path(repo_root, slug);
+        let path = lease_path(repo_root, key);
         let file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(false)
             .open(&path)
             .map_err(|e| WorktreeError::LeaseUnknown {
-                slug: slug.to_string(),
+                worktree: name.to_string(),
                 reason: format!("open {}: {e}", path.display()),
             })?;
         file.try_lock().map_err(|e| match e {
             // Another session holds the lease.
             TryLockError::WouldBlock => WorktreeError::Leased {
-                slug: slug.to_string(),
+                worktree: name.to_string(),
                 reason: "another session holds it".to_string(),
             },
             TryLockError::Error(e) => WorktreeError::LeaseUnknown {
-                slug: slug.to_string(),
+                worktree: name.to_string(),
                 reason: format!("lock {}: {e}", path.display()),
             },
         })?;
         Ok(Self { file, path })
     }
 
-    /// Give up the hold and remove the lease file, for a caller that took the
-    /// lease only to keep others out of an act that then did not happen. No
-    /// other process can hold the file this removes, because this guard is
-    /// still holding it; the lock is released after the file is gone.
+    /// Give up the hold and remove the lease file, for an act that stopped
+    /// without using what it guarded, or one that finished and has nothing
+    /// left to keep others out of. No other process can hold the file this
+    /// removes, because this guard is still holding it; the lock is released
+    /// after the file is gone.
     pub(super) fn discard(self) {
         match remove_file(&self.path) {
             Ok(()) => {}
@@ -471,17 +496,29 @@ impl Drop for WorktreeLease {
 /// to remove it and say why rather than report a session it never saw.
 pub fn worktree_leased(repo_root: &Path, slug: &str) -> Result<bool, WorktreeError> {
     validate_worktree_slug(slug)?;
+    leased_key(repo_root, &flatten_slug(slug), slug)
+}
+
+/// Whether a live process holds the lease of a resolved worktree, whoever
+/// created it. A tree this product never leased reads as not leased, which is
+/// what a pane showing a tree from elsewhere needs to know.
+pub(super) fn leased_for(repo_root: &Path, target: &WorktreeTarget) -> Result<bool, WorktreeError> {
+    leased_key(repo_root, &target.state_key(), &target.name())
+}
+
+/// Whether a live process holds the lease under a state key.
+fn leased_key(repo_root: &Path, key: &str, name: &str) -> Result<bool, WorktreeError> {
     state_dir_checked(repo_root)?;
-    let path = lease_path(repo_root, slug);
+    let path = lease_path(repo_root, key);
     let file = match OpenOptions::new().write(true).open(&path) {
         Ok(file) => file,
-        // No lease file means the slug was never leased, or a removal cleared
+        // No lease file means the name was never leased, or a removal cleared
         // it. A file that is there may hold no lock: releasing a lease leaves
         // the file behind, so the lock, not the file, is what answers.
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
         Err(e) => {
             return Err(WorktreeError::LeaseUnknown {
-                slug: slug.to_string(),
+                worktree: name.to_string(),
                 reason: format!("open {}: {e}", path.display()),
             });
         }
@@ -493,7 +530,7 @@ pub fn worktree_leased(repo_root: &Path, slug: &str) -> Result<bool, WorktreeErr
         }
         Err(TryLockError::WouldBlock) => Ok(true),
         Err(TryLockError::Error(e)) => Err(WorktreeError::LeaseUnknown {
-            slug: slug.to_string(),
+            worktree: name.to_string(),
             reason: format!("lock {}: {e}", path.display()),
         }),
     }

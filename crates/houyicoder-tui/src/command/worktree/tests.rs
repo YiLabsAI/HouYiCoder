@@ -1,4 +1,9 @@
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::FrontendRequest;
+
+use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::composition::{WorktreeEntry, app};
+use crate::test_harness::{connected_app_with_events, wait_for_request, worktree_preview};
 use crate::ui::WorktreeLevel;
 
 fn row(path: &str) -> WorktreeEntry {
@@ -129,10 +134,19 @@ fn test_enter_needs_connection() {
 /// from the detail returns to the detail rather than the list.
 #[test]
 fn test_close_returns_to_opener() {
-    let mut app = app();
+    let (mut app, events) = connected_app_with_events();
     app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
     app.ui.worktree_pane.list.cursor = 0;
     app.open_worktree_detail();
+    let read = wait_for_request(&events, |payload| {
+        matches!(payload, FrontendRequest::WorktreePreview { .. })
+    });
+    app.handle_agent_message(SessionMessage::Response {
+        request: read.req_id,
+        response: ServerResponse::WorktreePreview {
+            preview: worktree_preview("wt"),
+        },
+    });
     app.begin_worktree_removal();
     assert_eq!(app.ui.worktree_pane.level.get(), WorktreeLevel::Confirm);
     app.close_worktree_removal();
@@ -140,5 +154,138 @@ fn test_close_returns_to_opener() {
         app.ui.worktree_pane.level.get(),
         WorktreeLevel::Detail,
         "the confirmation returns to the detail it came from"
+    );
+}
+
+/// The main working tree is not a worktree the host can measure for removal,
+/// so its detail opens on what the listing holds and reads nothing.
+#[test]
+fn test_main_detail_reads_nothing() {
+    let (mut app, _events) = connected_app_with_events();
+    let mut main = row("/repo");
+    main.is_main = true;
+    main.is_current = true;
+    app.sessions.current.capabilities.worktree.entries = vec![main];
+    app.open_worktree_detail();
+    assert_eq!(app.ui.worktree_pane.level.get(), WorktreeLevel::Detail);
+    assert!(
+        app.ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .preview_request()
+            .is_none(),
+        "no read goes out for the main working tree"
+    );
+}
+
+/// A removal of the main working tree is refused where the gesture was made,
+/// including from the detail, and no confirmation opens on the refusal.
+#[test]
+fn test_main_removal_refused() {
+    let (mut app, _events) = connected_app_with_events();
+    let mut main = row("/repo");
+    main.is_main = true;
+    main.is_current = true;
+    app.sessions.current.capabilities.worktree.entries = vec![main];
+    app.open_worktree_detail();
+    app.begin_worktree_removal();
+    assert_eq!(
+        app.ui.worktree_pane.level.get(),
+        WorktreeLevel::Detail,
+        "the confirmation stays closed"
+    );
+    assert!(
+        app.ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .preview_request()
+            .is_none(),
+        "no read goes out"
+    );
+    assert!(
+        app.ui.worktree_pane.draft.borrow().notice().is_some(),
+        "the detail says why"
+    );
+}
+
+/// The tree the session works in cannot be removed either, and the list says
+/// so instead of sending a request the host would refuse.
+#[test]
+fn test_current_removal_refused() {
+    let mut app = app();
+    let mut current = row("/repo/current");
+    current.is_current = true;
+    app.sessions.current.capabilities.worktree.entries = vec![current];
+    app.begin_worktree_removal();
+    assert_eq!(app.ui.worktree_pane.level.get(), WorktreeLevel::List);
+    assert!(
+        app.ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .preview_request()
+            .is_none(),
+        "no read goes out"
+    );
+    assert!(app.ui.worktree_pane.notice().is_some(), "the list says why");
+}
+
+/// Entering the tree the session already works in changes nothing, so the
+/// gesture is answered in the pane rather than sent to the host.
+#[test]
+fn test_enter_refused_for_current() {
+    let (mut app, _events) = connected_app_with_events();
+    let mut current = row("/repo/current");
+    current.is_current = true;
+    app.sessions.current.capabilities.worktree.entries = vec![current];
+    app.enter_worktree_at_cursor();
+    assert!(
+        app.ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .enter_request()
+            .is_none(),
+        "no request goes out"
+    );
+    assert!(app.ui.worktree_pane.notice().is_some(), "the list says why");
+}
+
+/// The read key leaves a removal that is already with the host alone, since a
+/// fresh read would blank the page that states where the removal stands.
+#[test]
+fn test_retry_waits_for_removal() {
+    let (mut app, events) = connected_app_with_events();
+    app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
+    app.ui.worktree_pane.list.cursor = 0;
+    app.open_worktree_detail();
+    let read = wait_for_request(&events, |payload| {
+        matches!(payload, FrontendRequest::WorktreePreview { .. })
+    });
+    app.handle_agent_message(SessionMessage::Response {
+        request: read.req_id,
+        response: ServerResponse::WorktreePreview {
+            preview: worktree_preview("wt"),
+        },
+    });
+    app.begin_worktree_removal();
+    let submitted = app
+        .ui
+        .worktree_pane
+        .draft
+        .borrow_mut()
+        .take_submission(RequestId(9))
+        .is_some();
+    assert!(submitted, "the confirmation submits a removal");
+    app.retry_worktree_preview();
+    assert!(
+        app.ui.worktree_pane.draft.borrow().preview().is_some(),
+        "the preview the page states the removal against is kept"
+    );
+    assert!(
+        app.ui.worktree_pane.draft.borrow().removing(),
+        "the removal stays with the host"
     );
 }

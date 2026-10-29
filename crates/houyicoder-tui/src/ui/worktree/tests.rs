@@ -10,18 +10,18 @@ use crate::ui::{BeginOutcome, RemovalDraft, RemoveFocus, WorktreeLevel};
 fn test_draft_reuses_preview() {
     let mut draft = RemovalDraft::default();
     assert_eq!(
-        draft.begin(&worktree_path("alpha"), WorktreeLevel::List),
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None),
         BeginOutcome::Reading,
         "a first visit has nothing to show"
     );
     draft.accept(worktree_preview("alpha"));
     assert_eq!(
-        draft.begin(&worktree_path("alpha"), WorktreeLevel::Detail),
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::Detail, None),
         BeginOutcome::Ready,
         "the same worktree keeps the preview it already has"
     );
     assert_eq!(
-        draft.begin(&worktree_path("beta"), WorktreeLevel::Detail),
+        draft.begin(&worktree_path("beta"), WorktreeLevel::Detail, None),
         BeginOutcome::Reading,
         "another worktree needs its own read"
     );
@@ -34,10 +34,14 @@ fn test_draft_reuses_preview() {
 #[test]
 fn test_draft_reuses_pending_read() {
     let mut draft = RemovalDraft::default();
-    draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+    draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
     draft.expect_preview(RequestId(3));
     assert_eq!(
-        draft.begin(&worktree_path("alpha"), WorktreeLevel::Confirm),
+        draft.begin(
+            &worktree_path("alpha"),
+            WorktreeLevel::Confirm,
+            Some(WorktreeLevel::Confirm)
+        ),
         BeginOutcome::Reading
     );
     assert_eq!(
@@ -50,13 +54,13 @@ fn test_draft_reuses_pending_read() {
 #[test]
 fn test_draft_refuses_while_removing() {
     let mut draft = RemovalDraft::default();
-    draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+    draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
     draft.accept(worktree_preview("alpha"));
     draft
         .take_submission(RequestId(1))
         .expect("a free worktree submits");
     assert_eq!(
-        draft.begin(&worktree_path("beta"), WorktreeLevel::List),
+        draft.begin(&worktree_path("beta"), WorktreeLevel::List, None),
         BeginOutcome::Busy,
         "a removal with the host is not displaced by pointing elsewhere"
     );
@@ -67,7 +71,7 @@ fn test_draft_refuses_while_removing() {
     );
     draft.finish_removal();
     assert_eq!(
-        draft.begin(&worktree_path("beta"), WorktreeLevel::List),
+        draft.begin(&worktree_path("beta"), WorktreeLevel::List, None),
         BeginOutcome::Reading
     );
 }
@@ -75,7 +79,7 @@ fn test_draft_refuses_while_removing() {
 #[test]
 fn test_order_refused_while_leased() {
     let mut draft = RemovalDraft::default();
-    draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+    draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
     let mut preview = worktree_preview("alpha");
     preview.leased = true;
     draft.accept(preview);
@@ -89,7 +93,7 @@ fn test_order_refused_while_leased() {
 #[test]
 fn test_order_sent_once() {
     let mut draft = RemovalDraft::default();
-    draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+    draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
     draft.accept(worktree_preview("alpha"));
     let order = draft
         .take_submission(RequestId(7))
@@ -105,6 +109,41 @@ fn test_order_sent_once() {
     assert!(
         draft.take_submission(RequestId(9)).is_some(),
         "the answer reopens the retry"
+    );
+}
+
+#[test]
+fn test_read_opens_confirm_once() {
+    let mut draft = RemovalDraft::default();
+    assert_eq!(
+        draft.begin(
+            &worktree_path("alpha"),
+            WorktreeLevel::List,
+            Some(WorktreeLevel::Confirm)
+        ),
+        BeginOutcome::Reading
+    );
+    assert_eq!(
+        draft.take_open_on_preview(),
+        None,
+        "the page waits for a preview to show"
+    );
+    draft.accept(worktree_preview("alpha"));
+    assert_eq!(draft.take_open_on_preview(), Some(WorktreeLevel::Confirm));
+    assert_eq!(draft.take_open_on_preview(), None, "the jump happens once");
+}
+
+#[test]
+fn test_foreign_branch_not_toggled() {
+    let mut draft = RemovalDraft::default();
+    draft.begin(&worktree_path("alpha"), WorktreeLevel::Confirm, None);
+    let mut preview = worktree_preview("alpha");
+    preview.branch_deletable = false;
+    draft.accept(preview);
+    draft.toggle_branch_deletion();
+    assert!(
+        !draft.delete_unmerged_branch(),
+        "a branch the host keeps cannot be marked for deletion"
     );
 }
 

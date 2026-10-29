@@ -5,6 +5,7 @@ use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::{fs::rename, os::unix::fs::symlink};
 
+use super::super::session::worktree_branch_name;
 use super::*;
 
 static ROOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -128,6 +130,115 @@ fn test_listing_reads_lock() {
     assert!(!entries[0].locked, "the first entry carries no lock");
     assert_eq!(entries[1].path, PathBuf::from("/c"));
     assert!(entries[1].locked, "the lock line marks the entry before it");
+}
+
+/// A throwaway repository with one commit, so Git can register worktrees
+/// against it.
+fn temp_git_repo(tag: &str) -> PathBuf {
+    let sequence = ROOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let dir = temp_dir().join(format!("houyi-wt-target-{tag}-{}-{sequence}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("repo dir");
+    run_git(&dir, &["init", "-q"]).expect("init");
+    run_git(&dir, &["config", "user.email", "t@x"]).expect("user email");
+    run_git(&dir, &["config", "user.name", "t"]).expect("user name");
+    run_git(&dir, &["commit", "--allow-empty", "-m", "init", "-q"]).expect("first commit");
+    dir
+}
+
+/// Register a linked worktree at a path Git takes as given, the way another
+/// tool would place one.
+fn linked_tree(repo: &Path, path: &Path, branch: &str) {
+    create_dir_all(path.parent().expect("parent dir")).expect("tree parent");
+    run_git(
+        repo,
+        &["worktree", "add", "-b", branch, &path.to_string_lossy()],
+    )
+    .expect("register the tree");
+}
+
+/// The repository's own working tree is named as such rather than as a linked
+/// tree, so a caller can refuse to take it apart before it reads anything.
+#[test]
+fn test_target_names_main_checkout() {
+    let repo = temp_git_repo("main");
+    let target = resolve_target(&repo, &repo).expect("resolve the repository itself");
+
+    assert!(target.is_main(), "the first listing entry is the main tree");
+    assert_eq!(target.path(), canonicalize(&repo).expect("resolved repo"));
+    assert_eq!(
+        target.state_key(),
+        format!(
+            "@{:016x}",
+            fnv1a(target.path().as_os_str().as_encoded_bytes())
+        ),
+        "a tree with no slug is named by a digest of its path"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A tree created elsewhere is a linked tree with no slug, whatever directory
+/// it lives in, so the caller reads it as one this product did not create.
+#[test]
+fn test_target_marks_foreign_tree() {
+    let repo = temp_git_repo("foreign");
+    let path = repo.join(".claude").join("worktrees").join("feat");
+    linked_tree(&repo, &path, "feat");
+
+    let target = resolve_target(&repo, &path).expect("resolve a tree another tool made");
+
+    assert!(!target.is_main());
+    assert_eq!(target.role, WorktreeRole::Linked { slug: None });
+    assert_eq!(target.name(), "feat");
+    assert_eq!(target.identity.branch, "feat");
+    drop(remove_dir_all(&repo));
+}
+
+/// A tree where this product creates its own is named by its slug, which is
+/// what the creation record and the lease are keyed by.
+#[test]
+fn test_target_marks_managed_tree() {
+    let repo = temp_git_repo("managed");
+    create_dir_all(repo.join(".houyicoder")).expect("state dir");
+    let path = worktree_path_for(&repo, "team/otter");
+    linked_tree(&repo, &path, &worktree_branch_name("team/otter"));
+
+    let target = resolve_target(&repo, &path).expect("resolve a tree this product made");
+
+    assert_eq!(
+        target.role,
+        WorktreeRole::Linked {
+            slug: Some("team/otter".to_string())
+        }
+    );
+    assert_eq!(
+        flatten_slug("team/otter"),
+        target.state_key(),
+        "the flattened slug names the state files"
+    );
+    assert_eq!(
+        target.name(),
+        "team+otter",
+        "the pane names the directory, not the slug it came from"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A directory inside the repository that Git never registered is not a
+/// worktree, and the refusal says so instead of describing it.
+#[test]
+fn test_target_refuses_plain_dir() {
+    let repo = temp_git_repo("plain-dir");
+    let path = repo.join("just-a-directory");
+    create_dir_all(&path).expect("plain dir");
+
+    let error = resolve_target(&repo, &path).expect_err("nothing registered it");
+
+    assert!(
+        matches!(error, WorktreeError::Identity { .. }),
+        "expected Identity, got {error:?}"
+    );
+    drop(remove_dir_all(&repo));
 }
 
 /// A path that cannot be read has no numbers to hand, which is refused rather

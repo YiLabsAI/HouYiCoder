@@ -90,7 +90,7 @@ fn test_worktree_enter_opens_detail() {
             .draft
             .borrow()
             .preview()
-            .map(|p| p.slug.as_str()),
+            .map(|p| p.name.as_str()),
         Some("beta"),
         "the host's preview fills the detail"
     );
@@ -108,14 +108,19 @@ fn test_worktree_remove_needs_focus() {
     handle_working(&mut app, key(KeyCode::Char('d')));
     assert_eq!(
         app.ui.worktree_pane.level.get(),
-        WorktreeLevel::Confirm,
-        "d opens the confirmation"
+        WorktreeLevel::List,
+        "the confirmation waits for the host's answer"
     );
     let env = wait_for_request(
         &events,
         |payload| matches!(payload, FrontendRequest::WorktreePreview { path } if path == "/w/alpha"),
     );
     answer_preview(&mut app, env.req_id, "alpha");
+    assert_eq!(
+        app.ui.worktree_pane.level.get(),
+        WorktreeLevel::Confirm,
+        "the answer opens the confirmation"
+    );
     assert_eq!(
         app.ui.worktree_pane.draft.borrow().focus(),
         RemoveFocus::Cancel,
@@ -164,6 +169,40 @@ fn test_worktree_remove_needs_focus() {
     assert!(
         app.ui.worktree_pane.draft.borrow().removing(),
         "the confirmation waits on its own removal"
+    );
+}
+
+/// The repository's own working tree is named in the list rather than taken
+/// to a confirmation whose only possible answer is a refusal.
+#[test]
+fn test_main_row_refuses_removal() {
+    let (mut app, _events) = worktree_app();
+    app.sessions.current.capabilities.worktree.entries[0].is_main = true;
+    handle_working(&mut app, key(KeyCode::Char('d')));
+    assert_eq!(
+        app.ui.worktree_pane.level.get(),
+        WorktreeLevel::List,
+        "no page opens for a tree that cannot be removed"
+    );
+    assert!(
+        app.ui
+            .worktree_pane
+            .notice()
+            .is_some_and(|notice| notice.contains("main working tree")),
+        "the list says why"
+    );
+    assert!(
+        app.ui.worktree_pane.draft.borrow().path().is_none(),
+        "no removal is prepared"
+    );
+    assert!(
+        app.ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .preview_request()
+            .is_none(),
+        "the host is not asked to read a tree that cannot go"
     );
 }
 
@@ -307,17 +346,22 @@ fn test_worktree_unknown_key_noop() {
 }
 
 /// The detail keeps the list's two actions: e moves the session in, d opens
-/// the confirmation from where the user already is.
+/// the confirmation from where the user already is, once the read it was
+/// already waiting on lands.
 #[test]
 fn test_detail_keys_reach_actions() {
     let (mut app, events) = worktree_app();
     handle_working(&mut app, key(KeyCode::Enter));
+    let env = wait_for_request(&events, |payload| {
+        matches!(payload, FrontendRequest::WorktreePreview { .. })
+    });
     handle_working(&mut app, key(KeyCode::Char('e')));
     wait_for_request(
         &events,
         |payload| matches!(payload, FrontendRequest::WorktreeEnter { path } if path == "/w/alpha"),
     );
     handle_working(&mut app, key(KeyCode::Char('d')));
+    answer_preview(&mut app, env.req_id, "alpha");
     assert_eq!(
         app.ui.worktree_pane.level.get(),
         WorktreeLevel::Confirm,
@@ -412,8 +456,11 @@ fn test_editor_keeps_ctrl_keys() {
 /// rows are what the keys act on, and never move the list's cursor from there.
 #[test]
 fn test_scroll_keys_move_block() {
-    let (mut app, _events) = worktree_app();
+    let (mut app, events) = worktree_app();
     handle_working(&mut app, key(KeyCode::Enter));
+    let env = wait_for_request(&events, |payload| {
+        matches!(payload, FrontendRequest::WorktreePreview { .. })
+    });
     let cursor = app.ui.worktree_pane.list.cursor;
     handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(
@@ -431,6 +478,7 @@ fn test_scroll_keys_move_block() {
     );
     // The confirmation scrolls the same way, since the preview it shows is
     // just as long as the detail's.
+    answer_preview(&mut app, env.req_id, "alpha");
     handle_working(&mut app, key(KeyCode::Char('d')));
     handle_working(&mut app, key(KeyCode::Down));
     assert_eq!(

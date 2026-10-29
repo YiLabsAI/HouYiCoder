@@ -212,7 +212,7 @@ async fn test_worktree_removal_round_trip() {
     .await;
     let token = match preview {
         ResponsePayload::WorktreePreview(view) => {
-            assert_eq!(view.slug, "feat-a");
+            assert_eq!(view.name, "feat-a");
             assert_eq!(view.path, tree_path);
             assert!(!view.token.is_empty(), "a removal needs a token to name");
             view.token

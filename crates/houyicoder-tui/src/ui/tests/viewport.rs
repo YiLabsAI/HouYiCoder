@@ -587,13 +587,12 @@ fn test_worktree_pane_detail() {
         path: "/some/repo/alpha".into(),
         head: "abcdef0".into(),
         branch: "main".into(),
-        is_current: true,
         ..Default::default()
     }];
     app.ui.worktree_pane.level.set(WorktreeLevel::Detail);
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
-        draft.begin("/some/repo/alpha", WorktreeLevel::Detail);
+        draft.begin("/some/repo/alpha", WorktreeLevel::Detail, None);
         draft.expect_preview(RequestId(1));
     }
     let out = render(&app);
@@ -632,7 +631,7 @@ fn test_confirm_starts_on_cancel() {
     }];
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
-        draft.begin("alpha", WorktreeLevel::List);
+        draft.begin("alpha", WorktreeLevel::List, None);
         draft.accept(removal_preview("alpha"));
     }
     app.ui.worktree_pane.level.set(WorktreeLevel::Confirm);
@@ -678,7 +677,7 @@ fn test_confirm_brackets_focus() {
     }];
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
-        draft.begin("alpha", WorktreeLevel::List);
+        draft.begin("alpha", WorktreeLevel::List, None);
         draft.accept(removal_preview("alpha"));
         assert_eq!(draft.focus(), RemoveFocus::Cancel);
         draft.toggle_focus();

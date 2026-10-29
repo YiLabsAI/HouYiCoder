@@ -32,6 +32,7 @@ fn sample_preview(merge: MergeState) -> WorktreePreview {
         unmerged_commits: Some(3),
         leased: true,
         locked: false,
+        branch_deletable: true,
         token: "tok-9".to_string(),
     }
 }
@@ -46,7 +47,7 @@ fn test_preview_maps_every_measure() {
             base: "main".to_string(),
         }),
     );
-    assert_eq!(view.slug, "bold-otter");
+    assert_eq!(view.name, "bold-otter");
     assert_eq!(view.path, "/repo/.worktrees/bold-otter");
     assert_eq!(view.branch, "worktree/bold-otter");
     assert_eq!(view.head, "abc123");
@@ -62,6 +63,7 @@ fn test_preview_maps_every_measure() {
         !view.locked,
         "the preview's lock answer, not the identity's"
     );
+    assert!(view.branch_deletable, "the preview's branch answer");
     assert_eq!(view.token, "tok-9");
 }
 

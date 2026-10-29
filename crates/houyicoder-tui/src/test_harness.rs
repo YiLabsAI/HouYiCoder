@@ -214,12 +214,13 @@ pub(crate) fn worktree_path(name: &str) -> String {
 }
 
 /// One removal preview as the host answers it: dirty and untracked files, an
-/// ignored build directory, and an unmerged branch two commits ahead of dev.
-pub(crate) fn worktree_preview(slug: &str) -> WorktreePreviewView {
+/// ignored build directory, an unmerged branch two commits ahead of dev, and a
+/// branch the removal deletes with the tree.
+pub(crate) fn worktree_preview(name: &str) -> WorktreePreviewView {
     WorktreePreviewView {
-        slug: slug.to_string(),
-        path: worktree_path(slug),
-        branch: format!("worktree-{slug}"),
+        name: name.to_string(),
+        path: worktree_path(name),
+        branch: format!("worktree-{name}"),
         head: "abcdef0".to_string(),
         tracked_dirty: 2,
         untracked: 1,
@@ -230,6 +231,7 @@ pub(crate) fn worktree_preview(slug: &str) -> WorktreePreviewView {
         unmerged_commits: Some(2),
         leased: false,
         locked: false,
+        branch_deletable: true,
         token: "digest-1".to_string(),
     }
 }

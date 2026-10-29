@@ -8,16 +8,19 @@
 
 use serde::{Deserialize, Serialize};
 
-/// What a removal preview found in a managed worktree.
+/// What a removal preview found in a worktree.
 ///
 /// Every count is a number the host measured, so a count of zero means the
 /// host looked and found none. A question the host could not answer is None,
 /// never a zero standing in for an unknown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorktreePreviewView {
-    /// The name the host records the worktree under. Requests name the
-    /// directory instead; this is what the pane shows the user.
-    pub slug: String,
+    /// The name the pane shows for the worktree: the slug of one this product
+    /// created, and the directory name of one it did not. Requests name the
+    /// directory instead, so nothing acts on this value. A message recorded
+    /// under the field's earlier label still decodes.
+    #[serde(alias = "slug")]
+    pub name: String,
     /// The directory a removal would take apart.
     pub path: String,
     /// The branch the worktree is checked out on.
@@ -50,6 +53,13 @@ pub struct WorktreePreviewView {
     /// Whether Git records the worktree as locked, which refuses removal
     /// until the lock is released.
     pub locked: bool,
+    /// Whether the removal may delete the worktree's branch. A tree the host
+    /// created owns the branch it made; a tree it entered from elsewhere does
+    /// not, so its removal takes the directory and leaves the branch. A host
+    /// that does not send the field is read as keeping the branch, which is
+    /// the direction that loses no work.
+    #[serde(default)]
+    pub branch_deletable: bool,
     /// A digest of the tree's state, to be sent back with the removal. It
     /// proves nothing on its own: a removal compares it against the state it
     /// reads, so the comparison is what holds, not the value.

@@ -33,6 +33,8 @@ mod removal;
 
 pub use removal::remove_clean_worktree;
 pub use removal::remove_previewed_worktree;
+pub use removal::remove_target;
+pub use removal::remove_target_previewed;
 pub use removal::remove_worktree;
 
 /// Per-segment allowlist: letters, digits, dot, underscore, dash. The
@@ -61,9 +63,14 @@ pub enum WorktreeError {
     /// object it can act on and must leave the directory alone.
     Unmanaged { slug: String },
     /// The directory is not one this product created under its managed
-    /// worktrees directory, so no slug of this product names it and nothing
-    /// here may act on it.
+    /// worktrees directory, so no slug of this product names it.
     UnmanagedPath { path: PathBuf },
+    /// The directory is the repository's main working tree. A removal never
+    /// acts on it: taking it apart would take the repository with it.
+    MainCheckout { path: PathBuf },
+    /// The directory is the worktree this session works in, so a removal would
+    /// take away the directory the session is running from.
+    ActiveTree { path: PathBuf },
     /// The slug has a creation record this version refuses, so the directory
     /// cannot be established as the tree that record describes and nothing may
     /// act on it.
@@ -80,11 +87,13 @@ pub enum WorktreeError {
     /// could not be stored or read, or a path could not be resolved. Distinct
     /// from a Git failure so the message names the actor that failed.
     State { path: PathBuf, reason: String },
-    /// A live process holds the worktree's active-use lease.
-    Leased { slug: String, reason: String },
+    /// A live process holds the worktree's active-use lease. The name is the
+    /// worktree's slug when this product created it, and the directory name it
+    /// was entered under otherwise.
+    Leased { worktree: String, reason: String },
     /// The worktree's active-use lease could not be read, so whether a
     /// process holds it is unknown.
-    LeaseUnknown { slug: String, reason: String },
+    LeaseUnknown { worktree: String, reason: String },
     /// The directory was removed but its branch was not, so the act finished
     /// half done. The branch and the record are kept, and this answer names
     /// what survived rather than reporting the deleted directory as a failure
@@ -127,7 +136,17 @@ impl Display for WorktreeError {
             ),
             Self::UnmanagedPath { path } => write!(
                 f,
-                "{} is not a worktree this product created under its state directory, so it cannot be previewed, entered, or removed from here",
+                "{} is not a worktree this product created, so it carries no worktree name of this product's own",
+                path.display()
+            ),
+            Self::MainCheckout { path } => write!(
+                f,
+                "{} is the repository's main working tree; it is not a worktree the pane manages, and removing it would delete the repository",
+                path.display()
+            ),
+            Self::ActiveTree { path } => write!(
+                f,
+                "{} is the worktree this session is working in; leave it before removing it",
                 path.display()
             ),
             Self::RecordRejected { slug, reason } => write!(
@@ -149,11 +168,11 @@ impl Display for WorktreeError {
                 "worktree state at {} could not be used: {reason}",
                 path.display()
             ),
-            Self::Leased { slug, reason } => {
-                write!(f, "worktree \"{slug}\" is in use: {reason}")
+            Self::Leased { worktree, reason } => {
+                write!(f, "worktree \"{worktree}\" is in use: {reason}")
             }
-            Self::LeaseUnknown { slug, reason } => {
-                write!(f, "worktree \"{slug}\" in-use state unknown: {reason}")
+            Self::LeaseUnknown { worktree, reason } => {
+                write!(f, "worktree \"{worktree}\" in-use state unknown: {reason}")
             }
             Self::RemovalIncomplete {
                 path,
@@ -250,8 +269,9 @@ pub(super) fn worktrees_dir(repo_root: &Path) -> PathBuf {
 /// directory and carries the flattened form of its slug. The plus sign is not
 /// allowed inside a slug segment, so flattening is invertible and the slug is
 /// recovered from the directory name. Every other directory answers
-/// UnmanagedPath: that refusal is what keeps a worktree Git lists but this
-/// product never created from being entered, previewed, or removed from here.
+/// UnmanagedPath, which says this product made no tree there; a caller that
+/// can act on such a tree establishes it from Git's own worktree listing
+/// instead.
 pub fn managed_slug_for_path(repo_root: &Path, path: &Path) -> Result<String, WorktreeError> {
     let unmanaged = || WorktreeError::UnmanagedPath {
         path: path.to_path_buf(),
@@ -277,7 +297,11 @@ pub fn managed_slug_for_path(repo_root: &Path, path: &Path) -> Result<String, Wo
 pub struct WorktreeSession {
     pub original_cwd: PathBuf,
     pub worktree_path: PathBuf,
-    pub worktree_name: String,
+    /// The slug this product created the tree under, and None for a linked
+    /// tree the session entered from elsewhere. The path above names the
+    /// directory either way; only the slug decides what the lease and the
+    /// branch are.
+    pub worktree_slug: Option<String>,
     pub worktree_branch: Option<String>,
     pub original_branch: Option<String>,
     /// The HEAD commit at worktree creation — the baseline for counting

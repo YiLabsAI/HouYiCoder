@@ -756,14 +756,14 @@ fn test_errors_name_the_failure() {
         ),
         (
             WorktreeError::Leased {
-                slug: "tree".into(),
+                worktree: "tree".into(),
                 reason: "another session holds it".into(),
             },
             "is in use: another session holds it",
         ),
         (
             WorktreeError::LeaseUnknown {
-                slug: "tree".into(),
+                worktree: "tree".into(),
                 reason: "the lease file is a directory".into(),
             },
             "in-use state unknown: the lease file is a directory",

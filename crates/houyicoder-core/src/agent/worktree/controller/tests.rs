@@ -472,14 +472,14 @@ fn test_second_enter_refused_concurrently() {
 }
 
 #[tokio::test]
-async fn test_enter_refused_inflight_exec() {
+async fn test_enter_refused_while_running() {
     let repo = make_repo(4);
     let (controller, _store, _cwd) = wired(&repo, 1);
     let err = controller
         .enter(Some("feat-b".into()))
         .await
-        .expect_err("in-flight refused");
-    assert!(err.to_string().contains("in flight"));
+        .expect_err("running exec refused");
+    assert!(err.to_string().contains("still running"));
     remove_dir_all(&repo).ok();
 }
 

@@ -1,5 +1,5 @@
-//! What removing a managed worktree would discard: the identity the directory
-//! must still have, the changes it holds split by class, whether its branch is
+//! What removing a worktree would discard: the identity the directory must
+//! still have, the changes it holds split by class, whether its branch is
 //! merged, and a token naming the state the user was shown.
 //!
 //! The preview is evidence, not permission. The token names exactly the state
@@ -12,9 +12,13 @@ use std::path::Path;
 use super::changes::WorktreeChanges;
 use super::changes::read_changes;
 use super::identify::WorktreeIdentity;
+use super::identify::WorktreeRole;
+use super::identify::WorktreeTarget;
+use super::identify::fnv1a;
 use super::identify::resolve_identity;
 use super::record::ManagedWorktree;
 use super::record::RecordLookup;
+use super::record::leased_for;
 use super::record::lookup_record;
 use super::record::worktree_leased;
 use super::session::WorktreeError;
@@ -65,6 +69,11 @@ pub struct WorktreePreview {
     /// Whether Git records the worktree as locked, which refuses removal until
     /// the lock is cleared or a second force is given.
     pub locked: bool,
+    /// Whether the removal may delete the worktree's branch. A tree this
+    /// product created owns the branch it made, and a tree entered from
+    /// elsewhere does not: its branch belongs to whoever made the tree, so a
+    /// removal takes the directory and leaves the branch.
+    pub branch_deletable: bool,
     /// A digest of the tree's own state: the identity, the changes, and how
     /// the branch stands. It proves nothing on its own, and a caller that
     /// trusts it without re-reading the tree has a digest of whatever it was
@@ -122,6 +131,59 @@ pub fn preview_remove_worktree(
         unmerged_commits,
         leased,
         locked,
+        branch_deletable: true,
+        token,
+    })
+}
+
+/// Preview removing a resolved worktree, whoever created it.
+///
+/// A tree this product created goes through the creation record, which is the
+/// evidence that the directory still is the object the record describes. Any
+/// other tree has no record, so what it is comes from Git's own worktree
+/// listing alone, and the preview says what it can measure there: its changes,
+/// its lease, and its lock. No base branch was recorded for it, so the merge
+/// question is left unanswered rather than answered against a guess, and its
+/// branch is not the removal's to delete.
+///
+/// The main working tree is refused: a preview of taking it apart would offer
+/// the user a removal that could never run.
+pub fn preview_target(
+    repo_root: &Path,
+    target: &WorktreeTarget,
+) -> Result<WorktreePreview, WorktreeError> {
+    match &target.role {
+        WorktreeRole::Linked { slug: Some(slug) } => preview_remove_worktree(repo_root, slug),
+        WorktreeRole::MainCheckout => Err(WorktreeError::MainCheckout {
+            path: target.path().to_path_buf(),
+        }),
+        WorktreeRole::Linked { slug: None } => preview_foreign(repo_root, target),
+    }
+}
+
+/// The preview of a tree this product did not create. The lease is read before
+/// the tree is, for the same reason the managed preview does it: a lease that
+/// cannot be read refuses the preview, and the status read behind it is then
+/// not paid for.
+pub(super) fn preview_foreign(
+    repo_root: &Path,
+    target: &WorktreeTarget,
+) -> Result<WorktreePreview, WorktreeError> {
+    let repo_root = canonicalize(repo_root)?;
+    let leased = leased_for(&repo_root, target)?;
+    let changes = read_changes(target.path())?;
+    let merge = MergeState::Unknown { base: None };
+    let unmerged_commits = None;
+    let locked = target.identity.locked;
+    let token = preview_token(&target.identity, &changes, &merge, unmerged_commits, locked);
+    Ok(WorktreePreview {
+        identity: target.identity.clone(),
+        changes,
+        merge,
+        unmerged_commits,
+        leased,
+        locked,
+        branch_deletable: false,
         token,
     })
 }
@@ -227,17 +289,6 @@ fn preview_token(
         state.push(0);
     }
     format!("{:016x}", fnv1a(&state))
-}
-
-/// FNV-1a over the previewed state. A change detector only needs to separate
-/// two states of one worktree, so a short non-cryptographic digest is enough.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[cfg(test)]

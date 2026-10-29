@@ -8,9 +8,11 @@ use crate::composition;
 use crate::composition::WorktreeEntry;
 use crate::state::App;
 use crate::state::{Pane, Screen};
+use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
 use crate::test_harness::worktree_path;
 use crate::test_harness::worktree_preview;
+use ratatui::buffer::Buffer;
 
 fn pane_app() -> App {
     let mut app = composition::app();
@@ -29,7 +31,7 @@ fn with_preview(preview: WorktreePreviewView, level: WorktreeLevel) -> App {
     let app = pane_app();
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
-        draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
         draft.accept(preview);
     }
     app.ui.worktree_pane.level.set(level);
@@ -248,6 +250,46 @@ fn test_confirm_reports_progress() {
     assert!(out.contains("Removing…"), "{out}");
 }
 
+/// A confirmation whose preview the host refused states the refusal and
+/// offers neither the button nor the choice: nothing can be removed from a
+/// page that does not know what a removal would discard.
+#[test]
+fn test_refused_preview_offers_nothing() {
+    let app = pane_app();
+    {
+        let mut draft = app.ui.worktree_pane.draft.borrow_mut();
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
+        draft.set_notice("cannot read the worktree: not in a git work tree".to_string());
+    }
+    app.ui.worktree_pane.level.set(WorktreeLevel::Confirm);
+    let out = render(&app);
+    assert!(out.contains("cannot read the worktree"), "{out}");
+    assert!(out.contains("r to read again"), "{out}");
+    assert!(!out.contains("Remove worktree"), "{out}");
+    assert!(!out.contains("branch choice"), "{out}");
+}
+
+/// A confirmation still waiting on its preview offers only the way back out,
+/// since a choice narrowed to one button is not a choice.
+#[test]
+fn test_reading_preview_offers_escape() {
+    let app = pane_app();
+    {
+        let mut draft = app.ui.worktree_pane.draft.borrow_mut();
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
+        draft.expect_preview(RequestId(4));
+    }
+    app.ui.worktree_pane.level.set(WorktreeLevel::Confirm);
+    let out = render(&app);
+    assert!(
+        out.contains("Reading what a removal would discard"),
+        "{out}"
+    );
+    assert!(out.contains("Esc to back"), "{out}");
+    assert!(!out.contains("read again"), "{out}");
+    assert!(!out.contains("Remove worktree"), "{out}");
+}
+
 /// Each merge answer reads as the fact it is: merged, ahead by a counted
 /// number, unanswered against a base that is known, or no base at all.
 #[test]
@@ -273,6 +315,38 @@ fn test_merge_label_names_state() {
     assert!(out.contains("the record names no base branch"), "{out}");
 }
 
+/// A refusal lands on the list, above the rows the keys still act on, so the
+/// user reads why where the gesture was made.
+#[test]
+fn test_list_shows_notice() {
+    let app = pane_app();
+    app.ui.worktree_pane.set_notice(format!(
+        "{} is the repository's main working tree; it cannot be removed from here",
+        worktree_path("alpha")
+    ));
+    let out = render(&app);
+    assert!(out.contains("main working tree"), "{out}");
+    assert!(
+        out.contains("d to remove"),
+        "the keys keep their row: {out}"
+    );
+}
+
+/// A tree this product did not create keeps its branch, so the confirmation
+/// says the directory goes and the branch stays, and offers no key that would
+/// claim otherwise.
+#[test]
+fn test_foreign_branch_stays() {
+    let mut preview = worktree_preview("alpha");
+    preview.branch_deletable = false;
+    let out = render(&with_preview(preview, WorktreeLevel::Confirm));
+    assert!(
+        out.contains("branch worktree-alpha kept in the repository"),
+        "{out}"
+    );
+    assert!(!out.contains("b to branch choice"), "{out}");
+}
+
 /// A tree with nothing ignored says so rather than showing an empty suffix.
 #[test]
 fn test_ignored_summary_says_none() {
@@ -281,4 +355,157 @@ fn test_ignored_summary_says_none() {
     clean.ignored_unknown = 0;
     let out = render(&with_preview(clean, WorktreeLevel::Confirm));
     assert!(out.contains("Ignored:  none"), "{out}");
+}
+
+/// The main working tree cannot be entered or removed, so its detail names
+/// that standing and offers only the key that goes back. Naming a verb there
+/// would promise a host answer the host is certain to refuse.
+#[test]
+fn test_main_detail_offers_back() {
+    let mut app = pane_app();
+    let entry = &mut app.sessions.current.capabilities.worktree.entries[0];
+    entry.is_main = true;
+    entry.is_current = true;
+    app.ui.worktree_pane.level.set(WorktreeLevel::Detail);
+    let out = render(&app);
+    assert!(
+        out.contains("State:    main working tree (current)"),
+        "{out}"
+    );
+    assert!(!out.contains("e to enter"), "{out}");
+    assert!(!out.contains("d to remove"), "{out}");
+    assert!(out.contains("Esc to back"), "{out}");
+}
+
+/// A main working tree that is not current cannot be entered either, so its
+/// detail offers no verb. The enter key used to appear here, and every press
+/// collected a refusal from the host.
+#[test]
+fn test_main_detail_hides_enter() {
+    let mut app = pane_app();
+    let entry = &mut app.sessions.current.capabilities.worktree.entries[0];
+    entry.is_main = true;
+    entry.is_current = false;
+    app.ui.worktree_pane.level.set(WorktreeLevel::Detail);
+    let out = render(&app);
+    assert!(out.contains("State:    main working tree"), "{out}");
+    assert!(!out.contains("e to enter"), "{out}");
+    assert!(!out.contains("d to remove"), "{out}");
+}
+
+/// The list footer names only the verbs the selected row accepts: the main
+/// working tree is entered by nobody and removed by nobody.
+#[test]
+fn test_list_skips_main_verbs() {
+    let mut app = pane_app();
+    let entry = &mut app.sessions.current.capabilities.worktree.entries[0];
+    entry.is_main = true;
+    entry.is_current = false;
+    let out = render(&app);
+    assert!(out.contains("Enter to open"), "{out}");
+    assert!(!out.contains("e to enter"), "{out}");
+    assert!(!out.contains("d to remove"), "{out}");
+}
+
+/// An empty list has no row to open, so the footer names no row action.
+#[test]
+fn test_empty_list_hides_keys() {
+    let mut app = pane_app();
+    app.sessions.current.capabilities.worktree.entries.clear();
+    let out = render(&app);
+    assert!(!out.contains("Enter to open"), "{out}");
+    assert!(!out.contains("e to enter"), "{out}");
+    assert!(!out.contains("d to remove"), "{out}");
+    assert!(out.contains("Esc to close"), "{out}");
+}
+
+/// A linked tree the session works in cannot be entered again or removed, so
+/// its detail hides both verbs while still naming the standing.
+#[test]
+fn test_current_detail_hides_verbs() {
+    let mut app = pane_app();
+    app.sessions.current.capabilities.worktree.entries[0].is_current = true;
+    app.ui.worktree_pane.level.set(WorktreeLevel::Detail);
+    let out = render(&app);
+    assert!(out.contains("State:    current worktree"), "{out}");
+    assert!(!out.contains("e to enter"), "{out}");
+    assert!(!out.contains("d to remove"), "{out}");
+}
+
+/// A linked tree the session is not working in is the one the verbs act on.
+#[test]
+fn test_detail_linked_offers_verbs() {
+    let app = pane_app();
+    app.ui.worktree_pane.level.set(WorktreeLevel::Detail);
+    let out = render(&app);
+    assert!(out.contains("State:    linked worktree"), "{out}");
+    assert!(out.contains("e to enter"), "{out}");
+    assert!(out.contains("d to remove"), "{out}");
+}
+
+/// The list legend names both markers, and the dirty marker takes the warning
+/// colour while the current marker keeps the ordinary one, so the two facts are
+/// not read as the same state.
+#[test]
+fn test_list_legend_colours_markers() {
+    let mut app = pane_app();
+    app.sessions.current.capabilities.worktree.entries = vec![
+        WorktreeEntry {
+            path: "/some/repo".into(),
+            head: "abcdef0".into(),
+            branch: "main".into(),
+            is_main: true,
+            is_current: true,
+            ..Default::default()
+        },
+        WorktreeEntry {
+            path: "/some/repo/dirty".into(),
+            head: "1234567".into(),
+            branch: "feat".into(),
+            dirty_summary: "1 modified".into(),
+            ..Default::default()
+        },
+        WorktreeEntry {
+            path: "/some/repo/other".into(),
+            head: "7654321".into(),
+            branch: "topic".into(),
+            ..Default::default()
+        },
+    ];
+    // The cursor row is drawn in the highlight style, which would hide the
+    // marker colours this test is about, so the cursor sits on a plain row.
+    app.ui.worktree_pane.list.cursor = 2;
+    let out = render(&app);
+    assert!(
+        out.contains("worktrees — 3 listed (* current · ! dirty)"),
+        "{out}"
+    );
+    let buf = render_buffer(&app, 80, 24);
+    let current_row = row_of(&buf, "/some/repo ");
+    let dirty_row = row_of(&buf, "/some/repo/dirty");
+    assert!(
+        row_has(&buf, current_row, |style| style.fg == Some(Color::Green)),
+        "the current marker stays green"
+    );
+    assert!(
+        row_has(&buf, dirty_row, |style| style.fg == Some(Color::Yellow)),
+        "the dirty marker warns in yellow"
+    );
+}
+
+/// The row of the drawing that holds a needle.
+fn row_of(buf: &Buffer, needle: &str) -> u16 {
+    (0..buf.area.height)
+        .find(|&y| row_text(buf, y).contains(needle))
+        .unwrap_or_else(|| panic!("{needle} is not on screen"))
+}
+
+fn row_text(buf: &Buffer, y: u16) -> String {
+    (0..buf.area.width)
+        .map(|x| buf[(x, y)].symbol())
+        .collect::<String>()
+}
+
+fn row_has(buf: &Buffer, y: u16, matches: impl Fn(&Style) -> bool) -> bool {
+    (0..buf.area.width).any(|x| matches(&buf[(x, y)].style()))
 }

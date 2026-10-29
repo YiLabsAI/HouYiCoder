@@ -13,10 +13,13 @@ use super::super::cleanup::lookup_pending;
 use super::super::cleanup::remove_tree;
 use super::super::cleanup::write_pending;
 use super::super::identify::TargetStamp;
+use super::super::identify::WorktreeRole;
+use super::super::identify::WorktreeTarget;
 use super::super::identify::listed_in_git;
 use super::super::identify::resolve_identity;
 use super::super::preview::MergeState;
 use super::super::preview::merge_state;
+use super::super::preview::preview_foreign;
 use super::super::preview::preview_remove_worktree;
 use super::super::record::ManagedWorktree;
 use super::super::record::RecordLookup;
@@ -89,6 +92,126 @@ pub fn remove_clean_worktree(repo_root: &Path, slug: &str) -> Result<(), Worktre
         RemovalForce::Conservative,
         Authorization::Discard,
     )
+}
+
+/// Remove a worktree the user confirmed from the preview of a resolved
+/// directory. A tree this product created is taken apart under its creation
+/// record; any other tree is taken apart on Git's own worktree listing, with
+/// its branch left where it is.
+pub fn remove_target_previewed(
+    repo_root: &Path,
+    target: &WorktreeTarget,
+    token: &str,
+    delete_unmerged_branch: bool,
+) -> Result<(), WorktreeError> {
+    match &target.role {
+        WorktreeRole::Linked { slug: Some(slug) } => {
+            remove_previewed_worktree(repo_root, slug, token, delete_unmerged_branch)
+        }
+        WorktreeRole::MainCheckout => Err(WorktreeError::MainCheckout {
+            path: target.path().to_path_buf(),
+        }),
+        WorktreeRole::Linked { slug: None } => {
+            remove_foreign(repo_root, target, Authorization::Previewed(token))
+        }
+    }
+}
+
+/// Take a worktree apart for the session that worked in it, with the loss
+/// already accepted. The branch of a tree this product created goes with it;
+/// the branch of a tree entered from elsewhere stays.
+pub fn remove_target(repo_root: &Path, target: &WorktreeTarget) -> Result<(), WorktreeError> {
+    match &target.role {
+        WorktreeRole::Linked { slug: Some(slug) } => remove_worktree(repo_root, slug),
+        WorktreeRole::MainCheckout => Err(WorktreeError::MainCheckout {
+            path: target.path().to_path_buf(),
+        }),
+        WorktreeRole::Linked { slug: None } => {
+            remove_foreign(repo_root, target, Authorization::Discard)
+        }
+    }
+}
+
+/// Remove a linked worktree this product did not create, with its lease held
+/// for the whole act.
+///
+/// Such a tree has no creation record and no leftover record, because both are
+/// written per slug and this tree has none. What stands in their place is
+/// Git's own registration: the removal asks Git to take the tree away, and
+/// only a directory Git left behind after that is walked. The branch is never
+/// deleted: this product did not make it, so it is not the removal's to
+/// destroy.
+fn remove_foreign(
+    repo_root: &Path,
+    target: &WorktreeTarget,
+    authorization: Authorization<'_>,
+) -> Result<(), WorktreeError> {
+    let repo_root = canonicalize(repo_root)?;
+    if target.identity.locked {
+        return Err(WorktreeError::Locked {
+            path: target.path().to_path_buf(),
+            reason: "Git records a lock on it".to_string(),
+        });
+    }
+    // The lease is taken before the state is read, so nothing can begin
+    // working in the tree between the comparison and the act.
+    let lease = WorktreeLease::acquire_for(&repo_root, target)?;
+    let removed = remove_foreign_verified(&repo_root, target, authorization);
+    // The lease file is this removal's own residue either way: on success the
+    // tree it guarded is gone, and on failure a later attempt takes a fresh
+    // lease before it acts again.
+    lease.discard();
+    removed
+}
+
+/// The verified part of removing a tree this product did not create.
+fn remove_foreign_verified(
+    repo_root: &Path,
+    target: &WorktreeTarget,
+    authorization: Authorization<'_>,
+) -> Result<(), WorktreeError> {
+    let path = target.path();
+    // The numbers naming the directory are read before the checks and compared
+    // again right before the walk deletes, so a directory replaced in between
+    // is reported rather than deleted.
+    let stamp = TargetStamp::read(path)?;
+    // The confirmed preview is compared here, at the last point before Git is
+    // asked, so a tree that moved since the preview is reported as changed
+    // instead of being removed.
+    if let Authorization::Previewed(token) = authorization
+        && preview_foreign(repo_root, target)?.token != token
+    {
+        return Err(WorktreeError::Stale {
+            slug: target.name(),
+        });
+    }
+    if let Some(stamp) = stamp
+        && let Err(reason) = stamp.verify(path)
+    {
+        return Err(WorktreeError::Identity {
+            path: path.to_path_buf(),
+            reason,
+        });
+    }
+    let path_text = path.to_string_lossy().into_owned();
+    run_git(repo_root, &["worktree", "remove", "--force", &path_text])?;
+    // Git takes the directory with it. A directory still there afterwards is
+    // one this removal has to take away itself, under the same numbers the
+    // checks above agreed to. There is no record to finish it later, so a walk
+    // that fails names the directory and leaves it whole.
+    match path.try_exists() {
+        Ok(false) => Ok(()),
+        Ok(true) => remove_tree(path, stamp).map_err(|reason| WorktreeError::CleanupPending {
+            path: path.to_path_buf(),
+            reason,
+        }),
+        Err(error) => Err(WorktreeError::CleanupPending {
+            path: path.to_path_buf(),
+            reason: format!(
+                "git took its registration away, and whether the directory is gone could not be checked: {error}"
+            ),
+        }),
+    }
 }
 
 /// How much of Git's own caution a removal is allowed to override.

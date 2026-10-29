@@ -28,6 +28,7 @@ mod command;
 pub use command::command_shell;
 mod process;
 mod temp_dir;
+mod worktree;
 use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::shell_selection::ShellProgram;
@@ -611,54 +612,7 @@ impl SandboxSession for MacSeatbeltSession {
         worktree: &Path,
         git_common_dir: &Path,
     ) -> Result<WorktreeFenceGuard, SandboxError> {
-        // Refuse while an in-flight exec keeps its wide-fence profile alive
-        // (a backgrounded command could still write the main tree after the
-        // narrow). The caller should wait or cancel first.
-        if self.active_exec_count() > 0 {
-            return Err(SandboxError::Unsupported(
-                "worktree enter refused: a sandbox exec is in flight".into(),
-            ));
-        }
-        let worktree = dunce::canonicalize(worktree)
-            .map_err(|e| SandboxError::Io(format!("worktree canonicalize: {e}")))?;
-        let git_common = dunce::canonicalize(git_common_dir)
-            .map_err(|e| SandboxError::Io(format!("git common canonicalize: {e}")))?;
-        // The worktree must sit inside the repo root (the original workspace)
-        // — a path outside is an escape attempt.
-        if !worktree.starts_with(&self.workspace) {
-            return Err(SandboxError::PathTraversal(format!(
-                "worktree path escapes the repo root: {}",
-                worktree.display()
-            )));
-        }
-        // Allow-back the repo .git so git ops can read/write objects + refs,
-        // and keep the main checkout readable while writes stay narrowed.
-        self.add_working_dir(git_common.to_str().expect("git common path str"))?;
-        self.add_reading_dir(self.workspace.to_str().expect("workspace path str"))?;
-        // Record the narrow state: current_profile re-renders bound to the
-        // worktree + appends the .git/config read-allow; exec uses the
-        // worktree as cwd and leaves the environment untouched.
-        *self.narrow_workspace.lock().expect("narrow workspace lock") = Some(worktree.clone());
-        *self
-            .narrow_git_common
-            .lock()
-            .expect("narrow git common lock") = Some(git_common.clone());
-        // The restore closure reverts the narrow state + drops the .git
-        // allow-back. It captures Arc clones of the shared Mutex fields so it
-        // can revert through the original session (the Arc-clone points at the
-        // same Mutex). Runs on explicit restore or Drop.
-        let narrow_ws = Arc::clone(&self.narrow_workspace);
-        let narrow_git = Arc::clone(&self.narrow_git_common);
-        let dirs = self.dirs.clone();
-        let git_common_for_restore = git_common.clone();
-        let repo_for_restore = self.workspace.clone();
-        Ok(WorktreeFenceGuard::new(Box::new(move || {
-            *narrow_ws.lock().expect("restore: narrow ws lock") = None;
-            *narrow_git.lock().expect("restore: narrow git lock") = None;
-            dirs.remove_write(&git_common_for_restore);
-            dirs.remove_read(&repo_for_restore);
-            Ok(())
-        })))
+        worktree::narrow_to_worktree(self, worktree, git_common_dir)
     }
 
     fn add_working_dir(&self, path: &str) -> Result<(), SandboxError> {

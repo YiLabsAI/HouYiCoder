@@ -19,11 +19,13 @@ use crate::agent::worktree::cleanup::{
     PendingCleanup, RemovalIntent, lookup_pending, write_pending,
 };
 use crate::agent::worktree::identify::TargetStamp;
+use crate::agent::worktree::identify::resolve_target;
 use crate::agent::worktree::preview::preview_remove_worktree;
+use crate::agent::worktree::preview::preview_target;
 #[cfg(unix)]
 use crate::agent::worktree::record::state_dir;
 use crate::agent::worktree::record::{
-    ManagedWorktree, pending_path, read_managed_worktree, write_managed_worktree,
+    ManagedWorktree, WorktreeLease, pending_path, read_managed_worktree, write_managed_worktree,
 };
 
 /// Build the leftover a stopped removal leaves: a creation record, a branch, a
@@ -721,6 +723,125 @@ fn test_removal_refuses_changed_preview() {
         read_managed_worktree(&repo, slug).is_some(),
         "the creation record survives"
     );
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// A tree another tool made, checked out on a branch of its own name.
+fn foreign_tree(tag: &str, name: &str) -> (PathBuf, PathBuf) {
+    let repo = make_repo(tag);
+    let path = repo.join(".claude").join("worktrees").join(name);
+    fs::create_dir_all(path.parent().expect("tree parent")).expect("tree parent");
+    run_git(
+        &repo,
+        &["worktree", "add", "-b", name, &path.to_string_lossy()],
+    )
+    .expect("register the tree");
+    let resolved = dunce::canonicalize(&path).expect("resolve the tree");
+    (repo, resolved)
+}
+
+fn branch_at(repo: &Path, name: &str) -> bool {
+    run_git(
+        repo,
+        &["rev-parse", "--verify", &format!("refs/heads/{name}")],
+    )
+    .is_ok()
+}
+
+/// A tree this product did not create is taken apart by Git and its branch is
+/// left where it is, because the branch belongs to whoever made the tree.
+#[test]
+fn test_remove_target_keeps_branch() {
+    let (repo, path) = foreign_tree("foreign-remove", "feat");
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+
+    remove_target(&repo, &target).expect("the tree is removed");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(
+        branch_at(&repo, "feat"),
+        "the branch stays with the repository"
+    );
+    let listed = run_git(&repo, &["worktree", "list", "--porcelain"]).expect("list worktrees");
+    assert!(
+        !listed.contains(&path.to_string_lossy().into_owned()),
+        "Git no longer registers it"
+    );
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// The token a preview returned names the state the user confirmed, so the
+/// confirmed removal of such a tree runs and still keeps the branch.
+#[test]
+fn test_remove_target_accepts_token() {
+    let (repo, path) = foreign_tree("foreign-token", "quiet-otter");
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+    let token = preview_target(&repo, &target).expect("preview").token;
+
+    remove_target_previewed(&repo, &target, &token, true).expect("the confirmed removal runs");
+
+    assert!(!path.exists(), "the directory is gone");
+    assert!(
+        branch_at(&repo, "quiet-otter"),
+        "the branch stays whatever the order asked"
+    );
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// A tree that changed after its preview is not the one the user confirmed, so
+/// the removal refuses and answers Stale naming the directory.
+#[test]
+fn test_remove_target_refuses_stale() {
+    let (repo, path) = foreign_tree("foreign-stale", "busy-otter");
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+    let token = preview_target(&repo, &target).expect("preview").token;
+    write(path.join("added-later.txt"), "work").expect("change the tree");
+
+    let error =
+        remove_target_previewed(&repo, &target, &token, false).expect_err("the tree moved on");
+
+    assert!(
+        matches!(error, WorktreeError::Stale { ref slug } if slug == "busy-otter"),
+        "expected Stale naming the directory, got {error:?}"
+    );
+    assert!(path.exists(), "the directory survives");
+    assert!(branch_at(&repo, "busy-otter"), "the branch survives");
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// A leased tree refuses the removal before anything is read, so a session
+/// working in a tree this product did not create keeps it.
+#[test]
+fn test_remove_target_refuses_leased() {
+    let (repo, path) = foreign_tree("foreign-leased", "held-otter");
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+    let lease = WorktreeLease::acquire_for(&repo, &target).expect("take the lease");
+
+    let error = remove_target(&repo, &target).expect_err("a session holds it");
+
+    assert!(
+        matches!(error, WorktreeError::Leased { .. }),
+        "expected Leased, got {error:?}"
+    );
+    assert!(path.exists(), "the tree the session works in survives");
+    lease.discard();
+    drop(fs::remove_dir_all(&repo));
+}
+
+/// The repository's own working tree is refused by both removal verbs, so no
+/// path takes it apart.
+#[test]
+fn test_remove_target_refuses_main() {
+    let repo = make_repo("foreign-main");
+    let target = resolve_target(&repo, &repo).expect("resolve the repository itself");
+
+    let error = remove_target(&repo, &target).expect_err("the main tree is not removable");
+
+    assert!(
+        matches!(error, WorktreeError::MainCheckout { .. }),
+        "expected MainCheckout, got {error:?}"
+    );
+    assert!(repo.join(".git").exists(), "the repository is untouched");
     drop(fs::remove_dir_all(&repo));
 }
 

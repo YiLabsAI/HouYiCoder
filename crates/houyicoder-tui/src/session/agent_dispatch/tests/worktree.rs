@@ -32,7 +32,7 @@ fn waiting_on(request: RequestId, level: WorktreeLevel) -> App {
     let app = pane_app();
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
-        draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
         draft.expect_preview(request);
     }
     app.ui.worktree_pane.level.set(level);
@@ -43,7 +43,7 @@ fn holding_preview(level: WorktreeLevel) -> App {
     let app = pane_app();
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
-        draft.begin(&worktree_path("alpha"), WorktreeLevel::List);
+        draft.begin(&worktree_path("alpha"), WorktreeLevel::List, None);
         draft.accept(worktree_preview("alpha"));
     }
     app.ui.worktree_pane.level.set(level);
