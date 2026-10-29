@@ -9,6 +9,8 @@ use std::env::temp_dir;
 use std::fs;
 #[cfg(windows)]
 use std::fs::canonicalize;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::process::id;
 
@@ -113,6 +115,46 @@ fn test_startup_skips_stale_dir() {
     assert!(
         !dirs.iter().any(|d| d.contains("stale-deleted")),
         "the stale directory must not re-attach: {dirs:?}"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A stored grant whose path now leads somewhere else must not re-attach:
+/// the entry names the directory it was saved for, and a link retargeted
+/// after the fact would otherwise hand over whatever that path points at
+/// today.
+#[cfg(unix)]
+#[test]
+fn test_retargeted_link_not_restored() {
+    let root = temp_root("houyi-restore-retarget");
+    let store = temp_store(&root);
+    let target = root.join("authorized-dir");
+    fs::create_dir_all(&target).expect("mkdir target");
+    store
+        .add_directory(&target, Scope::Project)
+        .expect("add_directory");
+    let granted = dunce::canonicalize(&target).expect("canonicalize target");
+    // Replace the granted directory with a link to one the user never named.
+    let elsewhere = root.join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+    let elsewhere = dunce::canonicalize(&elsewhere).expect("canonicalize elsewhere");
+    fs::remove_dir_all(&target).expect("remove granted dir");
+    symlink(&elsewhere, &target).expect("link target to elsewhere");
+
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let session: Arc<dyn SandboxSession> =
+        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
+    restore_directory_grants(session.as_ref(), store.as_ref());
+
+    let dirs = session.working_dirs();
+    assert!(
+        !dirs.iter().any(|d| Path::new(d.as_str()) == granted),
+        "the grant must not re-attach once its path leads elsewhere: {dirs:?}"
+    );
+    assert!(
+        !dirs.iter().any(|d| Path::new(d.as_str()) == elsewhere),
+        "the directory the link now names was never granted: {dirs:?}"
     );
     fs::remove_dir_all(&root).ok();
 }
@@ -351,4 +393,36 @@ fn test_adapter_reports_capability() {
         }
     );
     assert_eq!(adapter.capability_revision(), 42);
+}
+
+/// A fence that cannot widen at runtime refuses both restores, and each
+/// refusal is counted rather than ending startup: one grant this backend
+/// cannot honour must not cost the user the rest of the session.
+#[test]
+fn test_refused_grant_keeps_starting() {
+    let root = temp_root("houyi-restore-refused");
+    let store = temp_store(&root);
+    let target = root.join("authorized-dir");
+    fs::create_dir_all(&target).expect("mkdir target");
+    store
+        .add_directory(&target, Scope::Project)
+        .expect("add_directory");
+    // A separate read-only directory: the store folds a read grant into an
+    // existing write grant, so reusing the same path would never reach the
+    // read re-attach.
+    let read_target = root.join("read-dir");
+    fs::create_dir_all(&read_target).expect("mkdir read target");
+    store
+        .add_read_directory(&read_target, Scope::Project)
+        .expect("add_read_directory");
+    let session = CapableSession;
+
+    restore_directory_grants(&session, store.as_ref());
+
+    assert!(
+        session.working_dirs().is_empty(),
+        "a fence that refuses the grant reports nothing granted: {:?}",
+        session.working_dirs()
+    );
+    fs::remove_dir_all(&root).ok();
 }

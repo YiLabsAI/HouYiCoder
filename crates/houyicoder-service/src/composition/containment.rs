@@ -163,28 +163,48 @@ impl Containment for ContainmentAdapter {
 /// approval card) live in the store's envelope; the fence is in-memory and
 /// starts empty, so without this bridge a persistent directory auth is silent
 /// on restart — the store has it, but the kernel fence does not, and the tool
-/// still refuses. Errors are ignored: a directory deleted since it was
-/// persisted should not brick startup; the stale entry just does not re-attach.
+/// still refuses.
+///
+/// A stored entry re-attaches only while the path still resolves to the
+/// directory it was saved for. The saved spelling is already resolved, so a
+/// path that resolves elsewhere now — the directory is gone, or the same name
+/// leads through a different link — names a directory the user never
+/// approved, and attaching it would hand over whatever it points at today.
+/// Skipping is also why a deleted directory cannot brick startup.
 pub(crate) fn restore_directory_grants(session: &dyn SandboxSession, store: &dyn RuleStore) {
     let write_dirs = store.load_directories();
     let read_dirs = store.load_read_directories();
-    let mut failed = 0;
+    let mut stale = 0;
+    let mut refused = 0;
     for dir in &write_dirs {
-        if session.add_working_dir(&dir.to_string_lossy()).is_err() {
-            failed += 1;
+        if !still_names_granted_dir(dir) {
+            stale += 1;
+        } else if session.add_working_dir(&dir.to_string_lossy()).is_err() {
+            refused += 1;
         }
     }
     for dir in &read_dirs {
-        if session.add_reading_dir(&dir.to_string_lossy()).is_err() {
-            failed += 1;
+        if !still_names_granted_dir(dir) {
+            stale += 1;
+        } else if session.add_reading_dir(&dir.to_string_lossy()).is_err() {
+            refused += 1;
         }
     }
     let total = write_dirs.len() + read_dirs.len();
-    if failed > 0 {
+    if stale + refused > 0 {
         tracing::warn!(
-            "startup: {failed}/{total} persistent directory authorizations failed to re-attach to the fence; the corresponding tools will refuse those paths"
+            "startup: {} of {total} persistent directory authorizations did not re-attach ({stale} no longer resolve to the directory they were granted for, {refused} the fence refused); the corresponding tools will refuse those paths",
+            stale + refused
         );
     }
+}
+
+/// Whether a stored directory grant still resolves to itself. Both sides of
+/// the comparison are resolved the same way, so a Windows path keeps the
+/// plain form this crate stores rather than the verbatim form the platform
+/// returns.
+fn still_names_granted_dir(stored: &Path) -> bool {
+    dunce::canonicalize(stored).is_ok_and(|now| now == stored)
 }
 
 /// Allow-back the repo git common dir when the workspace is a linked
