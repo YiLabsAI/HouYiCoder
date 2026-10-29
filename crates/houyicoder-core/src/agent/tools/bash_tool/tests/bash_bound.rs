@@ -5,7 +5,7 @@ use super::super::*;
 #[test]
 fn test_bound_under_cap_passes() {
     let dir = temp_dir();
-    let (o, e) = bound_bash_output("hello".into(), "world".into(), &dir);
+    let (o, e) = bound_bash_output("hello".into(), "world".into(), &dir, None);
     assert_eq!(o, "hello");
     assert_eq!(e, "world");
 }
@@ -14,7 +14,7 @@ fn test_bound_under_cap_passes() {
 fn test_bound_over_cap_spills() {
     let dir = temp_dir();
     let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
-    let (o, e) = bound_bash_output(big.clone(), String::new(), &dir);
+    let (o, e) = bound_bash_output(big.clone(), String::new(), &dir, None);
     assert!(o.contains("Output truncated"), "marker missing: {o}");
     assert!(
         o.contains("Full output saved to"),

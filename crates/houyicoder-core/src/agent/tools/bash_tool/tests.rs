@@ -2,6 +2,8 @@ mod bash_cancel;
 
 mod bash_bound;
 
+mod bash_capture;
+
 mod bash_shell;
 
 mod bash_timeout;
@@ -9,13 +11,14 @@ mod bash_timeout;
 use std::path::Path;
 use std::sync::Arc;
 
+use houyicoder_api::capture::CaptureStopReason;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::Tool;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::json;
 
-use super::{BashTool, MAX_TIMEOUT_MS, fold_notice, wall_budget_ms};
+use super::{BashTool, MAX_TIMEOUT_MS, fold_notice, saved_note, wall_budget_ms};
 
 /// A session that never runs anything: the schema question does not need one.
 struct NoExec;
@@ -130,4 +133,23 @@ fn test_wall_budget_accepts_timeout() {
         4000,
         "the documented name wins when both are present"
     );
+}
+
+/// The marker that says where the rest of the output went has to match what
+/// the file holds. A command stopped before it finished keeps only a prefix,
+/// so the marker names the stop instead of promising the full output.
+#[test]
+fn test_saved_note_names_stop() {
+    let path = Path::new("spill.log");
+    assert_eq!(
+        saved_note(path, 12, None),
+        "Full output saved to: spill.log"
+    );
+    for reason in [CaptureStopReason::ByteBudget, CaptureStopReason::WallBudget] {
+        let stopped = saved_note(path, 12, Some(reason));
+        assert!(
+            stopped.contains(&reason.to_string()) && stopped.contains("first 12KB"),
+            "the note names the stop and the length the file holds: {stopped}"
+        );
+    }
 }

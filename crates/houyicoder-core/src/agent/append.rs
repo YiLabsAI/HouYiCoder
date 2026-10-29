@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::agent::turn::result::run_completion_status;
 use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
 use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
+use houyicoder_protocol::block_ref::{BLOCK_REF_KEY, CONTAINS_KEY, block_addresses};
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
@@ -31,6 +31,7 @@ use super::hook::{HookEvent, wire::HookOutcome};
 use super::reducer::ReduceCtx;
 use super::reducer::TrustLevel;
 use super::{CompletionResponse, RunError, RunOutcome, RunResult, Runner};
+use std::collections::HashSet;
 use std::env::var;
 use std::sync::atomic::Ordering;
 
@@ -442,6 +443,15 @@ impl Runner {
         out
     }
 
+    /// Replace the whole output with one marker.
+    ///
+    /// The stored output may itself name blocks (a tool that published the
+    /// raw it dropped). The marker replaces the object that named them, so
+    /// they are restated beside it under contains: the reclaim pass walks
+    /// markers and never opens stored bytes, and without the restatement it
+    /// would release blocks the log still needs. Each address is restated
+    /// once, and an output naming more distinct blocks than the restatement
+    /// allows keeps its references inline.
     async fn externalize_whole(
         &self,
         tool: &str,
@@ -452,11 +462,38 @@ impl Runner {
         let Some(backend) = backend else {
             return output;
         };
+        // One restated entry per address, in document order: an output that
+        // names the same block six hundred times must not cost the event six
+        // hundred copies of its address.
+        let contained: Vec<String> = {
+            let mut seen = HashSet::new();
+            block_addresses(&output)
+                .into_iter()
+                .filter(|hash| seen.insert(*hash))
+                .map(str::to_string)
+                .collect()
+        };
+        if contained.len() > MAX_RESTATED_ADDRESSES {
+            // The restatement has to name every address it restates: the
+            // reclaim pass can only follow what it sees. Past this many, the
+            // output stays inline, where the walk reaches its own references
+            // without a copy.
+            return output;
+        }
         let hash = match backend.block_put(bytes.clone()).await {
             Ok(h) => h,
             Err(_) => return output,
         };
-        self.marker_for(tool, &hash.0, &bytes)
+        let mut marker = self.marker_for(tool, &hash.0, &bytes);
+        if !contained.is_empty() {
+            marker[CONTAINS_KEY] = serde_json::json!(
+                contained
+                    .into_iter()
+                    .map(|hash| serde_json::json!({BLOCK_REF_KEY: hash}))
+                    .collect::<Vec<_>>()
+            );
+        }
+        marker
     }
 
     /// Build the block_ref marker (preview + hint + data_tag) from the
@@ -677,7 +714,16 @@ fn now_ts() -> u64 {
 /// Tool outputs larger than this (serialized bytes) are externalized to
 /// the CAS at the PostToolUse point. The 8KB threshold balances a single
 /// large result against per-turn retrieval cost.
-const ISOLATE_LARGE_OUTPUT_BYTES: usize = 8192;
+pub(crate) const ISOLATE_LARGE_OUTPUT_BYTES: usize = 8192;
+
+/// The most distinct block addresses one externalized output may restate.
+///
+/// A whole-output externalize replaces the object that named those blocks, so
+/// its marker has to name each of them again for the reclaim pass. Past this
+/// count the restatement costs the event more than the externalization saves,
+/// and the output stays inline instead. That fallback is bounded: the tool has
+/// already bounded its own result before this runs.
+const MAX_RESTATED_ADDRESSES: usize = 64;
 
 /// Inline preview length, in chars, stored alongside a block_ref marker so
 /// the Summarize tier can serve a preview without a retrieval. Matches the

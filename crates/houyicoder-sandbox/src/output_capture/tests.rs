@@ -2,6 +2,9 @@
 // spawn, so the process-chokepoint rule is allowed here.
 #![allow(clippy::disallowed_methods)]
 use super::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
+use houyicoder_api::capture::{
+    CaptureStop, CaptureStopReason, CaptureVerdict, CapturedStream, RawOutputReceiver,
+};
 use houyicoder_context::SandboxError;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
@@ -27,7 +30,7 @@ async fn test_pipe_streams_ends_stdin() {
     let captured = CapturedOutput::default();
     let outcome = timeout(
         Duration::from_secs(2),
-        capture(child, None, &captured, DRAIN_GRACE),
+        capture(child, None, &captured, DRAIN_GRACE, None),
     )
     .await
     .expect("cat must reach end of file instead of waiting on the held pipe");
@@ -47,7 +50,7 @@ async fn test_capture_counts_lines() {
     let child = cmd.spawn().expect("spawn sh");
     let counter = Arc::new(AtomicI64::new(-1));
     let captured = CapturedOutput::default();
-    let output = capture(child, Some(&counter), &captured, DRAIN_GRACE)
+    let output = capture(child, Some(&counter), &captured, DRAIN_GRACE, None)
         .await
         .expect("capture");
     assert_eq!(counter.load(Ordering::Relaxed), 5, "final line count");
@@ -65,7 +68,7 @@ async fn test_capture_keeps_sentinel() {
     let child = cmd.spawn().expect("spawn sh");
     let counter = Arc::new(AtomicI64::new(-1));
     let captured = CapturedOutput::default();
-    let output = capture(child, Some(&counter), &captured, DRAIN_GRACE)
+    let output = capture(child, Some(&counter), &captured, DRAIN_GRACE, None)
         .await
         .expect("capture");
     assert_eq!(counter.load(Ordering::Relaxed), -1, "no stdout → sentinel");
@@ -120,7 +123,7 @@ async fn test_capture_requires_pipes() {
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     let child = cmd.spawn().expect("run true");
     let captured = CapturedOutput::default();
-    let err = capture(child, None, &captured, DRAIN_GRACE)
+    let err = capture(child, None, &captured, DRAIN_GRACE, None)
         .await
         .expect_err("an unpiped child cannot be drained");
     assert!(
@@ -141,7 +144,7 @@ async fn test_read_stops_at_exit() {
     let child = cmd.spawn().expect("spawn sh");
     let captured = CapturedOutput::default();
     let started = Instant::now();
-    let output = capture(child, None, &captured, Duration::from_millis(10))
+    let output = capture(child, None, &captured, Duration::from_millis(10), None)
         .await
         .expect("capture");
     let waited = started.elapsed();
@@ -154,4 +157,77 @@ async fn test_read_stops_at_exit() {
         "output printed before exit is kept"
     );
     assert!(output.status.success());
+}
+
+/// Refuses the first chunk it is handed.
+struct StopsAtOnce;
+
+impl RawOutputReceiver for StopsAtOnce {
+    fn receive(&self, _stream: CapturedStream, _bytes: &[u8]) -> CaptureVerdict {
+        CaptureVerdict::Stop(CaptureStop {
+            reason: CaptureStopReason::ByteBudget,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+        })
+    }
+}
+
+/// A capture that refuses the next chunk ends the command instead of draining
+/// a producer whose output is going nowhere. Without this, a command printing
+/// without end would run until its wall-clock budget.
+#[tokio::test]
+async fn test_stop_ends_command() {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg("yes");
+    pipe_streams(&mut cmd);
+    let child = cmd.spawn().expect("spawn sh");
+    let captured = CapturedOutput::default();
+    let started = Instant::now();
+    let output = timeout(
+        Duration::from_secs(2),
+        capture(child, None, &captured, DRAIN_GRACE, Some(&StopsAtOnce)),
+    )
+    .await
+    .expect("the stop must end the command rather than drain it")
+    .expect("capture");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the kill answers the call: waited {:?}",
+        started.elapsed()
+    );
+    assert!(
+        !output.status.success(),
+        "the producer was killed, not finished"
+    );
+}
+
+/// A stop that lands while the reads finish must still end the command. With
+/// one stream closed at once, its read ends before the other stream refuses
+/// bytes, so the finished reads and the stop arrive together; a drain that
+/// only watched for the stop signal would then wait for a producer that never
+/// stops printing.
+#[tokio::test]
+async fn test_stop_while_reads_finish() {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg("exec 2>/dev/null; yes");
+    pipe_streams(&mut cmd);
+    let child = cmd.spawn().expect("spawn sh");
+    let captured = CapturedOutput::default();
+    let started = Instant::now();
+    let output = timeout(
+        Duration::from_secs(2),
+        capture(child, None, &captured, DRAIN_GRACE, Some(&StopsAtOnce)),
+    )
+    .await
+    .expect("a stop beside finished reads must end the command")
+    .expect("capture");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the kill answers the call: waited {:?}",
+        started.elapsed()
+    );
+    assert!(
+        !output.status.success(),
+        "the producer was killed, not finished"
+    );
 }

@@ -6,18 +6,19 @@
 //! the bytes land in the caller's carrier as they arrive, so dropping the read
 //! future on a wall-clock stop loses nothing already read.
 
+use houyicoder_api::capture::{CaptureVerdict, CapturedStream, RawOutputReceiver};
 use houyicoder_api::launcher::{StdioConfig, StdioMode};
 use houyicoder_context::SandboxError;
 use std::io::Error;
 use std::process::Output;
 use std::process::Stdio;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::process::Command;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 
 /// How long the pipes keep draining once the direct child has exited. A
@@ -130,6 +131,7 @@ pub(crate) async fn capture(
     lines: Option<&AtomicI64>,
     captured: &CapturedOutput,
     grace: Duration,
+    receiver: Option<&dyn RawOutputReceiver>,
 ) -> std::io::Result<Output> {
     let Some(mut stdout) = child.stdout.take() else {
         return Err(Error::other("child stdout is not piped"));
@@ -137,10 +139,27 @@ pub(crate) async fn capture(
     let Some(mut stderr) = child.stderr.take() else {
         return Err(Error::other("child stderr is not piped"));
     };
+    // Raised when the capture refuses the next chunk. The command then has to
+    // stop: its output is going nowhere it can be kept, and a reader that
+    // keeps draining would let a runaway command run to its wall budget while
+    // the receiver grows or fails.
+    let stopped = AtomicBool::new(false);
+    let stop_signal = Notify::new();
+    let deliver = |stream: CapturedStream, bytes: &[u8]| {
+        if let Some(receiver) = receiver
+            && matches!(receiver.receive(stream, bytes), CaptureVerdict::Stop(_))
+        {
+            stopped.store(true, Ordering::Relaxed);
+            stop_signal.notify_one();
+        }
+    };
     let read_stdout = async {
         let mut chunk = vec![0u8; 8192];
         let mut nl: i64 = 0;
         loop {
+            if stopped.load(Ordering::Relaxed) {
+                break;
+            }
             let n = stdout.read(&mut chunk).await?;
             if n == 0 {
                 break;
@@ -150,17 +169,22 @@ pub(crate) async fn capture(
                 lines.store(nl, Ordering::Relaxed);
             }
             captured.push_stdout(&chunk[..n]);
+            deliver(CapturedStream::Stdout, &chunk[..n]);
         }
         Ok::<_, Error>(())
     };
     let read_stderr = async {
         let mut chunk = vec![0u8; 8192];
         loop {
+            if stopped.load(Ordering::Relaxed) {
+                break;
+            }
             let n = stderr.read(&mut chunk).await?;
             if n == 0 {
                 break;
             }
             captured.push_stderr(&chunk[..n]);
+            deliver(CapturedStream::Stderr, &chunk[..n]);
         }
         Ok::<_, Error>(())
     };
@@ -172,12 +196,37 @@ pub(crate) async fn capture(
     let mut reads = Box::pin(reads);
     let mut wait = Box::pin(child.wait());
     let mut read_result = None;
-    let status = tokio::select! {
-        status = &mut wait => status?,
-        result = &mut reads => {
-            read_result = Some(result);
-            wait.await?
+    let mut status = None;
+    let mut stop_early = false;
+    tokio::select! {
+        waited = &mut wait => status = Some(waited?),
+        result = &mut reads => read_result = Some(result),
+        _ = stop_signal.notified() => stop_early = true,
+    }
+    // A refused chunk and a finished read can land together: one stream
+    // closes while the other is the one that refused bytes. The stop is
+    // therefore read again here, so a command whose output nobody keeps is
+    // ended in either order instead of running to its wall budget.
+    let status = match status {
+        Some(status) => status,
+        None if stop_early || stopped.load(Ordering::Relaxed) => {
+            // Ending the command is what stops a producer whose output nobody
+            // keeps; the call answers with what the buffers hold. A read error
+            // that landed beside the stop is dropped with the read futures:
+            // the kill here is this call's own decision, and the stop is what
+            // the caller has to learn about.
+            drop(wait);
+            drop(reads);
+            if let Err(error) = child.start_kill() {
+                tracing::warn!(%error, "sandbox: the capture stop could not end the command");
+            }
+            return Ok(Output {
+                stdout: captured.take_stdout(),
+                stderr: captured.take_stderr(),
+                status: child.wait().await?,
+            });
         }
+        None => wait.await?,
     };
     match read_result {
         Some(result) => result?,

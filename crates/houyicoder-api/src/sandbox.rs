@@ -14,6 +14,7 @@
 //! kill, plus resource caps where the platform has a per-tree primitive) is
 //! enforced per-call by the backend; a Tool overrides the per-call ExecConfig.
 
+use crate::capture::RawOutputReceiver;
 use crate::shell::Shell;
 use houyicoder_async::PFut;
 use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
@@ -471,6 +472,29 @@ pub trait SandboxSession: Send + Sync {
         config: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         self.exec_with_config(command, config)
+    }
+
+    /// Streaming exec that also feeds the command's raw output to a capture
+    /// while the command runs.
+    ///
+    /// The point of the receiver is that the bytes reach the host before the
+    /// result is bounded, so the caller keeps everything the command printed,
+    /// not only the part that fits the context. A backend that reads its pipes
+    /// itself hands each chunk over as it arrives and honours the verdict.
+    ///
+    /// The default below runs the ordinary way and hands nothing over, so a
+    /// backend that does not override it captures nothing. A result handed
+    /// over after the command ended would be the bounded copy rather than the
+    /// stream, could not stop a producer that filled the capture, and could
+    /// not be called raw when the platform decoded the pipe into text.
+    fn exec_streaming_captured(
+        &self,
+        command: &str,
+        lines: Arc<AtomicI64>,
+        config: ExecConfig,
+        _receiver: Option<Arc<dyn RawOutputReceiver>>,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        self.exec_streaming_with_config(command, lines, config)
     }
 
     /// Emit an audit line when the kernel fence is not active, so the

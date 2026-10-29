@@ -30,6 +30,7 @@ mod memory_show;
 mod multiedit;
 mod path_util;
 mod read;
+mod result_capture;
 mod skill;
 mod subprocess_util;
 mod todo;
@@ -58,6 +59,8 @@ pub use webfetch::WebFetchTool;
 pub use worktree_enter::EnterWorktreeTool;
 pub use worktree_exit::ExitWorktreeTool;
 pub use write::WriteTool;
+
+pub(crate) use result_capture::SessionResultCapture;
 
 #[cfg(test)]
 mod tests;

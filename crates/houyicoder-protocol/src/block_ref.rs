@@ -10,12 +10,22 @@ use serde_json::Value;
 /// The key under which an output names the block that holds its bytes.
 pub const BLOCK_REF_KEY: &str = "block_ref";
 
+/// The key under which a whole-output marker restates every address the
+/// object it replaced named, so the walk still reaches them.
+pub const CONTAINS_KEY: &str = "contains";
+
 /// Every block address a value names, in document order.
 ///
 /// A marker is an object carrying the address under the marker key, and the
 /// producer places it either at the top level of an output (the whole output
 /// externalized) or as the value of one field (a single large field of an
 /// envelope externalized). The walk follows the marker wherever it sits.
+///
+/// A whole-output externalize replaces the object that named other blocks, so
+/// that marker restates every address the replaced object carried under the
+/// contains key. The reclaim pass never opens stored bytes; an address that
+/// survived only inside the stored copy would read as unreferenced and be
+/// released while the log still needs it.
 pub fn block_addresses(value: &Value) -> Vec<&str> {
     let mut out = Vec::new();
     collect(value, &mut out);

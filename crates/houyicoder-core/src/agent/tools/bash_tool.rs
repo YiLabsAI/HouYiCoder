@@ -8,6 +8,9 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use houyicoder_api::capture::{
+    CallEnd, CaptureStop, CaptureStopReason, CapturedStreams, RawOutputReceiver, ResultCapture,
+};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::shell::ShellCommand;
 use houyicoder_async::PFut;
@@ -15,6 +18,7 @@ use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::{Value, json};
 
 use houyicoder_api::tool::{Tool, ToolCtx};
+use houyicoder_protocol::capture_record::BlockMarker;
 use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
@@ -126,14 +130,23 @@ impl BashTool {
     /// Turn a finished exec into the tool answer: bound the output so a huge
     /// result cannot overflow the model window, fold the call's own notices
     /// into stderr, and offer any authorizable service a failed command
-    /// discovered. The full output above the bound is re-readable through the
-    /// spill path the marker names.
-    async fn tool_result(&self, result: ExecResult, notice: Option<String>) -> Value {
+    /// discovered. The full output above the bound is named by the capture
+    /// outcome, and it also stays re-readable through the spill path.
+    async fn tool_result(
+        &self,
+        result: ExecResult,
+        notice: Option<String>,
+        capture: CaptureOutcome,
+    ) -> Value {
         let exit_code = result.exit_code;
         let success = result.is_success();
-        let (stdout, stderr) =
-            bound_bash_output(result.stdout, result.stderr, &self.session.workspace_root());
-        let stderr = fold_notice(notice, stderr);
+        let (stdout, stderr) = bound_bash_output(
+            result.stdout,
+            result.stderr,
+            &self.session.workspace_root(),
+            capture.stop().map(|stop| stop.reason),
+        );
+        let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
         let has_active_skill = self
             .active_skill
             .as_ref()
@@ -151,6 +164,9 @@ impl BashTool {
         });
         if !authorizable.is_empty() {
             output["authorizable_services"] = json!(authorizable);
+        }
+        if let Some(reference) = capture.reference() {
+            output["raw_capture"] = reference;
         }
         output
     }
@@ -201,10 +217,10 @@ impl Tool for BashTool {
         let session = self.session.clone();
         let undo_stack = self.undo_stack.clone();
         let snapshot_store = self.snapshot_store.clone();
-        // Clone the progress sink so a spawned ticker can report elapsed
+        // Clone the progress handle so a background ticker can report elapsed
         // seconds to the host while exec runs. None for non-interactive runs
-        // (the ticker then no-ops). The sink ticks every ~1s; the host
-        // renders (Ns) on the chip after 2s.
+        // (the ticker then does nothing). The ticker reports every ~1s; the
+        // host renders (Ns) on the chip after 2s.
         let progress = ctx.progress.clone();
         Box::pin(async move {
             let cmd = input
@@ -235,18 +251,34 @@ impl Tool for BashTool {
             // renders (Ns · M lines); a non-streaming backend leaves it at
             // -1, so the tick reports lines=None and the chip shows (Ns)
             // only. The tick loop is dropped (cancelled) the moment exec
-            // completes — no leak. Only spawned when a progress sink is
-            // wired (interactive runs): tests + non-interactive runs have no
-            // sink and skip it (no tokio time driver needed). The tick arm
-            // never completes on its own (infinite loop), so the unreachable
-            // is a guard, not a path.
+            // completes — no leak. It starts only when progress is present
+            // (interactive runs): tests and non-interactive runs report
+            // nothing and skip it (no tokio time driver needed). The ticking
+            // branch never completes on its own (infinite loop), so the
+            // unreachable is a guard, not a path.
             let lines_counter = Arc::new(AtomicI64::new(-1));
             let exec_config = ExecConfig {
                 wall_timeout_ms: wall_budget_ms(&input),
                 ..ExecConfig::default()
             };
-            let exec =
-                session.exec_streaming_with_config(cmd, Arc::clone(&lines_counter), exec_config);
+            // Start the raw-output capture before the command runs, so the
+            // bytes reach it as the pipe delivers them rather than through the
+            // bounded result the model receives. When the host supplies no
+            // capture source, the exec runs without one and the bounded result
+            // is all that exists.
+            let capture = match (ctx.result_capture.as_ref(), ctx.session_id) {
+                (Some(source), Some(session_id)) => source.begin(session_id, &ctx.call_id, "bash"),
+                _ => None,
+            };
+            let receiver: Option<Arc<dyn RawOutputReceiver>> = capture
+                .clone()
+                .map(|capture| capture as Arc<dyn RawOutputReceiver>);
+            let exec = session.exec_streaming_captured(
+                cmd,
+                Arc::clone(&lines_counter),
+                exec_config,
+                receiver,
+            );
             // Cancel arm: an Esc aborts the run and must not wait out a
             // long command. Dropping the exec future triggers the sandbox's
             // RAII kill (process-group killpg on macOS; kill_on_drop on
@@ -297,6 +329,10 @@ impl Tool for BashTool {
             // the command was making progress, and a tool error teaches the
             // model to send the same call again or to poll with sleep in the
             // background — the loop the budget exists to shorten.
+            // An answered call publishes what it captured, including a
+            // command stopped at its budget: the output before the stop is
+            // exactly what the caller wants to read back. A failed call does
+            // not publish, because no result would name the blocks.
             let result = match outcome {
                 Ok(result) => result,
                 Err(SandboxError::Timeout {
@@ -304,17 +340,23 @@ impl Tool for BashTool {
                     stdout,
                     stderr,
                 }) => {
-                    let stderr = fold_notice(notice, stderr);
+                    let drops = model_view_loses_bytes(&stdout, &stderr);
+                    let capture = finish_capture(capture, CallEnd::WallBudget, drops).await;
+                    let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
                     return Ok(timed_out_output(
                         &message,
                         stdout,
                         stderr,
                         &self.session.workspace_root(),
+                        &capture,
                     ));
                 }
                 Err(e) => return Err(ToolError::Failed(format!("bash: {e}"))),
             };
-            Ok(self.tool_result(result, notice).await)
+            let drops = model_view_loses_bytes(&result.stdout, &result.stderr);
+            let end = CallEnd::Exited(result.exit_code);
+            let capture = finish_capture(capture, end, drops).await;
+            Ok(self.tool_result(result, notice, capture).await)
         })
     }
     fn is_destructive(&self) -> bool {
@@ -362,15 +404,131 @@ fn fold_notice(notice: Option<String>, stderr: String) -> String {
 /// would read as a measured result. The notice goes above whatever the bound
 /// leaves of stderr, because output that spilled to a file leaves the model
 /// looking at an empty stderr and nothing else would say why the call ended.
-fn timed_out_output(message: &str, stdout: String, stderr: String, spill_dir: &Path) -> Value {
-    let (stdout, stderr) = bound_bash_output(stdout, stderr, spill_dir);
+fn timed_out_output(
+    message: &str,
+    stdout: String,
+    stderr: String,
+    spill_dir: &Path,
+    capture: &CaptureOutcome,
+) -> Value {
+    let stopped = capture
+        .stop()
+        .map(|stop| stop.reason)
+        .or(Some(CaptureStopReason::WallBudget));
+    let (stdout, stderr) = bound_bash_output(stdout, stderr, spill_dir, stopped);
     let stderr = fold_notice(Some(format!("bash: stopped, {message}")), stderr);
-    json!({
+    let mut output = json!({
         "stdout": stdout,
         "stderr": stderr,
         "success": false,
         "timed_out": true,
-    })
+    });
+    if let Some(reference) = capture.reference() {
+        output["raw_capture"] = reference;
+    }
+    output
+}
+
+/// What the raw-output capture produced for one call.
+enum CaptureOutcome {
+    /// Nothing was published: the model view already carried every byte, or
+    /// the host supplied no capture source. The bounded result is all that
+    /// exists.
+    NotKept,
+    /// The raw output went to these blocks.
+    Published(CapturedStreams),
+    /// The capture could not publish. The bounded result is unaffected and
+    /// the result says the raw above the bound was not kept. The stop it
+    /// applied before failing still travels: the command was ended either
+    /// way, and the bounded result must not read as a complete one.
+    Failed { stop: Option<CaptureStop> },
+}
+
+impl CaptureOutcome {
+    /// Set when the capture stopped the command before its output ended.
+    fn stop(&self) -> Option<&CaptureStop> {
+        match self {
+            Self::Published(captured) => captured.stop.as_ref(),
+            Self::Failed { stop } => stop.as_ref(),
+            Self::NotKept => None,
+        }
+    }
+
+    /// The line the result carries when the capture stopped the command. The
+    /// command was ended rather than finished, and the bounded result reads as
+    /// a complete one unless something says so.
+    fn notice(&self) -> Option<String> {
+        self.stop().map(|stop| {
+            format!(
+                "bash: the capture budget was reached after {}KB; the command was stopped and the rest of its output was not kept",
+                (stop.stdout_bytes + stop.stderr_bytes) / 1024
+            )
+        })
+    }
+
+    /// The object the tool result carries to name the captured blocks. Each
+    /// stream address sits in a block marker of its own, so the log's reclaim
+    /// pass reaches every stream block from the result that names it.
+    fn reference(&self) -> Option<Value> {
+        match self {
+            Self::NotKept => None,
+            Self::Failed { stop } => {
+                let mut reference = json!({
+                    "capture_failed": "the raw output above the bound was not kept",
+                });
+                if let Some(stop) = stop {
+                    reference["stop_reason"] = json!(stop.reason);
+                }
+                Some(reference)
+            }
+            Self::Published(captured) => {
+                let mut reference = json!({
+                    "record": BlockMarker::new(captured.record.0.clone()),
+                    "stdout_bytes": captured.stdout_bytes,
+                    "stderr_bytes": captured.stderr_bytes,
+                });
+                if let Some(hash) = &captured.stdout {
+                    reference["stdout"] = json!(BlockMarker::new(hash.0.clone()));
+                }
+                if let Some(hash) = &captured.stderr {
+                    reference["stderr"] = json!(BlockMarker::new(hash.0.clone()));
+                }
+                if let Some(reason) = captured.stop_reason {
+                    reference["stop_reason"] = json!(reason);
+                }
+                Some(reference)
+            }
+        }
+    }
+}
+
+/// Publish what the capture holds, but only when the model view lost bytes to
+/// the bound. Below it the model receives the whole output, so a block would
+/// be a second copy of what the result already carries.
+///
+/// A failure to publish is an answer the caller reports, never a silent
+/// success: the model still receives the bounded output, and the operator
+/// reads the cause in the diagnostic log.
+async fn finish_capture(
+    capture: Option<Arc<dyn ResultCapture>>,
+    end: CallEnd,
+    drops: bool,
+) -> CaptureOutcome {
+    if !drops {
+        return CaptureOutcome::NotKept;
+    }
+    let Some(capture) = capture else {
+        return CaptureOutcome::NotKept;
+    };
+    let stop = capture.stop();
+    match capture.finish(end).await {
+        Ok(Some(captured)) => CaptureOutcome::Published(captured),
+        Ok(None) => CaptureOutcome::NotKept,
+        Err(error) => {
+            tracing::warn!(%error, "bash: the raw output capture could not publish");
+            CaptureOutcome::Failed { stop }
+        }
+    }
 }
 
 /// Max chars a bash result may enter the model context before it spills to a
@@ -390,23 +548,36 @@ const BASH_MAX_OUTPUT_CHARS: usize = 30_000;
 /// output is re-readable via the spill path in the marker.
 const BASH_STUB_CHARS: usize = 5_000;
 
+/// Whether the model view loses bytes to the bound. One answer serves both the
+/// bounding itself and the decision to keep the raw output, so the two cannot
+/// disagree about what the model saw.
+fn model_view_loses_bytes(stdout: &str, stderr: &str) -> bool {
+    stdout.len() + stderr.len() > BASH_MAX_OUTPUT_CHARS
+}
+
 /// Bound a bash result before it enters the model context. Under the cap the
-/// output passes through verbatim. Over the cap the full stdout + stderr
-/// spill to a workspace file (stderr lines tagged) and the model gets the tail
-/// plus a marker naming the spill path so it can re-read the full output.
-fn bound_bash_output(stdout: String, stderr: String, spill_dir: &Path) -> (String, String) {
-    let combined = stdout.len() + stderr.len();
-    if combined <= BASH_MAX_OUTPUT_CHARS {
+/// output passes through verbatim. Over the cap the stdout + stderr that were
+/// read spill to a workspace file (stderr lines tagged) and the model gets the
+/// tail plus a marker naming the spill path so it can re-read that output.
+///
+/// When the command was stopped before it finished, the spill file holds only
+/// what it printed before the stop. The stub says so: a reader who is told the
+/// full output was saved goes looking for bytes that were never kept.
+fn bound_bash_output(
+    stdout: String,
+    stderr: String,
+    spill_dir: &Path,
+    stopped: Option<CaptureStopReason>,
+) -> (String, String) {
+    if !model_view_loses_bytes(&stdout, &stderr) {
         return (stdout, stderr);
     }
-    let kb = combined / 1024;
+    let kb = (stdout.len() + stderr.len()) / 1024;
     match spill_bash_output(&stdout, &stderr, spill_dir) {
         Ok(path) => {
             let tail = tail_chars(&stdout, BASH_STUB_CHARS);
-            let stub = format!(
-                "{tail}\n\nOutput truncated ({kb}KB total). Full output saved to: {}\n",
-                path.display()
-            );
+            let saved = saved_note(&path, kb, stopped);
+            let stub = format!("{tail}\n\nOutput truncated ({kb}KB total). {saved}\n");
             // stderr is folded into the spill file (tagged); the model gets
             // the stdout stub + marker only.
             (stub, String::new())
@@ -418,11 +589,29 @@ fn bound_bash_output(stdout: String, stderr: String, spill_dir: &Path) -> (Strin
             let head: String = stdout.chars().take(half).collect();
             let tail_start = stdout.chars().count().saturating_sub(half);
             let tail: String = stdout.chars().skip(tail_start).collect();
+            let why = match stopped {
+                Some(reason) => format!("the command was stopped, {reason}"),
+                None => format!("{kb}KB total"),
+            };
             (
-                format!("{head}\n... [output truncated, {kb}KB total, spill failed] ...\n{tail}"),
+                format!("{head}\n... [output truncated, {why}, spill failed] ...\n{tail}"),
                 stderr,
             )
         }
+    }
+}
+
+/// The line that tells the model where the rest of the output went, and how
+/// much of it is really there. A command stopped mid-stream leaves a file
+/// holding only a prefix, so a reader told the full output was saved would go
+/// looking for bytes that were never kept.
+fn saved_note(path: &Path, kb: usize, stopped: Option<CaptureStopReason>) -> String {
+    match stopped {
+        Some(reason) => format!(
+            "the command was stopped, {reason}, so this file holds only the first {kb}KB of its output: {}",
+            path.display()
+        ),
+        None => format!("Full output saved to: {}", path.display()),
     }
 }
 

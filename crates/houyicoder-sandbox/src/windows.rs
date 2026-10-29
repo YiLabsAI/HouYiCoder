@@ -30,6 +30,7 @@ use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::shell_selection::ShellProgram;
 use crate::timeout::message;
+use houyicoder_api::capture::RawOutputReceiver;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     normalize_tool_path,
@@ -47,6 +48,7 @@ use std::fs::{create_dir_all, remove_dir_all};
 use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Child;
 use tokio::process::Command;
@@ -399,6 +401,57 @@ impl WindowsJobSession {
 // whether or not the kernel fence engaged.
 // ----------------------------------------------------------------------------
 
+impl WindowsJobSession {
+    /// Run one command, feeding its raw output to a capture when one is
+    /// given. The job object bounds the tree; the drain feeds the receiver as
+    /// bytes arrive, so a capture that refuses a chunk ends the command before
+    /// it runs to its wall budget.
+    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
+    async fn exec_inner(
+        &self,
+        command: String,
+        config: ExecConfig,
+        receiver: Option<Arc<dyn RawOutputReceiver>>,
+    ) -> Result<ExecResult, SandboxError> {
+        let wall = Duration::from_millis(config.wall_timeout_ms);
+        let _ = (config.cpu_secs, config.as_bytes, config.nproc);
+        if self.job_handle.is_none() {
+            tracing::warn!(
+                "sandbox audit: windows job object NOT enforced; running unfenced (wall={}s)",
+                config.wall_timeout_ms
+            );
+        }
+        let shell = self.program.clone().unwrap_or(ShellProgram::Cmd);
+        let mut cmd = Command::new(shell.executable());
+        cmd.args(shell.arguments(&command))
+            .current_dir(&self.workspace);
+        pipe_streams(&mut cmd);
+        cmd.kill_on_drop(true);
+        let child = cmd
+            .spawn()
+            .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
+        assign_if_fenced(self.job_handle, &child);
+        // The bytes land in collected as they arrive, so a wall-clock
+        // stop still reports what the command printed before the job
+        // object killed the tree.
+        let collected = CapturedOutput::default();
+        let outcome = timeout(
+            wall,
+            capture(child, None, &collected, DRAIN_GRACE, receiver.as_deref()),
+        )
+        .await;
+        match outcome {
+            Ok(Ok(output)) => Ok(ExecResult {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: output.status.code(),
+            }),
+            Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
+            Err(_elapsed) => Err(collected.timeout_error(message(config.wall_timeout_ms))),
+        }
+    }
+}
+
 impl SandboxSession for WindowsJobSession {
     fn shell(&self) -> Shell {
         self.program
@@ -410,53 +463,24 @@ impl SandboxSession for WindowsJobSession {
         self.fence.clone()
     }
 
-    // This start is still outside the launcher port: the port captures
-    // output synchronously, which would block a runtime worker. The job
-    // object bounds the tree's resources and lifetime; the executable itself
-    // was resolved and checked before the session was built.
-    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
     fn exec_with_config(
         &self,
         command: &str,
         config: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-        let cwd = self.workspace.clone();
         let command = command.to_string();
-        let wall = Duration::from_millis(config.wall_timeout_ms);
-        let job_raw = self.job_handle;
-        let program = self.program.clone();
-        Box::pin(async move {
-            let _ = (config.cpu_secs, config.as_bytes, config.nproc);
-            if job_raw.is_none() {
-                tracing::warn!(
-                    "sandbox audit: windows job object NOT enforced; running unfenced (wall={}s)",
-                    config.wall_timeout_ms
-                );
-            }
-            let shell = program.unwrap_or(ShellProgram::Cmd);
-            let mut cmd = Command::new(shell.executable());
-            cmd.args(shell.arguments(&command)).current_dir(&cwd);
-            pipe_streams(&mut cmd);
-            cmd.kill_on_drop(true);
-            let child = cmd
-                .spawn()
-                .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-            assign_if_fenced(job_raw, &child);
-            // The bytes land in collected as they arrive, so a wall-clock
-            // stop still reports what the command printed before the job
-            // object killed the tree.
-            let collected = CapturedOutput::default();
-            let outcome = timeout(wall, capture(child, None, &collected, DRAIN_GRACE)).await;
-            match outcome {
-                Ok(Ok(output)) => Ok(ExecResult {
-                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                    exit_code: output.status.code(),
-                }),
-                Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
-                Err(_elapsed) => Err(collected.timeout_error(message(config.wall_timeout_ms))),
-            }
-        })
+        Box::pin(async move { self.exec_inner(command, config, None).await })
+    }
+
+    fn exec_streaming_captured(
+        &self,
+        command: &str,
+        _lines: Arc<AtomicI64>,
+        config: ExecConfig,
+        receiver: Option<Arc<dyn RawOutputReceiver>>,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        let command = command.to_string();
+        Box::pin(async move { self.exec_inner(command, config, receiver).await })
     }
 
     fn workspace_root(&self) -> Arc<Path> {

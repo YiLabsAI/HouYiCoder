@@ -23,6 +23,7 @@ pub mod acpx;
 pub mod block_ref;
 pub mod cache_policy;
 pub mod capability;
+pub mod capture_record;
 pub mod envelope;
 pub mod error;
 pub mod extension;

@@ -1,6 +1,7 @@
 //! Process-group teardown and accounting for the macOS Seatbelt session: the
 //! tree kill, the CPU total a timeout reports, and the in-flight exec counter.
 
+use houyicoder_resilience::resource_breaker::{ResourceBreaker, SpawnEvent};
 use nix::sys::signal::Signal;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -78,5 +79,73 @@ pub(super) struct ExecCountGuard(pub(super) Arc<AtomicU64>);
 impl Drop for ExecCountGuard {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Reaps the command's process group when the exec ends, whatever the path:
+/// a normal exit, an error, a wall-clock stop, or a dropped future. A command
+/// that started a background job leaves it in the group, so killing only the
+/// direct child would leave that job running after the call returns.
+pub(super) struct TreeKillGuard {
+    pgid: i32,
+}
+
+impl TreeKillGuard {
+    pub(super) fn new(pgid: i32) -> Self {
+        Self { pgid }
+    }
+}
+
+impl Drop for TreeKillGuard {
+    fn drop(&mut self) {
+        kill_process_group(self.pgid);
+    }
+}
+
+/// Closes a breaker span that was opened when the process started, so the
+/// matching end lands
+/// on every exit path, a cancelled future included. A cancellation between
+/// the start and the finish would otherwise leave the span open: the active
+/// count never returns to zero and the burned CPU goes unrecorded, which
+/// trips the breaker on cancellations alone.
+///
+/// On the normal path finish() hands over the measured CPU; on the cancel path
+/// Drop measures the tree itself. The tree is still alive at that point
+/// because the kill guard is declared after this one and drops later.
+pub(super) struct BreakerSpanGuard {
+    breaker: Arc<ResourceBreaker>,
+    pgid: i32,
+    /// None until finish() sets it. None at Drop means the cancel path, so
+    /// the tree CPU is measured now, while the tree is still alive.
+    cpu_secs: Option<u64>,
+    exceeded_budget: bool,
+}
+
+impl BreakerSpanGuard {
+    pub(super) fn new(breaker: Arc<ResourceBreaker>, pgid: i32) -> Self {
+        Self {
+            breaker,
+            pgid,
+            cpu_secs: None,
+            exceeded_budget: false,
+        }
+    }
+
+    /// Record the measured outcome so Drop emits End with these values
+    /// instead of measuring CPU itself. Called on the normal exit path.
+    pub(super) fn finish(&mut self, cpu_secs: u64, exceeded_budget: bool) {
+        self.cpu_secs = Some(cpu_secs);
+        self.exceeded_budget = exceeded_budget;
+    }
+}
+
+impl Drop for BreakerSpanGuard {
+    fn drop(&mut self) {
+        let cpu_secs = self.cpu_secs.unwrap_or_else(|| tree_cpu_secs(self.pgid));
+        self.breaker.record(SpawnEvent::End {
+            cpu_secs,
+            proc_count: 1,
+            exceeded_budget: self.exceeded_budget,
+        });
     }
 }

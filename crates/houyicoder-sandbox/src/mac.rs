@@ -12,6 +12,7 @@
 //! compiled on macOS.
 
 use crate::{ProfileSpec, ShellSnapshot, render};
+use houyicoder_api::capture::RawOutputReceiver;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceCapability, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     WorktreeFenceGuard, normalize_tool_path,
@@ -34,7 +35,7 @@ use crate::runtime_dirs::RuntimeDirs;
 use crate::shell_selection::ShellProgram;
 use crate::timeout;
 use command::annotate_fence_refusal;
-use process::{ExecCountGuard, kill_process_group, tree_cpu_secs};
+use process::{BreakerSpanGuard, ExecCountGuard, TreeKillGuard, tree_cpu_secs};
 use std::env::var;
 use std::fs::remove_dir_all;
 use std::process::id;
@@ -433,6 +434,7 @@ impl MacSeatbeltSession {
         command: String,
         config: ExecConfig,
         lines: Option<Arc<AtomicI64>>,
+        receiver: Option<Arc<dyn RawOutputReceiver>>,
     ) -> Result<ExecResult, SandboxError> {
         let profile = self.current_profile();
         let cwd = self.effective_workspace();
@@ -532,7 +534,13 @@ impl MacSeatbeltSession {
         let collected = CapturedOutput::default();
         let outcome = timeout(
             wall,
-            capture(child, lines.as_deref(), &collected, DRAIN_GRACE),
+            capture(
+                child,
+                lines.as_deref(),
+                &collected,
+                DRAIN_GRACE,
+                receiver.as_deref(),
+            ),
         )
         .await;
         // Measure the tree's CPU while _tree_guard still holds the group
@@ -594,7 +602,7 @@ impl SandboxSession for MacSeatbeltSession {
         config: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         let command = command.to_string();
-        Box::pin(async move { self.exec_inner(command, config, None).await })
+        Box::pin(async move { self.exec_inner(command, config, None, None).await })
     }
 
     /// Streaming variant: the drain updates the shared line counter as
@@ -616,7 +624,21 @@ impl SandboxSession for MacSeatbeltSession {
         config: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         let command = command.to_string();
-        Box::pin(async move { self.exec_inner(command, config, Some(lines)).await })
+        Box::pin(async move { self.exec_inner(command, config, Some(lines), None).await })
+    }
+
+    fn exec_streaming_captured(
+        &self,
+        command: &str,
+        lines: Arc<AtomicI64>,
+        config: ExecConfig,
+        receiver: Option<Arc<dyn RawOutputReceiver>>,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        let command = command.to_string();
+        Box::pin(async move {
+            self.exec_inner(command, config, Some(lines), receiver)
+                .await
+        })
     }
 
     fn resolve(&self, path: &str) -> Result<PathBuf, SandboxError> {
@@ -724,73 +746,6 @@ impl SandboxSession for MacSeatbeltSession {
     // not hold. A short window (5s) bounds the cross-process noise risk.
     fn discover_authorizable(&self) -> Vec<String> {
         crate::deny_log::discover_authorizable(5)
-    }
-}
-
-/// RAII tree-kill guard. On Drop, killpg the whole process group. Instantiated
-/// after spawn so EVERY exit path (Ok, Err, wall-timeout, future-drop/Ctrl-C)
-/// reaps the tree. Without this, dropping the exec future only kill_on_drop'd
-/// the direct child — re-introducing the orphan-process problem on the
-/// cancel path. The guard makes the fix path-complete.
-struct TreeKillGuard {
-    pgid: i32,
-}
-
-impl TreeKillGuard {
-    fn new(pgid: i32) -> Self {
-        Self { pgid }
-    }
-}
-
-impl Drop for TreeKillGuard {
-    fn drop(&mut self) {
-        kill_process_group(self.pgid);
-    }
-}
-
-/// RAII guard pairing a SpawnEvent::Start so the matching End lands on EVERY
-/// exit path, including future-drop/cancel (Ctrl-C). Without it, a cancel
-/// between Start and the End call would leak the in-flight count and skip the
-/// burned-CPU accounting, false-tripping the breaker after enough cancels.
-/// On the normal path finish() is called with the pre-measured CPU so Drop
-/// records those values; on the cancel path Drop measures the tree CPU
-/// itself (the tree is still live — _tree_guard drops after this guard by
-/// reverse declaration order, so the breaker measures before killpg reaps).
-struct BreakerSpanGuard {
-    breaker: Arc<ResourceBreaker>,
-    pgid: i32,
-    /// None until finish() sets it; None on Drop means the cancel path, so
-    /// measure the tree CPU now (while it is still alive).
-    cpu_secs: Option<u64>,
-    exceeded_budget: bool,
-}
-
-impl BreakerSpanGuard {
-    fn new(breaker: Arc<ResourceBreaker>, pgid: i32) -> Self {
-        Self {
-            breaker,
-            pgid,
-            cpu_secs: None,
-            exceeded_budget: false,
-        }
-    }
-
-    /// Record the measured outcome so Drop emits End with these values
-    /// instead of measuring CPU itself. Called on the normal exit path.
-    fn finish(&mut self, cpu_secs: u64, exceeded_budget: bool) {
-        self.cpu_secs = Some(cpu_secs);
-        self.exceeded_budget = exceeded_budget;
-    }
-}
-
-impl Drop for BreakerSpanGuard {
-    fn drop(&mut self) {
-        let cpu_secs = self.cpu_secs.unwrap_or_else(|| tree_cpu_secs(self.pgid));
-        self.breaker.record(SpawnEvent::End {
-            cpu_secs,
-            proc_count: 1,
-            exceeded_budget: self.exceeded_budget,
-        });
     }
 }
 

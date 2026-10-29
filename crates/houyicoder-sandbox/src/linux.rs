@@ -11,6 +11,7 @@ use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::shell_selection::ShellProgram;
 use crate::timeout::message;
+use houyicoder_api::capture::RawOutputReceiver;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceCapability, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
     normalize_tool_path,
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::process::id;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -235,6 +236,7 @@ impl LinuxLandlockSession {
         &self,
         command: String,
         config: ExecConfig,
+        receiver: Option<Arc<dyn RawOutputReceiver>>,
     ) -> Result<ExecResult, SandboxError> {
         let wall = Duration::from_millis(config.wall_timeout_ms);
         let fence = if matches!(self.fence, FenceStatus::Enforced) {
@@ -287,7 +289,11 @@ impl LinuxLandlockSession {
         // The bytes land in collected as they arrive, so a wall-clock stop
         // still reports what the command printed before it was cut off.
         let collected = CapturedOutput::default();
-        let outcome = timeout(wall, capture(child, None, &collected, DRAIN_GRACE)).await;
+        let outcome = timeout(
+            wall,
+            capture(child, None, &collected, DRAIN_GRACE, receiver.as_deref()),
+        )
+        .await;
         match outcome {
             Ok(Ok(output)) => Ok(exec_result_from_output(output)),
             Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
@@ -425,7 +431,18 @@ impl SandboxSession for LinuxLandlockSession {
         config: ExecConfig,
     ) -> PFut<'_, Result<ExecResult, SandboxError>> {
         let command = command.to_string();
-        Box::pin(async move { self.exec_inner(command, config).await })
+        Box::pin(async move { self.exec_inner(command, config, None).await })
+    }
+
+    fn exec_streaming_captured(
+        &self,
+        command: &str,
+        _lines: Arc<AtomicI64>,
+        config: ExecConfig,
+        receiver: Option<Arc<dyn RawOutputReceiver>>,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        let command = command.to_string();
+        Box::pin(async move { self.exec_inner(command, config, receiver).await })
     }
 
     fn workspace_root(&self) -> Arc<Path> {

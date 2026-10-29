@@ -10,6 +10,7 @@
 
 pub mod agent_event;
 pub mod cache_policy;
+pub mod capture;
 pub mod cost_model;
 pub mod hook_fire;
 pub mod launcher;

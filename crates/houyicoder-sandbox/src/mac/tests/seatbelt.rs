@@ -6,6 +6,7 @@
 
 #![allow(clippy::disallowed_methods)]
 
+use super::super::process::kill_process_group;
 use super::super::temp_dir::COUNTER;
 use super::super::*;
 use crate::{ProfileSpec, render};

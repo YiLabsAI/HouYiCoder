@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use self::progress::ToolProgressReporter;
+use crate::capture::ResultCaptureSource;
 use crate::hook_fire::HookFire;
 use crate::spawn::{AgentIdentity, SpawnHandle};
 
@@ -69,6 +70,11 @@ pub struct ToolCtx {
     /// Threaded per call the way the spawn handle is, so a future child with
     /// its own registry fires correctly without re-wiring.
     pub hook_fire: Option<Arc<dyn HookFire>>,
+    /// The port that starts a durable capture of the call's raw output; None
+    /// when the host has no store to publish to. A command-running tool asks
+    /// it for one capture per dispatch, so the bytes above the context bound
+    /// survive somewhere a reader can reach them.
+    pub result_capture: Option<Arc<dyn ResultCaptureSource>>,
 }
 
 impl ToolCtx {
@@ -87,6 +93,7 @@ impl ToolCtx {
             spawn_handle: None,
             denied_agents: Arc::new(HashSet::new()),
             hook_fire: None,
+            result_capture: None,
         }
     }
 
@@ -135,6 +142,14 @@ impl ToolCtx {
     /// return). None on dispatches that cannot fire (no registry wired).
     pub fn with_hook_fire(mut self, fire: Arc<dyn HookFire>) -> Self {
         self.hook_fire = Some(fire);
+        self
+    }
+
+    /// Attach the port that starts a durable capture of a call's raw output.
+    /// The engine sets it where it sets the session, so every dispatched call
+    /// can keep the bytes its result was bounded from.
+    pub fn with_result_capture(mut self, source: Arc<dyn ResultCaptureSource>) -> Self {
+        self.result_capture = Some(source);
         self
     }
 }

@@ -36,6 +36,7 @@ use super::{
 };
 use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
 use crate::agent::resolve::ToolCallPlan;
+use crate::agent::tools::SessionResultCapture;
 use crate::agent::{RunError, Runner};
 use crate::observability::tool_failure_reason;
 use std::time::Instant;
@@ -395,9 +396,9 @@ impl Runner {
 
     /// The capability set one tool call executes with: the run token a tool
     /// honoring cancellation returns on, the session, the denied agent set,
-    /// the progress forwarder, the agent identity, and the spawn / hook-fire
-    /// seams when wired. One builder, so a dispatched call and an approved
-    /// call cannot drift apart.
+    /// the progress forwarder, the agent identity, the raw-output capture,
+    /// and the process launch / hook-fire boundaries when present. One
+    /// builder, so a dispatched call and an approved call cannot drift apart.
     fn tool_ctx(&self, call_id: &str, session: SessionId, token: &CancellationToken) -> ToolCtx {
         let mut ctx = ToolCtx::new(call_id)
             .with_cancel(token.clone())
@@ -407,7 +408,8 @@ impl Runner {
                 call_id.to_string(),
                 self.events.tool_execution_handler(),
             )))
-            .with_agent_identity(self.agent_identity().clone());
+            .with_agent_identity(self.agent_identity().clone())
+            .with_result_capture(Arc::new(SessionResultCapture::new(self.store())));
         if let Some(h) = self.spawn_handle() {
             ctx = ctx.with_spawn_handle(h.clone());
         }

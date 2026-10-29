@@ -1,13 +1,16 @@
 //! Isolate-stage tests: the runner under input isolation (paused from the
 //! host queue mid-run). Uses the parent tests module's fixtures (Runner,
 //! runner_with, SessionStore) via the glob import.
+use super::append::ISOLATE_LARGE_OUTPUT_BYTES;
 use super::append::new_event;
 use super::turn_group::assemble_model_input;
 use super::*;
 use crate::agent::reducer::HotPathReducer;
 use houyicoder_context::BlockHash;
 use houyicoder_context::SessionEvent;
+use houyicoder_protocol::block_ref::{BLOCK_REF_KEY, CONTAINS_KEY, block_addresses};
 use houyicoder_protocol::llm::InputItem;
+use serde_json::Value;
 
 #[tokio::test]
 async fn test_externalizes_large_tool_result() {
@@ -208,5 +211,122 @@ async fn test_blob_result_whole_externalize() {
     assert!(
         output.get("filenames").is_none(),
         "raw array not in the event"
+    );
+}
+
+/// A whole-output externalize replaces the object that named other blocks, so
+/// the event has to keep those addresses reachable. The reclaim pass walks
+/// markers in the event and never opens the stored bytes; an address only
+/// inside the stored output would read as unreferenced and be released while
+/// the log still needs it.
+#[tokio::test]
+async fn test_whole_externalize_keeps_refs() {
+    let p = Arc::new(FakeProvider::text("done"));
+    let runner = runner_with(p, ToolRegistry::new());
+    let session = SessionId::new();
+    runner
+        .store()
+        .append(new_event(
+            session,
+            SessionEvent::ToolCall {
+                call_id: "cb".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({}),
+            },
+        ))
+        .await
+        .unwrap();
+    let raw_stream = "a".repeat(64);
+    let matches: Vec<Value> = (0..600)
+        .map(|_| serde_json::json!({ "raw_capture": { "stdout": { BLOCK_REF_KEY: raw_stream } } }))
+        .collect();
+    let big = serde_json::json!({ "matches": matches });
+    runner
+        .append_tool_result(session, "cb".into(), "bash", big, 0)
+        .await
+        .unwrap();
+    let events = runner.store().replay(session).await.unwrap();
+    let tr = events
+        .iter()
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "cb"))
+        .expect("tool result appended");
+    let SessionEvent::ToolResult { output, .. } = &tr.event else {
+        unreachable!()
+    };
+    let stored = output
+        .get(BLOCK_REF_KEY)
+        .and_then(|v| v.as_str())
+        .expect("a blob over the threshold is stored whole");
+    let addresses = block_addresses(output);
+    assert!(
+        addresses.contains(&stored),
+        "the event names the block it stored"
+    );
+    assert!(
+        addresses.contains(&raw_stream.as_str()),
+        "the event still names the blocks the stored output named: {addresses:?}"
+    );
+    let restated = output[CONTAINS_KEY]
+        .as_array()
+        .expect("the marker restates the addresses");
+    assert_eq!(
+        restated.len(),
+        1,
+        "one address restated once, however often the output named it"
+    );
+    assert!(
+        serde_json::to_vec(output).unwrap().len() < ISOLATE_LARGE_OUTPUT_BYTES,
+        "the restatement keeps the event inside the size the isolation bound exists for"
+    );
+}
+
+/// An output that names more distinct blocks than the restatement allows stays
+/// inline. The restatement cannot drop an address without the reclaim pass
+/// releasing a block the log still needs, so past the limit the copy is not
+/// made at all.
+#[tokio::test]
+async fn test_many_refs_stay_inline() {
+    let p = Arc::new(FakeProvider::text("done"));
+    let runner = runner_with(p, ToolRegistry::new());
+    let session = SessionId::new();
+    runner
+        .store()
+        .append(new_event(
+            session,
+            SessionEvent::ToolCall {
+                call_id: "cm".into(),
+                tool: "bash".into(),
+                input: serde_json::json!({}),
+            },
+        ))
+        .await
+        .unwrap();
+    let matches: Vec<Value> = (0..200)
+        .map(|i| {
+            let hash = format!("{i:064}");
+            serde_json::json!({ "raw_capture": { "stdout": { BLOCK_REF_KEY: hash } } })
+        })
+        .collect();
+    let big = serde_json::json!({ "matches": matches });
+    runner
+        .append_tool_result(session, "cm".into(), "bash", big, 0)
+        .await
+        .unwrap();
+    let events = runner.store().replay(session).await.unwrap();
+    let tr = events
+        .iter()
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == "cm"))
+        .expect("tool result appended");
+    let SessionEvent::ToolResult { output, .. } = &tr.event else {
+        unreachable!()
+    };
+    assert!(
+        output.get(BLOCK_REF_KEY).is_none(),
+        "past the restatement limit the output stays inline"
+    );
+    assert_eq!(
+        block_addresses(output).len(),
+        200,
+        "the walk reaches every reference the inline output carries"
     );
 }
