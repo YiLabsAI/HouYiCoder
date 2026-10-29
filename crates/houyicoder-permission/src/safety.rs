@@ -43,6 +43,49 @@ const CONTROL_CHILDREN: &[&str] = &[
     "snapshots",
 ];
 
+/// The control children the execution fence refuses to let any process write,
+/// keyed by the configuration directory that holds them. A command that would
+/// write one cannot succeed while the fence is active, so the gate refuses it
+/// outright instead of asking for an approval the kernel then overrules.
+///
+/// The pairs are listed per directory because the fence's deny list is not a
+/// cross product: it names the settings and permission stores of the directories
+/// this product reads, the credential file wherever it sits, and the skill
+/// directories of all three, while a hooks or snapshots directory under another
+/// of them stays writable inside the workspace. Every control child absent from
+/// this table keeps the user's answer, because a refusal there would claim a
+/// kernel denial that does not happen.
+const FENCE_DENIED_CHILDREN: &[(&str, &[&str])] = &[
+    (
+        ".houyicoder/",
+        &[
+            ".credentials.json",
+            "permissions.json",
+            "permissions.local.json",
+            "settings.json",
+            "settings.local.json",
+            "skill-grants.json",
+            "skills",
+            "snapshots",
+        ],
+    ),
+    (
+        ".claude/",
+        &[
+            ".credentials.json",
+            "settings.json",
+            "settings.local.json",
+            "skills",
+        ],
+    ),
+    (".agents/", &["skills"]),
+];
+
+/// The fence-denied slice of the version-control directory. A planted hook runs
+/// at the user's next checkout, and the profile denies writes to it; every
+/// other path under the directory is how the repository client itself works.
+const FENCE_DENIED_GIT_PATH: &str = ".git/hooks";
+
 /// The memory store. Its text is recalled into a later prompt, so a silent
 /// write plants an instruction the model follows then, which is what the
 /// instruction files are protected from as well. Reading it is not protected:
@@ -121,18 +164,118 @@ pub(crate) fn marker_hit(content: &str) -> bool {
     control_hit(&forms) || memory_hit(&forms) || instruction_hit(&forms) || startup_hit(&forms)
 }
 
+/// Whether a command names a path the execution fence refuses to let it write,
+/// so that running it can only end in a kernel refusal.
+pub(crate) fn fence_denied_path(content: &str) -> bool {
+    let forms = spellings(content);
+    forms.iter().any(|lower| {
+        lower
+            .match_indices(FENCE_DENIED_GIT_PATH)
+            .any(|(at, _)| starts_component(lower, at))
+            || FENCE_DENIED_CHILDREN.iter().any(|(dir, children)| {
+                lower
+                    .match_indices(dir)
+                    .filter(|(at, _)| starts_component(lower, *at))
+                    .any(|(at, _)| {
+                        let rest = &lower[at + dir.len()..];
+                        children.iter().any(|child| under_child(rest, child))
+                    })
+            })
+    })
+}
+
+/// Whether the match starts a path component, so a name that merely ends in
+/// the directory name is not that directory. The fence addresses the
+/// directory by its own component, and a refusal may only stand where the
+/// kernel refuses. One exception: an option can carry the path it names
+/// without a separator, so a short option letter right before the marker
+/// still starts the component.
+fn starts_component(haystack: &str, at: usize) -> bool {
+    let before = &haystack[..at];
+    let Some(last) = before.chars().next_back() else {
+        return true;
+    };
+    if !is_name_char(last) {
+        return true;
+    }
+    option_prefix(before)
+}
+
+/// Whether the text ends with a short option -- a dash that itself starts a
+/// word, followed by letters -- so the letters are an option and not part of
+/// a file name.
+fn option_prefix(before: &str) -> bool {
+    let chars: Vec<char> = before.chars().collect();
+    let mut at = chars.len();
+    while at > 0 && (chars[at - 1].is_ascii_alphanumeric() || chars[at - 1] == '_') {
+        at -= 1;
+    }
+    at > 0 && at < chars.len() && chars[at - 1] == '-' && (at == 1 || !is_name_char(chars[at - 2]))
+}
+
+/// Whether every protected path the content names is one the fence refuses to
+/// let a process write. A command that only names such a path cannot change it
+/// while the fence holds, so the read waiver below rests on the kernel rather
+/// than on a classification of the command.
+pub(crate) fn fence_covers_all_hits(content: &str) -> bool {
+    let forms = spellings(content);
+    if !forms.iter().any(|lower| fence_denied_path(lower)) {
+        return false;
+    }
+    if instruction_hit(&forms) || memory_hit(&forms) || startup_hit(&forms) {
+        return false;
+    }
+    !control_hit_outside_fence(&forms)
+}
+
+/// Whether one of the spellings names a protected path the fence does not
+/// deny: a version-control path other than the hooks directory, or a control
+/// child absent from the fence's own list.
+fn control_hit_outside_fence(forms: &[String]) -> bool {
+    forms.iter().any(|lower| {
+        lower
+            .match_indices(VERSION_CONTROL_DIR)
+            .filter(|(at, _)| starts_component(lower, *at))
+            .any(|(at, _)| !under_child(&lower[at + VERSION_CONTROL_DIR.len()..], "hooks"))
+            || CONTROL_DIRS.iter().any(|dir| {
+                lower
+                    .match_indices(dir)
+                    .filter(|(at, _)| starts_component(lower, *at))
+                    .any(|(at, _)| {
+                        let rest = &lower[at + dir.len()..];
+                        CONTROL_CHILDREN.iter().any(|child| {
+                            under_child(rest, child) && !fence_denied_child(dir, child)
+                        })
+                    })
+            })
+    })
+}
+
+/// Whether the fence denies writes to a control child of a configuration
+/// directory.
+fn fence_denied_child(dir: &str, child: &str) -> bool {
+    FENCE_DENIED_CHILDREN
+        .iter()
+        .any(|(denied_dir, children)| *denied_dir == dir && children.contains(&child))
+}
+
 /// Whether one of the spellings names the version-control directory or a
 /// control path under an agent configuration directory.
 fn control_hit(forms: &[String]) -> bool {
     forms.iter().any(|lower| {
-        lower.contains(VERSION_CONTROL_DIR)
+        lower
+            .match_indices(VERSION_CONTROL_DIR)
+            .any(|(at, _)| starts_component(lower, at))
             || CONTROL_DIRS.iter().any(|dir| {
-                lower.match_indices(dir).any(|(at, _)| {
-                    let rest = &lower[at + dir.len()..];
-                    CONTROL_CHILDREN
-                        .iter()
-                        .any(|child| under_child(rest, child))
-                })
+                lower
+                    .match_indices(dir)
+                    .filter(|(at, _)| starts_component(lower, *at))
+                    .any(|(at, _)| {
+                        let rest = &lower[at + dir.len()..];
+                        CONTROL_CHILDREN
+                            .iter()
+                            .any(|child| under_child(rest, child))
+                    })
             })
     })
 }
@@ -144,6 +287,7 @@ fn memory_hit(forms: &[String]) -> bool {
         CONTROL_DIRS.iter().any(|dir| {
             lower
                 .match_indices(dir)
+                .filter(|(at, _)| starts_component(lower, *at))
                 .any(|(at, _)| under_memory(&lower[at + dir.len()..]))
         })
     })

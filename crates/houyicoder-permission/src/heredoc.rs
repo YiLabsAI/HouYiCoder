@@ -23,11 +23,27 @@ struct Start {
 /// safety scan does not see their literal text. Unquoted heredocs keep their
 /// bodies. The operator line and the closing delimiter line are preserved
 /// (only the body lines between them are replaced).
+pub(crate) fn strip_quoted_heredoc_bodies(content: &str) -> String {
+    walk_quoted_heredoc_bodies(content, |_| {})
+}
+
+/// The bodies of the quoted/escaped heredocs in a command, in the order they
+/// appear. A quoted body is literal text to the shell but still code to the
+/// program that reads it on standard input, so a caller judging what a script
+/// writes has to see it even though the safety scan does not.
+pub(crate) fn quoted_heredoc_bodies(content: &str) -> Vec<String> {
+    let mut bodies = Vec::new();
+    walk_quoted_heredoc_bodies(content, |line| bodies.push(line.to_string()));
+    bodies
+}
+
+/// Replace quoted/escaped heredoc bodies with a placeholder and hand each body
+/// line to the caller. The operator line and the closing delimiter line stay.
 #[expect(
     clippy::while_let_on_iterator,
     reason = "inner loop consumes same iterator"
-)] // inner loop consumes the same iterator
-pub(crate) fn strip_quoted_heredoc_bodies(content: &str) -> String {
+)]
+fn walk_quoted_heredoc_bodies(content: &str, mut on_body: impl FnMut(&str)) -> String {
     let mut out = String::with_capacity(content.len());
     let mut lines = content.lines().peekable();
     while let Some(line) = lines.next() {
@@ -48,6 +64,7 @@ pub(crate) fn strip_quoted_heredoc_bodies(content: &str) -> String {
                     out.push('\n');
                     break;
                 }
+                on_body(body_line);
                 out.push_str("_HEREDOC_BODY_");
                 out.push('\n');
             }

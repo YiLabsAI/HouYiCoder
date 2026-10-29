@@ -5,6 +5,8 @@
 //! itself is a reader — and because the per-command argument rules grow on
 //! their own.
 
+use super::quotes_balanced;
+use super::shell_word_spans;
 use super::split_compound;
 use super::strip_safe_redirects;
 use crate::pipeline::detection::strip_quotes;
@@ -26,10 +28,48 @@ use crate::pipeline::detection::strip_quotes;
 /// admitted by the argument rule, never by the name alone: the name says what
 /// the command usually does, the rule says what this call does.
 const READONLY_COMMANDS: &[&str] = &[
-    "basename", "cat", "curl", "cut", "df", "diff", "dirname", "du", "echo", "egrep", "false",
-    "fgrep", "file", "find", "git", "grep", "groups", "head", "id", "ls", "printf", "pwd",
-    "realpath", "rg", "seq", "sort", "stat", "strings", "tail", "test", "tr", "true", "uname",
-    "uniq", "wc", "whereis", "which", "whoami",
+    "basename",
+    "cat",
+    "curl",
+    "cut",
+    "df",
+    "diff",
+    "dirname",
+    "du",
+    "echo",
+    "egrep",
+    "false",
+    "fgrep",
+    "file",
+    "find",
+    "git",
+    "grep",
+    "groups",
+    "head",
+    "id",
+    "jq",
+    "ls",
+    "md5",
+    "printf",
+    "pwd",
+    "realpath",
+    "rg",
+    "seq",
+    "sha256sum",
+    "shasum",
+    "sort",
+    "stat",
+    "strings",
+    "tail",
+    "test",
+    "tr",
+    "true",
+    "uname",
+    "uniq",
+    "wc",
+    "whereis",
+    "which",
+    "whoami",
 ];
 
 /// Repository subcommands that only inspect a repository. The hash form is
@@ -230,7 +270,7 @@ fn writes_output(cmd: &str, segment: &str) -> bool {
     if !matches!(cmd, "sort" | "uniq" | "printf") {
         return false;
     }
-    let raw_args: Vec<&str> = segment.split_whitespace().skip(1).collect();
+    let raw_args: Vec<&str> = shell_word_spans(segment).into_iter().skip(1).collect();
     // Fail closed when an argument carries a backslash escape or shell
     // expansion: a static check cannot prove that the expanded token is not
     // an output flag or a second path argument.
@@ -330,6 +370,11 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
     if depth == 0 {
         return false;
     }
+    // Quoting this scan cannot follow may hide a separator, which would make
+    // one segment two commands the shell runs.
+    if !quotes_balanced(seg) {
+        return false;
+    }
     let stripped = strip_safe_redirects(seg);
     let chars: Vec<char> = stripped.chars().collect();
     let n = chars.len();
@@ -389,7 +434,7 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
     // skipped. A variable set for one command can redirect the repository
     // directory, the shell startup file, or the loader search path, so the
     // same argv would no longer describe what runs; asking is the safe answer.
-    let tokens: Vec<&str> = stripped.split_whitespace().collect();
+    let tokens: Vec<&str> = shell_word_spans(&stripped);
     let Some(first) = tokens.first() else {
         return false;
     };

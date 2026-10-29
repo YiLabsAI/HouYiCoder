@@ -195,6 +195,18 @@ pub(crate) fn deny_home_snapshot_store(home: &str, tag: &str) -> String {
     out
 }
 
+/// Deny writes to a snapshot store under any agent configuration directory,
+/// wherever it sits. The permission layer refuses a command that writes one
+/// on the strength of this denial, so the two have to name the same set: it
+/// judges by the directory name alone, which means every checkout on disk.
+/// A store belonging to another checkout is still the recovery evidence that
+/// a destructive command must not rewrite its way out of.
+pub(crate) fn deny_snapshot_stores_anywhere(tag: &str) -> String {
+    format!(
+        "(deny file-write* (regex #\".*/\\.houyicoder/snapshots(/|$)\") (with message \"{tag}\"))\n"
+    )
+}
+
 /// Deny writes to the snapshot store directory inside the workspace. This
 /// prevents a destructive command (rm -rf, git clean -fdx) from deleting
 /// its own undo data. The snapshot store is written by the host process

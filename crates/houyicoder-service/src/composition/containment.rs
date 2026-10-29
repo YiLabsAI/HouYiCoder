@@ -112,6 +112,12 @@ impl Containment for ContainmentAdapter {
     fn would_block(&self, effect: SideEffect) -> Option<String> {
         self.0.as_containment().and_then(|c| c.would_block(effect))
     }
+
+    fn denies_control_writes(&self) -> bool {
+        self.0
+            .as_containment()
+            .is_some_and(|c| c.denies_control_writes())
+    }
     fn boundary_root(&self) -> Option<Arc<Path>> {
         // The adapter wraps a SandboxSession; workspace_root is on SandboxSession
         // (not Containment), so delegate to the session directly. coverage() used

@@ -67,6 +67,10 @@ pub trait ModeGate: Send + Sync {
     fn add_directory(&self, _dir: &Path, _scope: Scope) {}
     /// Persist a read-only directory authorization.
     fn add_read_directory(&self, _dir: &Path, _scope: Scope) {}
+    /// Drop a directory authorization from every writable scope, so a
+    /// directory the user removed is not granted again on the next start.
+    /// Default no-op (no store / a test gate).
+    fn remove_directory(&self, _dir: &Path) {}
     /// Remove a rule by index. Returns true if the index was in range.
     fn remove_rule(&self, index: usize) -> bool;
     /// Enable or disable the git-checkpoint builtin rules (git commit / rebase
@@ -475,6 +479,23 @@ impl ModeGate for DefaultModeGate {
                 "[permission] add_read_directory: persistence write failed; the \
                  directory auth will not survive restart: {error}"
             );
+        }
+    }
+
+    fn remove_directory(&self, dir: &Path) {
+        // Every writable scope is cleared because the pane shows one list and
+        // does not know which scope granted the entry; leaving a copy behind
+        // would grant the directory again on the next start.
+        let Some(store) = &self.store else {
+            return;
+        };
+        for scope in [Scope::Local, Scope::Project, Scope::User] {
+            if let Err(error) = store.remove_directory(dir, scope) {
+                tracing::warn!(
+                    "[permission] remove_directory: persistence write failed for \
+                     {scope:?}; the directory may be granted again on restart: {error}"
+                );
+            }
         }
     }
 

@@ -19,14 +19,14 @@
 
 use std::sync::Arc;
 
-use houyicoder_api::sandbox::Containment;
+use houyicoder_api::sandbox::{Containment, Coverage, names_credential_path};
 
-use crate::compound::reads_only_protected;
-use crate::decision::{AskReason, AskSource, Decision};
-use crate::mode::{PermissionMode, ToolRequest};
+use crate::compound::{reads_only_protected, writes_fence_denied_path};
+use crate::decision::{AskReason, AskSource, Decision, DenyReason, DenySource};
+use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
-use crate::safety::{marker_hit, safety_check};
+use crate::safety::{fence_covers_all_hits, marker_hit, safety_check};
 use crate::side_effect::is_shell_tool;
 use std::fs::canonicalize;
 
@@ -52,6 +52,23 @@ pub struct ProtectedPathValidator {
 impl ProtectedPathValidator {
     pub fn new(containment: Option<Arc<dyn Containment>>) -> Self {
         Self { containment }
+    }
+
+    /// Whether a kernel fence refuses writes to the control files this stage
+    /// protects. Only then is a fence-denied path certain to fail, so both
+    /// answers that rest on the kernel -- the outright refusal and the
+    /// exemption for a command that only names such a path -- are taken here.
+    ///
+    /// An active fence is necessary but not sufficient: a backend that grants
+    /// writable roots without nested denies leaves a control file inside a
+    /// granted root writable, and a verdict built on a refusal that never
+    /// comes would either promise a block that does not happen or wave through
+    /// a write that lands.
+    fn fence_denies_control_writes(&self) -> bool {
+        self.containment.as_ref().is_some_and(|containment| {
+            matches!(containment.coverage(), Coverage::Fenced { .. })
+                && containment.denies_control_writes()
+        })
     }
 
     /// The file a host-process write would land on, as a string to judge.
@@ -103,15 +120,58 @@ impl Validator for ProtectedPathValidator {
         if req.is_read_only {
             return None;
         }
-        if ctx.mode == PermissionMode::Auto
-            && is_shell_tool(req.tool_name)
-            && reads_only_protected(ctx.content)
-        {
+        let shell = is_shell_tool(req.tool_name);
+        // The segments that name a protected path are proven read-only, so
+        // this command cannot damage the files the markers protect, whatever
+        // the mode. A credential is the exception: reading one leaks the
+        // secret even though it damages nothing, so a read that names one
+        // stays guarded.
+        let reads = shell && reads_only_protected(ctx.content);
+        if reads && !names_credential_path(ctx.content) {
             return None;
         }
+        // A write a fence that closes control paths refuses is evidence on its
+        // own. The text scan strips quoted heredoc bodies, so a script that
+        // replaces a control file inside one leaves no marker behind for the
+        // scan to see, while the write detection reads the body as the code
+        // the interpreter runs.
+        let fence_write =
+            shell && self.fence_denies_control_writes() && writes_fence_denied_path(ctx.content);
         let hit = safety_check(req.tool_name, req.input).is_some()
-            || self.resolved_path(req).is_some_and(|p| marker_hit(&p));
+            || self.resolved_path(req).is_some_and(|p| marker_hit(&p))
+            || fence_write;
         if !hit {
+            return None;
+        }
+        // A command that writes a control path can only end in a kernel
+        // refusal while the fence holds. Asking would collect a yes the fence
+        // then overrules, so the call is refused here with the reason instead.
+        // Naming the path is not writing it: the same text appears in a commit
+        // message or in a string redirected elsewhere, and those run fine, so
+        // only a redirect target or a writing command's operand counts.
+        if fence_write && !reads {
+            return Some(Decision::Deny(DenyReason {
+                source: DenySource::Fence,
+                validator: self.name(),
+                detail: "this command names a control file the sandbox fence \
+                         protects, so it is refused rather than approved. Edit \
+                         the file yourself, or use the app's own settings \
+                         command to change it."
+                    .into(),
+            }));
+        }
+        // A fence that closes control paths covers every one the command
+        // names, and the command writes none of them, so an approval adds
+        // nothing: the kernel boundary holds with or without the answer. A
+        // credential or startup file keeps its question, since reading one
+        // leaks a secret without writing anything.
+        if shell
+            && !reads
+            && self.fence_denies_control_writes()
+            && !names_credential_path(ctx.content)
+            && fence_covers_all_hits(ctx.content)
+            && !writes_fence_denied_path(ctx.content)
+        {
             return None;
         }
         Some(Decision::Ask(AskReason {

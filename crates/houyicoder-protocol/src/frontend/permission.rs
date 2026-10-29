@@ -160,10 +160,9 @@ pub enum AskSource {
 }
 
 /// Why a call was rejected without asking, wire form. Carries the source so
-/// the frontend can tell a user-configured deny from a headless fallback. The
-/// sandbox variant is transitional: the engine emits it only while the
-/// containment contract is unwired, and removes it once the fence rejects at
-/// execution time. Marked non_exhaustive so a future source fails safe.
+/// the frontend can tell a user-configured deny from a headless fallback and
+/// from a write the fence would refuse anyway. Marked non_exhaustive so a
+/// future source fails safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -173,6 +172,13 @@ pub enum DenySource {
     /// Headless operation turned an approval prompt into a rejection because
     /// there is no one to answer it.
     Headless,
+    /// The execution fence refuses the write, so an approval would only
+    /// produce a refusal after the user said yes.
+    Fence,
+    /// A source from a newer engine. A legacy frontend still reads the
+    /// rejection and shows the detail instead of failing to deserialize.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Why a call was escalated to the user, wire form. The validator name is a

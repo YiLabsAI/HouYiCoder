@@ -133,6 +133,7 @@ fn deny_source_label(s: DenySource) -> &'static str {
     match s {
         DenySource::UserRule => "user_rule",
         DenySource::Headless => "headless",
+        DenySource::Fence => "fence",
     }
 }
 

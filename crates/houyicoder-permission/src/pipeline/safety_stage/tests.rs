@@ -6,9 +6,8 @@
 //! through the process directly, so the kernel fence never sees the call and
 //! cannot refuse it the way it refuses the same write from a shell command.
 
-#[cfg(unix)]
 use crate::Decision;
-use crate::decision::Outcome;
+use crate::decision::{DenySource, Outcome};
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::{DefaultModeGate, ModeGate};
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
@@ -36,6 +35,57 @@ impl Containment for RootFence {
     }
     fn boundary_root(&self) -> Option<Arc<Path>> {
         Some(Arc::from(self.0.as_path()))
+    }
+}
+
+/// The same fence view with a kernel fence active, which is what makes a
+/// write to a fence-denied path impossible rather than merely risky.
+struct FencedRoot(PathBuf);
+
+impl Containment for FencedRoot {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: vec![self.0.clone()],
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+    fn boundary_root(&self) -> Option<Arc<Path>> {
+        Some(Arc::from(self.0.as_path()))
+    }
+    fn denies_control_writes(&self) -> bool {
+        true
+    }
+}
+
+/// A fence that opened the workspace for writing without any rule closing a
+/// control path inside it: the shape a writable-roots backend has, where the
+/// kernel never refuses such a write and the answer therefore still decides.
+struct PermissiveFence(PathBuf);
+
+impl Containment for PermissiveFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: vec![self.0.clone()],
+        }
+    }
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+    fn boundary_root(&self) -> Option<Arc<Path>> {
+        Some(Arc::from(self.0.as_path()))
+    }
+}
+
+fn bash_req(command: &'static str) -> ToolRequest<'static> {
+    let v: &'static Value = Box::leak(serde_json::json!({ "command": command }).into());
+    ToolRequest {
+        tool_name: "bash",
+        input: Some(v),
+        is_destructive: false,
+        is_read_only: false,
+        native_requires_approval: false,
     }
 }
 
@@ -68,6 +118,25 @@ impl Workspace {
     fn gate(&self) -> DefaultModeGate {
         DefaultModeGate::with_mode(PermissionMode::Auto)
             .with_containment(Arc::new(RootFence(self.0.clone())))
+    }
+
+    fn fenced_gate(&self) -> DefaultModeGate {
+        DefaultModeGate::with_mode(PermissionMode::Auto)
+            .with_containment(Arc::new(FencedRoot(self.0.clone())))
+    }
+
+    fn manual_gate(&self) -> DefaultModeGate {
+        DefaultModeGate::with_mode(PermissionMode::Manual)
+            .with_containment(Arc::new(RootFence(self.0.clone())))
+    }
+
+    fn manual_fenced_gate(&self) -> DefaultModeGate {
+        DefaultModeGate::with_mode(PermissionMode::Manual)
+            .with_containment(Arc::new(FencedRoot(self.0.clone())))
+    }
+
+    fn permissive_gate(&self, mode: PermissionMode) -> DefaultModeGate {
+        DefaultModeGate::with_mode(mode).with_containment(Arc::new(PermissiveFence(self.0.clone())))
     }
 }
 
@@ -197,4 +266,196 @@ fn test_shell_write_asks() {
         Outcome::Ask,
         "a shell write to a protected path must Ask"
     );
+}
+
+/// A command that writes a control file the fence refuses is rejected outright
+/// while the fence is active. Asking would collect a yes the kernel then
+/// overrules, which is the failure this check exists to remove.
+#[test]
+fn test_fenced_control_write_denied() {
+    let ws = Workspace::new(line!());
+    for command in [
+        "echo x >> ~/.houyicoder/settings.json",
+        "rm ~/.houyicoder/permissions.json",
+        "touch .houyicoder/skill-grants.json",
+        "mkdir ~/.claude/skills/new-skill",
+        "cp evil.sh .git/hooks/pre-commit",
+    ] {
+        let d = ws.fenced_gate().decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Deny, "denied: {command}");
+        match d {
+            Decision::Deny(reason) => assert_eq!(reason.source, DenySource::Fence),
+            other => panic!("expected a fence deny, got {other:?}"),
+        }
+    }
+}
+
+/// A command that only mentions a control path is not writing it. The fence
+/// check used to search the whole line, so a commit subject or a string
+/// redirected elsewhere was refused as if it were a write to the file.
+#[test]
+fn test_control_path_mention_asks() {
+    let ws = Workspace::new(line!());
+    for command in [
+        "git commit -m \"fix .houyicoder/settings.json readonly check\"",
+        "echo \"ok .claude/settings.json\" > /tmp/report.txt",
+    ] {
+        let d = ws.fenced_gate().decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Ask, "mention only: {command}");
+    }
+}
+
+/// A write to a control child the fence does not deny stays the user's answer.
+/// The refusal names the fence as its source, so it may only stand where the
+/// kernel would refuse the write too.
+///
+/// The gate judges the command text alone, against a throwaway workspace root:
+/// no shell runs and no file is written.
+#[test]
+fn test_fence_free_child_asks() {
+    let ws = Workspace::new(line!());
+    for command in [
+        "echo x > .claude/hooks/pre-commit",
+        "echo x > .agents/settings.json",
+    ] {
+        let d = ws.fenced_gate().decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Ask, "fence allows it: {command}");
+    }
+}
+
+/// A fence that grants the workspace without closing a control path inside it
+/// cannot back a refusal: the write lands on such a backend, so it stays the
+/// user's answer even though the same command is refused under a fence that
+/// closes control paths.
+#[test]
+fn test_permissive_fence_asks_write() {
+    let ws = Workspace::new(line!());
+    for command in [
+        "echo x >> ~/.houyicoder/settings.json",
+        "python3 -c \"open('/Users/von/.houyicoder/settings.json','w').write('{}')\"",
+    ] {
+        let d = ws
+            .permissive_gate(PermissionMode::Auto)
+            .decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Ask, "kernel allows it: {command}");
+    }
+}
+
+/// The read exemption rests on the same refusal, so a fence that does not
+/// close control paths keeps the question for a read it cannot prove is one.
+#[test]
+fn test_permissive_fence_asks_read() {
+    let ws = Workspace::new(line!());
+    for mode in [PermissionMode::Auto, PermissionMode::Manual] {
+        for command in [
+            "python3 -c \"import json; print(json.load(open('/Users/von/.houyicoder/settings.json')))\"",
+            "bash -c \"cat /Users/von/.houyicoder/permissions.json\"",
+        ] {
+            let d = ws.permissive_gate(mode).decide(&bash_req(command));
+            assert_eq!(d.outcome(), Outcome::Ask, "no kernel refusal: {command}");
+        }
+    }
+}
+
+/// Without a fence the same write can land, so the user's answer still
+/// decides and the call is asked rather than refused.
+#[test]
+fn test_unfenced_control_write_asks() {
+    let ws = Workspace::new(line!());
+    let d = ws
+        .gate()
+        .decide(&bash_req("echo x >> ~/.houyicoder/settings.json"));
+    assert_eq!(d.outcome(), Outcome::Ask, "unfenced: {d:?}");
+}
+
+/// A read of a settings file damages nothing and holds no secret, so an
+/// attested read-only command passes in every mode. Before this, Manual asked
+/// on every plain read the careful mode is the one a user picks, so the same
+/// command asked forever there while Auto let it through.
+#[test]
+fn test_fenced_settings_read_allowed() {
+    let ws = Workspace::new(line!());
+    for command in [
+        "cat ~/.houyicoder/settings.json",
+        "stat -f \"settings.json mtime: %Sm\" ~/.houyicoder/settings.json",
+        "jq '.count > 0' ~/.houyicoder/settings.json",
+        "stat -f \"mtime -> %Sm\" ~/.houyicoder/settings.json",
+    ] {
+        let d = ws.fenced_gate().decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Allow, "reads only: {command}");
+        let d = ws.manual_fenced_gate().decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Allow, "manual reads only: {command}");
+    }
+}
+
+/// Without a fence the read waiver is withdrawn, so Manual asks for the same
+/// read: the fence's read visibility is what the waiver rests on.
+#[test]
+fn test_manual_unfenced_read_asks() {
+    let ws = Workspace::new(line!());
+    let d = ws
+        .manual_gate()
+        .decide(&bash_req("cat ~/.houyicoder/settings.json"));
+    assert_eq!(d.outcome(), Outcome::Ask, "unfenced manual read: {d:?}");
+}
+
+/// A read of a credential still asks: the file cannot be damaged by a read,
+/// but the read leaks the secret.
+#[test]
+fn test_credential_read_asks() {
+    let ws = Workspace::new(line!());
+    for command in [
+        "cat ~/.houyicoder/.credentials.json",
+        "grep key ~/.claude/.credentials.json",
+    ] {
+        let d = ws.fenced_gate().decide(&bash_req(command));
+        assert_eq!(d.outcome(), Outcome::Ask, "leaks a secret: {command}");
+    }
+}
+
+/// A script that reads the settings file is the same read as cat, so it passes
+/// once the fence makes the file unwritable: the read cannot change it, and the
+/// kernel already refuses any write.
+#[test]
+fn test_script_settings_read_passes() {
+    let ws = Workspace::new(line!());
+    let command = "cd /Users/von/workspace/hicoder && echo \"settings\"; python3 -c \"\nimport json\nd=json.load(open('/Users/von/.houyicoder/settings.json'))\nprint(json.dumps(d.get('model',{}),indent=2))\n\"";
+    let d = ws.fenced_gate().decide(&bash_req(command));
+    assert_eq!(d.outcome(), Outcome::Allow, "reads only: {d:?}");
+}
+
+/// Backing the settings file up reads it and writes a temporary destination,
+/// so the fence refusal does not apply. The source operand used to be read as
+/// a write, which refused a backup the kernel allows.
+#[test]
+fn test_settings_backup_not_denied() {
+    let ws = Workspace::new(line!());
+    let command = "cd /Users/von/workspace/hicoder && cp ~/.houyicoder/settings.json \"$TMPDIR/settings.backup.$(date +%Y%m%d%H%M%S).json\" && ls -la \"$TMPDIR\"/settings.backup.*.json | tail -1";
+    let d = ws.fenced_gate().decide(&bash_req(command));
+    assert_ne!(d.outcome(), Outcome::Deny, "reads the source: {d:?}");
+}
+
+/// A script that assigns the settings path to a name and replaces that name
+/// writes the file, so the refusal names the fence instead of approving a
+/// command the kernel then fails.
+#[test]
+fn test_script_settings_write_denied() {
+    let ws = Workspace::new(line!());
+    let command = "cd /Users/von/workspace/hicoder && cat > \"$TMPDIR/cleanup.py\" <<'PY'\nimport json, os\n\npath = os.path.expanduser(\"~/.houyicoder/settings.json\")\nwith open(path) as f:\n    d = json.load(f)\n\ntmp = path + \".cleanup.tmp\"\nwith open(tmp, \"w\") as f:\n    json.dump(d, f)\n\nos.replace(tmp, path)\nPY\npython3 \"$TMPDIR/cleanup.py\"";
+    let d = ws.fenced_gate().decide(&bash_req(command));
+    assert_eq!(d.outcome(), Outcome::Deny, "writes the file: {d:?}");
+    match d {
+        Decision::Deny(reason) => assert_eq!(reason.source, DenySource::Fence),
+        other => panic!("expected a fence deny, got {other:?}"),
+    }
+}
+
+/// The version-control directory is denied only where the profile denies it.
+/// A hook write is refused; the configuration file the repository client
+/// maintains is not, so that write stays a question.
+#[test]
+fn test_git_config_write_asks() {
+    let ws = Workspace::new(line!());
+    let d = ws.fenced_gate().decide(&bash_req("echo x >> .git/config"));
+    assert_eq!(d.outcome(), Outcome::Ask, "not fence-denied: {d:?}");
 }

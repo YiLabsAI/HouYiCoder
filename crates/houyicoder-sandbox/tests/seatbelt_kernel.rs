@@ -38,6 +38,9 @@ struct Fence {
     tmpdir: PathBuf,
     profile: String,
     home: String,
+    /// Directories this fence opened beyond the workspace, removed on drop
+    /// beside the two it always owns.
+    granted: Vec<PathBuf>,
 }
 
 /// One probe result. A denial arrives as a non-zero exit whose stderr carries
@@ -123,7 +126,30 @@ impl Fence {
             tmpdir,
             profile,
             home,
+            granted: Vec::new(),
         }
+    }
+
+    /// Render the profile with one more directory opened for reading and
+    /// writing, the shape a session gets when the user grants a second
+    /// checkout. The grant is what makes a denial inside that directory the
+    /// rule under test rather than the absence of an allow.
+    fn with_granted(label: &str) -> Self {
+        let mut f = Self::new(label);
+        let granted = f
+            .workspace
+            .parent()
+            .expect("the probe workspace has a parent")
+            .join(format!("houyi-granted-{label}-{}", id()));
+        create_dir_all(&granted).expect("create granted dir");
+        let granted_text = granted.to_string_lossy().into_owned();
+        let grants = [granted_text.as_str()];
+        f.profile = houyicoder_sandbox::render(
+            &ProfileSpec::new(&f.workspace, &f.tmpdir.to_string_lossy(), &f.home, label)
+                .with_additional(&grants),
+        );
+        f.granted.push(granted);
+        f
     }
 
     /// Render the real profile with an explicit network posture. Separate from
@@ -184,6 +210,9 @@ impl Drop for Fence {
     fn drop(&mut self) {
         remove_dir_all(&self.workspace).ok();
         remove_dir_all(&self.tmpdir).ok();
+        for granted in &self.granted {
+            remove_dir_all(granted).ok();
+        }
     }
 }
 
@@ -459,6 +488,44 @@ fn test_denies_permission_store_write() {
          session can have its workspace there, so a guard broad enough to cover \
          the whole config directory would break it. {}",
         worktree.detail()
+    );
+}
+
+/// A snapshot store under another checkout stays write-denied even when the
+/// user grants that checkout for writing. The undo records are what a restore
+/// puts back, so a session that can rewrite them can have a later restore
+/// reinstate bytes the user never approved for that project.
+///
+/// The control probe writes an ordinary file in the same grant: without it a
+/// denial would also be explained by the grant never having applied.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_denies_foreign_snapshot_store() {
+    let f = Fence::with_granted("foreignsnap");
+    let granted = f.granted.first().expect("the fence holds its grant");
+    let store = granted.join(".houyicoder/snapshots");
+    create_dir_all(&store).expect("create foreign snapshot store");
+    let record = store.join("record.json");
+
+    let granted_probe = f.probe(
+        "granted-file",
+        &format!("printf 'x' >> {}/source.rs", granted.display()),
+    );
+    assert!(
+        granted_probe.allowed(),
+        "the grant must be live, or the denial below proves nothing: {}",
+        granted_probe.detail()
+    );
+
+    let store_probe = f.probe(
+        "foreign-store",
+        &format!("printf 'x' >> {}", record.display()),
+    );
+    assert!(
+        !store_probe.allowed(),
+        "a snapshot store outside the workspace must stay refused inside a \
+         granted directory. {}",
+        store_probe.detail()
     );
 }
 

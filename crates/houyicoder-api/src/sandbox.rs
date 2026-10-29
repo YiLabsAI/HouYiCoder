@@ -230,6 +230,20 @@ pub trait Containment: Send + Sync {
     fn boundary_write_dirs(&self) -> Vec<PathBuf> {
         self.boundary_dirs()
     }
+
+    /// Whether the fence refuses writes to the control paths the permission
+    /// layer protects: the settings and permission stores, the credential
+    /// files, and the skill and hook directories.
+    ///
+    /// The permission layer refuses such a write outright, and answers a
+    /// command that merely names one without writing it, on the strength of
+    /// this refusal. A fence that only grants writable roots cannot back the
+    /// claim: its kernel has no rule that closes a path nested inside a
+    /// granted root, so a control file inside the workspace stays writable and
+    /// the user's answer still decides. Default false, which keeps asking.
+    fn denies_control_writes(&self) -> bool {
+        false
+    }
 }
 
 mod boundary;
@@ -464,6 +478,16 @@ pub trait SandboxSession: Send + Sync {
     /// without a borrow tied to self — a &Path return cannot outlive an
     /// interior-mutable swap.
     fn workspace_root(&self) -> Arc<Path>;
+
+    /// The session's own scratch directory, when the backend creates one.
+    ///
+    /// The child runs with it as TMPDIR and the fence opens it for writing, so
+    /// a user reading the boundary would otherwise see a writable path the
+    /// report never names. Default None: a backend that confines writes to the
+    /// workspace root alone has no directory to report.
+    fn scratch_dir(&self) -> Option<PathBuf> {
+        None
+    }
 
     /// Resolve a logical path against the workspace root, refusing escapes
     /// (absolute paths are rejected; .. is collapsed and must stay inside).

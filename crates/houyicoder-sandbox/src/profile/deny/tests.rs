@@ -186,3 +186,19 @@ fn test_home_store_denied() {
         "reading the store is not the hazard; only writing it is: {p}"
     );
 }
+
+/// The store deny has to reach every checkout, not only the session's own:
+/// the permission layer refuses a command that writes one wherever it sits,
+/// and that refusal is only honest while the kernel agrees.
+#[test]
+fn test_store_deny_any_checkout() {
+    let p = deny_snapshot_stores_anywhere("tag-x");
+    assert!(
+        p.contains(r#"(regex #".*/\.houyicoder/snapshots(/|$)")"#),
+        "the deny must match the store under any checkout: {p}"
+    );
+    assert!(
+        !p.contains("file-read"),
+        "reading a store is not the hazard; only writing it is: {p}"
+    );
+}

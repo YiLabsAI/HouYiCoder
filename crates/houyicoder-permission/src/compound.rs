@@ -12,10 +12,12 @@
 use crate::heredoc::strip_quoted_heredoc_bodies;
 
 mod effect;
+mod fence_write;
 mod readonly;
 
 pub use effect::{is_effect_safe, reads_only_protected, removes_only_temp};
 pub(crate) use effect::{is_temp_output_target, sets_tmpdir, starts_with_supported_command};
+pub(crate) use fence_write::writes_fence_denied_path;
 pub use readonly::is_readonly_compound;
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
@@ -193,6 +195,100 @@ fn push_seg(out: &mut Vec<String>, s: &str) {
     let t = s.trim();
     if !t.is_empty() {
         out.push(t.into());
+    }
+}
+
+/// Split a command line into words the way the shell does, keeping each
+/// word's quotes and escapes. A quoted run of text is one word even when it
+/// contains spaces, and an unterminated quote leaves the rest of the line as
+/// one word the caller's decoder then refuses. Splitting on whitespace alone
+/// tears a quoted argument apart and reads the halves as syntax errors that
+/// are not there.
+pub(crate) fn shell_word_spans(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if let Some(open) = quote {
+            if byte == b'\\' && open == b'"' {
+                i += 2;
+                continue;
+            }
+            if byte == open {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' => {
+                quote = Some(byte);
+                start.get_or_insert(i);
+                i += 1;
+            }
+            b'\\' => {
+                start.get_or_insert(i);
+                i += 2;
+            }
+            byte if byte.is_ascii_whitespace() => {
+                if let Some(from) = start.take() {
+                    spans.push(&text[from..i]);
+                }
+                i += 1;
+            }
+            _ => {
+                start.get_or_insert(i);
+                i += 1;
+            }
+        }
+    }
+    if let Some(from) = start {
+        spans.push(&text[from..]);
+    }
+    spans
+}
+
+/// Resolve the quotes and escapes in one word kept by shell_word_spans, so a
+/// caller compares the text the shell passes to the process rather than the
+/// spelling on the line. None when the word holds an expansion or an
+/// unterminated quote: neither can be shown to name a fixed path.
+pub(super) fn decode_shell_word(raw: &str) -> Option<String> {
+    if raw.contains(['$', '`']) {
+        return None;
+    }
+    let mut out = String::with_capacity(raw.len());
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            i += 1;
+            continue;
+        }
+        if c == '\\' && !in_single {
+            let next = *chars.get(i + 1)?;
+            out.push(next);
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    if in_single || in_double {
+        None
+    } else {
+        Some(out)
     }
 }
 
@@ -490,7 +586,18 @@ pub fn is_attestable(segment: &str) -> bool {
             return false;
         }
     }
-    true
+    // An unterminated quote leaves two scanners disagreeing about where a word
+    // ends, and the shell's reading is the one that runs.
+    !scan.in_single && !scan.in_double
+}
+
+/// Whether every quote in the text is closed. A command whose quoting this
+/// scan cannot follow is never attested as reading, so a compound split at a
+/// separator the scan does not see cannot hide a second command.
+pub(crate) fn quotes_balanced(text: &str) -> bool {
+    let mut scan = QuoteScan::new(text);
+    while scan.next().is_some() {}
+    !scan.in_single && !scan.in_double
 }
 
 /// Whether all segments are independently attestable. This is the gate's

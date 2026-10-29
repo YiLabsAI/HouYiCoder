@@ -369,6 +369,14 @@ impl Containment for MacSeatbeltSession {
             _ => None,
         }
     }
+
+    /// The profile carries explicit write denies for the settings and
+    /// permission stores, the credential files, and the skill and hook
+    /// directories, emitted after every allow, so the kernel refuses those
+    /// writes even inside a workspace it opened.
+    fn denies_control_writes(&self) -> bool {
+        true
+    }
 }
 
 impl Drop for MacSeatbeltSession {

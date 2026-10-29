@@ -8,7 +8,10 @@
 //! change what the fence is asked to open.
 
 use super::readonly::{command_reads_only, find_matching_paren};
-use super::{is_env_assignment, split_compound, strip_safe_redirects};
+use super::{
+    decode_shell_word, is_attestable, is_env_assignment, quotes_balanced, shell_word_spans,
+    split_compound, strip_safe_redirects,
+};
 use crate::git_discard::{decode_token, is_shell_control_keyword, should_ask_before_git};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::pipeline::detection::{should_ask_egress, strip_quotes};
@@ -137,6 +140,11 @@ pub(crate) fn sets_tmpdir(command: &str) -> bool {
 
 fn check_compound_depth(command: &str, depth: u8, fenced: bool) -> bool {
     if depth == 0 {
+        return false;
+    }
+    // Quoting this scan cannot follow may hide a separator, which would make
+    // one segment describe a program the shell runs as two.
+    if !quotes_balanced(command) {
         return false;
     }
     let segments = split_compound(command);
@@ -451,15 +459,11 @@ pub fn reads_only_protected(command: &str) -> bool {
 
 fn is_readonly_protected_segment(segment: &str) -> bool {
     let cleaned = strip_safe_redirects(segment);
-    if cleaned.contains('>')
-        || cleaned.contains('<')
-        || cleaned.contains('`')
-        || cleaned.contains("$(")
-    {
+    if !is_attestable(&cleaned) {
         return false;
     }
     let mut words: Vec<String> = Vec::new();
-    for raw in cleaned.split_whitespace() {
+    for raw in shell_word_spans(&cleaned) {
         if is_env_assignment(raw) {
             continue;
         }
@@ -473,43 +477,6 @@ fn is_readonly_protected_segment(segment: &str) -> bool {
     };
     let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
     command_reads_only(cmd, &args, &cleaned, false)
-}
-
-fn decode_shell_word(raw: &str) -> Option<String> {
-    if raw.contains(['$', '`']) {
-        return None;
-    }
-    let mut out = String::with_capacity(raw.len());
-    let chars: Vec<char> = raw.chars().collect();
-    let mut i = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\'' && !in_double {
-            in_single = !in_single;
-            i += 1;
-            continue;
-        }
-        if c == '"' && !in_single {
-            in_double = !in_double;
-            i += 1;
-            continue;
-        }
-        if c == '\\' && !in_single {
-            let next = *chars.get(i + 1)?;
-            out.push(next);
-            i += 2;
-            continue;
-        }
-        out.push(c);
-        i += 1;
-    }
-    if in_single || in_double {
-        None
-    } else {
-        Some(out)
-    }
 }
 
 fn first_command_word(segment: &str) -> Option<String> {

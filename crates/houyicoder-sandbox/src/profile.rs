@@ -11,7 +11,7 @@ mod network;
 
 use self::deny::{
     deny_home_snapshot_store, deny_permission_stores, deny_settings_files,
-    deny_shared_temp_guarded, deny_snapshot_store, mandatory_deny,
+    deny_shared_temp_guarded, deny_snapshot_store, deny_snapshot_stores_anywhere, mandatory_deny,
 };
 use self::network::network_rules;
 use std::env::var;
@@ -244,6 +244,7 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     s.push_str(&deny_permission_stores(home, tag));
     s.push_str(&deny_snapshot_store(workspace, tag));
     s.push_str(&deny_home_snapshot_store(home, tag));
+    s.push_str(&deny_snapshot_stores_anywhere(tag));
     // After the deny above, so last-match-wins lets git read the system copies.
     // The home copies stay denied.
     s.push_str(&allow_system_etc(tag));

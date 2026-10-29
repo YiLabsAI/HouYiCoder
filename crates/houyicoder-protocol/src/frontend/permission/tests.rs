@@ -182,11 +182,22 @@ fn test_ask_source_falls_back() {
 
 #[test]
 fn test_deny_source_round_trips() {
-    for s in [DenySource::UserRule, DenySource::Headless] {
+    for s in [
+        DenySource::UserRule,
+        DenySource::Headless,
+        DenySource::Fence,
+    ] {
         let json = serde_json::to_string(&s).expect("serialize");
         let back: DenySource = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, s);
     }
+}
+
+#[test]
+fn test_deny_source_falls_back() {
+    // A source a newer engine might emit decodes to Unknown, not an error.
+    let back: DenySource = serde_json::from_str("\"yet_another_source\"").expect("fallback");
+    assert_eq!(back, DenySource::Unknown);
 }
 
 #[test]

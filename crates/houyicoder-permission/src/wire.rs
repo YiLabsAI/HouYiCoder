@@ -25,6 +25,7 @@ impl From<&DenySource> for wire::DenySource {
         match s {
             DenySource::UserRule => Self::UserRule,
             DenySource::Headless => Self::Headless,
+            DenySource::Fence => Self::Fence,
         }
     }
 }

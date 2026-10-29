@@ -87,6 +87,9 @@ pub enum DenySource {
     /// Headless operation turned an approval prompt into a rejection because
     /// there is no one to answer it.
     Headless,
+    /// The execution fence refuses the write, so approving the call would only
+    /// produce a refusal after the user said yes.
+    Fence,
 }
 
 /// Why a call was allowed. Not serializable as is: the containment variant
