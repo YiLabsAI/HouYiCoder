@@ -129,6 +129,27 @@ async fn test_active_skill_scans() {
     assert_eq!(output["authorizable_services"][0], "com.citrolabs.x");
 }
 
+/// The tool declares no way to run outside the fence. Its inputs are this
+/// property list, so the assertion is an exact set: any field added later
+/// that could turn the sandbox off fails here rather than shipping as an
+/// escape hatch the model can choose.
+#[test]
+fn test_schema_no_sandbox_escape() {
+    let tool = BashTool::new(Arc::new(DiscoverStub {
+        services: Vec::new(),
+        scans: Arc::new(AtomicUsize::new(0)),
+    }));
+    let schema = tool.input_schema();
+    let properties = schema["properties"].as_object().expect("property map");
+    let names: Vec<&str> = properties.keys().map(String::as_str).collect();
+    assert_eq!(names, ["command", "timeout_ms"], "unexpected input fields");
+    let text = schema.to_string().to_ascii_lowercase();
+    assert!(
+        !text.contains("sandbox") && !text.contains("dangerously"),
+        "no input field may disable the fence: {text}"
+    );
+}
+
 /// The tool text names the scratch variable and says the shared temp root is
 /// refused. A model that never reads it keeps writing to /tmp and loses the
 /// command to the fence.
