@@ -350,7 +350,7 @@ pub(crate) fn assemble(
         worktree_controller.as_ref(),
     );
     let mut startup = startup_warnings::collect_startup_warnings(
-        &fences.network_warnings,
+        &fences.warnings,
         &toggle_warnings,
         &effort_warnings,
         &provider_cfg_warnings,

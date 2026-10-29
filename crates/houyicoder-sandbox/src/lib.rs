@@ -41,6 +41,9 @@ pub use mac::command_shell;
 
 pub mod deny_log;
 
+mod shell_selection;
+pub use shell_selection::{ShellPreference, ShellProgram, ShellSelection, select_shell};
+
 mod output_capture;
 mod runtime_dirs;
 mod timeout;

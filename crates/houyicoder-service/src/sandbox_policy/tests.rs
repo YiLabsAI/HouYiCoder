@@ -143,3 +143,31 @@ fn test_deferred_keys_surface() {
     let (_, w) = network_policy_from(&c);
     assert!(w.iter().any(|m| m.contains("allow")), "got {w:?}");
 }
+
+#[test]
+fn test_shell_modes_map() {
+    assert_eq!(shell_preference(&ShellSetting::Auto), ShellPreference::Auto);
+    assert_eq!(
+        shell_preference(&ShellSetting::GitBash),
+        ShellPreference::GitBash
+    );
+    assert_eq!(shell_preference(&ShellSetting::Cmd), ShellPreference::Cmd);
+    assert_eq!(
+        shell_preference(&ShellSetting::Unsupported("powershell".into())),
+        ShellPreference::Cmd,
+        "a mode this version cannot run adds no search and no translation"
+    );
+}
+
+#[test]
+fn test_shell_settings_reported() {
+    let cfg = SandboxShellConfig::new(
+        ShellSetting::Cmd,
+        Some(PathBuf::from("C:\\Git\\bin\\bash.exe")),
+    );
+    let (_, w) = shell_program_from(&cfg, None);
+    assert!(
+        w.iter().any(|m| m.contains("git_bash_path")),
+        "a path the mode ignores must be reported: {w:?}"
+    );
+}

@@ -109,7 +109,7 @@ impl SandboxNetworkConfig {
         let mut out = Vec::new();
         if let NetworkMode::Unsupported(value) = &self.mode {
             out.push(format!(
-                "sandbox.network: mode {value:?} is not implemented, so egress is \
+                "mode {value:?} is not implemented, so egress is \
                  denied. Supported values are \"off\" and \"open\""
             ));
         }
@@ -123,13 +123,13 @@ impl SandboxNetworkConfig {
         self.unrecognized.keys().map(|k| {
             if DEFERRED_KEYS.contains(&k.as_str()) {
                 format!(
-                    "sandbox.network: {k} is not in effect yet — deciding it \
-                         needs a proxy that can see hostnames, which is not built. \
-                         Egress is currently either fully denied or fully open, so \
-                         this entry is not restricting anything"
+                    "{k} is not in effect yet — deciding it needs a proxy that can \
+                         see hostnames, which is not built. Egress is currently either \
+                         fully denied or fully open, so this entry is not restricting \
+                         anything"
                 )
             } else {
-                format!("sandbox.network: unknown key {k} is ignored")
+                format!("unknown key {k} is ignored")
             }
         })
     }

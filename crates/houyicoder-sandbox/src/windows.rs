@@ -28,6 +28,7 @@
 
 use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
+use crate::shell_selection::ShellProgram;
 use crate::timeout::message;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
@@ -78,6 +79,11 @@ pub struct WindowsJobSession {
     /// so these widen the resolver only: the kernel fence stays limited to
     /// resources and the coverage answer remains honest about that.
     dirs: RuntimeDirs,
+    /// The shell every command in this session is passed to. None until the
+    /// composition root has chosen one, which reads as the command
+    /// interpreter: the session names the shell it runs, so the tool layer
+    /// never translates for a shell the session does not use.
+    program: Option<ShellProgram>,
 }
 
 impl WindowsJobSession {
@@ -97,6 +103,7 @@ impl WindowsJobSession {
             job_handle,
             fence,
             dirs: RuntimeDirs::default(),
+            program: None,
         })
     }
 
@@ -120,6 +127,7 @@ impl WindowsJobSession {
             job_handle,
             fence,
             dirs: RuntimeDirs::default(),
+            program: None,
         })
     }
 
@@ -134,6 +142,15 @@ impl WindowsJobSession {
     /// PlatformSession parity.
     #[must_use]
     pub fn with_network(self, _network: NetworkPolicy) -> Self {
+        self
+    }
+
+    /// Set the shell this session passes commands to. The chosen program and
+    /// the shell the session reports come from this one field, so a command is
+    /// translated for the program that will read it.
+    #[must_use]
+    pub fn with_shell_program(mut self, program: Option<ShellProgram>) -> Self {
+        self.program = program;
         self
     }
 
@@ -384,13 +401,19 @@ impl WindowsJobSession {
 
 impl SandboxSession for WindowsJobSession {
     fn shell(&self) -> Shell {
-        Shell::Cmd
+        self.program
+            .as_ref()
+            .map_or(Shell::Cmd, ShellProgram::shell)
     }
 
     fn fence_status(&self) -> FenceStatus {
         self.fence.clone()
     }
 
+    // This start is still outside the launcher port: the port captures
+    // output synchronously, which would block a runtime worker. The job
+    // object bounds the tree's resources and lifetime; the executable itself
+    // was resolved and checked before the session was built.
     #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
     fn exec_with_config(
         &self,
@@ -401,6 +424,7 @@ impl SandboxSession for WindowsJobSession {
         let command = command.to_string();
         let wall = Duration::from_millis(config.wall_timeout_ms);
         let job_raw = self.job_handle;
+        let program = self.program.clone();
         Box::pin(async move {
             let _ = (config.cpu_secs, config.as_bytes, config.nproc);
             if job_raw.is_none() {
@@ -409,8 +433,9 @@ impl SandboxSession for WindowsJobSession {
                     config.wall_timeout_ms
                 );
             }
-            let mut cmd = Command::new("cmd");
-            cmd.arg("/C").arg(&command).current_dir(&cwd);
+            let shell = program.unwrap_or(ShellProgram::Cmd);
+            let mut cmd = Command::new(shell.executable());
+            cmd.args(shell.arguments(&command)).current_dir(&cwd);
             pipe_streams(&mut cmd);
             cmd.kill_on_drop(true);
             let child = cmd

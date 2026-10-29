@@ -59,6 +59,10 @@ landlock = "0.4"
 # the enforce feature. Only the Job Object + Threading + Foundation feature
 # trees are enabled to keep compile time and the binary surface minimal.
 [target.'cfg(target_os = "windows")'.dependencies]
+# pollster blocks on the handle the launcher hands back, so the shell
+# probe can read the search result without an async runtime. Target-gated
+# because only the Windows discovery path blocks; mac and Linux start no probe.
+pollster = "1"
 windows = { version = "0.62", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",

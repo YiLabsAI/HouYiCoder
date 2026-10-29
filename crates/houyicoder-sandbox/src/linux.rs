@@ -9,6 +9,7 @@
 
 use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
+use crate::shell_selection::ShellProgram;
 use crate::timeout::message;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
@@ -137,6 +138,14 @@ impl LinuxLandlockSession {
     /// visible through would_block answering None for network effects.
     #[must_use]
     pub fn with_network(self, _network: NetworkPolicy) -> Self {
+        self
+    }
+
+    /// No-op: this host runs its own shell, so there is no program to select.
+    /// Present for PlatformSession parity; a settings value naming a Windows
+    /// shell is reported by the selection before it reaches this session.
+    #[must_use]
+    pub fn with_shell_program(self, _program: Option<ShellProgram>) -> Self {
         self
     }
 

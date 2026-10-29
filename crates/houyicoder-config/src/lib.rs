@@ -27,6 +27,10 @@ pub mod settings_store;
 pub use sandbox_network::{
     NetworkMode, SandboxNetworkConfig, load_sandbox_network, load_sandbox_network_from,
 };
+mod sandbox_shell;
+pub use sandbox_shell::{
+    SandboxShellConfig, ShellSetting, load_sandbox_shell, load_sandbox_shell_from,
+};
 pub use settings_store::{SettingsWriteError, update_settings};
 pub mod model_section;
 use houyicoder_protocol::frontend::model::ModelChoice;

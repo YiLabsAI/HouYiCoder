@@ -30,6 +30,7 @@ mod process;
 mod temp_dir;
 use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
+use crate::shell_selection::ShellProgram;
 use crate::timeout;
 use command::annotate_fence_refusal;
 use process::{ExecCountGuard, kill_process_group, tree_cpu_secs};
@@ -224,6 +225,14 @@ impl MacSeatbeltSession {
             .with_network(network.clone()),
         );
         self.network = network;
+        self
+    }
+
+    /// No-op: this host runs its own shell, so there is no program to select.
+    /// Present for PlatformSession parity; a settings value naming a Windows
+    /// shell is reported by the selection before it reaches this session.
+    #[must_use]
+    pub fn with_shell_program(self, _program: Option<ShellProgram>) -> Self {
         self
     }
 

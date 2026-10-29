@@ -1,4 +1,5 @@
-//! Mapping from the on-disk sandbox settings to the enforced network policy.
+//! Mapping from the on-disk sandbox settings to the enforced network policy
+//! and the shell this host runs commands with.
 //!
 //! Two shapes exist on purpose. The settings shape is a serde record that must
 //! stay backward compatible with files users already have; the policy shape is
@@ -13,8 +14,11 @@
 //! kernel opening while the gate still refused every egress command. Both now
 //! derive from the value this module returns.
 
+use std::path::{Path, PathBuf};
+
 use houyicoder_api::sandbox::{Egress, NetworkPolicy, UnixSockets};
-use houyicoder_config::{NetworkMode, SandboxNetworkConfig};
+use houyicoder_config::{NetworkMode, SandboxNetworkConfig, SandboxShellConfig, ShellSetting};
+use houyicoder_sandbox::{ShellPreference, ShellSelection, select_shell};
 
 /// A settings entry that was not honoured, phrased for display to the user.
 ///
@@ -24,6 +28,16 @@ use houyicoder_config::{NetworkMode, SandboxNetworkConfig};
 /// the user believes a socket is reachable, the fence disagrees, and the symptom
 /// surfaces later as an unexplained permission error from an unrelated tool.
 pub type PolicyWarning = String;
+
+/// The sandbox settings warnings, kept by the section that produced them so
+/// each line can name its own settings key when it is displayed.
+#[derive(Debug, Default)]
+pub struct SandboxWarnings {
+    /// Warnings from the network section.
+    pub network: Vec<PolicyWarning>,
+    /// Warnings from the shell section.
+    pub shell: Vec<PolicyWarning>,
+}
 
 /// Map the settings record onto the enforced policy, collecting anything that
 /// could not be honoured.
@@ -49,6 +63,41 @@ pub fn network_policy_from(cfg: &SandboxNetworkConfig) -> (NetworkPolicy, Vec<Po
     (policy, warnings)
 }
 
+/// Choose the program this session runs commands with, and collect anything
+/// that could not be honoured.
+///
+/// The workspace is the directory a candidate shell must not live under: a
+/// repository that can write the program that runs its commands has already
+/// escaped the fence. The sandbox layer adds the directories this process
+/// runs commands in, which are the other places such a program could be put.
+/// A mode this version cannot run resolves to the command interpreter and is
+/// reported, so an unimplemented value never turns into an unexplained shell
+/// change.
+pub fn shell_program_from(
+    cfg: &SandboxShellConfig,
+    workspace: Option<&Path>,
+) -> (ShellSelection, Vec<PolicyWarning>) {
+    let preference = shell_preference(&cfg.mode);
+    let mut warnings = cfg.deferred_warnings();
+    let untrusted: Vec<PathBuf> = workspace.map(Path::to_path_buf).into_iter().collect();
+    let selection = select_shell(preference, cfg.git_bash_path.as_deref(), &untrusted);
+    if let Some(notice) = &selection.notice {
+        warnings.push(notice.clone());
+    }
+    (selection, warnings)
+}
+
+/// The preference a settings mode asks for. A mode this version cannot run
+/// resolves to the command interpreter: it adds neither a translation nor a
+/// search, and the deferred warning names the value that was not implemented.
+fn shell_preference(mode: &ShellSetting) -> ShellPreference {
+    match mode {
+        ShellSetting::Auto => ShellPreference::Auto,
+        ShellSetting::GitBash => ShellPreference::GitBash,
+        ShellSetting::Cmd | ShellSetting::Unsupported(_) => ShellPreference::Cmd,
+    }
+}
+
 /// Resolve the two settings fields that describe unix socket access onto the
 /// single enforced value.
 ///
@@ -63,9 +112,9 @@ fn map_unix_sockets(cfg: &SandboxNetworkConfig, warnings: &mut Vec<PolicyWarning
     if cfg.allow_all_unix_sockets {
         if !cfg.allow_unix_sockets.is_empty() {
             warnings.push(format!(
-                "sandbox.network: allow_all_unix_sockets is set, so the {} \
-                 enumerated allow_unix_sockets entries are ignored and every \
-                 unix socket path is reachable",
+                "allow_all_unix_sockets is set, so the {} enumerated \
+                 allow_unix_sockets entries are ignored and every unix socket \
+                 path is reachable",
                 cfg.allow_unix_sockets.len()
             ));
         }
@@ -81,8 +130,8 @@ fn map_unix_sockets(cfg: &SandboxNetworkConfig, warnings: &mut Vec<PolicyWarning
         .partition(|p| p.starts_with('/'));
     for p in rejected {
         warnings.push(format!(
-            "sandbox.network: ignoring allow_unix_sockets entry {p:?} because \
-             the fence matches absolute paths only"
+            "ignoring allow_unix_sockets entry {p:?} because the fence \
+             matches absolute paths only"
         ));
     }
     if absolute.is_empty() {

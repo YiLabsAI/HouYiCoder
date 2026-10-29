@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::degrade_with_notice;
 use super::resolve_project_workspace;
 use super::worktree::git_common_dir;
-use crate::sandbox_policy::{PolicyWarning, network_policy_from};
+use crate::sandbox_policy::{SandboxWarnings, network_policy_from, shell_program_from};
 use houyicoder_api::sandbox::{Containment, Coverage, SandboxSession, SideEffect};
 use houyicoder_permission::{DefaultModeGate, RuleStore};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
@@ -20,7 +20,7 @@ pub(super) struct SessionFences {
     pub(super) workspace: Option<PathBuf>,
     pub(super) sandbox_session: Option<Arc<dyn SandboxSession>>,
     pub(super) breaker: Arc<ResourceBreaker>,
-    pub(super) network_warnings: Vec<PolicyWarning>,
+    pub(super) warnings: SandboxWarnings,
     pub(super) gate: Arc<DefaultModeGate>,
 }
 
@@ -40,9 +40,15 @@ pub(super) fn build_session_fences(
         network_policy_from(&houyicoder_config::load_sandbox_network());
     let breaker = Arc::new(ResourceBreaker::new(ResourceBreakerConfig::default()));
     let workspace = resolve_project_workspace(project);
+    let (shell, shell_warnings) = shell_program_from(
+        &houyicoder_config::load_sandbox_shell(),
+        workspace.as_deref(),
+    );
+    let program = shell.program;
     let fence = |s: PlatformSession| {
         s.with_breaker(breaker.clone())
             .with_network(network.clone())
+            .with_shell_program(program.clone())
     };
     let tempdir_session = || {
         degrade_with_notice(
@@ -82,7 +88,10 @@ pub(super) fn build_session_fences(
         workspace,
         sandbox_session,
         breaker,
-        network_warnings,
+        warnings: SandboxWarnings {
+            network: network_warnings,
+            shell: shell_warnings,
+        },
         gate: Arc::new(gate_builder),
     }
 }
