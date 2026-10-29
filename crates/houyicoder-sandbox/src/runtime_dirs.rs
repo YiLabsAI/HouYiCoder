@@ -4,10 +4,10 @@
 //! from this state at the next spawn (macOS profile render, Linux fence
 //! argv) or admits paths against it (Windows resolver).
 
+use houyicoder_api::path::{expand_home, home_directory};
+use houyicoder_context::SandboxError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-
-use houyicoder_context::SandboxError;
 
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeDirs {
@@ -83,7 +83,7 @@ impl RuntimeDirs {
 }
 
 fn canonical_dir(path: &str) -> Result<PathBuf, SandboxError> {
-    let canonical = dunce::canonicalize(path)
+    let canonical = dunce::canonicalize(resolve_supplied(path))
         .map_err(|error| SandboxError::NotFound(format!("dir canonicalize: {path}: {error}")))?;
     if canonical.is_dir() {
         Ok(canonical)
@@ -115,12 +115,32 @@ fn remove_path(target: &Mutex<Vec<PathBuf>>, path: &Path) {
 }
 
 fn remove_supplied(target: &Mutex<Vec<PathBuf>>, path: &str) {
-    if let Ok(canonical) = dunce::canonicalize(path) {
+    let supplied = resolve_supplied(path);
+    if let Ok(canonical) = dunce::canonicalize(&supplied) {
         remove_path(target, &canonical);
-    } else {
-        target
-            .lock()
-            .expect("runtime dirs lock")
-            .retain(|directory| !directory.to_string_lossy().eq_ignore_ascii_case(path));
+        return;
     }
+    // A path that no longer resolves is compared as written. Case is
+    // compared loosely only where the file system does: elsewhere two
+    // spellings that differ in case name two directories, and clearing the
+    // wrong grant would revoke access the user did not ask to lose.
+    let supplied_text = supplied.to_string_lossy();
+    target
+        .lock()
+        .expect("runtime dirs lock")
+        .retain(|directory| {
+            let held = directory.to_string_lossy();
+            if cfg!(windows) {
+                !held.eq_ignore_ascii_case(&supplied_text)
+            } else {
+                held != supplied_text
+            }
+        });
+}
+
+/// The path the user meant by what they typed. A leading tilde is the shell's
+/// spelling for the home directory, and the kernel resolves it as a literal
+/// name, so the grant has to expand it before the file system is asked.
+fn resolve_supplied(path: &str) -> PathBuf {
+    expand_home(Path::new(path), home_directory().as_deref())
 }
