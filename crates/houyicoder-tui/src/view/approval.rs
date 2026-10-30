@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::records::Approval;
 
 use super::line_wrap::{truncate_width, wrap_line};
+use super::navigation::key_hint;
 use crate::state::App;
 use houyicoder_protocol::frontend::permission::AskSource;
 
@@ -108,11 +109,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     render_options(f, a, &mut rows);
 
     if plan.hint {
-        let hint = if a.two_option_card() {
-            " ↑↓ navigate · 1/2 select · Enter confirm · Esc cancel"
-        } else {
-            " ↑↓ navigate · 1/2/3 select · Enter confirm · Esc cancel"
-        };
+        // The footer follows the shared key-hint grammar so a user reads the
+        // same key names here as in every other pane. The numbered keys are
+        // not offered: the arrows already move the selection, and naming two
+        // ways to do one thing doubles the row without adding an action.
+        let hint = key_hint(&[
+            ("Up/Down", "select"),
+            ("Enter", "confirm"),
+            ("Esc", "cancel"),
+        ]);
         f.render_widget(
             Paragraph::new(hint).style(Style::new().fg(Color::DarkGray)),
             rows.take(1),
@@ -185,7 +190,7 @@ pub(super) fn essential_rows(a: &Approval) -> u16 {
 /// truncates the key hint rather than the choice the keys will act on.
 fn draw_narrow(f: &mut Frame, a: &Approval, area: Rect) {
     let line = format!(
-        " {} {}. {}  \u{2191}\u{2193} switch \u{b7} Enter confirm \u{b7} Esc cancel",
+        " {} {}. {}  Up/Down to select \u{b7} Enter to confirm \u{b7} Esc to cancel",
         "\u{276f}",
         option_number(a, a.selected),
         option_label(a, a.selected),

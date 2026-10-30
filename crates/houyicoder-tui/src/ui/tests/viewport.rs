@@ -604,9 +604,14 @@ fn test_worktree_pane_detail() {
     assert!(out.contains("Branch:"), "branch label: {out}");
     assert!(out.contains("(abcdef0)"), "head beside the branch: {out}");
     assert!(
-        out.contains("reading from the host"),
+        out.contains("reading…"),
         "an unanswered read says so instead of showing zeros: {out}"
     );
+    // Every measured row already holds its place, so the answer replaces the
+    // words in the rows that are on screen rather than adding rows.
+    for label in ["Merge:", "Changes:", "Ignored:", "Use:"] {
+        assert!(out.contains(label), "placeholder row {label}: {out}");
+    }
     assert!(
         out.contains("e to enter"),
         "enter hint in detail footer: {out}"

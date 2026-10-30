@@ -394,7 +394,7 @@ fn test_usage_tab_delegated() {
     assert!(s.contains("delegated usage:"), "the row is present: {s}");
     assert!(
         s.contains(
-            "2 subagent calls (included above) · 812k input · 41k output · 755k (93% cached)"
+            "2 subagent calls (included above) · 812k input · 41k output · 755k (93.0% cached)"
         ),
         "the row names each count and the share the complete account supports: {s}"
     );
@@ -436,7 +436,7 @@ fn test_usage_tab_recap_spend() {
     assert!(s.contains("recap usage:"), "the row is present: {s}");
     assert!(
         s.contains(
-            "3 recaps (included above) · 4.1k input · 300 output · 3.1k (76% cached) · 2.4s"
+            "3 recaps (included above) · 4.1k input · 300 output · 3.1k (75.6% cached) · 2.4s"
         ),
         "the row names each figure, the time, and the count: {s}"
     );
@@ -706,7 +706,10 @@ fn test_delegated_share_clamped() {
         ..TrajectoryView::default()
     }))));
     let s = render_usage(&app);
-    assert!(s.contains("100% cached"), "the share is held at one: {s}");
+    assert!(
+        s.contains("100.0% cached"),
+        "a delegated share with no miss reads as complete: {s}"
+    );
 }
 
 /// A child that reported only its cache-read count still has that count worth

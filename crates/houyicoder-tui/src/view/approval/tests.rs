@@ -145,7 +145,7 @@ fn test_render_separator_and_question() {
     // Cursor marker on the focused (Yes) option.
     assert!(out.contains('❯'), "cursor marker missing:\n{out}");
     // Bottom hint present.
-    assert!(out.contains("Esc cancel"), "hint line missing:\n{out}");
+    assert!(out.contains("Esc to cancel"), "hint line missing:\n{out}");
     // The actual command text is shown (not just raw JSON).
     assert!(
         out.contains("find . -type f | wc -l"),
@@ -307,12 +307,20 @@ fn test_system_safety_hides_option() {
         !out.contains("3. No"),
         "stale 3. No must not show when remember is hidden: {out}"
     );
-    // Hint reflects the two-option layout.
+    // Hint reflects the two-option layout: the footer names one key grammar
+    // whatever the option count, so the numbered keys never appear.
     assert!(
         !out.contains("1/2/3 select"),
         "three-option hint must not show when remember is hidden: {out}"
     );
-    assert!(out.contains("1/2 select"), "two-option hint missing: {out}");
+    assert!(
+        out.contains("Up/Down to select"),
+        "two-option hint missing: {out}"
+    );
+    assert!(
+        !out.contains("1/2 select"),
+        "the numbered keys are not advertised: {out}"
+    );
 }
 
 /// A two-option card (protected-path) should be vertically compact:
@@ -346,7 +354,7 @@ fn test_two_option_card_compact() {
         .expect("Yes line");
     let hint_idx = lines
         .iter()
-        .position(|l| l.contains("Esc cancel"))
+        .position(|l| l.contains("Esc to cancel"))
         .expect("hint line");
     let between: usize = lines[yes_idx + 1..hint_idx]
         .iter()
@@ -406,7 +414,7 @@ fn test_read_card_compact() {
             .expect("no"),
         lines
             .iter()
-            .position(|line| line.contains("Esc cancel"))
+            .position(|line| line.contains("Esc to cancel"))
             .expect("hint"),
     ];
     for pair in positions.windows(2) {
@@ -586,7 +594,7 @@ fn test_entitlement_card_two_option() {
         "No must be renumbered to 2 for entitlement: {out}"
     );
     assert!(
-        out.contains("1/2 select"),
+        out.contains("Up/Down to select"),
         "two-option hint missing for entitlement: {out}"
     );
     assert!(
@@ -1012,7 +1020,7 @@ fn test_narrow_card_shows_focus() {
     let out = render_text(&app_with_draft_card(0), 60, 7);
     assert!(out.contains("1. Yes"), "the focused option stays: {out}");
     assert!(
-        out.contains("Enter confirm"),
+        out.contains("Enter to confirm"),
         "and says what Enter does: {out}"
     );
     assert!(

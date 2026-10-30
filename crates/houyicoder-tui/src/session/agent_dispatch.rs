@@ -4,6 +4,7 @@
 mod run_completion;
 
 mod memory;
+mod permission_dirs;
 
 mod sandbox;
 
@@ -101,6 +102,12 @@ impl App {
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
         self.clear_memory_pending();
         self.ui.skills_pane.clear_pending();
+        // A request whose transport is gone can never be answered, and both
+        // confirmation pages ignore every key while one is out. Settling them
+        // is what returns the keys: without it the page has no button, no key,
+        // and no answer coming, so the only way out is abandoning the session.
+        self.settle_pending_worktree_removal();
+        self.settle_pending_restore();
         let run_line = if run_not_sent {
             "run not sent — connection failed before the request reached the transport"
         } else {
@@ -125,6 +132,20 @@ impl App {
             }
         }
         true
+    }
+
+    /// Release a worktree page that is waiting on the host for an answer the
+    /// dead transport can never carry.
+    fn settle_pending_worktree_removal(&mut self) {
+        let mut draft = self.ui.worktree_pane.draft.borrow_mut();
+        draft.finish_removal();
+        draft.finish_preview();
+        draft.finish_enter();
+    }
+
+    /// The same release for the sandbox page's restore confirmation.
+    fn settle_pending_restore(&mut self) {
+        self.ui.sandbox_pane.end_restore();
     }
 
     /// Fill the teammate view with the fetched child transcript. A pending
@@ -429,7 +450,7 @@ impl App {
                 self.system_line(render_permission_rules_wire(&rules));
             }
             ServerResponse::PermissionDirs { dirs } => {
-                self.sessions.current.capabilities.permission.dirs_cache = dirs.clone();
+                self.apply_permission_dirs(dirs);
             }
             ServerResponse::PermissionAskBeforeGit { enabled } => {
                 let permission = &mut self.sessions.current.capabilities.permission;
@@ -719,11 +740,15 @@ impl App {
     /// and without a fresh grace period the spinner would snap red the moment
     /// the tool-runtime stall exemption lifts.
     fn finish_tool(&mut self, call_id: &str) {
-        if let Some(p) = self.run_progress_mut()
-            && p.tools.finish(call_id)
-        {
-            p.last_delta_at = Some(Instant::now());
-        }
+        let Some(p) = self.run_progress_mut() else {
+            return;
+        };
+        // The clock is reset whether or not this run was tracking the call.
+        // A terminal frame for a call the run never saw still marks the end of
+        // a tool, and the silence that follows it is the wait for the next
+        // reply to start — the stretch a stale clock would paint as a stall.
+        p.tools.finish(call_id);
+        p.last_delta_at = Some(Instant::now());
     }
 }
 

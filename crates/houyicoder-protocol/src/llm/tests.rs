@@ -300,3 +300,29 @@ fn test_from_recorded_clamps() {
     assert_eq!(usage.total_tokens, u32::MAX);
     assert_eq!(usage.non_cached_input_tokens, u32::MAX);
 }
+
+/// A hundred percent says no input token went uncached. A turn that missed
+/// even one token must not round its way there, while a turn that missed none
+/// still reads as complete. The clamp lives in the one derivation both panes
+/// print from, so the same turn cannot read differently in two places.
+#[test]
+fn test_cache_pct_reserves_hundred() {
+    let p = UsageProvenance::ALL_REPORTED;
+    // 830k of 831k is 99.88%, which a single decimal already reports as 99.9.
+    assert_eq!(p.cache_hit_display_pct(830_000, 831_000), Some(99.9));
+    // 999.6k of 1M is 99.96%, which a single decimal rounds to a hundred. The
+    // miss is small but real, so the top of the range stays reserved.
+    assert_eq!(p.cache_hit_display_pct(999_600, 1_000_000), Some(99.9));
+    // One token short of the whole still cannot claim the whole.
+    assert_eq!(p.cache_hit_display_pct(999_999, 1_000_000), Some(99.9));
+    // Nothing missed: the claim is exact.
+    assert_eq!(p.cache_hit_display_pct(831_000, 831_000), Some(100.0));
+    // A miss large enough to land below the clamp is reported as measured.
+    assert_eq!(p.cache_hit_display_pct(500_000, 1_000_000), Some(50.0));
+    // A partial account supports no share at all.
+    let partial = UsageProvenance {
+        cache_read_reported: false,
+        ..UsageProvenance::ALL_REPORTED
+    };
+    assert_eq!(partial.cache_hit_display_pct(830_000, 831_000), None);
+}

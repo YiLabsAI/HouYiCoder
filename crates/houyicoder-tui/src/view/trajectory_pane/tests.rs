@@ -1,6 +1,7 @@
 //! Rendering tests for the trajectory pane: the turn list, the drill levels,
 //! and the time bars.
 
+use super::detail;
 use super::list;
 
 mod columns;
@@ -599,7 +600,7 @@ fn test_turn_row_cached_ratio() {
         .map(|s| s.content.as_ref())
         .collect();
     assert!(
-        text.contains("50% cache"),
+        text.contains("50.0% cache"),
         "the per-turn cached ratio renders: {text}"
     );
     assert!(
@@ -751,7 +752,10 @@ fn test_measured_miss_is_stated() {
         .flat_map(|l| l.spans.iter())
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(row.contains("0% cached"), "the row states the miss: {row}");
+    assert!(
+        row.contains("0.0% cached"),
+        "the row states the miss: {row}"
+    );
 
     let detail = detail_of_all(Vec::new());
     let app = app();
@@ -820,7 +824,10 @@ fn test_session_header_states_miss() {
         .flat_map(|l| l.spans.iter())
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(head.contains("cache hit 0%"), "the miss is stated: {head}");
+    assert!(
+        head.contains("cache hit 0.0%"),
+        "the miss is stated: {head}"
+    );
 }
 
 /// Entering trajectory initializes cursor to tail, and draw clamps and persists it.
@@ -905,14 +912,14 @@ fn test_timing_and_cache_render() {
     assert!(head_text.contains("p95 400ms"), "{head_text}");
     assert!(head_text.contains("p99 600ms"), "{head_text}");
     assert!(head_text.contains("decode 45.2 tok/s"));
-    assert!(head_text.contains("cache hit 50%"));
+    assert!(head_text.contains("cache hit 50.0%"));
 
     let body_text: String = body
         .iter()
         .flat_map(|l| l.spans.iter())
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(body_text.contains("50% cached"));
+    assert!(body_text.contains("50.0% cached"));
 }
 
 /// Every outcome has its own glyph and colour, so a pending record never looks
@@ -1444,4 +1451,96 @@ fn test_turn_key_round_trips() {
     let key = TrajectoryTurnKey::from_opening_event("01J0-opened-the-turn");
     assert_eq!(key.as_str(), "01J0-opened-the-turn");
     assert_eq!(key, key.clone(), "a key compares by the id it holds");
+}
+
+/// A turn that missed one token in a thousand renders as 99.9, never as a
+/// hundred. The list is where a reader scans many turns at once, so a row
+/// claiming a complete hit it did not have inflates the whole page.
+#[test]
+fn test_turn_row_no_ceiling() {
+    // 99.96% rounds to a hundred at one decimal place while 0.04% of the
+    // input still went uncached.
+    let turn = TrajectoryTurn {
+        tokens_in: Some(1_000_000),
+        cache_read: Some(999_600),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
+        ..turn(1, "a small miss")
+    };
+    let view = view(vec![TrajectoryRow::Turn(turn)]);
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 130, 6));
+    let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(
+        text.contains("99.9% cached"),
+        "a near-total hit keeps its miss visible: {text}"
+    );
+    assert!(
+        !text.contains("100.0% cached"),
+        "and never rounds up to complete: {text}"
+    );
+}
+
+/// A turn that missed nothing states the complete hit exactly, so the clamp
+/// above is a floor on rounding and not a ceiling on the truth.
+#[test]
+fn test_turn_row_full_hit() {
+    let turn = TrajectoryTurn {
+        tokens_in: Some(831_000),
+        cache_read: Some(831_000),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
+        ..turn(1, "nothing missed")
+    };
+    let view = view(vec![TrajectoryRow::Turn(turn)]);
+    let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 130, 6));
+    let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.contains("100.0% cached"), "{text}");
+}
+
+/// One turn has one cache share. The row, the session header above it, and the
+/// detail opened from it all read the same derivation at the same precision,
+/// so a reader comparing the three screens is comparing one number with
+/// itself. A near-total hit that rounds up to a hundred in two of them while
+/// the third says 99.9 makes the page contradict itself.
+#[test]
+fn test_cache_share_agrees() {
+    let turn = TrajectoryTurn {
+        tokens_in: Some(1_000_000),
+        cache_read: Some(999_600),
+        usage_provenance: UsageProvenance::ALL_REPORTED,
+        ..turn(1, "a near-complete hit")
+    };
+    let mut view = view(vec![TrajectoryRow::Turn(turn.clone())]);
+    view.tokens_in = Some(1_000_000);
+    view.cache_read = Some(999_600);
+    view.usage_provenance = UsageProvenance::ALL_REPORTED;
+    let (header, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 130, 10));
+    let header_text: String = header
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.as_ref())
+        .collect();
+    let row_text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    let detail_text = detail::format_turn_cache_for_test(&turn);
+
+    for (label, text) in [
+        ("session header", header_text.as_str()),
+        ("turn row", row_text.as_str()),
+        ("turn detail", detail_text.as_str()),
+    ] {
+        assert!(
+            !text.contains("100.0%"),
+            "{label} claims a complete hit the turn did not have: {text}"
+        );
+    }
+    assert!(
+        header_text.contains("99.9"),
+        "the session header states the same share: {header_text}"
+    );
+    assert!(
+        row_text.contains("99.9% cached"),
+        "the row states it: {row_text}"
+    );
+    assert!(
+        detail_text.contains("99.9%"),
+        "the detail states it: {detail_text}"
+    );
 }

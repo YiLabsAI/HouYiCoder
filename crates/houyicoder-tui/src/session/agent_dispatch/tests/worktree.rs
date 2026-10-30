@@ -77,6 +77,12 @@ fn render(app: &App) -> String {
     render_text(app, 80, 24)
 }
 
+/// The rows a render actually paints. A row of blanks is padding the frame
+/// height, not content, so it is not counted.
+fn row_count(text: &str) -> usize {
+    text.lines().filter(|line| !line.trim().is_empty()).count()
+}
+
 fn recorded(app: &App, needle: &str) -> bool {
     app.sessions
         .current
@@ -113,7 +119,7 @@ fn test_preview_answer_fills_draft() {
         out.contains("Changes:  2 tracked dirty · 1 untracked"),
         "{out}"
     );
-    assert!(!out.contains("reading from the host"), "{out}");
+    assert!(!out.contains("reading…"), "{out}");
 }
 
 /// An answer to a request the pane no longer waits on is dropped, so a reply
@@ -123,7 +129,12 @@ fn test_late_preview_answer_dropped() {
     let mut app = waiting_on(RequestId(3), WorktreeLevel::Detail);
     app.apply_worktree_preview(RequestId(9), worktree_preview("alpha"));
     let out = render(&app);
-    assert!(out.contains("reading from the host"), "{out}");
+    // The measured rows keep their places while the read is out, so the page
+    // does not grow when the answer lands.
+    assert!(out.contains("Merge:"), "{out}");
+    assert!(out.contains("Changes:"), "{out}");
+    assert!(out.contains("Ignored:"), "{out}");
+    assert!(out.contains("Use:"), "{out}");
     assert!(!out.contains("tracked dirty"), "{out}");
 }
 
@@ -171,7 +182,12 @@ fn test_late_enter_answer_recorded() {
 fn test_removal_answer_clears_pane() {
     let mut app = removing(RequestId(5));
     app.apply_worktree_removed(RequestId(5), WorktreeRemoveOutcome::Removed);
-    assert!(recorded(&app, "worktree: removed"));
+    // The receipt names what went. A bare "removed" reads the same for every
+    // tree, so a user who removed several cannot tell the lines apart.
+    assert!(
+        recorded(&app, "worktree: removed alpha"),
+        "the receipt names the tree"
+    );
     assert_eq!(app.ui.worktree_pane.level.get(), WorktreeLevel::List);
     assert_eq!(app.ui.worktree_pane.draft.borrow().path(), None);
 }
@@ -297,7 +313,7 @@ fn test_detail_shows_refusal() {
         out.contains("cannot read the worktree: no git repository here"),
         "{out}"
     );
-    assert!(!out.contains("reading from the host"), "{out}");
+    assert!(!out.contains("reading…"), "{out}");
 }
 
 /// A refused enter reaches the transcript, because the user asked to move and
@@ -311,4 +327,89 @@ fn test_refusal_reaches_transcript() {
         "worktree: cannot enter: already in a worktree session"
     ));
     assert_eq!(app.ui.worktree_pane.draft.borrow().enter_request(), None);
+}
+
+/// The wait for a preview is not a refusal, so it must leave the notice slot
+/// empty. A notice screen paints in the warning colour, and a line written
+/// there for a read that answers in milliseconds reads to the user as the
+/// page flashing a warning.
+#[test]
+fn test_preview_wait_keeps_notice() {
+    let app = waiting_on(RequestId(3), WorktreeLevel::Detail);
+    // The observable is the rendered page: a notice paints a yellow row, and
+    // the wait must not put one there.
+    let out = render(&app);
+    assert!(
+        out.contains("Worktree:"),
+        "the detail page is on screen: {out}"
+    );
+    assert!(
+        !out.contains("Notice:"),
+        "a read in progress paints no notice row: {out}"
+    );
+
+    // The assertion above is only load-bearing if the page can draw a notice
+    // at all. A real refusal puts one on this same page, which proves the
+    // absence during the read is the fix working rather than the row being
+    // unreachable from here.
+    let app = waiting_on(RequestId(3), WorktreeLevel::Detail);
+    app.ui
+        .worktree_pane
+        .draft
+        .borrow_mut()
+        .set_notice("cannot read the worktree: gone".to_string());
+    let out = render(&app);
+    assert!(
+        out.contains("Notice:"),
+        "a refusal does paint the notice row: {out}"
+    );
+}
+
+/// The waiting page and the answered page draw the same number of rows, so
+/// the answer replaces text in place instead of growing the block. This is
+/// what keeps the caret and the scroll position still while the host
+/// answers.
+#[test]
+fn test_preview_wait_keeps_rows() {
+    let waiting = render(&waiting_on(RequestId(3), WorktreeLevel::Detail));
+    let answered = render(&holding_preview(WorktreeLevel::Detail));
+    assert_eq!(
+        row_count(&waiting),
+        row_count(&answered),
+        "waiting:\n{waiting}\nanswered:\n{answered}"
+    );
+}
+
+/// The confirmation page drops the controls while the removal is out: no
+/// Cancel button and no key row, because neither would act.
+#[test]
+fn test_removal_in_flight_hides() {
+    let app = removing(RequestId(5));
+    let out = render(&app);
+    assert!(out.contains("Removing"), "{out}");
+    assert!(
+        !out.contains("[Cancel]"),
+        "a button named Cancel must not show while nothing can cancel: {out}"
+    );
+    assert!(
+        !out.contains("Esc to back"),
+        "no key row while every key is ignored: {out}"
+    );
+}
+
+/// An answer the pane is not waiting on cannot say which tree went. The draft
+/// may describe a different tree by then, so reading an identity off it would
+/// report a removal of a tree that is still on disk.
+#[test]
+fn test_unmatched_removal_unnamed() {
+    let mut app = removing(RequestId(5));
+    app.apply_worktree_removed(RequestId(9), WorktreeRemoveOutcome::Removed);
+    assert!(
+        recorded(&app, "worktree: removed"),
+        "the fact of removal is still reported"
+    );
+    assert!(
+        !recorded(&app, "worktree: removed alpha"),
+        "and no tree name is invented for an answer the pane did not ask for"
+    );
 }

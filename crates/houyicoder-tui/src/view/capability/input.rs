@@ -584,9 +584,11 @@ impl App {
         };
         if let Err(e) = self.enqueue(ClientCommand::PermissionAddDirQuery { req_id, path }) {
             self.system_line(Self::enqueue_failure_line("permission", e));
-            return;
         }
-        self.system_line("permission: adding directory".to_string());
+        // No line here: the request has not landed yet, and a line naming no
+        // path reads as a completed action. The answer carries the directory
+        // list, and the difference against the previous list is what says
+        // which directory was added.
     }
 
     /// Ship a remove-directory request for the cursor-th entry of dirs_cache.
@@ -613,9 +615,9 @@ impl App {
         };
         if let Err(e) = self.enqueue(ClientCommand::PermissionRemoveDirQuery { req_id, path }) {
             self.system_line(Self::enqueue_failure_line("permission", e));
-            return;
         }
-        self.system_line("permission: removing directory".to_string());
+        // As with the add: the removal is reported from the list the host
+        // sends back, so the line names the directory that actually left.
     }
 }
 

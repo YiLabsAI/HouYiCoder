@@ -125,9 +125,12 @@ fn spend_parts(
     if output > 0 {
         parts.push(format!("{} output", format_tokens(output)));
     }
-    match (provenance.cache_hit_pct(cache_read, input), cache_read) {
+    match (
+        provenance.cache_hit_display_pct(cache_read, input),
+        cache_read,
+    ) {
         (Some(pct), cache_read) if cache_read > 0 => {
-            parts.push(format!("{} ({pct:.0}% cached)", format_tokens(cache_read)))
+            parts.push(format!("{} ({pct:.1}% cached)", format_tokens(cache_read)))
         }
         (Some(_), _) => parts.push("0% cached".to_string()),
         (None, cache_read) if cache_read > 0 => {
@@ -185,7 +188,10 @@ pub(super) fn render_usage(app: &App) -> String {
     }
     let cache_read = u.cache_read_input_tokens as u64;
     if count_visible(cache_read, u.provenance.cache_read_reported) {
-        let cache_value = match u.cache_hit_pct() {
+        let cache_value = match u
+            .provenance
+            .cache_hit_display_pct(cache_read, u.input_tokens as u64)
+        {
             Some(pct) => format!("{} ({pct:.1}% of input)", ft(cache_read)),
             None => ft(cache_read),
         };
@@ -245,7 +251,7 @@ pub(super) fn render_usage(app: &App) -> String {
             }
             let cache_pct = match m
                 .provenance
-                .cache_hit_pct(m.cache_read_tokens, m.input_tokens)
+                .cache_hit_display_pct(m.cache_read_tokens, m.input_tokens)
             {
                 Some(pct) => format!(" ({pct:.1}%)"),
                 None => String::new(),

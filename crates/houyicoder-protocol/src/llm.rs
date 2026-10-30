@@ -82,6 +82,23 @@ impl UsageProvenance {
             .map(|rate| rate * 100.0)
     }
 
+    /// The share as the percentage a pane prints: one decimal place, with the
+    /// top of the range reserved for an account that missed nothing.
+    ///
+    /// A hundred percent is a claim that no input token went uncached, so a
+    /// share carrying even one miss must not round its way there. The value is
+    /// computed here rather than at each pane because a clamp applied at one
+    /// renderer and not another makes the same turn read differently in two
+    /// places that are supposed to agree.
+    pub fn cache_hit_display_pct(self, cache_read: u64, input: u64) -> Option<f64> {
+        let pct = self.cache_hit_pct(cache_read, input)?;
+        let tenths = (pct * 10.0).round() / 10.0;
+        if cache_read < input && tenths >= 100.0 {
+            return Some(99.9);
+        }
+        Some(tenths)
+    }
+
     /// The merge a combined usage record takes: a field is reported in the sum
     /// only when every summand reported it, so an unreported part cannot hide
     /// inside a total that reads as complete.

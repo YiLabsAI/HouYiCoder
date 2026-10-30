@@ -478,14 +478,22 @@ fn row_summary(ev: &TrajectoryRecord, name: &str, summary_w: usize) -> String {
 /// header and the row above it cannot disagree about whether the account
 /// supports one. A partial account keeps its raw count and loses only the
 /// derived share.
+#[cfg(test)]
+pub(super) fn format_turn_cache_for_test(turn: &TrajectoryTurn) -> String {
+    format_turn_cache(turn)
+}
+
 fn format_turn_cache(turn: &TrajectoryTurn) -> String {
     // A count above zero is named before its share. A measured miss has no
     // count worth naming, so it is stated as the rate alone.
-    match (turn.cache_hit_pct(), turn.cache_read) {
+    // The detail and the row it was opened from state one figure, at one
+    // precision: the share a reader compares across the two screens is the
+    // same number, not the same rate rounded two ways.
+    match (turn.cache_hit_display_pct(), turn.cache_read) {
         (Some(pct), Some(cache_read)) if cache_read > 0 => {
-            format!(" · {} ({pct:.0}%) cache hit", format_tokens(cache_read))
+            format!(" · {} ({pct:.1}%) cache hit", format_tokens(cache_read))
         }
-        (Some(_), _) => " · 0% cache hit".to_string(),
+        (Some(_), _) => " · 0.0% cache hit".to_string(),
         (None, Some(cache_read)) if cache_read > 0 => {
             format!(" · {} cache hit", format_tokens(cache_read))
         }

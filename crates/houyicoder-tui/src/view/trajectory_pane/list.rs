@@ -62,13 +62,17 @@ fn boundary_line(boundary: &TurnBoundary, now_secs: u64) -> Line<'static> {
 /// the session's own length, so a constant covers every row.
 const TURN_LABEL_W: usize = 5;
 
-/// The title column, in display columns.
-const TURN_TITLE_W: usize = 30;
+/// The title column, in display columns. The title is the column that gives
+/// way: the two columns either side of it are counted figures a reader needs
+/// whole, while a title is already truncated and loses only words. The cached
+/// cell's one-decimal form cost two columns, and taking them from the title is
+/// what keeps a hundred-column terminal able to show every column.
+const TURN_TITLE_W: usize = 28;
 
 /// The cached-ratio cell's own widest form. The share behind it is a rate held
 /// to one, so the figure is at most a three-digit percentage, whatever the
 /// session's size.
-const CACHED_CELL_W: usize = "100% cached".len();
+const CACHED_CELL_W: usize = "100.0% cached".len();
 
 /// The model and effort columns, in display columns.
 const MODEL_W: usize = MODEL_NAME_W + 2;
@@ -89,6 +93,10 @@ const TOKENS_FIXED_W: usize = " in ".len() + " out".len();
 /// turn, its tokens, its duration, and its outcome. Those four fixed columns
 /// take about sixty columns between them, so a terminal narrower than that
 /// clips the row and no gate here applies.
+///
+/// Each breakpoint is the width at which the row it enables still fits, which
+/// is why the cached cell's one-decimal form moves it: the widest cached cell
+/// grew by two columns, so the row holding every column needs two more.
 const CALLS_MIN_WIDTH: usize = 96;
 const MODEL_MIN_WIDTH: usize = 124;
 
@@ -108,8 +116,8 @@ fn count_label(n: usize, noun: &str) -> String {
 /// share is divided from, both leave the cell blank rather than reading as a
 /// measured miss.
 fn cached_cell(t: &TrajectoryTurn) -> String {
-    match t.cache_hit_pct() {
-        Some(pct) => format!("{pct:.0}% cached"),
+    match t.cache_hit_display_pct() {
+        Some(pct) => format!("{pct:.1}% cached"),
         None => String::new(),
     }
 }
@@ -326,11 +334,14 @@ pub(super) fn draw_turn_list(
         (None, Some(tout)) => format!("{} out", format_tokens(tout as u64)),
         (None, None) => "—".to_string(),
     };
+    // The header reads the same derivation as the rows below it, at the same
+    // precision. A page whose header says a hundred percent while its own row
+    // says 99.9 is telling the reader two different things about one turn.
     let cache_hit_str = match (traj.cache_read, traj.tokens_in) {
         (Some(c), Some(tin)) => traj
             .usage_provenance
-            .cache_hit_pct(c, tin as u64)
-            .map(|pct| format!(" · cache hit {pct:.0}%"))
+            .cache_hit_display_pct(c, tin as u64)
+            .map(|pct| format!(" · cache hit {pct:.1}%"))
             .unwrap_or_default(),
         _ => String::new(),
     };

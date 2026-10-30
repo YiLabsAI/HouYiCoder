@@ -1096,3 +1096,33 @@ fn test_block_anchor_durable() {
         "the same log anchors the same active block id"
     );
 }
+
+/// A tool finishing starts a silence that is not a stall: the reply to the
+/// next request has not begun arriving yet, and a large context spends seconds
+/// before its first token. The stall clock has to restart when the tool ends,
+/// or the row reddens during a wait that is going exactly as expected.
+///
+/// The call is deliberately one the run never saw start, which is the shape a
+/// reattached session produces: the terminal frame still marks the end of a
+/// tool, so the clock still has to move.
+#[test]
+fn test_tool_end_restarts_clock() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.start_run_for_test(1);
+    {
+        let p = app.run_progress_mut().expect("a run is live");
+        p.last_delta_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(40));
+    }
+    app.apply_frames([SequencedFrame::from(tool_done_frame("never-seen"))]);
+    let p = app.run_progress_mut().expect("the run is still live");
+    let waited = p
+        .last_delta_at
+        .expect("the clock restarted")
+        .elapsed()
+        .as_secs();
+    assert!(
+        waited < 2,
+        "the stall clock restarted at the tool's end, not {waited}s ago"
+    );
+}

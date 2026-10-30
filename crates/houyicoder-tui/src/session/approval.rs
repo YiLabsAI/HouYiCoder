@@ -11,6 +11,7 @@ use crate::fold::is_memory_notice;
 use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
 use crate::records::TranscriptLine;
 use crate::state::{App, Pane, Stage};
+use crate::view::todo_list::TODO_FOLD_KEY;
 use houyicoder_protocol::frontend::SessionId;
 
 impl App {
@@ -91,6 +92,15 @@ impl App {
         let Some(key) = key else {
             return false;
         };
+        // The checklist's summary publishes a fold key so the chord and a click
+        // both reach it, but it is not a transcript fold. Passing its key to
+        // the transcript view would store a fold group that no block owns: the
+        // key would be consumed, nothing would open, and the checklist branch
+        // further down would never run.
+        if key == TODO_FOLD_KEY {
+            self.sessions.current.todos.expanded = !self.sessions.current.todos.expanded;
+            return true;
+        }
         self.ui.transcript_view.toggle_fold(key);
         true
     }
@@ -395,9 +405,17 @@ impl App {
     /// the click handler, which knows the row from the mouse y coordinate).
     /// No-op when the row is not a fold row.
     pub(crate) fn toggle_fold_at_row(&mut self, ri: usize) {
-        if let Some(key) = self.ui.frame.keys.borrow().fold_key_at(ri) {
-            self.ui.transcript_view.toggle_fold(key);
+        let Some(key) = self.ui.frame.keys.borrow().fold_key_at(ri) else {
+            return;
+        };
+        // The checklist's summary publishes its own key so the shared chord and
+        // a click both reach it. It is not a transcript fold, so it toggles the
+        // checklist state rather than a fold group.
+        if key == TODO_FOLD_KEY {
+            self.sessions.current.todos.expanded = !self.sessions.current.todos.expanded;
+            return;
         }
+        self.ui.transcript_view.toggle_fold(key);
     }
 
     /// Collapse the expanded fold group under the selection anchor, if the

@@ -216,7 +216,7 @@ fn test_approval_popup_no_placeholder() {
         text.contains("Do you want to proceed?"),
         "proceed question missing:\n{text}"
     );
-    assert!(text.contains("Esc cancel"), "Esc hint missing:\n{text}");
+    assert!(text.contains("Esc to cancel"), "Esc hint missing:\n{text}");
 }
 
 #[test]
@@ -784,8 +784,9 @@ fn test_permission_remove_submode_deletes() {
 #[test]
 fn test_permission_workspace_add_flow() {
     // 'a' on the Workspace tab enters AddDir; typing fills the input box;
-    // Enter ships the path (the system line confirms the ship). Uses the
-    // connected app so typed chars route to the input box like the rule Add flow.
+    // Enter ships the path. The request is not an outcome, so nothing is
+    // written to the transcript here: the line that names the directory is
+    // produced when the host answers with the new list.
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
@@ -806,10 +807,12 @@ fn test_permission_workspace_add_flow() {
         PermissionInput::None,
         "AddDir Enter clears the sub-mode"
     );
-    let sys = last_system(&app);
+    // The failure to ship is the connected app's own business; what must
+    // never appear is a line claiming the directory was added when only the
+    // request went out.
     assert!(
-        sys.contains("adding") || sys.contains("not connected"),
-        "AddDir surfaces a system line: {sys}"
+        !last_system(&app).contains("added writable directory"),
+        "no completion is claimed before the host answers"
     );
 }
 

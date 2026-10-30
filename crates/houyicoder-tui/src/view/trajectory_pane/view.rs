@@ -123,6 +123,16 @@ impl TrajectoryTurn {
         self.usage_provenance
             .cache_hit_pct(cache_read, tokens_in as u64)
     }
+
+    /// The same share with the top of the range reserved for a turn that
+    /// missed nothing, one decimal place wide. The list prints this one.
+    pub fn cache_hit_display_pct(&self) -> Option<f64> {
+        let (Some(cache_read), Some(tokens_in)) = (self.cache_read, self.tokens_in) else {
+            return None;
+        };
+        self.usage_provenance
+            .cache_hit_display_pct(cache_read, tokens_in as u64)
+    }
 }
 
 /// One row of the turn list: a turn, or a background event between turns.

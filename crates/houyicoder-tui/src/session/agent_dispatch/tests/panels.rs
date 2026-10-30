@@ -9,6 +9,9 @@ use crate::test_harness::connected_app_with_events;
 use crate::test_harness::connection_lost_app;
 use crate::test_harness::install_agent_types;
 use crate::test_harness::render_text;
+use crate::test_harness::worktree_path;
+use crate::test_harness::worktree_preview;
+use crate::ui::WorktreeLevel;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
@@ -416,5 +419,127 @@ fn test_agents_types_empty_placeholder() {
     assert!(
         out.contains("(no agent types registered)"),
         "an empty type list shows the placeholder, not a blank pane: {out}"
+    );
+}
+
+/// The writable-directory list arrives whole, so the transcript line that
+/// names a directory has to come from the difference against the list the
+/// pane already held. A line written when the request went out names nothing
+/// and claims an effect the host may refuse; this asserts the reported line
+/// carries the path and the direction.
+#[test]
+fn test_permission_dirs_retained() {
+    let mut app = app();
+    app.sessions.current.capabilities.permission.dirs_cache = vec!["/old".into()];
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(11),
+        response: ServerResponse::PermissionDirs {
+            dirs: vec!["/old".into(), "/tmp/extra".into()],
+        },
+    });
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .iter()
+        .rev()
+        .find_map(|l| match l {
+            TranscriptLine::System(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert_eq!(last, "permission: added writable directory /tmp/extra");
+    assert_eq!(
+        app.sessions.current.capabilities.permission.dirs_cache,
+        vec!["/old".to_string(), "/tmp/extra".to_string()],
+        "the cache takes the host's list"
+    );
+}
+
+/// The removal direction, so the two sentences cannot be swapped: a directory
+/// the host dropped is named, and the one it kept is not.
+#[test]
+fn test_permission_dirs_dropped() {
+    let mut app = app();
+    app.sessions.current.capabilities.permission.dirs_cache =
+        vec!["/old".into(), "/tmp/extra".into()];
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(12),
+        response: ServerResponse::PermissionDirs {
+            dirs: vec!["/old".into()],
+        },
+    });
+    let last = app
+        .sessions
+        .current
+        .transcript
+        .iter()
+        .rev()
+        .find_map(|l| match l {
+            TranscriptLine::System(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert_eq!(last, "permission: removed writable directory /tmp/extra");
+}
+
+/// An unchanged list reports nothing: a refresh must not replay the whole
+/// grant set into the transcript as if every directory had just been added.
+#[test]
+fn test_permission_dirs_unchanged() {
+    let mut app = app();
+    let before = app.sessions.current.transcript.len();
+    app.sessions.current.capabilities.permission.dirs_cache = vec!["/old".into()];
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(13),
+        response: ServerResponse::PermissionDirs {
+            dirs: vec!["/old".into()],
+        },
+    });
+    assert_eq!(
+        app.sessions.current.transcript.len(),
+        before,
+        "an unchanged list adds no line"
+    );
+}
+
+/// A confirmation page waiting on a request the dead transport can never
+/// answer must let go of it. While the request is out the page ignores every
+/// key and offers no button, so a request that is never settled leaves the
+/// user with no way off the page at all.
+#[test]
+fn test_loss_settles_worktree_removal() {
+    let (mut app, _events) = connected_app_with_events();
+    let path = worktree_path("alpha");
+    {
+        let mut draft = app.ui.worktree_pane.draft.borrow_mut();
+        draft.begin(&path, WorktreeLevel::List, None);
+        draft.accept(worktree_preview("alpha"));
+        draft
+            .take_submission(RequestId(41))
+            .expect("a free worktree submits");
+    }
+    app.ui.worktree_pane.level.set(WorktreeLevel::Confirm);
+    assert!(app.ui.worktree_pane.draft.borrow().removing());
+
+    assert!(app.apply_connection_loss("connect failed".into(), Vec::new()));
+
+    assert!(
+        !app.ui.worktree_pane.draft.borrow().removing(),
+        "the removal stops waiting on an answer that cannot arrive"
+    );
+}
+
+/// The same release for the sandbox restore confirmation.
+#[test]
+fn test_loss_settles_restore() {
+    let (mut app, _events) = connected_app_with_events();
+    assert!(app.ui.sandbox_pane.begin_restore(RequestId(43)));
+
+    assert!(app.apply_connection_loss("connect failed".into(), Vec::new()));
+
+    assert!(
+        app.ui.sandbox_pane.restore_request().is_none(),
+        "the restore stops waiting on an answer that cannot arrive"
     );
 }
