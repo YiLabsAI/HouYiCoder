@@ -20,11 +20,15 @@ TEST_NAME_LEN_HARD = 50
 JARGON = re.compile(r"mid[-_]?run", re.IGNORECASE)
 
 # Module file-name suffixes that hide what the module owns. A file inside a
-# pipeline directory does not need to say "stage" again, and an abbreviation
-# ("bench") or an academic term ("corpus") leaves the reader guessing. The
-# suffix is checked against the file stem, so the directory supplies the
-# context instead of the name repeating it.
-BANNED_MODULE_SUFFIXES: tuple[str, ...] = ("_stage", "_bench", "_corpus")
+# pipeline directory does not need to say "stage" again; an abbreviation
+# ("bench") or an academic term ("corpus") leaves the reader guessing. Each
+# suffix carries the reason it is rejected, so the error names the actual
+# problem instead of one generic sentence that fits only the first entry.
+BANNED_MODULE_SUFFIXES: dict[str, str] = {
+    "_stage": "the enclosing directory already says what stage it holds",
+    "_bench": "an abbreviation; name the benchmark",
+    "_corpus": "an academic term; name the data the file holds",
+}
 
 # Top-level module whitelist for the four core crates (002 §6.3–§6.4).
 # Shared by check_rust_naming (check-time) and hook_rust (write-time).

@@ -544,21 +544,18 @@ def _check_module_suffixes(
     errors: list[str],
     root: Path = Path("crates"),
 ) -> None:
-    """Reject module file names whose suffix restates the directory or
-    abbreviates the concept. The directory already carries the context, so a
-    pipeline stage does not repeat 'stage' and a benchmark does not shorten to
-    'bench'."""
+    """Reject module file names whose suffix hides what the file owns. Each
+    suffix carries its own reason, so the error says why that one is refused
+    rather than repeating a sentence that only fits the first."""
     for p in sorted(root.rglob("*.rs")):
         posix = p.as_posix()
         if "/target/" in posix or "/src/" not in posix:
             continue
-        for suffix in BANNED_MODULE_SUFFIXES:
+        for suffix, reason in BANNED_MODULE_SUFFIXES.items():
             if p.stem.endswith(suffix):
                 errors.append(
-                    f"{posix}: module name '{p.stem}' ends with '{suffix}'; "
-                    f"the enclosing directory already supplies that context. "
-                    f"Name the file after what it owns (rules/naming.py "
-                    f"BANNED_MODULE_SUFFIXES)"
+                    f"{posix}: module name '{p.stem}' ends with '{suffix}': "
+                    f"{reason} (rules/naming.py BANNED_MODULE_SUFFIXES)"
                 )
 
 
