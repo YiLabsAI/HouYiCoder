@@ -280,6 +280,27 @@ async fn test_compact_backend_failure() {
     );
 }
 
+/// A dollar-mode direct-shell run is refused with a structured error until the
+/// host execution path lands; the frontend can tell that apart from an ack.
+#[tokio::test]
+async fn test_direct_shell_run_refused() {
+    let server = plain_server();
+    let err = error_reply(
+        server,
+        FrontendRequest::DirectShellRun {
+            session_id: FrontendSessionId("s".into()),
+            command: "echo hi".into(),
+        },
+    )
+    .await;
+    assert_eq!(err.category, ErrorCategory::InvalidRequest);
+    assert!(
+        err.message.contains("not implemented"),
+        "the stub names the missing path: {}",
+        err.message
+    );
+}
+
 /// A gate that refuses the mode cycle surfaces its refusal as a typed error
 /// reply; the mode stays where it was.
 #[tokio::test]

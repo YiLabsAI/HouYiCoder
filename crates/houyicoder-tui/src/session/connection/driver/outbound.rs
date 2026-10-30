@@ -53,6 +53,17 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
                 disabled_skills,
             },
         ),
+        ClientCommand::DirectShellRun {
+            req_id,
+            session_id,
+            command,
+        } => request(
+            req_id,
+            FrontendRequest::DirectShellRun {
+                session_id,
+                command,
+            },
+        ),
         ClientCommand::Verdict { req_id, decision } => {
             reverse(req_id, ClientResponsePayload::Permission(decision))
         }

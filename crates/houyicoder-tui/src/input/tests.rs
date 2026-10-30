@@ -1,6 +1,11 @@
 use super::*;
 
+use super::history;
 use crate::input::queue::InputItem;
+use std::env::temp_dir;
+use std::fs::{create_dir_all, remove_file};
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -245,4 +250,154 @@ fn test_pending_paste_holds() {
         "the buffer stays for the next check"
     );
     assert!(input.pending_paste.last.is_some(), "the timestamp stays");
+}
+
+fn shell_input_with_history(entries: &[&str]) -> Input {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut input = Input::default();
+    let dir = temp_dir().join(format!("houyi-shell-hist-{}-{seq}", id()));
+    drop(create_dir_all(&dir));
+    let path = dir.join("shell_history.jsonl");
+    drop(remove_file(&path));
+    let project = history::current_project();
+    for entry in entries {
+        let line = format!("$ {entry}");
+        history::add(&line, &project, "", &path);
+    }
+    input.apply_shell_history_path(path);
+    input
+}
+
+fn shell_mode_input(entries: &[&str], draft: &str) -> Input {
+    let mut input = shell_input_with_history(entries);
+    input.mode = InputMode::DirectShell;
+    input.editor.set(draft.to_string());
+    input
+}
+
+/// A leading dollar plus a space enters DirectShell mode and consumes the
+/// prefix, so the editor holds the bare command.
+#[test]
+fn test_dollar_space_enters_shell() {
+    let mut input = Input::default();
+    input.editor.set("$ cargo test".to_string());
+    input.recompute_mode();
+    assert_eq!(input.mode, InputMode::DirectShell);
+    assert_eq!(input.editor.value(), "cargo test");
+}
+
+/// A dollar followed by a letter or digit stays in Chat, so variables and
+/// numbers do not false-trigger.
+#[test]
+fn test_dollar_nonspace_stays_chat() {
+    let mut input = Input::default();
+    for text in ["$100", "$HOME", "$var"] {
+        input.editor.set(text.to_string());
+        input.recompute_mode();
+        assert_eq!(input.mode, InputMode::Chat, "{text:?} stays in Chat mode");
+    }
+}
+
+/// A prefix match in the shell history surfaces a ghost suffix.
+#[test]
+fn test_ghost_from_history() {
+    let mut input = shell_mode_input(&["cargo test", "cargo build"], "cargo t");
+    input.refresh_ghost(Instant::now());
+    assert_eq!(input.ghost.as_deref(), Some("est"));
+}
+
+/// Tab accepts the ghost suffix into the editor without executing, and the
+/// ghost clears.
+#[test]
+fn test_tab_accepts_ghost() {
+    let mut input = shell_mode_input(&["cargo test"], "cargo t");
+    input.refresh_ghost(Instant::now());
+    assert!(input.accept_ghost(Instant::now()));
+    assert_eq!(input.editor.value(), "cargo test");
+    assert!(input.ghost.is_none());
+}
+
+/// Esc drops the ghost first; a second Esc exits DirectShell mode, keeping the
+/// draft so it can be edited as a normal prompt.
+#[test]
+fn test_esc_clears_ghost_exits() {
+    let mut input = shell_mode_input(&["cargo test"], "cargo t");
+    input.refresh_ghost(Instant::now());
+    assert!(input.ghost.is_some());
+    input.clear_ghost();
+    assert!(input.ghost.is_none());
+    assert_eq!(
+        input.mode,
+        InputMode::DirectShell,
+        "one Esc clears only the ghost"
+    );
+    input.exit_shell_mode();
+    assert_eq!(input.mode, InputMode::Chat);
+    assert_eq!(input.editor.value(), "cargo t", "the draft is kept");
+}
+
+/// exit_shell_mode returns the composer to Chat with the draft intact.
+#[test]
+fn test_backspace_empty_exits_shell() {
+    let mut input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    input.exit_shell_mode();
+    assert_eq!(input.mode, InputMode::Chat);
+}
+
+/// The ghost and command accessors guard their branches: refresh_ghost clears
+/// when not in DirectShell, when the draft is multiline, or when the cursor is
+/// mid-text; accept_ghost returns false with no ghost; shell_command returns None
+/// in Chat or on an empty draft.
+#[test]
+fn test_shell_accessors_guard_branches() {
+    let now = Instant::now();
+    // Chat mode: refresh clears, shell_command is None.
+    let mut input = Input {
+        ghost: Some("x".into()),
+        ..Default::default()
+    };
+    input.refresh_ghost(now);
+    assert!(input.ghost.is_none());
+    assert!(input.shell_command().is_none());
+    // DirectShell with a multiline draft: refresh clears.
+    let mut input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    input.editor.set("a\nb".into());
+    input.refresh_ghost(now);
+    assert!(input.ghost.is_none());
+    // DirectShell with cursor mid-text: refresh clears.
+    let mut input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    input.editor.set("ab".into());
+    input.editor.move_left();
+    input.refresh_ghost(now);
+    assert!(input.ghost.is_none());
+    // accept_ghost with no ghost is a no-op.
+    let mut input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    assert!(!input.accept_ghost(now));
+    // DirectShell with an empty draft: shell_command is None.
+    let input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    assert!(input.shell_command().is_none());
+    // recompute_mode is a no-op when already in DirectShell.
+    let mut input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    input.editor.set("cargo".into());
+    input.recompute_mode();
+    assert_eq!(input.editor.value(), "cargo");
 }

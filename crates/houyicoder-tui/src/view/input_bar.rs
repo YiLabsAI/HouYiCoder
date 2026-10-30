@@ -13,6 +13,7 @@ use ratatui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::input::InputMode;
 use crate::state::App;
 
 /// Render the inline Ctrl+F search bar (one line below the input box).
@@ -37,8 +38,11 @@ pub(super) fn draw_inline_search(f: &mut Frame, area: Rect, app: &App) {
 /// so the rendered rows and the reserved height never drift.
 pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let content_cols = (area.width as usize).saturating_sub(4);
+    let shell_mode = app.ui.input.mode == InputMode::DirectShell;
     let border_color = if app.approval().is_some() || app.ask_question().is_some() {
         Color::Yellow
+    } else if shell_mode {
+        Color::Cyan
     } else {
         Color::Gray
     };
@@ -50,6 +54,7 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
     let glyph_style = Style::new().fg(Color::Cyan);
     let body_style = Style::new().fg(Color::Reset);
+    let ghost_style = Style::new().fg(Color::DarkGray);
     // The painted caret hides when the terminal window is unfocused, and while
     // the child strip holds the keyboard: two carets on screen would claim the
     // keys reach both.
@@ -65,12 +70,17 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     // move the model cursor but rendered nowhere).
     let (crow, ccol) = app.ui.input.editor.cursor_position(content_cols);
     let cursor_byte = app.ui.input.editor.cursor();
+    let ghost = app.ui.input.ghost.as_deref();
     let lines: Vec<Line> = wrapped
         .iter()
         .enumerate()
         .map(|(i, wl)| {
             let prefix: Span<'static> = if i == 0 {
-                Span::styled("❯ ", glyph_style)
+                if shell_mode {
+                    Span::styled("$ ", glyph_style)
+                } else {
+                    Span::styled("❯ ", glyph_style)
+                }
             } else {
                 Span::raw("  ")
             };
@@ -91,11 +101,13 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
                         spans.push(Span::styled(after.to_string(), body_style));
                     }
                 } else {
-                    // Cursor past the text end: an inverted space block.
+                    // Cursor past the text end: an inverted space block, then
+                    // the ghost suffix in DirectShell mode, or the placeholder
+                    // hint in Chat mode on an empty first line.
                     spans.push(Span::styled(" ".to_string(), cursor_style));
-                    // Empty input: a dim placeholder hint that vanishes on
-                    // the first keystroke, so no welcome line floats above.
-                    if wl.text.is_empty() && wl.start_offset == 0 {
+                    if let Some(suffix) = ghost {
+                        spans.push(Span::styled(suffix.to_string(), ghost_style));
+                    } else if wl.text.is_empty() && wl.start_offset == 0 && !shell_mode {
                         spans.push(Span::styled(
                             "let's build, or / for commands".to_string(),
                             Style::new().fg(Color::DarkGray),

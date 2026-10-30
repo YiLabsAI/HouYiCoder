@@ -6,9 +6,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
+use crate::input::InputMode;
 use crate::state::enums::{CyclicTab, StatusTab};
 use crate::state::{App, Pane};
 use crate::view::skill_origin::display_order;
+use std::time::Instant;
 
 use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
@@ -134,6 +136,14 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // Esc cancels. When Other is focused, typing goes into the text input.
     if app.ask_question().is_some() {
         handle_ask_question(app, k);
+        return;
+    }
+    // DirectShell mode owns its own keys: Tab and Right accept the ghost,
+    // Enter runs the typed command, Esc clears the ghost then exits the mode,
+    // Backspace on an empty draft exits, and typing refreshes the ghost. The
+    // pane-specific arms below never run while the composer is in this mode.
+    if app.ui.input.mode == InputMode::DirectShell {
+        handle_direct_shell(app, k);
         return;
     }
     if app.ui.navigation.pane == Pane::Memory && app.ui.memory.detail().is_some() {
@@ -556,8 +566,58 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.ui.input.editor.pop()
         }
         KeyCode::Char(c) if !pane_replaces_input(app.ui.navigation.pane) => {
-            app.ui.input.editor.push(c)
+            app.ui.input.editor.push(c);
+            // A leading dollar plus a space enters DirectShell mode and
+            // consumes the prefix; a dollar followed by anything else stays
+            // Chat, so variables and numbers do not false-trigger.
+            app.ui.input.recompute_mode();
         }
+        _ => {}
+    }
+}
+
+/// Handle a keystroke while the composer is in DirectShell mode. Tab and Right
+/// accept the ghost suffix without running; Enter runs the typed command (the
+/// ghost is never swallowed into it); Esc drops the ghost first and exits the
+/// mode on a second press; Backspace on an empty draft exits; typing refreshes
+/// the ghost.
+fn handle_direct_shell(app: &mut App, k: KeyEvent) {
+    let now = Instant::now();
+    match k.code {
+        KeyCode::Tab | KeyCode::Right if app.ui.input.ghost.is_some() => {
+            app.ui.input.accept_ghost(now);
+        }
+        KeyCode::Enter => {
+            if let Some(command) = app.ui.input.shell_command() {
+                app.ui.input.record_shell_command(&command);
+                app.ui.input.editor = Default::default();
+                app.ui.input.mode = InputMode::Chat;
+                app.ui.input.ghost = None;
+                app.submit_direct_shell(command);
+            }
+        }
+        KeyCode::Esc => {
+            if app.ui.input.ghost.is_some() {
+                app.ui.input.clear_ghost();
+            } else {
+                app.ui.input.exit_shell_mode();
+            }
+        }
+        KeyCode::Backspace => {
+            if app.ui.input.editor.is_empty() {
+                app.ui.input.exit_shell_mode();
+            } else {
+                app.ui.input.editor.pop();
+                app.ui.input.refresh_ghost(now);
+            }
+        }
+        KeyCode::Char(c) => {
+            app.ui.input.editor.push(c);
+            app.ui.input.refresh_ghost(now);
+        }
+        KeyCode::Left => app.ui.input.editor.move_left(),
+        KeyCode::Home => app.ui.input.editor.move_home(),
+        KeyCode::End => app.ui.input.editor.move_end(),
         _ => {}
     }
 }

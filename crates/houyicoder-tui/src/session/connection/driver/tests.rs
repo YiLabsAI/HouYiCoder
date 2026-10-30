@@ -1,10 +1,33 @@
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::{FrontendRequest, SessionId};
 
 use super::Outbound;
 use super::UnknownReportBudget;
 use super::outbound::frame_for;
 use crate::agent_message::ClientCommand;
+
+#[test]
+fn test_frame_direct_shell_run() {
+    let outbound = frame_for(ClientCommand::DirectShellRun {
+        req_id: RequestId(7),
+        session_id: SessionId("s1".into()),
+        command: "cargo test".into(),
+    });
+    match outbound {
+        Outbound::Request {
+            payload:
+                FrontendRequest::DirectShellRun {
+                    session_id,
+                    command,
+                },
+            ..
+        } => {
+            assert_eq!(session_id.0, "s1");
+            assert_eq!(command, "cargo test");
+        }
+        _ => panic!("a DirectShellRun command frames a DirectShellRun request"),
+    }
+}
 
 #[test]
 fn test_unknown_report_budget_spends() {

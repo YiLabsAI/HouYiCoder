@@ -40,6 +40,29 @@ impl App {
     /// Start a user turn, steer input to the viewed child, or queue it while
     /// another turn is active. New turns render an immediate user echo after
     /// the enqueue is accepted. Returns false when the enqueue was refused.
+    /// Submit a dollar-mode command to the host sandbox. No model turn starts:
+    /// the host runs the command in the session sandbox and streams the result
+    /// back as a tool-style entry. The command is real user input, so the host
+    /// treats it as trusted-user-sourced, not model-sourced.
+    pub fn submit_direct_shell(&mut self, command: String) {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
+            self.system_line("shell: no session connection");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("shell: request ids exhausted");
+            return;
+        };
+        let session_id = self.sessions.current.identity.session_id.clone();
+        if let Err(e) = self.enqueue(ClientCommand::DirectShellRun {
+            req_id,
+            session_id,
+            command,
+        }) {
+            self.system_line(Self::enqueue_failure_line("shell", e));
+        }
+    }
+
     pub fn spawn_run(&mut self, input: String) -> bool {
         // A viewed child receives input directly and shows an optimistic echo.
         let steer = self

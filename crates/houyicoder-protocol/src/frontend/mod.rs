@@ -701,6 +701,14 @@ pub enum FrontendRequest {
     DebugSet {
         level: DebugLevel,
     },
+    /// Run a command the user typed in the dollar direct-shell mode. The host
+    /// executes it in the session sandbox without a model turn, so no LLM is
+    /// called. The command is real user input: the host must not let the model
+    /// forge one. Capture and result handling reuse the bash path.
+    DirectShellRun {
+        session_id: SessionId,
+        command: String,
+    },
 }
 
 /// Login mode (enterprise SSO, API key, or local/offline).

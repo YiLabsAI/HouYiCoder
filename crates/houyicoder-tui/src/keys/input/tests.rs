@@ -113,6 +113,7 @@ fn test_ctrl_u_kills_line() {
     );
 }
 
+<<<<<<< HEAD
 /// Ctrl+U at the start of a wrapped line has nothing behind it to delete, so
 /// the readline meaning alone leaves the key dead at exactly the moment the
 /// draft should go. It clears the field instead, which is the whole-buffer
@@ -239,4 +240,88 @@ fn test_ctrl_u_keeps_above() {
         "keep medrop this",
         "the text above survives; only the newline behind the cursor goes"
     );
+}
+
+use crate::input::InputMode;
+
+/// A working app with the composer in DirectShell mode holding a ghost suffix.
+fn shell_app_with_ghost(draft: &str, suffix: &str) -> App {
+    let mut app = working_app();
+    app.ui.input.mode = InputMode::DirectShell;
+    app.ui.input.editor.set(draft.to_string());
+    app.ui.input.ghost = Some(suffix.to_string());
+    app
+}
+
+/// Tab in DirectShell mode accepts the ghost suffix into the editor without
+/// running the command.
+#[test]
+fn test_shell_tab_accepts_ghost() {
+    let mut app = shell_app_with_ghost("cargo t", "est");
+    handle_input(&mut app, key(KeyCode::Tab));
+    assert_eq!(app.ui.input.editor.value(), "cargo test");
+    assert!(app.ui.input.ghost.is_none());
+    assert_eq!(app.ui.input.mode, InputMode::DirectShell);
+}
+
+/// Enter in DirectShell mode runs the typed command (never the ghost), clears
+/// the editor, and returns the composer to Chat. The send itself needs a live
+/// connection, which the working app lacks, so it is a no-op here.
+#[test]
+fn test_shell_enter_runs_typed() {
+    let mut app = shell_app_with_ghost("cargo t", "est");
+    handle_input(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.ui.input.mode, InputMode::Chat);
+    assert!(
+        app.ui.input.editor.is_empty(),
+        "the editor clears after Enter"
+    );
+}
+
+/// Esc drops the ghost first and stays in DirectShell; a second Esc exits.
+#[test]
+fn test_shell_esc_clears_exits() {
+    let mut app = shell_app_with_ghost("cargo t", "est");
+    handle_input(&mut app, key(KeyCode::Esc));
+    assert!(app.ui.input.ghost.is_none());
+    assert_eq!(app.ui.input.mode, InputMode::DirectShell);
+    handle_input(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.ui.input.mode, InputMode::Chat);
+}
+
+/// Backspace on an empty DirectShell draft exits the mode.
+#[test]
+fn test_shell_backspace_empty_exits() {
+    let mut app = working_app();
+    app.ui.input.mode = InputMode::DirectShell;
+    handle_input(&mut app, key(KeyCode::Backspace));
+    assert_eq!(app.ui.input.mode, InputMode::Chat);
+}
+
+/// A leading dollar plus a space in Chat mode enters DirectShell and consumes
+/// the prefix; a dollar followed by a digit stays Chat.
+#[test]
+fn test_dollar_space_enters_shell() {
+    let mut app = working_app();
+    app.ui.input.editor.set("$".to_string());
+    handle_input(&mut app, key(KeyCode::Char(' ')));
+    assert_eq!(app.ui.input.mode, InputMode::DirectShell);
+    let mut app = working_app();
+    app.ui.input.editor.set("$".to_string());
+    handle_input(&mut app, key(KeyCode::Char('1')));
+    assert_eq!(app.ui.input.mode, InputMode::Chat);
+}
+
+/// Typing in DirectShell mode appends to the editor and refreshes the ghost; Left
+/// moves the cursor without leaving the mode.
+#[test]
+fn test_shell_typing_and_left() {
+    let mut app = working_app();
+    app.ui.input.mode = InputMode::DirectShell;
+    app.ui.input.editor.set("ab".to_string());
+    handle_input(&mut app, key(KeyCode::Char('c')));
+    assert_eq!(app.ui.input.editor.value(), "abc");
+    handle_input(&mut app, key(KeyCode::Left));
+    assert_eq!(app.ui.input.editor.cursor(), 2);
+    assert_eq!(app.ui.input.mode, InputMode::DirectShell);
 }

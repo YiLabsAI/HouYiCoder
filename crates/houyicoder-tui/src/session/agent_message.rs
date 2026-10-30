@@ -412,6 +412,12 @@ pub enum ClientCommand {
         content: Vec<ContentBlock>,
         disabled_skills: HashSet<String>,
     },
+    /// Run a dollar-mode command directly in the host sandbox, no model turn.
+    DirectShellRun {
+        req_id: RequestId,
+        session_id: FrontendSessionId,
+        command: String,
+    },
     /// Answer a pending reverse permission ask with the human verdict.
     Verdict {
         req_id: RequestId,

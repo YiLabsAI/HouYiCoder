@@ -16,6 +16,7 @@ pub(crate) mod palette;
 pub mod paste;
 
 pub mod queue;
+pub(crate) mod shell_history;
 
 use std::mem::take;
 use std::path::PathBuf;
@@ -26,6 +27,34 @@ use crate::input::queue::InputQueue;
 use crate::paste::{PasteStore, PendingPaste};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+/// The composer mode. Chat is the default conversation; DirectShell is the
+/// dollar-prefixed mode that submits a command to the host sandbox without a
+/// model turn. Entry is keyed on a leading dollar followed by a space (or a
+/// lone dollar), so a dollar immediately followed by a letter or digit stays
+/// in Chat and never false-triggers.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputMode {
+    #[default]
+    Chat,
+    DirectShell,
+}
+
+impl InputMode {
+    /// Whether a draft text should enter DirectShell mode: a leading dollar
+    /// followed by a space, or a lone dollar awaiting the space. A dollar
+    /// followed by anything else (a variable like HOME, a number) stays Chat.
+    fn from_text(text: &str) -> Self {
+        let mut chars = text.chars();
+        if chars.next() == Some('$') {
+            match chars.next() {
+                None | Some(' ') => return Self::DirectShell,
+                _ => {}
+            }
+        }
+        Self::Chat
+    }
+}
 
 /// One visual row of the wrapped input. start_offset is the byte offset into
 /// the full text where this row's content begins, so a (row, column) screen
@@ -431,6 +460,13 @@ pub(crate) struct Input {
     pub(crate) pending_paste: PendingPaste,
     /// Queued user inputs submitted while a run was in flight, drained FIFO.
     pub(crate) queue: InputQueue,
+    /// The composer mode: Chat or DirectShell.
+    pub(crate) mode: InputMode,
+    /// The ghost-text suffix for the current DirectShell input, rendered after
+    /// the cursor and accepted by Tab.
+    pub(crate) ghost: Option<String>,
+    /// The cached shell-history completion source for DirectShell mode.
+    pub(crate) shell_history: shell_history::ShellHistory,
 }
 
 impl Input {
@@ -457,11 +493,104 @@ impl Input {
         self.editor = Default::default();
         self.pasted = Default::default();
         self.pending_paste = Default::default();
+        self.mode = InputMode::Chat;
+        self.ghost = None;
+        self.shell_history.invalidate();
     }
 
     /// Wire the prompt-history file for this session.
     pub(crate) fn apply_history_path(&mut self, path: PathBuf) {
         self.history = HistoryNav::with_path(path);
+    }
+
+    /// Wire the shell-history cache from the same prompt-history file. The
+    /// dollar-mode reads and writes share the prompt store, filtering on the
+    /// dollar prefix.
+    pub(crate) fn apply_shell_history_path(&mut self, path: PathBuf) {
+        self.shell_history.configure(
+            path.to_string_lossy().to_string(),
+            history::current_project(),
+            String::new(),
+        );
+    }
+
+    /// Re-check the editor text for a DirectShell entry. Called after a
+    /// keystroke lands: when the draft gains a leading dollar plus a space, the
+    /// mode switches and the prefix is consumed so the editor holds the bare
+    /// command. A lone dollar stays in Chat until the space arrives.
+    pub(crate) fn recompute_mode(&mut self) {
+        if self.mode == InputMode::DirectShell {
+            return;
+        }
+        let mode = InputMode::from_text(self.editor.value());
+        if mode == InputMode::DirectShell {
+            let text = self.editor.value();
+            let consumed = if text.starts_with("$ ") { 2 } else { return };
+            let rest = &text[consumed..];
+            self.editor.set(rest.to_string());
+            self.mode = InputMode::DirectShell;
+        }
+    }
+
+    /// Recompute the ghost suffix from the shell history. Called after a
+    /// keystroke or cursor move in DirectShell mode. now is injected so the
+    /// cache TTL is deterministic under test.
+    pub(crate) fn refresh_ghost(&mut self, now: Instant) {
+        if self.mode != InputMode::DirectShell {
+            self.ghost = None;
+            return;
+        }
+        // Only complete when the cursor sits at the end of a single-line draft.
+        let text = self.editor.value();
+        if text.contains('\n') || self.editor.cursor() != text.len() {
+            self.ghost = None;
+            return;
+        }
+        self.ghost = self.shell_history.completion(text, now).map(|m| m.suffix);
+    }
+
+    /// Accept the ghost suffix into the editor (Tab) without executing. The
+    /// editor takes the full matched command and the cursor lands at its end.
+    /// Returns true when a ghost was accepted.
+    pub(crate) fn accept_ghost(&mut self, now: Instant) -> bool {
+        let Some(suffix) = self.ghost.take() else {
+            return false;
+        };
+        self.editor.insert_str(&suffix);
+        self.refresh_ghost(now);
+        true
+    }
+
+    /// Clear the ghost suffix. The first Esc in DirectShell mode drops the
+    /// ghost without leaving the mode; a second Esc exits.
+    pub(crate) fn clear_ghost(&mut self) {
+        self.ghost = None;
+    }
+
+    /// Leave DirectShell mode for Chat, keeping the draft so the user can edit
+    /// it as a normal prompt. The dollar prefix is not restored.
+    pub(crate) fn exit_shell_mode(&mut self) {
+        self.mode = InputMode::Chat;
+        self.ghost = None;
+    }
+
+    /// The command a DirectShell Enter would run: the editor text, trimmed of a
+    /// trailing newline. None when the draft is empty or not in DirectShell.
+    pub(crate) fn shell_command(&self) -> Option<String> {
+        if self.mode != InputMode::DirectShell {
+            return None;
+        }
+        let text = self.editor.value().trim_end_matches('\n');
+        if text.trim().is_empty() {
+            return None;
+        }
+        Some(text.to_string())
+    }
+
+    /// Record a submitted command to the shell-history cache (prepend, dedup)
+    /// so the next completion sees it without a re-read.
+    pub(crate) fn record_shell_command(&mut self, command: &str) {
+        self.shell_history.prepend(command);
     }
 
     /// Drain the pending-paste accumulator once the gap since the last chunk

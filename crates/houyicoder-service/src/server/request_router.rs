@@ -73,6 +73,22 @@ impl Server {
                 self.send_response(io, req_id, self.debug_response(level))
                     .await
             }
+            FrontendRequest::DirectShellRun { .. } => {
+                // The dollar-mode input surface and request wiring land in
+                // 07-01; the host execution path is 07-02. Until then the
+                // request is refused with a structured error rather than
+                // silently acked, so the frontend can tell the two apart.
+                self.send_response(
+                    io,
+                    req_id,
+                    ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::InvalidRequest,
+                        "direct shell execution is not implemented yet",
+                        true,
+                    )),
+                )
+                .await
+            }
             payload => self.dispatch_query(io, req_id, payload).await,
         }
     }

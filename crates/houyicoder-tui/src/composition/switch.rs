@@ -223,7 +223,8 @@ impl App {
         for w in startup_warnings {
             self.system_line(w);
         }
-        self.ui.input.apply_history_path(history_path);
+        self.ui.input.apply_history_path(history_path.clone());
+        self.ui.input.apply_shell_history_path(history_path);
     }
 
     /// Reset the frontend-side session-local fields a session switch must

@@ -20,9 +20,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/app/state.rs:App": {
-        # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it. The broad-access budget grew by one for the sandbox pane's key dispatcher, which fans out across the pane state and the session like every other pane handler.
+        # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it. The broad-access budget grew by one for the sandbox pane's key dispatcher, which fans out across the pane state and the session like every other pane handler. It grew by one more for submit_direct_shell (07-01), a submit verb that enqueues a DirectShellRun command the same way spawn_run enqueues SendMessage, so it reads the session connection and routes through enqueue.
         "fields": 3,
-        "mut_app": 28,
+        "mut_app": 29,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
         # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session.
@@ -48,8 +48,13 @@ ACTIVE_OWNERS = {
         "fields": 9,
     },
     "crates/houyicoder-tui/src/input.rs:Input": {
-        # The composed chat text and the context that edits it: editor, history, both paste halves, and the queued-input FIFO.
-        "fields": 5,
+        # The composed chat text and the context that edits it: editor, history,
+        # both paste halves, and the queued-input FIFO, plus the dollar
+        # direct-shell composer state (mode, ghost suffix, shell-history cache)
+        # added in 07-01. The three are cohesive DirectShell state kept on the
+        # composer because the mode switch reads and consumes the editor text in
+        # one place; a sub-owner would only route the same calls through it.
+        "fields": 8,
     },
     "crates/houyicoder-tui/src/input/queue.rs:InputQueue": {
         # The queued-input FIFO and its selection cursor; the items stay private so the order and the cursor cannot drift apart.
