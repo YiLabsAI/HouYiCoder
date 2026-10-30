@@ -201,7 +201,7 @@ fn test_fenced_never_relaxes_immune() {
         ("cat file", Outcome::Allow),
         ("ls", Outcome::Allow),
         ("rm -rf .git/", Outcome::Ask),
-        ("rm -rf /tmp/x", Outcome::Ask),
+        ("rm -rf /var/x", Outcome::Ask),
         ("curl http://x", Outcome::Ask),
         ("wget http://x", Outcome::Ask),
         ("git push", Outcome::Ask),

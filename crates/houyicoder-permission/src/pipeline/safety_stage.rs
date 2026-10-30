@@ -22,7 +22,7 @@ use std::sync::Arc;
 use houyicoder_api::sandbox::{Containment, FenceAxis, names_credential_path};
 
 use crate::compound::{reads_only_protected, writes_fence_denied_path};
-use crate::decision::{AskReason, AskSource, Decision, DenyReason, DenySource};
+use crate::decision::{AskReason, AskSource, Decision};
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
@@ -142,23 +142,6 @@ impl Validator for ProtectedPathValidator {
             || fence_write;
         if !hit {
             return None;
-        }
-        // A command that writes a control path can only end in a kernel
-        // refusal while the fence holds. Asking would collect a yes the fence
-        // then overrules, so the call is refused here with the reason instead.
-        // Naming the path is not writing it: the same text appears in a commit
-        // message or in a string redirected elsewhere, and those run fine, so
-        // only a redirect target or a writing command's operand counts.
-        if fence_write && !reads {
-            return Some(Decision::Deny(DenyReason {
-                source: DenySource::Fence,
-                validator: self.name(),
-                detail: "this command names a control file the sandbox fence \
-                         protects, so it is refused rather than approved. Edit \
-                         the file yourself, or use the app's own settings \
-                         command to change it."
-                    .into(),
-            }));
         }
         // A fence that closes control paths covers every one the command
         // names, and the command writes none of them, so an approval adds

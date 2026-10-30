@@ -54,6 +54,7 @@ const READONLY_COMMANDS: &[&str] = &[
     "pwd",
     "realpath",
     "rg",
+    "sed",
     "seq",
     "sha256sum",
     "shasum",
@@ -143,9 +144,36 @@ pub(super) fn command_reads_only(
         "find" => !args.iter().any(|arg| FIND_WRITE_PREDICATES.contains(arg)),
         "git" => git_reads_only(args),
         "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
+        "sed" => sed_reads_only(args),
         "curl" => allow_network && curl_reads_only(segment, args),
         _ => true,
     }
+}
+
+/// Whether a sed call only reads. The in-place flags and the script-file flag
+/// write, and a write command in the script writes, so each of them asks. The
+/// rest print, so a sed that pages a file with -n and a print range reads.
+fn sed_reads_only(args: &[&str]) -> bool {
+    for &arg in args {
+        if arg == "-i" || arg == "--in-place" || arg == "-f" || arg == "--file" {
+            return false;
+        }
+        // A short cluster like -in or -i.bak carries the in-place letter.
+        if let Some(cluster) = arg.strip_prefix('-')
+            && !cluster.starts_with('-')
+            && cluster.contains('i')
+        {
+            return false;
+        }
+        if arg.contains("/w ") || arg.contains(" w ") || arg.trim_end().ends_with(" w") {
+            return false;
+        }
+        // A sed write command like 'w file' or 's/a/b/w file'
+        if arg.starts_with("w ") || arg.starts_with("w/") {
+            return false;
+        }
+    }
+    true
 }
 
 fn git_reads_only(args: &[&str]) -> bool {

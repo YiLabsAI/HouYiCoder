@@ -20,6 +20,7 @@
 //! shared DRIFT_VECTOR duplicated in both crates' tests.
 
 use crate::compound::strip_safe_redirects;
+use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::pipeline::detection::expand_inline_interpreter;
 
 /// The git subcommand word for a discard form, for session-scoped consent.
@@ -120,7 +121,11 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
     if content.is_empty() {
         return Vec::new();
     }
-    let expanded = expand_inline_interpreter(content);
+    // Heredoc bodies are stripped before the scan, so a script that mentions a
+    // git discard form only inside a quoted heredoc body (a test string, a
+    // comment) does not read as a real git op the command runs.
+    let stripped = strip_quoted_heredoc_bodies(content);
+    let expanded = expand_inline_interpreter(&stripped);
     let cleaned = strip_safe_redirects(&expanded);
     let mut ops = Vec::new();
     // The scan runs over the command as written, not a lowercased copy. A

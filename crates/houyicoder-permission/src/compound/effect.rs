@@ -19,31 +19,50 @@ use crate::safety::marker_hit;
 
 const MAX_DEPTH: u8 = 4;
 
-const ALLOWED_ENV_NAMES: &[&str] = &[
-    "CACERT",
-    "RUSTC_WRAPPER",
-    "HOUYICODER_FAST_TOKENS",
-    "CARGO_TARGET_DIR",
-    "COV_DIR",
-    "LCOV",
-    "i",
-    "w",
-    "c",
-    "s",
-    "e",
+/// Environment variables whose assignment can rebind the temporary directory,
+/// the loader search path, the shell startup file, or repository identity. A
+/// leading assignment to one of these is treated as a tmpdir-setter because the
+/// same argv would no longer describe what runs. Names outside this set are
+/// ordinary local variables a compound command may set without changing the
+/// execution environment.
+const DANGEROUS_ENV_NAMES: &[&str] = &[
+    "TMPDIR",
+    "TMPPREFIX",
+    "PATH",
+    "IFS",
+    "BASH_ENV",
+    "ENV",
+    "CDPATH",
+    "GLOBIGNORE",
+    "SHELLOPTS",
+    "BASHOPTS",
 ];
+
+/// Whether an environment variable name can rebind the temporary directory or
+/// the loader, shell, or repository configuration. Prefixed families cover the
+/// dynamic loader and the git identity and path settings.
+fn is_dangerous_env_name(name: &str) -> bool {
+    DANGEROUS_ENV_NAMES.contains(&name)
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+        || name.starts_with("GIT_")
+}
 
 /// Commands a fenced session can predict. A segment that writes or removes a
 /// session-temporary path is accepted only when every segment before it starts
 /// with one of these, because those preceding segments are the only chance the
 /// command has to plant a symbolic link the later write would follow.
 ///
+/// cp is admitted only by the argument rule in segment_effect_safe, which
+/// requires its destination to name a session-temporary child or a safe
+/// workspace relative path; the name alone never clears it.
+///
 /// Deliberately absent: anything that creates a link or runs arbitrary code
-/// (ln, cp, mv, tar, install, rsync, python, shell interpreters), anything that
+/// (ln, mv, tar, install, rsync, python, shell interpreters), anything that
 /// can rebind the temporary directory (getopts, printf -v, read, eval, export,
 /// declare, unset), and the network clients, which the egress check owns.
 const SUPPORTED_EFFECT_COMMANDS: &[&str] = &[
-    "basename", "cargo", "cat", "cd", "cut", "df", "diff", "dirname", "du", "echo", "false",
+    "basename", "cargo", "cat", "cd", "cp", "cut", "df", "diff", "dirname", "du", "echo", "false",
     "file", "find", "git", "grep", "head", "jq", "ls", "make", "mkdir", "nohup", "pwd", "realpath",
     "rg", "rm", "rmdir", "sed", "sleep", "sort", "stat", "strings", "tail", "touch", "tr", "true",
     "uniq", "wc", "which",
@@ -73,7 +92,7 @@ pub(crate) fn sets_tmpdir(command: &str) -> bool {
                 && !raw_name.starts_with('-')
             {
                 let name = decode_token(raw_name);
-                if !ALLOWED_ENV_NAMES.contains(&name.as_str()) {
+                if is_dangerous_env_name(&name) {
                     return true;
                 }
             } else {
@@ -195,26 +214,76 @@ fn is_assignment_word(word: &str) -> bool {
 
 /// Whether a redirect target names a single child of the session temporary
 /// directory. A nested path, a traversal, a glob, or an expansion cannot be
-/// resolved from text, so none of them qualify.
+/// resolved from text, so none of them qualify. The literal /tmp and
+/// /private/tmp roots are admitted alongside the expansion forms because the
+/// seatbelt fence allows writes there on every platform the gate runs on.
 pub(crate) fn is_temp_output_target(target: &str) -> bool {
     if marker_hit(target) {
         return false;
     }
     let rest = target
         .strip_prefix("$TMPDIR/")
-        .or_else(|| target.strip_prefix("${TMPDIR}/"));
+        .or_else(|| target.strip_prefix("${TMPDIR}/"))
+        .or_else(|| target.strip_prefix("/tmp/"))
+        .or_else(|| target.strip_prefix("/private/tmp/"));
     let Some(suffix) = rest else {
         return false;
     };
+    is_single_temp_child(suffix)
+}
+
+/// Whether a suffix names one non-traversing child of a temporary directory.
+fn is_single_temp_child(suffix: &str) -> bool {
     !suffix.is_empty()
         && suffix != "."
         && suffix != ".."
         && !suffix.contains(['/', '*', '?', '[', ']', '$', '`', '(', ')', '\\'])
 }
 
+/// Whether a redirect target names a safe relative path inside the workspace.
+/// The path must not start from root or home, must not traverse, and must not
+/// carry a glob, an expansion, or a marker the fence protects. With the fence
+/// holding, the kernel decides where the write lands, so the gate only excludes
+/// constructs that can change what the fence is asked to open.
+fn is_safe_workspace_redirect_target(target: &str) -> bool {
+    if marker_hit(target) {
+        return false;
+    }
+    !target.is_empty()
+        && !target.starts_with('/')
+        && !target.starts_with('~')
+        && !target.contains("..")
+        && !target.contains(['*', '?', '[', ']', '$', '`', '(', ')', '\\'])
+}
+
+/// Whether a cp call writes its destination into a session-temporary child or a
+/// safe workspace relative path. The destination is the last non-option
+/// operand; earlier operands are sources.
+fn copy_destination_is_safe(segment: &str) -> bool {
+    let mut destination: Option<&str> = None;
+    for token in segment.split_whitespace().skip(1) {
+        if is_env_assignment(token) {
+            continue;
+        }
+        let word = strip_quotes(token);
+        if word.is_empty() || word.starts_with('-') {
+            continue;
+        }
+        destination = Some(word);
+    }
+    destination.is_some_and(|d| is_temp_output_target(d) || is_safe_workspace_redirect_target(d))
+}
+
 fn segment_effect_safe(segment: &str, depth: u8, fenced: bool, preceding_supported: bool) -> bool {
     let cleaned = strip_safe_redirects(segment);
     if first_command_word(&cleaned).as_deref() == Some("eval") {
+        return false;
+    }
+    // cp is admitted only when its destination names a session-temporary child
+    // or a safe workspace relative path, so a copy into an arbitrary location
+    // still asks.
+    if first_command_word(&cleaned).as_deref() == Some("cp") && !copy_destination_is_safe(&cleaned)
+    {
         return false;
     }
     let chars: Vec<char> = cleaned.chars().collect();
@@ -237,6 +306,13 @@ fn segment_effect_safe(segment: &str, depth: u8, fenced: bool, preceding_support
         }
         if in_single {
             i += 1;
+            continue;
+        }
+        // Inside double quotes a backslash escapes the next character, so a
+        // closing quote or backtick it precedes is literal rather than a
+        // boundary the scan can act on.
+        if in_double && c == '\\' {
+            i += 2;
             continue;
         }
         if c == '`' {
@@ -285,7 +361,7 @@ fn segment_effect_safe(segment: &str, depth: u8, fenced: bool, preceding_support
             let Some((target, next_i)) = read_redirect_token(&chars, after_op) else {
                 return false;
             };
-            if !is_temp_output_target(&target) {
+            if !is_temp_output_target(&target) && !is_safe_workspace_redirect_target(&target) {
                 return false;
             }
             i = next_i;
@@ -322,10 +398,14 @@ pub fn removes_only_temp(command: &str, fenced: bool) -> bool {
     }
     let mut saw_rm = false;
     let mut preceding_supported = true;
+    let mut cwd_in_temp = false;
     for segment in &segments {
+        if let Some(dir) = cd_target(segment) {
+            cwd_in_temp = is_temp_root(dir);
+        }
         if is_rm_segment(segment) {
             saw_rm = true;
-            if !preceding_supported || !rm_targets_are_temp(segment) {
+            if !preceding_supported || !rm_targets_are_temp(segment, cwd_in_temp) {
                 return false;
             }
         }
@@ -334,11 +414,28 @@ pub fn removes_only_temp(command: &str, fenced: bool) -> bool {
     saw_rm
 }
 
+/// The destination of a cd segment, when the segment is exactly two tokens. A
+/// following rm that names a single relative file is judged against whether the
+/// working directory sits in a session temporary root.
+fn cd_target(segment: &str) -> Option<&str> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    if tokens.len() != 2 || tokens[0] != "cd" {
+        return None;
+    }
+    Some(strip_quotes(tokens[1]))
+}
+
+/// Whether a directory names a session temporary root the fence allows writes
+/// into.
+fn is_temp_root(dir: &str) -> bool {
+    dir == "$TMPDIR" || dir == "${TMPDIR}" || dir == "/tmp" || dir == "/private/tmp"
+}
+
 fn is_rm_segment(segment: &str) -> bool {
     first_command_word(segment).as_deref() == Some("rm")
 }
 
-fn rm_targets_are_temp(segment: &str) -> bool {
+fn rm_targets_are_temp(segment: &str, cwd_in_temp: bool) -> bool {
     let cleaned = strip_safe_redirects(segment);
     let mut saw_target = false;
     for token in cleaned.split_whitespace().skip(1) {
@@ -353,7 +450,7 @@ fn rm_targets_are_temp(segment: &str) -> bool {
             continue;
         }
         saw_target = true;
-        if !is_temp_output_target(word) {
+        if !(is_temp_output_target(word) || cwd_in_temp && is_single_temp_child(word)) {
             return false;
         }
     }

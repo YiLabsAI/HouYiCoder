@@ -7,7 +7,7 @@
 //! cannot refuse it the way it refuses the same write from a shell command.
 
 use crate::Decision;
-use crate::decision::{DenySource, Outcome};
+use crate::decision::Outcome;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::{DefaultModeGate, ModeGate};
 use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SideEffect};
@@ -302,11 +302,11 @@ fn test_shell_write_asks() {
     );
 }
 
-/// A command that writes a control file the fence refuses is rejected outright
-/// while the fence is active. Asking would collect a yes the kernel then
-/// overrules, which is the failure this check exists to remove.
+/// A command that writes a control file the fence refuses is the user's
+/// answer, not a refusal: the fence backstops the write at the kernel, so the
+/// gate asks and a confirmation may proceed. Naming the path is not writing it.
 #[test]
-fn test_fenced_control_write_denied() {
+fn test_fenced_control_write_asks() {
     let ws = Workspace::new(line!());
     for command in [
         "echo x >> ~/.houyicoder/settings.json",
@@ -316,11 +316,7 @@ fn test_fenced_control_write_denied() {
         "cp evil.sh .git/hooks/pre-commit",
     ] {
         let d = ws.fenced_gate().decide(&bash_req(command));
-        assert_eq!(d.outcome(), Outcome::Deny, "denied: {command}");
-        match d {
-            Decision::Deny(reason) => assert_eq!(reason.source, DenySource::Fence),
-            other => panic!("expected a fence deny, got {other:?}"),
-        }
+        assert_eq!(d.outcome(), Outcome::Ask, "asked: {command}");
     }
 }
 
@@ -333,8 +329,8 @@ fn test_control_write_asks_unconfined() {
     let command = "echo x >> ~/.houyicoder/settings.json";
     assert_eq!(
         ws.fenced_gate().decide(&bash_req(command)).outcome(),
-        Outcome::Deny,
-        "a writes-confined fence refuses the write outright"
+        Outcome::Ask,
+        "a writes-confined fence asks the user to confirm the write"
     );
     assert_eq!(
         ws.reads_only_control_gate()
@@ -349,15 +345,21 @@ fn test_control_write_asks_unconfined() {
 /// check used to search the whole line, so a commit subject or a string
 /// redirected elsewhere was refused as if it were a write to the file.
 #[test]
-fn test_control_path_mention_asks() {
+fn test_control_mention_safe() {
     let ws = Workspace::new(line!());
-    for command in [
+    // A commit subject that names the path still asks via the checkpoint
+    // validator, but never refuses.
+    let d = ws.fenced_gate().decide(&bash_req(
         "git commit -m \"fix .houyicoder/settings.json readonly check\"",
+    ));
+    assert_eq!(d.outcome(), Outcome::Ask, "commit mentions the path");
+    // An echo that writes a temp file carrying the path as a string writes the
+    // temp file, not the control file, so it allows once the temp redirect is
+    // recognized.
+    let d = ws.fenced_gate().decide(&bash_req(
         "echo \"ok .claude/settings.json\" > /tmp/report.txt",
-    ] {
-        let d = ws.fenced_gate().decide(&bash_req(command));
-        assert_eq!(d.outcome(), Outcome::Ask, "mention only: {command}");
-    }
+    ));
+    assert_eq!(d.outcome(), Outcome::Allow, "echo writes a temp file");
 }
 
 /// A write to a control child the fence does not deny stays the user's answer.
@@ -491,18 +493,14 @@ fn test_settings_backup_not_denied() {
 }
 
 /// A script that assigns the settings path to a name and replaces that name
-/// writes the file, so the refusal names the fence instead of approving a
-/// command the kernel then fails.
+/// writes the file, so the gate asks for confirmation rather than refusing on
+/// the fence's behalf; the kernel backstops the write itself.
 #[test]
-fn test_script_settings_write_denied() {
+fn test_script_settings_write_asks() {
     let ws = Workspace::new(line!());
     let command = "cd /Users/von/workspace/hicoder && cat > \"$TMPDIR/cleanup.py\" <<'PY'\nimport json, os\n\npath = os.path.expanduser(\"~/.houyicoder/settings.json\")\nwith open(path) as f:\n    d = json.load(f)\n\ntmp = path + \".cleanup.tmp\"\nwith open(tmp, \"w\") as f:\n    json.dump(d, f)\n\nos.replace(tmp, path)\nPY\npython3 \"$TMPDIR/cleanup.py\"";
     let d = ws.fenced_gate().decide(&bash_req(command));
-    assert_eq!(d.outcome(), Outcome::Deny, "writes the file: {d:?}");
-    match d {
-        Decision::Deny(reason) => assert_eq!(reason.source, DenySource::Fence),
-        other => panic!("expected a fence deny, got {other:?}"),
-    }
+    assert_eq!(d.outcome(), Outcome::Ask, "writes the file: {d:?}");
 }
 
 /// The version-control directory is denied only where the profile denies it.

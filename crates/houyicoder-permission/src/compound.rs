@@ -634,6 +634,13 @@ impl QuoteScan {
 
     fn next(&mut self) -> Option<char> {
         let c = self.chars.get(self.pos).copied()?;
+        // Inside double quotes a backslash escapes the next character, so an
+        // escaped quote or backtick does not toggle the state or read as a
+        // substitution boundary.
+        if self.in_double && c == '\\' {
+            self.pos += 2;
+            return Some(c);
+        }
         match c {
             '\'' if !self.in_double => self.in_single = !self.in_single,
             '"' if !self.in_single => self.in_double = !self.in_double,

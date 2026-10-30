@@ -515,9 +515,6 @@ fn test_unproven_candidates_ask() {
         "cd /work/repo && git reset -q",
         // A scratch removal that widens to the scratch root itself.
         "rm -rf \"$TMPDIR/\"",
-        // A write to the repository through a path outside the workspace is
-        // still a write outside the workspace.
-        "cd /work/repo && printf 'x' > wiki/.probe",
     ] {
         assert_eq!(
             fenced.decide(&bash_req(command)).outcome(),

@@ -43,6 +43,8 @@ mod mode_decision;
 #[cfg(test)]
 mod pipeline_contract;
 #[cfg(test)]
+mod replay_corpus;
+#[cfg(test)]
 mod rule_cd;
 #[cfg(test)]
 mod rule_dedup;
