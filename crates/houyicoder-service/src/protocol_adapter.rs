@@ -4,9 +4,9 @@
 
 mod acp_permission;
 pub(crate) mod agents;
-mod always_grant;
 pub(crate) mod checkpoint_view;
 pub(crate) mod compaction;
+mod durable_grant;
 pub(crate) mod hooks;
 pub(crate) mod memory_view;
 pub(crate) mod redundancy;
@@ -18,11 +18,11 @@ use trajectory_row::{event_name, hex_short};
 
 use AcpxMethod::*;
 pub(crate) use acp_permission::{acp_permission_response_to_decision, approval_to_acp_permission};
-pub(crate) use always_grant::{
-    AlwaysGrant, CardFence, always_grant, approval_options, installed_scope,
+pub(crate) use durable_grant::{
+    CardFence, DurableGrant, approval_options, durable_grant, installed_scope,
 };
 #[cfg(test)]
-pub(crate) use always_grant::{FENCED, UNFENCED};
+pub(crate) use durable_grant::{FENCED, UNFENCED};
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
 use houyicoder_context::SessionEvent;

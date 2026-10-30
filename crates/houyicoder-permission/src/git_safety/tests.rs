@@ -2,7 +2,7 @@ use super::*;
 
 /// Shared drift vector: the commands where the conservative consent
 /// matcher + core's aggressive snapshot matcher MUST agree (clear-cut
-/// discards). Core's agent::git_discard holds an identical vector + an
+/// discards). Core's agent::git_safety holds an identical vector + an
 /// expected table; keep both in sync. Asymmetric cases (single-path
 /// checkout, bare stash) live in their own crate-specific tests.
 const DRIFT_VECTOR: &[&str] = &[

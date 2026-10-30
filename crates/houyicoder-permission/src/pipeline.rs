@@ -14,12 +14,12 @@
 
 #![allow(dead_code)] // ladder view metadata pending permission view wiring; locally unused
 
-pub mod consent_stage;
+pub mod consent;
 pub mod detection;
 pub mod mode_default;
 pub mod post_transform;
-pub mod rule_stage;
-pub mod safety_stage;
+pub mod protected_path;
+pub mod rule;
 
 use crate::consent::{ConsentStore, args_key};
 use crate::decision::Decision;
@@ -30,7 +30,7 @@ use detection::{
     NetworkEgressValidator, PathBoundsValidator,
 };
 use houyicoder_api::sandbox::Containment;
-use safety_stage::ProtectedPathValidator;
+use protected_path::ProtectedPathValidator;
 use std::sync::Arc;
 
 /// The position of a validator in the ladder. The discriminant is the order:
@@ -149,16 +149,16 @@ impl Pipeline {
         // tiebreaker, so rule_allow is registered before rule_ask to keep the
         // old Allow-then-Ask arm order inside Stage::RuleAllow.
         let validators: Vec<Box<dyn Validator>> = vec![
-            Box::new(rule_stage::RuleDenyValidator),
+            Box::new(rule::RuleDenyValidator),
             Box::new(ProtectedPathValidator::new(None)),
             Box::new(DestructiveCommandValidator::new(None)),
             Box::new(GitCheckpointValidator),
             Box::new(NetworkEgressValidator::new(None)),
             Box::new(CompoundCommandValidator::new(None)),
             Box::new(PathBoundsValidator::new(None)),
-            Box::new(rule_stage::RuleAllowValidator),
-            Box::new(rule_stage::RuleAskValidator),
-            Box::new(consent_stage::StoredConsentValidator),
+            Box::new(rule::RuleAllowValidator),
+            Box::new(rule::RuleAskValidator),
+            Box::new(consent::StoredConsentValidator),
             Box::new(mode_default::ModeDefaultValidator),
         ];
         let mut p = Self { validators };

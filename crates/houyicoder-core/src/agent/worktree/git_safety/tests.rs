@@ -175,7 +175,7 @@ fn test_drift_vector_conservative_matches() {
     // The conservative git_discard_form (matches the permission crate's
     // git_discard_consent_word) on the shared DRIFT_VECTOR. If this
     // drifts from the permission side, the other crate's drift test
-    // fails too — see permission/src/git_discard.rs DRIFT_VECTOR.
+    // fails too — see permission/src/git_safety.rs DRIFT_VECTOR.
     // The safe branch delete is asserted apart from this vector: the two
     // gates deliberately disagree on it, since a snapshot costs nothing while
     // a consent prompt costs the user an interruption.

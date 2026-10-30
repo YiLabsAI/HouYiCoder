@@ -21,7 +21,7 @@ mod consent;
 mod decision;
 mod egress;
 mod gate;
-mod git_discard;
+mod git_safety;
 mod guarded_tool;
 mod heredoc;
 mod metrics;

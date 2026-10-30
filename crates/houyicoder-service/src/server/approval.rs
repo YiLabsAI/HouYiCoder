@@ -25,7 +25,7 @@ use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope, Delega
 
 use crate::composition::ContainmentAdapter;
 use crate::protocol_adapter::{
-    AlwaysGrant, CardFence, always_grant, build_approval_request, installed_scope,
+    CardFence, DurableGrant, build_approval_request, durable_grant, installed_scope,
     parse_approval_decision,
 };
 
@@ -318,7 +318,7 @@ impl Server {
 
     fn install_approved_consent(
         &self,
-        grant: &AlwaysGrant,
+        grant: &DurableGrant,
         lifetime: ApprovalScope,
         grants: &[BoundaryGrant],
     ) -> Result<ConsentInstall, ProtocolError> {
@@ -352,7 +352,7 @@ impl Server {
         grants: &[BoundaryGrant],
         choice: ApprovalScope,
     ) -> Result<(), StoreError> {
-        let grant = always_grant(tool_name, input, reason, self.card_fence(), grants);
+        let grant = durable_grant(tool_name, input, reason, self.card_fence(), grants);
         self.apply_install(&grant, installed_scope(&grant, choice))
     }
 
@@ -367,21 +367,21 @@ impl Server {
     /// session-length grant rather than claiming a saved one.
     fn apply_install(
         &self,
-        grant: &AlwaysGrant,
+        grant: &DurableGrant,
         lifetime: ApprovalScope,
     ) -> Result<(), StoreError> {
         if lifetime == ApprovalScope::Once {
             return Ok(());
         }
         match grant {
-            AlwaysGrant::Once | AlwaysGrant::Directories => Ok(()),
-            AlwaysGrant::Network(destinations) => {
+            DurableGrant::Once | DurableGrant::Directories => Ok(()),
+            DurableGrant::Network(destinations) => {
                 for destination in destinations {
                     self.gate.add_egress_allow(destination);
                 }
                 Ok(())
             }
-            AlwaysGrant::Rule(rule) => {
+            DurableGrant::Rule(rule) => {
                 // The plan chose the store the rule belongs in; the
                 // client's session choice keeps it in memory instead.
                 let scope = match lifetime {
@@ -427,8 +427,8 @@ impl Server {
         input: &serde_json::Value,
         reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
-    ) -> AlwaysGrant {
-        always_grant(tool_name, input, reason, self.card_fence(), grants)
+    ) -> DurableGrant {
+        durable_grant(tool_name, input, reason, self.card_fence(), grants)
     }
 
     /// Apply the exact directory grants disclosed on the approval card, then
@@ -465,7 +465,7 @@ impl Server {
     /// second kind is installed whole rather than half.
     pub(crate) fn install_consent(
         &self,
-        grant: &AlwaysGrant,
+        grant: &DurableGrant,
         lifetime: ApprovalScope,
         grants: &[BoundaryGrant],
     ) -> Result<ConsentInstall, SandboxError> {

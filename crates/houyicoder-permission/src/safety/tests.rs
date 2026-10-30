@@ -1,4 +1,4 @@
-mod claude_dir;
+mod config_dir;
 
 use houyicoder_api::sandbox::CREDENTIAL_FILES;
 

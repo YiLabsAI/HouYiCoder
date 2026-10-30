@@ -19,7 +19,7 @@ use crate::compound::{normalize_shell_command, split_compound};
 use crate::consent::ConsentStore;
 use crate::decision::{AllowReason, AskReason, AskSource, Decision};
 use crate::egress::trusted_egress_scopes;
-use crate::git_discard::collect_git_ask_ops;
+use crate::git_safety::collect_git_ask_ops;
 use crate::metrics::DecisionBucket;
 use crate::metrics::DecisionCounter;
 use crate::metrics::decision_labels;

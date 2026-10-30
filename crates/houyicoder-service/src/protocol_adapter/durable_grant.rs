@@ -47,7 +47,7 @@ pub(crate) const UNFENCED: CardFence = CardFence {
 /// What an "always" verdict on one ask can durably authorize. The approval
 /// card and the consent router both read this, so what the card promises is
 /// what gets installed.
-pub(crate) enum AlwaysGrant {
+pub(crate) enum DurableGrant {
     /// Network destinations remembered for the session.
     Network(Vec<String>),
     /// A directory capability. The directories themselves are the grants the
@@ -60,7 +60,7 @@ pub(crate) enum AlwaysGrant {
     Once,
 }
 
-impl AlwaysGrant {
+impl DurableGrant {
     /// The lifetime the card states and the install keeps. A destination or a
     /// git history rule lasts this session: the approval was about the work
     /// in progress, and the git rule already carries that scope. A directory
@@ -97,7 +97,7 @@ fn shorter(choice: ApprovalScope, allowed: ApprovalScope) -> ApprovalScope {
 /// The lifetime an install keeps for this grant when the client chose choice:
 /// nothing when the choice is once or the grant has no lifetime, otherwise the
 /// shorter of the choice and the plan.
-pub(crate) fn installed_scope(grant: &AlwaysGrant, choice: ApprovalScope) -> ApprovalScope {
+pub(crate) fn installed_scope(grant: &DurableGrant, choice: ApprovalScope) -> ApprovalScope {
     match grant.scope() {
         Some(allowed) => shorter(choice, allowed),
         None => ApprovalScope::Once,
@@ -120,27 +120,27 @@ pub(crate) fn installed_scope(grant: &AlwaysGrant, choice: ApprovalScope) -> App
 /// about to install, not from the reason text: the card writes that text, and
 /// reading a path back out of prose installs whatever the wording happens to
 /// contain. Every grant is listed, because the install covers all of them.
-pub(crate) fn always_grant(
+pub(crate) fn durable_grant(
     tool_name: &str,
     input: &serde_json::Value,
     reason: Option<&AskReason>,
     fence: CardFence,
     grants: &[BoundaryGrant],
-) -> AlwaysGrant {
+) -> DurableGrant {
     let Some(reason) = reason else {
-        return AlwaysGrant::Once;
+        return DurableGrant::Once;
     };
     if reason.source == AskSource::SystemSafety {
-        return AlwaysGrant::Once;
+        return DurableGrant::Once;
     }
     if matches!(
         reason.validator.as_str(),
         "path-bounds" | "directory-capability"
     ) {
         return if grants.is_empty() {
-            AlwaysGrant::Once
+            DurableGrant::Once
         } else {
-            AlwaysGrant::Directories
+            DurableGrant::Directories
         };
     }
     if matches!(
@@ -152,15 +152,15 @@ pub(crate) fn always_grant(
         // programs, not hosts, so a remembered destination is its own entry.
         // A fence that refuses the egress keeps the ask single-shot.
         if fence.egress_blocked {
-            return AlwaysGrant::Once;
+            return DurableGrant::Once;
         }
         let command = houyicoder_permission::input_content(tool_name, Some(input));
         if !egress_outputs_safe(&command, fence.writes_confined) {
-            return AlwaysGrant::Once;
+            return DurableGrant::Once;
         }
         return match houyicoder_permission::egress_scope_list(&command, fence.writes_confined) {
-            Some(scopes) if !scopes.is_empty() => AlwaysGrant::Network(scopes),
-            _ => AlwaysGrant::Once,
+            Some(scopes) if !scopes.is_empty() => DurableGrant::Network(scopes),
+            _ => DurableGrant::Once,
         };
     }
     // The four history-moving git subcommands shadow their builtin ask rule
@@ -175,17 +175,17 @@ pub(crate) fn always_grant(
                 Effect::Allow,
             )
         {
-            return AlwaysGrant::Rule(rule.with_scope(Scope::Session));
+            return DurableGrant::Rule(rule.with_scope(Scope::Session));
         }
-        return AlwaysGrant::Once;
+        return DurableGrant::Once;
     }
     // A remembered command is a preference about this machine's workspace,
     // not a policy the repository should carry: it lands in the machine-local
     // store, where the workspace lifetime can restore it and where a different
     // checkout never inherits it.
     match consent_rule_for(tool_name, input) {
-        Some(rule) => AlwaysGrant::Rule(rule.with_scope(Scope::Local)),
-        None => AlwaysGrant::Once,
+        Some(rule) => DurableGrant::Rule(rule.with_scope(Scope::Local)),
+        None => DurableGrant::Once,
     }
 }
 
@@ -213,10 +213,10 @@ fn directory_label(grants: &[BoundaryGrant]) -> Option<String> {
 /// named, because the install covers all of them. Naming the lifetime is what
 /// lets the user tell a session-long preference from a workspace-long one
 /// without knowing which store each lands in.
-fn always_label(grant: &AlwaysGrant, grants: &[BoundaryGrant]) -> Option<String> {
+fn durable_label(grant: &DurableGrant, grants: &[BoundaryGrant]) -> Option<String> {
     let effect = match grant {
-        AlwaysGrant::Once => return None,
-        AlwaysGrant::Network(scopes) => match scopes.as_slice() {
+        DurableGrant::Once => return None,
+        DurableGrant::Network(scopes) => match scopes.as_slice() {
             [] => return None,
             [one] => format!("{one} *"),
             [first, second] => format!("{first}, {second} *"),
@@ -224,8 +224,8 @@ fn always_label(grant: &AlwaysGrant, grants: &[BoundaryGrant]) -> Option<String>
                 format!("{first}, {second} (+{} more) *", rest.len())
             }
         },
-        AlwaysGrant::Directories => directory_label(grants)?,
-        AlwaysGrant::Rule(rule) => match &rule.content {
+        DurableGrant::Directories => directory_label(grants)?,
+        DurableGrant::Rule(rule) => match &rule.content {
             Some(RuleContent::Prefix(prefix)) => format!("{prefix} *"),
             Some(RuleContent::Exact(value)) => value.clone(),
             Some(RuleContent::Glob(pattern)) => pattern.clone(),
@@ -257,8 +257,8 @@ pub(crate) fn approval_options(
         scope: None,
         meta: None,
     }];
-    let grant = always_grant(tool_name, input, reason, fence, grants);
-    if let Some(label) = always_label(&grant, grants) {
+    let grant = durable_grant(tool_name, input, reason, fence, grants);
+    if let Some(label) = durable_label(&grant, grants) {
         options.push(PermissionOption {
             option_id: "allow_always".into(),
             name: label,

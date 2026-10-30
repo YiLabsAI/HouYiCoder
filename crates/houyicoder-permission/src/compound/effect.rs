@@ -12,7 +12,7 @@ use super::{
     decode_shell_word, is_attestable, is_env_assignment, quotes_balanced, shell_word_spans,
     split_compound, strip_safe_redirects,
 };
-use crate::git_discard::{decode_token, is_shell_control_keyword, should_ask_before_git};
+use crate::git_safety::{decode_token, is_shell_control_keyword, should_ask_before_git};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::pipeline::detection::{should_ask_egress, strip_quotes};
 use crate::safety::marker_hit;

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::agent::git_discard::command_triggers_git_snapshot;
+use crate::agent::git_safety::command_triggers_git_snapshot;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use std::fs::copy;
 use std::fs::create_dir_all;

@@ -6,6 +6,9 @@
 //! through the process directly, so the kernel fence never sees the call and
 //! cannot refuse it the way it refuses the same write from a shell command.
 
+// The variant match below sits in a unix-only case, so the import is gated
+// with it: on a target without symlinks the name would be unused.
+#[cfg(unix)]
 use crate::Decision;
 use crate::decision::Outcome;
 use crate::mode::{PermissionMode, ToolRequest};

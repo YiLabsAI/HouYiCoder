@@ -40,7 +40,7 @@ pub(crate) use turn::{
     call, fallback, input_queue, outcome_counts, resolve, result, step, thinking, truncation,
     user_turn, verify,
 };
-pub use worktree::{controller as worktree_controller, git_discard, session as worktree_session};
+pub use worktree::{controller as worktree_controller, git_safety, session as worktree_session};
 
 pub use effort::{
     ModelCatalogResolver, apply_effort_settings, effort_default_for, resolve_applied_effort,

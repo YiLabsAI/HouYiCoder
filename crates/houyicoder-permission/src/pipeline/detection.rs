@@ -14,7 +14,7 @@ use crate::compound::{
 };
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::egress::{egress_outputs_safe, egress_scope_list};
-use crate::git_discard::{collect_git_ask_ops, decode_token, is_shell_control_keyword};
+use crate::git_safety::{collect_git_ask_ops, decode_token, is_shell_control_keyword};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};

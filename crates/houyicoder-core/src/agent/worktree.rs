@@ -7,7 +7,7 @@
 pub mod changes;
 mod cleanup;
 pub mod controller;
-pub mod git_discard;
+pub mod git_safety;
 pub mod identify;
 pub mod preview;
 pub mod record;

@@ -1,12 +1,12 @@
-mod bash_cancel;
+mod cancel;
 
-mod bash_bound;
+mod output_limit;
 
-mod bash_capture;
+mod capture;
 
-mod bash_shell;
+mod shell;
 
-mod bash_timeout;
+mod timeout;
 
 use std::path::Path;
 use std::sync::Arc;

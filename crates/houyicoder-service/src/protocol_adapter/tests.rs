@@ -40,14 +40,32 @@ fn test_file_output_once() {
         other => panic!("expected file output approval: {other:?}"),
     };
     assert!(matches!(
-        always_grant("bash", &input, Some(&reason), UNFENCED, &[]),
-        AlwaysGrant::Once
+        durable_grant("bash", &input, Some(&reason), UNFENCED, &[]),
+        DurableGrant::Once
     ));
     let options = approval_options("bash", &input, Some(&reason), UNFENCED, &[]);
     let ids: Vec<&str> = options.iter().map(|o| o.option_id.as_str()).collect();
     assert_eq!(ids, ["allow_once", "reject_once"]);
     gate.add_egress_allow("curl https://example.test");
     assert_eq!(gate.decide(&request).outcome(), Outcome::Ask);
+}
+
+/// A git op outside the four history-rewriting verbs keeps a single approval.
+/// Only commit, rebase, reset, and tag mint a durable rule, so a discard form
+/// must not promise a session-wide remember the store would never receive.
+#[test]
+fn test_git_discard_keeps_once() {
+    let input = serde_json::json!({"command": "git checkout -- crates/foo.rs"});
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "git_checkpoint".to_string(),
+        detail: "a git discard form".into(),
+        containment_note: None,
+    };
+    assert!(matches!(
+        durable_grant("bash", &input, Some(&reason), FENCED, &[]),
+        DurableGrant::Once
+    ));
 }
 
 #[test]
@@ -67,8 +85,8 @@ fn test_read_scope_remember() {
         Decision::Ask(reason) => AskReason::from(&reason),
         other => panic!("expected origin approval: {other:?}"),
     };
-    let scopes = match always_grant("bash", &input, Some(&reason), UNFENCED, &[]) {
-        AlwaysGrant::Network(scopes) => scopes,
+    let scopes = match durable_grant("bash", &input, Some(&reason), UNFENCED, &[]) {
+        DurableGrant::Network(scopes) => scopes,
         _ => panic!("expected origin scopes"),
     };
     assert_eq!(
@@ -104,8 +122,8 @@ fn test_remember_names_grant_dir() {
         containment_note: None,
     };
     assert!(matches!(
-        always_grant("write", &input, Some(&reason), FENCED, &grants),
-        AlwaysGrant::Directories
+        durable_grant("write", &input, Some(&reason), FENCED, &grants),
+        DurableGrant::Directories
     ));
     let options = approval_options("write", &input, Some(&reason), FENCED, &grants);
     let always = options
@@ -118,7 +136,7 @@ fn test_remember_names_grant_dir() {
     // A client's choice can shorten the lifetime the ask offers, never lengthen
     // it: a workspace answer on a session-scoped plan keeps the session, and a
     // workspace answer on a plan with no durable grant keeps nothing.
-    let session_plan = AlwaysGrant::Network(vec!["api.github.com *".into()]);
+    let session_plan = DurableGrant::Network(vec!["api.github.com *".into()]);
     assert_eq!(
         installed_scope(&session_plan, ApprovalScope::Workspace),
         ApprovalScope::Session,
@@ -130,7 +148,7 @@ fn test_remember_names_grant_dir() {
         "a once answer keeps nothing"
     );
     assert_eq!(
-        installed_scope(&AlwaysGrant::Once, ApprovalScope::Workspace),
+        installed_scope(&DurableGrant::Once, ApprovalScope::Workspace),
         ApprovalScope::Once,
         "a plan with no durable grant keeps nothing at any choice"
     );
@@ -138,8 +156,8 @@ fn test_remember_names_grant_dir() {
     // An ask with no grant offers no remember option: the card cannot promise
     // a scope the durable store would never receive.
     assert!(matches!(
-        always_grant("write", &input, Some(&reason), FENCED, &[]),
-        AlwaysGrant::Once
+        durable_grant("write", &input, Some(&reason), FENCED, &[]),
+        DurableGrant::Once
     ));
     let ungranted = approval_options("write", &input, Some(&reason), FENCED, &[]);
     let ids: Vec<&str> = ungranted.iter().map(|o| o.option_id.as_str()).collect();
@@ -737,8 +755,8 @@ fn test_blocked_egress_hides_remember() {
         egress_blocked: true,
     };
     assert!(matches!(
-        always_grant("bash", &input, Some(&reason), blocked, &[]),
-        AlwaysGrant::Once
+        durable_grant("bash", &input, Some(&reason), blocked, &[]),
+        DurableGrant::Once
     ));
     let blocked_options = approval_options("bash", &input, Some(&reason), blocked, &[]);
     let ids: Vec<&str> = blocked_options

@@ -6,7 +6,7 @@
 //!   (annoying but safe); a false negative runs silently (the snapshot
 //!   trigger in core is the backstop). Stays conservative to avoid
 //!   over-asking on branch switches.
-//! - snapshot (core, agent::git_discard::git_snapshot_form): AGGRESSIVE — any
+//! - snapshot (core, agent::git_safety::git_snapshot_form): AGGRESSIVE — any
 //!   git op that MAY touch the working tree triggers a pre-run CoW snapshot.
 //!   A false positive is one free snapshot (silent); a false negative is
 //!   permanent data loss. The static matcher cannot tell a branch name from a
@@ -173,7 +173,7 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
 /// and git global options that take a value (-C val, -c val, --git-dir[=val],
 /// --work-tree[=val], --namespace[=val], --exec-path[=val]). Returns None
 /// when the segment's first command is not git. Matches core's
-/// agent::git_discard::git_sub_and_args — keep both in sync.
+/// agent::git_safety::git_sub_and_args — keep both in sync.
 fn git_sub_and_args<'a>(tokens: &[&'a str]) -> Option<(&'a str, Vec<&'a str>)> {
     let mut i = 0;
     // Skip leading shell control keywords and env-assignments (FOO=bar) to reach "git".

@@ -29,11 +29,9 @@ pub(crate) fn bash_req(command: &str) -> ToolRequest<'static> {
 }
 
 #[cfg(test)]
+mod containment_axes;
+#[cfg(test)]
 mod egress;
-#[cfg(test)]
-mod fence_axes;
-#[cfg(test)]
-mod fenced_exec;
 #[cfg(test)]
 mod git_ops;
 #[cfg(test)]
@@ -43,12 +41,13 @@ mod mode_decision;
 #[cfg(test)]
 mod pipeline_contract;
 #[cfg(test)]
-mod replay_corpus;
-#[cfg(test)]
-mod rule_cd;
-#[cfg(test)]
 mod rule_dedup;
+#[cfg(test)]
+mod sandbox_containment;
 #[cfg(test)]
 mod session_replay;
 #[cfg(test)]
 mod shell_policy;
+#[cfg(test)]
+#[cfg(test)]
+mod workdir_rule;

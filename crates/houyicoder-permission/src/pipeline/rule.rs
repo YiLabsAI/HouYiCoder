@@ -8,7 +8,7 @@
 //! detection + safety ladders run.
 
 use crate::decision::{AllowReason, AskReason, AskSource, Decision, DenyReason, DenySource};
-use crate::git_discard::should_ask_before_git;
+use crate::git_safety::should_ask_before_git;
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::Effect;
