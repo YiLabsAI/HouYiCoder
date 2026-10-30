@@ -57,10 +57,29 @@ impl ShellHistory {
         self.invalidate();
     }
 
+    /// The prompt-history file path the cache reads from and records to. Test-only
+    /// accessor so a persistence test can read the file the cache wrote.
+    #[cfg(test)]
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
     /// Drop the cache so the next lookup re-reads the file.
     pub(crate) fn invalidate(&mut self) {
         self.cache.clear();
         self.loaded_at = None;
+    }
+
+    /// Record a submitted command: prepend to the in-memory cache (deduped) and
+    /// append to the prompt-history JSONL with the dollar prefix so the next
+    /// session's read picks it up. The cache write is best-effort; a missing or
+    /// unwritable file leaves the in-memory history for the rest of the session.
+    pub(crate) fn record(&mut self, command: &str) {
+        self.prepend(command);
+        if !self.path.is_empty() {
+            let line = format!("{SHELL_PREFIX}{command}");
+            history::add(&line, &self.project, &self.session, Path::new(&self.path));
+        }
     }
 
     /// Prepend a submitted command to the cache without a re-read, deduping so

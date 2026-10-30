@@ -75,7 +75,8 @@ impl Server {
             }
             FrontendRequest::DirectShellRun { .. } => {
                 // The dollar-mode input surface and request wiring land in
-                // 07-01; the host execution path is 07-02. Until then the
+                // The dollar-mode input surface and request wiring land first;
+                // the host execution path follows. Until then the
                 // request is refused with a structured error rather than
                 // silently acked, so the frontend can tell the two apart.
                 self.send_response(

@@ -46,13 +46,23 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     } else {
         Color::Gray
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::TOP | Borders::BOTTOM)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border_color));
+    if shell_mode {
+        block = block.title(Span::styled(
+            " bash · sandboxed ",
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ));
+    }
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let glyph_style = Style::new().fg(Color::Cyan);
+    let glyph_style = if shell_mode {
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::Cyan)
+    };
     let body_style = Style::new().fg(Color::Reset);
     let ghost_style = Style::new().fg(Color::DarkGray);
     // The painted caret hides when the terminal window is unfocused, and while
@@ -127,3 +137,6 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         inner.y.saturating_add(row),
     )));
 }
+
+#[cfg(test)]
+mod tests;

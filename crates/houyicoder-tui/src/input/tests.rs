@@ -3,7 +3,7 @@ use super::*;
 use super::history;
 use crate::input::queue::InputItem;
 use std::env::temp_dir;
-use std::fs::{create_dir_all, remove_file};
+use std::fs::{create_dir_all, read_to_string, remove_file};
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -346,6 +346,20 @@ fn test_backspace_empty_exits_shell() {
     };
     input.exit_shell_mode();
     assert_eq!(input.mode, InputMode::Chat);
+}
+
+/// record_shell_command prepends to the cache and appends to the prompt-history
+/// file, so the command survives a session restart.
+#[test]
+fn test_record_shell_command_persists() {
+    let mut input = shell_input_with_history(&["cargo test"]);
+    let path = input.shell_history.path().to_string();
+    input.record_shell_command("cargo build");
+    let content = read_to_string(&path).unwrap_or_default();
+    assert!(
+        content.contains("$ cargo build"),
+        "the recorded command is appended with the dollar prefix: {content}"
+    );
 }
 
 /// The ghost and command accessors guard their branches: refresh_ghost clears

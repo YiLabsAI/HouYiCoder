@@ -21,6 +21,9 @@ impl App {
             self.ui.navigation.palette.query.push_str(token);
         } else {
             self.ui.input.editor.insert_str(token);
+            // A pasted dollar plus a space enters DirectShell like a typed one,
+            // so the mode switch is not bypassed by paste.
+            self.ui.input.recompute_mode();
         }
     }
 

@@ -324,4 +324,36 @@ fn test_shell_typing_and_left() {
     handle_input(&mut app, key(KeyCode::Left));
     assert_eq!(app.ui.input.editor.cursor(), 2);
     assert_eq!(app.ui.input.mode, InputMode::DirectShell);
+    handle_input(&mut app, key(KeyCode::Home));
+    assert_eq!(app.ui.input.editor.cursor(), 0);
+    handle_input(&mut app, key(KeyCode::End));
+    assert_eq!(app.ui.input.editor.cursor(), 3);
+}
+
+/// A pasted dollar plus a space enters DirectShell mode the same way a typed one
+/// does, so paste does not bypass the mode switch.
+#[test]
+fn test_paste_enters_shell_mode() {
+    let mut app = working_app();
+    app.apply_paste_token("$ cargo test");
+    assert_eq!(app.ui.input.mode, InputMode::DirectShell);
+    assert_eq!(app.ui.input.editor.value(), "cargo test");
+}
+
+/// A cursor move off the end clears the ghost, so a later Tab does not insert the
+/// stale suffix at the wrong position.
+#[test]
+fn test_shell_left_clears_ghost() {
+    let mut app = shell_app_with_ghost("cargo t", "est");
+    handle_input(&mut app, key(KeyCode::Left));
+    assert!(
+        app.ui.input.ghost.is_none(),
+        "moving the cursor off the end clears the ghost"
+    );
+    handle_input(&mut app, key(KeyCode::Tab));
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "cargo t",
+        "Tab after Left is a no-op, the suffix is not inserted mid-text"
+    );
 }

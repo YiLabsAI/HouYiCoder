@@ -615,9 +615,18 @@ fn handle_direct_shell(app: &mut App, k: KeyEvent) {
             app.ui.input.editor.push(c);
             app.ui.input.refresh_ghost(now);
         }
-        KeyCode::Left => app.ui.input.editor.move_left(),
-        KeyCode::Home => app.ui.input.editor.move_home(),
-        KeyCode::End => app.ui.input.editor.move_end(),
+        KeyCode::Left => {
+            app.ui.input.editor.move_left();
+            app.ui.input.refresh_ghost(now);
+        }
+        KeyCode::Home => {
+            app.ui.input.editor.move_home();
+            app.ui.input.refresh_ghost(now);
+        }
+        KeyCode::End => {
+            app.ui.input.editor.move_end();
+            app.ui.input.refresh_ghost(now);
+        }
         _ => {}
     }
 }

@@ -587,10 +587,10 @@ impl Input {
         Some(text.to_string())
     }
 
-    /// Record a submitted command to the shell-history cache (prepend, dedup)
-    /// so the next completion sees it without a re-read.
+    /// Record a submitted command to the shell history: prepend to the in-memory
+    /// cache and append to the prompt-history file so it survives a restart.
     pub(crate) fn record_shell_command(&mut self, command: &str) {
-        self.shell_history.prepend(command);
+        self.shell_history.record(command);
     }
 
     /// Drain the pending-paste accumulator once the gap since the last chunk

@@ -37,9 +37,6 @@ mod startup;
 mod transcript_rebuild;
 
 impl App {
-    /// Start a user turn, steer input to the viewed child, or queue it while
-    /// another turn is active. New turns render an immediate user echo after
-    /// the enqueue is accepted. Returns false when the enqueue was refused.
     /// Submit a dollar-mode command to the host sandbox. No model turn starts:
     /// the host runs the command in the session sandbox and streams the result
     /// back as a tool-style entry. The command is real user input, so the host
@@ -63,6 +60,9 @@ impl App {
         }
     }
 
+    /// Start a user turn, steer input to the viewed child, or queue it while
+    /// another turn is active. New turns render an immediate user echo after
+    /// the enqueue is accepted. Returns false when the enqueue was refused.
     pub fn spawn_run(&mut self, input: String) -> bool {
         // A viewed child receives input directly and shows an optimistic echo.
         let steer = self
