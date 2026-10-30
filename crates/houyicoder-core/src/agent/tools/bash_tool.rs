@@ -1,9 +1,10 @@
 //! BashTool: run a shell command in the sandbox. Destructive commands
-//! snapshot the writable roots first (so the command's writes can be
-//! reverted); the output is
-//! bounded so a runaway command cannot overflow the model context (the
-//! full output spills to a workspace file past the cap). Split from tools.rs so
-//! that file stays under the file-size gate.
+//! snapshot the writable roots first, so the command's writes can be reverted.
+//!
+//! The output is bounded so a runaway command cannot overflow the model
+//! context. Past the cap the model reads the tail and a line naming where the
+//! rest is: the capture's blocks, or a workspace file when no capture holds
+//! them.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -22,6 +23,7 @@ use houyicoder_protocol::capture_record::BlockMarker;
 use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
+use super::results::keys::{CAPTURE_KEY, RECORD_KEY, STDERR_KEY, STDOUT_KEY};
 use crate::agent::fallback::FallbackToolOutcome;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
@@ -130,13 +132,15 @@ impl BashTool {
     /// Turn a finished exec into the tool answer: bound the output so a huge
     /// result cannot overflow the model window, fold the call's own notices
     /// into stderr, and offer any authorizable service a failed command
-    /// discovered. The full output above the bound is named by the capture
-    /// outcome, and it also stays re-readable through the spill path.
+    /// discovered. What the bound cut off is read back from the capture, so
+    /// the answer names the kept stream instead of copying the bytes into the
+    /// workspace.
     async fn tool_result(
         &self,
         result: ExecResult,
         notice: Option<String>,
         capture: CaptureOutcome,
+        call_id: &str,
     ) -> Value {
         let exit_code = result.exit_code;
         let success = result.is_success();
@@ -145,6 +149,7 @@ impl BashTool {
             result.stderr,
             &self.session.workspace_root(),
             capture.stop().map(|stop| stop.reason),
+            &kept_streams(&capture, call_id),
         );
         let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
         let has_active_skill = self
@@ -166,7 +171,7 @@ impl BashTool {
             output["authorizable_services"] = json!(authorizable);
         }
         if let Some(reference) = capture.reference() {
-            output["raw_capture"] = reference;
+            output[CAPTURE_KEY] = reference;
         }
         output
     }
@@ -196,7 +201,9 @@ impl Tool for BashTool {
          Each call has a wall-clock budget of 120 seconds by default. A build \
          or test run that legitimately takes longer sets timeout_ms (up to \
          600000) on that call; do not start work in the background and poll it \
-         with sleep."
+         with sleep. Output over 30 KB is cut to its tail: the note above it \
+         names where the rest was kept, and conversation_search reads it back \
+         in windows."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -349,6 +356,7 @@ impl Tool for BashTool {
                         stderr,
                         &self.session.workspace_root(),
                         &capture,
+                        &ctx.call_id,
                     ));
                 }
                 Err(e) => return Err(ToolError::Failed(format!("bash: {e}"))),
@@ -356,7 +364,9 @@ impl Tool for BashTool {
             let drops = model_view_loses_bytes(&result.stdout, &result.stderr);
             let end = CallEnd::Exited(result.exit_code);
             let capture = finish_capture(capture, end, drops).await;
-            Ok(self.tool_result(result, notice, capture).await)
+            Ok(self
+                .tool_result(result, notice, capture, &ctx.call_id)
+                .await)
         })
     }
     fn is_destructive(&self) -> bool {
@@ -402,7 +412,7 @@ fn fold_notice(notice: Option<String>, stderr: String) -> String {
 /// The answer a command stopped at its wall-clock budget becomes. The exit
 /// code is absent rather than zero: nothing exited, and a fabricated code
 /// would read as a measured result. The notice goes above whatever the bound
-/// leaves of stderr, because output that spilled to a file leaves the model
+/// leaves of stderr, because output that went to the capture leaves the model
 /// looking at an empty stderr and nothing else would say why the call ended.
 fn timed_out_output(
     message: &str,
@@ -410,12 +420,19 @@ fn timed_out_output(
     stderr: String,
     spill_dir: &Path,
     capture: &CaptureOutcome,
+    call_id: &str,
 ) -> Value {
     let stopped = capture
         .stop()
         .map(|stop| stop.reason)
         .or(Some(CaptureStopReason::WallBudget));
-    let (stdout, stderr) = bound_bash_output(stdout, stderr, spill_dir, stopped);
+    let (stdout, stderr) = bound_bash_output(
+        stdout,
+        stderr,
+        spill_dir,
+        stopped,
+        &kept_streams(capture, call_id),
+    );
     let stderr = fold_notice(Some(format!("bash: stopped, {message}")), stderr);
     let mut output = json!({
         "stdout": stdout,
@@ -424,7 +441,7 @@ fn timed_out_output(
         "timed_out": true,
     });
     if let Some(reference) = capture.reference() {
-        output["raw_capture"] = reference;
+        output[CAPTURE_KEY] = reference;
     }
     output
 }
@@ -483,15 +500,15 @@ impl CaptureOutcome {
             }
             Self::Published(captured) => {
                 let mut reference = json!({
-                    "record": BlockMarker::new(captured.record.0.clone()),
+                    RECORD_KEY: BlockMarker::new(captured.record.0.clone()),
                     "stdout_bytes": captured.stdout_bytes,
                     "stderr_bytes": captured.stderr_bytes,
                 });
                 if let Some(hash) = &captured.stdout {
-                    reference["stdout"] = json!(BlockMarker::new(hash.0.clone()));
+                    reference[STDOUT_KEY] = json!(BlockMarker::new(hash.0.clone()));
                 }
                 if let Some(hash) = &captured.stderr {
-                    reference["stderr"] = json!(BlockMarker::new(hash.0.clone()));
+                    reference[STDERR_KEY] = json!(BlockMarker::new(hash.0.clone()));
                 }
                 if let Some(reason) = captured.stop_reason {
                     reference["stop_reason"] = json!(reason);
@@ -531,21 +548,20 @@ async fn finish_capture(
     }
 }
 
-/// Max chars a bash result may enter the model context before it spills to a
-/// workspace file. A runaway command (find on a huge tree, a verbose build) can
+/// Max chars a bash result may enter the model context before it is cut down
+/// to a tail. A runaway command (find on a huge tree, a verbose build) can
 /// emit megabytes; without a bound the next turn overflows the context
 /// window and the provider rejects with HTTP 400, bricking the session.
 ///
-/// Bounds at 30K chars (~7.5K tokens, safe for any model window) since
-/// the compaction runtime is not landed yet; a compaction pass would
-/// otherwise keep accumulated results under the window. Relax toward 8MB
-/// once the compaction runtime lands.
+/// Bounds at 30K chars (~7.5K tokens, safe for any model window). The kept
+/// copy stays in the capture, so raising the bound later costs model context
+/// but no stored bytes.
 const BASH_MAX_OUTPUT_CHARS: usize = 30_000;
 
-/// Max chars kept in the stub when the output spills to disk. Char-based
-/// (not line) so a no-newline megabyte blob still yields a bounded stub; the
-/// tail carries the exit/error context the model most needs, and the full
-/// output is re-readable via the spill path in the marker.
+/// Max chars kept in the tail the model sees once the output passes the cap.
+/// Char-based (not line) so a no-newline megabyte blob still yields a bounded
+/// tail; the tail carries the exit/error context the model most needs, and
+/// the note under it names where the rest can be read.
 const BASH_STUB_CHARS: usize = 5_000;
 
 /// Whether the model view loses bytes to the bound. One answer serves both the
@@ -556,23 +572,34 @@ fn model_view_loses_bytes(stdout: &str, stderr: &str) -> bool {
 }
 
 /// Bound a bash result before it enters the model context. Under the cap the
-/// output passes through verbatim. Over the cap the stdout + stderr that were
-/// read spill to a workspace file (stderr lines tagged) and the model gets the
-/// tail plus a marker naming the spill path so it can re-read that output.
+/// output passes through verbatim. Over the cap the model gets the tail plus a
+/// note saying where the rest is: the covered bytes stay in the capture and
+/// the note names that stream, so the full output is read back in bounded
+/// windows instead of copied into the workspace. Only when no capture holds
+/// the bytes does the rest spill to a workspace file.
 ///
-/// When the command was stopped before it finished, the spill file holds only
-/// what it printed before the stop. The stub says so: a reader who is told the
-/// full output was saved goes looking for bytes that were never kept.
+/// When the command was stopped before it finished, neither copy holds more
+/// than it printed before the stop. The note says so: a reader told the full
+/// output was saved goes looking for bytes that were never kept.
 fn bound_bash_output(
     stdout: String,
     stderr: String,
     spill_dir: &Path,
     stopped: Option<CaptureStopReason>,
+    kept: &[String],
 ) -> (String, String) {
     if !model_view_loses_bytes(&stdout, &stderr) {
         return (stdout, stderr);
     }
     let kb = (stdout.len() + stderr.len()) / 1024;
+    if !kept.is_empty() {
+        let tail = tail_chars(&stdout, BASH_STUB_CHARS);
+        let note = kept_note(kept, stopped);
+        return (
+            format!("{tail}\n\nOutput truncated ({kb}KB total). {note}\n"),
+            String::new(),
+        );
+    }
     match spill_bash_output(&stdout, &stderr, spill_dir) {
         Ok(path) => {
             let tail = tail_chars(&stdout, BASH_STUB_CHARS);
@@ -602,9 +629,9 @@ fn bound_bash_output(
 }
 
 /// The line that tells the model where the rest of the output went, and how
-/// much of it is really there. A command stopped mid-stream leaves a file
-/// holding only a prefix, so a reader told the full output was saved would go
-/// looking for bytes that were never kept.
+/// much of it is really there. A command stopped mid-stream leaves the kept
+/// copy holding only a prefix, so a reader told the full output was saved
+/// would go looking for bytes that were never kept.
 fn saved_note(path: &Path, kb: usize, stopped: Option<CaptureStopReason>) -> String {
     match stopped {
         Some(reason) => format!(
@@ -612,6 +639,42 @@ fn saved_note(path: &Path, kb: usize, stopped: Option<CaptureStopReason>) -> Str
             path.display()
         ),
         None => format!("Full output saved to: {}", path.display()),
+    }
+}
+
+/// The line that points the model at the streams the capture kept, named the
+/// way the recall tool lists them: the call id and the stream. Stderr left the
+/// model view with the truncation and rides in the same note, so a reader who
+/// only sees this line still knows both streams survived.
+fn kept_note(kept: &[String], stopped: Option<CaptureStopReason>) -> String {
+    let names = kept.join(" and ");
+    match stopped {
+        Some(reason) => format!(
+            "the command was stopped, {reason}, so only the prefix it printed before the stop was kept, as {names}; read it with conversation_search (results read)"
+        ),
+        None => format!(
+            "The full output is kept as {names}; read it with conversation_search (results read)"
+        ),
+    }
+}
+
+/// The streams the capture actually published, named the way the recall tool
+/// lists them. Empty when it published nothing, which includes a capture that
+/// failed: nothing is stored then, so the caller keeps another copy of the
+/// bytes instead of pointing at streams that do not exist.
+fn kept_streams(capture: &CaptureOutcome, call_id: &str) -> Vec<String> {
+    match capture {
+        CaptureOutcome::Published(captured) => {
+            let mut names = Vec::new();
+            if captured.stdout.is_some() {
+                names.push(format!("{call_id}:{STDOUT_KEY}"));
+            }
+            if captured.stderr.is_some() {
+                names.push(format!("{call_id}:{STDERR_KEY}"));
+            }
+            names
+        }
+        CaptureOutcome::NotKept | CaptureOutcome::Failed { .. } => Vec::new(),
     }
 }
 

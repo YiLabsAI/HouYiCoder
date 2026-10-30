@@ -55,11 +55,17 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> BlockHash {
 /// so verifying a block already on disk costs one buffer. The digest is the
 /// same one hashing the whole content returns.
 pub(crate) fn sha256_file(path: &Path) -> io::Result<BlockHash> {
-    let mut file = File::open(path)?;
+    sha256_reader(File::open(path)?)
+}
+
+/// Compute the SHA-256 of a reader's bytes. A caller that already holds the
+/// file open hashes that handle rather than reopening the path, so the bytes
+/// it verifies are the bytes it then reads.
+pub(crate) fn sha256_reader(mut reader: impl Read) -> io::Result<BlockHash> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; HASH_BUFFER_BYTES];
     loop {
-        let read = file.read(&mut buffer)?;
+        let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
         }

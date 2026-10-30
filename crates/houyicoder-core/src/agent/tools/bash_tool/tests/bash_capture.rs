@@ -342,15 +342,14 @@ fn test_budget_stop_marks_result() {
     );
 }
 
-/// A spill file written by a stopped command is named with the stop, so the
-/// model does not go looking for bytes that were never kept. The workspace
-/// here can hold the file: a failed spill would fall back to the in-memory
-/// stub and leave this path untested.
+/// A command stopped at the capture budget keeps only the prefix it printed.
+/// The note names the stop and the streams that were kept, so the model
+/// neither goes looking for bytes that were never kept nor is pointed at a
+/// stream that holds nothing.
 #[test]
-fn test_spill_note_names_stop() {
+fn test_kept_note_names_stop() {
     let root = env::temp_dir().join(format!("houyi-spill-{}", SessionId::new()));
     let printed = payload();
-    let kb = printed.len() / 1024;
     let log: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let tool = BashTool::new(Arc::new(LargeOutputSession::spilling(printed, &root)));
     let ctx = ToolCtx::new("call-1")
@@ -360,16 +359,24 @@ fn test_spill_note_names_stop() {
         .expect("the command answers");
     let stdout = output["stdout"].as_str().expect("stdout is a string");
     assert!(
-        stdout.contains("the command was stopped") && stdout.contains(&format!("first {kb}KB")),
-        "the note names the stop and the length the file holds: {stdout}"
+        stdout.contains("the command was stopped") && stdout.contains("only the prefix"),
+        "the note names the stop: {stdout}"
     );
     assert!(
-        !stdout.contains("Full output saved"),
-        "a partial file is never named as the full output: {stdout}"
+        stdout.contains("call-1:stdout"),
+        "the note names the stream that was kept: {stdout}"
     );
     assert!(
-        stdout.contains(&root.display().to_string()),
-        "the note names where the prefix went: {stdout}"
+        !stdout.contains("call-1:stderr"),
+        "a stream with nothing in it is not offered: {stdout}"
+    );
+    assert!(
+        !stdout.contains(&root.display().to_string()),
+        "no workspace copy is offered when the capture holds the bytes: {stdout}"
+    );
+    assert!(
+        !root.join(".houyicoder").exists(),
+        "nothing is written to the workspace"
     );
     fs::remove_dir_all(&root).ok();
 }

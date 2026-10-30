@@ -5,7 +5,7 @@ use super::super::*;
 #[test]
 fn test_bound_under_cap_passes() {
     let dir = temp_dir();
-    let (o, e) = bound_bash_output("hello".into(), "world".into(), &dir, None);
+    let (o, e) = bound_bash_output("hello".into(), "world".into(), &dir, None, &[]);
     assert_eq!(o, "hello");
     assert_eq!(e, "world");
 }
@@ -14,7 +14,7 @@ fn test_bound_under_cap_passes() {
 fn test_bound_over_cap_spills() {
     let dir = temp_dir();
     let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
-    let (o, e) = bound_bash_output(big.clone(), String::new(), &dir, None);
+    let (o, e) = bound_bash_output(big.clone(), String::new(), &dir, None, &[]);
     assert!(o.contains("Output truncated"), "marker missing: {o}");
     assert!(
         o.contains("Full output saved to"),
@@ -23,6 +23,52 @@ fn test_bound_over_cap_spills() {
     assert_eq!(e, "", "stderr should fold into spill");
     // stub is far smaller than the original
     assert!(o.len() < big.len() / 2);
+}
+
+/// A kept capture is the copy the model reads back, so the truncation names
+/// both streams and leaves no file behind in the workspace.
+#[test]
+fn test_over_cap_names_kept() {
+    let dir = temp_dir().join("houyi-bound-kept");
+    let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
+    let (o, e) = bound_bash_output(
+        big.clone(),
+        String::new(),
+        &dir,
+        None,
+        &["call-1:stdout".to_string(), "call-1:stderr".to_string()],
+    );
+    assert!(o.contains("call-1:stdout"), "names the stdout stream: {o}");
+    assert!(o.contains("call-1:stderr"), "names the stderr stream: {o}");
+    assert!(
+        !o.contains("output saved to"),
+        "a kept capture needs no workspace file: {o}"
+    );
+    assert_eq!(e, "");
+    assert!(
+        !dir.join(".houyicoder").join("bash-output").exists(),
+        "nothing is written when the capture holds the bytes"
+    );
+    remove_dir_all(&dir).ok();
+}
+
+/// A command stopped at its budget keeps only what it printed before the
+/// stop, and the note says so instead of promising the whole output.
+#[test]
+fn test_bound_stopped_says_prefix() {
+    let dir = temp_dir();
+    let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
+    let (o, _) = bound_bash_output(
+        big,
+        String::new(),
+        &dir,
+        Some(CaptureStopReason::WallBudget),
+        &["call-1".to_string()],
+    );
+    assert!(
+        o.contains("the command was stopped") && o.contains("only the prefix"),
+        "a stopped command keeps a prefix: {o}"
+    );
 }
 
 #[test]
@@ -37,6 +83,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use std::env::temp_dir;
+use std::fs::remove_dir_all;
 
 struct DiscoverStub {
     services: Vec<String>,

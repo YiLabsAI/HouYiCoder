@@ -31,9 +31,9 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId,
-    LenientRead, LogIndexEntry, LogIndexReader, LogRangeRead, MAX_WINDOW_BYTES, ReverseRead,
-    SAMPLE_INTERVAL_BYTES, SessionId, SessionLogEntry,
+    BlockHash, BlockWindow, CheckpointId, CheckpointManifest, ContextBackend, ContextError,
+    EventId, LenientRead, LogIndexEntry, LogIndexReader, LogRangeRead, MAX_WINDOW_BYTES,
+    ReverseRead, SAMPLE_INTERVAL_BYTES, SessionId, SessionLogEntry,
     session_class::{CHECKPOINT_DIR, INDEX_FILE, LOG_FILE, session_dir},
 };
 
@@ -71,6 +71,11 @@ pub struct LocalFileBackend {
     /// positive identities are cached: an empty log can gain a first record,
     /// and a failed read can succeed later.
     first_record_ids: Mutex<HashMap<SessionId, EventId>>,
+    /// The file identity each read block was last confirmed under. Checking a
+    /// block against its address means hashing it whole, which a windowed read
+    /// cannot afford per page; this remembers the check so later windows of
+    /// the same unchanged file skip it.
+    verified_blocks: Mutex<HashMap<BlockHash, blocks::BlockStamp>>,
 }
 
 impl LocalFileBackend {
@@ -83,6 +88,7 @@ impl LocalFileBackend {
             read_count: AtomicUsize::new(0),
             lossy_line_count: AtomicUsize::new(0),
             first_record_ids: Mutex::new(HashMap::new()),
+            verified_blocks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -771,6 +777,16 @@ impl ContextBackend for LocalFileBackend {
 
     fn block_get(&self, hash: &BlockHash) -> PFut<'_, Result<Vec<u8>, ContextError>> {
         let out = self.block_get_sync(hash);
+        Box::pin(async move { out })
+    }
+
+    fn block_get_range(
+        &self,
+        hash: &BlockHash,
+        offset: u64,
+        len: usize,
+    ) -> PFut<'_, Result<BlockWindow, ContextError>> {
+        let out = self.block_get_range_sync(hash, offset, len);
         Box::pin(async move { out })
     }
 }

@@ -111,6 +111,19 @@ impl Display for ContextError {
 
 impl Error for ContextError {}
 
+/// One byte window of a stored block, with the block's full length.
+///
+/// The length travels with the window because a reader paging a stream needs
+/// to know where the stream ends, and a short window alone cannot say whether
+/// it ended or the request did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockWindow {
+    /// The bytes this window covers.
+    pub bytes: Vec<u8>,
+    /// The stored length of the whole block.
+    pub total: u64,
+}
+
 /// The pluggable, deny-by-default storage interface. Append-only event log
 /// plus checkpoint (compaction plan) storage plus an optional CAS for large
 /// blobs. Object-safe (PFut) so a real async-fs / sqlite / cloud backend
@@ -172,6 +185,28 @@ pub trait ContextBackend: Send + Sync {
     /// stored bytes against the hash before returning them, and the size
     /// caveat on block_put applies here as well.
     fn block_get(&self, _hash: &BlockHash) -> PFut<'_, Result<Vec<u8>, ContextError>> {
+        Box::pin(async move { Err(ContextError::Unsupported) })
+    }
+
+    /// Read one byte window of a stored block. Default Unsupported.
+    ///
+    /// A reader that pages a stored stream asks for a window rather than the
+    /// whole block: a block holds whatever the caller stored, up to gigabytes
+    /// of paused output, and materializing it to serve one page would cost the
+    /// memory the paging exists to bound. A backend that has not implemented
+    /// a windowed read answers Unsupported instead of falling back to
+    /// block_get, so the reader reports that it cannot page rather than
+    /// quietly paying for the whole block.
+    ///
+    /// The window starts at offset and holds at most len bytes, fewer when the
+    /// block ends first. total is the stored length, which lets a reader
+    /// learn the end without a second call.
+    fn block_get_range(
+        &self,
+        _hash: &BlockHash,
+        _offset: u64,
+        _len: usize,
+    ) -> PFut<'_, Result<BlockWindow, ContextError>> {
         Box::pin(async move { Err(ContextError::Unsupported) })
     }
 
@@ -290,3 +325,6 @@ pub trait ContextBackend: Send + Sync {
         None
     }
 }
+
+#[cfg(test)]
+mod tests;

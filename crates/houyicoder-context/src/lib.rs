@@ -35,7 +35,8 @@ pub use sandbox_types::{DirEntry, ExecConfig, ExecResult, SandboxError};
 /// The storage interface: the ContextBackend trait and its error type.
 mod backend;
 pub use backend::{
-    ContextBackend, ContextError, LenientRead, LogRangeRead, MAX_WINDOW_BYTES, ReverseRead,
+    BlockWindow, ContextBackend, ContextError, LenientRead, LogRangeRead, MAX_WINDOW_BYTES,
+    ReverseRead,
 };
 
 /// The session descriptor written alongside the event log.

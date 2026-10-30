@@ -221,3 +221,56 @@ fn test_concurrent_put_same_block() {
     assert_eq!(back.unwrap(), blob, "the published block is whole");
     fs::remove_dir_all(&root).ok();
 }
+
+/// A windowed read answers the bytes at the requested offset without loading
+/// the rest of the block, reports the stored length so a reader learns the end
+/// in one call, and clamps a window that would run past it.
+#[test]
+fn test_block_range_answers_window() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let blob = b"0123456789".to_vec();
+    let hash = pollster::block_on(b.block_put(blob.clone())).unwrap();
+    let window = pollster::block_on(b.block_get_range(&hash, 3, 4)).unwrap();
+    assert_eq!(window.bytes, b"3456", "the window starts at the offset");
+    assert_eq!(window.total, 10, "the length is reported");
+    let tail = pollster::block_on(b.block_get_range(&hash, 8, 8)).unwrap();
+    assert_eq!(tail.bytes, b"89", "a window stops at the end of the block");
+    let past = pollster::block_on(b.block_get_range(&hash, 40, 8)).unwrap();
+    assert!(
+        past.bytes.is_empty(),
+        "an offset past the end reads nothing"
+    );
+    assert_eq!(past.total, 10, "the length is still reported");
+}
+
+/// A window of a damaged block is refused like a whole read: the bytes are
+/// checked against the address before any of them is returned, so a block
+/// edited on disk cannot be paged past the check.
+#[test]
+fn test_block_range_verifies_content() {
+    let root = temp_root();
+    let b = LocalFileBackend::new(root.clone());
+    let hash = pollster::block_on(b.block_put(b"original".to_vec())).unwrap();
+    let path = root
+        .join(".cas")
+        .join(&hash.0[..2])
+        .join(format!("{}.bin", hash.0));
+    fs::write(&path, b"tampered").unwrap();
+    let got = pollster::block_on(b.block_get_range(&hash, 0, 4));
+    assert!(
+        matches!(got, Err(ContextError::Corrupt(_))),
+        "a window of damaged bytes must not read: {got:?}"
+    );
+    let missing = pollster::block_on(b.block_get_range(&BlockHash("0".repeat(64)), 0, 4));
+    assert!(
+        matches!(missing, Err(ContextError::NotFound)),
+        "a block that was never written is missing, not empty: {missing:?}"
+    );
+    let bad = pollster::block_on(b.block_get_range(&BlockHash("../x".into()), 0, 4));
+    assert!(
+        matches!(bad, Err(ContextError::Corrupt(_))),
+        "a name that is not a digest names no file: {bad:?}"
+    );
+    fs::remove_dir_all(&root).ok();
+}

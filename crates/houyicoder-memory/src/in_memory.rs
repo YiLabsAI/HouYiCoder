@@ -5,12 +5,12 @@
 //! this crate depends on that, not the reverse (dependency inversion).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    BlockHash, CheckpointId, CheckpointManifest, ContextBackend, ContextError, EventId, SessionId,
-    SessionLogEntry,
+    BlockHash, BlockWindow, CheckpointId, CheckpointManifest, ContextBackend, ContextError,
+    EventId, SessionId, SessionLogEntry,
 };
 
 use crate::sha256_hex;
@@ -166,6 +166,33 @@ impl ContextBackend for InMemoryBackend {
 
     fn block_get(&self, hash: &BlockHash) -> PFut<'_, Result<Vec<u8>, ContextError>> {
         let out = self.block_get_sync(hash);
+        Box::pin(async move { out })
+    }
+
+    /// A window of an in-memory block is a slice of the stored bytes; the
+    /// store already holds the whole block, so no read grows with the window.
+    fn block_get_range(
+        &self,
+        hash: &BlockHash,
+        offset: u64,
+        len: usize,
+    ) -> PFut<'_, Result<BlockWindow, ContextError>> {
+        let out = {
+            // A read cannot leave the map half-written, so the lock's
+            // poisoning carries no information a caller could act on.
+            let blocks = self.blocks.lock().unwrap_or_else(PoisonError::into_inner);
+            blocks
+                .get(hash)
+                .map_or(Err(ContextError::NotFound), |block| {
+                    let total = block.len() as u64;
+                    let start = usize::try_from(offset.min(total)).unwrap_or(usize::MAX);
+                    let end = start.saturating_add(len).min(block.len());
+                    Ok(BlockWindow {
+                        bytes: block[start..end].to_vec(),
+                        total,
+                    })
+                })
+        };
         Box::pin(async move { out })
     }
 

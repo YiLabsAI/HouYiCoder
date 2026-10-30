@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod memory;
 pub mod path;
 pub mod provider;
+pub mod result_catalog;
 pub mod sandbox;
 pub mod session;
 pub mod shell;

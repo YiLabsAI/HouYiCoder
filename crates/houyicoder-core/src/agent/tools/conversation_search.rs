@@ -1,32 +1,20 @@
-//! The conversation recall tool. The model calls it to recall detail that was
-//! folded out of the assembled context by a compaction, without re-injecting the
-//! whole block. The tool replays the raw session log (append-only, never
-//! mutated by a compaction), filters to the text-bearing events, and either
-//! substring-searches a query or slices a turn range, returning short snippets
-//! the model reads in place of the full folded span.
+//! The conversation recall tool. The model calls it to recall detail a
+//! compaction folded out of the assembled context, or that a tool kept beyond
+//! what the model read, without re-injecting the whole block.
 //!
-//! A compaction folds older turns into a summary (Summarized disposition) and
-//! keeps a verbatim tail (Verbatim). The raw events stay in the log; the
-//! assembled context applies the manifest's disposition plan on top. So a replay
-//! returns every event, including the folded ones — this tool searches that
-//! full set. When a match lands in the Summarized span (the compacted detail
-//! the assembled context no longer shows), the tool bumps a recall meter the
-//! compaction path snapshots to compute a recall rate: of the events a
-//! compaction folded, how many the model later pulled back. The rate is an
-//! instrumentation signal, not a correctness gate.
-//!
-//! Three modes: a keyword query (case-insensitive substring, up to 10
-//! matches with surrounding context), a turns range {start, end} (retrieve
-//! events by index), or stats (event/folded counts). Long texts truncate so
-//! the model reads snippets, not a whole re-injected folded block.
+//! The transcript modes read the durable log page by page: a keyword query
+//! answers short snippets, a turn range answers bounded rows, and a match that
+//! lands in the folded span bumps the recall meter the compaction path reads.
+//! The results mode answers from the stored-result catalog.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::agent::model_window::span_for_lowercase_offsets;
 use crate::agent::skill_body::frame_untrusted_body;
-use houyicoder_api::session::SessionLog;
+use houyicoder_api::session::{SessionLog, TrajectoryPosition};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_context::{Disposition, EventId, SessionEvent, SessionId, SessionLogEntry};
@@ -34,21 +22,40 @@ use houyicoder_protocol::extension::ToolError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// The conversation recall tool. Holds a shared session-log handle (to replay
-/// the raw log + read the current manifest) and a shared recall meter the
-/// compaction path snapshots. Both are Arc so the tool shares one instance
-/// with the runner across the session.
+use super::results::SessionResultCatalog;
+
+mod stored;
+
+/// Records one page read asks for while the transcript is walked.
+const TRANSCRIPT_PAGE: usize = 512;
+
+/// The most matches one query reports. Past this the output counts the rest
+/// rather than holding them, so a query that matches everywhere stays bounded.
+const MAX_MATCHES: usize = 64;
+
+/// The most turn rows one range listing returns.
+const MAX_TURN_ROWS: usize = 40;
+
+/// Characters of one turn row the listing shows.
+const TURN_ROW_CHARS: usize = 1000;
+
+/// The conversation recall tool. Holds a shared session-log handle (the raw
+/// log and the current manifest) and a shared recall meter the compaction path
+/// reads, plus the catalog it answers stored-result requests from. The handles
+/// are shared so the tool and the runner observe one log and one meter.
 pub struct ConversationSearchTool {
     store: Arc<dyn SessionLog>,
     recall_meter: Arc<AtomicU32>,
+    catalog: SessionResultCatalog,
 }
 
 impl ConversationSearchTool {
-    /// Construct with a shared session-log handle + a recall meter the
-    /// compaction path snapshots. The composition root passes the same store
-    /// the runner holds + the same meter the compaction path reads.
+    /// Construct with a shared session-log handle and a recall meter the
+    /// compaction path reads. The composition root passes the same store the
+    /// runner holds and the same meter the compaction path reads.
     pub fn new(store: Arc<dyn SessionLog>, recall_meter: Arc<AtomicU32>) -> Self {
         Self {
+            catalog: SessionResultCatalog::new(Arc::clone(&store)),
             store,
             recall_meter,
         }
@@ -63,6 +70,8 @@ struct SearchInput {
     turns: Option<TurnRange>,
     #[serde(default)]
     stats: Option<bool>,
+    #[serde(default)]
+    results: Option<stored::Request>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,12 +86,12 @@ impl Tool for ConversationSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search the full conversation history (including details a compaction \
-         folded out of the live view) by keyword, or retrieve a range of \
-         turns. Use this to recall compacted detail without re-reading the \
-         whole transcript. Pass a query for substring search, or a turns \
-         range {start, end} to retrieve events by index, or stats: true for \
-         conversation statistics."
+        "Search the conversation history since the last clear (including \
+         detail a compaction folded out of the live view) by keyword, or \
+         retrieve a range of turns. A tool result that named kept output is \
+         readable here too: list what was kept, read a window of one stream, \
+         or search inside it. Use this to recall compacted or truncated detail \
+         without re-reading the whole transcript."
     }
 
     fn input_schema(&self) -> Value {
@@ -106,6 +115,54 @@ impl Tool for ConversationSearchTool {
                 "stats": {
                     "type": "boolean",
                     "description": "Return conversation statistics (event count, folded count, has summary)."
+                },
+                "results": {
+                    "type": "object",
+                    "properties": {
+                        "op": {
+                            "type": "string",
+                            "enum": ["list", "search", "read", "stats"],
+                            "description": "Which stored-result request to run."
+                        },
+                        "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Text to find when op is search. This is text inside the stored output, not the transcript query."
+                        },
+                        "id": {
+                            "type": "string",
+                            "description": "Result id, as listed, for read or for a search inside one result."
+                        },
+                        "tool": {
+                            "type": "string",
+                            "description": "Only list results of this tool."
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Byte offset to start reading at."
+                        },
+                        "len": {
+                            "type": "integer",
+                            "description": "Bytes to read, at most 8000."
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "First line to read, counting from one."
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": "Lines to read, at most 200."
+                        },
+                        "cursor": {
+                            "type": "string",
+                            "description": "The cursor a previous page returned, to continue from."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Results per page, at most 20."
+                        }
+                    },
+                    "required": ["op"]
                 }
             },
             "additionalProperties": false
@@ -113,8 +170,6 @@ impl Tool for ConversationSearchTool {
     }
 
     fn execute(&self, ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
-        let store = Arc::clone(&self.store);
-        let recall_meter = Arc::clone(&self.recall_meter);
         Box::pin(async move {
             let params: SearchInput = serde_json::from_value(input)
                 .map_err(|e| ToolError::InvalidInput(format!("conversation_search: {e}")))?;
@@ -123,48 +178,28 @@ impl Tool for ConversationSearchTool {
                     "conversation_search: no session bound to this dispatch".to_string(),
                 )
             })?;
-            let events = store
-                .replay(session)
-                .await
-                .map_err(|e| ToolError::Failed(format!("conversation_search: replay: {e}")))?;
-            let folded_ids = folded_event_ids(&store, session).await;
-            let text_events: Vec<&SessionLogEntry> = events
-                .iter()
-                .filter(|e| transcript_item(e).is_some())
-                .collect();
-            let mut output = String::new();
-
-            if params.stats == Some(true) {
-                output.push_str(&format_stats(&events, &text_events, &folded_ids));
+            if params.results.is_some()
+                && (params.query.is_some() || params.turns.is_some() || params.stats.is_some())
+            {
+                // The two request families answer different questions, and
+                // quietly preferring one would drop the other without saying
+                // so.
+                return Err(ToolError::InvalidInput(
+                    "conversation_search: ask for one of query, turns, stats or results, not several"
+                        .to_string(),
+                ));
             }
-
-            // A blank query is no query: an empty substring matches every
-            // text, so the search would report every event as a hit and count
-            // the whole folded span as recalled.
-            let query = params.query.filter(|q| !q.trim().is_empty());
-            if let Some(query) = query {
-                let matches = search_events(&text_events, &query);
-                let folded_matches = matches
-                    .iter()
-                    .filter(|m| folded_ids.contains(&m.event_id))
-                    .count();
-                if folded_matches > 0 {
-                    recall_meter.fetch_add(folded_matches as u32, Ordering::Relaxed);
-                }
-                output.push_str(&format_search_results(&query, &matches, folded_matches));
+            if let Some(request) = params.results {
+                let output = stored::serve(&self.catalog, session, request).await?;
+                return Ok(json!({ "result": output }));
             }
-
-            if let Some(range) = params.turns {
-                output.push_str(&format_turn_range(&text_events, range));
+            let folded = folded_event_ids(&self.store, session).await;
+            let scan = scan_transcript(&self.store, session, params.query, params.turns, folded)?;
+            if scan.folded_matches > 0 {
+                self.recall_meter
+                    .fetch_add(scan.folded_matches as u32, Ordering::Relaxed);
             }
-
-            if output.is_empty() {
-                output.push_str(
-                    "Provide a query (string) to search, a turns range \
-                     {start, end} to retrieve events, or stats: true for \
-                     conversation statistics.",
-                );
-            }
+            let output = scan.render(params.stats == Some(true));
             Ok(json!({ "result": output }))
         })
     }
@@ -179,12 +214,186 @@ impl Tool for ConversationSearchTool {
     }
 }
 
-/// One keyword match: the event index (into the text-bearing events), the
-/// event id (to test membership in the folded span), a role label, and a
-/// context snippet around the hit.
+/// What one walk of the transcript collected.
+struct TranscriptScan {
+    query: Option<String>,
+    folded: HashSet<EventId>,
+    events: usize,
+    text_events: usize,
+    summary: bool,
+    folded_matches: usize,
+    matches: Vec<SearchMatch>,
+    dropped_matches: usize,
+    turns: Option<TurnRange>,
+    rows: Vec<TurnRow>,
+    dropped_rows: usize,
+    /// Log bytes the walk passed over without reading, because the record
+    /// holding them was wider than one read.
+    skipped_bytes: u64,
+}
+
+/// One row a turn listing shows.
+struct TurnRow {
+    index: usize,
+    role: &'static str,
+    text: String,
+}
+
+impl TranscriptScan {
+    fn new(query: Option<String>, folded: HashSet<EventId>, turns: Option<TurnRange>) -> Self {
+        Self {
+            query,
+            folded,
+            events: 0,
+            text_events: 0,
+            summary: false,
+            folded_matches: 0,
+            matches: Vec::new(),
+            dropped_matches: 0,
+            turns,
+            rows: Vec::new(),
+            dropped_rows: 0,
+            skipped_bytes: 0,
+        }
+    }
+
+    /// Fold one log record into what the request answers with.
+    fn absorb(&mut self, event: &SessionLogEntry) {
+        self.events += 1;
+        if matches!(event.event, SessionEvent::Summary { .. }) {
+            self.summary = true;
+        }
+        let Some((role, text)) = transcript_item(event) else {
+            return;
+        };
+        let index = self.text_events;
+        self.text_events += 1;
+        if let Some(query) = &self.query
+            && let Some(snippet) = snippet_window(&text, query)
+        {
+            if self.folded.contains(&event.id) {
+                self.folded_matches += 1;
+            }
+            if self.matches.len() < MAX_MATCHES {
+                self.matches.push(SearchMatch {
+                    index,
+                    role,
+                    snippet,
+                });
+            } else {
+                self.dropped_matches += 1;
+            }
+        }
+        if let Some(range) = &self.turns
+            && index >= range.start
+            && index < range.end
+        {
+            if self.rows.len() < MAX_TURN_ROWS {
+                self.rows.push(TurnRow {
+                    index,
+                    role,
+                    text: cut_chars(&text, TURN_ROW_CHARS),
+                });
+            } else {
+                self.dropped_rows += 1;
+            }
+        }
+    }
+
+    fn render(&self, stats: bool) -> String {
+        let mut output = String::new();
+        if stats {
+            output.push_str(&format_stats(
+                self.events,
+                self.text_events,
+                self.folded.len(),
+                self.summary,
+            ));
+        }
+        if let Some(query) = &self.query {
+            output.push_str(&format_search_results(
+                query,
+                &self.matches,
+                self.folded_matches,
+                self.dropped_matches,
+                self.skipped_bytes > 0,
+            ));
+        }
+        if let Some(range) = &self.turns {
+            output.push_str(&format_turn_rows(range, &self.rows, self.dropped_rows));
+        }
+        if self.skipped_bytes > 0 {
+            output.push_str(&format!(
+                "\nThe walk passed over {} bytes of records it could not read, \
+                 so this answer may be missing events.\n",
+                self.skipped_bytes
+            ));
+        }
+        if output.is_empty() {
+            output.push_str(
+                "Provide a query (string) to search, a turns range \
+                 {start, end} to retrieve events, stats: true for \
+                 conversation statistics, or results: {op} for output a \
+                 tool kept beyond what you read.",
+            );
+        }
+        output
+    }
+}
+
+/// Walk the session's log page by page and collect what the request asks for.
+///
+/// A page is released as the next is read, so a long session costs one page of
+/// memory plus the rows the answer reports, rather than a copy of the log.
+fn scan_transcript(
+    store: &Arc<dyn SessionLog>,
+    session: SessionId,
+    query: Option<String>,
+    turns: Option<TurnRange>,
+    folded: HashSet<EventId>,
+) -> Result<TranscriptScan, ToolError> {
+    // A blank query is no query: an empty substring matches every text, so the
+    // search would report every event as a hit and count the whole folded span
+    // as recalled.
+    let query = query
+        .filter(|q| !q.trim().is_empty())
+        .map(|q| q.to_lowercase());
+    let mut scan = TranscriptScan::new(query, folded, turns);
+    let mut position = TrajectoryPosition::start();
+    loop {
+        let page = store
+            .trajectory_page(session, position, TRANSCRIPT_PAGE)
+            .map_err(|e| ToolError::Failed(format!("conversation_search: read: {e}")))?;
+        // A page that advances without holding a record is a record the walk
+        // passed over, not the end of the log, so the walk goes on from where
+        // the page stopped and remembers the bytes it could not read.
+        let moved = page.next != position;
+        position = page.next;
+        scan.skipped_bytes += page.skipped_bytes;
+        for event in &page.events {
+            scan.absorb(event);
+        }
+        if !moved {
+            break;
+        }
+    }
+    Ok(scan)
+}
+
+/// The first limit characters of a text, with a note when it was cut.
+fn cut_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(limit).collect();
+    out.push_str("... (truncated)");
+    out
+}
+
+/// One keyword match: its index among the text-bearing events, the label it
+/// renders under, and a context snippet around the hit.
 struct SearchMatch {
     index: usize,
-    event_id: EventId,
     role: &'static str,
     snippet: String,
 }
@@ -193,12 +402,12 @@ struct SearchMatch {
 /// span the assembled context no longer shows verbatim). Empty when no compaction
 /// has run. The tool uses this to count how many keyword matches landed in
 /// compacted detail — the recall signal.
-async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> Vec<EventId> {
+async fn folded_event_ids(store: &Arc<dyn SessionLog>, session: SessionId) -> HashSet<EventId> {
     let Ok(view) = store.current_view(session).await else {
-        return Vec::new();
+        return HashSet::new();
     };
     let Some(manifest) = view.manifest.as_ref() else {
-        return Vec::new();
+        return HashSet::new();
     };
     manifest
         .plan
@@ -297,28 +506,6 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
     }
 }
 
-/// Case-insensitive substring search over the text-bearing events. Each hit
-/// records its index, event id, role, and a snippet around the first match.
-fn search_events(events: &[&SessionLogEntry], query: &str) -> Vec<SearchMatch> {
-    let query_lower = query.to_lowercase();
-    let mut results = Vec::new();
-    for (idx, event) in events.iter().enumerate() {
-        let Some((role, text)) = transcript_item(event) else {
-            continue;
-        };
-        let Some(snippet) = snippet_window(&text, &query_lower) else {
-            continue;
-        };
-        results.push(SearchMatch {
-            index: idx,
-            event_id: event.id,
-            role,
-            snippet,
-        });
-    }
-    results
-}
-
 /// A snippet around the first hit of the query, with ellipsis when the match
 /// is not at the text boundary. None when the text does not contain the query,
 /// so the hit and its window are decided from one lowercase copy rather than
@@ -343,14 +530,27 @@ fn snippet_window(text: &str, query_lower: &str) -> Option<String> {
 }
 
 /// Render up to 10 search matches, with a tail count when truncated. The
-/// folded-matches count surfaces how many hits landed in compacted detail.
-fn format_search_results(query: &str, matches: &[SearchMatch], folded_matches: usize) -> String {
-    if matches.is_empty() {
+/// folded-matches count reports how many hits landed in compacted detail.
+fn format_search_results(
+    query: &str,
+    matches: &[SearchMatch],
+    folded_matches: usize,
+    dropped: usize,
+    unread: bool,
+) -> String {
+    if matches.is_empty() && dropped == 0 {
+        // A walk that passed over bytes cannot report that nothing matches;
+        // it can only report what it read.
+        if unread {
+            return format!(
+                "## Search Results\n\nNo match for '{query}' in the records the walk could read.\n"
+            );
+        }
         return format!("## Search Results\n\nNo results found for '{query}'.\n");
     }
     let mut out = format!(
         "## Search Results for '{query}'\n\nFound {} matches",
-        matches.len()
+        matches.len() + dropped
     );
     if folded_matches > 0 {
         out.push_str(&format!(" ({folded_matches} in compacted detail)"));
@@ -359,65 +559,44 @@ fn format_search_results(query: &str, matches: &[SearchMatch], folded_matches: u
     for m in matches.iter().take(10) {
         out.push_str(&format!("**[{}] {}:**\n{}\n\n", m.index, m.role, m.snippet));
     }
-    if matches.len() > 10 {
-        out.push_str(&format!("... and {} more results\n", matches.len() - 10));
+    let more = matches.len().saturating_sub(10) + dropped;
+    if more > 0 {
+        out.push_str(&format!("... and {more} more results\n"));
     }
     out
 }
 
-/// Render a turn range: the text-bearing events with index in [start, end).
-/// Long texts truncate to 1000 chars so the model does not re-ingest a whole
-/// folded block (the whole point of recall over re-injection).
-fn format_turn_range(events: &[&SessionLogEntry], range: TurnRange) -> String {
-    let end = range.end.min(events.len());
-    if range.start >= end {
+/// Render the turn rows one range collected. Each row carries a body, so a
+/// text-less event never reaches the listing as a heading over nothing.
+fn format_turn_rows(range: &TurnRange, rows: &[TurnRow], dropped: usize) -> String {
+    if rows.is_empty() && dropped == 0 {
         return format!(
             "## Turns {}-{}\n\nNo events in that range.\n",
             range.start, range.end
         );
     }
     let mut out = format!("## Turns {}-{}\n\n", range.start, range.end);
-    for (i, event) in events[range.start..end].iter().enumerate() {
-        let idx = range.start + i;
-        // An event with no transcript text renders nothing at all, not a
-        // heading over an empty body. The caller indexes text-bearing events,
-        // so this only fires for a direct caller handing over a raw slice.
-        let Some((role, text)) = transcript_item(event) else {
-            continue;
-        };
-        out.push_str(&format!("**[{idx}] {role}:**\n"));
-        if text.len() > 1000 {
-            out.push_str(&text.chars().take(1000).collect::<String>());
-            out.push_str("... (truncated)\n");
-        } else {
-            out.push_str(&text);
-            out.push('\n');
-        }
+    for row in rows {
+        out.push_str(&format!("**[{}] {}:**\n", row.index, row.role));
+        out.push_str(&row.text);
         out.push('\n');
+        out.push('\n');
+    }
+    if dropped > 0 {
+        out.push_str(&format!("... and {dropped} more events in that range\n"));
     }
     out
 }
 
 /// Render conversation statistics: total events, text-bearing events, folded
 /// count, and whether a summary exists.
-fn format_stats(
-    events: &[SessionLogEntry],
-    text_events: &[&SessionLogEntry],
-    folded_ids: &[EventId],
-) -> String {
-    let has_summary = events
-        .iter()
-        .any(|e| matches!(e.event, SessionEvent::Summary { .. }));
+fn format_stats(events: usize, text_events: usize, folded: usize, has_summary: bool) -> String {
     format!(
         "## Conversation Stats\n\n\
-         - Total events: {}\n\
-         - Text-bearing events: {}\n\
-         - Folded (compacted) events: {}\n\
-         - Has summary: {}\n\n",
-        events.len(),
-        text_events.len(),
-        folded_ids.len(),
-        has_summary
+         - Total events: {events}\n\
+         - Text-bearing events: {text_events}\n\
+         - Folded (compacted) events: {folded}\n\
+         - Has summary: {has_summary}\n\n"
     )
 }
 

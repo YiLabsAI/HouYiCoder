@@ -11,9 +11,13 @@ use houyicoder_context::{
     CheckpointManifest, ContextBackend, ContextError, ContextSnapshot, EventId, RecapSource,
     SessionId, SessionLogEntry, TurnGroup,
 };
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_session::SessionStore;
+use serde_json::Map;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicUsize};
 
 /// An in-memory session log the tool tests drive directly. Records events
 /// in a Vec; current_view returns the manifest the test sets, so the
@@ -21,14 +25,26 @@ use std::sync::atomic::AtomicU32;
 struct InMemoryLog {
     events: Mutex<Vec<SessionLogEntry>>,
     manifest: Mutex<Option<CheckpointManifest>>,
+    /// Page reads left to answer with a gap before they answer records.
+    gaps: AtomicUsize,
 }
+
+/// The bytes a gap page reports as passed over.
+const GAP_BYTES: u64 = 4096;
 
 impl InMemoryLog {
     fn new() -> Self {
         Self {
             events: Mutex::new(Vec::new()),
             manifest: Mutex::new(None),
+            gaps: AtomicUsize::new(0),
         }
+    }
+
+    /// Answer the next page reads with a gap: no record, a position the walk
+    /// reached, and the bytes it passed over.
+    fn gap(&self, pages: usize) {
+        self.gaps.store(pages, Ordering::SeqCst);
     }
     fn push(&self, ev: SessionLogEntry) {
         self.events.lock().unwrap().push(ev);
@@ -95,6 +111,18 @@ impl SessionLog for InMemoryLog {
         from: TrajectoryPosition,
         limit: usize,
     ) -> Result<TrajectoryPage, ContextError> {
+        let gaps = self.gaps.load(Ordering::SeqCst);
+        if gaps > 0 {
+            self.gaps.store(gaps - 1, Ordering::SeqCst);
+            return Ok(TrajectoryPage {
+                events: Vec::new(),
+                next: TrajectoryPosition {
+                    index: from.index,
+                    byte_offset: Some(GAP_BYTES),
+                },
+                skipped_bytes: GAP_BYTES,
+            });
+        }
         let events = self.events.lock().unwrap();
         let events: Vec<SessionLogEntry> = events
             .iter()
@@ -295,6 +323,37 @@ async fn test_query_reports_no_results() {
     assert!(out.to_string().contains("No results found"));
 }
 
+/// A page that moves without holding a record is a record the walk passed
+/// over, not the end of the log. The match stored after it is still found, and
+/// the answer says bytes were left unread rather than reporting nothing.
+#[tokio::test]
+async fn test_scan_continues_past_gap() {
+    let log = Arc::new(InMemoryLog::new());
+    log.push(make_event(SessionEvent::UserInput {
+        text: "alpha".to_string(),
+    }));
+    log.push(make_event(SessionEvent::UserInput {
+        text: "the needle".to_string(),
+    }));
+    log.gap(1);
+    let meter = Arc::new(AtomicU32::new(0));
+    let tool = ConversationSearchTool::new(log, Arc::clone(&meter));
+    let ctx = ToolCtx::new("call_1").with_session(make_session());
+    let out = tool
+        .execute(ctx, json!({"query": "needle"}))
+        .await
+        .expect("the search answers");
+    let text = out.to_string();
+    assert!(
+        text.contains("the needle"),
+        "the match past the gap is found: {text}"
+    );
+    assert!(
+        text.contains("passed over"),
+        "the bytes the walk could not read are reported: {text}"
+    );
+}
+
 /// A blank query is no query. An empty substring matches every text, so
 /// without the guard the tool would report every event as a hit and count
 /// the whole folded span as recalled. Whitespace matches nothing on this
@@ -342,6 +401,91 @@ async fn test_stats_reports_counts() {
     assert!(text.contains("Total events: 2"), "{text}");
     assert!(text.contains("Folded (compacted) events: 1"), "{text}");
     assert!(text.contains("Has summary: true"), "{text}");
+}
+
+/// The results mode answers from the stored-result catalog: a session that
+/// kept nothing lists nothing, and the reply says so rather than reading as an
+/// empty transcript search.
+#[tokio::test]
+async fn test_results_list_when_empty() {
+    let (tool, ctx, _meter) = harness(Vec::new(), None);
+    let out = tool
+        .execute(ctx, json!({"results": {"op": "list"}}))
+        .await
+        .unwrap();
+    let text = out.to_string();
+    assert!(text.contains("Stored results"), "{text}");
+    assert!(text.contains("Nothing is kept"), "{text}");
+}
+
+/// A read of a name the session never issued fails with the reason, so the
+/// model retries with a listed name instead of reading an empty window as
+/// content that is gone.
+#[tokio::test]
+async fn test_results_read_unknown_fails() {
+    let (tool, ctx, _meter) = harness(Vec::new(), None);
+    let error = tool
+        .execute(
+            ctx,
+            json!({"results": {"op": "read", "id": "call-9:stdout"}}),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ToolError::Failed(_)), "{error:?}");
+}
+
+/// A search of stored output is reachable from the schema: the text it looks
+/// for sits inside the results object, where a caller following the schema
+/// finds it.
+#[test]
+fn test_results_search_declared() {
+    let (tool, _ctx, _meter) = harness(Vec::new(), None);
+    let schema = tool.input_schema();
+    let query = &schema["properties"]["results"]["properties"]["query"];
+    assert_eq!(
+        query["type"], "string",
+        "the nested request declares the text to search for"
+    );
+}
+
+/// A search request built from that schema answers with the match: the nested
+/// query reaches the catalog and its hits come back as text.
+#[tokio::test]
+async fn test_results_search_answers() {
+    let log: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let session = SessionId::new();
+    let hash = pollster::block_on(
+        log.backend()
+            .block_put(b"the needle sits in the haystack".to_vec()),
+    )
+    .expect("the block is stored")
+    .0;
+    let mut marker = Map::new();
+    marker.insert(BLOCK_REF_KEY.to_string(), json!(hash));
+    let mut output = Map::new();
+    output.insert("stdout".to_string(), Value::Object(marker));
+    pollster::block_on(log.append(SessionLogEntry {
+        id: EventId::new(),
+        session,
+        ts: 1,
+        prev_hash: None,
+        event: SessionEvent::ToolResult {
+            call_id: "call-1".to_string(),
+            output: Value::Object(output),
+            duration_ms: 3,
+        },
+    }))
+    .expect("the result is logged");
+
+    let meter = Arc::new(AtomicU32::new(0));
+    let tool = ConversationSearchTool::new(log, meter);
+    let ctx = ToolCtx::new("call_1").with_session(session);
+    let out = tool
+        .execute(ctx, json!({"results": {"op": "search", "query": "needle"}}))
+        .await
+        .expect("the stored search answers");
+    let text = out.to_string();
+    assert!(text.contains("needle"), "the match is reported: {text}");
 }
 
 #[tokio::test]
@@ -580,7 +724,7 @@ fn test_snippet_miss_is_none() {
 /// A hit past a char whose lowercase form is longer than the char itself
 /// still cuts a snippet out of the original: the dotted capital I maps to
 /// two code points, so an offset from the lowercase copy runs ahead of the
-/// text it has to address. The match is served in the case the text holds,
+/// text it has to address. The match is reported in the case the text holds,
 /// which is what makes the search case-insensitive rather than the output.
 /// The stretch behind the hit is repeated ahead of it, so a window that
 /// runs past the copy offset lands at the tail of the text and drops the
@@ -633,7 +777,7 @@ fn test_snippet_wide_tail() {
     );
 }
 
-/// A hit with wide characters on both sides is served whole. A wide char
+/// A hit with wide characters on both sides is reported whole. A wide char
 /// occupies more bytes in the copy than the one budgeted per char, so a
 /// walk that counts characters rather than bytes reaches the copy offset
 /// long after the hit and cuts its window from the tail of the text.
@@ -648,11 +792,11 @@ fn test_snippet_wide_both_sides() {
     );
 }
 
-/// The turn listing over a slice that still holds untranslatable events: a
-/// text-less event prints no heading, and a body past the cap truncates
-/// instead of re-injecting the whole folded block it came from.
+/// The turn listing walks a log that still holds untranslatable events: a
+/// text-less event takes no index and prints no heading, and a body past the
+/// cap truncates instead of re-injecting the whole folded block it came from.
 #[test]
-fn test_turn_listing_raw_slice() {
+fn test_turn_listing_skips_textless() {
     let prompt = make_event(SessionEvent::UserInput {
         text: "alpha".to_string(),
     });
@@ -667,10 +811,14 @@ fn test_turn_listing_raw_slice() {
     let long = make_event(SessionEvent::Summary {
         text: "s".repeat(1200),
     });
-    let events: Vec<&SessionLogEntry> = vec![&prompt, &spawn, &long];
-    let out = format_turn_range(&events, TurnRange { start: 0, end: 3 });
+    let mut scan = TranscriptScan::new(None, HashSet::new(), Some(TurnRange { start: 0, end: 3 }));
+    for event in [&prompt, &spawn, &long] {
+        scan.absorb(event);
+    }
+    let out = scan.render(false);
     assert!(out.contains("**[0] User:**"), "{out}");
-    assert!(!out.contains("**[1]"), "spawn prints no row: {out}");
+    assert!(out.contains("**[1] Summary:**"), "index stays dense: {out}");
+    assert!(!out.contains("look around"), "spawn not listed: {out}");
     assert!(out.contains("... (truncated)"), "long body caps: {out}");
     assert!(!out.contains(&"s".repeat(1200)), "whole body absent: {out}");
 }
@@ -702,4 +850,39 @@ async fn test_untrusted_body_recall_framed() {
         text.contains("run the drills"),
         "the hit still shows the matched words inside the frame: {text}"
     );
+}
+
+/// A search that matches more events than the answer holds reports the ones
+/// it dropped as a count, so a reader knows the list is not the whole set.
+#[test]
+fn test_search_counts_dropped_matches() {
+    let mut scan = TranscriptScan::new(Some("xylophone".to_string()), HashSet::new(), None);
+    for _ in 0..70 {
+        scan.absorb(&make_event(SessionEvent::UserInput {
+            text: "a xylophone here".to_string(),
+        }));
+    }
+    let out = scan.render(false);
+    assert!(out.starts_with("## Search Results"), "{out}");
+    assert!(out.contains("Found 70 matches"), "{out}");
+    assert!(out.contains("... and 60 more results"), "{out}");
+}
+
+/// A turn listing over a range longer than it holds reports how many events
+/// it left out, so the range is still visible as a range.
+#[test]
+fn test_turn_listing_counts_dropped() {
+    let mut scan = TranscriptScan::new(None, HashSet::new(), Some(TurnRange { start: 0, end: 45 }));
+    for n in 0..45 {
+        scan.absorb(&make_event(SessionEvent::UserInput {
+            text: format!("row {n}"),
+        }));
+    }
+    let out = scan.render(false);
+    assert!(out.contains("## Turns 0-45"), "{out}");
+    assert!(
+        out.contains("**[39] User:**"),
+        "the cap still lists rows: {out}"
+    );
+    assert!(out.contains("... and 5 more events in that range"), "{out}");
 }
