@@ -215,6 +215,11 @@ pub enum ServerEvent {
     Delta { text: String },
     /// One incremental chunk of model reasoning (the breathing thinking row).
     ReasoningDelta { text: String },
+    /// One incremental chunk of the arguments a tool call is being written
+    /// with. It never reaches the transcript: it refreshes the stall clock and
+    /// the token estimate, because a call that writes a large file streams for
+    /// many seconds and the row must not read that as a stalled turn.
+    ToolInputDelta { text: String },
     /// A long-running tool (bash) ticks its elapsed seconds so the chip shows
     /// it is not stuck. Routes to the active run's bash ticker keyed by
     /// call_id; the chip renders (Ns) after 2s, or (Ns · M lines) when lines

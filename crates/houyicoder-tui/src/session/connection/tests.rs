@@ -1454,3 +1454,36 @@ async fn test_drop_reclaims_driver() {
         Err(_) => panic!("driver was not reclaimed within 500ms after abort"),
     }
 }
+
+/// A tool call's argument fragments reach the event loop under their own
+/// server event, so the row can tell a writing model from a stalled one.
+#[tokio::test]
+async fn test_drive_translates_tool_input() {
+    let mut engine = FakeEngine::new();
+    engine.event(FrontendEvent::Acpx {
+        notification: AcpxNotification::new(
+            AcpxMethod::LlmToolInputDelta,
+            serde_json::json!({"text": "{\"path\":"}),
+        ),
+    });
+    engine.event(FrontendEvent::Acpx {
+        notification: AcpxNotification::new(AcpxMethod::LlmToolInputDelta, serde_json::json!({})),
+    });
+    engine.close();
+    let run = engine.drive(Vec::new()).await;
+
+    assert!(
+        run.msgs.iter().any(|m| matches!(
+            m,
+            SessionMessage::Event(ServerEvent::ToolInputDelta { text }) if text == "{\"path\":"
+        )),
+        "the argument fragment reaches the event loop: {run:?}"
+    );
+    assert!(
+        !run.msgs.iter().any(|m| matches!(
+            m,
+            SessionMessage::Event(ServerEvent::ToolInputDelta { text }) if text.is_empty()
+        )),
+        "a notification without text is dropped, not half-built: {run:?}"
+    );
+}

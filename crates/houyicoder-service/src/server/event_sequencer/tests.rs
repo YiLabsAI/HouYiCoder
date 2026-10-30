@@ -663,3 +663,26 @@ fn test_snapshot_blocks_causal_delta() {
     assert_eq!(durable[1].seq, EventSeq(1));
     assert_eq!(pending[0].seq, EventSeq(2));
 }
+
+/// A tool call's argument fragments ride the same ephemeral channel as text
+/// and reasoning deltas, under their own method, so a live view can tell the
+/// model is writing rather than stalled.
+#[test]
+fn test_tool_input_delta_maps() {
+    let sequencer = EventSequencer::new();
+    EventHandler::<ResponseStreamEvent>::handle(
+        &sequencer,
+        ResponseStreamEvent::ToolInputDelta {
+            text: "{\"path\":".into(),
+        },
+    );
+    let pending = sequencer.sequence_pending_for_test();
+    assert_eq!(pending.len(), 1, "one notification is queued");
+    match &pending[0].payload {
+        FrontendEvent::Acpx { notification } => {
+            assert_eq!(notification.method, AcpxMethod::LlmToolInputDelta);
+            assert_eq!(notification.params["text"], "{\"path\":");
+        }
+        other => panic!("expected an acpx notification, got {other:?}"),
+    }
+}

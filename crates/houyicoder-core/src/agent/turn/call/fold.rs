@@ -136,6 +136,16 @@ impl Runner {
                 }
                 state.reasoning.push(text);
             }
+            // The arguments of a tool call are model output, and a call that
+            // writes a large file streams them for many seconds. Forwarding
+            // each fragment keeps a live view's own clock honest: without it
+            // the view sees silence while the model is writing, and reports a
+            // stall on a turn that is going as expected.
+            LlmEvent::ToolInputDelta { text, .. } => {
+                if let Some(handler) = response_handler {
+                    handler.handle(ResponseStreamEvent::ToolInputDelta { text });
+                }
+            }
             LlmEvent::ToolCall { id, name, input } => {
                 state
                     .tool_calls
@@ -157,7 +167,6 @@ impl Runner {
             | LlmEvent::ReasoningStart { .. }
             | LlmEvent::ReasoningEnd { .. }
             | LlmEvent::ToolInputStart { .. }
-            | LlmEvent::ToolInputDelta { .. }
             | LlmEvent::ToolInputEnd { .. }
             | LlmEvent::ToolResult { .. }
             | LlmEvent::ToolError { .. }

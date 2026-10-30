@@ -26,9 +26,30 @@ pub struct RunProgress {
     pub(crate) live_block: LiveBlock,
     pub(crate) thinking_started_at: Option<Instant>,
     pub(crate) last_delta_at: Option<Instant>,
+    /// Characters of tool-call arguments the model has written this turn. The
+    /// arguments are model output like the assistant text, so the token
+    /// estimate counts them; a call that writes a large file would otherwise
+    /// leave the meter frozen for as long as the call takes to write.
+    pub(crate) live_tool_input_chars: usize,
     /// The per-call tool runtime: which calls are running and the bash
     /// ticker with the revision the slot cache keys on.
     pub(crate) tools: ToolRuntime,
+}
+
+impl RunProgress {
+    /// Record a fragment of the arguments a tool call is being written with.
+    ///
+    /// The arguments are model output, not a tool running and not text the
+    /// transcript shows, but they must keep the stall clock and the token
+    /// estimate moving: a call that writes a large file streams for many
+    /// seconds, and a row reading its own clock would call that busy stretch
+    /// a stall.
+    pub(crate) fn note_tool_input(&mut self, text: &str) {
+        self.live_tool_input_chars += text.chars().count();
+        self.live_block = LiveBlock::Responding;
+        self.live_active = true;
+        self.last_delta_at = Some(Instant::now());
+    }
 }
 
 /// The per-call tool runtime of one run: which calls are running, and for

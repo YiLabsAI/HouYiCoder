@@ -217,6 +217,7 @@ impl EventHandler<ResponseStreamEvent> for EventSequencer {
         let (method, text) = match event {
             ResponseStreamEvent::AssistantTextDelta { text } => (AcpxMethod::LlmTextDelta, text),
             ResponseStreamEvent::ReasoningDelta { text } => (AcpxMethod::LlmReasoningDelta, text),
+            ResponseStreamEvent::ToolInputDelta { text } => (AcpxMethod::LlmToolInputDelta, text),
         };
         self.enqueue_ephemeral(FrontendEvent::Acpx {
             notification: AcpxNotification::new(method, serde_json::json!({ "text": text })),

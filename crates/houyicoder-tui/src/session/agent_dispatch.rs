@@ -230,6 +230,11 @@ impl App {
                     p.last_delta_at = Some(Instant::now());
                 }
             }
+            ServerEvent::ToolInputDelta { text } => {
+                if let Some(p) = self.run_progress_mut() {
+                    p.note_tool_input(&text);
+                }
+            }
             ServerEvent::ToolProgress {
                 call_id,
                 elapsed_secs,

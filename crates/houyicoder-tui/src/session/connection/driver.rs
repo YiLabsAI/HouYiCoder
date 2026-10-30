@@ -238,6 +238,19 @@ async fn drive_connection(
                                     ));
                                 }
                             }
+                            AcpxMethod::LlmToolInputDelta => {
+                                if let Some(text) = notification
+                                    .params
+                                    .get("text")
+                                    .and_then(|v| v.as_str())
+                                {
+                                    let _send = agent_tx.send(SessionMessage::Event(
+                                        ServerEvent::ToolInputDelta {
+                                            text: text.to_string(),
+                                        },
+                                    ));
+                                }
+                            }
                             AcpxMethod::ToolProgress => {
                                 if let (Some(call_id), Some(elapsed)) = (
                                     notification.params.get("call_id").and_then(|v| v.as_str()),

@@ -36,6 +36,7 @@ mod denied_agents;
 mod hook_gate;
 mod missing_args;
 pub(crate) mod run_completion;
+mod stream_events;
 mod tool_duration;
 mod tool_result_baseline;
 mod turn_abort;
@@ -483,6 +484,7 @@ async fn test_stream_persists_deltas() {
         .map(|event| match event {
             ResponseStreamEvent::AssistantTextDelta { text }
             | ResponseStreamEvent::ReasoningDelta { text } => text,
+            ResponseStreamEvent::ToolInputDelta { text } => text,
         })
         .collect();
     assert_eq!(deltas.concat(), "hello world");

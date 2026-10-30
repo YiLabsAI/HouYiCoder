@@ -20,6 +20,14 @@ where
 }
 
 /// Incremental model-response output.
+///
+/// Every variant is a delta by definition: the enum exists to carry pieces of
+/// a response as they arrive, so the shared suffix names the thing rather than
+/// repeating a word the type could drop.
+#[expect(
+    clippy::enum_variant_names,
+    reason = "every variant is a delta; the suffix is the type's meaning"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResponseStreamEvent {
     /// Incremental assistant response text.
@@ -30,6 +38,17 @@ pub enum ResponseStreamEvent {
     /// Incremental model reasoning text.
     ReasoningDelta {
         /// Text appended to the reasoning preview.
+        text: String,
+    },
+    /// Incremental text of a tool call's arguments, as the model writes them.
+    ///
+    /// This is model output like the two above, and it can run for a long
+    /// time: a call that writes a large file streams several thousand tokens
+    /// of JSON before the call exists. A reader that only counted text and
+    /// reasoning deltas saw silence for that whole stretch, so a live view
+    /// reading its own clock called a busy model stalled.
+    ToolInputDelta {
+        /// Text appended to the arguments of the call being written.
         text: String,
     },
 }

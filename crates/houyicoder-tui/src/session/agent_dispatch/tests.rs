@@ -2,6 +2,7 @@ use super::frame_log_msg;
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::records::TranscriptLine;
 use crate::state::Pane;
+use crate::state::enums::LiveBlock;
 use crate::test_harness::{connected_app_events, wait_for_request};
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::envelope::RequestId;
@@ -164,3 +165,31 @@ fn test_open_pane_keeps_notice() {
 }
 
 mod subagent_fetch;
+
+/// A tool call's arguments stream for as long as the model takes to write
+/// them, which for a large file is many seconds. Each fragment must refresh
+/// the stall clock and count toward the token estimate; without that the row
+/// reads the busy stretch as a stalled turn and the meter freezes.
+#[test]
+fn test_tool_input_delta_live() {
+    let (mut app, _events) = connected_app_events();
+    app.start_run_for_test(0);
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::ToolInputDelta {
+        text: "{\"path\":\"a.rs\"}".into(),
+    }));
+    let p = app.run_progress_mut().expect("active run");
+    assert!(
+        p.last_delta_at.is_some(),
+        "a streamed argument fragment refreshes the stall clock"
+    );
+    assert_eq!(
+        p.live_tool_input_chars,
+        "{\"path\":\"a.rs\"}".chars().count(),
+        "the fragment counts toward the token estimate"
+    );
+    assert_eq!(
+        p.live_block,
+        LiveBlock::Responding,
+        "the verb reads Working while a call is being written"
+    );
+}
