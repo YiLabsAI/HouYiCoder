@@ -146,7 +146,16 @@ verify: check-full
 	@$(CARGO) build --tests --workspace
 	@echo "▶ Running ignored suites per crate (package-group discovery)."
 	@start=$$(date +%s); status=0; \
+	nested_sandbox=0; \
+	if ! sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then \
+		nested_sandbox=1; \
+		printf "\033[1;33m⚠ kernel refuses to nest a second seatbelt here, so the sandbox crate's ignored suite is skipped; run it from a plain terminal to cover it\033[0m\n"; \
+	fi; \
 	for crate in $(NEXTEST_VERIFY_CRATES); do \
+		if [ "$$crate" = "houyicoder-sandbox" ] && [ "$$nested_sandbox" = "1" ]; then \
+			echo "  $$crate (skipped: cannot nest sandbox-exec)"; \
+			continue; \
+		fi; \
 		echo "  $$crate"; \
 		$(CARGO) nextest run -p $$crate --run-ignored only -j 3 --no-tests=warn $(NEXTEST_VERIFY_FILTER) || status=$$?; \
 	done; \

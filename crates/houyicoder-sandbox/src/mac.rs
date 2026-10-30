@@ -471,6 +471,10 @@ impl MacSeatbeltSession {
         {
             return Err(SandboxError::BreakerOpen(e.to_string()));
         }
+        // A session may run unfenced (via the --no-sandbox flag or the
+        // HOUYICODER_SANDBOX_NO_ENFORCE test escape hatch). The kernel refuses
+        // to apply a second seatbelt inside an existing one, so a suite running
+        // under a session's own fence cannot spawn sandbox-exec at all.
         let unfenced = crate::is_unfenced();
         let mut cmd = if unfenced {
             Command::new(&self.shell)
@@ -487,6 +491,10 @@ impl MacSeatbeltSession {
         cmd.env("TMPDIR", &tmpdir_str)
             .env("TMPPREFIX", format!("{tmpdir_str}/zsh"));
         if !unfenced {
+            // The profile and its separator belong to the fenced form only.
+            // The program under it is sandbox-exec, so the shell is an
+            // argument. Unfenced there is no wrapper, and the shell IS the
+            // program, so passing it again would ask bash to execute itself.
             cmd.arg("-p").arg(&profile).arg("--").arg(&self.shell);
         }
         cmd.arg("-c").arg(&command).current_dir(&cwd);
