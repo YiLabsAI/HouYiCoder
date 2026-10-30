@@ -22,9 +22,9 @@
 //! checkout as a potential discard.
 
 /// True when an already-extracted git subcommand + its args form a CLEAR-CUT
-/// working-tree or history discard. args are lowercased by the caller (git
-/// flags -d/-D collapse to the same intent — both delete a branch — so
-/// case-folding is safe). A bare git checkout <branch> switch is NOT a
+/// working-tree or history discard. args arrive as written: a flag's case
+/// carries meaning, and this predicate reads it rather than folding it. A
+/// bare git checkout <branch> switch is NOT a
 /// discard (the consent gate stays conservative; the snapshot trigger covers
 /// the ambiguous case).
 pub fn git_discard_form(sub: &str, args: &[&str]) -> bool {
@@ -59,7 +59,10 @@ pub fn git_discard_form(sub: &str, args: &[&str]) -> bool {
                 .unwrap_or("");
             matches!(sub2, "drop" | "clear" | "pop")
         }
-        "branch" => has_flag("-d") || has_flag("--delete"),
+        // Both spellings may delete a branch, so both warrant the snapshot:
+        // the aggressive side pays one free copy rather than risk a permanent
+        // loss. The consent side asks only about the forced one.
+        "branch" => has_flag("-d") || has_flag("-D") || has_flag("--delete"),
         "push" => args.iter().any(|a| a.starts_with("--force") || *a == "-f"),
         _ => false,
     }
@@ -94,7 +97,10 @@ pub fn git_snapshot_form(sub: &str, args: &[&str]) -> bool {
                 .unwrap_or("");
             sub2.is_empty() || matches!(sub2, "drop" | "clear" | "pop")
         }
-        "branch" => has_flag("-d") || has_flag("--delete"),
+        // Both spellings may delete a branch, so both warrant the snapshot:
+        // the aggressive side pays one free copy rather than risk a permanent
+        // loss. The consent side asks only about the forced one.
+        "branch" => has_flag("-d") || has_flag("-D") || has_flag("--delete"),
         "push" => args.iter().any(|a| a.starts_with("--force") || *a == "-f"),
         _ => false,
     }

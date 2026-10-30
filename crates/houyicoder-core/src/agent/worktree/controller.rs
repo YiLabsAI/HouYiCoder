@@ -747,7 +747,11 @@ fn recorded_exit_action(
 }
 
 mod child;
+mod removal;
 
+// Shared with the exit tool's tests, which need a wired controller to ask the
+// approval gate about, so the module is reachable from the crate rather than
+// private to this one.
 #[cfg(test)]
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-mod tests;
+pub(crate) mod tests;

@@ -161,7 +161,6 @@ const DRIFT_VECTOR: &[&str] = &[
     "git stash clear",
     "git stash pop",
     "git branch -D feature",
-    "git branch -d feature",
     "git push --force origin main",
     "git push --force-with-lease",
     "git checkout main && git status", // switch segment not a discard
@@ -177,16 +176,17 @@ fn test_drift_vector_conservative_matches() {
     // git_discard_consent_word) on the shared DRIFT_VECTOR. If this
     // drifts from the permission side, the other crate's drift test
     // fails too — see permission/src/git_discard.rs DRIFT_VECTOR.
+    // The safe branch delete is asserted apart from this vector: the two
+    // gates deliberately disagree on it, since a snapshot costs nothing while
+    // a consent prompt costs the user an interruption.
     let expected = [
-        true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-        false, false, false, false, false,
+        true, true, true, true, true, true, true, true, true, true, true, true, true, true, false,
+        false, false, false, false,
     ];
     assert_eq!(DRIFT_VECTOR.len(), expected.len());
     for (cmd, exp) in DRIFT_VECTOR.iter().zip(expected.iter()) {
-        let lower = cmd.to_ascii_lowercase();
-        // Split on compound separators like the real matchers, take the
-        // first git segment.
-        let (sub, args) = lower
+        // The scan reads the command as written: a flag's case carries meaning.
+        let (sub, args) = cmd
             .split(['&', ';', '|', '\n'])
             .find_map(|seg| git_sub_and_args(&seg.split_whitespace().collect::<Vec<_>>()))
             .unwrap_or_else(|| panic!("no git sub in {cmd}"));

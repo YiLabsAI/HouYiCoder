@@ -24,9 +24,11 @@ use crate::pipeline::detection::expand_inline_interpreter;
 
 /// The git subcommand word for a discard form, for session-scoped consent.
 /// Returns None for a non-discard (a branch switch, an unstage, a stash save,
-/// a normal push). args are lowercased by the caller (git flags -d/-D
-/// collapse to the same intent — both delete a branch — so case-folding is
-/// safe).
+/// a normal push, a branch delete that Git itself guards).
+///
+/// args arrive as written. Their case carries meaning: -d and -D are two
+/// different acts, and folding them together makes the guarded delete ask for
+/// consent it does not need.
 pub(crate) fn git_discard_consent_word(sub: &str, args: &[&str]) -> Option<&'static str> {
     let sub = sub.to_ascii_lowercase();
     let has = |flag: &str| args.contains(&flag);
@@ -72,7 +74,15 @@ pub(crate) fn git_discard_consent_word(sub: &str, args: &[&str]) -> Option<&'sta
             "stash"
         }
         "branch" => {
-            if !(has("-d") || has("--delete")) {
+            // A branch delete has two spellings and they are not the same act.
+            // The lowercase one makes Git refuse to delete a branch holding
+            // work that is not merged; the uppercase one deletes it anyway.
+            // Only the forced spelling discards anything, so only it asks.
+            // Force may also arrive beside the safe spelling, which makes the
+            // safe spelling forced.
+            let forced = has("-D") || has("-f") || has("--force");
+            let deleting = has("-d") || has("--delete") || forced;
+            if !deleting || !forced {
                 return None;
             }
             "branch"
@@ -112,16 +122,24 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
     }
     let expanded = expand_inline_interpreter(content);
     let cleaned = strip_safe_redirects(&expanded);
-    let lower_scan = cleaned.to_ascii_lowercase();
     let mut ops = Vec::new();
-    for segment in lower_scan.split(['&', ';', '|', '\n', '(', ')', '`']) {
+    // The scan runs over the command as written, not a lowercased copy. A
+    // lowercase copy erases the one distinction this classifier has to see:
+    // git's branch delete has a safe spelling and a forced one, and they
+    // differ only by the case of a single letter. Folding it made a delete
+    // that Git refuses to run on unmerged work read the same as one that
+    // throws the work away, so the safe form asked for consent it did not
+    // need. Case-insensitive matching happens where it belongs, on the
+    // subcommand word.
+    for segment in cleaned.split(['&', ';', '|', '\n', '(', ')', '`']) {
         let raw_tokens: Vec<&str> = segment.split_whitespace().collect();
         let unquoted: Vec<String> = raw_tokens.iter().map(|t| decode_token(t)).collect();
         let token_refs: Vec<&str> = unquoted.iter().map(String::as_str).collect();
         let Some((sub, args)) = git_sub_and_args(&token_refs) else {
             continue;
         };
-        let matched = match sub {
+        let sub_lower = sub.to_ascii_lowercase();
+        let matched = match sub_lower.as_str() {
             "commit" => Some("commit"),
             "rebase" => Some("rebase"),
             "reset" => {
@@ -136,7 +154,7 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
                 }
             }
             "tag" => Some("tag"),
-            _ => git_discard_consent_word(sub, &args),
+            _ => git_discard_consent_word(&sub_lower, &args),
         };
         if let Some(word) = matched {
             ops.push(word);

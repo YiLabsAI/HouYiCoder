@@ -52,6 +52,10 @@ impl Tool for ExitWorktreeTool {
                 "discard_changes": {
                     "type": "boolean",
                     "description": "Only meaningful with action=remove. When true, discard uncommitted files and commits not on the original branch. When false (default), a remove with such work refuses and lists it."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional slug of a managed worktree under .houyicoder/worktrees/ to remove via the host when not currently inside it."
                 }
             },
             "required": ["action"]
@@ -79,6 +83,30 @@ impl Tool for ExitWorktreeTool {
                 .get("discard_changes")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            // A slug names a tree the session is not in, so it takes the
+            // removal path directly. A shell removal cannot do this: the fence
+            // refuses any tree carrying a protected path, which leaves the
+            // registration gone and half a directory behind.
+            if let Some(slug) = input
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                if !matches!(action, ExitAction::Remove) {
+                    return Err(ToolError::InvalidInput(
+                        "exit_worktree: name only applies to action=remove".into(),
+                    ));
+                }
+                let path = controller
+                    .remove_managed(slug, discard)
+                    .await
+                    .map_err(|e| ToolError::Failed(e.to_string()))?;
+                return Ok(json!({
+                    "action": "remove",
+                    "worktree_path": path,
+                    "message": format!("removed the managed worktree {slug}"),
+                }));
+            }
             let outcome = controller
                 .exit(action, discard)
                 .await
@@ -106,10 +134,24 @@ impl Tool for ExitWorktreeTool {
         false
     }
     fn requires_approval_for(&self, input: &Value) -> bool {
-        input
+        let removing = input
             .get("action")
             .and_then(|v| v.as_str())
-            .map(|a| a == "remove")
-            .unwrap_or(true)
+            .is_some_and(|a| a == "remove");
+        if !removing {
+            return false;
+        }
+        // A remove with no tree behind it removes nothing, so asking the user
+        // to confirm it asks them to approve an act that cannot happen. A
+        // resumed session holds no record of entering a tree, and the card
+        // that used to appear for it failed the moment it was accepted.
+        let names_tree = input
+            .get("name")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty());
+        names_tree || self.controller.current()
     }
 }
+
+#[cfg(test)]
+mod tests;
