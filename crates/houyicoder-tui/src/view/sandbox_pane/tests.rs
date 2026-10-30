@@ -638,3 +638,55 @@ fn test_pending_read_names_retry() {
     let out = render(&app);
     assert!(out.contains("reopening the pane reads again"), "{out}");
 }
+
+/// Opening the tab reads the listing, and the frames either side of the answer
+/// must put the listing on the same row. The tab line carries the count from
+/// the first frame, so the answer fills that slot instead of adding it, and the
+/// notice band above the listing is held open whether or not a notice shows,
+/// so a refusal on the second frame cannot push the rows down.
+#[test]
+fn test_checkpoints_read_holds_layout() {
+    let reading = pane_app();
+    reading.ui.sandbox_pane.tab.set(SandboxTab::Checkpoints);
+    reading.ui.sandbox_pane.expect_list(RequestId(7));
+
+    let answered = pane_app();
+    answered.ui.sandbox_pane.tab.set(SandboxTab::Checkpoints);
+    answered.ui.sandbox_pane.accept_checkpoints(listing());
+
+    let before = render_buffer(&reading, 100, 30);
+    let after = render_buffer(&answered, 100, 30);
+    // The count rides on the tab line, so the line holds its row and its
+    // text gains no new segment when the answer lands.
+    assert_eq!(
+        row_of(&before, "[Checkpoints]"),
+        row_of(&after, "[Checkpoints]"),
+        "the tab line holds its row"
+    );
+    assert!(
+        row_text(&before, row_of(&before, "[Checkpoints]")).contains("recorded"),
+        "the count slot is present while reading"
+    );
+    // The listing's first row lands where the placeholder was.
+    assert_eq!(
+        row_of(&before, "Reading the recorded writes"),
+        row_of(&after, "active"),
+        "the listing starts where the placeholder was"
+    );
+
+    // A notice is drawn in the band above the listing. The band is reserved,
+    // so the rows below it do not move when one appears.
+    let with_notice = pane_app();
+    with_notice.ui.sandbox_pane.tab.set(SandboxTab::Checkpoints);
+    with_notice.ui.sandbox_pane.accept_checkpoints(listing());
+    with_notice
+        .ui
+        .sandbox_pane
+        .set_notice("the restore was refused".to_string());
+    let noted = render_buffer(&with_notice, 100, 30);
+    assert_eq!(
+        row_of(&before, "Reading the recorded writes"),
+        row_of(&noted, "active"),
+        "a notice must not push the listing down"
+    );
+}

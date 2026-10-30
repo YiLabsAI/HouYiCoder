@@ -312,7 +312,11 @@ fn test_merge_label_names_state() {
     let mut no_base = worktree_preview("alpha");
     no_base.base_branch = None;
     let out = render(&with_preview(no_base, WorktreeLevel::Confirm));
-    assert!(out.contains("the record names no base branch"), "{out}");
+    assert!(out.contains("base branch unknown"), "{out}");
+    assert!(
+        !out.contains("record"),
+        "the copy must not name an internal store: {out}"
+    );
 }
 
 /// A refusal lands on the list, above the rows the keys still act on, so the

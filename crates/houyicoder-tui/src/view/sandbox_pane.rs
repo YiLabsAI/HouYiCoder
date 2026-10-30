@@ -36,6 +36,12 @@ const TABS: [(SandboxTab, &str); 2] = [
     (SandboxTab::Checkpoints, "Checkpoints"),
 ];
 
+/// Rows the notice band occupies above the listing. It is held open whether or
+/// not a notice is showing: the band sits above the list, so letting it appear
+/// on the frame an answer lands would move every row down, and the frame after
+/// a notice clears would move them back.
+const NOTICE_BAND: u16 = 2;
+
 /// Columns the listing spends on the cursor marker before a row starts.
 const MARKER_COLUMNS: usize = 2;
 
@@ -193,22 +199,28 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
     let notice = pane.notice();
     let rows = listing.as_ref().map(row_count).unwrap_or(0);
     let footer = list_footer(listing.as_ref(), pane.cursor.get());
+    // The notice band is reserved whether or not a notice is showing. It sits
+    // above the list, so letting it appear on the frame an answer lands would
+    // move every row down, and the frame after a notice clears would move them
+    // back. A band that is always there costs one blank row and keeps the
+    // listing still across the whole read.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(if notice.is_some() { 2 } else { 0 }),
+            Constraint::Length(NOTICE_BAND),
             Constraint::Min(0),
             Constraint::Length(key_row_height(&footer, area)),
         ])
         .split(area);
     let mut header = vec![tab_header(pane.tab.get(), &TABS)];
-    if listing.is_some() {
-        header[0].spans.push(Span::styled(
-            format!("   {rows} recorded"),
-            Style::new().fg(Color::DarkGray),
-        ));
-    }
+    // The count keeps its place from the first frame. Reading it off the
+    // listing only would add a segment when the answer lands, and the tab
+    // header would reflow underneath the cursor.
+    header[0].spans.push(Span::styled(
+        format!("   {rows} recorded"),
+        Style::new().fg(Color::DarkGray),
+    ));
     f.render_widget(Paragraph::new(header), chunks[0]);
     if let Some(notice) = notice {
         f.render_widget(
@@ -453,13 +465,25 @@ fn draw_restore(f: &mut Frame, area: Rect, app: &App) {
     let row = listing
         .as_ref()
         .and_then(|list| row_at(list, pane.cursor.get()));
-    let mut lines = vec![tab_header(
-        pane.focus.get(),
-        &[
-            (RestoreFocus::Cancel, "Cancel"),
-            (RestoreFocus::Restore, "Restore checkpoint"),
-        ],
-    )];
+    // A restore already with the host is writing the earlier bytes back and
+    // cannot be called off, so the buttons that offer a choice come off the
+    // page. A Cancel that cannot cancel is worse than no button: the user
+    // presses it, believes the restore stopped, and the bytes are back anyway.
+    let restoring = pane.restore_request().is_some();
+    let mut lines = if restoring {
+        vec![tab_header(
+            pane.focus.get(),
+            &[(RestoreFocus::Restore, "Restore checkpoint")],
+        )]
+    } else {
+        vec![tab_header(
+            pane.focus.get(),
+            &[
+                (RestoreFocus::Cancel, "Cancel"),
+                (RestoreFocus::Restore, "Restore checkpoint"),
+            ],
+        )]
+    };
     match row {
         Some(CheckpointRow::Write(view)) => {
             lines.push(Line::from(vec![
@@ -496,17 +520,18 @@ fn draw_restore(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    block_with_keys(
-        f,
-        area,
-        lines,
+    // The keys follow the buttons: while the restore is out none of them acts,
+    // so naming them would promise actions the pane will ignore.
+    let keys: &[(&str, &str)] = if restoring {
+        &[]
+    } else {
         &[
             ("Left/Right", "choose"),
             ("Enter", "confirm"),
             ("Esc", "back"),
-        ],
-        &pane.scroll,
-    );
+        ]
+    };
+    block_with_keys(f, area, lines, keys, &pane.scroll);
 }
 
 /// What a restore does to this target, said before the user commits to it. A

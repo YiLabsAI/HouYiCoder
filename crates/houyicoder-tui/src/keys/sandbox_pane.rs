@@ -63,16 +63,29 @@ impl App {
                 KeyCode::Esc => SandboxAction::Back,
                 _ => return None,
             }),
-            CheckpointLevel::Restore => Some(match k.code {
-                KeyCode::Up => SandboxAction::Scroll(-1),
-                KeyCode::Down => SandboxAction::Scroll(1),
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab if !typing => {
-                    SandboxAction::ToggleFocus
+            CheckpointLevel::Restore => {
+                // A restore already with the host is writing the earlier bytes
+                // back and cannot be called off. Leaving Cancel and Esc live
+                // would let the user walk away believing it stopped while the
+                // host kept going.
+                if pane.restore_request().is_some() {
+                    return match k.code {
+                        KeyCode::Up => Some(SandboxAction::Scroll(-1)),
+                        KeyCode::Down => Some(SandboxAction::Scroll(1)),
+                        _ => None,
+                    };
                 }
-                KeyCode::Enter if !typing => SandboxAction::Confirm,
-                KeyCode::Esc => SandboxAction::Back,
-                _ => return None,
-            }),
+                Some(match k.code {
+                    KeyCode::Up => SandboxAction::Scroll(-1),
+                    KeyCode::Down => SandboxAction::Scroll(1),
+                    KeyCode::Left | KeyCode::Right | KeyCode::Tab if !typing => {
+                        SandboxAction::ToggleFocus
+                    }
+                    KeyCode::Enter if !typing => SandboxAction::Confirm,
+                    KeyCode::Esc => SandboxAction::Back,
+                    _ => return None,
+                })
+            }
         }
     }
 }

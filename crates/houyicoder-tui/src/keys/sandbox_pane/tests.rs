@@ -200,3 +200,62 @@ fn test_esc_returns_from_detail() {
     assert_eq!(app.ui.sandbox_pane.level.get(), CheckpointLevel::List);
     assert_eq!(app.ui.navigation.pane, Pane::Sandbox);
 }
+
+/// A restore already with the host cannot be called off, so the confirmation
+/// must stop offering ways out. Esc and Enter both leave the page when the
+/// pane is idle; while the restore is out they must do nothing, or the user
+/// walks away believing the bytes were left alone while the host puts them
+/// back.
+#[test]
+fn test_restore_in_flight_locks() {
+    let (mut app, events) = sandbox_app();
+    handle_working(&mut app, key(KeyCode::Char('r')));
+    handle_working(&mut app, key(KeyCode::Tab));
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.ui.sandbox_pane.restore_request().is_some(),
+        "the confirmed restore is with the host"
+    );
+    let focus = app.ui.sandbox_pane.focus.get();
+
+    handle_working(&mut app, key(KeyCode::Esc));
+    assert_eq!(
+        app.ui.sandbox_pane.level.get(),
+        CheckpointLevel::Restore,
+        "Esc does not leave a page whose work cannot be stopped"
+    );
+    handle_working(&mut app, key(KeyCode::Left));
+    assert_eq!(
+        app.ui.sandbox_pane.focus.get(),
+        focus,
+        "focus cannot be moved to a button that no longer exists"
+    );
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(
+        app.ui.sandbox_pane.restore_request().is_some(),
+        "a second Enter submits nothing"
+    );
+    drop(events);
+}
+
+/// The page itself drops the controls: no Cancel button and no key row,
+/// because neither would act.
+#[test]
+fn test_restore_in_flight_hides() {
+    let (mut app, _events) = sandbox_app();
+    handle_working(&mut app, key(KeyCode::Char('r')));
+    handle_working(&mut app, key(KeyCode::Tab));
+    handle_working(&mut app, key(KeyCode::Enter));
+    assert!(app.ui.sandbox_pane.restore_request().is_some());
+
+    let text = render_text(&app, 100, 30);
+    assert!(text.contains("Restoring"), "{text}");
+    assert!(
+        !text.contains("[Cancel]"),
+        "a button named Cancel must not show while nothing can cancel: {text}"
+    );
+    assert!(
+        !text.contains("Esc to back"),
+        "no key row while every key is ignored: {text}"
+    );
+}

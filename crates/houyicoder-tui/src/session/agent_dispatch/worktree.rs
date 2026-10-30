@@ -89,14 +89,30 @@ impl App {
                 true
             }
         };
-        let sentence = removal_sentence(&outcome);
         if !waited {
+            // This answer is not the one the pane is waiting on, so the draft
+            // describes some other tree and cannot say which one went. The
+            // receipt still names the fact of removal and nothing it cannot
+            // know: naming the draft's tree here would report a removal of a
+            // tree that is still on disk.
+            let sentence = removal_sentence(&outcome, None);
             self.system_line(sentence);
             if removal_changed_the_list(&outcome) {
                 self.refresh_worktrees();
             }
             return;
         }
+        // The answer names only the fact of removal, so the identity of what
+        // went comes from the preview the confirmed submission was made
+        // against. A receipt without it reads the same for every tree, and a
+        // user who removed several cannot tell which one each line reports.
+        let removed = match (&outcome, self.ui.worktree_pane.draft.borrow().preview()) {
+            (WorktreeRemoveOutcome::Removed, Some(preview)) => {
+                Some((preview.name.clone(), preview.path.clone()))
+            }
+            _ => None,
+        };
+        let sentence = removal_sentence(&outcome, removed.as_ref());
         match outcome {
             WorktreeRemoveOutcome::Removed => {
                 self.ui.worktree_pane.draft.borrow_mut().clear();
@@ -169,9 +185,14 @@ impl App {
 }
 
 /// What a removal answer says, wherever it is shown.
-fn removal_sentence(outcome: &WorktreeRemoveOutcome) -> String {
+fn removal_sentence(outcome: &WorktreeRemoveOutcome, removed: Option<&(String, String)>) -> String {
     match outcome {
-        WorktreeRemoveOutcome::Removed => "worktree: removed".to_string(),
+        WorktreeRemoveOutcome::Removed => match removed {
+            Some((name, path)) => format!("worktree: removed {name} ({path})"),
+            // The answer to a request the pane no longer waits on carries no
+            // preview to name, and a receipt is still owed.
+            None => "worktree: removed".to_string(),
+        },
         WorktreeRemoveOutcome::Stale => {
             "the worktree changed since the preview; nothing was removed".to_string()
         }

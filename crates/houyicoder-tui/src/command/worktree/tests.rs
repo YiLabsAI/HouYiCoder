@@ -3,7 +3,10 @@ use houyicoder_protocol::frontend::FrontendRequest;
 
 use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::composition::{WorktreeEntry, app};
-use crate::test_harness::{connected_app_with_events, wait_for_request, worktree_preview};
+use crate::state::{Pane, Screen};
+use crate::test_harness::{
+    connected_app_with_events, render_text, wait_for_request, worktree_preview,
+};
 use crate::ui::WorktreeLevel;
 
 fn row(path: &str) -> WorktreeEntry {
@@ -287,5 +290,39 @@ fn test_retry_waits_for_removal() {
     assert!(
         app.ui.worktree_pane.draft.borrow().removing(),
         "the removal stays with the host"
+    );
+}
+
+/// Opening a detail page starts a preview read, and that read must leave the
+/// notice slot empty. The notice slot paints in the warning colour, so a line
+/// written there for a read that answers in milliseconds shows the user a
+/// warning flash on a page that has nothing wrong with it.
+#[test]
+fn test_detail_open_is_quiet() {
+    let (mut app, _events) = connected_app_with_events();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Worktree;
+    app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
+    app.ui.worktree_pane.list.cursor = 0;
+    app.open_worktree_detail();
+    assert!(
+        app.ui
+            .worktree_pane
+            .draft
+            .borrow()
+            .preview_request()
+            .is_some(),
+        "the read goes out"
+    );
+    // The observable is the drawn page: a notice is a yellow row, so the page
+    // that opens on a read must not draw one.
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Worktree:"),
+        "the detail page is on screen: {out}"
+    );
+    assert!(
+        !out.contains("Notice:"),
+        "opening the detail paints no notice row: {out}"
     );
 }

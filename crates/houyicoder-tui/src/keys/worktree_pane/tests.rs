@@ -510,3 +510,59 @@ fn test_search_keeps_cursor_keys() {
     assert_eq!(app.ui.worktree_pane.list.cursor, 1, "Up moves back");
     assert_eq!(app.ui.worktree_pane.list.query, "a", "the query is kept");
 }
+
+/// Reach the confirmation with the removal already submitted, the state a
+/// slow deletion leaves the pane in.
+fn removing_with_host(app: &mut App, events: &mpsc::Receiver<TransportEvent>) {
+    handle_working(app, key(KeyCode::Char('d')));
+    let env = wait_for_request(events, |payload| {
+        matches!(payload, FrontendRequest::WorktreePreview { .. })
+    });
+    answer_preview(app, env.req_id, "alpha");
+    handle_working(app, key(KeyCode::Right));
+    handle_working(app, key(KeyCode::Enter));
+    drop(wait_for_request(events, |payload| {
+        matches!(payload, FrontendRequest::WorktreeRemove { .. })
+    }));
+    assert!(
+        app.ui.worktree_pane.draft.borrow().removing(),
+        "the removal is with the host"
+    );
+}
+
+/// A removal already with the host cannot be called back: the host is taking
+/// the directory apart and its answer is the only thing left to wait for. Esc
+/// used to return to the list while the host kept deleting, which left the
+/// user believing the removal had been cancelled and then finding the tree
+/// gone.
+#[test]
+fn test_removal_in_flight_locks() {
+    let (mut app, events) = worktree_app();
+    removing_with_host(&mut app, &events);
+    let focus = app.ui.worktree_pane.draft.borrow().focus();
+    let branch_choice = app.ui.worktree_pane.draft.borrow().delete_unmerged_branch();
+
+    for pressed in [
+        KeyCode::Esc,
+        KeyCode::Left,
+        KeyCode::Enter,
+        KeyCode::Char('b'),
+    ] {
+        handle_working(&mut app, key(pressed));
+        assert_eq!(
+            app.ui.worktree_pane.level.get(),
+            WorktreeLevel::Confirm,
+            "{pressed:?} does not leave a page whose work cannot be stopped"
+        );
+        assert_eq!(
+            app.ui.worktree_pane.draft.borrow().focus(),
+            focus,
+            "{pressed:?} cannot move focus to a button that no longer exists"
+        );
+    }
+    assert_eq!(
+        app.ui.worktree_pane.draft.borrow().delete_unmerged_branch(),
+        branch_choice,
+        "the branch choice cannot be flipped after the removal is submitted"
+    );
+}

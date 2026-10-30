@@ -591,12 +591,12 @@ fn test_preview_rejects_other_branch() {
     drop(remove_dir_all(&repo));
 }
 
-/// A tree another tool made is previewed from Git's own record: its changes and
-/// its lease are measured, and the questions only a creation record could
-/// answer are reported unanswered rather than guessed. Its branch is not the
-/// removal's to delete.
+/// A tree another tool made is previewed from Git's own record: its changes
+/// and its lease are measured, and the merge question is asked against the
+/// branch the main working tree is on rather than answered from a creation
+/// record it never had. Its branch is not the removal's to delete.
 #[test]
-fn test_foreign_preview_reports_unanswered() {
+fn test_foreign_preview_reports_merge() {
     let repo = make_repo("foreign");
     let path = repo.join(".claude").join("worktrees").join("feat");
     create_dir_all(path.parent().expect("tree parent")).expect("tree parent");
@@ -614,13 +614,76 @@ fn test_foreign_preview_reports_unanswered() {
         !preview.branch_deletable,
         "a branch this product did not create stays"
     );
-    assert_eq!(preview.merge, MergeState::Unknown { base: None });
+    // The tree was made from HEAD and holds no commit of its own, so its
+    // branch is already in the main tree's branch.
+    let base = current_branch(&repo).expect("the main tree is on a branch");
+    assert_eq!(preview.merge, MergeState::Merged { base });
     assert_eq!(
-        preview.unmerged_commits, None,
-        "no base was recorded, so no count is claimed"
+        preview.unmerged_commits,
+        Some(0),
+        "a branch on its base holds no commits of its own"
     );
     assert!(!preview.leased, "nobody holds it");
     assert_eq!(preview.token.len(), 16);
+    drop(remove_dir_all(&repo));
+}
+
+/// A foreign tree that carries its own commit reports the work it holds, so a
+/// user deciding on a removal sees what would be lost instead of being told
+/// the question was never asked.
+#[test]
+fn test_foreign_counts_unmerged() {
+    let repo = make_repo("foreign-ahead");
+    let path = repo.join(".claude").join("worktrees").join("ahead");
+    create_dir_all(path.parent().expect("tree parent")).expect("tree parent");
+    git(
+        &repo,
+        &["worktree", "add", "-b", "ahead", &path.to_string_lossy()],
+    );
+    write(path.join("draft.txt"), "work\n").expect("write a change");
+    git(&path, &["add", "draft.txt"]);
+    git(&path, &["commit", "-m", "draft", "-q"]);
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+
+    let preview = preview_target(&repo, &target).expect("preview the tree");
+
+    let base = current_branch(&repo).expect("the main tree is on a branch");
+    assert_eq!(preview.merge, MergeState::NotMerged { base });
+    assert_eq!(
+        preview.unmerged_commits,
+        Some(1),
+        "one commit is not in the base"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A detached main working tree names no branch to compare against, so the
+/// answer is an unknown base with no name rather than an invented one.
+#[test]
+fn test_foreign_detached_base() {
+    let repo = make_repo("foreign-detached");
+    let path = repo.join(".claude").join("worktrees").join("somewhere");
+    create_dir_all(path.parent().expect("tree parent")).expect("tree parent");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "somewhere",
+            &path.to_string_lossy(),
+        ],
+    );
+    git(&repo, &["checkout", "--detach", "-q"]);
+    let target = resolve_target(&repo, &path).expect("resolve the tree");
+
+    let preview = preview_target(&repo, &target).expect("preview the tree");
+
+    assert_eq!(preview.merge, MergeState::Unknown { base: None });
+    assert_eq!(
+        preview.unmerged_commits, None,
+        "with no base there is nothing to count against"
+    );
     drop(remove_dir_all(&repo));
 }
 

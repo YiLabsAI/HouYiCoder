@@ -171,16 +171,26 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             lines.push(Line::from(format!("Use:      {}", use_state(preview))));
         }
         None => {
-            let changes = if entry.dirty_summary.is_empty() {
-                "clean".to_string()
-            } else {
-                entry.dirty_summary.clone()
-            };
-            lines.push(Line::from(format!("Changes:  {changes}")));
-            // A read that is still out is what the host has not answered; a
-            // read that ended without a preview says why below.
+            // The measured rows hold their places while the answer is out, so
+            // the page does not grow a row when it lands. They are drawn in
+            // the placeholder colour rather than the notice colour: a read in
+            // flight is not a refusal, and a warning colour here flashes for
+            // the few milliseconds before the measurement arrives.
+            let pending = Style::new().fg(Color::DarkGray);
+            let placeholder =
+                |label: &str| Line::from(Span::styled(format!("{label:<10}reading…"), pending));
             if draft.preview_request().is_some() {
-                lines.push(Line::from("Merge:    reading from the host…".to_string()));
+                lines.push(placeholder("Merge:"));
+                lines.push(placeholder("Changes:"));
+                lines.push(placeholder("Ignored:"));
+                lines.push(placeholder("Use:"));
+            } else {
+                let changes = if entry.dirty_summary.is_empty() {
+                    "clean".to_string()
+                } else {
+                    entry.dirty_summary.clone()
+                };
+                lines.push(Line::from(format!("Changes:  {changes}")));
             }
         }
     }
@@ -212,13 +222,25 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let focus = draft.focus();
-    let mut lines = vec![tab_header(
-        focus,
-        &[
-            (RemoveFocus::Cancel, "Cancel"),
-            (RemoveFocus::Remove, "Remove worktree"),
-        ],
-    )];
+    // While the removal is with the host there is no choice left to make, so
+    // the buttons that offer one come off the page. A button named Cancel that
+    // cannot cancel is worse than no button: the user presses it, believes the
+    // removal stopped, and finds the tree gone afterwards.
+    let removing = draft.removing();
+    let mut lines = if removing {
+        vec![tab_header(
+            focus,
+            &[(RemoveFocus::Remove, "Remove worktree")],
+        )]
+    } else {
+        vec![tab_header(
+            focus,
+            &[
+                (RemoveFocus::Cancel, "Cancel"),
+                (RemoveFocus::Remove, "Remove worktree"),
+            ],
+        )]
+    };
     lines.push(Line::from(format!(
         "Worktree: {} ({})",
         preview.name, preview.path
@@ -267,16 +289,21 @@ fn draw_confirm(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         )));
     }
-    let mut keys: Vec<(&'static str, &'static str)> =
-        vec![("Left/Right", "choose"), ("Enter", "confirm")];
-    // A merged branch goes with the tree and a tree this product did not
-    // create keeps its branch whatever the choice says, so the key that
-    // changes the choice is not offered where it would change nothing.
-    if preview.branch_deletable && !preview.merged {
-        keys.push(("b", "branch choice"));
+    // The keys follow the buttons: none of them acts while the removal is
+    // out, so naming them would promise actions the pane will ignore.
+    let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
+    if !removing {
+        keys.push(("Left/Right", "choose"));
+        keys.push(("Enter", "confirm"));
+        // A merged branch goes with the tree and a tree this product did not
+        // create keeps its branch whatever the choice says, so the key that
+        // changes the choice is not offered where it would change nothing.
+        if preview.branch_deletable && !preview.merged {
+            keys.push(("b", "branch choice"));
+        }
+        keys.push(("r", "read again"));
+        keys.push(("Esc", "back"));
     }
-    keys.push(("r", "read again"));
-    keys.push(("Esc", "back"));
     block_with_keys(f, area, lines, &keys, &app.ui.worktree_pane.scroll);
 }
 
@@ -341,8 +368,11 @@ fn branch_disposition(preview: &WorktreePreviewView, delete_unmerged: bool) -> S
 
 /// How the worktree's branch stands against the branch it was forked from.
 fn merge_label(preview: &WorktreePreviewView) -> String {
+    // No branch to compare against is a fact about where the main working
+    // tree stands, not about a record the user never saw. Say which fact it
+    // is and stop there.
     let Some(base) = preview.base_branch.as_deref() else {
-        return "the record names no base branch".to_string();
+        return "base branch unknown".to_string();
     };
     if preview.merged {
         return format!("merged into {base}");

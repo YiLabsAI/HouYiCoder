@@ -23,6 +23,7 @@ use super::record::lookup_record;
 use super::record::worktree_leased;
 use super::session::WorktreeError;
 use super::session::canonicalize;
+use super::session::current_branch;
 use super::session::run_git;
 use super::session::run_git_code;
 use super::session::validate_worktree_slug;
@@ -172,8 +173,13 @@ pub(super) fn preview_foreign(
     let repo_root = canonicalize(repo_root)?;
     let leased = leased_for(&repo_root, target)?;
     let changes = read_changes(target.path())?;
-    let merge = MergeState::Unknown { base: None };
-    let unmerged_commits = None;
+    // No creation record exists, so the branch to compare against is the one
+    // the main working tree is on: that is the branch this tree would be
+    // merged into. The question is the same one a managed tree asks, asked
+    // against the base Git itself reports instead of one a record names.
+    let base = current_branch(&repo_root);
+    let merge = foreign_merge_state(&repo_root, &target.identity.branch, base.as_deref());
+    let unmerged_commits = count_foreign_unmerged(&repo_root, &target.identity.branch, &merge);
     let locked = target.identity.locked;
     let token = preview_token(&target.identity, &changes, &merge, unmerged_commits, locked);
     Ok(WorktreePreview {
@@ -186,6 +192,56 @@ pub(super) fn preview_foreign(
         branch_deletable: false,
         token,
     })
+}
+
+/// How an unmanaged worktree's branch stands against the branch the main
+/// working tree is on.
+///
+/// The answer comes from Git's own ancestry question, so it holds whatever
+/// created the directory. Detached HEAD in the main working tree leaves no
+/// branch to ask about, and that is reported as an unknown base with no name
+/// rather than an answer invented against some other ref.
+fn foreign_merge_state(repo_root: &Path, branch: &str, base: Option<&str>) -> MergeState {
+    let Some(base) = base else {
+        return MergeState::Unknown { base: None };
+    };
+    let head = format!("refs/heads/{branch}");
+    let base_ref = format!("refs/heads/{base}");
+    match run_git_code(
+        repo_root,
+        &["merge-base", "--is-ancestor", &head, &base_ref],
+    ) {
+        Some(0) => MergeState::Merged {
+            base: base.to_string(),
+        },
+        Some(1) => MergeState::NotMerged {
+            base: base.to_string(),
+        },
+        // Git answered neither way: the branch may be gone, or the base may
+        // not resolve. The base name is kept so the pane can say which
+        // question went unanswered.
+        _ => MergeState::Unknown {
+            base: Some(base.to_string()),
+        },
+    }
+}
+
+/// How many commits the base branch does not contain. The count is what the
+/// user sees beside the merge state; the state itself comes from the ancestry
+/// question, never from this number.
+fn count_foreign_unmerged(repo_root: &Path, branch: &str, merge: &MergeState) -> Option<u32> {
+    let base = match merge {
+        MergeState::Merged { base } | MergeState::NotMerged { base } => base,
+        MergeState::Unknown { .. } => return None,
+    };
+    let head = format!("refs/heads/{branch}");
+    let base_ref = format!("refs/heads/{base}");
+    let counted = run_git(
+        repo_root,
+        &["rev-list", "--count", &format!("{base_ref}..{head}")],
+    )
+    .ok()?;
+    counted.trim().parse().ok()
 }
 
 /// Whether the worktree branch's commits are all reachable from the branch it

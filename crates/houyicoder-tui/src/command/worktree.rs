@@ -191,10 +191,10 @@ impl App {
         );
     }
 
-    /// Ask the host what a removal would discard, and say on the level the
-    /// gesture came from that the answer is on its way. The page the gesture
-    /// aimed at opens when the answer lands, so the wait is short enough to
-    /// read as part of the same gesture.
+    /// Ask the host what a removal would discard. The wait is drawn by the
+    /// detail page itself, which keeps its field rows in place while the
+    /// answer is out; nothing goes into the notice slot, which is reserved
+    /// for a refusal the user has to read.
     fn start_preview_read(&mut self, path: &str) {
         if self
             .ui
@@ -204,16 +204,6 @@ impl App {
             .preview_request()
             .is_none()
         {
-            const READING: &str = "reading what a removal would discard…";
-            if self.ui.worktree_pane.level.get() == WorktreeLevel::List {
-                self.ui.worktree_pane.set_notice(READING.to_string());
-            } else {
-                self.ui
-                    .worktree_pane
-                    .draft
-                    .borrow_mut()
-                    .set_notice(READING.to_string());
-            }
             self.request_worktree_preview(path);
         }
     }

@@ -96,6 +96,19 @@ impl WorktreePaneState {
     }
 
     fn confirm_action(&self, k: KeyEvent, typing: bool) -> Option<WorktreeAction> {
+        // A removal already with the host cannot be called back: the host is
+        // taking the directory apart and its answer is the only thing left to
+        // wait for. Offering Cancel or a way back here would let the user
+        // leave the page believing the removal stopped, and then find the
+        // tree gone. Only the scroll keys stay live, so a long preview can
+        // still be read while the host works.
+        if self.draft.borrow().removing() {
+            return match k.code {
+                KeyCode::Up => Some(WorktreeAction::Scroll(-1)),
+                KeyCode::Down => Some(WorktreeAction::Scroll(1)),
+                _ => None,
+            };
+        }
         Some(match k.code {
             KeyCode::Up => WorktreeAction::Scroll(-1),
             KeyCode::Down => WorktreeAction::Scroll(1),
