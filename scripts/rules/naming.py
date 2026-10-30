@@ -19,6 +19,13 @@ TEST_NAME_LEN_HARD = 50
 # term and is NOT blocked.
 JARGON = re.compile(r"mid[-_]?run", re.IGNORECASE)
 
+# Module file-name suffixes that hide what the module owns. A file inside a
+# pipeline directory does not need to say "stage" again, and an abbreviation
+# ("bench") or an academic term ("corpus") leaves the reader guessing. The
+# suffix is checked against the file stem, so the directory supplies the
+# context instead of the name repeating it.
+BANNED_MODULE_SUFFIXES: tuple[str, ...] = ("_stage", "_bench", "_corpus")
+
 # Top-level module whitelist for the four core crates (002 §6.3–§6.4).
 # Shared by check_rust_naming (check-time) and hook_rust (write-time).
 ALLOWED_TOP_MODULES: dict[str, frozenset[str]] = {

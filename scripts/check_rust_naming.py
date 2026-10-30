@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules.naming import (  # noqa: E402
     ALLOWED_MOD_RS,
     ALLOWED_TOP_MODULES,
+    BANNED_MODULE_SUFFIXES,
     JARGON,
     TEST_NAME_LEN_HARD,
     TEST_UNDERSCORE_CAP,
@@ -539,6 +540,28 @@ def _scan(path: Path, errors: list[str], warns: list[str]) -> None:
             pending_test = False
 
 
+def _check_module_suffixes(
+    errors: list[str],
+    root: Path = Path("crates"),
+) -> None:
+    """Reject module file names whose suffix restates the directory or
+    abbreviates the concept. The directory already carries the context, so a
+    pipeline stage does not repeat 'stage' and a benchmark does not shorten to
+    'bench'."""
+    for p in sorted(root.rglob("*.rs")):
+        posix = p.as_posix()
+        if "/target/" in posix or "/src/" not in posix:
+            continue
+        for suffix in BANNED_MODULE_SUFFIXES:
+            if p.stem.endswith(suffix):
+                errors.append(
+                    f"{posix}: module name '{p.stem}' ends with '{suffix}'; "
+                    f"the enclosing directory already supplies that context. "
+                    f"Name the file after what it owns (rules/naming.py "
+                    f"BANNED_MODULE_SUFFIXES)"
+                )
+
+
 def main(paths: list[str]) -> int:
     files = [Path(p) for p in paths if p.endswith(".rs")] or list(
         Path("crates").rglob("*.rs")
@@ -551,6 +574,7 @@ def main(paths: list[str]) -> int:
     _check_file_qualifiers(errors)
     _check_flat_test_peer(errors)
     _check_dir_layout(errors)
+    _check_module_suffixes(errors)
     _check_naming(errors)
     for w in warns:
         print(f"warn: {w}", file=sys.stderr)
