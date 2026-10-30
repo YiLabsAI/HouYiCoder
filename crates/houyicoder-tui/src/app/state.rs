@@ -203,6 +203,19 @@ impl App {
         self.sessions.current.run.progress_mut()
     }
 
+    /// Cancel the run in flight because the process is stopping.
+    ///
+    /// A signal ends the process, not the session: the run is cancelled so
+    /// the lease release that follows does not wait for a turn nobody is
+    /// watching. An idle app has nothing to cancel, and asking the driver to
+    /// abort a run that does not exist would record a cancellation for work
+    /// that never started.
+    pub(crate) fn stop_for_signal(&mut self) {
+        if self.agent_busy() {
+            self.abort_run();
+        }
+    }
+
     /// Test seam: transition to Running with a specific request id.
     /// Replaces the old direct agent_busy write that bypassed the state
     /// machine.

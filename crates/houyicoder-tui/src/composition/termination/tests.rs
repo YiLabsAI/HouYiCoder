@@ -45,14 +45,18 @@ fn test_exit_folds_causes() {
     assert!(watch.should_exit(true), "both causes agree");
 }
 
-/// Installing the watch registers the handlers and leaves the flag clear, so
-/// a session that receives no signal runs to its own end. The registration is
-/// process-wide; this test owns that state because no other case installs it.
+/// Installing the watch registers the handlers. Registration is
+/// process-wide and cannot be undone, so a second watch shares the first
+/// one's flag instead of installing a handler nobody reads: a signal raised
+/// through either is visible to both. The flag's value is not asserted here
+/// because another case in this binary may have raised it already.
 #[test]
-fn test_watch_installs_clean() {
-    let watch = watch_termination().expect("register the termination handlers");
+fn test_watch_is_shared() {
+    let first = watch_termination().expect("register the termination handlers");
+    let second = watch_termination().expect("share the registration");
+    first.requested.store(true, Ordering::Relaxed);
     assert!(
-        !watch.requested(),
-        "a freshly installed watch has seen no signal"
+        second.requested(),
+        "both watches read the one flag the handlers write"
     );
 }

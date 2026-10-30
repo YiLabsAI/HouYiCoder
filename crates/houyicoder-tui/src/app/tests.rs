@@ -1178,3 +1178,47 @@ fn test_click_todo_summary_expands() {
         "a click on the summary shows the hidden rows"
     );
 }
+
+/// A termination signal cancels the run in flight so the lease release that
+/// follows does not wait for a turn nobody is watching. An idle app has no
+/// run to cancel, so the call is a no-op rather than a recorded cancellation
+/// for work that never started.
+#[test]
+fn test_stop_for_signal() {
+    let mut idle = working_app();
+    assert!(!idle.agent_busy(), "the fixture starts idle");
+    idle.stop_for_signal();
+    assert!(!idle.agent_busy(), "an idle app stays idle");
+
+    let (mut running, _events) = connected_app_events();
+    running.start_run_for_test(0);
+    assert!(running.agent_busy(), "the run is in flight");
+    running.stop_for_signal();
+    assert!(
+        running.sessions.current.run.is_cancelling(),
+        "the run is asked to stop"
+    );
+}
+
+/// A signal ends the process, not the session, so the loop hands no resume
+/// target up: a session switch started after the signal would outlive the
+/// stop that was meant to end it.
+#[test]
+fn test_exit_target_on_signal() {
+    let (mut app, _events) = connected_app_events();
+    let signal = crate::termination::TerminationWatch::for_test(true);
+    assert_eq!(
+        app.exit_target(&signal),
+        None,
+        "a signal hands no resume target up"
+    );
+
+    // A normal quit still hands up what the queue holds, because the caller
+    // may have to rebuild the session outside this loop.
+    let quiet = crate::termination::TerminationWatch::for_test(false);
+    assert_eq!(
+        app.exit_target(&quiet),
+        None,
+        "an empty queue hands up nothing"
+    );
+}

@@ -31,7 +31,7 @@ use crate::state::{App, Pane, Screen, ViewportMode};
 use crate::terminal_guard::{
     CrosstermModes, TerminalGuard, assert_mouse_modes, set_terminal_progress,
 };
-use crate::termination::watch_termination;
+use crate::termination::{TerminationWatch, watch_termination};
 use crate::view;
 use crate::view::working::fleet_strip::{FleetClick, click_route};
 
@@ -47,11 +47,13 @@ pub fn run_with_runner(
     // The guard owns every terminal mode change below, so an early error
     // return or a panic unwinding past this loop restores the console
     // instead of leaving it on the alternate screen in raw mode.
-    let mut guard = TerminalGuard::acquire(CrosstermModes)?;
     // A termination signal does not unwind, so the guard's Drop never runs on
     // that path. The watch raises a flag the loop reads, and the loop then
-    // leaves through the same teardown every other exit uses.
+    // leaves through the same teardown every other exit uses. It is installed
+    // before the guard so the window between taking the terminal modes and
+    // being able to hear a signal does not exist.
     let termination = watch_termination()?;
+    let mut guard = TerminalGuard::acquire(CrosstermModes)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     let mut app = build_app(bundle, startup);
@@ -140,10 +142,24 @@ pub fn run_with_runner(
     // progress indicator are restored inside the guard's teardown, so this is
     // the one teardown step the loop has to drive explicitly.
     guard.release();
-    // In-process resume consumes the /resume Command during the swap. A
-    // command survives only when the caller must rebuild the session outside
-    // this loop (no in-process builder), so hand its target up.
-    Ok(app.ui.input.queue.drain_resume_target())
+    Ok(app.exit_target(&termination))
+}
+
+impl App {
+    /// What the loop hands up when it ends.
+    ///
+    /// A signal ends the process, not the session: nothing that survives this
+    /// frame may start another one, so the run in flight is cancelled and a
+    /// queued resume target is dropped. A normal quit hands up whatever the
+    /// queue holds, because the caller may have to rebuild the session
+    /// outside this loop.
+    fn exit_target(&mut self, termination: &TerminationWatch) -> Option<String> {
+        if termination.requested() {
+            self.stop_for_signal();
+            return None;
+        }
+        self.ui.input.queue.drain_resume_target()
+    }
 }
 
 /// Apply one terminal event and report whether the view changed.
