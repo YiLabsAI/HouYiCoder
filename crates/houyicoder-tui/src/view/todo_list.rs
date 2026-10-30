@@ -147,22 +147,39 @@ fn hidden_summary_body(
     hidden_active: usize,
     hidden_paused: usize,
 ) -> String {
+    // The footer counts the same states, in the same order and under the same
+    // names as the header above it. Two vocabularies for one list make the
+    // reader check whether the two lines are even describing the same thing,
+    // when all the footer says is how many rows the fold is hiding.
     let mut parts: Vec<String> = Vec::new();
+    if hidden_completed > 0 {
+        parts.push(format!("+{hidden_completed} done"));
+    }
     if hidden_active > 0 {
-        parts.push(format!("{hidden_active} in progress"));
+        parts.push(format!("+{hidden_active} in progress"));
     }
     if hidden_paused > 0 {
-        parts.push(format!("{hidden_paused} paused"));
+        parts.push(format!("+{hidden_paused} paused"));
     }
     if hidden_pending > 0 {
-        parts.push(format!("{hidden_pending} pending"));
+        parts.push(format!("+{hidden_pending} open"));
     }
-    if hidden_completed > 0 {
-        parts.push(format!("{hidden_completed} completed"));
+    if parts.is_empty() {
+        return String::new();
     }
-    let body = parts.join(", ");
-    format!(" … +{body}")
+    // The key is named here because this line is the only thing telling the
+    // reader there is more to see. It is the shared expand chord, the same one
+    // every other foldable block answers to.
+    format!(" … hidden: {} ({})", parts.join(", "), EXPAND_HINT)
 }
+
+/// The chord every foldable block in the transcript answers to, named the way
+/// the footer spells it.
+const EXPAND_HINT: &str = "ctrl+o to expand";
+
+/// The identity the checklist's summary row publishes for the fold chord and
+/// the click hit-test. Fixed, because the session holds one checklist.
+pub(crate) const TODO_FOLD_KEY: &str = "todos";
 
 /// The collapsed hidden-summary footer line, dim.
 fn hidden_summary(
@@ -198,14 +215,27 @@ pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
     let active = count_by_status(todos, TodoStatus::InProgress);
     let paused = count_by_status(todos, TodoStatus::Paused);
     let open = count_by_status(todos, TodoStatus::Pending);
-    let h = format!(
-        "{} tasks ({} done, {} in progress, {} paused, {} open)",
-        todos.len(),
-        done,
-        active,
-        paused,
-        open,
-    );
+    // A state nobody is in is left out: a zero beside a count the reader is
+    // checking makes the line longer without adding a fact. The order is the
+    // one the list below is grouped by, and the footer uses the same names.
+    let mut parts: Vec<String> = Vec::new();
+    if done > 0 {
+        parts.push(format!("{done} done"));
+    }
+    if active > 0 {
+        parts.push(format!("{active} in progress"));
+    }
+    if paused > 0 {
+        parts.push(format!("{paused} paused"));
+    }
+    if open > 0 {
+        parts.push(format!("{open} open"));
+    }
+    let h = if parts.is_empty() {
+        format!("{} tasks", todos.len())
+    } else {
+        format!("{} tasks ({})", todos.len(), parts.join(", "))
+    };
     let mut out = vec![(
         h.clone(),
         Line::from(Span::styled(h, Style::default().fg(Color::DarkGray))),
@@ -258,6 +288,15 @@ fn render_collapsed(
         ));
     }
     out
+}
+
+/// The rows the collapsed checklist drew, so the tail can tag the summary line
+/// with its fold affordance. The summary is the line the user clicks to see
+/// the hidden rows, which is the same gesture every other foldable block
+/// answers to.
+pub fn collapsed_summary_row(rows: &[(String, Line<'static>)]) -> Option<usize> {
+    rows.iter()
+        .position(|(plain, _)| plain.starts_with(" … hidden:"))
 }
 
 /// Render the expanded view: all items grouped by status, truncated by

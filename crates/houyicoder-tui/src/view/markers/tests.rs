@@ -561,3 +561,51 @@ fn test_diff_row_gap_dim() {
     assert_eq!(line.spans.len(), 1); // body only, no padding (no bg)
     assert!(line.spans[0].style.bg.is_none());
 }
+
+/// A hunk header states both file positions. Numbering a hunk from the old
+/// side alone repeats numbers across the omitted region whenever an earlier
+/// hunk grew or shrank the file: the first hunk ends on new-file line 204, the
+/// omitted region is skipped, and the next hunk then restarts its context at
+/// the old-file line 204 again. The user reads two 204s around one "...".
+#[test]
+fn test_diff_hunks_number_sides() {
+    let body = "Edited 3 lines\n\
+@@ -200,5 +200,7 @@
+ line 200
+ line 201
+-removed 202
++added 202
++added 203
+ line 203
+ line 204
+@@ -204,3 +206,3 @@
+ line 206
+-changed 207
++changed 207 now
+ line 208
+";
+    let plan = plan_diff_body(body, 80).expect("parses");
+    // A removal carries the old-file number, which is lower than the context
+    // above it once the file has grown, so the whole column is not monotonic.
+    // What must hold is the seam: the omitted region is skipped, and the next
+    // hunk continues from the number its own header states.
+    let first_gap = plan
+        .iter()
+        .position(|r| r.kind == PlanKind::Gap)
+        .expect("the omitted region is drawn as a gap");
+    let before = plan[..first_gap]
+        .iter()
+        .rev()
+        .find_map(|r| r.num)
+        .expect("a numbered row before the gap");
+    let after = plan[first_gap + 1..]
+        .iter()
+        .find_map(|r| r.num)
+        .expect("a numbered row after the gap");
+    assert_eq!(before, 205, "the hunk ends on its last new-file number");
+    assert_eq!(
+        after,
+        before + 1,
+        "the next hunk continues from there, so no number repeats across the gap"
+    );
+}

@@ -1131,3 +1131,50 @@ fn poll_until_closed(connection: &mut SessionConnection, bound: Duration) -> Pol
         yield_now();
     }
 }
+
+/// The checklist's summary row is a fold affordance, so a click on it opens the
+/// list the same way a click on any other collapsed block opens that block. A
+/// footer that says rows are hidden, with no gesture that shows them, tells the
+/// reader something they cannot act on.
+#[test]
+fn test_click_todo_summary_expands() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = (0..6)
+        .map(|i| TodoView {
+            content: format!("task {i}"),
+            active_form: None,
+            status: TodoStatus::Pending,
+        })
+        .collect();
+    drop(render_text(&app, 80, 24));
+    assert!(!app.sessions.current.todos.expanded);
+
+    let target = app
+        .ui
+        .frame
+        .layout
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, text)| text.contains("hidden:"))
+        .expect("the summary row is on screen");
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 2,
+        row: rect.y + target as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse(&mut app, down);
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..down
+        },
+    );
+    assert!(
+        app.sessions.current.todos.expanded,
+        "a click on the summary shows the hidden rows"
+    );
+}

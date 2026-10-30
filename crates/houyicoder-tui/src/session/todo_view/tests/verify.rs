@@ -60,11 +60,17 @@ fn test_collapsed_renders_active_footer() {
     );
     // The recently completed item shows the done glyph.
     assert!(out.contains("✔"), "done glyph missing:\n{out}");
-    // Two pending items are hidden beyond the three visible slots -> footer.
-    assert!(out.contains("… +"), "hidden footer missing:\n{out}");
+    // Two pending items are hidden beyond the three visible slots. The footer
+    // names them with the same word the header above uses, and names the chord
+    // that shows them, since it is the only thing saying more rows exist.
+    assert!(out.contains("… hidden:"), "hidden footer missing:\n{out}");
     assert!(
-        out.contains("pending"),
-        "pending count in footer missing:\n{out}"
+        out.contains("+2 open"),
+        "the hidden count uses the header's word:\n{out}"
+    );
+    assert!(
+        out.contains("ctrl+o to expand"),
+        "the footer names the expand chord:\n{out}"
     );
 }
 
@@ -195,5 +201,61 @@ fn test_status_no_tasks_section() {
     assert!(
         !out.contains("tasks:"),
         "no tasks section expected without a checklist:\n{out}"
+    );
+}
+
+/// The header above the list and the footer under it count the same states. Two
+/// vocabularies for one list make the reader stop and check whether the lines
+/// describe the same thing, when the footer's only job is to say how many rows
+/// the fold is hiding. Both lines use the header's words, in the header's order.
+#[test]
+fn test_footer_uses_header_words() {
+    let todos = seeded_todos(&[
+        ("setup", TodoStatus::Completed),
+        ("doing", TodoStatus::InProgress),
+        ("a", TodoStatus::Pending),
+        ("b", TodoStatus::Pending),
+        ("c", TodoStatus::Pending),
+        ("d", TodoStatus::Pending),
+    ]);
+    let mut app = working_app();
+    app.sessions.current.todos.items = todos;
+    app.sessions
+        .current
+        .todos
+        .completion_at
+        .insert("setup".into(), Instant::now());
+    let out = render_text(&app, 80, 24);
+    let header = out
+        .lines()
+        .find(|l| l.contains("tasks ("))
+        .unwrap_or_else(|| panic!("no header:\n{out}"));
+    let footer = out
+        .lines()
+        .find(|l| l.contains("hidden:"))
+        .unwrap_or_else(|| panic!("no footer:\n{out}"));
+    // Every state the footer names is one the header names, so the two lines
+    // are read with one vocabulary.
+    for word in ["done", "in progress", "paused", "open"] {
+        let named_in_footer =
+            footer.contains(&format!(" {word}")) || footer.contains(&format!("+{word}"));
+        assert!(
+            !named_in_footer || header.contains(word),
+            "the footer names {word:?} but the header does not: {header}"
+        );
+    }
+    // The words the old footer used are gone: one list, one vocabulary.
+    assert!(
+        !footer.contains("pending"),
+        "no second word for open: {footer}"
+    );
+    assert!(
+        !footer.contains("completed"),
+        "no second word for done: {footer}"
+    );
+    // A state nobody is in is not printed as a zero.
+    assert!(
+        !header.contains("0 paused"),
+        "a zero state is left out: {header}"
     );
 }

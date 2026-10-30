@@ -203,14 +203,19 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_focused_fold_expand() {
         return;
     }
+    // The checklist is a session-wide block the user reads whole or not at
+    // all, and its collapsed form says how many rows it is hiding. It is
+    // offered before the tail fallback because that fallback claims the chord
+    // whenever any foldable block is on screen, which in a real session is
+    // always: ranked after it, this branch never ran.
+    if !app.sessions.current.todos.items.is_empty() {
+        app.sessions.current.todos.expanded = !app.sessions.current.todos.expanded;
+        return;
+    }
     if app.toggle_tail_expand() {
         return;
     }
     if app.toggle_latest_memory_notice() {
-        return;
-    }
-    if !app.sessions.current.todos.items.is_empty() {
-        app.sessions.current.todos.expanded = !app.sessions.current.todos.expanded;
         return;
     }
     app.toggle_focused_result_expand();

@@ -90,28 +90,49 @@ fn test_stall_intensity_none() {
     assert_eq!(stall_intensity(None), 0.0);
 }
 
+/// Waiting for a reply to start is silence, not a stall. A large context
+/// spends several seconds before its first token, and the row that turns red
+/// on that wait shows the user an error on a turn that is going exactly as
+/// expected. The default threshold must sit past a slow first token.
+#[test]
+fn test_stall_clears_token_wait() {
+    let t = Instant::now() - Duration::from_secs(5);
+    assert_eq!(
+        stall_intensity(Some(t)),
+        0.0,
+        "a five-second wait for the first token is healthy"
+    );
+}
+
+/// Reasoning is held calm for longer than ordinary text, and the two
+/// thresholds stay ordered now that the default one moved out past a slow
+/// first token: a future tweak cannot silently collapse them.
 #[test]
 fn test_stall_reasoning_threshold_higher() {
-    // Reasoning has a sparse token cadence; a 5s delta is healthy, so the
-    // reasoning threshold (10s) must not fire red where the default (3s)
-    // would. Pin both so a future tweak can't silently collapse them.
-    let t = Instant::now() - Duration::from_secs(5);
-    assert_eq!(stall_intensity_reasoning(Some(t)), 0.0);
+    // At the point text turns fully red, reasoning is still calm. This is the
+    // one ordering the two thresholds exist to express: reasoning is the mode
+    // where silence is most expected, so it must never redden first.
+    let t = Instant::now() - Duration::from_secs(20);
     assert!(
         stall_intensity(Some(t)) > 0.0,
-        "default 3s threshold fires at 5s"
+        "twenty seconds of silence is a stall for text"
+    );
+    assert_eq!(
+        stall_intensity_reasoning(Some(t)),
+        0.0,
+        "reasoning is still held calm at that point"
     );
 }
 
 #[test]
 fn test_stall_reasoning_long_think() {
-    // A 12s delta exceeds even the reasoning threshold (10s): a true
-    // hang still trips the gradient, so long thinking is calm but a
-    // genuine stall is not hidden.
-    let t = Instant::now() - Duration::from_secs(12);
+    // A long delta exceeds even the reasoning threshold: a true hang still
+    // trips the gradient, so long thinking is calm but a genuine stall is not
+    // hidden behind the longer window.
+    let t = Instant::now() - Duration::from_secs(30);
     assert!(
         stall_intensity_reasoning(Some(t)) > 0.0,
-        "12s exceeds reasoning 10s threshold"
+        "thirty seconds exceeds the reasoning threshold"
     );
 }
 

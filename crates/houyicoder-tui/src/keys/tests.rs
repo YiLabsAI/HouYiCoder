@@ -10,6 +10,7 @@ use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::TeammateView;
 use crate::records::{Approval, TranscriptLine};
+use crate::session::todo_view::{TodoStatus, TodoView};
 use crate::state::Screen;
 use crate::state::enums::StatusTab;
 use crate::state::model_draft::ModelSettingFocus;
@@ -1875,4 +1876,80 @@ fn test_down_enters_strip() {
         "the strip below the input takes the keyboard"
     );
     assert_eq!(app.ui.input.editor.value(), "a", "the draft is untouched");
+}
+
+/// The checklist answers the shared expand chord. It used to sit behind the
+/// tail fallback, which claims the chord whenever any foldable block is on
+/// screen — in a real session that is always — so the checklist branch never
+/// ran and the list could not be opened at all.
+#[test]
+fn test_ctrl_o_reaches_checklist() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = vec![
+        TodoView {
+            content: "write the fix".into(),
+            active_form: Some("writing the fix".into()),
+            status: TodoStatus::Pending,
+        },
+        TodoView {
+            content: "run the gate".into(),
+            active_form: Some("running the gate".into()),
+            status: TodoStatus::Pending,
+        },
+    ];
+    // A foldable block at the tail, the state that used to swallow the chord.
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::ThoughtFor {
+            ms: Some(9_000),
+            reasoning: Some("a train of reasoning".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        });
+    assert!(!app.sessions.current.todos.expanded);
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.sessions.current.todos.expanded,
+        "the chord reaches the checklist even with a fold at the tail"
+    );
+    handle_ctrl_o(&mut app);
+    assert!(
+        !app.sessions.current.todos.expanded,
+        "and the same chord closes it again"
+    );
+}
+
+/// The chord must work with the cursor on the checklist's own summary row.
+/// That row publishes a fold key so a click can open the list, and the chord
+/// path read the same key and handed it to the transcript, which stored a fold
+/// group nothing owned: the key was consumed, the list stayed shut, and the
+/// hint printed on the row was a lie.
+#[test]
+fn test_ctrl_o_opens_todos() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = (0..6)
+        .map(|i| TodoView {
+            content: format!("task {i}"),
+            active_form: None,
+            status: TodoStatus::Pending,
+        })
+        .collect();
+    drop(render_text(&app, 80, 24));
+    let summary = app
+        .ui
+        .frame
+        .layout
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, text)| text.contains("hidden:"))
+        .expect("the summary row is on screen");
+    app.ui.selection.transcript.anchor = Some((0, summary));
+    assert!(!app.sessions.current.todos.expanded);
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.sessions.current.todos.expanded,
+        "the chord opens the checklist from its own summary row"
+    );
 }

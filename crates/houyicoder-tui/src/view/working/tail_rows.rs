@@ -5,10 +5,13 @@
 use ratatui::layout::Rect;
 
 use crate::rows::row_set::{Row, RowSet};
+use crate::selection::TAG_FOLD;
 use crate::selection::TAG_PLAIN;
 use crate::selection::TAG_SPINNER;
 use crate::state::App;
 use crate::view::spinner::spinner_row_text;
+use crate::view::todo_list::TODO_FOLD_KEY;
+use crate::view::todo_list::collapsed_summary_row;
 use crate::view::todo_list::render_rows;
 
 /// Build the per-frame live rows: the streaming assistant text (when active),
@@ -65,8 +68,26 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet 
     let todo_rows = render_rows(app);
     if !todo_rows.is_empty() {
         spacer_if_needed(&mut sink);
-        for (plain, styled) in todo_rows {
-            sink.push(Row::new(PLAIN, plain).pre(Some(styled)));
+        // The collapsed summary is the row that offers the hidden items, so it
+        // carries the fold affordance every other foldable block carries: the
+        // shared chord toggles it, and a click on the row does the same. A
+        // summary with no affordance is a line telling the reader there is
+        // more to see and no way to see it.
+        let summary = collapsed_summary_row(&todo_rows);
+        for (i, (plain, styled)) in todo_rows.into_iter().enumerate() {
+            // The summary is tagged as a fold row, which is the tag the click
+            // hit-test reads to decide between opening a fold and opening a
+            // delegation. A plain tag would route the click to the delegation
+            // path and the checklist would stay shut.
+            let row = if Some(i) == summary {
+                Row::new(TAG_FOLD, plain)
+                    .pre(Some(styled))
+                    .fold_key(Some(TODO_FOLD_KEY.to_string()))
+                    .group(Some(TODO_FOLD_KEY.to_string()))
+            } else {
+                Row::new(PLAIN, plain).pre(Some(styled))
+            };
+            sink.push(row);
         }
     }
 

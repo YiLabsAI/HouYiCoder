@@ -55,7 +55,14 @@ pub fn spinner_row_text(app: &App, elapsed: Duration, width: u16) -> String {
 }
 
 /// Stall threshold before the red fade-in begins (seconds without a delta).
-const STALL_THRESHOLD_SECS: u64 = 3;
+///
+/// The clock measures silence, and a healthy silence has two shapes: the
+/// model thinking, and the wait for a reply to start arriving at all. A large
+/// context spends several seconds before its first token, so a threshold tuned
+/// to the gap between mid-reply deltas turns the row red during a wait that is
+/// going exactly as expected. Fifteen seconds is longer than a slow first
+/// token and short enough that a genuine hang is still visible.
+const STALL_THRESHOLD_SECS: u64 = 15;
 
 /// During reasoning (LiveBlock::Thinking) a slow token cadence is normal —
 /// thinking tokens arrive sparsely, unlike the dense deltas of assistant
@@ -63,7 +70,12 @@ const STALL_THRESHOLD_SECS: u64 = 3;
 /// model that thinks for 30s reads as "stuck" and turns red. Raise the
 /// threshold so reasoning stays calm; a genuine hang still trips the
 /// gradient once it exceeds this longer window.
-const STALL_THRESHOLD_REASONING_SECS: u64 = 10;
+///
+/// This stays above the text threshold on purpose. Reasoning is the mode where
+/// silence is most expected, so a reasoning row that turned red sooner than a
+/// text row would invert the one ordering the two thresholds exist to
+/// express.
+const STALL_THRESHOLD_REASONING_SECS: u64 = 25;
 
 /// Duration of the red intensity fade-in after the stall threshold (seconds).
 const STALL_FADE_SECS: u64 = 2;
@@ -94,8 +106,9 @@ fn stall_intensity_with(last_delta_at: Option<Instant>, threshold_secs: u64) -> 
     }
 }
 
-/// Stall intensity for the default cadence (assistant text deltas). Slow here
-/// does mean likely stuck — fire the red gradient at 3s.
+/// Stall intensity for the default cadence. This covers both mid-reply gaps
+/// and the wait for a reply to begin, so the threshold is set past a slow
+/// first token rather than to the gap between deltas.
 pub fn stall_intensity(last_delta_at: Option<Instant>) -> f32 {
     stall_intensity_with(last_delta_at, STALL_THRESHOLD_SECS)
 }

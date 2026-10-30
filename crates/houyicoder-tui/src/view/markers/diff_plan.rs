@@ -18,13 +18,17 @@ pub(super) enum DiffKind {
     Context,
 }
 
-/// A parsed unified-diff hunk: the old-file start line number (from the
-/// @@ -N,... header) + the classified lines (sigil stripped). The @@
-/// header itself is consumed as metadata, never rendered — the line
-/// numbers are derived from the @@ oldStart field, not parsed from the
-/// @@ text, so the header never reaches the rendered rows.
+/// A parsed unified-diff hunk: both file start line numbers from the
+/// @@ -N,... +M,... header plus the classified lines (sigil stripped). The @@
+/// header itself is consumed as metadata, never rendered.
+///
+/// Both starts are kept because a hunk can grow the file. The old and new
+/// line numbers diverge by however much the earlier hunks added or removed, so
+/// a hunk numbered from one counter alone repeats numbers across the omitted
+/// region between hunks.
 struct DiffHunk {
     old_start: usize,
+    new_start: usize,
     lines: Vec<(DiffKind, String)>,
 }
 
@@ -56,11 +60,12 @@ pub(super) struct PlanRow {
 /// Parse an Edit/MultiEdit result body (one-line summary + a unified diff)
 /// into the pre-collapse display plan: the summary row, then for each hunk
 /// its line-numbered diff rows, with a dim Gap row interspersed between
-/// hunks. Line numbers follow the standard structured-patch scheme: context and
-/// add lines advance the counter, a remove block numbers each line then
-/// backs the counter up so the following add block restarts from the hunk's
-/// old-file start (removals show old-file numbers, additions show new-file
-/// numbers, context shows the running new-file number). Returns None when
+/// hunks. Line numbers follow the standard structured-patch scheme with one
+/// counter per file: a removal advances only the old-file counter, an addition
+/// only the new-file counter, and a context line advances both and shows the
+/// new-file number. Each hunk starts from the two positions its own header
+/// states, so a file that grew in an earlier hunk does not repeat numbers.
+/// Returns None when
 /// the body carries no @@ hunk header (not a structured diff body) so the
 /// caller falls back to plain line-by-line rendering.
 pub(super) fn plan_diff_body(body: &str, width: u16) -> Option<Vec<PlanRow>> {
@@ -73,17 +78,21 @@ pub(super) fn plan_diff_body(body: &str, width: u16) -> Option<Vec<PlanRow>> {
             if let Some(h) = cur.take() {
                 hunks.push(h);
             }
-            // "@@ -N,... +M,... @@" — the old-file start is the digits after
-            // the first '-'. A new-file hunk emits "-0" (empty old); parse
-            // falls back to 1 on a malformed header (fail safe, never panic).
+            // "@@ -N,... +M,... @@" — the old-file start follows the first
+            // '-', the new-file start follows the first '+'. A new-file hunk
+            // emits "-0" (empty old); parse falls back to 1 on a malformed
+            // header (fail safe, never panic). A header naming no plus side
+            // falls back to the old start, which is what a one-sided header
+            // means.
             let after_minus = rest.strip_prefix('-').unwrap_or(rest);
-            let digits: String = after_minus
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            let old_start = digits.parse::<usize>().unwrap_or(1);
+            let old_start = leading_number(after_minus).unwrap_or(1);
+            let new_start = rest
+                .split_once('+')
+                .and_then(|(_, after_plus)| leading_number(after_plus))
+                .unwrap_or(old_start);
             cur = Some(DiffHunk {
                 old_start,
+                new_start,
                 lines: Vec::new(),
             });
             continue;
@@ -215,61 +224,55 @@ fn content_wrap_width(plan: &[PlanRow], width: u16) -> Option<usize> {
     width.checked_sub(gutter)
 }
 
-/// Number + pair the lines of one hunk into planned rows. Line numbers follow
-/// the standard structured-patch scheme: context and add lines advance the counter,
-/// a remove block numbers each line then backs the counter up so the following
-/// add block restarts from the hunk's old-file start (removals show old-file
-/// numbers, additions show new-file numbers). After numbering, adjacent
-/// remove+add blocks are paired for inline word-level diff (pair_word_diffs).
+/// Number + pair the lines of one hunk into planned rows.
+///
+/// Two counters run side by side, one per file, because the two files stop
+/// agreeing at the first change. A removed line consumes a line of the old
+/// file only; an added line consumes one of the new file only; a context line
+/// consumes one of each. Both start from the hunk's own header, so a hunk that
+/// follows an earlier one which grew or shrank the file continues from the
+/// numbers the header states instead of repeating the old side's.
+///
+/// After numbering, adjacent remove+add blocks are paired for inline
+/// word-level diff (pair_word_diffs).
 fn per_hunk_rows(hunk: &DiffHunk) -> Vec<PlanRow> {
     let mut rows = Vec::with_capacity(hunk.lines.len());
-    let mut i = hunk.old_start;
-    let mut idx = 0;
-    while idx < hunk.lines.len() {
-        let (kind, text) = &hunk.lines[idx];
-        match kind {
-            DiffKind::Context | DiffKind::Add => {
-                rows.push(PlanRow {
-                    kind: PlanKind::Diff(*kind),
-                    num: Some(i),
-                    text: text.clone(),
-                    word: None,
-                });
-                i += 1;
-                idx += 1;
-            }
+    let mut old_line = hunk.old_start;
+    let mut new_line = hunk.new_start;
+    for (kind, text) in &hunk.lines {
+        let num = match kind {
             DiffKind::Remove => {
-                // First removal takes the current counter (not yet advanced);
-                // each subsequent removal advances first, so a K-line removal
-                // block is numbered old_start..old_start + K - 1. Then the
-                // counter backs up by (K - 1) so the following add block
-                // restarts at the same old start — the counter is decremented
-                // by the number of removed lines.
-                rows.push(PlanRow {
-                    kind: PlanKind::Diff(DiffKind::Remove),
-                    num: Some(i),
-                    text: text.clone(),
-                    word: None,
-                });
-                idx += 1;
-                let mut subsequent = 0usize;
-                while idx < hunk.lines.len() && hunk.lines[idx].0 == DiffKind::Remove {
-                    i += 1;
-                    rows.push(PlanRow {
-                        kind: PlanKind::Diff(DiffKind::Remove),
-                        num: Some(i),
-                        text: hunk.lines[idx].1.clone(),
-                        word: None,
-                    });
-                    subsequent += 1;
-                    idx += 1;
-                }
-                i -= subsequent;
+                let num = old_line;
+                old_line += 1;
+                num
             }
-        }
+            DiffKind::Add => {
+                let num = new_line;
+                new_line += 1;
+                num
+            }
+            DiffKind::Context => {
+                let num = new_line;
+                old_line += 1;
+                new_line += 1;
+                num
+            }
+        };
+        rows.push(PlanRow {
+            kind: PlanKind::Diff(*kind),
+            num: Some(num),
+            text: text.clone(),
+            word: None,
+        });
     }
     pair_word_diffs(&mut rows);
     rows
+}
+
+/// The leading run of digits in text, as a number.
+fn leading_number(text: &str) -> Option<usize> {
+    let digits: String = text.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 /// Pair adjacent remove+add blocks within a hunk + attach word-level diff
