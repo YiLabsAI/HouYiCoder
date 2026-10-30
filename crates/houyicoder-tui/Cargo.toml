@@ -80,5 +80,13 @@ vt100 = "0.16.2"
 [target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.31", features = ["signal", "process"] }
 
+# A termination signal ends the process without unwinding, so the terminal
+# guard's Drop never runs and the emulator keeps reporting mouse motion. The
+# crate is already in the graph through crossterm, which uses it to read
+# events; registering a flag handler here adds no crate to the build. Safe API
+# only (no signal-handler closures), so the workspace's unsafe ban holds.
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [lints]
 workspace = true

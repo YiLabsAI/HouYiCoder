@@ -1670,6 +1670,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "signal-hook",
  "similar",
  "syntect",
  "tokio",

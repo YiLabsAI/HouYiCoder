@@ -6,6 +6,7 @@
 
 pub(crate) mod terminal_guard;
 pub(crate) mod terminal_title;
+pub(crate) mod termination;
 
 mod app_default;
 mod placeholder;

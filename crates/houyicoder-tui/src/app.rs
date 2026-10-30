@@ -31,6 +31,7 @@ use crate::state::{App, Pane, Screen, ViewportMode};
 use crate::terminal_guard::{
     CrosstermModes, TerminalGuard, assert_mouse_modes, set_terminal_progress,
 };
+use crate::termination::watch_termination;
 use crate::view;
 use crate::view::working::fleet_strip::{FleetClick, click_route};
 
@@ -47,6 +48,10 @@ pub fn run_with_runner(
     // return or a panic unwinding past this loop restores the console
     // instead of leaving it on the alternate screen in raw mode.
     let mut guard = TerminalGuard::acquire(CrosstermModes)?;
+    // A termination signal does not unwind, so the guard's Drop never runs on
+    // that path. The watch raises a flag the loop reads, and the loop then
+    // leaves through the same teardown every other exit uses.
+    let termination = watch_termination()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     let mut app = build_app(bundle, startup);
@@ -56,7 +61,10 @@ pub fn run_with_runner(
     // OSC 9;4 progress sequence, so the escape is written only on transitions.
     let mut reported_busy = false;
 
-    while !app.ui.quit {
+    // A termination signal is answered by leaving through the normal
+    // teardown, so every terminal mode the guard took is restored. The loop
+    // reads the same exit decision the user's quit sets.
+    while !termination.should_exit(app.ui.quit) {
         // Apply startup and streaming messages before drawing so a trust prompt
         // never flashes the screen it is about to replace.
         if app.poll_agent() {

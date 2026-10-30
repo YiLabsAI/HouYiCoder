@@ -24,7 +24,7 @@ mod frame_timing;
 mod test_harness;
 
 pub use app::state;
-pub(crate) use composition::{terminal_guard, terminal_title};
+pub(crate) use composition::{terminal_guard, terminal_title, termination};
 pub(crate) use input::palette;
 pub use input::{history, paste};
 pub use session::{agent_message, pending_prompt};
