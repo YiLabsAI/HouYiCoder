@@ -153,6 +153,7 @@ fn test_banner_hint_follows_state() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "verify".into(),
+            description: String::new(),
             turn: 1,
             tokens: 0,
             tool_uses: 0,

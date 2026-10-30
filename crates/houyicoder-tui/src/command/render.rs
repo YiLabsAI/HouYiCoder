@@ -16,7 +16,6 @@ use houyicoder_protocol::frontend::trajectory::{
 };
 
 use crate::evidence::MemoryEntry;
-use crate::todo_view::{TodoStatus, TodoView};
 
 /// The display label for a wire permission mode, so the render path never
 /// imports the permission crate (the server is the mode authority).
@@ -134,60 +133,6 @@ pub(crate) fn memory_entries_from_wire(entries: &[MemorySummaryEntry]) -> Vec<Me
         .collect()
 }
 
-/// The checklist section folded into /status: every item grouped by status
-/// with a counts header. Empty when no checklist tool is wired or the list is
-/// cleared, so /status stays clean on a fresh turn. Reads the tool's shared
-/// state handle (lock and clone), never dispatching a tool call.
-pub(crate) fn render_todo_section(todos: &[TodoView]) -> String {
-    if todos.is_empty() {
-        return String::new();
-    }
-    let done = todos
-        .iter()
-        .filter(|t| t.status == TodoStatus::Completed)
-        .count();
-    let active = todos
-        .iter()
-        .filter(|t| t.status == TodoStatus::InProgress)
-        .count();
-    let paused = todos
-        .iter()
-        .filter(|t| t.status == TodoStatus::Paused)
-        .count();
-    let open = todos
-        .iter()
-        .filter(|t| t.status == TodoStatus::Pending)
-        .count();
-    let mut s = format!(
-        "tasks: {} ({} done, {} in progress, {} paused, {} open)\n",
-        todos.len(),
-        done,
-        active,
-        paused,
-        open,
-    );
-    let glyph = |st: TodoStatus| match st {
-        TodoStatus::InProgress => "◼",
-        TodoStatus::Paused => "Ⅱ",
-        TodoStatus::Completed => "✔",
-        TodoStatus::Pending => "◻",
-    };
-    let mut grouped: Vec<&TodoView> = Vec::with_capacity(todos.len());
-    grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::InProgress));
-    grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Paused));
-    grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Pending));
-    grouped.extend(todos.iter().filter(|t| t.status == TodoStatus::Completed));
-    for t in grouped {
-        let label = match t.status {
-            TodoStatus::InProgress => t.active_form.clone().unwrap_or_else(|| t.content.clone()),
-            TodoStatus::Paused => format!("{} (paused)", t.content),
-            TodoStatus::Pending | TodoStatus::Completed => t.content.clone(),
-        };
-        s.push_str(&format!("  {} {}\n", glyph(t.status), label));
-    }
-    s
-}
-
 /// /permissions view: the full permission surface — active mode, durable
 /// rules, and the session verdict log. The verdict log renders
 /// PermissionDecision SessionLogEntries (the durable audit trail of every approve /
@@ -279,12 +224,7 @@ fn trim_zero(s: String) -> String {
     s.replacen(".0", "", 1)
 }
 
-pub(crate) fn render_status(
-    snap: &StatusSnapshot,
-    session: &SessionId,
-    sandbox: &str,
-    todos: &[TodoView],
-) -> String {
+pub(crate) fn render_status(snap: &StatusSnapshot, session: &SessionId) -> String {
     let mut s = String::new();
     s.push_str(&field("Version", &snap.version));
     let name = snap
@@ -306,19 +246,30 @@ pub(crate) fn render_status(
         "Auth token",
         snap.auth_token_source.as_deref().unwrap_or("(none)"),
     ));
+    // A blank row separates where the session runs from what it runs with.
+    // The rows above answer who and where; the rows below answer which model
+    // and which sources, and reading them as one block made the two questions
+    // look like one list.
+    s.push('\n');
     s.push_str(&field("Base URL", &snap.base_url));
     s.push_str(&field("Model", &snap.model));
-    s.push_str(&field("sandbox", sandbox));
     s.push_str(&field("Setting sources", &snap.setting_sources));
-    if let Some(descriptor) = snap.descriptor.as_ref() {
+    // The breaker earns a row only while it is holding calls back. A closed
+    // breaker is the ordinary state, and a row that always reads the same
+    // trains the reader to skip the one line that matters when it opens.
+    if matches!(snap.breaker_state.as_deref(), Some("Open")) {
+        s.push_str(&field("Breaker", &render_breaker_line(snap)));
+    }
+    // Provenance is named only when it says something. A fresh session is the
+    // ordinary case and the word carries no information; a fork or a resumed
+    // export is the case worth a row.
+    if let Some(descriptor) = snap.descriptor.as_ref()
+        && !matches!(descriptor.provenance, WireSessionProvenance::Fresh)
+    {
         s.push_str(&field(
-            "provenance",
+            "Provenance",
             &render_provenance(&descriptor.provenance),
         ));
-    }
-    let todo = render_todo_section(todos);
-    if !todo.is_empty() {
-        s.push_str(&todo);
     }
     s
 }

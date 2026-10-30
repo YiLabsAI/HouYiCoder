@@ -3,6 +3,7 @@
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
+use houyicoder_api::skill::SkillRegistry;
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{SessionDescriptorStore, SessionEvent, SessionId};
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 use crate::agent::append::new_event;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::worktree_controller::{ChildWorktree, WorktreeController};
-use crate::agent::{Runner, ToolRegistry};
+use crate::agent::{ConditionalSkillActivator, HookRegistry, Runner, ToolRegistry};
 
 use super::bus_types::AgentBus;
 use super::bus_types::BusMessage;
@@ -95,6 +96,18 @@ pub struct SpawnRequest {
     pub child_cancel: CancellationToken,
     /// The shared in-process bus used for child status and steering.
     pub bus: Option<Arc<AgentBus>>,
+    /// The skill registry the parent discovered. The child carries the Skill
+    /// tool, so without the registry the tool has no listing and no resolver:
+    /// the child cannot see which skills exist, and the model reads a SKILL.md
+    /// by absolute path instead. None in tests and the stub path.
+    pub skill_registry: Option<Arc<dyn SkillRegistry>>,
+    /// The parent's conditional-skill activator, paired with the registry:
+    /// it is what hides a paths-gated skill until its paths are touched.
+    pub conditional: Option<Arc<dyn ConditionalSkillActivator>>,
+    /// The parent's hook registry. A child runs tools, so it answers to the
+    /// same write-time gates the parent does; without this a sub-agent is a
+    /// path around every project rule.
+    pub hooks: Option<Arc<HookRegistry>>,
     /// The parent's descriptor store. The child runner records its own
     /// prompt through it, so a child's descriptor says what that child was
     /// asked to do. None leaves the child with whatever descriptor the
@@ -188,9 +201,13 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     let subagent_type = req.subagent_type.clone();
     let prompt_summary = req.prompt_summary.clone();
     let bus = req.bus.clone();
+    // The descriptor carries the delegating call's task summary so the fleet
+    // row can name what this child is doing; the type alone cannot tell two
+    // children of one type apart.
     let child = ChildDescriptor {
         agent_id: child_sid.to_string(),
         agent_type: req.subagent_type.clone(),
+        description: req.prompt_summary.clone(),
         run_mode: req.run_mode,
     };
 
@@ -209,6 +226,19 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     // asked, which is the state a resume by id reads.
     if let Some(descriptor_store) = req.descriptor_store.clone() {
         runner = runner.with_descriptor_store(descriptor_store);
+    }
+    // The child inherits the parent's skill and hook wiring. These are the
+    // components the tools it holds read, so a child without them carries the
+    // Skill tool with no listing behind it and runs tools outside the
+    // project's write-time gates.
+    if let Some(registry) = req.skill_registry.clone() {
+        runner = runner.with_skill_registry(registry);
+    }
+    if let Some(conditional) = req.conditional.clone() {
+        runner = runner.with_conditional(conditional);
+    }
+    if let Some(hooks) = req.hooks.clone() {
+        runner = runner.with_hooks(hooks);
     }
     if let Some(bus) = bus {
         let mut events = AgentEventHandlers::default();

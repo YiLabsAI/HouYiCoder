@@ -28,6 +28,7 @@ fn fleet_app(n: usize, granted: u16) -> App {
             .push(FleetEntry {
                 agent_id: format!("c{i}"),
                 subagent_type: "explore".into(),
+                description: String::new(),
                 turn: 1,
                 tokens: 10,
                 tool_uses: 0,
@@ -83,6 +84,7 @@ fn test_hint_follows_drawn_grant() {
             .push(FleetEntry {
                 agent_id: format!("c{i}"),
                 subagent_type: "explore".into(),
+                description: String::new(),
                 turn: 1,
                 tokens: 10,
                 tool_uses: 0,
@@ -110,6 +112,7 @@ fn test_agents_hint_excludes_completed() {
     let done = FleetEntry {
         agent_id: "done".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 1,
         tokens: 10,
         tool_uses: 0,

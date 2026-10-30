@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
+use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
@@ -33,6 +34,7 @@ use houyicoder_core::agent::multi_agent::registry::delegatable_agents;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, TriggerSource};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
+use houyicoder_core::agent::{ConditionalSkillActivator, HookRegistry};
 use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
 use std::env::current_dir;
 use std::mem::take;
@@ -78,6 +80,15 @@ pub struct MultiAgentDeps {
     /// Descriptor store used to stamp child provenance so the resume picker can
     /// filter subagent sessions out.
     pub descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+    /// The parent's skill registry, shared with every child: a child holds the
+    /// Skill tool, and without it the tool has no listing or resolver behind
+    /// it. The activator travels with it, since it is what hides a
+    /// paths-gated skill until those paths are touched.
+    pub skill_registry: Option<Arc<dyn SkillRegistry>>,
+    pub conditional: Option<Arc<dyn ConditionalSkillActivator>>,
+    /// The parent's hook registry, so a child's own tool calls meet the same
+    /// write-time gates instead of becoming a path around them.
+    pub hooks: Option<Arc<HookRegistry>>,
 }
 
 pub struct MultiAgentRuntime {
@@ -109,6 +120,12 @@ pub struct MultiAgentRuntime {
     child_drivers: Arc<Mutex<DriverRegistry>>,
     /// Descriptor store for stamping SpawnedBy provenance on child sessions.
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+    /// Skill registry + activator + hooks inherited by every child, so a
+    /// sub-agent discovers and loads skills natively and answers to the same
+    /// write-time gates its parent does.
+    skill_registry: Option<Arc<dyn SkillRegistry>>,
+    conditional: Option<Arc<dyn ConditionalSkillActivator>>,
+    hooks: Option<Arc<HookRegistry>>,
 }
 
 /// One live child: its runner (Weak, so a finished child drops the entry's
@@ -255,6 +272,9 @@ impl MultiAgentRuntime {
             children: Arc::new(Mutex::new(HashMap::new())),
             child_drivers: Arc::new(Mutex::new(DriverRegistry::default())),
             descriptor_store: deps.descriptor_store,
+            skill_registry: deps.skill_registry,
+            conditional: deps.conditional,
+            hooks: deps.hooks,
         }
     }
 
@@ -365,6 +385,9 @@ impl SpawnHandle for MultiAgentRuntime {
             children: Arc::clone(&self.children),
             child_drivers: Arc::clone(&self.child_drivers),
             descriptor_store: self.descriptor_store.clone(),
+            skill_registry: self.skill_registry.clone(),
+            conditional: self.conditional.clone(),
+            hooks: self.hooks.clone(),
         };
         let trigger = TriggerSource::ModelTool {
             tool_call_id: ctx.call_id.clone(),
@@ -541,6 +564,9 @@ impl SpawnHandle for MultiAgentRuntime {
             children: Arc::clone(&self.children),
             child_drivers: Arc::clone(&self.child_drivers),
             descriptor_store: self.descriptor_store.clone(),
+            skill_registry: self.skill_registry.clone(),
+            conditional: self.conditional.clone(),
+            hooks: self.hooks.clone(),
         };
         let trigger = TriggerSource::System {
             hook: hook.to_string(),

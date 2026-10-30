@@ -214,6 +214,7 @@ fn test_steer_echo_renders() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 1,
             tokens: 50,
             tool_uses: 0,
@@ -307,6 +308,7 @@ fn test_view_hides_tail() {
     );
 }
 
+mod compaction;
 mod scrollback;
 
 /// Cutting a running call to its column budget keeps the paren that closes

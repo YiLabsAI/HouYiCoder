@@ -130,6 +130,9 @@ async fn test_join_reclaims_abandoned_worktree() {
         workspace: Some(repo.clone()),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let hook = Arc::new(BlockingStartHook {
         entered: Notify::new(),

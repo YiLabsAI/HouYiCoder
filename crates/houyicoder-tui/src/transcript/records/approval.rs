@@ -55,6 +55,10 @@ pub struct Approval {
     /// running. None when the card is not counting down: a Level 2 ask, a
     /// cancelled countdown, or a delay of zero.
     pub auto_approve_at: Option<Instant>,
+    /// The whole-second countdown the last frame drew. The card holds still
+    /// between ticks, so the shell redraws only when this figure changes;
+    /// comparing deadlines instead would never report the per-second step.
+    pub shown_secs: Option<u64>,
     /// Whether the user touched a navigation key while the countdown ran.
     /// One touch cancels the auto-approve for the life of this card; the
     /// user's Enter or Esc then decides it.
@@ -172,6 +176,21 @@ impl Approval {
         let deadline = self.auto_approve_at?;
         let left = deadline.saturating_duration_since(now).as_secs();
         Some(left)
+    }
+
+    /// Record the countdown figure this frame will draw. Returns true when it
+    /// differs from the figure the last frame drew, which is the signal the
+    /// shell turns into a redraw. A card without a countdown reports false
+    /// and leaves the recorded figure alone.
+    pub fn note_countdown(&mut self, now: Instant) -> bool {
+        let Some(left) = self.auto_approve_secs_left(now) else {
+            return false;
+        };
+        if self.shown_secs == Some(left) {
+            return false;
+        }
+        self.shown_secs = Some(left);
+        true
     }
 
     /// Whether the countdown has run down. The caller auto-approves Once when

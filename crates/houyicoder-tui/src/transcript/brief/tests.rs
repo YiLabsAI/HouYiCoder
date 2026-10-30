@@ -391,3 +391,35 @@ fn test_agent_brief_caps_long() {
     );
     assert!(brief.starts_with("→ "), "prefix preserved, got {brief}");
 }
+
+/// The delegating call names its job, not only its role. The description is
+/// the field that says which task this child has, and the type alone makes two
+/// children of one type read identically on the transcript.
+#[test]
+fn test_agent_brief_shows_description() {
+    let input = serde_json::json!({
+        "subagent_type": "verify",
+        "description": "deep review approval diff",
+        "prompt": "review it"
+    });
+    assert_eq!(
+        tool_call_brief("agent", &input),
+        "→ verify: deep review approval diff"
+    );
+}
+
+/// A call with no description keeps the type alone rather than ending on a
+/// dangling separator.
+#[test]
+fn test_agent_brief_without_description() {
+    let input = serde_json::json!({"subagent_type": "explore", "prompt": "find auth"});
+    assert_eq!(tool_call_brief("agent", &input), "→ explore");
+}
+
+/// A blank or whitespace-only description is the same as none: the chip must
+/// not read "explore: " with nothing after it.
+#[test]
+fn test_agent_brief_blank_description() {
+    let input = serde_json::json!({"subagent_type": "explore", "description": "   "});
+    assert_eq!(tool_call_brief("agent", &input), "→ explore");
+}

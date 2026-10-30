@@ -151,6 +151,10 @@ impl App {
                 // accepts, so a closed driver leaves no flag waiting on a reply
                 // that never comes; ConnectionLost announces the loss.
                 self.ui.navigation.pane = Pane::Status;
+                // The sub-tab survives a pane close, so a reopen can land on
+                // Config with no cursor. Syncing here keeps Enter live on the
+                // first press instead of waiting for an arrow key.
+                self.sync_config_cursor();
                 let Some(s) = self.sessions.current.connection.as_ref() else {
                     return;
                 };

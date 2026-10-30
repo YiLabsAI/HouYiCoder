@@ -287,6 +287,7 @@ fn test_search_ignores_fleet_click() {
             .push(FleetEntry {
                 agent_id: sid.into(),
                 subagent_type: "explore".into(),
+                description: String::new(),
                 turn: 1,
                 tokens: 10,
                 tool_uses: 0,

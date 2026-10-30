@@ -24,6 +24,13 @@ pub struct ChildDescriptor {
     pub agent_id: String,
     /// Registered child-agent type.
     pub agent_type: String,
+    /// The task summary the delegating call carried (its description). This
+    /// is what tells one child of a type from another: two explore children
+    /// working on different questions are indistinguishable by type alone,
+    /// and the fleet row would name neither's job. Empty when the spawn came
+    /// from a source that has no model-supplied description.
+    #[serde(default)]
+    pub description: String,
     /// Product execution mode.
     pub run_mode: ChildRunMode,
 }
@@ -38,8 +45,15 @@ impl ChildDescriptor {
         Self {
             agent_id: agent_id.into(),
             agent_type: agent_type.into(),
+            description: String::new(),
             run_mode,
         }
+    }
+
+    /// Attach the delegating call's task summary.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
     }
 }
 

@@ -33,6 +33,7 @@ use crate::view::{
     trajectory_pane, worktree_pane,
 };
 
+mod compaction_rows;
 mod delegation_rows;
 pub(crate) mod fleet_strip;
 mod footer_budget;

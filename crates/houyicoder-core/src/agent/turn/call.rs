@@ -10,7 +10,6 @@ use houyicoder_protocol::llm::{
 
 use crate::agent::compaction::{CompactionSuppression, SuppressionCause};
 use crate::agent::context::AssembledContext;
-use crate::agent::context::turn_group::append_user_text;
 use crate::agent::economy::{economy_decision, estimate_compaction};
 use crate::agent::model_window::{
     conservative_input_tokens, fill_omitted_usage, record_learned_context_window,
@@ -133,7 +132,6 @@ impl Runner {
         turn_token: &CancellationToken,
     ) -> Result<TurnCall, RunError> {
         const MAX_OVERFLOW_RETRIES: u32 = 2;
-        const CONVERGE_REMINDER_TURNS: u32 = 5;
 
         // Retries stay within this turn. The durable start marker preserves
         // its boundary even when the call fails before usage is recorded.
@@ -154,7 +152,7 @@ impl Runner {
             let snapshot = self.store.current_view(session).await?;
             // A model switch must invalidate the cached prefix before context
             // assembly; the request and the context report use that same view.
-            let (inference, mut assembled) = self.assemble_request(
+            let (inference, assembled) = self.assemble_request(
                 &snapshot.events,
                 snapshot.manifest.as_ref(),
                 length_retries > 0,
@@ -163,16 +161,6 @@ impl Runner {
             // token_count() can't run after that. Fallback for
             // provider-omits-usage, passed to record_turn at turn end.
             let estimated_input_tokens = assembled.measurement.token_count();
-
-            // Do not nudge the model before its first turn, even when the
-            // configured turn limit is small.
-            let remaining = max_turns.saturating_sub(turn);
-            if turn > 1 && remaining <= CONVERGE_REMINDER_TURNS {
-                let reminder = "If you have gathered enough information to \
-                     answer, synthesize your findings and produce the final \
-                     answer now. Prioritize answering over further exploration.";
-                append_user_text(&mut assembled.messages, reminder);
-            }
 
             // Pre-flight: an absolute reserve (response room, capped, +
             // estimation margin) beats a 95% ratio, which on a 200k window
@@ -196,6 +184,11 @@ impl Runner {
                     .and_then(|ol| ol.last_turn_delta().map(|d| d.input));
                 let conservative_input_tokens =
                     conservative_input_tokens(estimated_input_tokens, last_observed);
+                // How many turns this run can still take. The economy gate
+                // below reads it to judge whether a compaction pays back
+                // before the limit; nothing is injected into the request on
+                // the strength of it.
+                let remaining = max_turns.saturating_sub(turn);
                 // Economy gate: compact proactively when the remaining turns
                 // make the rewrite + summarizer cost pay back in cache-read
                 // savings. Runs before the ceiling so an expensive view

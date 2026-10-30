@@ -1026,6 +1026,7 @@ fn test_fleet_click_selects() {
             .push(FleetEntry {
                 agent_id: format!("c{i}"),
                 subagent_type: "explore".into(),
+                description: String::new(),
                 turn: 1,
                 tokens: 10,
                 tool_uses: 0,

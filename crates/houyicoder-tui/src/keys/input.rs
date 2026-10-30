@@ -195,9 +195,12 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.ui.navigation.pane = Pane::Transcript;
         }
         // In the /status pane, Tab cycles the sub-tab (Status, Config, Usage)
-        // instead of the whole pane (the pane owns its tab bar).
+        // instead of the whole pane (the pane owns its tab bar). Landing on
+        // Config puts the cursor on its first row: the tab is a list the keys
+        // act on, and a list with no cursor has nothing for Enter to change.
         KeyCode::Tab if app.ui.navigation.pane == Pane::Status => {
-            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.next()
+            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.next();
+            app.sync_config_cursor();
         }
         KeyCode::Tab
             if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
@@ -292,10 +295,33 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         // Config, Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.
         KeyCode::Left if app.ui.navigation.pane == Pane::Status => {
-            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.prev()
+            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.prev();
+            app.sync_config_cursor();
         }
         KeyCode::Right if app.ui.navigation.pane == Pane::Status => {
-            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.next()
+            app.ui.navigation.status_pane.tab = app.ui.navigation.status_pane.tab.next();
+            app.sync_config_cursor();
+        }
+        // The Config tab is a list: Up/Down move its cursor and Enter acts on
+        // the row. Status and Usage are reading surfaces with no cursor, so
+        // the arrows keep their tab meaning there.
+        KeyCode::Up
+            if app.ui.navigation.pane == Pane::Status
+                && app.ui.navigation.status_pane.tab == StatusTab::Config =>
+        {
+            app.move_config_cursor(-1)
+        }
+        KeyCode::Down
+            if app.ui.navigation.pane == Pane::Status
+                && app.ui.navigation.status_pane.tab == StatusTab::Config =>
+        {
+            app.move_config_cursor(1)
+        }
+        KeyCode::Enter
+            if app.ui.navigation.pane == Pane::Status
+                && app.ui.navigation.status_pane.tab == StatusTab::Config =>
+        {
+            app.activate_config_row()
         }
         KeyCode::Esc if app.ui.navigation.pane == Pane::Status => {
             app.ui.navigation.pane = Pane::Transcript;
@@ -521,7 +547,16 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             app.ui
                 .input
                 .editor
-                .kill_to_line_start(app.ui.frame.feedback.terminal_cols.get());
+                .kill_backward(app.ui.frame.feedback.terminal_cols.get());
+        }
+        // The complement of Ctrl+U: kill forward to the end of the wrapped
+        // line, leaving the newline so the line shortens instead of joining
+        // the next one.
+        KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ui
+                .input
+                .editor
+                .kill_to_line_end(app.ui.frame.feedback.terminal_cols.get());
         }
         KeyCode::Backspace if !pane_replaces_input(app.ui.navigation.pane) => {
             app.ui.input.editor.pop()

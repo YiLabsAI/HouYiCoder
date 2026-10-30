@@ -42,6 +42,10 @@ struct ToolCallFacts {
 /// session long enough to evict the record and a reconnect onto the old card.
 const APPROVAL_CALLS_CAP: usize = 512;
 
+/// The scope spelling older logs wrote for what the wire now calls a
+/// workspace grant. Read when counting only; nothing writes it.
+const LEGACY_ALWAYS_SCOPE: &str = "always";
+
 /// Which of one call's approval records were counted. A reconnect re-emits
 /// an open card and records that ask again, while a resume after a restart
 /// asks the same call anew; without this ledger the same card or verdict
@@ -107,10 +111,14 @@ impl ApprovalFold {
         self.answers = self.answers.saturating_add(1);
         if verdict == PermissionVerdict::Denied {
             self.denied = self.denied.saturating_add(1);
+        } else if scope == ApprovalScope::Workspace.as_str() || scope == LEGACY_ALWAYS_SCOPE {
+            // Older logs spelled the workspace grant "always". The words
+            // differ but the grant does not, so the count lands where a
+            // current log would put it; leaving it to fall through would
+            // report every one of those answers as a once-only consent.
+            self.approved_workspace = self.approved_workspace.saturating_add(1);
         } else if scope == ApprovalScope::Session.as_str() {
             self.approved_session = self.approved_session.saturating_add(1);
-        } else if scope == ApprovalScope::Workspace.as_str() {
-            self.approved_workspace = self.approved_workspace.saturating_add(1);
         } else {
             // The scope names the grant the answer actually bought, not the
             // one the client asked for. A spelling this build does not know

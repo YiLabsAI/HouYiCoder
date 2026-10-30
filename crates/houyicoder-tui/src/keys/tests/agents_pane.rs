@@ -17,6 +17,7 @@ fn push_running(app: &mut App, agent_id: &str) {
         .push(FleetEntry {
             agent_id: agent_id.into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 1,
             tokens: 10,
             tool_uses: 0,

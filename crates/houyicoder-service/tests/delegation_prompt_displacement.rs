@@ -254,6 +254,9 @@ fn build_harness(
             workspace: Some(PathBuf::from("/tmp")),
             bus: None,
             descriptor_store: None,
+            skill_registry: None,
+            conditional: None,
+            hooks: None,
         });
         builder = builder.with_spawn_handle(Arc::new(runtime));
         return Harness {

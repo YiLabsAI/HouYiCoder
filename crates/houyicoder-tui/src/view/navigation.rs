@@ -18,7 +18,22 @@ use crate::view::line_wrap::max_scroll_offset;
 
 /// Build a tab row with one bracketed active label.
 pub(crate) fn tab_header<T: Copy + Eq>(active: T, tabs: &[(T, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw("  ")];
+    tab_header_at(active, tabs, "  ")
+}
+
+/// Build a tab row whose first label starts at the given left margin.
+///
+/// The margin exists because a tab bar has to line up with the content under
+/// it: a pane whose body is indented two columns wants the same indent here,
+/// and a pane whose body starts at the left edge wants none. Taking it as a
+/// parameter is what keeps both readable without each pane re-deriving the
+/// spacing.
+pub(crate) fn tab_header_at<T: Copy + Eq>(
+    active: T,
+    tabs: &[(T, &str)],
+    margin: &'static str,
+) -> Line<'static> {
+    let mut spans = vec![Span::raw(margin)];
     for (index, (value, label)) in tabs.iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw("  "));

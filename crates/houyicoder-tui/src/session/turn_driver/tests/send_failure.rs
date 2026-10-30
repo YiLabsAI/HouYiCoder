@@ -82,6 +82,7 @@ fn test_child_inject_refused() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 1,
         tokens: 0,
         tool_uses: 0,

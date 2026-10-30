@@ -71,6 +71,18 @@ pub enum EconomyReason {
     NoShrink,
 }
 
+/// The longest future the economy estimate will price.
+///
+/// The savings side of the calculation counts a cache re-read per remaining
+/// turn, so a horizon taken straight from the turn limit grows without bound:
+/// raising the limit to support long tasks multiplied the projected saving by
+/// the same factor and made every large view look worth compacting on its
+/// first turn. Fifty turns is past the point where the answer stops changing
+/// (the summarizer cost is paid once, so a longer horizon only scales the
+/// saving it is compared against), and it keeps the estimate tied to a horizon
+/// a reader would recognise rather than to a configuration number.
+pub const ECONOMY_HORIZON_CAP: u64 = 50;
+
 /// Build a compaction estimate from the current input-token count +
 /// remaining turns. The post-compact size is a fold-ratio heuristic (the
 /// verbatim tail is roughly a third of the assembled context); the
@@ -78,13 +90,16 @@ pub enum EconomyReason {
 /// output. Rough but conservative — an over-estimate under-counts
 /// savings, leaning toward skipping (safe; the ceiling gate still fires
 /// if the view keeps growing).
+///
+/// The horizon is capped here rather than at the call site so every caller
+/// prices the same future.
 pub fn estimate_compaction(current_input_tokens: u32, remaining_turns: u64) -> CompactionEstimate {
     let projected_new = current_input_tokens / 3;
     let folded = current_input_tokens.saturating_sub(projected_new);
     CompactionEstimate {
         old_tokens: current_input_tokens as u64,
         new_tokens: projected_new as u64,
-        remaining_turns,
+        remaining_turns: remaining_turns.min(ECONOMY_HORIZON_CAP),
         summarizer_input_tokens: folded as u64,
         summarizer_output_tokens: (folded / 10) as u64,
     }

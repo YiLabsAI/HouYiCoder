@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use super::compaction_rows::push_compaction_rows;
 use super::delegation_rows::{Delegation, push_delegation_rows};
 use super::notice_rows::push_notice_rows;
 use super::tail_rows::build_tail_rows;
@@ -291,8 +292,14 @@ fn rendered_tool_rows(
     if prog.elapsed_secs < 2 {
         return Some(rows);
     }
+    // A count of one is singular. The chip is read at a glance while the
+    // command runs, so "1 lines" makes the reader stop at the one number the
+    // suffix exists to report.
     let suffix = match prog.lines {
-        Some(n) => format!(" ({}s · {n} lines)", prog.elapsed_secs),
+        Some(n) => {
+            let noun = if n == 1 { "line" } else { "lines" };
+            format!(" ({}s · {n} {noun})", prog.elapsed_secs)
+        }
         None => format!(" ({}s)", prog.elapsed_secs),
     };
     if let Some(last) = rows.last_mut() {
@@ -425,6 +432,15 @@ pub(crate) fn push_line_rows(
             color: color.as_deref(),
         };
         push_delegation_rows(&delegation, grp, width, app, sink);
+        return true;
+    }
+    if let TranscriptLine::Compaction {
+        key,
+        stats,
+        summary,
+    } = line
+    {
+        push_compaction_rows(key, stats, summary, width, app, sink);
         return true;
     }
     if let TranscriptLine::Agent(text) = line {

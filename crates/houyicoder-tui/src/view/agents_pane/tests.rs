@@ -69,6 +69,7 @@ fn push_running(app: &mut App, agent_id: &str) {
         .push(FleetEntry {
             agent_id: agent_id.into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 2,
             tokens: 1400,
             tool_uses: 0,
@@ -331,6 +332,7 @@ fn test_completed_metrics_render() {
         .push(FleetEntry {
             agent_id: "c-metrics".into(),
             subagent_type: "verify".into(),
+            description: String::new(),
             turn: 3,
             tokens: 24_500,
             tool_uses: 18,

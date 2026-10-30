@@ -16,9 +16,10 @@ use ratatui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::command::render::{field, permission_mode_label, render_breaker_line, render_status};
+use crate::command::render::{field, render_status};
 use crate::state::{App, enums::StatusTab};
-use crate::view::navigation::{key_hint, tab_header};
+use crate::view::navigation::{key_hint, tab_header_at};
+use crate::view::status::config_rows::{CONFIG_ROWS, row_changes, row_label, row_value};
 
 /// Default height /status asks for: a header + up to ~12 status lines + a
 /// footer. Capped at half the main area by draw_command_pane.
@@ -32,26 +33,49 @@ const STATUS_TABS: [(StatusTab, &str); 3] = [
 /// Render the /status content into the Pane inner rect (the closure passed
 /// to draw_command_pane). Sub-tab header + the active tab's content + footer.
 pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
+    // The tab row, a blank spacer, the body, another spacer, and the key
+    // hint. The spacers are what keep the three regions reading as three:
+    // without them the first field row sits against the tab labels and the
+    // hint sits against the last field, and the whole pane reads as one wall.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Min(0),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .split(inner);
-    // Sub-tab header: Status / Config / Usage, the active one bold cyan.
+    // The tab row starts at the left edge because the body does: every field
+    // below begins in column zero, so an indented tab row would be the one
+    // line out of alignment.
     f.render_widget(
-        Paragraph::new(tab_header(app.ui.navigation.status_pane.tab, &STATUS_TABS)),
+        Paragraph::new(tab_header_at(
+            app.ui.navigation.status_pane.tab,
+            &STATUS_TABS,
+            "",
+        )),
         chunks[0],
     );
     // Body: the active tab's content.
-    draw_tab_body(f, app.ui.navigation.status_pane.tab, chunks[1], app);
-    let footer = Paragraph::new(key_hint(&[
-        ("Tab/Left/Right", "switch tab"),
-        ("Esc", "close"),
-    ]));
-    f.render_widget(footer, chunks[2]);
+    draw_tab_body(f, app.ui.navigation.status_pane.tab, chunks[2], app);
+    let footer = Paragraph::new(key_hint(&footer_keys(app)));
+    f.render_widget(footer, chunks[4]);
+}
+
+/// The keys the pane offers, which follow the tab: a list tab names the two
+/// keys that move and act on its cursor, and the reading tabs name the tab
+/// switch alone.
+fn footer_keys(app: &App) -> Vec<(&'static str, &'static str)> {
+    let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
+    if app.ui.navigation.status_pane.tab == StatusTab::Config {
+        keys.push(("Up/Down", "select"));
+        keys.push(("Enter", "change"));
+    }
+    keys.push(("Tab/Left/Right", "switch tab"));
+    keys.push(("Esc", "close"));
+    keys
 }
 
 /// The body of the active sub-tab. Status reuses render_status (the shared
@@ -63,12 +87,7 @@ fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
     let body: String = match tab {
         StatusTab::Status => {
             let snap = app.snapshot_or_stub();
-            render_status(
-                &snap,
-                &app.sessions.current.identity.session_id,
-                &app.sessions.current.sandbox,
-                &app.sessions.current.todos.items,
-            )
+            render_status(&snap, &app.sessions.current.identity.session_id)
         }
         StatusTab::Config => render_config(app),
         StatusTab::Usage => render_usage(app),
@@ -148,37 +167,25 @@ fn name_edit_line(field: &InputField) -> Line<'static> {
 /// Display-only: the user flips a toggle by editing the settings file (the
 /// settings file is the source of truth, edited externally, not inline).
 fn render_config(app: &App) -> String {
-    let f = field;
-    let mode = app.current_mode();
-    let snap = app.snapshot_or_stub();
-    let on_off = |b: bool| if b { "on" } else { "off" };
+    let cursor = app.ui.navigation.status_pane.config_cursor;
     let mut s = String::new();
-    // Config tab shows the resolved model id (not the tier label) + the
-    // applied effort (None = no effort parameter sent, hidden per I8). Both
-    // come from the host snapshot, so the tab cannot name a model the session
-    // is not running.
-    let applied = &app.sessions.current.capabilities.model.catalog.applied;
-    s.push_str(&f("Model", &applied.id));
-    if let Some(effort) = applied.effort {
-        s.push_str(&f("effort", effort.label()));
+    for (i, row) in CONFIG_ROWS.iter().enumerate() {
+        // The marker follows the shared list grammar every other pane uses,
+        // so a reader who has moved a cursor elsewhere already knows what it
+        // means here.
+        let marker = if cursor == Some(i) { "❯ " } else { "  " };
+        // The hint names the one key that acts. Only rows that act carry it:
+        // a hint on a row that ignores the key is a promise the pane breaks.
+        let hint = if row_changes(*row) {
+            "   (Enter to change)"
+        } else {
+            ""
+        };
+        s.push_str(&field(
+            &format!("{marker}{}", row_label(*row)),
+            &format!("{}{hint}", row_value(app, *row)),
+        ));
     }
-    s.push_str(&f("Permission mode", permission_mode_label(mode)));
-    let delay = app
-        .sessions
-        .current
-        .capabilities
-        .permission
-        .auto_approve_delay_secs;
-    let timer = if delay == 0 {
-        "off".to_string()
-    } else {
-        format!("{delay}s")
-    };
-    s.push_str(&f("Auto-approve timer", &timer));
-    s.push_str(&f("sandbox", &app.sessions.current.sandbox));
-    s.push_str(&f("breaker", &render_breaker_line(&snap)));
-    s.push_str(&f("auto-memory", on_off(snap.auto_memory)));
-    s.push_str(&f("auto-dream", on_off(snap.auto_dream)));
     s.trim_end().to_string()
 }
 

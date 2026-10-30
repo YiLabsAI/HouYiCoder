@@ -28,6 +28,7 @@ fn test_abort_viewed_child_turn() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 2,
             tokens: 100,
             tool_uses: 0,
@@ -141,6 +142,7 @@ fn test_steer_completed_surfaces_notice() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 3,
             tokens: 100,
             tool_uses: 1,
@@ -266,6 +268,7 @@ fn test_child_transcript_no_row() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 1,
             tokens: 50,
             tool_uses: 0,
@@ -358,6 +361,7 @@ fn test_view_fleet_type_fallback() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 1,
             tokens: 50,
             tool_uses: 0,
@@ -407,6 +411,7 @@ fn test_view_fold_row_wins() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 2,
             tokens: 100,
             tool_uses: 0,
@@ -448,6 +453,7 @@ fn test_running_child_starting() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 0,
             tokens: 0,
             tool_uses: 0,
@@ -496,6 +502,7 @@ fn test_completed_child_unavailable() {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 3,
             tokens: 100,
             tool_uses: 1,

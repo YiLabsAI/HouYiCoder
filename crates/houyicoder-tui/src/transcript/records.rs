@@ -215,6 +215,28 @@ pub enum TranscriptLine {
     /// block). Carries the full view payload so the renderer lays it out
     /// without re-deriving data on each frame.
     ContextGrid(ContextView),
+    /// A context compaction, rendered as one foldable row instead of the two
+    /// raw lines the host notification used to contribute.
+    ///
+    /// The checkpoint and the summary arrive as separate notifications and
+    /// both used to land as plain system rows: the checkpoint said nothing a
+    /// reader needed, and the summary pasted the model's whole digest into the
+    /// transcript, filling the screen with text the reader did not ask for and
+    /// cannot act on. One row names the event and hides the body behind the
+    /// shared fold chord, so the fact stays visible and the bytes stay on
+    /// demand.
+    Compaction {
+        /// The checkpoint this compaction recorded, used as its fold identity.
+        /// Two compactions in one session are two separate blocks; a shared
+        /// constant key would expand and collapse both together.
+        key: String,
+        /// The statistics the checkpoint reported, already formatted for the
+        /// row ("754 turns, 5885 events"). Empty when the boundary carried
+        /// none, and the row then shows no parenthesis rather than empty ones.
+        stats: String,
+        /// The summary body, shown only when the row is expanded.
+        summary: String,
+    },
     /// A sub-agent delegation rendered INLINE as a fold-group in the parent
     /// flow. The parent message list is never swapped out. The agent tool's
     /// structured result carries child_sid + subagent_type + summary. Default
@@ -239,6 +261,18 @@ pub enum TranscriptLine {
         /// row share one source. None when the agent has no color set.
         color: Option<String>,
     },
+}
+
+/// The one-line label a compaction row shows. The statistics sit in
+/// parentheses only when the boundary reported any, so a checkpoint without
+/// them reads as the bare event rather than as an empty pair of brackets.
+pub(crate) fn compaction_row_text(stats: &str, hint: ToggleHint) -> String {
+    let detail = if stats.is_empty() {
+        String::new()
+    } else {
+        format!(" ({stats})")
+    };
+    format!("\u{273b} Context compacted{detail}{}", hint.suffix())
 }
 
 /// Build an inline Subagent fold-group line from an agent-tool result, or
@@ -506,6 +540,10 @@ impl TranscriptLine {
             // A delegation surfaces its summary as the searchable text; the
             // child transcript is fetched on expand, not inlined here.
             Self::Subagent { summary, .. } => summary.clone(),
+            Self::Compaction { stats, .. } => {
+                let hint = ToggleHint::Expand;
+                compaction_row_text(stats, hint)
+            }
         }
     }
 

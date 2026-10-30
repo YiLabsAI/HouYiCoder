@@ -3,6 +3,7 @@
 use super::*;
 use crate::agent_message::FleetEntry;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
+use crate::app::handle_key;
 use crate::composition::app;
 use crate::composition::shared_runtime;
 use crate::keys::handle_working;
@@ -502,6 +503,7 @@ fn running_fleet_app() -> App {
         .push(FleetEntry {
             agent_id: "c1".into(),
             subagent_type: "explore".into(),
+            description: String::new(),
             turn: 1,
             tokens: 50,
             tool_uses: 0,
@@ -1137,7 +1139,7 @@ fn poll_until_closed(connection: &mut SessionConnection, bound: Duration) -> Pol
 /// footer that says rows are hidden, with no gesture that shows them, tells the
 /// reader something they cannot act on.
 #[test]
-fn test_click_todo_summary_expands() {
+fn test_click_summary_opens() {
     let mut app = working_app();
     app.sessions.current.todos.items = (0..6)
         .map(|i| TodoView {
@@ -1220,5 +1222,106 @@ fn test_exit_target_on_signal() {
         app.exit_target(&quiet),
         None,
         "an empty queue hands up nothing"
+    );
+}
+
+/// A click that opens the checklist must leave the chord able to close it.
+/// The click parks the selection anchor on the row it hit; if the chord then
+/// reads that anchor and finds a row the expanded list no longer offers, it
+/// consumes nothing and the list cannot be folded back.
+#[test]
+fn test_click_then_chord() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = (0..6)
+        .map(|i| TodoView {
+            content: format!("task {i}"),
+            active_form: None,
+            status: TodoStatus::Pending,
+        })
+        .collect();
+    drop(render_text(&app, 80, 24));
+    let target = app
+        .ui
+        .frame
+        .layout
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, text)| text.contains("hidden:"))
+        .expect("the summary row is on screen");
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 2,
+        row: rect.y + target as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse(&mut app, down);
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..down
+        },
+    );
+    assert!(app.sessions.current.todos.expanded, "the click opened it");
+
+    drop(render_text(&app, 80, 24));
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        ),
+    );
+    assert!(
+        !app.sessions.current.todos.expanded,
+        "the chord closes what the click opened"
+    );
+}
+
+/// The header row is the one row that is on screen both while the list is
+/// collapsed and while it is expanded, so it is the row a reader reaches for
+/// to close it again. A click on it must fold the list, exactly as a click on
+/// the hidden-summary row opens it.
+#[test]
+fn test_click_header_folds() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = (0..6)
+        .map(|i| TodoView {
+            content: format!("task {i}"),
+            active_form: None,
+            status: TodoStatus::Pending,
+        })
+        .collect();
+    app.sessions.current.todos.expanded = true;
+    drop(render_text(&app, 80, 24));
+    let header = app
+        .ui
+        .frame
+        .layout
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, text)| text.contains("tasks ("))
+        .expect("the header row is on screen");
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 2,
+        row: rect.y + header as u16,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse(&mut app, down);
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..down
+        },
+    );
+    assert!(
+        !app.sessions.current.todos.expanded,
+        "a click on the header folds the list"
     );
 }

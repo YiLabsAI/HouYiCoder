@@ -35,7 +35,10 @@ pub fn spawn(
                 _ = cancel.cancelled() => break,
                 msg = spawned_rx.recv() => match msg {
                     Ok(BusMessage::Spawned { child }) => {
-                        let snap = Snapshot::default();
+                        let snap = Snapshot {
+                            description: child.description.clone(),
+                            ..Snapshot::default()
+                        };
                         emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
                         children.insert(child.agent_id, (child.agent_type, snap));
                     }
@@ -45,10 +48,25 @@ pub fn spawn(
                 },
                 msg = progress_rx.recv() => match msg {
                     Ok(BusMessage::Progress { child, turn, tokens, tool_uses, last_activity }) => {
+                        // A later progress message may arrive without the
+                        // descriptor's description (a re-registered child, a
+                        // relay that joined late), so the summary already held
+                        // survives instead of being blanked mid-run.
+                        let known = children
+                            .get(&child.agent_id)
+                            .map(|(_, snap)| snap.description.clone())
+                            .unwrap_or_else(|| child.description.clone());
                         let entry = children
                             .entry(child.agent_id.clone())
-                            .or_insert_with(|| (child.agent_type, Snapshot::default()));
-                        entry.1 = Snapshot { turn, tokens, tool_uses, last_activity, completed: None };
+                            .or_insert_with(|| (child.agent_type.clone(), Snapshot::default()));
+                        entry.1 = Snapshot {
+                            description: if child.description.is_empty() { known } else { child.description.clone() },
+                            turn,
+                            tokens,
+                            tool_uses,
+                            last_activity,
+                            completed: None,
+                        };
                         emit(&event_sequencer, &child.agent_id, &entry.0, &entry.1);
                     }
                     Ok(_) => {}
@@ -76,6 +94,9 @@ pub fn spawn(
 
 #[derive(Default)]
 struct Snapshot {
+    /// The delegating call's task summary, held across progress messages so a
+    /// message that omits it does not blank the fleet row's only label.
+    description: String,
     turn: u32,
     tokens: u64,
     tool_uses: u32,
@@ -98,6 +119,7 @@ fn emit(event_sequencer: &EventSequencer, agent_id: &str, subagent_type: &str, s
     event_sequencer.enqueue_reliable(FrontendEvent::AgentStatus {
         agent_id: agent_id.to_string(),
         subagent_type: subagent_type.to_string(),
+        description: snap.description.clone(),
         turn: snap.turn,
         tokens: snap.tokens,
         tool_uses: snap.tool_uses,

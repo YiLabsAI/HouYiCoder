@@ -112,3 +112,89 @@ fn test_ctrl_u_kills_line() {
         "Ctrl+U deletes to the wrapped line start"
     );
 }
+
+/// Ctrl+U at the start of a wrapped line has nothing behind it to delete, so
+/// the readline meaning alone leaves the key dead at exactly the moment the
+/// draft should go. It clears the field instead, which is the whole-buffer
+/// reset the multi-line prompt needed.
+#[test]
+fn test_ctrl_u_clears_whole() {
+    let mut app = working_app();
+    app.ui
+        .input
+        .editor
+        .set("first line\nsecond line".to_string());
+    app.ui.input.editor.move_to(0);
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.ui.input.editor.is_empty(),
+        "a dead backward kill clears the field: {:?}",
+        app.ui.input.editor.value()
+    );
+}
+
+/// The readline meaning still wins where it applies: with text behind the
+/// cursor the key deletes back to the line start and leaves the earlier lines
+/// alone. Without this the escalation above would be a whole-buffer clear.
+#[test]
+fn test_ctrl_u_readline_offset() {
+    let mut app = working_app();
+    app.ui.input.editor.set("keep me\ndrop this".to_string());
+    app.ui
+        .input
+        .editor
+        .move_to("keep me\n".len() + "drop ".len());
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "keep me\nthis",
+        "only the text between the line start and the cursor goes"
+    );
+}
+
+/// Ctrl+K deletes forward to the end of the wrapped line and keeps the
+/// newline, so the line shortens rather than the following line moving up
+/// into it.
+#[test]
+fn test_ctrl_k_kills_forward() {
+    let mut app = working_app();
+    app.ui.input.editor.set("keep this\ndrop that".to_string());
+    app.ui
+        .input
+        .editor
+        .move_to("keep this\n".len() + "drop".len());
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "keep this\ndrop",
+        "the rest of the line goes and the next line stays put"
+    );
+}
+
+/// The two kills are complements: Ctrl+U takes what is behind the cursor on
+/// the line and Ctrl+K takes what is ahead of it, both leaving the other
+/// lines untouched.
+#[test]
+fn test_kill_pair_partitions_line() {
+    let mut app = working_app();
+    app.ui.input.editor.set("before\nafter".to_string());
+    app.ui.input.editor.move_to(0);
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "\nafter",
+        "Ctrl+K emptied the first line and kept the second"
+    );
+}

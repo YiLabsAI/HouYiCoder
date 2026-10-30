@@ -66,6 +66,9 @@ fn runtime_with_backend(
         workspace: Some(PathBuf::from("/tmp")),
         bus,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     (runtime, store, parent_sid)
@@ -117,6 +120,9 @@ async fn test_provenance_precedes_child_run() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(Arc::clone(&bus)),
         descriptor_store: Some(descriptors.clone()),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let token = CancellationToken::new();
@@ -173,6 +179,9 @@ async fn test_background_boundary_provenance() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(descriptors.clone()),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let token = CancellationToken::new();
@@ -229,6 +238,9 @@ async fn test_child_task_excludes_memory() {
         workspace: Some(dir.clone()),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -289,6 +301,9 @@ async fn test_max_turns_surfaces_partial() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -456,6 +471,9 @@ async fn test_spawn_announces_on_bus() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let mut rx = bus.subscribe(spawned_topic());
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -491,6 +509,9 @@ async fn test_spawn_system_records_trigger() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let args = SpawnArgs::new("explore", "review the diff", "review the diff");
     let outcome = runtime
@@ -585,6 +606,9 @@ async fn test_send_to_child_inbox() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus),
         descriptor_store: None,
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     runtime
         .send_to_child_inbox("c1", "focus on auth".into())
@@ -737,6 +761,9 @@ async fn test_background_child_notifies_parent() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
@@ -888,6 +915,9 @@ async fn test_foreground_failure_reaches_parent() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -937,6 +967,9 @@ async fn test_foreground_failure_loses_partial() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -1012,6 +1045,9 @@ async fn test_background_failure_notifies_parent() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
@@ -1165,6 +1201,9 @@ async fn test_failed_write_reaches_terminal() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("explore", "find the auth module", "find auth");
@@ -1222,6 +1261,9 @@ async fn test_unwritable_boundary_refuses_spawn() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("explore", "find the auth module", "find auth");
@@ -1348,6 +1390,9 @@ async fn test_background_panic_notifies_parent() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: Some(bus.clone()),
         descriptor_store: None,
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "task", "task");

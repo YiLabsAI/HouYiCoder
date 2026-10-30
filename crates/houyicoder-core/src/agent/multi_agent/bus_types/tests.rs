@@ -13,6 +13,7 @@ fn test_agent_bus_pub_sub() {
             child: ChildDescriptor {
                 agent_id: "child-1".into(),
                 agent_type: "explore".into(),
+                description: String::new(),
                 run_mode: ChildRunMode::Foreground,
             },
             turn: 1,

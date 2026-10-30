@@ -46,6 +46,15 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
                 .get("subagent_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("general-purpose");
+            // The description is what says which job this child is doing;
+            // the type alone names the role, so two children of one type read
+            // identically. The call still shows the type, because the type is
+            // the thing the model chose, and the task beside it.
+            let description = input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
             // Cap the type so a malformed or very long name keeps the chip
             // one line, matching the budget every other arm enforces.
             const MAX_TYPE: usize = 40;
@@ -55,7 +64,11 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
             } else {
                 st.to_string()
             };
-            format!("→ {capped}")
+            if description.is_empty() {
+                format!("→ {capped}")
+            } else {
+                format!("→ {capped}: {description}")
+            }
         }
         _ => value_brief(input),
     }

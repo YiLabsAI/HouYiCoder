@@ -99,6 +99,12 @@ pub enum FrontendEvent {
     AgentStatus {
         agent_id: String,
         subagent_type: String,
+        /// The delegating call's task summary. Names what this child is
+        /// doing, which the type alone cannot: two children of one type are
+        /// otherwise indistinguishable in the fleet row. Empty for a spawn no
+        /// model description reached (a hook- or gate-driven child).
+        #[serde(default)]
+        description: String,
         turn: u32,
         tokens: u64,
         tool_uses: u32,

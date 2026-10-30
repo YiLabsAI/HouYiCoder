@@ -175,6 +175,7 @@ fn test_event_carries_payload() {
         FrontendEvent::AgentStatus {
             agent_id: filler.clone(),
             subagent_type: filler.clone(),
+            description: String::new(),
             turn: 1,
             tokens: 0,
             tool_uses: 0,

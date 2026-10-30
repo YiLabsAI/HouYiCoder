@@ -143,3 +143,59 @@ fn test_tool_records_while_running() {
             .is_none()
     );
 }
+
+/// One line of output is singular. The suffix reports how much a running
+/// command has produced, and a plural behind a one makes the reader stop at
+/// exactly the number they were glancing at.
+#[test]
+fn test_bash_chip_one_line() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript = vec![
+        TranscriptLine::User("hi".into()),
+        tcall("c1", "bash", "cat notes.txt", ToolOutcome::Success),
+    ]
+    .into();
+    app.start_run_for_test(0);
+    app.run_progress_mut()
+        .expect("active run")
+        .tools
+        .begin("c1".into());
+    app.run_progress_mut()
+        .expect("active run")
+        .tools
+        .note_tick("c1".into(), 5, Some(1));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("(5s · 1 line)"),
+        "one line reads singular: {out}"
+    );
+    assert!(!out.contains("1 lines"), "and never plural: {out}");
+}
+
+/// Two lines stay plural, so the singular branch is a count of one and not a
+/// noun swapped for every count.
+#[test]
+fn test_bash_chip_two_lines() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript = vec![
+        TranscriptLine::User("hi".into()),
+        tcall("c1", "bash", "cat notes.txt", ToolOutcome::Success),
+    ]
+    .into();
+    app.start_run_for_test(0);
+    app.run_progress_mut()
+        .expect("active run")
+        .tools
+        .begin("c1".into());
+    app.run_progress_mut()
+        .expect("active run")
+        .tools
+        .note_tick("c1".into(), 5, Some(2));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("(5s · 2 lines)"),
+        "two lines read plural: {out}"
+    );
+}

@@ -107,6 +107,19 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         " Do you want to proceed?".to_string()
     };
     f.render_widget(Paragraph::new(question), rows.take(1));
+    // A running countdown gets one dim sentence of its own, so the user learns
+    // the card will resolve on its own before it does. The Yes label carries
+    // the seconds too, but a reader looking at the question would otherwise
+    // see the card answer itself for no stated reason. It is a separate row
+    // rather than more text on the question: appended, it pushed the question
+    // past the card's width and the whole card drew blank.
+    if let Some(secs) = a.auto_approve_secs_left(Instant::now()) {
+        let note = format!(" auto-approving in {secs}s \u{00b7} any key to pause");
+        f.render_widget(
+            Paragraph::new(note.clone()).style(Style::new().fg(Color::DarkGray)),
+            rows.take(1),
+        );
+    }
 
     render_options(f, a, &mut rows);
 
@@ -184,7 +197,15 @@ struct CardPlan {
 /// The rows outside the plan that every card carries: the question and the
 /// numbered options it offers.
 pub(super) fn essential_rows(a: &Approval) -> u16 {
-    if a.two_option_card() { 3 } else { 4 }
+    // The countdown note is a row of its own while the timer runs, so the
+    // card asks for it rather than letting the layout solver take it from the
+    // transcript or the draft.
+    let note = u16::from(a.auto_approve_at.is_some());
+    if a.two_option_card() {
+        3 + note
+    } else {
+        4 + note
+    }
 }
 
 /// The card as a single row, for a slot too short to hold the question and
@@ -228,7 +249,15 @@ fn option_label(a: &Approval, selected: usize) -> String {
         return "Always allow".to_string();
     }
     if a.two_option_card() {
-        return if selected == 1 { "No" } else { "Yes" }.to_string();
+        // The countdown belongs on this card too. Both cards can carry a
+        // running auto-approve timer, and a two-option card that printed a
+        // bare Yes hid the one thing that told the user the decision was
+        // about to be made for them.
+        return if selected == 1 {
+            "No".to_string()
+        } else {
+            yes_label(a)
+        };
     }
     match selected {
         0 => yes_label(a),

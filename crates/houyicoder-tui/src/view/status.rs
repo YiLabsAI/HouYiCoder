@@ -4,6 +4,8 @@
 //! in the Working status bar and folds into the pane border title in Focus
 //! mode. Spec id/title and per-clause divergence live inside the spec pane.
 
+mod config_actions;
+mod config_rows;
 pub mod pane;
 mod usage;
 

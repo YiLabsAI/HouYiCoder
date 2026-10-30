@@ -627,8 +627,14 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         return;
     }
     // k stops the selected child; a confirmed K stops all children. Esc keeps
-    // its non-terminal interrupt role.
-    if app.ui.navigation.pane == Pane::Transcript
+    // its non-terminal interrupt role. Both are plain-key gestures: Ctrl+K is
+    // the draft's kill-to-line-end, so it must not be read as a child kill
+    // just because the draft happens to be empty.
+    let plain_key = !k
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    if plain_key
+        && app.ui.navigation.pane == Pane::Transcript
         && app.ui.navigation.viewport == ViewportMode::Working
         && app.ui.input.editor.is_empty()
         && app.ui.teammate_view.is_none()

@@ -7,6 +7,7 @@ fn child(run_mode: ChildRunMode) -> ChildDescriptor {
     ChildDescriptor {
         agent_id: "child-1".into(),
         agent_type: "explore".into(),
+        description: String::new(),
         run_mode,
     }
 }

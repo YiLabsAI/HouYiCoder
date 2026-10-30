@@ -223,9 +223,14 @@ impl App {
     /// Enter on the approve option ships. Returns true when a verdict fired so
     /// the caller redraws.
     pub(crate) fn tick_auto_approve(&mut self, now: Instant) -> bool {
+        // The card prints the seconds it has left, so a fresh second is a
+        // visible change even though the deadline did not move. Without this
+        // the countdown sat on its opening figure until it fired: the loop
+        // redraws only on the dirty flag, and nothing set it between ticks.
+        let stepped = self.approval_mut().is_some_and(|a| a.note_countdown(now));
         let expired = self.approval().is_some_and(|a| a.auto_approve_expired(now));
         if !expired {
-            return false;
+            return stepped;
         }
         let (call_id, tool, kind) = match self.approval() {
             Some(a) => (a.call_id.clone(), a.tool.clone(), a.focused_kind()),
@@ -353,6 +358,7 @@ impl App {
             expanded: false,
             call_id,
             options: ask.options,
+            shown_secs: None,
             auto_approve_at: None,
             auto_approve_cancelled: false,
         };

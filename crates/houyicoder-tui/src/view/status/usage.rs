@@ -31,7 +31,7 @@ fn render_usage_latency(
     let timing = view.timing;
     if timing.model_ms > 0 || timing.tool_ms > 0 {
         s.push_str(&f(
-            "model / tool time",
+            "Model / tool time",
             &format!(
                 "{} / {}",
                 span_label(timing.model_ms),
@@ -43,7 +43,7 @@ fn render_usage_latency(
         (timing.ttft_avg_ms, timing.ttft_p95_ms, timing.ttft_p99_ms)
     {
         s.push_str(&f(
-            "ttft",
+            "TTFT",
             &format!(
                 "{} avg · {} p95 · {} p99 ({} samples)",
                 span_label(avg),
@@ -55,7 +55,7 @@ fn render_usage_latency(
     }
     if let Some(tps) = timing.decode_tok_per_sec {
         s.push_str(&f(
-            "decode speed",
+            "Decode speed",
             &format!("{tps:.1} tok/s ({} samples)", timing.decode_samples),
         ));
     }
@@ -86,8 +86,8 @@ fn render_background_spend(
             subagent.cache_read,
             subagent.provenance,
         );
-        let row = spend_row(&parts, "subagent call", subagent.calls, subagent.unmeasured);
-        s.push_str(&f("delegated usage", &row));
+        let row = spend_row(&parts, subagent.calls, subagent.unmeasured);
+        s.push_str(&f("Subagents", &row));
     }
     if let Some(recap) = view.recap_usage {
         let mut parts = spend_parts(
@@ -99,8 +99,8 @@ fn render_background_spend(
         if let Some(ms) = recap.duration_ms {
             parts.push(span_label(ms));
         }
-        let row = spend_row(&parts, "recap", recap.calls, recap.unmeasured);
-        s.push_str(&f("recap usage", &row));
+        let row = spend_row(&parts, recap.calls, recap.unmeasured);
+        s.push_str(&f("Recap usage", &row));
     }
 }
 
@@ -142,32 +142,28 @@ fn spend_parts(
     parts
 }
 
-/// One background caller's row text. No figures at all is an unmeasured cost,
-/// not a free one, so the row says so instead of printing zeroes. A row whose
-/// every call went unmeasured says the same even if a figure slipped through:
-/// nothing it could print was measured, so nothing is inside the totals above.
+/// One background caller's row text: the call count, then the figures.
 ///
-/// The count leads because the pane does not wrap: on a terminal narrower than
-/// the row the tail is clipped, and how many calls the figures cover is what a
-/// reader needs before the figures themselves. When some calls wrote no figure
-/// the sum is a floor, so the count says how many were measured rather than
-/// letting the sum pass for the whole.
-fn spend_row(parts: &[String], one: &str, calls: usize, unmeasured: usize) -> String {
-    let counted = if calls == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{calls} {one}s")
-    };
+/// The label column already names the caller, so the count does not repeat it.
+/// A row that read "4 subagent calls" under a "Subagents" label spent its
+/// scarce width naming the same thing twice, and the pane clips rather than
+/// folds.
+///
+/// No figures at all is an unmeasured cost, not a free one, so the row says so
+/// instead of printing zeroes. When some calls wrote no figure the sum is a
+/// floor, so the count says how many were measured rather than letting the sum
+/// pass for the whole.
+fn spend_row(parts: &[String], calls: usize, unmeasured: usize) -> String {
     if parts.is_empty() || unmeasured >= calls {
-        return format!("usage not reported ({counted})");
+        return format!("usage not reported ({})", count_label(calls, "call"));
     }
     let counted = if unmeasured == 0 {
-        counted
+        count_label(calls, "call")
     } else {
         let measured = calls.saturating_sub(unmeasured);
-        format!("{measured} of {counted} measured")
+        format!("{measured} of {} measured", count_label(calls, "call"))
     };
-    format!("{counted} (included above) · {}", parts.join(" · "))
+    format!("{counted} · {}", parts.join(" · "))
 }
 
 /// The session's approval and turn audit, folded by the host from the
@@ -192,39 +188,45 @@ fn render_session_audit(snap: &StatusSnapshot, f: &impl Fn(&str, &str) -> String
         // trails: the pane clips a row that outgrows the terminal rather than
         // folding it, so the order puts what the reader can act on first.
         let mut row = format!(
-            "{} · {approved} approved · {} denied",
-            count_label(approvals.cards as usize, "card"),
-            approvals.denied
+            "{} · {approved} approved",
+            count_label(approvals.cards as usize, "card")
         );
+        if approvals.denied > 0 {
+            row.push_str(&format!(" · {} denied", approvals.denied));
+        }
         if approvals.unknown_outcome > 0 {
             // A cancelled ask got no answer: reporting it as a denial would
             // claim a refusal the user never gave.
             row.push_str(&format!(" · {} no verdict", approvals.unknown_outcome));
         }
         if approved > 0 {
-            row.push_str(&format!(
-                " ({} once · {} session · {} workspace)",
-                approvals.approved_once, approvals.approved_session, approvals.approved_workspace
-            ));
+            // Only the scopes that were actually used. A card set that is
+            // all once-only reads "87 once"; printing "0 session · 0
+            // workspace" beside it makes the reader check three numbers to
+            // learn that two of them say nothing.
+            let mut scopes: Vec<String> = Vec::new();
+            if approvals.approved_once > 0 {
+                scopes.push(format!("{} once", approvals.approved_once));
+            }
+            if approvals.approved_session > 0 {
+                scopes.push(format!("{} session", approvals.approved_session));
+            }
+            if approvals.approved_workspace > 0 {
+                scopes.push(format!("{} workspace", approvals.approved_workspace));
+            }
+            if !scopes.is_empty() {
+                row.push_str(&format!(" ({})", scopes.join(" · ")));
+            }
         }
-        s.push_str(&f("approvals", &row));
+        s.push_str(&f("Approvals", &row));
     }
+    // The turn rows exist only to explain a turn that did not finish in a
+    // readable way. A share of completed turns tells a reader nothing they
+    // can act on, and over a log written by an older build the share divides
+    // by a denominator that leaves most of the turns out, so it reads as a
+    // complete run beside a large unknown count.
     let turns = audit.turns;
-    let ended = turns
-        .completed
-        .saturating_add(turns.interrupted)
-        .saturating_add(turns.unfinished);
     let mut parts: Vec<String> = Vec::new();
-    if ended > 0 {
-        let share = 100.0 * f64::from(turns.completed) / f64::from(ended);
-        parts.push(format!(
-            "{}/{ended} completed ({share:.0}%)",
-            turns.completed
-        ));
-    }
-    // An unreadable ending qualifies the share above, so it comes before
-    // the other adverse counts: a row that has to stop early must not drop
-    // the term that explains why the share is what it is.
     if turns.unknown > 0 {
         parts.push(format!("{} unknown", turns.unknown));
     }
@@ -235,7 +237,7 @@ fn render_session_audit(snap: &StatusSnapshot, f: &impl Fn(&str, &str) -> String
         parts.push(format!("{} unfinished", turns.unfinished));
     }
     if !parts.is_empty() {
-        s.push_str(&f("turns", &parts.join(" · ")));
+        s.push_str(&f("Turns", &parts.join(" · ")));
     }
 }
 
@@ -253,17 +255,21 @@ pub(super) fn render_usage(app: &App) -> String {
     let u = &snap.cumulative_usage;
     let ft = format_tokens;
     let mut s = String::new();
-    s.push_str(&f("input tokens", &ft(u.input_tokens as u64)));
-    s.push_str(&f("output tokens", &ft(u.output_tokens as u64)));
-    // Reasoning tokens: a component of output, shown only when >0. The
-    // parenthetical note "(incl. in output)" makes the inclusion relation
-    // explicit so it is not read as a separate total (I14).
-    if u.reasoning_tokens > 0 {
-        s.push_str(&f(
-            "reasoning",
-            &format!("{} (incl. in output)", ft(u.reasoning_tokens as u64)),
-        ));
-    }
+    s.push_str(&f("Input tokens", &ft(u.input_tokens as u64)));
+    // Reasoning is a component of the output total, not a separate one, so it
+    // rides on the output row. Its own row made a reader compare two figures
+    // to see how much of the answer was thinking, and a lone "incl. in
+    // output" note to learn they overlapped at all.
+    let output_value = if u.reasoning_tokens > 0 {
+        format!(
+            "{} ({} thinking)",
+            ft(u.output_tokens as u64),
+            ft(u.reasoning_tokens as u64)
+        )
+    } else {
+        ft(u.output_tokens as u64)
+    };
+    s.push_str(&f("Output tokens", &output_value));
     let cache_read = u.cache_read_input_tokens as u64;
     if count_visible(cache_read, u.provenance.cache_read_reported) {
         let cache_value = match u
@@ -273,14 +279,14 @@ pub(super) fn render_usage(app: &App) -> String {
             Some(pct) => format!("{} ({pct:.1}% of input)", ft(cache_read)),
             None => ft(cache_read),
         };
-        s.push_str(&f("cached input", &cache_value));
+        s.push_str(&f("Cached input", &cache_value));
     }
     // Not every provider reports cache creation. A zero cannot distinguish
     // an actual zero from an omitted field, so show this row only with data.
     if u.cache_write_input_tokens > 0 {
-        s.push_str(&f("cache creation", &ft(u.cache_write_input_tokens as u64)));
+        s.push_str(&f("Cache creation", &ft(u.cache_write_input_tokens as u64)));
     }
-    s.push_str(&f("tool calls", &tool_call_row(&snap)));
+    s.push_str(&f("Tool calls", &tool_call_row(&snap)));
     render_session_audit(&snap, &f, &mut s);
     // One read of the session's typed summary serves both the split and the
     // latency rows, so a frame pays for it once.
@@ -320,7 +326,7 @@ pub(super) fn render_usage(app: &App) -> String {
                 ft(m.output_tokens),
             );
             if m.reasoning_tokens > 0 {
-                row.push_str(&format!(" · {} reasoning", ft(m.reasoning_tokens)));
+                row.push_str(&format!(" · {} thinking", ft(m.reasoning_tokens)));
             }
             let cache_pct = match m
                 .provenance

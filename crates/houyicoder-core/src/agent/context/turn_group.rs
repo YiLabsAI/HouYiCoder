@@ -57,9 +57,9 @@ pub fn assemble_model_input(
 }
 
 /// Push a user-role text into the items, merging into the last item if it is
-/// already a User (providers reject user-in-a-row). Shared with the loop that
-/// appends a runner nudge after assembly, so both keep the same rule.
-pub(crate) fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
+/// already a User (providers reject user-in-a-row). Every caller is in this
+/// module: the two assembly steps that append a user clause.
+fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
     if let Some(InputItem::User { content }) = items.last_mut() {
         content.push('\n');
         content.push_str(text);

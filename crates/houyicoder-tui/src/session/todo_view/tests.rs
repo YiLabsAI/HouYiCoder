@@ -80,6 +80,45 @@ fn test_run_end_pauses_existing() {
     assert_eq!(state.items[0].status, TodoStatus::Paused);
 }
 
+/// A new run resumes the item a previous run paused. The pause is accurate
+/// while nothing runs; leaving it in place once a run starts again reads as a
+/// task stopped while the run that would finish it is going.
+#[test]
+fn test_run_resumes_paused_item() {
+    let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+        "todos": [{"content": "unfinished", "status": "in_progress"}]
+    })));
+    let mut state = TodoState::default();
+    state.update(from_ref(&frame), 0, true);
+    state.update(from_ref(&frame), 0, false);
+    assert_eq!(state.items[0].status, TodoStatus::Paused);
+
+    // A new run starts. The item is being worked again, so it reads as in
+    // progress even before this turn lands a todo write of its own.
+    state.update(from_ref(&frame), 0, true);
+    assert_eq!(
+        state.items[0].status,
+        TodoStatus::InProgress,
+        "a run in progress resumes the paused item"
+    );
+}
+
+/// Completed and pending items are untouched by a resume: only a pause is a
+/// statement about the current run.
+#[test]
+fn test_resume_leaves_other_states() {
+    let frame = TranscriptFrame::Session(todo_write_frame(serde_json::json!({
+        "todos": [
+            {"content": "done", "status": "completed"},
+            {"content": "later", "status": "pending"}
+        ]
+    })));
+    let mut state = TodoState::default();
+    state.update(from_ref(&frame), 0, true);
+    assert_eq!(state.items[0].status, TodoStatus::Completed);
+    assert_eq!(state.items[1].status, TodoStatus::Pending);
+}
+
 #[test]
 fn test_prune_hides_done() {
     let now = Instant::now();

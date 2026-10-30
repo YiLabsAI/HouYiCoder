@@ -10,9 +10,9 @@ use crate::selection::TAG_PLAIN;
 use crate::selection::TAG_SPINNER;
 use crate::state::App;
 use crate::view::spinner::spinner_row_text;
-use crate::view::todo_list::TODO_FOLD_KEY;
 use crate::view::todo_list::collapsed_summary_row;
 use crate::view::todo_list::render_rows;
+use crate::view::todo_list::{HEADER_ROW, TODO_FOLD_KEY};
 
 /// Build the per-frame live rows: the streaming assistant text (when active),
 /// the spinner (when a run is in flight), and the session checklist. Each
@@ -75,11 +75,17 @@ pub(super) fn build_tail_rows(area: Rect, app: &App, has_slots: bool) -> RowSet 
         // more to see and no way to see it.
         let summary = collapsed_summary_row(&todo_rows);
         for (i, (plain, styled)) in todo_rows.into_iter().enumerate() {
-            // The summary is tagged as a fold row, which is the tag the click
+            // Two rows carry the fold affordance: the header, and the hidden
+            // summary. Both say the list can open or close, so both have to
+            // answer the gesture. A header that named the chord without being
+            // wired to it is the trap this replaces: the reader could open the
+            // list from the summary and then find nothing that closes it.
+            //
+            // Both are tagged as fold rows, which is the tag the click
             // hit-test reads to decide between opening a fold and opening a
             // delegation. A plain tag would route the click to the delegation
             // path and the checklist would stay shut.
-            let row = if Some(i) == summary {
+            let row = if Some(i) == summary || i == HEADER_ROW {
                 Row::new(TAG_FOLD, plain)
                     .pre(Some(styled))
                     .fold_key(Some(TODO_FOLD_KEY.to_string()))

@@ -308,17 +308,17 @@ pub(crate) fn assemble(
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
     let denied_agents = resolve_denied_agents(rule_store.as_deref());
     let bus = Arc::new(AgentBus::new());
-    let spawn_handle = multi_agent::build_runtime(multi_agent::MultiAgentDeps {
-        registry: agent_registry.clone(),
-        store: store.clone(),
-        provider: Arc::clone(&provider),
-        tools: tools.clone(),
-        config: config.clone(),
-        worktree_controller: worktree_controller.clone(),
-        workspace: fences.workspace.clone(),
-        bus: Some(Arc::clone(&bus)),
-        descriptor_store: Some(Arc::clone(&descriptor_store)),
-    });
+    let spawn_handle = multi_agent::build_runtime(skills.multi_agent_deps(
+        agent_registry.clone(),
+        store.clone(),
+        Arc::clone(&provider),
+        tools.clone(),
+        config.clone(),
+        worktree_controller.clone(),
+        fences.workspace.clone(),
+        Some(Arc::clone(&bus)),
+        Some(Arc::clone(&descriptor_store)),
+    ));
     let (section, effort_warnings) = load_model_section_from(&settings_path());
     let (recap, recap_warnings) = build_recap(session, &section, &store, &provider_for_extractor);
     let store_log_root = store.session_log_root();

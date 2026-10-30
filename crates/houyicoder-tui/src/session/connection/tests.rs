@@ -341,6 +341,7 @@ async fn test_drive_translates_agent_status() {
     engine.event(FrontendEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 2,
         tokens: 150,
         tool_uses: 3,

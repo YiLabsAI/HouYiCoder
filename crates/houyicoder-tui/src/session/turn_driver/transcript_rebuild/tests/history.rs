@@ -309,15 +309,17 @@ fn test_log_notice_single_row() {
     pump(&mut app, user_msg("go"));
     pump(&mut app, compaction_frame());
     pump(&mut app, agent_msg("ok"));
+    // The compaction is one foldable row rather than a checkpoint line plus
+    // the summary that followed it, so the count is over that row.
     let notices = app
         .transcript()
         .iter()
-        .filter(|l| matches!(l, TranscriptLine::System(t) if t == "compaction checkpoint"))
+        .filter(|l| matches!(l, TranscriptLine::Compaction { .. }))
         .count();
     assert_eq!(
         notices,
         1,
-        "one checkpoint row through a rebuild: {:?}",
+        "one compaction row through a rebuild: {:?}",
         app.transcript()
     );
 }

@@ -232,7 +232,10 @@ pub fn built_in_general_purpose() -> AgentDefinition {
         model: None,
         effort: None,
         permission_mode: None,
-        max_turns: None,
+        // A general-purpose child does the whole assignment, so it gets the
+        // budget a short task needs. The ceiling exists so a runaway search
+        // stops visibly rather than spending a session's tokens on nothing.
+        max_turns: Some(200),
         skills: Vec::new(),
         mcp_servers: Vec::new(),
         hooks: Vec::new(),
@@ -259,7 +262,10 @@ pub fn built_in_explore() -> AgentDefinition {
         model: Some("Flash".into()),
         effort: None,
         permission_mode: None,
-        max_turns: None,
+        // A read-only child answers one question. Its budget stops a
+        // search that keeps finding new leads from consuming the whole
+        // session, while leaving room for a real multi-file sweep.
+        max_turns: Some(100),
         skills: Vec::new(),
         mcp_servers: Vec::new(),
         hooks: Vec::new(),
@@ -286,7 +292,10 @@ pub fn built_in_plan() -> AgentDefinition {
         model: Some("Max".into()),
         effort: None,
         permission_mode: None,
-        max_turns: None,
+        // A read-only child answers one question. Its budget stops a
+        // search that keeps finding new leads from consuming the whole
+        // session, while leaving room for a real multi-file sweep.
+        max_turns: Some(100),
         skills: Vec::new(),
         mcp_servers: Vec::new(),
         hooks: Vec::new(),
@@ -313,7 +322,10 @@ pub fn built_in_verify() -> AgentDefinition {
         model: Some("Max".into()),
         effort: None,
         permission_mode: None,
-        max_turns: None,
+        // A read-only child answers one question. Its budget stops a
+        // search that keeps finding new leads from consuming the whole
+        // session, while leaving room for a real multi-file sweep.
+        max_turns: Some(100),
         skills: Vec::new(),
         mcp_servers: Vec::new(),
         hooks: Vec::new(),
@@ -340,7 +352,10 @@ pub fn built_in_code_guide() -> AgentDefinition {
         model: Some("Flash".into()),
         effort: None,
         permission_mode: None,
-        max_turns: None,
+        // A read-only child answers one question. Its budget stops a
+        // search that keeps finding new leads from consuming the whole
+        // session, while leaving room for a real multi-file sweep.
+        max_turns: Some(100),
         skills: Vec::new(),
         mcp_servers: Vec::new(),
         hooks: Vec::new(),

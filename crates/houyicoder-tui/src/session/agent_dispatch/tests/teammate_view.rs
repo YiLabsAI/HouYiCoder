@@ -4,9 +4,18 @@ use crate::composition::app;
 use crate::records::TeammateView;
 use crate::records::ToolOutcome;
 use crate::records::TranscriptLine;
+use crate::test_harness::render_text;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+
+/// An app on the working screen, which is where the fleet strip draws.
+fn working_app() -> crate::state::App {
+    let mut app = app();
+    app.ui.navigation.screen = crate::state::Screen::Working;
+    app.ui.navigation.viewport = crate::state::ViewportMode::Working;
+    app
+}
 
 /// Enter on a Subagent line opens the teammate view targeting the line at
 /// the cursor, not the last one. The view carries the subagent_type +
@@ -330,6 +339,7 @@ fn test_agent_status_updates_fleet() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 1,
         tokens: 100,
         tool_uses: 2,
@@ -351,6 +361,7 @@ fn test_agent_status_updates_fleet() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 3,
         tokens: 300,
         tool_uses: 5,
@@ -386,6 +397,7 @@ fn test_teammate_view_auto_exit() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 2,
         tokens: 200,
         tool_uses: 1,
@@ -397,6 +409,7 @@ fn test_teammate_view_auto_exit() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 2,
         tokens: 200,
         tool_uses: 1,
@@ -415,6 +428,7 @@ fn test_teammate_view_auto_exit() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c2".into(),
         subagent_type: "plan".into(),
+        description: String::new(),
         turn: 1,
         tokens: 10,
         tool_uses: 0,
@@ -429,6 +443,7 @@ fn test_teammate_view_auto_exit() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 9,
         tokens: 900,
         tool_uses: 4,
@@ -455,6 +470,7 @@ fn test_teammate_live_refetch() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 2,
         tokens: 200,
         tool_uses: 1,
@@ -476,6 +492,7 @@ fn test_teammate_live_refetch() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 2,
         tokens: 210,
         tool_uses: 1,
@@ -493,6 +510,7 @@ fn test_teammate_live_refetch() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c2".into(),
         subagent_type: "plan".into(),
+        description: String::new(),
         turn: 5,
         tokens: 10,
         tool_uses: 0,
@@ -506,5 +524,56 @@ fn test_teammate_live_refetch() {
             .and_then(|v| v.last_fetched_turn),
         Some(2),
         "a different child status does not touch the viewed child's turn"
+    );
+}
+
+/// The delegating call's description reaches the fleet row. It travels the
+/// whole path — wire frame, dispatch, entry, render — so a break anywhere on
+/// it leaves the row naming only the role, which is what the user already
+/// chose and cannot tell two children of one type apart.
+#[test]
+fn test_description_reaches_row() {
+    let mut app = working_app();
+    app.handle_agent_message(SessionMessage::Event(ServerEvent::AgentStatus {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        description: "map the auth path".into(),
+        turn: 1,
+        tokens: 4200,
+        tool_uses: 2,
+        last_activity: Some("grep".into()),
+        completed: None,
+    }));
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("map the auth path"),
+        "the fleet row names the job: {out}"
+    );
+}
+
+/// A later status that omits the summary does not blank the row. The relay
+/// and the dispatch both forward whatever the frame carries, and a frame with
+/// no description mid-run would otherwise erase the only label the row has.
+#[test]
+fn test_blank_keeps_label() {
+    let mut app = working_app();
+    let frame = |description: &str, turn: u32| {
+        SessionMessage::Event(ServerEvent::AgentStatus {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            description: description.into(),
+            turn,
+            tokens: 4200,
+            tool_uses: 2,
+            last_activity: Some("grep".into()),
+            completed: None,
+        })
+    };
+    app.handle_agent_message(frame("map the auth path", 1));
+    app.handle_agent_message(frame("", 2));
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("map the auth path"),
+        "the label survives a status without one: {out}"
     );
 }

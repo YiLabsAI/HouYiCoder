@@ -5,10 +5,45 @@ use crate::lifecycle::SessionLeaseStore;
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all, remove_file};
 use std::os::unix::net::UnixStream as StdUnixStream;
+use std::path::{Path, PathBuf};
 use std::process::id;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;
+
+/// The longest path a Unix-domain socket can be bound to, including the
+/// trailing NUL: 104 on macOS and 108 on Linux. The shorter figure is used on
+/// both so a test that passes on one platform cannot fail on the other.
+const SUN_PATH_MAX: usize = 104;
+
+/// A short directory for a socket fixture.
+///
+/// A socket path has a hard byte limit, and the system temp root can be long:
+/// on macOS it is already 71 bytes under a session scratch dir, which leaves
+/// well under 40 for the rest. Naming the fixture with a short leaf and
+/// asserting the final path keeps the failure readable here rather than at
+/// the bind, where the error names the socket and not the directory that made
+/// it too long.
+fn socket_dir(prefix: &str) -> PathBuf {
+    let dir = temp_dir().join(format!("{prefix}-{}", id()));
+    create_dir_all(&dir).ok();
+    dir
+}
+
+/// The socket path inside a fixture directory, checked against the platform
+/// limit before it is used. A path that cannot be bound is a fault in the
+/// fixture, not a property of the code under test.
+fn socket_path(dir: &Path, leaf: &str) -> PathBuf {
+    let path = dir.join(leaf);
+    let len = path.as_os_str().len();
+    assert!(
+        len < SUN_PATH_MAX,
+        "fixture socket path is {len} bytes, over the {SUN_PATH_MAX}-byte \
+         limit; shorten the leaf or the directory name: {}",
+        path.display()
+    );
+    path
+}
 
 /// A frame round-trips through the carrier: writing on one stream end
 /// lands on the FrameCarrier inbound channel, and sending on the outbound
@@ -51,9 +86,8 @@ async fn test_bridge_round_trips_frame() {
 /// without a full runner harness.
 #[tokio::test]
 async fn test_listen_accepts_one() {
-    let dir = temp_dir().join(format!("houyicoder-uds-{}", id()));
-    create_dir_all(&dir).ok();
-    let path = dir.join("listen_accepts_one.sock");
+    let dir = socket_dir("hu-uds");
+    let path = socket_path(&dir, "l.sock");
     remove_file(&path).ok();
 
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
@@ -79,9 +113,9 @@ async fn test_listen_accepts_one() {
 /// error is Unavailable, marked retriable, and names the bind step.
 #[tokio::test]
 async fn test_bind_failure_reports_unavailable() {
-    let missing = temp_dir().join(format!("houyi-uds-missing-{}", id()));
+    let missing = temp_dir().join(format!("hu-miss-{}", id()));
     drop(remove_dir_all(&missing));
-    let path = missing.join("nested.sock");
+    let path = missing.join("n.sock");
 
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
     let err = listen_uds(host, SessionId::new(), &path)

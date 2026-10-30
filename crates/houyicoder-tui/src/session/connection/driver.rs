@@ -319,6 +319,7 @@ async fn drive_connection(
                     FrontendEvent::AgentStatus {
                         agent_id,
                         subagent_type,
+                        description,
                         turn,
                         tokens,
                         tool_uses,
@@ -328,6 +329,7 @@ async fn drive_connection(
                         let _send = agent_tx.send(SessionMessage::Event(ServerEvent::AgentStatus {
                             agent_id,
                             subagent_type,
+                            description,
                             turn,
                             tokens,
                             tool_uses,

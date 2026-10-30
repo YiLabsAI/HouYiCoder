@@ -2,6 +2,7 @@
 
 use super::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{
     PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionEvent, SessionId,
@@ -11,12 +12,14 @@ use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
 
-use crate::agent::ToolRegistry;
 use crate::agent::multi_agent::bus_types::ChildRunMode;
 use crate::agent::multi_agent::bus_types::progress_topic;
 use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, ChildStatus, completed_topic};
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::runner_config::RunnerConfig;
+use crate::agent::{
+    Hook, HookContext, HookError, HookEvent, HookRegistry, HookSource, HookVerdict, ToolRegistry,
+};
 use crate::provider::test_support::FakeProvider;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_protocol::llm::EffortLevel;
@@ -50,6 +53,9 @@ fn req_at_depth(
         child_cancel: CancellationToken::new(),
         bus: None,
         descriptor_store: None,
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     }
 }
 
@@ -480,5 +486,113 @@ async fn test_inbox_drained_at_boundary() {
         events.iter().any(|e| matches!(&e.event,
                 SessionEvent::MidTurnInput { text, .. } if text == "steer here")),
         "inbox text drained at the turn boundary as a MidTurnInput event"
+    );
+}
+
+/// A tiny registry holding one skill, so a test can tell "the child has the
+/// parent's skill set" from "the child has no skill set at all".
+struct OneSkill;
+
+impl SkillRegistry for OneSkill {
+    fn list_model_invocable(&self) -> Vec<SkillDescriptor> {
+        vec![SkillDescriptor {
+            name: "deep-review".into(),
+            description: "review a change".into(),
+            when_to_use: None,
+            argument_hint: None,
+            disable_model_invocation: false,
+            user_invocable: true,
+            body_token_estimate: 0,
+            allowed_tools: Vec::new(),
+            allowed_mach_services: Vec::new(),
+            allow_app_launch: false,
+        }]
+    }
+
+    fn find(&self, _name: &str) -> Option<SkillDescriptor> {
+        None
+    }
+
+    fn prepare_body(
+        &self,
+        name: &str,
+        _args: Option<&str>,
+        _session_id: Option<&str>,
+    ) -> Result<String, SkillError> {
+        Err(SkillError::NotFound(name.to_string()))
+    }
+}
+
+/// The child runner carries the parent's skill registry. The child holds the
+/// Skill tool, so a runner without the registry has a tool with no listing
+/// and no resolver behind it: it cannot see which skills exist, and the model
+/// falls back to reading a SKILL.md by absolute path.
+#[tokio::test]
+async fn test_child_inherits_skill_registry() {
+    let registry: Arc<dyn SkillRegistry> = Arc::new(OneSkill);
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let mut req = req_at_depth(parent_sid, store.clone(), provider, 0);
+    req.skill_registry = Some(Arc::clone(&registry));
+
+    let handle = spawn_child(req).await.expect("spawn");
+
+    let names: Vec<String> = handle
+        .runner
+        .skill_registry()
+        .expect("the child carries the parent's registry")
+        .list_model_invocable()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert_eq!(names, vec!["deep-review".to_string()]);
+}
+
+/// A project rule that refuses every call about to run. The child inherits
+/// the registry holding it, so its own tool calls meet the same gate.
+struct RefuseAll;
+
+impl Hook for RefuseAll {
+    fn name(&self) -> &str {
+        "refuse-all"
+    }
+    fn events(&self) -> &[HookEvent] {
+        &[HookEvent::PreToolUse]
+    }
+    fn evaluate(&self, _ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        Ok(HookVerdict::Deny("project rule".into()))
+    }
+    fn source(&self) -> HookSource {
+        HookSource::Project
+    }
+}
+
+/// A child inherits the parent's hook registry, so its tool calls answer to
+/// the same write-time gates. A child without it is a path around every
+/// project rule: the parent's gates apply where the parent runs tools, and
+/// the child runs its own.
+#[tokio::test]
+async fn test_child_inherits_hooks() {
+    let hooks = Arc::new(HookRegistry::new());
+    hooks.register(Arc::new(RefuseAll));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let mut req = req_at_depth(parent_sid, store.clone(), provider, 0);
+    req.hooks = Some(Arc::clone(&hooks));
+
+    let handle = spawn_child(req).await.expect("spawn");
+
+    let names: Vec<String> = handle
+        .runner
+        .hooks_list()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["refuse-all".to_string()],
+        "the child answers to the parent's gates"
     );
 }

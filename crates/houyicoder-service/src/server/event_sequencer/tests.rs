@@ -26,6 +26,7 @@ fn status(agent_id: &str, turn: u32) -> FrontendEvent {
     FrontendEvent::AgentStatus {
         agent_id: agent_id.to_string(),
         subagent_type: "explore".to_string(),
+        description: String::new(),
         turn,
         tokens: 0,
         tool_uses: 0,

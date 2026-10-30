@@ -176,18 +176,29 @@ fn test_status_shows_session_tasks() {
     app.sessions.current.todos.items = todos;
     app.run_command(SlashCommand::Status);
     // /status opens a pane (the shared Pane template), not a transcript dump;
-    // render the working surface to read the pane content. A tall-enough
-    // terminal so the pane's area/2 cap admits the tasks section.
+    // render the working surface to read the pane content.
     let out = render_text(&app, 80, 40);
-    // Todos stay on the Status tab; tokens/wall-duration moved to Usage.
-    assert!(out.contains("tasks: 1"), "tasks count missing:\n{out}");
+    // The checklist is transcript content, not a /status row: it is on
+    // screen in the transcript above the pane, and repeating it inside the
+    // pane would put one list on two surfaces with two sets of counts to
+    // keep in step.
+    let lines: Vec<&str> = out.lines().collect();
+    let tab = lines
+        .iter()
+        .position(|l| l.contains("[Status]"))
+        .unwrap_or_else(|| panic!("no sub-tab header:\n{out}"));
+    let hint = lines
+        .iter()
+        .position(|l| l.contains("switch tab"))
+        .unwrap_or_else(|| panic!("no key hint:\n{out}"));
+    let body: Vec<&str> = lines[tab..hint].to_vec();
     assert!(
-        out.contains("in progress, 0 paused, 0 open"),
-        "tasks breakdown missing:\n{out}"
+        !body.iter().any(|l| l.contains("tasks (")),
+        "the pane does not repeat the checklist:\n{out}"
     );
     assert!(
         out.contains("doing run tests"),
-        "task item line missing:\n{out}"
+        "the transcript still shows it:\n{out}"
     );
 }
 
@@ -257,5 +268,46 @@ fn test_footer_uses_header_words() {
     assert!(
         !header.contains("0 paused"),
         "a zero state is left out: {header}"
+    );
+}
+
+/// The expanded header names the way back. The checklist can fill the screen,
+/// and the row that opened it is the one the reader looks at to close it; a
+/// header that only counted states leaves that reader hunting.
+#[test]
+fn test_expanded_header_hints() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = seeded_todos(&[
+        ("one", TodoStatus::Completed),
+        ("two", TodoStatus::InProgress),
+        ("three", TodoStatus::Pending),
+    ]);
+    app.sessions.current.todos.expanded = true;
+    let out = render_text(&app, 100, 30);
+    let header = out
+        .lines()
+        .find(|l| l.contains("tasks ("))
+        .unwrap_or_else(|| panic!("no header:\n{out}"));
+    assert!(
+        header.contains("ctrl+o to collapse"),
+        "the expanded header names the chord that closes it: {header}"
+    );
+}
+
+/// The collapsed header does not promise a collapse: with the list shut the
+/// chord is what opens it, and naming the opposite would be wrong.
+#[test]
+fn test_collapsed_header_quiet() {
+    let mut app = working_app();
+    app.sessions.current.todos.items =
+        seeded_todos(&[("one", TodoStatus::Completed), ("two", TodoStatus::Pending)]);
+    let out = render_text(&app, 100, 30);
+    let header = out
+        .lines()
+        .find(|l| l.contains("tasks ("))
+        .unwrap_or_else(|| panic!("no header:\n{out}"));
+    assert!(
+        !header.contains("collapse"),
+        "a shut list offers no collapse: {header}"
     );
 }

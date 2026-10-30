@@ -1,6 +1,10 @@
 //! Budget-pressure gate: capture real CompletionRequests and assert the
-//! runtime-injected User items are constant across turns — any per-turn
-//! variation = budget interpolation.
+//! runtime never injects a user item that urges the model to stop early.
+//!
+//! A fabricated user turn telling the model its budget is nearly gone is not
+//! a neutral reminder: a reasoning model reads it as the user asking for a
+//! partial answer now, abandons the remaining work, and ends the run with a
+//! plain stop, which also loses the turn-limit outcome the terminal reports.
 
 use std::sync::{Arc, Mutex};
 
@@ -118,47 +122,45 @@ async fn test_injected_messages_no_pressure() {
     let captured = seen.lock().expect("mutex").clone();
     assert!(
         captured.len() >= 3,
-        "at least 3 requests (reminder fires turn 2+), got {}",
+        "the run must make several calls for this to mean anything, got {}",
         captured.len()
     );
 
-    // Constancy gate: the convergence reminder this module guards must read
-    // the same on every turn it fires, with no turn count, percentage, or
-    // remaining budget interpolated into it.
-    //
-    // Other injected notes may legitimately precede it (a redundant-call
-    // nudge carries the tool name and so varies by turn), so the reminder is
-    // matched on its own text rather than by comparing whole items: a gate
-    // that required every injected item to be byte-identical would fail on
-    // an unrelated, correct injection and say nothing about interpolation.
-    const REMINDER: &str = "If you have gathered enough information to answer, \
-         synthesize your findings and produce the final answer now. Prioritize \
-         answering over further exploration.";
-    //
-    // Skip the first trailing item (turn 0's is the real user prompt).
-    let trailing: Vec<String> = captured
-        .iter()
-        .filter_map(|r| match r.input.last() {
-            Some(InputItem::User { content }) => Some(content.clone()),
-            _ => None,
-        })
-        .skip(1)
-        .collect();
-    assert!(
-        !trailing.is_empty(),
-        "the convergence reminder fires on later turns, so at least one \
-         request ends with an injected item"
-    );
-    for (i, t) in trailing.iter().enumerate() {
-        let at = t
-            .find(REMINDER)
-            .unwrap_or_else(|| panic!("turn {} is missing the convergence reminder: {t}", i + 1));
-        assert_eq!(
-            &t[at..],
-            REMINDER,
-            "the convergence reminder varies on turn {} = per-turn state \
-             interpolated into model input",
-            i + 1
-        );
+    // Nothing the runtime injects may urge the model to stop early. A fake
+    // user turn saying the budget is nearly gone reads to a reasoning model
+    // as the user asking it to wrap up, so it abandons the remaining work and
+    // returns a partial answer, and the run then ends in a plain stop instead
+    // of the turn-limit outcome the terminal reports.
+    const PRESSURE_PATTERNS: [&str; 6] = [
+        "gathered enough",
+        "synthesize",
+        "final answer",
+        "remaining turns",
+        "budget",
+        "wrap up",
+    ];
+    for (i, request) in captured.iter().enumerate() {
+        for item in &request.input {
+            let InputItem::User { content } = item else {
+                continue;
+            };
+            let lower = content.to_ascii_lowercase();
+            for pattern in PRESSURE_PATTERNS {
+                assert!(
+                    !lower.contains(&pattern.to_ascii_lowercase()),
+                    "call {} carries the pressure phrase {pattern:?} in a user \
+                     item: {content}",
+                    i + 1
+                );
+            }
+        }
     }
+
+    // The loop must run to its own end rather than being talked into stopping:
+    // every scripted tool call is consumed, so all five responses were used.
+    assert_eq!(
+        captured.len(),
+        5,
+        "the run used every scripted response instead of stopping early"
+    );
 }

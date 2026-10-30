@@ -63,6 +63,19 @@ impl App {
                 w,
             ),
             // Plain selectable rows: count the exact set the draw path emits.
+            // A compaction draws its head row plus one wrapped row per digest
+            // line while expanded, so a flat count of the label undershoots by
+            // exactly the digest and every offset after it drifts.
+            TranscriptLine::Compaction { key, summary, .. } => {
+                let mut n = 1; // head row
+                if self.ui.transcript_view.expanded.fold_groups.contains(key) || self.ui.verbose {
+                    n += summary
+                        .lines()
+                        .map(|logical| wrap_line(logical, w as usize).len())
+                        .sum::<usize>();
+                }
+                n
+            }
             TranscriptLine::ContextGrid(view) => render_as_rows(view, w as usize).len(),
             TranscriptLine::Subagent {
                 child_sid,

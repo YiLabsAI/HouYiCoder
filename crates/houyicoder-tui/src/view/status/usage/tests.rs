@@ -38,28 +38,38 @@ impl TrajectoryLog for Fixed {
 fn test_usage_tab_has_tokens() {
     let app = working_app();
     let s = render_usage(&app);
-    assert!(s.contains("input tokens:"), "input row: {s}");
-    assert!(s.contains("output tokens:"), "output row: {s}");
+    assert!(s.contains("Input tokens:"), "input row: {s}");
+    assert!(s.contains("Output tokens:"), "output row: {s}");
 }
 
-/// The Usage tab shows reasoning tokens (incl. in output) only when >0.
+/// Reasoning rides on the output row, only when it is above zero. It is a
+/// component of the output total, so a separate row made the reader compare
+/// two figures to learn how much of the answer was thinking.
 #[test]
 fn test_usage_tab_shows_reasoning() {
     let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
+    snap.cumulative_usage.output_tokens = 4000;
     snap.cumulative_usage.reasoning_tokens = 1500;
     app.sessions.current.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
-    assert!(s.contains("reasoning:"), "reasoning row: {s}");
-    assert!(s.contains("incl. in output"), "inclusion note: {s}");
+    assert!(
+        s.contains("Output tokens:        4k (1.5k thinking)"),
+        "the output row carries the thinking share: {s}"
+    );
+    assert!(
+        !s.contains("reasoning:"),
+        "no reasoning row of its own: {s}"
+    );
 
     // Hidden when 0.
     let mut app = working_app();
     let mut snap = app.snapshot_or_stub();
+    snap.cumulative_usage.output_tokens = 4000;
     snap.cumulative_usage.reasoning_tokens = 0;
     app.sessions.current.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
-    assert!(!s.contains("reasoning:"), "no reasoning when 0: {s}");
+    assert!(!s.contains("thinking"), "no thinking when 0: {s}");
 }
 
 /// The Usage tab renders the per-model section only when two or more
@@ -123,11 +133,11 @@ fn test_per_model_lists_models() {
     assert!(qwen.contains("1.5m input"), "compact m suffix: {qwen}");
     assert!(qwen.contains("400k output"), "compact k suffix: {qwen}");
     assert!(
-        !qwen.contains("reasoning"),
-        "qwen reasoning 0 omitted: {qwen}"
+        !qwen.contains("thinking"),
+        "qwen thinking 0 omitted: {qwen}"
     );
     assert!(glm.contains("300k input"), "glm compact: {glm}");
-    assert!(glm.contains("8k reasoning"), "glm reasoning shown: {glm}");
+    assert!(glm.contains("8k thinking"), "glm thinking shown: {glm}");
 }
 
 /// A model whose calls never reported the cache-read field leaves that count
@@ -282,20 +292,20 @@ fn test_usage_tab_latency_rows() {
     let mut app = working_app();
     app.sessions.persistence.trajectory_log = Some(Arc::new(Fixed(Arc::new(view))));
     let s = render_usage(&app);
-    assert!(s.contains("model / tool time:"), "work time row: {s}");
+    assert!(s.contains("Model / tool time:"), "work time row: {s}");
     assert!(s.contains("91.2s / 28.4s"), "the split: {s}");
-    assert!(s.contains("ttft:"), "ttft row: {s}");
+    assert!(s.contains("TTFT:"), "ttft row: {s}");
     assert!(
         s.contains("1.8s avg · 4.8s p95 · 8.2s p99"),
         "percentiles: {s}"
     );
     assert!(s.contains("(612 samples)"), "the sample count: {s}");
-    assert!(s.contains("decode speed:"), "decode row: {s}");
+    assert!(s.contains("Decode speed:"), "decode row: {s}");
     assert!(s.contains("31.4 tok/s (590 samples)"), "the rate: {s}");
     // The existing rows keep their names and order above the new ones.
-    assert!(s.contains("input tokens:"), "existing rows intact: {s}");
+    assert!(s.contains("Input tokens:"), "existing rows intact: {s}");
     assert!(
-        s.find("input tokens:").unwrap() < s.find("model / tool time:").unwrap(),
+        s.find("Input tokens:").unwrap() < s.find("Model / tool time:").unwrap(),
         "latency rows come after the token rows: {s}"
     );
 }
@@ -360,9 +370,9 @@ fn test_usage_tab_no_timing() {
         ..TrajectoryView::default()
     }))));
     let s = render_usage(&app);
-    assert!(!s.contains("ttft:"), "no ttft row without samples: {s}");
-    assert!(!s.contains("decode speed:"), "no decode row: {s}");
-    assert!(!s.contains("model / tool time:"), "no work-time row: {s}");
+    assert!(!s.contains("TTFT:"), "no ttft row without samples: {s}");
+    assert!(!s.contains("Decode speed:"), "no decode row: {s}");
+    assert!(!s.contains("Model / tool time:"), "no work-time row: {s}");
 }
 
 /// Delegated sub-agent work is reported on its own row, which says the
@@ -393,11 +403,9 @@ fn test_usage_tab_delegated() {
         ..TrajectoryView::default()
     }))));
     let s = render_usage(&app);
-    assert!(s.contains("delegated usage:"), "the row is present: {s}");
+    assert!(s.contains("Subagents:"), "the row is present: {s}");
     assert!(
-        s.contains(
-            "2 subagent calls (included above) · 812k input · 41k output · 755k (93.0% cached)"
-        ),
+        s.contains("2 calls · 812k input · 41k output · 755k (93.0% cached)"),
         "the row names each count and the share the complete account supports: {s}"
     );
 }
@@ -435,11 +443,9 @@ fn test_usage_tab_recap_spend() {
         ..TrajectoryView::default()
     }))));
     let s = render_usage(&app);
-    assert!(s.contains("recap usage:"), "the row is present: {s}");
+    assert!(s.contains("Recap usage:"), "the row is present: {s}");
     assert!(
-        s.contains(
-            "3 recaps (included above) · 4.1k input · 300 output · 3.1k (75.6% cached) · 2.4s"
-        ),
+        s.contains("3 calls · 4.1k input · 300 output · 3.1k (75.6% cached) · 2.4s"),
         "the row names each figure, the time, and the count: {s}"
     );
 }
@@ -473,7 +479,7 @@ fn test_usage_tab_recap_unknown() {
     }))));
     let s = render_usage(&app);
     assert!(
-        s.contains("usage not reported (1 recap)"),
+        s.contains("usage not reported (1 call)"),
         "an unmeasured recap says so: {s}"
     );
     assert!(
@@ -502,7 +508,7 @@ fn test_usage_tab_no_delegated() {
         ..TrajectoryView::default()
     }))));
     let s = render_usage(&app);
-    assert!(!s.contains("delegated usage:"), "no row: {s}");
+    assert!(!s.contains("Subagents:"), "no row: {s}");
 }
 
 /// The cached row divides only when input was reported. With input it
@@ -540,7 +546,7 @@ fn test_usage_cache_share() {
     };
     app.sessions.current.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
-    assert!(s.contains("cached input"), "the row is present: {s}");
+    assert!(s.contains("Cached input"), "the row is present: {s}");
     assert!(s.contains("500"), "the count stands: {s}");
     assert!(!s.contains("% of input"), "no share to divide by: {s}");
 }
@@ -568,7 +574,7 @@ fn test_cached_row_follows_report() {
     app.sessions.current.capabilities.status.status_cache = Some(snap.clone());
     let s = render_usage(&app);
     assert!(
-        !s.contains("cached input"),
+        !s.contains("Cached input"),
         "no call reported the field, so the tab claims nothing: {s}"
     );
     snap.cumulative_usage.provenance = UsageProvenance {
@@ -579,7 +585,7 @@ fn test_cached_row_follows_report() {
     app.sessions.current.capabilities.status.status_cache = Some(snap);
     let s = render_usage(&app);
     assert!(
-        s.contains("cached input"),
+        s.contains("Cached input"),
         "a reported zero is a miss the row states: {s}"
     );
     assert!(
@@ -616,7 +622,7 @@ fn test_usage_tab_delegated_unreported() {
         ..TrajectoryView::default()
     }))));
     let s = render_usage(&app);
-    assert!(s.contains("delegated usage:"), "the row is present: {s}");
+    assert!(s.contains("Subagents:"), "the row is present: {s}");
     assert!(
         s.contains("usage not reported"),
         "an unmeasured cost says so: {s}"
@@ -627,7 +633,7 @@ fn test_usage_tab_delegated_unreported() {
     );
     let row = s
         .lines()
-        .find(|l| l.starts_with("delegated usage:"))
+        .find(|l| l.starts_with("Subagents:"))
         .expect("the row is present");
     assert!(
         !row.contains("cached"),
@@ -671,7 +677,7 @@ fn test_delegated_row_cache_unknown() {
     assert!(s.contains("812k input"), "the reported tokens stand: {s}");
     let row = s
         .lines()
-        .find(|l| l.starts_with("delegated usage:"))
+        .find(|l| l.starts_with("Subagents:"))
         .expect("the row is present");
     assert!(
         !row.contains("cached"),
@@ -750,7 +756,7 @@ fn test_delegated_row_keeps_cache() {
     let s = render_usage(&app);
     let row = s
         .lines()
-        .find(|l| l.starts_with("delegated usage:"))
+        .find(|l| l.starts_with("Subagents:"))
         .expect("the row is present");
     assert!(
         row.contains("12.3k cached"),
@@ -806,7 +812,7 @@ fn test_delegated_row_omits_output() {
     let s = render_usage(&app);
     let row = s
         .lines()
-        .find(|l| l.starts_with("delegated usage:"))
+        .find(|l| l.starts_with("Subagents:"))
         .expect("the row is present");
     assert!(
         row.contains("900 input"),
@@ -841,7 +847,7 @@ fn test_recap_row_names_unmeasured() {
     }))));
     let s = render_usage(&app);
     assert!(
-        s.contains("2 of 3 recaps measured (included above) · 4.1k input · 300 output · 2.4s"),
+        s.contains("2 of 3 calls measured · 4.1k input · 300 output · 2.4s"),
         "the row states the floor its figures stand for: {s}"
     );
 }
@@ -909,11 +915,11 @@ fn test_recap_row_stays_visible() {
 
     let screen = render_text(&app, 80, 24);
     assert!(
-        screen.contains("recap usage:"),
+        screen.contains("Recap usage:"),
         "the row is on screen: {screen}"
     );
     assert!(
-        screen.contains("3 recaps"),
+        screen.contains("3 calls"),
         "the count is on screen: {screen}"
     );
     assert!(
@@ -957,9 +963,16 @@ fn test_usage_tab_shows_audit() {
         !screen.contains("no verdict"),
         "every card was answered: {screen}"
     );
+    // The completed share is gone: it told a reader nothing they could act
+    // on. What remains is the ending that did not finish in a readable way,
+    // which is the only thing the turn row was ever able to explain.
     assert!(
-        screen.contains("9/10 completed (90%) · 1 interrupted"),
-        "the turn row is on screen: {screen}"
+        !screen.contains("completed ("),
+        "no completed share: {screen}"
+    );
+    assert!(
+        screen.contains("1 interrupted"),
+        "the adverse ending is still stated: {screen}"
     );
 }
 
@@ -984,11 +997,11 @@ fn test_cancelled_ask_reported() {
 
     let screen = render_text(&app, 80, 24);
     assert!(
-        screen.contains("1 card · 0 approved · 0 denied · 1 no verdict"),
+        screen.contains("1 card · 0 approved · 1 no verdict"),
         "the cancelled card is stated: {screen}"
     );
     assert!(
-        !screen.contains("turns:"),
+        !screen.contains("Turns:"),
         "no turn ended, so the turn row is absent: {screen}"
     );
 }
@@ -1027,13 +1040,17 @@ fn test_audit_rows_survive_clipping() {
         "the counts lead the row: {screen}"
     );
     assert!(
-        screen.contains("7/9 completed (78%) · 1 unknown"),
-        "the share and the ending that qualifies it lead the row: {screen}"
+        !screen.contains("completed ("),
+        "no completed share over a denominator that omits the unknown turns: {screen}"
+    );
+    assert!(
+        screen.contains("1 unknown"),
+        "the unreadable ending leads the row: {screen}"
     );
 
     let wide = render_text(&app, 120, 24);
     assert!(
-        wide.contains("7/9 completed (78%) · 1 unknown · 1 interrupted · 1 unfinished"),
+        wide.contains("1 unknown · 1 interrupted · 1 unfinished"),
         "the full breakdown fits a wide terminal: {wide}"
     );
 }
@@ -1096,6 +1113,6 @@ fn test_empty_audit_omitted() {
     app.ui.navigation.pane = Pane::Status;
     app.ui.navigation.status_pane.tab = StatusTab::Usage;
     let screen = render_text(&app, 80, 24);
-    assert!(!screen.contains("approvals:"), "no rows yet: {screen}");
-    assert!(!screen.contains("turns:"), "no rows yet: {screen}");
+    assert!(!screen.contains("Approvals:"), "no rows yet: {screen}");
+    assert!(!screen.contains("Turns:"), "no rows yet: {screen}");
 }

@@ -112,6 +112,12 @@ impl TodoState {
         self.cursor = Some(EventCursor::Local(abs_count as u64));
         if !run_active {
             pause_inactive(&mut self.items);
+        } else {
+            // A new run resumes a checklist that a previous run paused. The pause
+            // is real: an interrupted turn leaves its in-progress item paused
+            // until the next turn lands one, and a paused item on a run that
+            // is going reads as work stopped when nothing is stopped.
+            resume_paused(&mut self.items);
         }
         let Some(mut items) = latest else {
             return;
@@ -233,6 +239,20 @@ fn pause_inactive(items: &mut [TodoView]) {
     for item in items {
         if item.status == TodoStatus::InProgress {
             item.status = TodoStatus::Paused;
+        }
+    }
+}
+
+/// Bring a paused checklist back to in progress when a run starts again.
+///
+/// A run that ends without completing its checklist leaves the active item
+/// paused, which is accurate while nothing is running. The next run works that
+/// same item, so leaving it paused reads as a task stopped while the run that
+/// would finish it is going.
+fn resume_paused(items: &mut [TodoView]) {
+    for item in items {
+        if item.status == TodoStatus::Paused {
+            item.status = TodoStatus::InProgress;
         }
     }
 }

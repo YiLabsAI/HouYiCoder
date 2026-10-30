@@ -209,3 +209,41 @@ fn test_format_agent_line() {
     assert!(line.starts_with("- explore:"));
     assert!(line.contains("(Tools: read, grep)"));
 }
+
+/// Every built-in child names its own turn budget. A definition that named
+/// none would inherit the parent's, so a read-only child answering one
+/// question could spend a whole long session's budget on it.
+#[test]
+fn test_builtins_budgeted() {
+    for def in built_in_all() {
+        assert!(
+            def.max_turns.is_some(),
+            "{} names a turn budget",
+            def.subagent_type
+        );
+    }
+}
+
+/// A read-only child gets a tighter budget than the general-purpose one. The
+/// budget exists to stop a search that keeps finding new leads, and a
+/// read-only agent cannot act on what it finds, so it has less reason to keep
+/// going.
+#[test]
+fn test_readonly_tighter() {
+    let all = built_in_all();
+    let find = |name: &str| {
+        all.iter()
+            .find(|d| d.subagent_type == name)
+            .unwrap_or_else(|| panic!("{name} is registered"))
+            .max_turns
+            .expect("a budget")
+    };
+    let general = find("general-purpose");
+    for read_only in ["explore", "plan", "verify"] {
+        let budget = find(read_only);
+        assert!(
+            budget < general,
+            "{read_only} ({budget}) must stay under general-purpose ({general})"
+        );
+    }
+}

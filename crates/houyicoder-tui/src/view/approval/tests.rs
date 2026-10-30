@@ -4,6 +4,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
 
+use std::time::{Duration, Instant};
+
 use super::args::{diff_preview, entitlement_detail};
 use super::cap_first;
 use crate::composition;
@@ -1072,6 +1074,44 @@ fn test_narrow_card_shows_focus() {
 
 /// A working surface holding a draft long enough to crowd the card, and a
 /// card focused on the given option.
+/// A two-option card that can still auto-approve: the server sent an option
+/// set with no remember entry, so the card has two options while staying a
+/// ramp-eligible ask. This is the shape whose Yes label used to drop the
+/// countdown. A protected-path card is also two-option, but it never
+/// auto-approves, so it cannot carry this assertion.
+fn card_app(selected: usize) -> App {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"rm -rf /tmp/scratch"}"#.into(),
+            reason: "this command removes a directory".into(),
+            selected,
+            call_id: String::new(),
+            options: vec![
+                PermissionOption {
+                    option_id: "allow_once".into(),
+                    name: "Yes".into(),
+                    kind: PermissionOptionKind::AllowOnce,
+                    scope: None,
+                    meta: None,
+                },
+                PermissionOption {
+                    option_id: "reject_once".into(),
+                    name: "No".into(),
+                    kind: PermissionOptionKind::RejectOnce,
+                    scope: None,
+                    meta: None,
+                },
+            ],
+            ..Default::default()
+        },
+    ));
+    app
+}
+
 fn app_with_draft_card(selected: usize) -> App {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
@@ -1124,4 +1164,63 @@ fn test_reason_without_label_plain() {
         !out.contains(": agent wants to run this tool"),
         "no leading colon without a label:\n{out}"
     );
+}
+
+/// A two-option card shows the countdown on its Yes option, the same way the
+/// three-option card does. Both cards can carry a running timer, and a bare
+/// Yes on this one hid the one thing that told the user the decision was
+/// about to be made for them.
+#[test]
+fn test_two_option_countdown() {
+    let mut app = card_app(0);
+    {
+        let card = app.approval_mut().expect("card");
+        card.start_auto_approve(7);
+    }
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("Yes (auto in"),
+        "the Yes option names the countdown: {out}"
+    );
+    assert!(
+        out.contains("auto-approving in"),
+        "and the card says what is about to happen: {out}"
+    );
+    assert!(
+        out.contains("any key to pause"),
+        "and how to stop it: {out}"
+    );
+}
+
+/// The countdown redraws once per second. The shell repaints only on the dirty
+/// flag, so a tick that answers false for every second but the last leaves the
+/// figure frozen at its opening value until it fires.
+#[test]
+fn test_countdown_repaints() {
+    let mut app = card_app(0);
+    {
+        let card = app.approval_mut().expect("card");
+        card.start_auto_approve(7);
+    }
+    let now = Instant::now();
+    assert!(
+        app.tick_auto_approve(now),
+        "the first tick records the opening figure"
+    );
+    assert!(
+        !app.tick_auto_approve(now),
+        "the same second does not repaint again"
+    );
+    assert!(
+        app.tick_auto_approve(now + Duration::from_secs(1)),
+        "the next second is a visible change"
+    );
+}
+
+/// A card with no countdown never reports a change: the tick exists for the
+/// figure, and a card that shows none has nothing to repaint.
+#[test]
+fn test_tick_without_countdown() {
+    let mut app = card_app(0);
+    assert!(!app.tick_auto_approve(Instant::now()));
 }

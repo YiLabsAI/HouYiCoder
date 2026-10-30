@@ -25,6 +25,9 @@ async fn test_child_prompt_reaches_descriptor() {
         workspace: Some(PathBuf::from("/tmp")),
         bus: None,
         descriptor_store: Some(descriptors.clone()),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);

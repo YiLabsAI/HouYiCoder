@@ -21,6 +21,11 @@ pub struct StatusPaneState {
     /// backspace, Left/Right to the buffer. Enter commits (sends a
     /// RenameSession request), Esc cancels.
     pub name_edit: Option<InputField>,
+    /// The Config tab's cursor: which row Enter acts on. The list is the tab,
+    /// so its position is part of the tab's state rather than a local. None
+    /// while the cursor is off the list (the tab was not entered by a key
+    /// that placed it).
+    pub config_cursor: Option<usize>,
 }
 
 /// The user's position in the frontend: which screen and pane are showing,

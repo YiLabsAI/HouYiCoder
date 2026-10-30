@@ -174,8 +174,11 @@ fn hidden_summary_body(
 }
 
 /// The chord every foldable block in the transcript answers to, named the way
-/// the footer spells it.
+/// the footer spells it. The collapse form is a separate constant rather than
+/// a rewrite of this one: the two are read as whole phrases, and building one
+/// from the other by string surgery would break on any wording change.
 const EXPAND_HINT: &str = "ctrl+o to expand";
+const COLLAPSE_HINT: &str = "ctrl+o to collapse";
 
 /// The identity the checklist's summary row publishes for the fold chord and
 /// the click hit-test. Fixed, because the session holds one checklist.
@@ -231,10 +234,18 @@ pub fn render_rows(app: &App) -> Vec<(String, Line<'static>)> {
     if open > 0 {
         parts.push(format!("{open} open"));
     }
+    // The expanded header names the way back. A fold that offers only its
+    // opening gesture traps the reader: the checklist can fill the screen, and
+    // the row that opened it no longer says it can close again.
     let h = if parts.is_empty() {
         format!("{} tasks", todos.len())
     } else {
         format!("{} tasks ({})", todos.len(), parts.join(", "))
+    };
+    let h = if app.sessions.current.todos.expanded {
+        format!("{h} ({COLLAPSE_HINT})")
+    } else {
+        h
     };
     let mut out = vec![(
         h.clone(),
@@ -298,6 +309,12 @@ pub fn collapsed_summary_row(rows: &[(String, Line<'static>)]) -> Option<usize> 
     rows.iter()
         .position(|(plain, _)| plain.starts_with(" … hidden:"))
 }
+
+/// The header row, which is always row zero when the checklist has rows. It
+/// publishes the fold key too, so the same gesture that opened the list from
+/// the hidden-summary row closes it from the header, and a click on the header
+/// does either.
+pub const HEADER_ROW: usize = 0;
 
 /// Render the expanded view: all items grouped by status, truncated by
 /// terminal height with a hidden summary footer.

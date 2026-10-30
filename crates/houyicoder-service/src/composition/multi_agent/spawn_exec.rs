@@ -356,6 +356,9 @@ fn background_driver(
 ) -> JoinHandle<()> {
     let subagent_type = req.subagent_type.clone();
     let task = req.prompt.clone();
+    // The delegating call's task summary, read before the request moves into
+    // the task so the fleet row is labelled from the first status.
+    let description = req.prompt_summary.clone();
     tokio::spawn(async move {
         // The completion signal fires when this driver ends, however it ends:
         // the guard rides the whole task, so the shutdown join's wait on it
@@ -388,11 +391,16 @@ fn background_driver(
             &subagent_type,
             &child_str,
         );
+        // The delegating call's task summary travels on the descriptor so the
+        // fleet row names the job from the first status. Without it the row
+        // shows the type alone until the child finishes a turn, which is the
+        // one moment a reader wants to know what it is working on.
         let child = ChildDescriptor::new(
             child_str.clone(),
             subagent_type.clone(),
             ChildRunMode::Background,
-        );
+        )
+        .with_description(description.clone());
         // Register the live runner for a per-turn abort (the viewed-child Esc
         // path). The lifecycle token is registered alongside so a shutdown
         // stop reaches a child whose run has not started.
@@ -532,6 +540,9 @@ fn foreground_driver(
     task: String,
 ) -> JoinHandle<Result<SpawnOutcome, SpawnFailure>> {
     let subagent_type = req.subagent_type.clone();
+    // The delegating call's task summary, read before the request moves into
+    // the task so the fleet row is labelled from the first status.
+    let description = req.prompt_summary.clone();
     tokio::spawn(async move {
         // The completion signal fires when this driver ends, however it ends:
         // the guard rides the whole task, so the shutdown join's wait on it
@@ -556,7 +567,8 @@ fn foreground_driver(
             child_str.clone(),
             subagent_type.clone(),
             ChildRunMode::Foreground,
-        );
+        )
+        .with_description(description.clone());
         // Register the live runner for a per-turn abort (moot for sync — the
         // parent blocks on the tool call + cannot be viewing the child mid-run
         // — but the registry is shared so the async path's contract holds
@@ -621,6 +633,11 @@ fn child_spawn_request(
             &this.config.model,
             def.omit_project_context,
         ),
+        // The definition's own ceiling wins, so a read-only child cannot spend
+        // the parent's whole budget on one question. A definition that names
+        // none inherits the parent's, which keeps a hand-written agent from
+        // silently getting a zero-turn run.
+        max_turns: def.max_turns.unwrap_or(this.config.max_turns),
         ..this.config.clone()
     };
     SpawnRequest {
@@ -640,6 +657,9 @@ fn child_spawn_request(
         child_cancel,
         bus: this.bus.clone(),
         descriptor_store: this.descriptor_store.clone(),
+        skill_registry: this.skill_registry.clone(),
+        conditional: this.conditional.clone(),
+        hooks: this.hooks.clone(),
     }
 }
 

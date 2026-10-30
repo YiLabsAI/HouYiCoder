@@ -558,14 +558,62 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
         }
     }
 
+    /// Record the compaction boundary: the event's own row, naming the
+    /// statistics the checkpoint reported. The checkpoint id becomes the row's
+    /// fold identity, so two compactions in one session fold separately.
+    fn push_compaction_boundary(&mut self, key: String, stats: String, id: RowId) {
+        self.out.push(TranscriptLine::Compaction {
+            key,
+            stats,
+            summary: String::new(),
+        });
+        self.ids.push(id);
+    }
+
+    /// Attach the summary to the compaction row it belongs to, so the digest
+    /// stays available behind the fold instead of becoming a row of its own.
+    ///
+    /// The row is found by scanning back for the most recent compaction, not by
+    /// looking at the tail: a turn boundary can land between the two
+    /// notifications, so "the previous row" is not a reliable join. The summary
+    /// payload carries no checkpoint id, so appending order is the only link
+    /// the wire offers. A summary with no boundary in this window still draws a
+    /// row, because the event happened and dropping the digest would lose it.
+    fn push_compaction_summary(&mut self, summary: String, id: RowId) {
+        if let Some(pos) = self
+            .out
+            .iter()
+            .rposition(|line| matches!(line, TranscriptLine::Compaction { .. }))
+        {
+            if let TranscriptLine::Compaction { summary: body, .. } = &mut self.out[pos] {
+                *body = summary;
+            }
+            return;
+        }
+        self.out.push(TranscriptLine::Compaction {
+            key: String::new(),
+            stats: String::new(),
+            summary,
+        });
+        self.ids.push(id);
+    }
+
     /// Emit the row a host notification contributes. Audit-only notifications
     /// stay out of the readable transcript.
     fn emit_acpx(&mut self, n: &AcpxNotification, id: RowId) {
         match n.method {
             AcpxMethod::ContextCompactionBoundary => {
-                self.out
-                    .push(TranscriptLine::System("compaction checkpoint".to_string()));
-                self.ids.push(id);
+                let stats = boundary_stats(&n.params);
+                // The checkpoint id is the row's fold identity: two
+                // compactions in one session are two blocks, and a shared
+                // constant key would open and close both at once.
+                let key = n
+                    .params
+                    .get("checkpoint")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                self.push_compaction_boundary(key, stats, id);
             }
             AcpxMethod::ContextSummary => {
                 let text = n
@@ -574,9 +622,12 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                self.out
-                    .push(TranscriptLine::System(format!("summary: {text}")));
-                self.ids.push(id);
+                // The summary is the body of the compaction the boundary just
+                // announced, not a row of its own. Losing it into the fold is
+                // the point: the model's digest is reference material the
+                // reader consults on demand, and pasting it into the
+                // transcript spent the whole screen on it.
+                self.push_compaction_summary(text, id);
             }
             // The answer is model text, so it reaches the terminal only after
             // control sequences are removed: a summary that carries one could
@@ -719,3 +770,16 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
 
 #[cfg(test)]
 mod tests;
+
+/// The statistics a compaction boundary reported, formatted for the row label.
+/// The boundary carries the token counts it measured; a boundary that carried
+/// none yields an empty string and the row then shows no parenthesis.
+fn boundary_stats(params: &serde_json::Value) -> String {
+    let pre = params.get("preTokens").and_then(|v| v.as_u64());
+    let post = params.get("postTokens").and_then(|v| v.as_u64());
+    match (pre, post) {
+        (Some(pre), Some(post)) => format!("{pre} -> {post} tokens"),
+        (Some(pre), None) => format!("{pre} tokens"),
+        _ => String::new(),
+    }
+}

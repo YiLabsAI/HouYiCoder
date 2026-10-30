@@ -25,6 +25,7 @@ mod focus {
         FleetEntry {
             agent_id: id.into(),
             subagent_type: "verify".into(),
+            description: String::new(),
             turn: 1,
             tokens: 0,
             tool_uses: 0,
@@ -153,6 +154,7 @@ mod dispatch {
             .push(FleetEntry {
                 agent_id: "c1".into(),
                 subagent_type: "verify".into(),
+                description: String::new(),
                 turn: 1,
                 tokens: 0,
                 tool_uses: 0,
@@ -203,6 +205,7 @@ mod dispatch {
             .push(FleetEntry {
                 agent_id: "c2".into(),
                 subagent_type: "explore".into(),
+                description: String::new(),
                 turn: 1,
                 tokens: 0,
                 tool_uses: 0,

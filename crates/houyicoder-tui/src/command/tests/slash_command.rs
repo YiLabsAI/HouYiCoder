@@ -221,16 +221,20 @@ fn test_status_shows_runtime_state() {
     app.run_command(SlashCommand::Status);
     let out = render(&app);
     println!("--- /status ---\n{out}\n--- end ---");
-    // Status tab identity fields: Model + sandbox + Session ID. mode + breaker
-    // moved to the Config tab (a focused config view); tokens + wall duration
-    // moved to the Usage tab.
+    // Status tab identity fields: Model + Session ID. The sandbox and the
+    // checklist live on their own surfaces (the status bar and the
+    // transcript), so /status does not repeat them; mode + breaker moved to
+    // the Config tab, tokens + wall duration to the Usage tab.
     assert!(out.contains("Model:"), "model field missing");
-    assert!(out.contains("sandbox:"), "sandbox field missing");
     assert!(out.contains("Session ID:"), "session field missing");
     assert!(out.contains("Auth token:"), "auth token field missing");
     assert!(
         out.contains("Setting sources:"),
         "setting sources field missing"
+    );
+    assert!(
+        !out.contains("sandbox:"),
+        "the sandbox has its own surface, not a /status row:\n{out}"
     );
 }
 

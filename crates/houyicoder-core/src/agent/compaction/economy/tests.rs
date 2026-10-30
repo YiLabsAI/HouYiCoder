@@ -149,3 +149,26 @@ fn test_thin_shrink_below_floor() {
     assert!(!dec.compact, "thin shrink below clear floor should skip");
     assert_eq!(dec.reason, EconomyReason::BelowClearFloor);
 }
+
+/// The horizon is capped, so raising the turn limit cannot inflate the
+/// projected saving. The savings side counts a cache re-read per remaining
+/// turn; without the cap, a limit raised to support long tasks multiplied that
+/// count by the same factor and made every large view look worth compacting on
+/// its first turn.
+#[test]
+fn test_horizon_capped() {
+    let small = estimate_compaction(120_000, 10);
+    assert_eq!(small.remaining_turns, 10, "a short horizon is priced as is");
+
+    let huge = estimate_compaction(120_000, 1_000);
+    assert_eq!(
+        huge.remaining_turns, ECONOMY_HORIZON_CAP,
+        "a limit of a thousand turns is not a thousand-turn payback window"
+    );
+
+    // The rest of the estimate does not move with the horizon: the same view
+    // costs the same to compact however long the run has left.
+    assert_eq!(small.old_tokens, huge.old_tokens);
+    assert_eq!(small.new_tokens, huge.new_tokens);
+    assert_eq!(small.summarizer_input_tokens, huge.summarizer_input_tokens);
+}

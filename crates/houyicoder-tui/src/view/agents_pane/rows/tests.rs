@@ -5,6 +5,7 @@ fn fleet_entry(agent_id: &str, completed: Option<&str>) -> FleetEntry {
     FleetEntry {
         agent_id: agent_id.into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 1,
         tokens: 10,
         tool_uses: 0,

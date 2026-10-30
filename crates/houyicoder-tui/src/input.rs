@@ -172,6 +172,45 @@ impl InputField {
         }
     }
 
+    /// Kill from the cursor to the end of the wrapped line it is on (the
+    /// complement of kill_to_line_start). The newline is left in place, so
+    /// this shortens the line rather than joining it to the next. No-op when
+    /// the cursor is already at the line end.
+    pub fn kill_to_line_end(&mut self, cols: usize) {
+        let (idx, _) = self.cursor_position(cols);
+        let lines = self.wrapped_lines(cols);
+        let Some(wl) = lines.get(idx) else {
+            return;
+        };
+        let end = wl.start_offset + wl.text.len();
+        if self.cursor < end {
+            self.text.drain(self.cursor..end);
+        }
+    }
+
+    /// Kill backward to the wrapped line start, escalating to a full clear
+    /// when there is nothing before the cursor on that line.
+    ///
+    /// Readline's Ctrl+U is the backward kill. On its own it is a no-op
+    /// whenever the cursor sits at the start of a wrapped line, which is a
+    /// dead key at exactly the moment a user wants to throw the draft away:
+    /// a multi-line prompt with the caret parked at the start of a line had
+    /// no one-keystroke way to clear it. The escalation keeps the readline
+    /// meaning where it applies and gives the dead press a use.
+    pub fn kill_backward(&mut self, cols: usize) {
+        let (idx, _) = self.cursor_position(cols);
+        let lines = self.wrapped_lines(cols);
+        let Some(wl) = lines.get(idx) else {
+            self.clear();
+            return;
+        };
+        if wl.start_offset < self.cursor {
+            self.kill_to_line_start(cols);
+        } else {
+            self.clear();
+        }
+    }
+
     /// Move the cursor one grapheme left. No-op at 0.
     pub fn move_left(&mut self) {
         if let Some((i, _)) = self.text[..self.cursor].grapheme_indices(true).next_back() {

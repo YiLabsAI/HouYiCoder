@@ -46,6 +46,10 @@ use std::collections::HashSet;
 pub struct FleetEntry {
     pub agent_id: String,
     pub subagent_type: String,
+    /// The delegating call's task summary. A type-only row cannot tell two
+    /// children of one type apart, so the strip names the job instead of
+    /// repeating the type the user already chose.
+    pub description: String,
     pub turn: u32,
     pub tokens: u64,
     pub tool_uses: u32,
@@ -197,6 +201,8 @@ pub enum ConnectionEvent {
 pub(crate) struct AgentStatusSnapshot {
     pub agent_id: String,
     pub subagent_type: String,
+    /// The delegating call's task summary, naming what this child is doing.
+    pub description: String,
     pub turn: u32,
     pub tokens: u64,
     pub tool_uses: u32,
@@ -250,6 +256,9 @@ pub enum ServerEvent {
     AgentStatus {
         agent_id: String,
         subagent_type: String,
+        /// The delegating call's task summary, naming what this child is
+        /// doing. Empty for a spawn no model description reached.
+        description: String,
         turn: u32,
         tokens: u64,
         tool_uses: u32,

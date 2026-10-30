@@ -22,7 +22,12 @@ use std::process::id;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const DEFAULT_MAX_TURNS: u32 = 200;
+/// The per-user-turn tool-loop ceiling a session gets when nothing overrides
+/// it. Large enough that a long multi-module task runs to its own end rather
+/// than stopping to report half of it, and still finite: a loop that never
+/// terminates must fail visibly, and reaching the limit returns the turn-limit
+/// outcome the terminal reports instead of hanging.
+const DEFAULT_MAX_TURNS: u32 = 1000;
 
 /// Runner-level settings resolved from the merged settings file and env.
 #[derive(Debug, Clone, PartialEq, Eq)]

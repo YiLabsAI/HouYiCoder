@@ -8,6 +8,7 @@ fn entry(id: &str, kind: &str, turn: u32, tokens: u64, tool: &str) -> FleetEntry
     FleetEntry {
         agent_id: id.into(),
         subagent_type: kind.into(),
+        description: String::new(),
         turn,
         tokens,
         tool_uses: 0,
@@ -164,6 +165,7 @@ fn test_completed_row_terse() {
     let e = FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 3,
         tokens: 1200,
         tool_uses: 2,
@@ -191,6 +193,7 @@ fn test_grace_drops_expired() {
     fleet.entries.push(FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 3,
         tokens: 100,
         tool_uses: 1,
@@ -213,6 +216,7 @@ fn test_grace_keeps_recent() {
     fleet.entries.push(FleetEntry {
         agent_id: "b".into(),
         subagent_type: "plan".into(),
+        description: String::new(),
         turn: 2,
         tokens: 50,
         tool_uses: 0,
@@ -237,6 +241,7 @@ fn test_drop_clamps_selected() {
     entries_mut(&mut app.sessions.current).push(FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 1,
         tokens: 10,
         tool_uses: 0,
@@ -257,6 +262,7 @@ fn test_drop_clamps_selected() {
     entries_mut(&mut app.sessions.current).push(FleetEntry {
         agent_id: "c3".into(),
         subagent_type: "verify".into(),
+        description: String::new(),
         turn: 1,
         tokens: 10,
         tool_uses: 0,
@@ -284,6 +290,7 @@ fn test_grace_pins_viewed_child() {
     fleet.entries.push(FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 3,
         tokens: 100,
         tool_uses: 1,
@@ -295,6 +302,7 @@ fn test_grace_pins_viewed_child() {
     fleet.entries.push(FleetEntry {
         agent_id: "c2".into(),
         subagent_type: "plan".into(),
+        description: String::new(),
         turn: 1,
         tokens: 10,
         tool_uses: 0,
@@ -350,6 +358,7 @@ fn test_running_row_shows_elapsed() {
     let e = FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
+        description: String::new(),
         turn: 2,
         tokens: 100,
         tool_uses: 0,
@@ -372,6 +381,7 @@ fn test_row_shows_waiting_approval() {
     let e = FleetEntry {
         agent_id: "c1".into(),
         subagent_type: "verify".into(),
+        description: String::new(),
         turn: 2,
         tokens: 100,
         tool_uses: 3,
@@ -409,4 +419,57 @@ fn test_format_elapsed_compact() {
     assert_eq!(format_elapsed(Duration::from_secs(312)), "5m 12s");
     assert_eq!(format_elapsed(Duration::from_secs(3600)), "1h 0m 0s");
     assert_eq!(format_elapsed(Duration::from_secs(3725)), "1h 2m 5s");
+}
+
+/// A strip row names the job, not the role. The type is what the parent
+/// already chose, so a row repeating it tells the reader nothing; the task
+/// summary is what separates two children of one type from each other.
+#[test]
+fn test_row_uses_description() {
+    let e = FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        description: "map the auth path".into(),
+        turn: 1,
+        tokens: 100,
+        tool_uses: 0,
+        last_activity: Some("grep".into()),
+        completed: None,
+        completed_at: None,
+        started_at: Some(Instant::now()),
+    };
+    let line = build_row(&e, false, None, false);
+    let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+    assert!(
+        text.contains("map the auth path"),
+        "the row names the job: {text}"
+    );
+}
+
+/// A child with no summary keeps the type as its label, so the row never
+/// reads as a bare verb with nothing doing it.
+#[test]
+fn test_row_type_fallback() {
+    let e = FleetEntry {
+        agent_id: "c1".into(),
+        subagent_type: "explore".into(),
+        description: String::new(),
+        turn: 1,
+        tokens: 100,
+        tool_uses: 0,
+        last_activity: Some("grep".into()),
+        completed: None,
+        completed_at: None,
+        started_at: Some(Instant::now()),
+    };
+    let line = build_row(&e, false, None, false);
+    let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+    assert!(
+        text.contains("explore:"),
+        "an unlabelled child keeps its type as the label: {text}"
+    );
+    assert!(
+        !text.contains("◯  ·") && !text.contains("◯ :"),
+        "and the label is never left empty: {text}"
+    );
 }

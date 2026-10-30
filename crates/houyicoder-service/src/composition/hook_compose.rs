@@ -454,6 +454,41 @@ impl SkillRuntime {
         );
     }
 
+    /// The multi-agent deps this session's parent components yield. Gathered
+    /// here because the child-inherited components live on this runtime: a
+    /// child runs the parent's tools, so it needs the skill registry and
+    /// activator (which skills exist, which gated ones are active) and the
+    /// hook registry (the write-time gates). A child without them holds the
+    /// Skill tool with nothing behind it and bypasses every project rule.
+    #[expect(clippy::too_many_arguments, reason = "one call site, all parent parts")]
+    pub(super) fn multi_agent_deps(
+        &self,
+        registry: Arc<dyn AgentRegistry>,
+        store: Arc<dyn SessionLog>,
+        provider: Arc<dyn ModelProvider>,
+        tools: ToolRegistry,
+        config: RunnerConfig,
+        worktree_controller: Option<Arc<WorktreeController>>,
+        workspace: Option<PathBuf>,
+        bus: Option<Arc<AgentBus>>,
+        descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+    ) -> crate::composition::multi_agent::MultiAgentDeps {
+        crate::composition::multi_agent::MultiAgentDeps {
+            registry,
+            store,
+            provider,
+            tools,
+            config,
+            worktree_controller,
+            workspace,
+            bus,
+            descriptor_store,
+            skill_registry: Some(Arc::clone(&self.registry) as Arc<dyn SkillRegistry>),
+            conditional: Some(Arc::clone(&self.conditional)),
+            hooks: Some(Arc::clone(&self.hook_registry)),
+        }
+    }
+
     pub(super) fn attach_to_runner(&self, runner: Runner, workspace: Option<PathBuf>) -> Runner {
         if let Some(ws) = &workspace {
             *runner.cwd_handle().write().expect("cwd lock") = ws.clone();

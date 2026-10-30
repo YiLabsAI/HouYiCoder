@@ -7,6 +7,7 @@ use houyicoder_protocol::frontend::permission::AskSource;
 
 fn card(validator: &str, source: Option<AskSource>, args: &str) -> Approval {
     Approval {
+        shown_secs: None,
         tool: "bash".into(),
         args: args.into(),
         reason: "r".into(),

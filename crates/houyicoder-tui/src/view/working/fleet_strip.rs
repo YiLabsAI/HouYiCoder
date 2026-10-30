@@ -175,29 +175,34 @@ fn build_row<'a>(
         ("◯ ", Style::default().fg(Color::Cyan))
     };
     let tokens = format!("{} tok", format_tokens(entry.tokens));
+    // The label names the job, not the role. The type is what the parent
+    // model already chose, so repeating it on every row of a fleet tells the
+    // reader nothing they did not just decide; the task summary is the only
+    // thing distinguishing two children of one type. A child with no summary
+    // (a hook- or gate-driven spawn) keeps the type as its label rather than
+    // showing an empty one.
+    let label = if entry.description.is_empty() {
+        entry.subagent_type.as_str()
+    } else {
+        entry.description.as_str()
+    };
     let body = if entry.completed.is_some() {
-        format!("{} · done · {}", entry.subagent_type, tokens)
+        format!("{label} · done · {tokens}")
     } else if awaiting == Some(entry.agent_id.as_str()) {
         let elapsed = entry
             .started_at
             .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
             .unwrap_or_default();
-        format!(
-            "{}: waiting for approval · {}{}",
-            entry.subagent_type, tokens, elapsed
-        )
+        format!("{label}: waiting for approval · {tokens}{elapsed}")
     } else {
         let elapsed = entry
             .started_at
             .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
             .unwrap_or_default();
         format!(
-            "{}: {} · {} · turn {}{}",
-            entry.subagent_type,
+            "{label}: {} · {tokens} · turn {}{elapsed}",
             verb_for(entry.last_activity.as_deref()),
-            tokens,
             entry.turn,
-            elapsed
         )
     };
     Line::from(vec![
