@@ -125,7 +125,7 @@ fn test_entitlement_yes_grants() {
     // Wait for the hint line at the bottom of the card so the full card
     // has been painted before reading content.
     assert!(
-        s.wait_for_plain("Esc cancel", ENTITLEMENT_TIMEOUT),
+        s.wait_for_plain("Esc to cancel", ENTITLEMENT_TIMEOUT),
         "the entitlement card hint should render:\n{}",
         s.output_plain()
     );
@@ -197,7 +197,7 @@ fn test_entitlement_no_declines() {
     s.send_str("run it");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for_plain("Esc cancel", ENTITLEMENT_TIMEOUT),
+        s.wait_for_plain("Esc to cancel", ENTITLEMENT_TIMEOUT),
         "the entitlement card should fully render:\n{}",
         s.output_plain()
     );
