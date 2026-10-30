@@ -177,6 +177,11 @@ fn linked_worktree_main_root(workspace: &Path) -> Option<PathBuf> {
 
 /// Expand project-root environment placeholders and rewrite inherited
 /// main-checkout paths so a hook command runs against the active worktree.
+///
+/// The main-checkout rewrite runs first. A linked worktree lives under the
+/// main checkout, so its own path starts with the main path; expanding a
+/// placeholder first would place the active path there, and the main-to-active
+/// rewrite would then match inside it and nest the worktree path in itself.
 fn rewrite_hook_spec(
     mut spec: HookSpec,
     active_ws: &Path,
@@ -185,14 +190,20 @@ fn rewrite_hook_spec(
     let ws_str = active_ws.to_string_lossy();
     let main_str = inherited_from.map(|p| p.to_string_lossy().into_owned());
     for arg in &mut spec.args {
+        // A command that already names the active tree is left alone. The
+        // rewrite is only for a path copied from the main checkout, and a
+        // second pass over a path that already points here would nest the
+        // worktree inside itself.
+        if let Some(main) = &main_str
+            && !arg.contains(ws_str.as_ref())
+        {
+            *arg = arg.replace(main, &ws_str);
+        }
         *arg = arg
             .replace("${HOUYI_PROJECT_DIR}", &ws_str)
             .replace("$HOUYI_PROJECT_DIR", &ws_str)
             .replace("${CLAUDE_PROJECT_DIR}", &ws_str)
             .replace("$CLAUDE_PROJECT_DIR", &ws_str);
-        if let Some(main) = &main_str {
-            *arg = arg.replace(main, &ws_str);
-        }
     }
     spec
 }

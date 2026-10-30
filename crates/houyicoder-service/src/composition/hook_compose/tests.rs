@@ -683,3 +683,73 @@ fn test_worktree_inherits_and_reload() {
 
     drop(remove_dir_all(&root));
 }
+
+/// A linked worktree sits inside the main checkout's directory, so its path
+/// begins with the main path. Expanding the project placeholder before the
+/// main-to-active rewrite would leave the active path in place and then
+/// rewrite the main prefix inside it, nesting the worktree path in itself and
+/// pointing the hook at a script that does not exist. The command must end up
+/// naming the active worktree exactly once.
+#[test]
+fn test_inherited_hook_rewrite() {
+    let main = Path::new("/repo");
+    let active = Path::new("/repo/.houyicoder/worktrees/feature");
+    let spec = HookSpec {
+        name: "gate".into(),
+        events: vec!["PreToolUse".into()],
+        program: "sh".into(),
+        args: vec![
+            "-c".into(),
+            "python3 $HOUYI_PROJECT_DIR/scripts/hook_rust.py".into(),
+            // An argument that already names the main checkout, the shape a
+            // copied settings file carries before the substitution.
+            "/repo/scripts/hook_commit_gate.py".into(),
+        ],
+        matcher: None,
+        if_condition: None,
+        shell: None,
+        timeout_secs: None,
+        once: false,
+    };
+    let rewritten = rewrite_hook_spec(spec, active, Some(main));
+    let expanded = "/repo/.houyicoder/worktrees/feature/scripts/hook_rust.py";
+    assert_eq!(
+        rewritten.args[1],
+        format!("python3 {expanded}"),
+        "the placeholder names the active worktree once"
+    );
+    assert_eq!(
+        rewritten.args[2], "/repo/.houyicoder/worktrees/feature/scripts/hook_commit_gate.py",
+        "a main-checkout path is repointed at the active worktree"
+    );
+    // The nesting this guards against: the active path appearing twice in one
+    // argument, which resolves to no file at all.
+    for arg in &rewritten.args {
+        assert!(
+            !arg.contains(".houyicoder/worktrees/feature/.houyicoder/worktrees/feature"),
+            "the active path must not be nested inside itself: {arg}"
+        );
+    }
+
+    // An argument that already names the active tree is left alone. The
+    // rewrite exists to repoint a path copied from the main checkout; running
+    // it over a path that already points here would nest the tree in itself,
+    // so the guard is what makes the function safe to apply twice.
+    let already = HookSpec {
+        name: "gate".into(),
+        events: vec!["PreToolUse".into()],
+        program: "sh".into(),
+        args: vec!["-c".into(), format!("python3 {expanded}")],
+        matcher: None,
+        if_condition: None,
+        shell: None,
+        timeout_secs: None,
+        once: false,
+    };
+    let again = rewrite_hook_spec(already, active, Some(main));
+    assert_eq!(
+        again.args[1],
+        format!("python3 {expanded}"),
+        "an argument already naming the active tree survives a second pass"
+    );
+}
