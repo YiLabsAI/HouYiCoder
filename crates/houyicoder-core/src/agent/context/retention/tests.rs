@@ -2,6 +2,7 @@ use super::*;
 
 use std::sync::Arc;
 
+use super::Tokenizer;
 use crate::agent::cache_liveness::{CACHE_TTL_MS, CacheLivenessRetentionPolicy, CachedPrefixState};
 use houyicoder_context::ContextError;
 use houyicoder_context::SessionEvent;
@@ -119,15 +120,17 @@ fn test_rehydrate_3tier_not_unconditional() {
     let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
     let marker = marker_with_preview(&hash.0, "first 200 chars...");
     let policy = AgeRetentionPolicy::default();
-
-    // Recent (age 0) materializes — block_get fires, full content served.
-    let ctx = RetentionContext {
-        age_in_turns: 0,
+    let ctx_at = |age| RetentionContext {
+        age_in_turns: age,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 0,
         mutating: true,
     };
+
+    // Recent (age 0) materializes — block_get fires, full content served.
+    let ctx = ctx_at(0);
     let out = materialize_block(
         &marker,
         Some(&backend as &dyn ContextBackend),
@@ -138,13 +141,7 @@ fn test_rehydrate_3tier_not_unconditional() {
     assert_eq!(backend.gets(), 1, "Materialize paid one block_get");
 
     // Middle (age 3) summarizes — preview served, no block_get.
-    let ctx = RetentionContext {
-        age_in_turns: 3,
-        is_superseded: false,
-        block_ref: None,
-        assembly_id: 0,
-        mutating: true,
-    };
+    let ctx = ctx_at(3);
     let out = materialize_block(
         &marker,
         Some(&backend as &dyn ContextBackend),
@@ -163,13 +160,7 @@ fn test_rehydrate_3tier_not_unconditional() {
     );
 
     // Old (age 10) evicts — typed evicted marker, no block_get.
-    let ctx = RetentionContext {
-        age_in_turns: 10,
-        is_superseded: false,
-        block_ref: None,
-        assembly_id: 0,
-        mutating: true,
-    };
+    let ctx = ctx_at(10);
     let out = materialize_block(
         &marker,
         Some(&backend as &dyn ContextBackend),
@@ -202,6 +193,7 @@ fn test_rehydrate_3tier_not_unconditional() {
         age_in_turns: 0,
         is_superseded: true,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 0,
         mutating: true,
     };
@@ -240,6 +232,7 @@ fn test_summarize_without_preview_marker() {
         age_in_turns: 3,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 0,
         mutating: true,
     };
@@ -467,6 +460,7 @@ fn age_ctx(age: u32) -> RetentionContext<'static> {
         age_in_turns: age,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 0,
         mutating: true,
     }
@@ -735,6 +729,7 @@ fn test_holds_decision_while_alive() {
         age_in_turns: 1,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 1,
         mutating: true,
     };
@@ -754,6 +749,7 @@ fn test_holds_decision_while_alive() {
         age_in_turns: 8,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 2,
         mutating: true,
     };
@@ -785,6 +781,7 @@ fn test_miss_recomputes_aggressively() {
         age_in_turns: 1,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 1,
         mutating: true,
     };
@@ -801,6 +798,7 @@ fn test_miss_recomputes_aggressively() {
         age_in_turns: 8,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 2,
         mutating: true,
     };
@@ -822,6 +820,7 @@ fn test_miss_recomputes_aggressively() {
         age_in_turns: 8,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: 3,
         mutating: true,
     };
@@ -852,20 +851,24 @@ fn budget_ctx(id: u64) -> RetentionContext<'static> {
         age_in_turns: 0,
         is_superseded: false,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: id,
         mutating: true,
     }
 }
 
-/// Once a turn has materialized its budget in bytes, the next Materialize
+/// Once a turn has materialized its budget in tokens, the next Materialize
 /// request demotes to Summarize so the assembled context does not keep growing
 /// with retrieved blocks.
 #[test]
 fn test_budget_demotes_after_quota() {
-    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), 1024);
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), Tokenizer::new());
+    policy.set_turn_budget(1);
     let ctx = budget_ctx(1);
     assert_eq!(policy.decide(&ctx), RetentionDecision::Materialize);
-    policy.record_materialized_bytes("a", 1024);
+    // Any multi-token content past a one-token budget trips the demote under
+    // either tokenizer path, so the test does not lean on an exact count.
+    policy.record_materialized_content("a", b"hello world");
     assert_eq!(
         policy.decide(&ctx),
         RetentionDecision::Summarize,
@@ -877,10 +880,11 @@ fn test_budget_demotes_after_quota() {
 /// that was demoted at the end of one turn can materialize in the next.
 #[test]
 fn test_budget_resets_per_assembly() {
-    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), 1024);
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), Tokenizer::new());
+    policy.set_turn_budget(1);
     let ctx = budget_ctx(1);
     assert_eq!(policy.decide(&ctx), RetentionDecision::Materialize);
-    policy.record_materialized_bytes("a", 1024);
+    policy.record_materialized_content("a", b"hello world");
     assert_eq!(policy.decide(&ctx), RetentionDecision::Summarize);
     let next = budget_ctx(2);
     assert_eq!(
@@ -895,11 +899,30 @@ fn test_budget_resets_per_assembly() {
 /// than the full bytes.
 #[test]
 fn test_budget_zero_demotes_all() {
-    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), 0);
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), Tokenizer::new());
+    policy.set_turn_budget(0);
     let ctx = budget_ctx(1);
     assert_eq!(
         policy.decide(&ctx),
         RetentionDecision::Summarize,
         "a zero budget keeps only the preview"
+    );
+}
+
+/// The pre-check demotes a block whose stored byte length alone would reach
+/// the budget, without fetching it. A marker carrying the byte length lets the
+/// policy gate before the retrieval.
+#[test]
+fn test_budget_skips_oversized_block() {
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), Tokenizer::new());
+    policy.set_turn_budget(1024);
+    let ctx = RetentionContext {
+        stored_bytes: Some(2048),
+        ..budget_ctx(1)
+    };
+    assert_eq!(
+        policy.decide(&ctx),
+        RetentionDecision::Summarize,
+        "a block whose stored size reaches the budget is demoted without a fetch"
     );
 }

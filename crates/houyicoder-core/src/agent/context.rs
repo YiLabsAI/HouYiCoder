@@ -15,6 +15,7 @@
 //! conversation cost reads the whole assembled history, so only the
 //! measurement behind the /context pane derives it.
 
+pub(crate) mod budget;
 pub(crate) mod cache_liveness;
 pub(crate) mod conversation;
 pub(crate) mod prompt;
@@ -25,7 +26,7 @@ pub(crate) mod turn_group;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::agent::context::conversation::ConversationCost;
@@ -354,6 +355,10 @@ pub struct ContextBuilder {
     /// process sent instead of stamping the reopen time. Zero means unset: a
     /// fresh session uses its first assembly's clock.
     epoch_start_ms: AtomicU64,
+    /// The active model's context window, in tokens. The runner updates it on a
+    /// model switch so the per-turn tool-result budget tracks the window rather
+    /// than a fixed constant. Zero means unset; the budget then keeps its cap.
+    model_window: AtomicU32,
 }
 
 impl ContextBuilder {
@@ -369,6 +374,7 @@ impl ContextBuilder {
             prompt_hash: Mutex::new(None),
             assembly_seq: AtomicU64::new(0),
             epoch_start_ms: AtomicU64::new(0),
+            model_window: AtomicU32::new(0),
         }
     }
 
@@ -386,16 +392,6 @@ impl ContextBuilder {
             .lock()
             .map(|g| g.clone())
             .unwrap_or_default()
-    }
-
-    /// Install the retention policy the serve path uses for block_ref
-    /// ToolResults. The Runner calls this at construction with the cache-
-    /// liveness policy sharing its cached-prefix state; the serve path then
-    /// holds per-block decisions stable while the cached prefix is live.
-    pub(crate) fn set_retention_policy(&self, policy: Arc<dyn retention::RetentionPolicy>) {
-        if let Ok(mut g) = self.retention_policy.lock() {
-            *g = Some(policy);
-        }
     }
 
     /// Override the cwd used for the memory-file walk-up (tests + harness that
@@ -688,6 +684,10 @@ impl ContextBuilder {
         let Some(policy) = policy else {
             return turn_group::assemble_model_input(events, backend);
         };
+        // Set the per-turn tool-result budget before materialize runs, so the
+        // policy gates on a window-proportional token ceiling rather than a
+        // fixed constant. No-op for non-budgeted policies.
+        self.push_turn_budget();
         let assembly_id = if mode.mutating && !mode.continuation {
             self.assembly_seq.fetch_add(1, Ordering::Relaxed) + 1
         } else {

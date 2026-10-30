@@ -93,6 +93,8 @@ impl Runner {
     ) -> (RequestInferenceConfig, AssembledContext) {
         let inference = self.snapshot_inference();
         let parts = self.assembly_parts();
+        self.context_builder
+            .set_model_window(inference.context_window);
         let assembled = self.context_builder.build_for_turn(
             events,
             manifest,

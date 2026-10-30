@@ -817,6 +817,7 @@ async fn test_turn_records_dirty() {
         age_in_turns: 0,
         is_superseded: false,
         block_ref: Some("h1"),
+        stored_bytes: None,
         assembly_id: 1,
         mutating: true,
     };

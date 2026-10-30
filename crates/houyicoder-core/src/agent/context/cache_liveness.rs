@@ -11,7 +11,6 @@ use houyicoder_protocol::llm::Usage;
 use crate::agent::Runner;
 use crate::agent::context::retention::{
     BudgetedRetentionPolicy, RetentionContext, RetentionDecision, RetentionPolicy,
-    TURN_RESULT_BUDGET_BYTES,
 };
 
 mod state;
@@ -41,7 +40,7 @@ impl Runner {
         )));
         let budgeted = Arc::new(BudgetedRetentionPolicy::new(
             cache_policy,
-            TURN_RESULT_BUDGET_BYTES,
+            self.context_builder.tokenizer_clone(),
         ));
         self.context_builder.set_retention_policy(budgeted);
     }

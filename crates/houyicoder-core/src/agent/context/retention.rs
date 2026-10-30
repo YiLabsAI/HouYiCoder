@@ -28,9 +28,13 @@
 //! microcompact vocabulary (trigger/keep/clear_at_least).
 
 use std::collections::HashSet;
+use std::str;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+
+use super::Tokenizer;
 
 use houyicoder_context::{BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
@@ -208,6 +212,11 @@ pub struct RetentionContext<'a> {
     pub is_superseded: bool,
     /// The CAS hash when the output is a block_ref marker, else None.
     pub block_ref: Option<&'a str>,
+    /// The stored byte length the marker names for this block, when it
+    /// carries one. A budget policy uses this as a pre-fetch token upper
+    /// bound (a UTF-8 byte count is never below the token count) so it can
+    /// decide to demote without reading the block first.
+    pub stored_bytes: Option<u64>,
     /// The assembly this decision is computed for.
     pub assembly_id: u64,
     /// Whether this assembly will be sent to the provider.
@@ -224,6 +233,18 @@ pub trait RetentionPolicy: Send + Sync {
     /// that measures the context it holds can size the held set. The default
     /// ignores the observation.
     fn record_materialized_bytes(&self, _block_ref: &str, _bytes: usize) {}
+
+    /// Report the stored bytes of a block the policy materialized, so a
+    /// token-budget policy can tokenize the actual content and account it in
+    /// the budget's unit. The default ignores it; a byte-count policy keeps
+    /// using record_materialized_bytes.
+    fn record_materialized_content(&self, _block_ref: &str, _content: &[u8]) {}
+
+    /// Set the per-turn materialization budget in tokens. The assembler calls
+    /// this each turn after measuring the window so a budget policy gates on a
+    /// window-proportional ceiling rather than a fixed constant. The default
+    /// ignores it (non-budgeted policies do not gate).
+    fn set_turn_budget(&self, _tokens: u32) {}
 }
 
 /// Default policy: superseded results evict regardless of age; recent
@@ -261,35 +282,41 @@ impl RetentionPolicy for AgeRetentionPolicy {
     }
 }
 
-/// The most bytes of CAS blocks one turn may materialize back into the
-/// assembled context. A byte proxy for the design's per-turn tool-result
-/// budget B = min(8192, 0.10 * W) tokens: 32 KiB covers about 8 KiB of tokens
-/// at four bytes each, the floor the design sets before the load experiment
-/// picks a window-proportional value. The budget bounds the cumulative
-/// retrieval, not any single block, so a recent active result still enters in
-/// full while older ones fold to previews once the turn has spent its quota.
-pub const TURN_RESULT_BUDGET_BYTES: u64 = 32 * 1024;
+/// The cap on the per-turn tool-result budget, in tokens. The design sets
+/// B = min(8192, floor(0.10 * W)) where W is the window left after system,
+/// tools, user input, and the reply reserve. 8192 is the hard ceiling; the
+/// assembler computes the window-proportional half each turn and calls
+/// set_turn_budget, so the budget tracks the model window rather than a fixed
+/// constant. The load experiment may lower the fraction; it does not change
+/// the ceiling or the token unit.
+pub const TURN_RESULT_BUDGET_CAP_TOKENS: u32 = 8192;
 
-/// A retention policy that bounds how many bytes a single turn materializes
+/// A retention policy that bounds how many tokens a single turn materializes
 /// from the CAS. It wraps an inner policy (age or cache-liveness) and demotes a
-/// Materialize decision to Summarize once the bytes the turn has already
-/// retrieved reach the budget. The counter resets at an assembly boundary, so
-/// each turn starts with its full quota. The decision is made before the block
-/// is read: the accumulator holds what prior blocks in the same turn cost, not
-/// a pre-fetch of the block being decided, so the gate never reads the full
-/// content only to reject it.
+/// Materialize decision to Summarize once the tokens the turn has already
+/// retrieved reach the per-turn budget. The counter resets at an assembly
+/// boundary, so each turn starts with its full quota.
+///
+/// The decision is made before the block is read. The pre-check uses the
+/// stored byte length the marker names as a token upper bound (a UTF-8 byte
+/// count is never below the token count), so a block that would push the turn
+/// past its budget is demoted without a retrieval. The final accounting
+/// tokenizes the materialized content, so the accumulator is exact once a
+/// block is read, not a byte proxy.
 pub struct BudgetedRetentionPolicy {
     inner: Arc<dyn RetentionPolicy>,
-    max_bytes: u64,
+    tokenizer: Tokenizer,
+    budget_tokens: AtomicU32,
     accumulated: AtomicU64,
     assembly: AtomicU64,
 }
 
 impl BudgetedRetentionPolicy {
-    pub fn new(inner: Arc<dyn RetentionPolicy>, max_bytes: u64) -> Self {
+    pub fn new(inner: Arc<dyn RetentionPolicy>, tokenizer: Tokenizer) -> Self {
         Self {
             inner,
-            max_bytes,
+            tokenizer,
+            budget_tokens: AtomicU32::new(TURN_RESULT_BUDGET_CAP_TOKENS),
             accumulated: AtomicU64::new(0),
             assembly: AtomicU64::new(u64::MAX),
         }
@@ -306,7 +333,15 @@ impl RetentionPolicy for BudgetedRetentionPolicy {
             if self.assembly.swap(ctx.assembly_id, Ordering::Relaxed) != ctx.assembly_id {
                 self.accumulated.store(0, Ordering::Relaxed);
             }
-            if self.accumulated.load(Ordering::Relaxed) >= self.max_bytes {
+            let budget = self.budget_tokens.load(Ordering::Relaxed) as u64;
+            // Pre-check: the stored byte length is a token upper bound, so a
+            // block that would push the turn past its budget is demoted before
+            // the retrieval. A marker without a stored length is decided on
+            // the accumulated total alone (the inner policy already bounds
+            // single blocks upstream via the isolate and bash caps).
+            let projected =
+                self.accumulated.load(Ordering::Relaxed) + ctx.stored_bytes.unwrap_or(0);
+            if projected >= budget {
                 return RetentionDecision::Summarize;
             }
         }
@@ -315,7 +350,22 @@ impl RetentionPolicy for BudgetedRetentionPolicy {
 
     fn record_materialized_bytes(&self, block_ref: &str, bytes: usize) {
         self.inner.record_materialized_bytes(block_ref, bytes);
-        self.accumulated.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    fn record_materialized_content(&self, block_ref: &str, content: &[u8]) {
+        self.inner.record_materialized_content(block_ref, content);
+        // Final accounting: tokenize the actual materialized content so the
+        // accumulator shares the budget's token unit, not a byte proxy. The
+        // stored bytes are a UTF-8 JSON serialization; a decode failure falls
+        // back to the byte count as a conservative upper bound.
+        let tokens = str::from_utf8(content)
+            .map(|s| u64::from(self.tokenizer.count(s)))
+            .unwrap_or(content.len() as u64);
+        self.accumulated.fetch_add(tokens, Ordering::Relaxed);
+    }
+
+    fn set_turn_budget(&self, tokens: u32) {
+        self.budget_tokens.store(tokens, Ordering::Relaxed);
     }
 }
 
@@ -376,9 +426,11 @@ fn apply_tier(
         return marker.clone();
     };
     // Stamp the block_ref onto the context so a cache-liveness policy can
-    // key a per-block decision on it.
+    // key a per-block decision on it, and the stored byte length the marker
+    // names so a budget policy can pre-check the size without fetching.
     let ctx = RetentionContext {
         block_ref: Some(hash_str),
+        stored_bytes: marker.get("bytes").and_then(|v| v.as_u64()),
         ..*ctx
     };
     match policy.decide(&ctx) {
@@ -388,6 +440,7 @@ fn apply_tier(
                 Ok(bytes) => match serde_json::from_slice(&bytes) {
                     Ok(value) => {
                         policy.record_materialized_bytes(hash_str, bytes.len());
+                        policy.record_materialized_content(hash_str, &bytes);
                         value
                     }
                     // Stored bytes did not deserialize: the block is corrupt or

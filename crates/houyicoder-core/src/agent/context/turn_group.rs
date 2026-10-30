@@ -341,6 +341,7 @@ fn materialize_result(
         age_in_turns,
         is_superseded,
         block_ref: None,
+        stored_bytes: None,
         assembly_id: scope.id,
         mutating: scope.mutating,
     };

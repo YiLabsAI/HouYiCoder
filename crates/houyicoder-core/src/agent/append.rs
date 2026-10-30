@@ -519,6 +519,7 @@ impl Runner {
             BLOCK_REF_KEY: hash,
             "preview": preview,
             "data_tag": data_tag,
+            "bytes": bytes.len(),
             "hint": "large output compacted; re-invoke the tool to retrieve it",
         })
     }
