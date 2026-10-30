@@ -141,6 +141,13 @@ impl Tool for ExitWorktreeTool {
         if !removing {
             return false;
         }
+        // A remove that keeps its changes is a plain directory cleanup the user
+        // already chose; only a remove that explicitly discards unmerged work
+        // asks, since that is the one act that loses what was not committed.
+        let discards = input.get("discard_changes").and_then(|v| v.as_bool()) == Some(true);
+        if !discards {
+            return false;
+        }
         // A remove with no tree behind it removes nothing, so asking the user
         // to confirm it asks them to approve an act that cannot happen. A
         // resumed session holds no record of entering a tree, and the card

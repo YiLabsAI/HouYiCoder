@@ -183,10 +183,11 @@ def _normalize(payload: dict):
     A payload naming no tool is not a write an editor issued, so it is
     skipped; one naming a covered tool but carving out no path is blocked by
     the caller instead, since a write the gate cannot locate is the case it
-    must not wave through.
+    must not wave through. Bash is admitted here so its heredoc bodies reach
+    the same rust checks; its path is parsed out of the command, not a key.
     """
     tool = str(payload.get("tool_name") or "").lower()
-    if tool not in _WRITE_TOOLS:
+    if tool not in _WRITE_TOOLS and tool != "bash":
         return None
     args = payload.get("input")
     if not isinstance(args, dict):
@@ -194,12 +195,99 @@ def _normalize(payload: dict):
     if not isinstance(args, dict):
         args = {}
     path = ""
-    for key in _PATH_KEYS:
-        value = args.get(key)
-        if isinstance(value, str) and value:
-            path = value
-            break
+    if tool in _WRITE_TOOLS:
+        for key in _PATH_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                path = value
+                break
     return tool, args, path
+
+
+_REWRITE_HINT = (
+    "\nRewrite: plain English comments (no product names / backticks "
+    "/ CJK / codenames / design-doc refs) and descriptive test names "
+    "(no test1/test2, no e2e/integration type tags -- the directory "
+    "denotes the type) (AGENTS.md)."
+)
+
+
+def _rust_violations(path, chunk, existing_lines, existing_paths):
+    """Yield (rule, detail) for one chunk of rust source being written.
+
+    The disk sets (existing_lines, existing_paths) carry over violations the
+    file already holds, so a rewrite or a move is not reported as new. The
+    caller prints and dedups what this yields.
+    """
+    if not chunk:
+        return
+    for line in chunk.splitlines():
+        for message, line_text in line_violations(line):
+            yield message, line_text
+    for rule, name in _test_name_violations(chunk):
+        yield rule, name
+    for message, preview in _comment_density_violations(chunk):
+        yield message, preview
+    for _lineno, line in inline_use_violations(chunk):
+        if line in existing_lines:
+            continue
+        yield (
+            "a use statement inside a function body; move it to the "
+            "module's import block",
+            line,
+        )
+    for chain in repeated_deep_paths(chunk):
+        if chain in existing_paths:
+            continue
+        yield (
+            "deep qualified path in code body; import it at module "
+            "scope instead of repeating or nesting :: chains",
+            chain,
+        )
+
+
+# A heredoc opener that writes a .rs file: cat/tee with a redirect to a .rs
+# path followed by a quoted or bare heredoc delimiter, or the delimiter
+# followed by the redirect. Both orderings are valid shell syntax.
+_HEREDOC_OPEN = re.compile(
+    r"(?:^|[;&|]\s*|&&\s*)"
+    r"(?:cat|tee)\b.*?"
+    r"(?:(?:>>|>)\s*(\S+\.rs)\s*<<-?\s*['\"]?(\w+)['\"]?|<<-?\s*['\"]?(\w+)['\"]?\s*(?:>>|>)\s*(\S+\.rs))"
+    r"\s*$"
+)
+
+
+def _bash_rs_heredocs(command):
+    """Return [(rs_path, body)] for each heredoc writing a .rs file.
+
+    A bash command that writes rust via a heredoc carries the new source in
+    the body between the opener line and the closing delimiter. Both ordering
+    conventions (cat >> file <<EOF and cat <<EOF > file) are recognized.
+    """
+    if not command:
+        return []
+    lines = command.splitlines()
+    results = []
+    i = 0
+    while i < len(lines):
+        m = _HEREDOC_OPEN.search(lines[i])
+        if not m:
+            i += 1
+            continue
+        if m.group(1) is not None:
+            rs_path, delim = m.group(1), m.group(2)
+        else:
+            delim, rs_path = m.group(3), m.group(4)
+        body_lines = []
+        i += 1
+        while i < len(lines):
+            if lines[i].strip() == delim:
+                break
+            body_lines.append(lines[i])
+            i += 1
+        results.append((rs_path, "\n".join(body_lines)))
+        i += 1
+    return results
 
 
 def main():
@@ -213,6 +301,49 @@ def main():
     if normalized is None:
         sys.exit(0)
     tool, ti, path = normalized
+
+    if tool == "bash":
+        command = _text(ti.get("command"))
+        targets = _bash_rs_heredocs(command)
+        if not targets:
+            # A bash command with no .rs heredoc the parser can read is not a
+            # rust write this gate can see, so it lets the call through.
+            sys.exit(0)
+        seen = set()
+        for rs_path, body in targets:
+            existing_lines = set()
+            existing_paths = set()
+            try:
+                disk_text = Path(rs_path).read_text(encoding="utf-8")
+                existing_lines = {line.strip() for line in disk_text.splitlines()}
+                existing_paths = set(repeated_deep_paths(disk_text))
+            except OSError:
+                pass
+            for rule, detail in _rust_violations(
+                rs_path, body, existing_lines, existing_paths
+            ):
+                key = (rule, detail)
+                if key in seen:
+                    continue
+                seen.add(key)
+                print(
+                    f"blocked write to {rs_path}: {rule}\n  -> {detail}",
+                    file=sys.stderr,
+                )
+            for rule, name in _file_name_violation(rs_path):
+                key = (rule, name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                print(
+                    f"blocked write to {rs_path}: {rule}\n  -> {name}",
+                    file=sys.stderr,
+                )
+        if seen:
+            print(_REWRITE_HINT, file=sys.stderr)
+            sys.exit(2)
+        sys.exit(0)
+
     if not path:
         # A covered tool with no locatable target: the file the rules apply to
         # is unknown, so allowing would be a silent hole.
@@ -253,58 +384,27 @@ def main():
         pass
     for chunk in chunks:
         if is_rs:
-            for line in chunk.splitlines():
-                for message, line_text in line_violations(line):
-                    key = (message, line_text)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    print(f"blocked write to {path}: {message}\n  -> {line_text}", file=sys.stderr)
-            for rule, name in _test_name_violations(chunk):
-                key = (rule, name)
+            for rule, detail in _rust_violations(
+                path, chunk, existing_lines, existing_paths
+            ):
+                key = (rule, detail)
                 if key in seen:
                     continue
                 seen.add(key)
-                print(f"blocked write to {path}: {rule}\n  -> {name}", file=sys.stderr)
-            for message, preview in _comment_density_violations(chunk):
-                key = (message, preview)
-                if key in seen:
-                    continue
-                seen.add(key)
-                print(f"blocked write to {path}: {message}\n  -> {preview}", file=sys.stderr)
-            for lineno, line in inline_use_violations(chunk):
-                if line in existing_lines:
-                    # A rewrite or a move that carries a pre-existing local
-                    # import over is not a new one; the ratchet counts those.
-                    continue
-                rule = (
-                    "a use statement inside a function body; move it to the "
-                    "module's import block"
+                print(
+                    f"blocked write to {path}: {rule}\n  -> {detail}",
+                    file=sys.stderr,
                 )
-                key = (rule, line)
-                if key in seen:
-                    continue
-                seen.add(key)
-                print(f"blocked write to {path}: {rule}\n  -> {line}", file=sys.stderr)
-            for chain in repeated_deep_paths(chunk):
-                if chain in existing_paths:
-                    continue
-                rule = (
-                    "deep qualified path in code body; import it at module "
-                    "scope instead of repeating or nesting :: chains"
-                )
-                key = (rule, chain)
-                if key in seen:
-                    continue
-                seen.add(key)
-                print(f"blocked write to {path}: {rule}\n  -> {chain}", file=sys.stderr)
         if is_baseline_py:
             for message, line in _baseline_comment_violation(chunk):
                 key = (message, line)
                 if key in seen:
                     continue
                 seen.add(key)
-                print(f"blocked write to {path}: {message}\n  -> {line}", file=sys.stderr)
+                print(
+                    f"blocked write to {path}: {message}\n  -> {line}",
+                    file=sys.stderr,
+                )
     for rule, name in _file_name_violation(path):
         key = (rule, name)
         if key in seen:
@@ -312,13 +412,7 @@ def main():
         seen.add(key)
         print(f"blocked write to {path}: {rule}\n  -> {name}", file=sys.stderr)
     if seen:
-        print(
-            "\nRewrite: plain English comments (no product names / backticks "
-            "/ CJK / codenames / design-doc refs) and descriptive test names "
-            "(no test1/test2, no e2e/integration type tags -- the directory "
-            "denotes the type) (AGENTS.md).",
-            file=sys.stderr,
-        )
+        print(_REWRITE_HINT, file=sys.stderr)
         sys.exit(2)
     sys.exit(0)
 

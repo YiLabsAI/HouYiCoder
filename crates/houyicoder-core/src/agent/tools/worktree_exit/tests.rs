@@ -42,15 +42,21 @@ fn test_keep_needs_no_approval() {
     drop(remove_dir_all(&repo));
 }
 
-/// A removal that names a tree is a real removal, so the user is asked. The
-/// name is what tells the gate there is something to take apart when the
-/// session itself is not inside one.
+/// A removal that names a tree and discards its work is a real removal, so the
+/// user is asked. A removal that keeps the work runs without a card. The name
+/// is what tells the gate there is something to take apart when the session
+/// itself is not inside one.
 #[test]
 fn test_named_remove_needs_approval() {
     let repo = make_repo(93);
     let (controller, _store, _cwd) = wired(&repo, 0);
     let tool = ExitWorktreeTool::new(controller);
     assert!(tool.requires_approval_for(&json!({
+        "action": "remove",
+        "name": "s36-ux-fix",
+        "discard_changes": true
+    })));
+    assert!(!tool.requires_approval_for(&json!({
         "action": "remove",
         "name": "s36-ux-fix"
     })));

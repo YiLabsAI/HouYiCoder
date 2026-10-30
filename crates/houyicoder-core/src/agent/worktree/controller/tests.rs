@@ -556,7 +556,11 @@ async fn test_tools_execute_through_controller() {
     assert!(!enter.is_destructive());
 
     let exit = ExitWorktreeTool::new(controller.clone());
-    assert!(exit.requires_approval_for(&json!({"action":"remove"})));
+    assert!(exit.requires_approval_for(&json!({
+        "action": "remove",
+        "discard_changes": true
+    })));
+    assert!(!exit.requires_approval_for(&json!({"action": "remove"})));
     assert!(!exit.requires_approval_for(&json!({"action":"keep"})));
     let out = exit
         .execute(ToolCtx::new("call-2"), json!({"action":"keep"}))

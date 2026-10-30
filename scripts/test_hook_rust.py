@@ -213,6 +213,36 @@ def main() -> int:
     if empty is None or empty[2] != "":
         failures.append("a pathless write must resolve with an empty path to block")
 
+    # Bash heredoc writes to a .rs file: the gate parses the target path and
+    # the body out of the command and runs the same rust checks an edit does,
+    # so a cat-heredoc cannot bypass the comment and naming rules. A bash
+    # command with no .rs heredoc parses to nothing and lets the call through.
+    bash_payload = {
+        "tool_name": "bash",
+        "input": {"command": "cat >> crates/foo/tests.rs <<'RSEOF'\n// 中文注释\nRSEOF"},
+    }
+    bn = hr._normalize(bash_payload)
+    if bn is None or bn[0] != "bash":
+        failures.append("a bash payload must resolve so its heredoc is checked")
+    else:
+        targets = hr._bash_rs_heredocs(bn[1].get("command", ""))
+        if len(targets) != 1 or not targets[0][0].endswith("foo/tests.rs"):
+            failures.append(f"heredoc target misparsed: {targets!r}")
+        elif "中文" not in targets[0][1]:
+            failures.append("heredoc body not captured between the delimiters")
+        else:
+            flagged = list(
+                hr._rust_violations(targets[0][0], targets[0][1], set(), set())
+            )
+            if not any("CJK" in r or "中文" in d for r, d in flagged):
+                failures.append("a CJK comment in a bash heredoc body was not flagged")
+    # A bash command that writes no .rs heredoc is not a rust write the gate
+    # can see, so the parser returns nothing and the call is allowed.
+    if hr._bash_rs_heredocs("cargo test --lib"):
+        failures.append("a plain bash command must not parse as a .rs heredoc")
+    if hr._bash_rs_heredocs("cat >> notes.md <<'EOF'\nhi\nEOF"):
+        failures.append("a non-.rs heredoc must not be captured")
+
     # Product-name arm: fires when a wordlist resolves, skips when absent.
     # Uses a temp wordlist (monkeypatched) so the test does not depend on the
     # real gitignored list being present (a clean clone has none).

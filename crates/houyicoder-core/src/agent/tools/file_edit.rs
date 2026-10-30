@@ -14,9 +14,10 @@ use houyicoder_protocol::extension::ToolError;
 use crate::agent::diff::unified_diff;
 use crate::snapshot::file_transaction::FileTransaction;
 
-/// Max bytes Edit will read into memory. Files larger than this are
-/// refused (Edit is for source edits, not giant generated files).
-pub const EDIT_MAX_BYTES: usize = 256 * 1024;
+/// Max bytes Edit will read into memory. Files larger than this are refused.
+/// Set to 64 MiB so the long-form review docs the model edits in place clear
+/// the guard; the snapshot backup ceiling above it still bounds memory use.
+pub const EDIT_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Apply one old to new replacement to content, fail-closed. Returns the
 /// new content or an error message. Pure (no I/O) so MultiEdit can apply a
