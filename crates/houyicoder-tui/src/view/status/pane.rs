@@ -163,6 +163,18 @@ fn render_config(app: &App) -> String {
         s.push_str(&f("effort", effort.label()));
     }
     s.push_str(&f("Permission mode", permission_mode_label(mode)));
+    let delay = app
+        .sessions
+        .current
+        .capabilities
+        .permission
+        .auto_approve_delay_secs;
+    let timer = if delay == 0 {
+        "off".to_string()
+    } else {
+        format!("{delay}s")
+    };
+    s.push_str(&f("Auto-approve timer", &timer));
     s.push_str(&f("sandbox", &app.sessions.current.sandbox));
     s.push_str(&f("breaker", &render_breaker_line(&snap)));
     s.push_str(&f("auto-memory", on_off(snap.auto_memory)));

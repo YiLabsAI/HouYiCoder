@@ -10,6 +10,7 @@
 pub(crate) mod model;
 
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::time::{Duration, Instant};
 
 use houyicoder_protocol::acp_wire::PermissionOptionKind;
@@ -59,6 +60,11 @@ pub(crate) struct PermissionCapability {
     /// that rewinds the log past the cursor resets both together so the scan
     /// re-parses from zero against the truncated log.
     pub(crate) verdict_cursor: usize,
+    /// The delay before a Level 1 approval card auto-approves in Auto mode, in
+    /// seconds. Zero disables the countdown. Read from the
+    /// HOUYICODER_AUTO_APPROVE_DELAY_SECS env var so a host or unattended run
+    /// can tune or silence it without a settings round-trip.
+    pub(crate) auto_approve_delay_secs: u64,
 }
 
 impl Default for PermissionCapability {
@@ -71,8 +77,19 @@ impl Default for PermissionCapability {
             sticky_choices: HashMap::new(),
             verdict_log_cache: Vec::new(),
             verdict_cursor: 0,
+            auto_approve_delay_secs: auto_approve_delay_secs(),
         }
     }
+}
+
+/// The auto-approve countdown delay, read from the environment. Defaults to
+/// seven seconds; zero disables the countdown so an Auto session still asks
+/// every Level 1 card.
+fn auto_approve_delay_secs() -> u64 {
+    env::var("HOUYICODER_AUTO_APPROVE_DELAY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(7)
 }
 
 /// The session's status caches and poll bookkeeping as the wire reports them:

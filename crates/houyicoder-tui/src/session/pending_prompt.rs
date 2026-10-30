@@ -2,10 +2,12 @@
 //! optional interactive question card, or a startup workspace-trust ask. App
 //! reads the pending ask through the accessors below, beside the type.
 
+use std::time::Instant;
+
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::PermissionMode;
-use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest};
+use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalRequest, ApprovalScope};
 use houyicoder_protocol::frontend::trust::TrustPrompt;
 
 use crate::agent_message::ClientCommand;
@@ -24,7 +26,7 @@ pub enum PendingPrompt {
     Permission {
         req_id: RequestId,
         requests: Vec<ApprovalRequest>,
-        card: Option<Approval>,
+        card: Option<Box<Approval>>,
         question: Option<Box<AskQuestion>>,
     },
     /// A startup workspace-trust ask, shown before any run begins.
@@ -52,7 +54,7 @@ impl PendingPrompt {
         Self::Permission {
             req_id,
             requests: Vec::new(),
-            card: Some(card),
+            card: Some(Box::new(card)),
             question: None,
         }
     }
@@ -99,7 +101,7 @@ impl PendingPrompt {
     /// The generic approval card, or None for a question or trust ask.
     pub fn approval(&self) -> Option<&Approval> {
         match self {
-            Self::Permission { card, .. } => card.as_ref(),
+            Self::Permission { card, .. } => card.as_deref(),
             Self::Trust { .. } => None,
         }
     }
@@ -108,7 +110,7 @@ impl PendingPrompt {
     /// permission ask.
     pub fn approval_mut(&mut self) -> Option<&mut Approval> {
         match self {
-            Self::Permission { card, .. } => card.as_mut(),
+            Self::Permission { card, .. } => card.as_deref_mut(),
             Self::Trust { .. } => None,
         }
     }
@@ -134,7 +136,7 @@ impl PendingPrompt {
     /// ask.
     pub fn set_approval(&mut self, card: Option<Approval>) {
         if let Self::Permission { card: slot, .. } = self {
-            *slot = card;
+            *slot = card.map(Box::new);
         }
     }
 
@@ -216,6 +218,41 @@ impl App {
         }
     }
 
+    /// Tick the auto-approve countdown of the active card. When it has run
+    /// down, the card resolves as a single Yes-once, the same decision an
+    /// Enter on the approve option ships. Returns true when a verdict fired so
+    /// the caller redraws.
+    pub(crate) fn tick_auto_approve(&mut self, now: Instant) -> bool {
+        let expired = self.approval().is_some_and(|a| a.auto_approve_expired(now));
+        if !expired {
+            return false;
+        }
+        let (call_id, tool, kind) = match self.approval() {
+            Some(a) => (a.call_id.clone(), a.tool.clone(), a.focused_kind()),
+            None => return false,
+        };
+        if let Some(a) = self.approval_mut() {
+            a.auto_approve_at = None;
+        }
+        self.sessions
+            .current
+            .capabilities
+            .permission
+            .sticky_choices
+            .insert(tool, kind);
+        if self.sessions.current.connection.is_some() {
+            self.resolve_current_approval(ApprovalDecision {
+                call_id,
+                approved: true,
+                updated_input: None,
+                scope: ApprovalScope::Once,
+            });
+        } else {
+            self.sessions.current.clear_prompt();
+        }
+        true
+    }
+
     /// Resolve the active approval, clear its interface state, and send the
     /// verdict as the matching reverse response. No-op when no request awaits
     /// a decision.
@@ -286,12 +323,22 @@ impl App {
         // hide persistent approval because consent cannot override them.
         let args = ask.input.to_string();
         let selected = self.initial_cursor(&tool);
-        let (reason, source, containment_note) = if tool == ENTITLEMENT_TOOL {
-            ("denied during the last command".to_string(), None, None)
+        let (reason, source, validator, containment_note) = if tool == ENTITLEMENT_TOOL {
+            (
+                "denied during the last command".to_string(),
+                None,
+                None,
+                None,
+            )
         } else {
             match ask.reason {
-                Some(r) => (r.detail.clone(), Some(r.source), r.containment_note.clone()),
-                None => ("agent wants to run this tool".to_string(), None, None),
+                Some(r) => (
+                    r.detail.clone(),
+                    Some(r.source),
+                    Some(r.validator.clone()),
+                    r.containment_note.clone(),
+                ),
+                None => ("agent wants to run this tool".to_string(), None, None, None),
             }
         };
         let mut card = Approval {
@@ -299,16 +346,30 @@ impl App {
             args,
             reason,
             source,
+            validator,
             delegation: ask.delegation,
             containment_note,
             selected,
             expanded: false,
             call_id,
             options: ask.options,
+            auto_approve_at: None,
+            auto_approve_cancelled: false,
         };
         // Two-option cards cannot retain a hidden persistent choice.
         if card.two_option_card() && card.selected == 2 {
             card.selected = 0;
+        }
+        // A Level 1 card in Auto mode starts the auto-approve countdown. The
+        // delay comes from the session permission cache; zero disables it.
+        if self.current_mode() == PermissionMode::Auto {
+            let delay = self
+                .sessions
+                .current
+                .capabilities
+                .permission
+                .auto_approve_delay_secs;
+            card.start_auto_approve(delay);
         }
         if let Some(p) = self.sessions.current.prompt.as_mut() {
             p.set_approval(Some(card));

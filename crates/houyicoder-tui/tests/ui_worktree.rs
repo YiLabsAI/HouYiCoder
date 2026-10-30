@@ -345,14 +345,13 @@ const EXIT_REMOVE_REFUSE_SCRIPT: &str = r#"[
 ]"#;
 
 /// The fail-closed discard gate: exit_worktree(remove) with discard_changes
-/// false (the default) on a worktree that has uncommitted work must refuse
-/// even after the human confirms the remove card. The remove still asks
-/// (approval is keyed on the action, not the discard flag), so the card fires
-/// first; confirming resumes onto the controller exit, which returns the
+/// absent (the default) runs without an approval card, since approval is keyed
+/// on an explicit discard_changes=true. The controller exit(Remove, false)
+/// still refuses on a worktree that has uncommitted work, returning the
 /// refuse error listing the work + pointing the model back to the user. The
 /// worktree directory must survive (not deleted) and the run must still end.
-/// Without this path the approval card would be a rubber stamp -- the
-/// discard gate is the second of the two gates on a remove.
+/// Without this path the discard gate would be the only thing between a
+/// default remove and lost work, so the refuse must hold even without a card.
 #[test]
 #[ignore]
 fn test_remove_refuses_uncommitted_work() {
@@ -361,28 +360,11 @@ fn test_remove_refuses_uncommitted_work() {
     let mut s = pty_session_in_repo(repo.clone(), EXIT_REMOVE_REFUSE_SCRIPT);
     s.send_str("go");
     s.send_key(&Key::Enter);
-    // enter runs, then bash touch dirties the worktree, then exit(remove)
-    // raises the approval card. The card appearing means enter + touch ran.
-    let card_timeout = Duration::from_secs(15);
-    assert!(
-        s.wait_for("Exit_worktree command", card_timeout),
-        "the approval card header should render for exit_worktree remove:\n{}",
-        s.output()
-    );
-    assert!(
-        wt_dir.exists(),
-        "the worktree directory should exist after enter + touch:\n{}",
-        s.output()
-    );
-    assert!(
-        s.wait_for("1. Yes", RENDER_TIMEOUT),
-        "the Yes option should render on the approval card:\n{}",
-        s.output()
-    );
-    // Confirm Yes -> resume -> controller exit(Remove, discard=false). The
-    // worktree has 1 uncommitted file -> the discard gate refuses.
-    s.send_key(&Key::Enter);
-    let end_timeout = Duration::from_secs(15);
+    // enter runs, then bash touch dirties the worktree, then exit(remove) runs
+    // without a card. No approval card fires: discard_changes is absent, so the
+    // gate does not ask. The controller exit(Remove, false) refuses on the
+    // uncommitted file and reports it in the result row.
+    let end_timeout = Duration::from_secs(20);
     // Wait on the refuse text, not on a generic end-of-run word: the result
     // row is what proves the user is told, and it is also the signal that the
     // gate has run. The row body is previewed (truncated to the row width) in

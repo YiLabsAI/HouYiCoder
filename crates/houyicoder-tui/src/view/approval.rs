@@ -12,6 +12,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 use serde_json::Value;
+use std::time::Instant;
 
 use crate::records::Approval;
 
@@ -230,9 +231,21 @@ fn option_label(a: &Approval, selected: usize) -> String {
         return if selected == 1 { "No" } else { "Yes" }.to_string();
     }
     match selected {
-        0 => "Yes".to_string(),
+        0 => yes_label(a),
         2 => format!("Yes, and don't ask again for {}", remember_label(a)),
         _ => "No".to_string(),
+    }
+}
+
+/// The Yes label, with the auto-approve countdown hint when one is running.
+/// The hint names the seconds left so the user can see the card is about to
+/// resolve on its own; a touch of any navigation key cancels it.
+fn yes_label(a: &Approval) -> String {
+    let base = "Yes".to_string();
+    if let Some(secs) = a.auto_approve_secs_left(Instant::now()) {
+        format!("{base} (auto in {secs}s)")
+    } else {
+        base
     }
 }
 

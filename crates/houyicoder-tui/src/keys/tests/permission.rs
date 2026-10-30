@@ -7,7 +7,7 @@
 #![cfg(test)]
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
@@ -330,6 +330,31 @@ fn approval_app(approval: Approval) -> App {
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), approval));
     app
+}
+
+/// An expired countdown fires the auto-approve: the card resolves as a
+/// Yes-once and clears, with no connection needed to clear the prompt.
+#[test]
+fn test_auto_approve_tick_fires() {
+    let mut a = Approval {
+        tool: "bash".into(),
+        args: "cat > /tmp/x".into(),
+        reason: "r".into(),
+        source: None,
+        validator: Some("compound_command".into()),
+        delegation: None,
+        containment_note: None,
+        selected: 0,
+        expanded: false,
+        call_id: "c1".into(),
+        options: Vec::new(),
+        ..Default::default()
+    };
+    a.auto_approve_at = Some(Instant::now() - Duration::from_secs(1));
+    let mut app = approval_app(a);
+    let fired = app.tick_auto_approve(Instant::now());
+    assert!(fired, "an expired countdown fires the auto-approve");
+    assert!(app.approval().is_none(), "the card cleared after firing");
 }
 
 fn press(app: &mut App, c: char) {

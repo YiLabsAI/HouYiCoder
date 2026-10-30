@@ -1,5 +1,7 @@
 //! Tool-approval prompt state and option layout rules.
 
+use std::time::{Duration, Instant};
+
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::AskSource;
@@ -22,6 +24,11 @@ pub struct Approval {
     /// card: a SystemSafety source hides the "remember" option because
     /// consent cannot override a protected-path check.
     pub source: Option<AskSource>,
+    /// The gate validator that produced the ask, when the wire carried a
+    /// reason. Drives the auto-approve countdown: a card from a validator
+    /// that widens the workspace bounds, touches the network, or forces a
+    /// push never auto-approves.
+    pub validator: Option<String>,
     /// The child delegation this ask was routed up from, when the ask
     /// originates from a spawned child rather than the parent's own run.
     /// None for a parent tool call. The card labels the child type so the
@@ -44,6 +51,14 @@ pub struct Approval {
     /// The verdict options the server offered (N-option). Empty when the
     /// server deferred; the card falls back to its built-in 3-option set.
     pub options: Vec<PermissionOption>,
+    /// The instant a Level 1 auto-approve countdown expires, when one is
+    /// running. None when the card is not counting down: a Level 2 ask, a
+    /// cancelled countdown, or a delay of zero.
+    pub auto_approve_at: Option<Instant>,
+    /// Whether the user touched a navigation key while the countdown ran.
+    /// One touch cancels the auto-approve for the life of this card; the
+    /// user's Enter or Esc then decides it.
+    pub auto_approve_cancelled: bool,
 }
 
 /// The number of visible options in the approval prompt.
@@ -85,6 +100,84 @@ impl Approval {
     /// allow or a decline.
     pub fn two_option_card(&self) -> bool {
         self.remember_hidden() || self.is_entitlement()
+    }
+
+    /// Whether this card may auto-approve in Auto mode after the countdown.
+    /// Level 2 asks never do: a protected path, a request to widen the
+    /// workspace bounds, a network call, a forced push, or a native tool call
+    /// the user did not flag as discarding all need a human press. The rest
+    /// (a fenced compound command, a destructive command, a local git
+    /// checkpoint, a discard-flagged native call) recover or stay inside the
+    /// fence, so a countdown that lands on Yes-once is safe.
+    pub fn auto_approve_eligible(&self) -> bool {
+        if matches!(self.source, Some(AskSource::SystemSafety)) || self.is_entitlement() {
+            return false;
+        }
+        match self.validator.as_deref() {
+            Some(
+                "path_bounds"
+                | "path-bounds"
+                | "directory_capability"
+                | "directory-capability"
+                | "network_egress"
+                | "network-egress",
+            ) => {
+                return false;
+            }
+            Some("git_checkpoint") => return !self.is_forced_push(),
+            Some("tool_native") => return self.discards_changes(),
+            _ => {}
+        }
+        true
+    }
+
+    /// Whether the serialized args name a forced push, the one git checkpoint
+    /// form that rewrites published history rather than local state.
+    fn is_forced_push(&self) -> bool {
+        let args = self.args.to_ascii_lowercase();
+        args.contains("push")
+            && (args.contains("--force")
+                || args.contains("--no-verify")
+                || args.contains(" -f ")
+                || args.ends_with(" -f")
+                || args.contains(" -f\n"))
+    }
+
+    /// Whether the serialized args carry an explicit discard_changes true, the
+    /// flag a native tool call uses to say it throws uncommitted work away.
+    fn discards_changes(&self) -> bool {
+        self.args.contains("\"discard_changes\"") && self.args.contains("true")
+    }
+
+    /// Start the auto-approve countdown if the card is eligible and the delay
+    /// is non-zero. A Level 2 card, a zero delay, or a cursor parked on No by a
+    /// sticky reject leaves the deadline None so the card waits for the user.
+    pub fn start_auto_approve(&mut self, delay_secs: u64) {
+        if delay_secs > 0 && self.focused_approves() && self.auto_approve_eligible() {
+            self.auto_approve_at = Some(Instant::now() + Duration::from_secs(delay_secs));
+            self.auto_approve_cancelled = false;
+        }
+    }
+
+    /// Cancel the countdown for the life of this card. One navigation key does
+    /// it; the user's Enter or Esc then decides.
+    pub fn cancel_auto_approve(&mut self) {
+        self.auto_approve_at = None;
+        self.auto_approve_cancelled = true;
+    }
+
+    /// The whole seconds left on the countdown, for the "(auto in Ns)" hint.
+    /// None when no countdown is running.
+    pub fn auto_approve_secs_left(&self, now: Instant) -> Option<u64> {
+        let deadline = self.auto_approve_at?;
+        let left = deadline.saturating_duration_since(now).as_secs();
+        Some(left)
+    }
+
+    /// Whether the countdown has run down. The caller auto-approves Once when
+    /// this returns true and clears the deadline.
+    pub fn auto_approve_expired(&self, now: Instant) -> bool {
+        self.auto_approve_at.is_some_and(|d| now >= d)
     }
 
     /// The count of visible options: two (Yes / No) on a two-option card,
@@ -156,3 +249,6 @@ impl Approval {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

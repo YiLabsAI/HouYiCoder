@@ -82,6 +82,9 @@ pub fn run_with_runner(
         if app.ui.notifications.tick(now) {
             dirty = true;
         }
+        if app.tick_auto_approve(now) {
+            dirty = true;
+        }
         if app.sessions.current.todos.prune(now) {
             dirty = true;
         }

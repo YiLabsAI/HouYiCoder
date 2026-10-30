@@ -89,6 +89,12 @@ pub(super) fn handle_approval(app: &mut App, k: KeyEvent) {
     let Some(a) = app.approval_mut() else {
         return;
     };
+    // One key touch cancels the auto-approve countdown: the user took manual
+    // control, so the card waits for their Enter or Esc. Enter and Esc resolve
+    // the card regardless, so cancelling first is harmless.
+    if !matches!(k.code, KeyCode::Enter | KeyCode::Esc) {
+        a.cancel_auto_approve();
+    }
     match k.code {
         // 1=Yes, 2=Yes-don't-ask, 3=No. a/r pin approve/reject. When the
         // card is two-option (protected-path or entitlement), '2' selects

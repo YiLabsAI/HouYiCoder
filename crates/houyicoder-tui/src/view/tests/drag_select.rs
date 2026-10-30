@@ -895,6 +895,7 @@ fn test_approval_drag_resets() {
             expanded: false,
             call_id: "c1".into(),
             options: Vec::new(),
+            ..Default::default()
         },
     ));
     let _out = render_text(&app, 80, 24);
