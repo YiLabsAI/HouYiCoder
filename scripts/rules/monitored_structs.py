@@ -68,8 +68,8 @@ ACTIVE_OWNERS = {
         "fields": 14,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:PermissionCapability": {
-        # The server-reported permission caches plus the verdict audit trail and the read position that guards it.
-        "fields": 7,
+        # The server-reported permission caches, the verdict audit trail, and the auto-approve countdown delay the mode reads.
+        "fields": 8,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:StatusCapability": {
         # The status caches and poll bookkeeping the status paths read.

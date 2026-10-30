@@ -41,7 +41,8 @@ const MACH_SERVICES: &[&str] = &[
     "com.apple.trustd.agent",
 ];
 
-/// /dev devices sh/dyld opens with ioctl.
+/// /dev devices sh/dyld opens with ioctl. /dev/ptmx is the pseudo-tty master a
+/// test harness opens to spawn a terminal pair under the sandbox.
 const DEV_IOCTL: &[&str] = &[
     "/dev/null",
     "/dev/zero",
@@ -49,6 +50,7 @@ const DEV_IOCTL: &[&str] = &[
     "/dev/urandom",
     "/dev/dtracehelper",
     "/dev/tty",
+    "/dev/ptmx",
 ];
 
 /// Broad system-config read denies. Specific required files are allowed back;
@@ -235,16 +237,18 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // Lands after the allow-backs so opening the workspace for writing cannot
     // wash out a deny of a credential path inside it.
     s.push_str(&mandatory_deny(home, tag));
-    // Settings are denied before the scratch directory is opened for writing,
-    // permission stores and snapshot stores after it: a fixture project needs
-    // its own settings file, while permission stores and undo snapshots must
-    // stay write-denied even when placed under the scratch or shared temp root.
+    // Settings and the anywhere-snapshot deny land before the scratch
+    // directory is opened for writing, so a fixture project gets its own
+    // settings file and may write snapshots under the scratch or shared temp
+    // root. Permission stores and the workspace/home snapshot denies land
+    // after it, so those stay write-denied even when placed under a writable
+    // root.
     s.push_str(&deny_settings_files(home, tag));
+    s.push_str(&deny_snapshot_stores_anywhere(tag));
     s.push_str(&allow_tmpdir_writes(tmpdir, workspace));
     s.push_str(&deny_permission_stores(home, tag));
     s.push_str(&deny_snapshot_store(workspace, tag));
     s.push_str(&deny_home_snapshot_store(home, tag));
-    s.push_str(&deny_snapshot_stores_anywhere(tag));
     // After the deny above, so last-match-wins lets git read the system copies.
     // The home copies stay denied.
     s.push_str(&allow_system_etc(tag));
@@ -303,9 +307,10 @@ pub fn deny_default(tag: &str) -> String {
 /// sandbox-exec — process exec/fork/info/signal, mach-priv-task-port,
 /// mach-lookup of 16 system services, ipc-posix-shm/sem, iokit,
 /// system-socket AF_SYSTEM proto 2, sysctl-read, distributed-notification,
-/// file-ioctl on /dev/null|zero|random|urandom|dtracehelper|tty, and
-/// read-write on /dev/null character device. Without this set sh aborts
-/// under deny default.
+/// file-ioctl on /dev/null|zero|random|urandom|dtracehelper|tty|ptmx, and
+/// read-write on /dev/null character device. The pseudo-tty allow and the
+/// read-write on /dev/ptmx and /dev/ttys* let a test harness open a terminal
+/// pair under the sandbox. Without this set sh aborts under deny default.
 pub fn allow_set(tag: &str) -> String {
     let _ = tag;
     let mach = MACH_SERVICES
@@ -333,7 +338,10 @@ pub fn allow_set(tag: &str) -> String {
          (allow sysctl-read)\n\
          (allow distributed-notification-post)\n\
          (allow file-ioctl {dev_ioctl})\n\
-         (allow file-read-data file-write-data (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n"
+         (allow file-read-data file-write-data (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n\
+         (allow pseudo-tty)\n\
+         (allow file-read-data file-write-data file-ioctl (literal \"/dev/ptmx\"))\n\
+         (allow file-read-data file-write-data file-ioctl (regex #\"^/dev/ttys[0-9]+$\"))\n"
     )
 }
 

@@ -188,6 +188,7 @@ def test_commit_without_marker_is_blocked():
     # guidance has to be there and not only on stdout.
     assert "BLOCKED" in err, "the block message is not on stderr"
     assert not out.strip(), "the block message went to the model-blind stream"
+    assert ".houyicoder/.commit_ready" in err, "the hint names the preferred marker path"
     assert not (root / ".claude" / ".commit_ready").exists(), "the block wrote a marker"
     print("ok  block: a commit with no marker exits 2 and leaves no marker")
 

@@ -529,6 +529,41 @@ fn test_denies_foreign_snapshot_store() {
     );
 }
 
+/// A sandboxed test that runs the snapshot store suite lays out its fixture
+/// store under the session temporary directory. The anywhere-deny lands before
+/// the tmpdir allow, so the tmpdir path is writable while the workspace and an
+/// external granted directory keep their snapshot stores refused.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_scratch_snapshot_store_writable() {
+    let f = Fence::new("scratch-snapshots");
+    let store = f.tmpdir.join("fixture/.houyicoder/snapshots");
+    create_dir_all(&store).expect("create fixture snapshot store");
+    let scratch = f.probe(
+        "scratch-store",
+        &format!("printf 'x' >> {}/record.json", store.display()),
+    );
+    assert!(
+        scratch.allowed(),
+        "a snapshot store under the session scratch directory must be writable, \
+         or the snapshot suite cannot run inside the sandbox. {}",
+        scratch.detail()
+    );
+
+    create_dir_all(f.workspace.join(".houyicoder/snapshots"))
+        .expect("create workspace snapshot store");
+    let workspace_store = f.probe(
+        "workspace-store",
+        "printf 'x' >> .houyicoder/snapshots/record.json",
+    );
+    assert!(
+        !workspace_store.allowed() && workspace_store.denied_by_fence(),
+        "the workspace snapshot store stays refused: it holds the undo records a \
+         restore reinstates. {}",
+        workspace_store.detail()
+    );
+}
+
 /// A sandboxed test lays out its own fixture project under the session
 /// temporary directory, and that fixture needs a writable settings file. The
 /// real permission store under the same directory must stay refused, and so
