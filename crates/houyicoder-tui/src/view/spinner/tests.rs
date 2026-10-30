@@ -79,6 +79,45 @@ fn test_tool_pulse_bounded() {
     assert!(pulse >= 0.0);
 }
 
+/// The breathing sine reaches its trough once per cycle, where the pulse is
+/// near zero. The row's state while a tool runs is "breathing", not "shimmer",
+/// so no frame of a whole cycle may take the cyan highlight.
+#[test]
+fn test_tool_pulse_never_shimmers() {
+    for millis in (0..1250).step_by(5) {
+        let line = spinner_line(
+            "✻ Working… (5s · ↓ 80 tokens)",
+            Duration::from_millis(millis),
+            0.0,
+            true,
+        );
+        assert!(
+            line.spans.iter().all(|s| s.style.fg != Some(Color::Cyan)),
+            "tool-active frame at {millis}ms took the cyan shimmer"
+        );
+    }
+}
+
+/// At the trough the verb is the dim base colour, not a brighter pulse: the
+/// breathing fades back to the gray it starts from rather than stopping at a
+/// brighter floor.
+#[test]
+fn test_tool_pulse_floor_dim() {
+    // Three quarters of the cycle puts the sine at its minimum.
+    let line = spinner_line(
+        "✻ Working… (5s · ↓ 80 tokens)",
+        Duration::from_millis(938),
+        0.0,
+        true,
+    );
+    let verb = &line.spans[2];
+    assert_eq!(
+        verb.style.fg,
+        Some(Color::Rgb(88, 88, 88)),
+        "the trough is the dim base gray"
+    );
+}
+
 #[test]
 fn test_tool_pulse_off() {
     let pulse = tool_pulse_opacity(Duration::from_millis(500), false);

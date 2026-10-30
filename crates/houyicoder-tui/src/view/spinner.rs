@@ -215,8 +215,13 @@ pub fn spinner_line(
     }
     // Tool-use breathing pulse: while a tool runs, the whole verb breathes as
     // one word between dim and brighter gray without a sliding shimmer window.
-    let pulse = tool_pulse_opacity(elapsed, tool_active);
-    if pulse > 0.0 {
+    // The branch keys on the tool being active rather than on the pulse value:
+    // the pulse is a floating-point expression, and gating on it makes the
+    // choice of branch depend on whether a sine happens to round to zero. The
+    // state the row means to express is "a tool is running", so that is what
+    // it tests.
+    if tool_active {
+        let pulse = tool_pulse_opacity(elapsed, tool_active);
         let body_style = Style::new().fg(lerp_color(DIM_GRAY, PULSE_GRAY, pulse / 0.3));
         spans.push(Span::styled(verb.to_string(), body_style));
         spans.push(Span::styled(tail.to_string(), dim));
