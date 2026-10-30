@@ -1,6 +1,7 @@
 use super::*;
 use houyicoder_api::sandbox::{BoundaryAccess, BoundaryGrant};
 use houyicoder_api::session::{ApprovalAudit, TurnAudit};
+use houyicoder_context::AgentId;
 use houyicoder_context::PermissionVerdict;
 use houyicoder_context::RecapSource;
 use houyicoder_context::RecapUsage;
@@ -8,6 +9,9 @@ use houyicoder_context::SessionEvent;
 use houyicoder_context::{EventId, SessionId, SessionLogEntry};
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::RunError;
+use houyicoder_core::agent::RunOutcome as EngineOutcome;
+use houyicoder_core::agent::RunResult as EngineResult;
+use houyicoder_core::agent::VerifyFailure;
 use houyicoder_permission::PermissionMode as E;
 use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
@@ -18,6 +22,7 @@ use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::permission::{AskSource, RuleDestination};
 use houyicoder_protocol::frontend::run::ApprovalScope;
 use houyicoder_protocol::llm::ProviderError;
+use houyicoder_protocol::llm::Usage;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::slice::from_ref;
@@ -872,4 +877,55 @@ fn test_session_audit_maps_figures() {
     assert_eq!(view.turns.interrupted, 2);
     assert_eq!(view.turns.unfinished, 1);
     assert_eq!(view.turns.unknown, 3);
+}
+
+/// Every engine outcome maps to a wire outcome one-for-one, except
+/// Interruption (never reaches the wire) and BudgetExceeded, which folds into
+/// the max_turns shape with the same stop reason. The spent total and limit
+/// ride the RunResult and the diagnostic log, not the wire.
+#[test]
+fn test_run_result_maps_outcomes() {
+    fn case(outcome: EngineOutcome) -> RunResult {
+        map_run_result(&EngineResult {
+            outcome,
+            turns: 3,
+            usage: Usage::default(),
+        })
+    }
+    let final_out = case(EngineOutcome::FinalOutput("done".into()));
+    assert!(matches!(final_out.outcome, RunOutcome::FinalOutput { .. }));
+    assert_eq!(final_out.turns, 3);
+
+    let handoff = case(EngineOutcome::Handoff(AgentId("child".into())));
+    assert!(matches!(handoff.outcome, RunOutcome::Handoff { .. }));
+
+    let interrupted = case(EngineOutcome::Interrupted("user".into()));
+    assert!(matches!(
+        interrupted.outcome,
+        RunOutcome::Interrupted { .. }
+    ));
+    assert!(matches!(interrupted.stop_reason, StopReason::Cancelled));
+
+    let verify = case(EngineOutcome::VerifyFailed(VerifyFailure {
+        checks: vec!["clippy".into()],
+        ..VerifyFailure::default()
+    }));
+    assert!(matches!(verify.outcome, RunOutcome::VerifyFailed { .. }));
+
+    let max_turns = case(EngineOutcome::MaxTurnsReached { turns: 3 });
+    assert!(matches!(
+        max_turns.outcome,
+        RunOutcome::MaxTurnsReached { turns: 3 }
+    ));
+
+    let budget = case(EngineOutcome::BudgetExceeded {
+        spent: 900,
+        limit: 500,
+    });
+    assert!(
+        matches!(budget.outcome, RunOutcome::MaxTurnsReached { turns: 3 }),
+        "a budget stop folds into the max_turns wire shape: {:?}",
+        budget.outcome
+    );
+    assert!(matches!(budget.stop_reason, StopReason::MaxTurnRequests));
 }

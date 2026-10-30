@@ -193,6 +193,16 @@ impl Tool for ConversationSearchTool {
                 let output = stored::serve(&self.catalog, session, request).await?;
                 return Ok(json!({ "result": output }));
             }
+            if let Some(q) = params.query.as_ref()
+                && q.trim().is_empty()
+            {
+                // An empty query is not a search with no hits: it would match
+                // every text event and count the whole folded span as recalled,
+                // so it is refused rather than answered.
+                return Err(ToolError::InvalidInput(
+                    "conversation_search: a query search needs a non-empty query".to_string(),
+                ));
+            }
             let folded = folded_event_ids(&self.store, session).await;
             let scan = scan_transcript(&self.store, session, params.query, params.turns, folded)?;
             if scan.folded_matches > 0 {
@@ -352,9 +362,8 @@ fn scan_transcript(
     turns: Option<TurnRange>,
     folded: HashSet<EventId>,
 ) -> Result<TranscriptScan, ToolError> {
-    // A blank query is no query: an empty substring matches every text, so the
-    // search would report every event as a hit and count the whole folded span
-    // as recalled.
+    // The caller guards an empty query upstream, so a None here is a request
+    // that never named a query (turns or stats mode), not a blank one.
     let query = query
         .filter(|q| !q.trim().is_empty())
         .map(|q| q.to_lowercase());

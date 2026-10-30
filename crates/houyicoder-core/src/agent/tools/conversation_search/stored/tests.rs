@@ -312,6 +312,27 @@ async fn test_search_reports_matches() {
     assert!(none.contains("No match in the stored output."), "{none}");
 }
 
+/// An empty query is refused rather than answered as no match, since a blank
+/// substring would match every byte of every kept stream.
+#[tokio::test]
+async fn test_search_empty_query_refused() {
+    let (log, session) = seeded(b"a needle here", b"");
+    let catalog = SessionResultCatalog::new(log);
+    for blank in ["", "   "] {
+        let err = ask(
+            &catalog,
+            session,
+            json!({"op": "search", "query": blank, "id": "call-1:stdout"}),
+        )
+        .await
+        .expect_err("an empty query is an invalid request");
+        assert!(
+            err.to_string().contains("non-empty query"),
+            "a blank query ({blank:?}) is refused: {err}"
+        );
+    }
+}
+
 /// A search whose page filled up says the scan stopped and how to continue,
 /// so a reader does not take a full page for the whole answer.
 #[tokio::test]

@@ -89,11 +89,11 @@ async fn test_timeout_speaks_when_silent() {
     );
 }
 
-/// Output too large for the context spills to a file, and the model is left
-/// with an empty stderr in place of the command's own. The stop notice still
-/// has to reach it, or the call comes back as a truncated blob with no cause.
+/// Output too large for the context with no captured stream is bounded to a
+/// head+tail stub, and the stop notice still reaches stderr in place of the
+/// command's own, or the call comes back as a truncated blob with no cause.
 #[tokio::test]
-async fn test_spill_keeps_stop_notice() {
+async fn test_truncation_keeps_stop_notice() {
     let tool = BashTool::new(Arc::new(StoppedExec {
         stdout: "a".repeat(BASH_MAX_OUTPUT_CHARS + 1),
         stderr: "warning: slow link\n".into(),
@@ -107,12 +107,17 @@ async fn test_spill_keeps_stop_notice() {
         .expect("a budget stop is a result");
     let stdout = out["stdout"].as_str().expect("stdout text");
     assert!(
-        stdout.contains("Output truncated"),
-        "the marker names the spill: {stdout}"
+        stdout.contains("Output truncated") && stdout.contains("not kept"),
+        "the stub names the truncation and says the rest was not kept: {stdout}"
     );
-    assert_eq!(
-        out["stderr"], "bash: stopped, wall-clock 120s exceeded",
-        "the notice survives the spill: {out}"
+    let stderr = out["stderr"].as_str().expect("stderr text");
+    assert!(
+        stderr.contains("bash: stopped, wall-clock 120s exceeded"),
+        "the notice survives the truncation: {stderr}"
+    );
+    assert!(
+        stderr.contains("warning: slow link"),
+        "the command's own stderr is kept alongside the notice: {stderr}"
     );
 }
 

@@ -836,3 +836,70 @@ fn test_miss_recomputes_aggressively() {
         "a reported miss recomputes aggressively: age 8 evicts, got: {out}"
     );
 }
+
+/// A test inner policy that always asks to materialize, so the budget wrapper
+/// is the only thing that can demote the decision.
+struct AlwaysMaterialize;
+
+impl RetentionPolicy for AlwaysMaterialize {
+    fn decide(&self, _ctx: &RetentionContext<'_>) -> RetentionDecision {
+        RetentionDecision::Materialize
+    }
+}
+
+fn budget_ctx(id: u64) -> RetentionContext<'static> {
+    RetentionContext {
+        age_in_turns: 0,
+        is_superseded: false,
+        block_ref: None,
+        assembly_id: id,
+        mutating: true,
+    }
+}
+
+/// Once a turn has materialized its budget in bytes, the next Materialize
+/// request demotes to Summarize so the assembled context does not keep growing
+/// with retrieved blocks.
+#[test]
+fn test_budget_demotes_after_quota() {
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), 1024);
+    let ctx = budget_ctx(1);
+    assert_eq!(policy.decide(&ctx), RetentionDecision::Materialize);
+    policy.record_materialized_bytes("a", 1024);
+    assert_eq!(
+        policy.decide(&ctx),
+        RetentionDecision::Summarize,
+        "the budget spent, the next materialize demotes to a preview"
+    );
+}
+
+/// A new assembly id resets the quota, so each turn starts fresh and a result
+/// that was demoted at the end of one turn can materialize in the next.
+#[test]
+fn test_budget_resets_per_assembly() {
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), 1024);
+    let ctx = budget_ctx(1);
+    assert_eq!(policy.decide(&ctx), RetentionDecision::Materialize);
+    policy.record_materialized_bytes("a", 1024);
+    assert_eq!(policy.decide(&ctx), RetentionDecision::Summarize);
+    let next = budget_ctx(2);
+    assert_eq!(
+        policy.decide(&next),
+        RetentionDecision::Materialize,
+        "a new turn resets the quota"
+    );
+}
+
+/// A zero budget demotes every materialize to a preview, so a turn that cannot
+/// afford any retrieval still answers with the marker's inline preview rather
+/// than the full bytes.
+#[test]
+fn test_budget_zero_demotes_all() {
+    let policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), 0);
+    let ctx = budget_ctx(1);
+    assert_eq!(
+        policy.decide(&ctx),
+        RetentionDecision::Summarize,
+        "a zero budget keeps only the preview"
+    );
+}

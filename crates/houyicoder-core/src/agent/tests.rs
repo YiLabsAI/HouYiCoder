@@ -145,6 +145,95 @@ async fn test_run_tool_then_final() {
     assert_eq!(result.turns, 2);
 }
 
+/// A run whose cumulative token spend crosses the configured budget stops
+/// before the next model call and surfaces BudgetExceeded with the spent total
+/// and the limit, so a runaway turn does not bill past the ceiling.
+#[tokio::test]
+async fn test_run_budget_stops_turn() {
+    // One response that calls a tool and reports 1000 tokens. The loop runs
+    // turn 1 (cumulative 1000), the tool answers, RunAgain; turn 2 sees the
+    // budget spent and stops before the second model call.
+    let resp = CompletionResponse {
+        output: vec![
+            OutputItem::Text {
+                text: "echoing".into(),
+            },
+            OutputItem::ToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                input: serde_json::json!({"x": 1}),
+            },
+        ],
+        usage: Usage {
+            total_tokens: 1000,
+            ..Usage::default()
+        },
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![resp]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(StubTool::new("echo")));
+    let runner = runner_with(p, tools).with_run_budget(500);
+    let session = SessionId::new();
+    let result = runner.run(session, "hi".into()).await.unwrap();
+    match result.outcome {
+        RunOutcome::BudgetExceeded { spent, limit } => {
+            assert_eq!(spent, 1000, "the spent total is the cumulative usage");
+            assert_eq!(limit, 500, "the limit is the configured budget");
+        }
+        other => panic!("expected BudgetExceeded, got {other:?}"),
+    }
+    assert_eq!(
+        result.turns, 1,
+        "the budget stops before the second model call"
+    );
+}
+
+/// The run budget is per run, not session-wide: a second run in the same
+/// session starts with a fresh spend, so the first run's bill does not
+/// pre-block the next before its first model call.
+#[tokio::test]
+async fn test_budget_scoped_to_run() {
+    let resp = CompletionResponse {
+        output: vec![
+            OutputItem::Text {
+                text: "echoing".into(),
+            },
+            OutputItem::ToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                input: serde_json::json!({"x": 1}),
+            },
+        ],
+        usage: Usage {
+            total_tokens: 1000,
+            ..Usage::default()
+        },
+        model: "test".into(),
+    };
+    let p = Arc::new(FakeProvider::new(vec![resp]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(StubTool::new("echo")));
+    let runner = runner_with(p, tools).with_run_budget(500);
+    let session = SessionId::new();
+    let first = runner.run(session, "first".into()).await.unwrap();
+    assert!(
+        matches!(first.outcome, RunOutcome::BudgetExceeded { .. }),
+        "the first run hits the budget: {:?}",
+        first.outcome
+    );
+    let second = runner.run(session, "second".into()).await.unwrap();
+    assert!(
+        matches!(second.outcome, RunOutcome::BudgetExceeded { .. }),
+        "the second run also hits its own budget: {:?}",
+        second.outcome
+    );
+    assert_eq!(
+        second.turns, 1,
+        "the second run is not pre-blocked: it runs a turn before the budget fires"
+    );
+}
+
 #[tokio::test]
 async fn test_run_unknown_tool_error() {
     let resp = CompletionResponse {

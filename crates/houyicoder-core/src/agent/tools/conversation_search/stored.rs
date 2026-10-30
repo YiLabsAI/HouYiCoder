@@ -98,6 +98,11 @@ pub(super) async fn serve(
             ))
         }
         Request::Search { query, id, cursor } => {
+            if query.trim().is_empty() {
+                return Err(ToolError::InvalidInput(
+                    "conversation_search: a results search needs a non-empty query".to_string(),
+                ));
+            }
             let found = catalog
                 .search(
                     session,

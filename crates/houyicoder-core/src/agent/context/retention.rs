@@ -28,6 +28,9 @@
 //! microcompact vocabulary (trigger/keep/clear_at_least).
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use houyicoder_context::{BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
@@ -255,6 +258,64 @@ impl RetentionPolicy for AgeRetentionPolicy {
         } else {
             RetentionDecision::Evict
         }
+    }
+}
+
+/// The most bytes of CAS blocks one turn may materialize back into the
+/// assembled context. A byte proxy for the design's per-turn tool-result
+/// budget B = min(8192, 0.10 * W) tokens: 32 KiB covers about 8 KiB of tokens
+/// at four bytes each, the floor the design sets before the load experiment
+/// picks a window-proportional value. The budget bounds the cumulative
+/// retrieval, not any single block, so a recent active result still enters in
+/// full while older ones fold to previews once the turn has spent its quota.
+pub const TURN_RESULT_BUDGET_BYTES: u64 = 32 * 1024;
+
+/// A retention policy that bounds how many bytes a single turn materializes
+/// from the CAS. It wraps an inner policy (age or cache-liveness) and demotes a
+/// Materialize decision to Summarize once the bytes the turn has already
+/// retrieved reach the budget. The counter resets at an assembly boundary, so
+/// each turn starts with its full quota. The decision is made before the block
+/// is read: the accumulator holds what prior blocks in the same turn cost, not
+/// a pre-fetch of the block being decided, so the gate never reads the full
+/// content only to reject it.
+pub struct BudgetedRetentionPolicy {
+    inner: Arc<dyn RetentionPolicy>,
+    max_bytes: u64,
+    accumulated: AtomicU64,
+    assembly: AtomicU64,
+}
+
+impl BudgetedRetentionPolicy {
+    pub fn new(inner: Arc<dyn RetentionPolicy>, max_bytes: u64) -> Self {
+        Self {
+            inner,
+            max_bytes,
+            accumulated: AtomicU64::new(0),
+            assembly: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl RetentionPolicy for BudgetedRetentionPolicy {
+    fn decide(&self, ctx: &RetentionContext<'_>) -> RetentionDecision {
+        let decision = self.inner.decide(ctx);
+        if decision == RetentionDecision::Materialize {
+            // A new assembly starts the quota over. The reset is checked here
+            // rather than on every call so a turn whose first blocks summarize
+            // does not touch the counter until one wants to materialize.
+            if self.assembly.swap(ctx.assembly_id, Ordering::Relaxed) != ctx.assembly_id {
+                self.accumulated.store(0, Ordering::Relaxed);
+            }
+            if self.accumulated.load(Ordering::Relaxed) >= self.max_bytes {
+                return RetentionDecision::Summarize;
+            }
+        }
+        decision
+    }
+
+    fn record_materialized_bytes(&self, block_ref: &str, bytes: usize) {
+        self.inner.record_materialized_bytes(block_ref, bytes);
+        self.accumulated.fetch_add(bytes as u64, Ordering::Relaxed);
     }
 }
 

@@ -48,6 +48,12 @@ pub enum RunOutcome {
     /// accumulated so far. A graceful max-turns result (is_error semantics
     /// with cost/usage statistics) rather than a throw.
     MaxTurnsReached { turns: u32 },
+    /// The run spent its whole-run token budget. Not a crash — the run is
+    /// resumable, and the result carries the turns and usage so the caller
+    /// surfaces the cost. The budget defaults to none (unbounded); a configured
+    /// limit stops the loop before the next model call once cumulative spend
+    /// reaches it, so a runaway turn does not bill past the ceiling.
+    BudgetExceeded { spent: u64, limit: u64 },
 }
 
 impl RunOutcome {
@@ -64,7 +70,9 @@ impl RunOutcome {
             Self::Interrupted(_) | Self::Interruption(_) => RunCompletionStatus::Interrupted,
             Self::Handoff(_) => RunCompletionStatus::HandedOff,
             Self::VerifyFailed(_) => RunCompletionStatus::VerificationFailed,
-            Self::MaxTurnsReached { .. } => RunCompletionStatus::TurnLimitReached,
+            Self::MaxTurnsReached { .. } | Self::BudgetExceeded { .. } => {
+                RunCompletionStatus::TurnLimitReached
+            }
         }
     }
 
@@ -77,9 +85,10 @@ impl RunOutcome {
             Self::FinalOutput(text) => text.clone(),
             Self::Interrupted(reason) => reason.clone(),
             Self::Handoff(agent) => agent.0.clone(),
-            Self::Interruption(_) | Self::VerifyFailed(_) | Self::MaxTurnsReached { .. } => {
-                String::new()
-            }
+            Self::Interruption(_)
+            | Self::VerifyFailed(_)
+            | Self::MaxTurnsReached { .. }
+            | Self::BudgetExceeded { .. } => String::new(),
         };
         (self.completion_status(), summary)
     }

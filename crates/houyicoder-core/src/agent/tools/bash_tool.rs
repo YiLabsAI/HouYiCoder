@@ -6,7 +6,6 @@
 //! rest is: the capture's blocks, or a workspace file when no capture holds
 //! them.
 
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::capture::{
@@ -28,16 +27,10 @@ use crate::agent::fallback::FallbackToolOutcome;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
 use crate::snapshot::is_destructive_command;
-use std::fs::File;
-use std::fs::create_dir_all;
-use std::io::Write;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
 
@@ -147,7 +140,6 @@ impl BashTool {
         let (stdout, stderr) = bound_bash_output(
             result.stdout,
             result.stderr,
-            &self.session.workspace_root(),
             capture.stop().map(|stop| stop.reason),
             &kept_streams(&capture, call_id),
         );
@@ -355,7 +347,6 @@ impl Tool for BashTool {
                         &message,
                         stdout,
                         stderr,
-                        &self.session.workspace_root(),
                         &capture,
                         &ctx.call_id,
                     ));
@@ -419,7 +410,6 @@ fn timed_out_output(
     message: &str,
     stdout: String,
     stderr: String,
-    spill_dir: &Path,
     capture: &CaptureOutcome,
     call_id: &str,
 ) -> Value {
@@ -427,13 +417,8 @@ fn timed_out_output(
         .stop()
         .map(|stop| stop.reason)
         .or(Some(CaptureStopReason::WallBudget));
-    let (stdout, stderr) = bound_bash_output(
-        stdout,
-        stderr,
-        spill_dir,
-        stopped,
-        &kept_streams(capture, call_id),
-    );
+    let (stdout, stderr) =
+        bound_bash_output(stdout, stderr, stopped, &kept_streams(capture, call_id));
     let stderr = fold_notice(Some(format!("bash: stopped, {message}")), stderr);
     let mut output = json!({
         "stdout": stdout,
@@ -574,10 +559,12 @@ fn model_view_loses_bytes(stdout: &str, stderr: &str) -> bool {
 
 /// Bound a bash result before it enters the model context. Under the cap the
 /// output passes through verbatim. Over the cap the model gets the tail plus a
-/// note saying where the rest is: the covered bytes stay in the capture and
-/// the note names that stream, so the full output is read back in bounded
-/// windows instead of copied into the workspace. Only when no capture holds
-/// the bytes does the rest spill to a workspace file.
+/// note saying where the rest is read back: when the capture kept a stream the
+/// note names it and points at conversation_search, so the full output is read
+/// in bounded windows instead of copied into the workspace. When no capture
+/// holds the bytes, the model gets a head+tail stub and is told the rest was
+/// not kept, rather than being sent to a workspace file it would have to
+/// re-run a command to read.
 ///
 /// When the command was stopped before it finished, neither copy holds more
 /// than it printed before the stop. The note says so: a reader told the full
@@ -585,7 +572,6 @@ fn model_view_loses_bytes(stdout: &str, stderr: &str) -> bool {
 fn bound_bash_output(
     stdout: String,
     stderr: String,
-    spill_dir: &Path,
     stopped: Option<CaptureStopReason>,
     kept: &[String],
 ) -> (String, String) {
@@ -601,46 +587,22 @@ fn bound_bash_output(
             String::new(),
         );
     }
-    match spill_bash_output(&stdout, &stderr, spill_dir) {
-        Ok(path) => {
-            let tail = tail_chars(&stdout, BASH_STUB_CHARS);
-            let saved = saved_note(&path, kb, stopped);
-            let stub = format!("{tail}\n\nOutput truncated ({kb}KB total). {saved}\n");
-            // stderr is folded into the spill file (tagged); the model gets
-            // the stdout stub + marker only.
-            (stub, String::new())
-        }
-        Err(_) => {
-            // Spill failed (workspace dir unwritable): fall back to a head+tail
-            // in-memory stub so the result still fits the context budget.
-            let half = BASH_MAX_OUTPUT_CHARS / 2;
-            let head: String = stdout.chars().take(half).collect();
-            let tail_start = stdout.chars().count().saturating_sub(half);
-            let tail: String = stdout.chars().skip(tail_start).collect();
-            let why = match stopped {
-                Some(reason) => format!("the command was stopped, {reason}"),
-                None => format!("{kb}KB total"),
-            };
-            (
-                format!("{head}\n... [output truncated, {why}, spill failed] ...\n{tail}"),
-                stderr,
-            )
-        }
-    }
-}
-
-/// The line that tells the model where the rest of the output went, and how
-/// much of it is really there. A command stopped mid-stream leaves the kept
-/// copy holding only a prefix, so a reader told the full output was saved
-/// would go looking for bytes that were never kept.
-fn saved_note(path: &Path, kb: usize, stopped: Option<CaptureStopReason>) -> String {
-    match stopped {
-        Some(reason) => format!(
-            "the command was stopped, {reason}, so this file holds only the first {kb}KB of its output: {}",
-            path.display()
-        ),
-        None => format!("Full output saved to: {}", path.display()),
-    }
+    // No capture holds the bytes (a legacy session, or the host supplied no
+    // capture source). Keep the result bounded with the stdout tail and say
+    // the rest was not kept, so the model is not pointed at a file it would
+    // need another command to read. Stderr is bounded to the same tail too:
+    // it is usually small, but a command that floods stderr must not blow the
+    // context the way an unbounded stdout would.
+    let stdout_tail = tail_chars(&stdout, BASH_STUB_CHARS);
+    let stderr_tail = tail_chars(&stderr, BASH_STUB_CHARS);
+    let why = match stopped {
+        Some(reason) => format!("the command was stopped, {reason}"),
+        None => format!("{kb}KB total"),
+    };
+    (
+        format!("{stdout_tail}\n\nOutput truncated ({why}); the rest was not kept.\n"),
+        stderr_tail,
+    )
 }
 
 /// The line that points the model at the streams the capture kept, named the
@@ -677,26 +639,6 @@ fn kept_streams(capture: &CaptureOutcome, call_id: &str) -> Vec<String> {
         }
         CaptureOutcome::NotKept | CaptureOutcome::Failed { .. } => Vec::new(),
     }
-}
-
-/// Write the full stdout + stderr to a workspace file, stderr lines prefixed so
-/// the spill is self-describing. Returns the spill path for the marker.
-fn spill_bash_output(stdout: &str, stderr: &str, spill_dir: &Path) -> std::io::Result<PathBuf> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = spill_dir.join(".houyicoder").join("bash-output");
-    create_dir_all(&dir)?;
-    let path = dir.join(format!("houyi-bash-{nanos}.log"));
-    let mut f = File::create(&path)?;
-    f.write_all(stdout.as_bytes())?;
-    if !stderr.is_empty() {
-        for line in stderr.split('\n') {
-            writeln!(f, "[stderr] {line}")?;
-        }
-    }
-    Ok(path)
 }
 
 /// The last N chars of a string, in original order. Char-based (not line)

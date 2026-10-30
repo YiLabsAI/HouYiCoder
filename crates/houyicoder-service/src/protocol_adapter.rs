@@ -16,6 +16,8 @@ mod trajectory_row;
 pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
 
+use houyicoder_core::agent::RunOutcome as EngineOutcome;
+
 use AcpxMethod::*;
 pub(crate) use acp_permission::{acp_permission_response_to_decision, approval_to_acp_permission};
 pub(crate) use durable_grant::{
@@ -65,13 +67,13 @@ pub(crate) use session_descriptor::map_session_descriptor;
 /// VerifyFailure (collapses to a summary string).
 pub(crate) fn map_run_result(run: &houyicoder_core::agent::RunResult) -> RunResult {
     let (outcome, stop_reason) = match &run.outcome {
-        houyicoder_core::agent::RunOutcome::FinalOutput(text) => (
+        EngineOutcome::FinalOutput(text) => (
             RunOutcome::FinalOutput {
                 content: vec![ContentBlock::Text { text: text.clone() }],
             },
             StopReason::EndTurn,
         ),
-        houyicoder_core::agent::RunOutcome::Handoff(agent) => (
+        EngineOutcome::Handoff(agent) => (
             RunOutcome::Handoff {
                 agent: agent.0.clone(),
             },
@@ -79,13 +81,13 @@ pub(crate) fn map_run_result(run: &houyicoder_core::agent::RunResult) -> RunResu
             // when that lands. The stop reason is the legal end-turn value.
             StopReason::EndTurn,
         ),
-        houyicoder_core::agent::RunOutcome::Interrupted(reason) => (
+        EngineOutcome::Interrupted(reason) => (
             RunOutcome::Interrupted {
                 reason: reason.clone(),
             },
             StopReason::Cancelled,
         ),
-        houyicoder_core::agent::RunOutcome::VerifyFailed(failure) => {
+        EngineOutcome::VerifyFailed(failure) => {
             let summary = if failure.checks.is_empty() {
                 "verify failed".to_string()
             } else {
@@ -98,15 +100,29 @@ pub(crate) fn map_run_result(run: &houyicoder_core::agent::RunResult) -> RunResu
                 StopReason::EndTurn,
             )
         }
-        houyicoder_core::agent::RunOutcome::MaxTurnsReached { turns } => (
+        EngineOutcome::MaxTurnsReached { turns } => (
             RunOutcome::MaxTurnsReached { turns: *turns },
             // Graceful max-turns ceiling; the run is resumable.
             StopReason::MaxTurnRequests,
         ),
+        EngineOutcome::BudgetExceeded { spent, limit } => {
+            tracing::warn!(
+                spent,
+                limit,
+                "run stopped at its token budget; the wire folds this into max_turns"
+            );
+            (
+                RunOutcome::MaxTurnsReached { turns: run.turns },
+                // A token-budget ceiling is a limit reached, same wire shape as
+                // max_turns; the spent total and the limit ride the RunResult
+                // and this diagnostic, not the wire.
+                StopReason::MaxTurnRequests,
+            )
+        }
         // Interruption never reaches the wire: the turn loop drives the
         // reverse-request + resume loop and only calls map_run_result on
         // a final outcome. Reaching this arm is a logic bug; fail visibly.
-        houyicoder_core::agent::RunOutcome::Interruption(_) => {
+        EngineOutcome::Interruption(_) => {
             unreachable!("interruption is resolved by the reverse-request loop, not mapped to wire")
         }
     };

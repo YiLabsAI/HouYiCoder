@@ -8,17 +8,17 @@ mod shell;
 
 mod timeout;
 
-use std::path::Path;
-use std::sync::Arc;
-
-use houyicoder_api::capture::CaptureStopReason;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::Tool;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::json;
+use std::path::Path;
+use std::sync::Arc;
 
-use super::{BashTool, MAX_TIMEOUT_MS, fold_notice, saved_note, wall_budget_ms};
+use super::{
+    BASH_MAX_OUTPUT_CHARS, BashTool, MAX_TIMEOUT_MS, bound_bash_output, fold_notice, wall_budget_ms,
+};
 
 /// A session that never runs anything: the schema question does not need one.
 struct NoExec;
@@ -135,21 +135,27 @@ fn test_wall_budget_accepts_timeout() {
     );
 }
 
-/// The marker that says where the rest of the output went has to match what
-/// the file holds. A command stopped before it finished keeps only a prefix,
-/// so the marker names the stop instead of promising the full output.
+/// Output over the cap with no captured stream is bounded to a head+tail stub
+/// and tells the model the rest was not kept, rather than naming a workspace
+/// file the model would have to re-run a command to read.
 #[test]
-fn test_saved_note_names_stop() {
-    let path = Path::new("spill.log");
-    assert_eq!(
-        saved_note(path, 12, None),
-        "Full output saved to: spill.log"
+fn test_truncation_without_capture() {
+    let stdout = "x".repeat(BASH_MAX_OUTPUT_CHARS + 1);
+    let (out, stderr) = bound_bash_output(stdout, String::new(), None, &[]);
+    assert!(
+        out.contains("Output truncated"),
+        "the stub says truncated: {out}"
     );
-    for reason in [CaptureStopReason::ByteBudget, CaptureStopReason::WallBudget] {
-        let stopped = saved_note(path, 12, Some(reason));
-        assert!(
-            stopped.contains(&reason.to_string()) && stopped.contains("first 12KB"),
-            "the note names the stop and the length the file holds: {stopped}"
-        );
-    }
+    assert!(
+        out.contains("not kept"),
+        "the stub says the rest was not kept: {out}"
+    );
+    assert!(
+        !out.contains("saved to") && !out.contains(".log") && !out.contains('/'),
+        "no workspace file path is named: {out}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "stderr is empty when nothing was kept: {stderr}"
+    );
 }

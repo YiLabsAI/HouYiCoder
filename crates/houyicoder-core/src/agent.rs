@@ -157,6 +157,13 @@ pub struct Runner {
     /// loop writes per-turn; status_snapshot reads it for /context + /compact.
     /// Reset on a new session by the host calling reset_usage.
     usage: SharedUsage,
+    /// A ceiling on the run's cumulative token spend. None (the default) leaves
+    /// the run unbounded; a set value stops the loop before the next model call
+    /// once the run's usage reaches it, surfacing BudgetExceeded with the
+    /// spent total and the limit. No composition root sets this yet; the load
+    /// experiment picks the number, after which a root wires it from
+    /// configured window space.
+    run_budget: Option<u64>,
     /// Shared observability log (thin aggregator: tool stats / cost / per-turn
     /// delta); tracks the usage field's shared-mutex shape.
     observability: obs_wire::SharedObservability,
@@ -456,6 +463,23 @@ impl Runner {
         result
     }
 
+    /// A per-run token budget stops the loop before the next model call once
+    /// the run's cumulative spend reaches the ceiling, so a runaway turn does
+    /// not bill past it. Unconfigured (None) leaves the run unbounded. The run
+    /// total is the usage the drive loop folds each call into, scoped to this
+    /// run and reset when the host starts a new one, so one run's spend never
+    /// pre-blocks the next. Returns the BudgetExceeded result when the budget
+    /// is spent, else None to continue the loop.
+    fn check_run_budget(&self, turns: u32, usage: &Usage) -> Option<RunResult> {
+        let limit = self.run_budget?;
+        let spent = u64::from(usage.total_tokens);
+        (spent >= limit).then(|| RunResult {
+            outcome: RunOutcome::BudgetExceeded { spent, limit },
+            turns,
+            usage: usage.clone(),
+        })
+    }
+
     async fn drive_loop_inner(
         &self,
         session: SessionId,
@@ -477,6 +501,9 @@ impl Runner {
                             turns: turn - 1,
                             usage,
                         });
+                    }
+                    if let Some(budgeted) = self.check_run_budget(turn - 1, &usage) {
+                        return Ok(budgeted);
                     }
                     // Mid-turn interjection: drain the host-submitted queue,
                     // the bus inbox, + lower-priority completion notifications,

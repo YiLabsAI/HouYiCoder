@@ -9,7 +9,10 @@ use std::sync::Arc;
 use houyicoder_protocol::llm::Usage;
 
 use crate::agent::Runner;
-use crate::agent::context::retention::{RetentionContext, RetentionDecision, RetentionPolicy};
+use crate::agent::context::retention::{
+    BudgetedRetentionPolicy, RetentionContext, RetentionDecision, RetentionPolicy,
+    TURN_RESULT_BUDGET_BYTES,
+};
 
 mod state;
 
@@ -33,10 +36,14 @@ impl Runner {
     /// so the serve path's block_ref decisions stay stable while the cached
     /// prefix is live and recompute aggressively once it expires.
     pub(crate) fn wire_cache_liveness_policy(&self) {
-        self.context_builder
-            .set_retention_policy(Arc::new(CacheLivenessRetentionPolicy::new(Arc::clone(
-                &self.cached_prefix,
-            ))));
+        let cache_policy = Arc::new(CacheLivenessRetentionPolicy::new(Arc::clone(
+            &self.cached_prefix,
+        )));
+        let budgeted = Arc::new(BudgetedRetentionPolicy::new(
+            cache_policy,
+            TURN_RESULT_BUDGET_BYTES,
+        ));
+        self.context_builder.set_retention_policy(budgeted);
     }
 
     /// Stamp the completed turn's clock and reported cache read. A collapse

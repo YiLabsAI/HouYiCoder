@@ -743,7 +743,9 @@ fn terminal_summary(
 ) -> (String, String) {
     match r.outcome {
         RunOutcome::FinalOutput(t) => ("completed".to_string(), t),
-        RunOutcome::MaxTurnsReached { .. } => ("max_turns".to_string(), partial_of(child_tail)),
+        RunOutcome::MaxTurnsReached { .. } | RunOutcome::BudgetExceeded { .. } => {
+            ("max_turns".to_string(), partial_of(child_tail))
+        }
         RunOutcome::Interrupted(_) | RunOutcome::Interruption(_) => {
             ("interrupted".to_string(), partial_of(child_tail))
         }

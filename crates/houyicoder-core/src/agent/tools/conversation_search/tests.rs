@@ -323,6 +323,26 @@ async fn test_query_reports_no_results() {
     assert!(out.to_string().contains("No results found"));
 }
 
+/// An empty query is refused rather than answered as a search that matched
+/// nothing, since a blank substring would match every text event.
+#[tokio::test]
+async fn test_empty_query_refused() {
+    let e = make_event(SessionEvent::UserInput {
+        text: "hello".to_string(),
+    });
+    let (tool, ctx, _meter) = harness(vec![e], None);
+    for blank in ["", "   ", "\t\n"] {
+        let err = tool
+            .execute(ctx.clone(), json!({"query": blank}))
+            .await
+            .expect_err("an empty query is an invalid request");
+        assert!(
+            err.to_string().contains("non-empty query"),
+            "a blank query ({blank:?}) is refused: {err}"
+        );
+    }
+}
+
 /// A page that moves without holding a record is a record the walk passed
 /// over, not the end of the log. The match stored after it is still found, and
 /// the answer says bytes were left unread rather than reporting nothing.
@@ -359,28 +379,21 @@ async fn test_scan_continues_past_gap() {
 /// the whole folded span as recalled. Whitespace matches nothing on this
 /// text, so it is the second input that holds the empty-substring rule.
 #[tokio::test]
-async fn test_blank_query_reports_guidance() {
+async fn test_blank_query_refused() {
     for query in ["", "   "] {
         let folded = make_event(SessionEvent::UserInput {
             text: "alpha beta".to_string(),
         });
         let folded_id = folded.id;
         let manifest = make_manifest_summarized(vec![folded_id]);
-        let (tool, ctx, meter) = harness(vec![folded], Some(manifest));
-        let out = tool.execute(ctx, json!({"query": query})).await.unwrap();
-        let text = out.to_string();
+        let (tool, ctx, _meter) = harness(vec![folded], Some(manifest));
+        let err = tool
+            .execute(ctx, json!({"query": query}))
+            .await
+            .expect_err("a blank query is an invalid request");
         assert!(
-            text.contains("Provide a query"),
-            "guidance served for {query:?}: {text}"
-        );
-        assert!(
-            !text.contains("Search Results"),
-            "no hit reported for {query:?}: {text}"
-        );
-        assert_eq!(
-            meter.load(Ordering::Relaxed),
-            0,
-            "no recall counted for {query:?}"
+            err.to_string().contains("non-empty query"),
+            "a blank query ({query:?}) is refused: {err}"
         );
     }
 }

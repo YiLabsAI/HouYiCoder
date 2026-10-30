@@ -106,6 +106,14 @@ impl Runner {
         self
     }
 
+    /// Set a ceiling on the run's cumulative token spend. The drive loop
+    /// checks it before each model call and stops with BudgetExceeded once
+    /// cumulative usage reaches the limit. None leaves the run unbounded.
+    pub fn with_run_budget(mut self, limit: u64) -> Self {
+        self.run_budget = Some(limit);
+        self
+    }
+
     /// Install all event-domain handlers before the runner is shared.
     pub fn set_event_handlers(&mut self, events: AgentEventHandlers) {
         self.memory.set_event_handlers(&events);

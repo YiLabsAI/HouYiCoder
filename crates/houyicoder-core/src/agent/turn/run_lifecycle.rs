@@ -72,6 +72,7 @@ impl Runner {
             startup_warnings: Mutex::new(Vec::new()),
             breaker: None,
             usage: Arc::new(Mutex::new(UsageAccumulator::default())),
+            run_budget: None,
             observability,
             cancel: Mutex::new(None),
             aborted: AtomicBool::new(false),
