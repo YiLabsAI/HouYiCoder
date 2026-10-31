@@ -189,7 +189,7 @@ fn test_foreground_call_renders_row() {
         s.output()
     );
     assert!(
-        s.output_compact().contains("Agent(→explore)"),
+        s.output_compact().contains("Agent(→explore:findauth)"),
         "agent call row should name the subagent type:\n{}",
         s.output()
     );
@@ -302,7 +302,7 @@ fn test_foreground_input_echoes_user() {
         s.output()
     );
     assert!(
-        s.output_compact().contains("Agent(→explore)"),
+        s.output_compact().contains("Agent(→explore:findauth)"),
         "agent call row should follow the user message:\n{}",
         s.output()
     );

@@ -289,8 +289,8 @@ fn test_teammate_banner_hint() {
     s.send_str("\r");
     assert!(s.wait_for_plain("Viewing", RENDER_TIMEOUT));
     assert!(
-        s.output_compact().contains("shift+↑↓return"),
-        "banner should carry the shift-arrow return hint:\n{}",
+        s.output_compact().contains("(finished)·Esctoreturn"),
+        "banner should carry the return hint:\n{}",
         s.output()
     );
 }

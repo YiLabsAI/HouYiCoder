@@ -139,7 +139,7 @@ fn test_resume_usage_covers_history() {
     // The Usage tab's rows are one row each: the token row and the cache row
     // the recorded turn produced.
     assert!(
-        s.wait_for_screen("input tokens:", RENDER_TIMEOUT),
+        s.wait_for_screen("Input tokens", RENDER_TIMEOUT),
         "the Usage tab renders the token rows:\n{}",
         s.screen().contents()
     );
@@ -277,7 +277,7 @@ fn test_status_shows_resumed_provenance() {
     // escapes between styled spans, so multi-word labels are not contiguous
     // in the raw byte stream.
     assert!(
-        s.wait_for_plain("provenance:", RENDER_TIMEOUT),
+        s.wait_for_plain("Provenance:", RENDER_TIMEOUT),
         "/status should render the provenance line:\n{}",
         s.output()
     );

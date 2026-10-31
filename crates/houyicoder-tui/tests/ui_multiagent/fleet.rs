@@ -86,7 +86,7 @@ fn test_strip_done_after_completion() {
         s.output()
     );
     assert!(
-        s.output_compact().contains("explore·done"),
+        s.output_compact().contains("findauth·done"),
         "strip should show the done row after completion:\n{}",
         s.output()
     );
@@ -116,7 +116,7 @@ fn test_strip_two_children_rows() {
     );
     let pc = s.output_compact();
     assert!(
-        pc.contains("explore·done") && pc.contains("plan·done"),
+        pc.contains("first·done") && pc.contains("second·done"),
         "both child strip rows should render with their own type:\n{}",
         s.output()
     );
@@ -147,7 +147,7 @@ fn test_strip_running_verb_inflight() {
         s.output()
     );
     assert!(
-        !s.output_compact().contains("explore·done"),
+        !s.output_compact().contains("findauth·done"),
         "strip should not show done before the child completes:\n{}",
         s.output()
     );
@@ -168,7 +168,7 @@ fn test_strip_shift_enter_teammate() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    assert!(s.wait_for_compact("explore·done", RENDER_TIMEOUT * 2));
+    assert!(s.wait_for_compact("findauth·done", RENDER_TIMEOUT * 2));
     s.send_key(&Key::ShiftDown);
     s.send_str("\r");
     assert!(
@@ -225,7 +225,7 @@ fn test_strip_running_to_done() {
     // running row long enough to be seen.
     assert!(s.wait_for_compact("◯", RENDER_TIMEOUT * 2));
     assert!(
-        s.wait_for_compact("explore·done", RENDER_TIMEOUT * 3),
+        s.wait_for_compact("findauth·done", RENDER_TIMEOUT * 3),
         "strip should transition to the done row after completion:\n{}",
         s.output()
     );
@@ -248,7 +248,7 @@ fn test_strip_completed_check_glyph() {
     s.send_str("find auth");
     s.send_str("\r");
     assert!(
-        s.wait_for_compact("✓explore", RENDER_TIMEOUT * 2),
+        s.wait_for_compact("✓findauth", RENDER_TIMEOUT * 2),
         "completed strip should show the check glyph + type:\n{}",
         s.output()
     );
@@ -269,7 +269,7 @@ fn test_strip_shift_arrows_enter() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    assert!(s.wait_for_compact("✓explore", RENDER_TIMEOUT * 2));
+    assert!(s.wait_for_compact("✓findauth", RENDER_TIMEOUT * 2));
     s.send_key(&Key::ShiftUp);
     s.send_key(&Key::ShiftDown);
     s.send_str("\r");
