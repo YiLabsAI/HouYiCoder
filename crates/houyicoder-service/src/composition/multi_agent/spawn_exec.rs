@@ -22,11 +22,9 @@ use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
-use std::time::Duration;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 
 use super::announce_spawn;
 use super::drive::drive_child_to_terminal;
@@ -41,6 +39,9 @@ use houyicoder_core::agent::multi_agent::registry::AgentError;
 use houyicoder_core::agent::multi_agent::registry::PromptSource;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use std::panic::resume_unwind;
+
+mod ceiling;
+use ceiling::{CeilingEnding, TIMED_OUT_STATUS, await_ceilinged};
 
 #[expect(
     clippy::too_many_arguments,
@@ -585,6 +586,7 @@ fn foreground_driver(
         // exists, SubagentSpawn recorded, run not started); pairs with the
         // later SubagentStop across the SubagentSpawn-to-Return span.
         fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
+        let ceiling_cancel = handle.cancel.clone();
         let drive = finalize_child(
             handle,
             this.store.clone(),
@@ -596,17 +598,18 @@ fn foreground_driver(
             hook_fire,
             task,
         );
-        // A delegation with no ceiling can hold the parent's turn open for as
-        // long as it likes, with no way to reclaim it. The ceiling cancels the
-        // child the way a shutdown does, so the fence is released and the run
-        // reaches a terminal instead of leaving a half-driven runner behind.
-        let (status, summary, usage) = match timeout_secs {
-            Some(secs) => match timeout(Duration::from_secs(secs), drive).await {
-                Ok(done) => done,
-                Err(_) => return Err(SpawnFailure::TimedOut { secs }),
-            },
-            None => drive.await,
-        };
+        let (status, summary, usage) =
+            match await_ceilinged(drive, timeout_secs, ceiling_cancel).await {
+                CeilingEnding::Finished(done) => done,
+                CeilingEnding::Cut { secs, done } => {
+                    let (_, summary, usage) = done;
+                    (
+                        TIMED_OUT_STATUS.to_string(),
+                        format!("[timed out after {secs}s, resumable via {child_str}]\n{summary}"),
+                        usage,
+                    )
+                }
+            };
         Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
     })
 }

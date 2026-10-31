@@ -1993,13 +1993,12 @@ async fn test_return_usage_covers_subtree() {
     assert_eq!(usage.cache_read_input_tokens, 10);
 }
 
-#[cfg(test)]
+// The parent module is already gated on cfg(test), so these declarations
+// inherit it; repeating the attribute on each one said nothing the enclosing
+// module had not already said.
 mod admission_credential;
-#[cfg(test)]
 mod join_children;
-#[cfg(test)]
 mod shutdown_gate;
-#[cfg(test)]
+mod timeout;
 mod turn_cap;
-#[cfg(test)]
 mod worktree_reclaim;

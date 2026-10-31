@@ -46,6 +46,15 @@ impl DelegationTool {
 /// one side matching a name the other no longer uses.
 pub(crate) const NAME: &str = "agent";
 
+/// Wall-clock ceiling a delegation runs under when its caller names none.
+///
+/// Ten minutes is long enough for a research child to read a codebase and
+/// short enough that a child which has stopped making progress cannot hold
+/// the parent's turn for the rest of the session. The run reports the timeout
+/// as a resumable outcome rather than an error, so the work already done is
+/// still reachable through the child session id.
+const DEFAULT_DELEGATION_TIMEOUT_SECS: u64 = 600;
+
 const DESCRIPTION: &str = "\
 Launch a new agent to delegate a sub-task. Use a specialized agent type when one fits; otherwise the general-purpose agent handles research, search, and multi-step execution.
 
@@ -167,10 +176,7 @@ impl Tool for DelegationTool {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            args.timeout_secs = input
-                .get("timeout_secs")
-                .and_then(|v| v.as_u64())
-                .filter(|secs| *secs > 0);
+            args.timeout_secs = delegation_ceiling(&input);
             let Some(handle) = ctx.spawn_handle.as_ref() else {
                 return Err(ToolError::Failed(
                     "agent: no spawn port wired on this dispatch".into(),
@@ -194,6 +200,23 @@ impl Tool for DelegationTool {
         // not an Ask gate on every call.
         false
     }
+}
+
+/// The wall-clock ceiling this call runs under.
+///
+/// A delegation with no ceiling holds the parent's turn open for as long as
+/// the child likes, and the parent has no way to reclaim it: the run sits at
+/// whatever the child was doing when it stopped making progress. So the
+/// ceiling is a default rather than something the model has to remember to
+/// pass. An explicit value still wins, so a caller that knows its task is long
+/// can ask for more, and a non-positive value is ignored the way a missing one
+/// is rather than turning into an instant timeout.
+fn delegation_ceiling(input: &serde_json::Value) -> Option<u64> {
+    input
+        .get("timeout_secs")
+        .and_then(|v| v.as_u64())
+        .filter(|secs| *secs > 0)
+        .or(Some(DEFAULT_DELEGATION_TIMEOUT_SECS))
 }
 
 /// Surface a resolve error as the message the model sees: an unknown type

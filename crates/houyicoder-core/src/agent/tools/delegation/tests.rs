@@ -252,3 +252,53 @@ fn test_boundary_failure_message() {
         "a boundary write failure is not a worktree failure: {msg}"
     );
 }
+
+/// A delegation with no ceiling of its own gets the default. Without one, a
+/// child that stops making progress holds the parent's turn for the rest of
+/// the session with no way to reclaim it.
+#[test]
+fn test_ceiling_defaults() {
+    let bare = serde_json::json!({"subagent_type": "explore", "prompt": "go"});
+    assert_eq!(
+        delegation_ceiling(&bare),
+        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        "a call that names no ceiling still gets one"
+    );
+}
+
+/// An explicit ceiling wins, so a caller that knows its task is long can ask
+/// for more than the default.
+#[test]
+fn test_ceiling_explicit_wins() {
+    let long = serde_json::json!({"timeout_secs": 3600});
+    assert_eq!(delegation_ceiling(&long), Some(3600));
+    let short = serde_json::json!({"timeout_secs": 30});
+    assert_eq!(delegation_ceiling(&short), Some(30));
+}
+
+/// A zero or negative ceiling falls back to the default rather than becoming
+/// an instant timeout, which would stop every child before its first turn.
+#[test]
+fn test_ceiling_rejects_zero() {
+    assert_eq!(
+        delegation_ceiling(&serde_json::json!({"timeout_secs": 0})),
+        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        "zero is not a ceiling, it is a missing one"
+    );
+    assert_eq!(
+        delegation_ceiling(&serde_json::json!({"timeout_secs": -5})),
+        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        "a negative value is not a u64 at all"
+    );
+}
+
+/// A value of the wrong type is treated as absent, so a malformed field cannot
+/// silently remove the ceiling.
+#[test]
+fn test_ceiling_ignores_wrong_type() {
+    assert_eq!(
+        delegation_ceiling(&serde_json::json!({"timeout_secs": "600"})),
+        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        "a string is not a number"
+    );
+}
