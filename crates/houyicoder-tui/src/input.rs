@@ -189,25 +189,33 @@ impl InputField {
     }
 
     /// Kill backward to the wrapped line start, escalating to a full clear
-    /// when there is nothing before the cursor on that line.
+    /// when the cursor sits at the very beginning of the draft.
     ///
     /// Readline's Ctrl+U is the backward kill. On its own it is a no-op
     /// whenever the cursor sits at the start of a wrapped line, which is a
-    /// dead key at exactly the moment a user wants to throw the draft away:
-    /// a multi-line prompt with the caret parked at the start of a line had
-    /// no one-keystroke way to clear it. The escalation keeps the readline
-    /// meaning where it applies and gives the dead press a use.
+    /// dead key at exactly the moment a user wants to throw the draft away.
+    /// The escalation covers that dead press, but only at offset zero: at the
+    /// start of a middle line there IS text behind the cursor, just not on
+    /// that line, and clearing the buffer there would discard lines the user
+    /// did not point at.
     pub fn kill_backward(&mut self, cols: usize) {
+        if self.cursor == 0 {
+            self.clear();
+            return;
+        }
         let (idx, _) = self.cursor_position(cols);
         let lines = self.wrapped_lines(cols);
         let Some(wl) = lines.get(idx) else {
-            self.clear();
+            self.kill_to_line_start(cols);
             return;
         };
         if wl.start_offset < self.cursor {
             self.kill_to_line_start(cols);
         } else {
-            self.clear();
+            // Column zero of a later line: nothing on this line to delete, and
+            // the lines above are not the user's target. Delete the newline
+            // instead, which is the one character the cursor sits behind.
+            self.backspace();
         }
     }
 

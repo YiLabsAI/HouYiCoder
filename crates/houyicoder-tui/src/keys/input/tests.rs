@@ -198,3 +198,45 @@ fn test_kill_pair_partitions_line() {
         "Ctrl+K emptied the first line and kept the second"
     );
 }
+
+/// ATTACK: the caret at the very first column of a multi-line draft. Readline
+/// Ctrl+U has nothing behind it there, and the escalation must clear the whole
+/// buffer rather than leaving the draft untouched.
+#[test]
+fn test_ctrl_u_clears_buffer() {
+    let mut app = working_app();
+    app.ui
+        .input
+        .editor
+        .set("first line\nsecond line".to_string());
+    app.ui.input.editor.move_to(0);
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.ui.input.editor.is_empty(),
+        "Ctrl+U at column zero clears the buffer: {:?}",
+        app.ui.input.editor.value()
+    );
+}
+
+/// The caret at the start of a middle line deletes the newline behind it and
+/// nothing else. The line above holds text the user did not point at, so a
+/// whole-buffer clear here would throw that work away; the escalation to a
+/// full clear belongs to offset zero, where nothing is behind the cursor.
+#[test]
+fn test_ctrl_u_keeps_above() {
+    let mut app = working_app();
+    app.ui.input.editor.set("keep me\ndrop this".to_string());
+    app.ui.input.editor.move_to("keep me\n".len());
+    handle_input(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "keep medrop this",
+        "the text above survives; only the newline behind the cursor goes"
+    );
+}
