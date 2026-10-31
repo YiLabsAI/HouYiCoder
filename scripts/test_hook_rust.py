@@ -13,6 +13,8 @@ itself must be guarded.
 Run: python3 scripts/test_hook_rust.py  (wired into make check as gate-tests).
 Exit 0 = pass, 1 = fail.
 """
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -38,6 +40,26 @@ def _caught_acceptance(text: str) -> bool:
 
 def _caught_comparison(text: str) -> bool:
     return COMPARISON.search(text) is not None
+
+
+def _run_hook(payload: dict) -> int:
+    """Drive the gate as the harness does, returning its exit status."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+        json.dump(payload, tf)
+        path = tf.name
+    try:
+        with open(path, "rb") as handle:
+            done = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("hook_rust.py"))],
+                stdin=handle,
+                capture_output=True,
+            )
+        return done.returncode
+    finally:
+        os.unlink(path)
 
 
 def main() -> int:
@@ -242,6 +264,48 @@ def main() -> int:
         failures.append("a plain bash command must not parse as a .rs heredoc")
     if hr._bash_rs_heredocs("cat >> notes.md <<'EOF'\nhi\nEOF"):
         failures.append("a non-.rs heredoc must not be captured")
+
+    # A scripted edit of a workspace .rs file bypasses the static checks, the
+    # file transaction ledger, and the structured diff, so the gate refuses it
+    # and names the tools that would have applied all three.
+    script_shapes = {
+        "python heredoc with write_text": "python3 - <<'PY'\nPath('crates/a.rs').write_text('x')\nPY",
+        "python one-liner with write open": "python3 -c \"open('crates/a.rs','w').write('x')\"",
+        "sed in place": "sed -i s/a/b/ crates/a.rs",
+        "perl in place": "perl -i -pe 's/a/b/' crates/a.rs",
+    }
+    for label, command in script_shapes.items():
+        if not hr._script_edit_targets(command):
+            failures.append(f"a scripted .rs edit was not caught: {label}")
+
+    # Reading through an interpreter, or writing outside the workspace, is not
+    # an edit of the tree and must stay allowed, or the gate blocks its own
+    # fixtures and every legitimate inspection command.
+    allowed_shapes = {
+        "python read only": "python3 -c \"print(open('crates/a.rs').read())\"",
+        "sed read only": "sed -n 1,5p crates/a.rs",
+        "python writing a non-rust file": "python3 -c \"open('notes.md','w').write('x')\"",
+        "python writing under the temp dir": f"python3 -c \"open('{os.environ.get('TMPDIR','/tmp')}/a.rs','w').write('x')\"",
+        "cargo test": "cargo test --lib",
+    }
+    for label, command in allowed_shapes.items():
+        found = hr._script_edit_targets(command)
+        if found:
+            failures.append(f"a harmless command was refused: {label} -> {found}")
+
+    # The recognizer is only half the gate: the call has to actually exit 2.
+    # Driving main() with a real payload is what proves the block arm runs,
+    # because a predicate that nobody calls still passes every unit check.
+    blocked = _run_hook(
+        {"tool_name": "bash", "tool_input": {"command": "sed -i s/a/b/ crates/a.rs"}}
+    )
+    if blocked != 2:
+        failures.append(f"a scripted .rs edit must exit 2, got {blocked}")
+    passed = _run_hook(
+        {"tool_name": "bash", "tool_input": {"command": "cargo test --lib"}}
+    )
+    if passed != 0:
+        failures.append(f"a plain command must exit 0, got {passed}")
 
     # Product-name arm: fires when a wordlist resolves, skips when absent.
     # Uses a temp wordlist (monkeypatched) so the test does not depend on the

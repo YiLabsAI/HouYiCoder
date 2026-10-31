@@ -15,6 +15,26 @@
 //! which always returns a concrete Allow / Ask / Deny. Compound shell commands
 //! are checked per-segment: any un-attestable segment (redirect, command
 //! substitution) escalates the whole command to Ask.
+//!
+//! # Operation risk tiers and auto-approval governance
+//!
+//! The permission engine structures operations into three risk tiers to balance
+//! autonomous agent velocity against security guarantees:
+//!
+//! - Level 0 (Silent Allow): safe read-only operations, idempotent queries,
+//!   previously consented actions, and temporary session scratch modifications.
+//!   These execute immediately without interrupting the user.
+//! - Level 1 (Low-Risk Autonomous Actions): fenced workspace file edits,
+//!   standard compound shell commands, and local git commits or checkpoints. In
+//!   Auto mode, these present an approval prompt with an auto-approval countdown
+//!   (defaulting to 7 seconds), allowing autonomous execution while keeping a
+//!   window for human inspection and pause.
+//! - Level 2 (High-Risk Sensitive Operations): protected control-plane writes
+//!   (such as settings, hooks, skills, and permission configurations), workspace
+//!   path-bounds expansion, network egress, forced history rewrites (git push
+//!   with force), and credential access. In Auto mode, these strictly require
+//!   manual confirmation and never auto-approve, ensuring that autonomous runs
+//!   cannot silently subvert system fences.
 
 mod compound;
 mod consent;

@@ -17,6 +17,7 @@ The comment-rule detector is shared with the check-time gate
 wordlist to drift. Test-name limits are shared via rules/naming.py.
 """
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -290,6 +291,55 @@ def _bash_rs_heredocs(command):
     return results
 
 
+# A bash command that rewrites a workspace source file through an
+# interpreter instead of the edit tool. It bypasses every static check, the
+# file transaction ledger that undo reads, and the structured diff, so the
+# write is refused rather than inspected: the body of a python heredoc is not
+# a .rs file this gate can parse as one.
+_SCRIPT_EDITORS = re.compile(r"(?:^|[;&|]\s*|&&\s*|\|\|\s*|\$\(\s*)(python3?|perl|sed)\s")
+
+
+def _script_edit_targets(command):
+    """Return the workspace .rs paths a scripted edit would rewrite.
+
+    Recognizes the three shapes that write a file from a shell command:
+    python with a write-mode open or a write_text call, sed with an in-place
+    flag, and perl with an in-place flag. A path under the temp directory is
+    left alone: scratch fixtures are not workspace source, and a test that
+    writes one is not editing the tree.
+    """
+    if not command:
+        return []
+    if not _SCRIPT_EDITORS.search(command):
+        return []
+    writes = (
+        "write_text" in command
+        or re.search(r"open\s*\([^)]*['\"][wa]", command) is not None
+        or re.search(r"\bsed\s+[^;|&]*-i", command) is not None
+        or re.search(r"\bperl\s+[^;|&]*-i", command) is not None
+    )
+    if not writes:
+        return []
+    targets = []
+    for token in re.findall(r"[\w./~$-]*\.rs\b", command):
+        if _is_scratch_path(token):
+            continue
+        targets.append(token)
+    return targets
+
+
+def _is_scratch_path(path):
+    """Whether a path names a temp location rather than the workspace."""
+    scratch_roots = ("/tmp/", "/private/tmp/")
+    if path.startswith(scratch_roots):
+        return True
+    for key in ("TMPDIR", "TMP"):
+        root = os.environ.get(key)
+        if root and path.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -304,6 +354,16 @@ def main():
 
     if tool == "bash":
         command = _text(ti.get("command"))
+        scripted = _script_edit_targets(command)
+        if scripted:
+            for rs_path in sorted(set(scripted)):
+                print(
+                    f"blocked bash script edit of workspace .rs file {rs_path}: "
+                    "use the edit, multiedit, or write tool so static checks, "
+                    "the file transaction ledger, and the structured diff apply.",
+                    file=sys.stderr,
+                )
+            sys.exit(2)
         targets = _bash_rs_heredocs(command)
         if not targets:
             # A bash command with no .rs heredoc the parser can read is not a
