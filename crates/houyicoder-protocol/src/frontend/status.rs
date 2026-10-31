@@ -86,6 +86,14 @@ pub struct StatusSnapshot {
     /// display-only contract as auto_memory.
     #[serde(default = "default_true")]
     pub auto_dream: bool,
+    /// Whether the host may write a recap while the user is away, and how long
+    /// the session must sit idle first. Both come from the settings file
+    /// server-side, the same way the two memory switches do, so the Config tab
+    /// can show them without the TUI importing the config crate.
+    #[serde(default)]
+    pub recap_enabled: bool,
+    #[serde(default)]
+    pub recap_idle_secs: u64,
     /// Per-model token breakdown for the Usage sub-tab's "Usage by model"
     /// section. Sorted by input+output descending. Empty when the session
     /// has used a single model (the flat cumulative_usage already covers it)

@@ -27,11 +27,15 @@ pub(crate) enum ConfigRow {
     AutoMemory,
     /// Whether the session writes a recap while the user is away.
     AutoDream,
+    /// Whether the host may write a recap at all.
+    Recap,
+    /// How long the session must sit idle before that recap is written.
+    RecapIdle,
 }
 
 /// The rows in display order. This is the order the reader sees and the order
 /// the cursor moves through.
-pub(crate) const CONFIG_ROWS: [ConfigRow; 7] = [
+pub(crate) const CONFIG_ROWS: [ConfigRow; 9] = [
     ConfigRow::Model,
     ConfigRow::ReasoningEffort,
     ConfigRow::PermissionMode,
@@ -39,6 +43,8 @@ pub(crate) const CONFIG_ROWS: [ConfigRow; 7] = [
     ConfigRow::Sandbox,
     ConfigRow::AutoMemory,
     ConfigRow::AutoDream,
+    ConfigRow::Recap,
+    ConfigRow::RecapIdle,
 ];
 
 /// The delay values the auto-approve timer cycles through, in seconds. Zero
@@ -46,6 +52,11 @@ pub(crate) const CONFIG_ROWS: [ConfigRow; 7] = [
 /// press on a fresh session lands on the next plausible setting rather than
 /// jumping to an extreme.
 pub(crate) const TIMER_STEPS: [u64; 6] = [7, 15, 30, 0, 3, 5];
+
+/// The idle windows the recap row cycles through, in seconds. The first press
+/// moves to the next plausible window rather than jumping to an extreme, the
+/// same ordering the timer row uses.
+pub(crate) const RECAP_IDLE_STEPS: [u64; 4] = [180, 300, 600, 900];
 
 /// Whether a row acts on Enter. A row that shows state the session does not
 /// own (the model, the sandbox) takes no press, so it prints no hint.
@@ -64,6 +75,8 @@ pub(crate) fn row_label(row: ConfigRow) -> &'static str {
         ConfigRow::Sandbox => "Sandbox",
         ConfigRow::AutoMemory => "Auto-memory",
         ConfigRow::AutoDream => "Auto-dream",
+        ConfigRow::Recap => "Recap",
+        ConfigRow::RecapIdle => "Recap idle trigger",
     }
 }
 
@@ -113,6 +126,15 @@ pub(crate) fn row_value(app: &App, row: ConfigRow) -> String {
         ConfigRow::Sandbox => app.sessions.current.sandbox.clone(),
         ConfigRow::AutoMemory => on_off(app.snapshot_or_stub().auto_memory),
         ConfigRow::AutoDream => on_off(app.snapshot_or_stub().auto_dream),
+        ConfigRow::Recap => on_off(app.snapshot_or_stub().recap_enabled),
+        ConfigRow::RecapIdle => {
+            let secs = app.snapshot_or_stub().recap_idle_secs;
+            if secs == 0 {
+                "off".to_string()
+            } else {
+                format!("{}m", secs / 60)
+            }
+        }
     }
 }
 

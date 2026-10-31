@@ -143,14 +143,13 @@ impl Server {
             FrontendRequest::Trajectory => self.dispatch_trajectory(io, req_id).await,
             FrontendRequest::Context => self.handle_context(io, req_id).await,
             FrontendRequest::Compact => self.handle_compact(io, req_id).await,
-            FrontendRequest::MemoryList => self.handle_memory_list(io, req_id).await,
-            FrontendRequest::MemoryShow { key } => self.handle_memory_show(io, req_id, key).await,
-            FrontendRequest::MemoryForget { key, scope } => {
-                self.handle_memory_forget(io, req_id, key, scope).await
-            }
-            FrontendRequest::MemoryToggleState => self.handle_memory_toggle_state(io, req_id).await,
-            FrontendRequest::MemoryToggle { which } => {
-                self.handle_memory_toggle(io, req_id, which).await
+            FrontendRequest::MemoryList
+            | FrontendRequest::MemoryShow { .. }
+            | FrontendRequest::MemoryForget { .. }
+            | FrontendRequest::MemoryToggleState
+            | FrontendRequest::MemoryToggle { .. }
+            | FrontendRequest::RecapConfigSet { .. } => {
+                self.dispatch_memory(io, req_id, payload).await
             }
             FrontendRequest::PermissionMode
             | FrontendRequest::PermissionRules
@@ -161,6 +160,32 @@ impl Server {
             | FrontendRequest::PermissionRemoveWorkingDir { .. }
             | FrontendRequest::PermissionAskBeforeGit { .. } => {
                 self.dispatch_permission(io, req_id, payload).await
+            }
+            _ => self.send_response(io, req_id, ResponsePayload::Ack).await,
+        }
+    }
+
+    /// Route a memory or recap request, grouped the way the permission
+    /// router is so the query router stays one decision per surface.
+    async fn dispatch_memory(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        payload: FrontendRequest,
+    ) -> Result<(), ProtocolError> {
+        match payload {
+            FrontendRequest::MemoryList => self.handle_memory_list(io, req_id).await,
+            FrontendRequest::MemoryShow { key } => self.handle_memory_show(io, req_id, key).await,
+            FrontendRequest::MemoryForget { key, scope } => {
+                self.handle_memory_forget(io, req_id, key, scope).await
+            }
+            FrontendRequest::MemoryToggleState => self.handle_memory_toggle_state(io, req_id).await,
+            FrontendRequest::MemoryToggle { which } => {
+                self.handle_memory_toggle(io, req_id, which).await
+            }
+            FrontendRequest::RecapConfigSet { enabled, idle_secs } => {
+                self.handle_recap_config(io, req_id, enabled, idle_secs)
+                    .await
             }
             _ => self.send_response(io, req_id, ResponsePayload::Ack).await,
         }

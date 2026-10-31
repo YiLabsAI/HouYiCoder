@@ -513,6 +513,12 @@ pub enum ClientCommand {
         req_id: RequestId,
         which: MemoryToggleWhich,
     },
+    /// Write the recap switch and its idle window.
+    RecapConfigSet {
+        req_id: RequestId,
+        enabled: bool,
+        idle_secs: u64,
+    },
     /// Forget one memory by key + scope (the /memory forget command or the
     /// pane d action). The scope routes the delete to the matching storage
     /// root so forgetting a user/project row deletes the explicit file. The

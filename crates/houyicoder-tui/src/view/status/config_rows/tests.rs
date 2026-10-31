@@ -80,3 +80,33 @@ fn test_timer_steps_distinct() {
         "the ring includes off, so the countdown can be turned off from here"
     );
 }
+
+/// The two recap rows read from the settings snapshot, so the Config tab shows
+/// the same switch and window the host reads.
+#[test]
+fn test_recap_rows_render() {
+    let mut app = composition::app();
+    {
+        let mut snap = app.snapshot_or_stub();
+        snap.recap_enabled = true;
+        snap.recap_idle_secs = 600;
+        app.sessions.current.capabilities.status.status_cache = Some(snap);
+    }
+    assert_eq!(row_value(&app, ConfigRow::Recap), "on");
+    assert_eq!(row_value(&app, ConfigRow::RecapIdle), "10m");
+}
+
+/// A window of zero reads as off rather than as a zero-minute trigger, which
+/// would look like an instant recap.
+#[test]
+fn test_recap_zero_reads_off() {
+    let mut app = composition::app();
+    {
+        let mut snap = app.snapshot_or_stub();
+        snap.recap_enabled = false;
+        snap.recap_idle_secs = 0;
+        app.sessions.current.capabilities.status.status_cache = Some(snap);
+    }
+    assert_eq!(row_value(&app, ConfigRow::Recap), "off");
+    assert_eq!(row_value(&app, ConfigRow::RecapIdle), "off");
+}

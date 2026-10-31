@@ -316,6 +316,7 @@ fn test_memory_pane_renders_rows() {
         .set_toggles(ToggleState {
             auto_memory: false,
             auto_dream: false,
+            recap: false,
         });
     let off = render(&app);
     assert!(off.contains("○ auto-memory"), "off renders ○:\n{off}");
@@ -363,6 +364,7 @@ fn test_header_status_row_styles() {
         .set_toggles(ToggleState {
             auto_memory: false,
             auto_dream: false,
+            recap: false,
         });
     let buf = render_buffer(&app, 100, 28);
     for needle in ["○ auto-memory", "auto-memory"] {
@@ -760,6 +762,7 @@ fn test_toggle_reply_writes_outcome() {
             state: ToggleState {
                 auto_memory: false,
                 auto_dream: true,
+                recap: false,
             },
         },
     });
@@ -790,6 +793,7 @@ fn test_toggle_read_skips_transcript() {
             state: ToggleState {
                 auto_memory: false,
                 auto_dream: true,
+                recap: false,
             },
         },
     });

@@ -200,6 +200,10 @@ pub enum MemoryToggleWhich {
 pub struct ToggleState {
     pub auto_memory: bool,
     pub auto_dream: bool,
+    /// The recap switch. Defaulted so a payload from a host that predates it
+    /// reads as off rather than failing to parse.
+    #[serde(default)]
+    pub recap: bool,
 }
 
 #[cfg(test)]

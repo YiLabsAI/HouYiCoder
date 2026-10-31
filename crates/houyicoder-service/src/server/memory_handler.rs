@@ -1,5 +1,6 @@
 //! Handlers for memory requests in the server dispatch.
 
+use houyicoder_config::recap::save_recap_to;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
@@ -68,6 +69,39 @@ impl Server {
     ) -> Result<(), ProtocolError> {
         let state = self.runner.memory_gate_state();
         let toggle = map_toggle_state(state.auto_memory, state.auto_dream);
+        self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
+            .await
+    }
+
+    /// Write the recap switch and its idle window, then reply with the
+    /// settings snapshot the Config tab renders from.
+    ///
+    /// The host owns the settings file, so this is the only place the pair is
+    /// written: a TUI-local write would be overwritten by the next host save
+    /// and would diverge from what the recap trigger actually reads.
+    pub(super) async fn handle_recap_config(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        enabled: bool,
+        idle_secs: u64,
+    ) -> Result<(), ProtocolError> {
+        if let Err(e) = save_recap_to(&self.settings_path, enabled, idle_secs) {
+            return self
+                .send_response(
+                    io,
+                    req_id,
+                    ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::Internal,
+                        format!("failed to save settings: {e}"),
+                        false,
+                    )),
+                )
+                .await;
+        }
+        let current = self.runner.memory_gate_state();
+        let mut toggle = map_toggle_state(current.auto_memory, current.auto_dream);
+        toggle.recap = enabled;
         self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
             .await
     }

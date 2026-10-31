@@ -340,6 +340,7 @@ fn test_recap_needs_usable_model() {
     let enabled = |model: Option<&str>| RecapConfig {
         enabled: true,
         model: model.map(str::to_string),
+        idle_trigger_secs: houyicoder_config::recap::DEFAULT_RECAP_IDLE_SECS,
     };
 
     let (settings, warnings) = recap_settings(enabled(Some("small-1")), &section);
@@ -374,6 +375,7 @@ fn test_recap_needs_usable_model() {
     let off = RecapConfig {
         enabled: false,
         model: Some("gpt-5".into()),
+        idle_trigger_secs: houyicoder_config::recap::DEFAULT_RECAP_IDLE_SECS,
     };
     let (settings, warnings) = recap_settings(off, &section);
     assert!(!settings.usable());

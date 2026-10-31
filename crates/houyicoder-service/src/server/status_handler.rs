@@ -1,5 +1,7 @@
 //! Status snapshot assembly and session rename.
 
+use houyicoder_config::recap::load_recap_from;
+use houyicoder_config::settings_path;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::SessionId;
@@ -166,6 +168,11 @@ impl Server {
         let (toggles, _settings_warnings) = houyicoder_config::load_toggles();
         snapshot.auto_memory = toggles.auto_memory;
         snapshot.auto_dream = toggles.auto_dream;
+        // The switch and its window travel together: the Config tab shows
+        // both, and a window without the switch names a trigger that never fires.
+        let (recap, _recap_warnings) = load_recap_from(&settings_path());
+        snapshot.recap_enabled = recap.enabled;
+        snapshot.recap_idle_secs = recap.idle_trigger_secs;
         snapshot.by_model = build_model_usage_view(self.runner.by_model_usage());
         snapshot
     }

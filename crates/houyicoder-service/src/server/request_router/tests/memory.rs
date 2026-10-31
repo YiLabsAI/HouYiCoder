@@ -6,6 +6,7 @@ use super::super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::memory::MemoryProvider;
+use houyicoder_config::recap::load_recap_from;
 use houyicoder_context::SessionId;
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySummary};
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -251,4 +252,55 @@ async fn test_failed_toggle_keeps_state() {
         other => panic!("expected ToggleState, got {other:?}"),
     }
     drop(remove_file(&blocker));
+}
+
+/// The recap pair is written to the settings file and echoed back, so the
+/// Config tab shows what a restart would read rather than what it hoped.
+#[tokio::test]
+async fn test_recap_config_persists() {
+    let dir = temp_dir().join(format!("recap-ok-{}", id()));
+    let settings = dir.join("settings.json");
+    let payloads = memory_dispatch(
+        Some(settings.clone()),
+        vec![FrontendRequest::RecapConfigSet {
+            enabled: true,
+            idle_secs: 600,
+        }],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::ToggleState(state) => {
+            assert!(state.recap, "the reply carries the new switch");
+        }
+        other => panic!("expected ToggleState, got {other:?}"),
+    }
+    let (loaded, _w) = load_recap_from(&settings);
+    assert!(loaded.enabled, "the switch is persisted");
+    assert_eq!(loaded.idle_trigger_secs, 600, "so is the window");
+    drop(remove_dir_all(&dir));
+}
+
+/// A write failure replies Error rather than a snapshot claiming the change
+/// landed, so the tab never shows a switch a restart would revert.
+#[tokio::test]
+async fn test_recap_write_failure_reports() {
+    let blocker = temp_dir().join(format!("recap-block-{}", id()));
+    write(&blocker, "regular file, not a directory").unwrap();
+    let payloads = memory_dispatch(
+        Some(blocker.join("settings.json")),
+        vec![FrontendRequest::RecapConfigSet {
+            enabled: true,
+            idle_secs: 300,
+        }],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::Error(e) => {
+            assert!(
+                e.message.contains("settings"),
+                "the refusal names the file: {e:?}"
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
 }

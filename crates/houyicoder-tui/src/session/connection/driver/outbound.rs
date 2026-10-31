@@ -90,6 +90,14 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
         ClientCommand::MemoryToggleQuery { req_id, which } => {
             request(req_id, FrontendRequest::MemoryToggle { which })
         }
+        ClientCommand::RecapConfigSet {
+            req_id,
+            enabled,
+            idle_secs,
+        } => request(
+            req_id,
+            FrontendRequest::RecapConfigSet { enabled, idle_secs },
+        ),
         ClientCommand::MemoryForgetQuery { req_id, key, scope } => {
             request(req_id, FrontendRequest::MemoryForget { key, scope })
         }

@@ -8,8 +8,12 @@
 
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
+use crate::agent_message::ClientCommand;
+
 use crate::state::{App, enums::StatusTab};
-use crate::view::status::config_rows::{CONFIG_ROWS, ConfigRow, TIMER_STEPS, row_changes};
+use crate::view::status::config_rows::{
+    CONFIG_ROWS, ConfigRow, RECAP_IDLE_STEPS, TIMER_STEPS, row_changes,
+};
 
 impl App {
     /// Place the Config cursor when the tab becomes active, and drop it when
@@ -52,6 +56,8 @@ impl App {
             ConfigRow::AutoApproveTimer => self.step_auto_approve_timer(),
             ConfigRow::AutoMemory => self.toggle_memory_setting(MemoryToggleWhich::Auto),
             ConfigRow::AutoDream => self.toggle_memory_setting(MemoryToggleWhich::Dream),
+            ConfigRow::Recap => self.set_recap_config(),
+            ConfigRow::RecapIdle => self.step_recap_idle(),
             // Model and Sandbox are shown, not changed: the model picker is
             // its own pane, and the sandbox is fixed for the session.
             ConfigRow::Model | ConfigRow::ReasoningEffort | ConfigRow::Sandbox => {}
@@ -80,5 +86,53 @@ impl App {
             format!("{next}s")
         };
         self.system_line(format!("auto-approve timer: {shown}"));
+    }
+
+    /// Flip the recap switch, sending the window along with it.
+    ///
+    /// The host owns the settings file, so the tab asks rather than writing:
+    /// a local write would be overwritten by the next host save and would
+    /// diverge from the file the recap actually reads.
+    fn set_recap_config(&mut self) {
+        let enabled = !self.snapshot_or_stub().recap_enabled;
+        let idle = self.snapshot_or_stub().recap_idle_secs;
+        self.send_recap_config(enabled, idle);
+    }
+
+    /// Advance the idle window to the next step in the ring, keeping the
+    /// switch as it is. A window outside the ring moves to the first step,
+    /// the same way the timer row handles an unexpected value.
+    fn step_recap_idle(&mut self) {
+        let snap = self.snapshot_or_stub();
+        let enabled = snap.recap_enabled;
+        let current = snap.recap_idle_secs;
+        let next = RECAP_IDLE_STEPS
+            .iter()
+            .position(|step| *step == current)
+            .map(|i| RECAP_IDLE_STEPS[(i + 1) % RECAP_IDLE_STEPS.len()])
+            .unwrap_or(RECAP_IDLE_STEPS[0]);
+        self.send_recap_config(enabled, next);
+    }
+
+    /// Ask the host to write both recap fields and echo the outcome.
+    fn send_recap_config(&mut self, enabled: bool, idle_secs: u64) {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
+            self.system_line("recap: not connected");
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("recap: request ids exhausted");
+            return;
+        };
+        if let Err(e) = self.enqueue(ClientCommand::RecapConfigSet {
+            req_id,
+            enabled,
+            idle_secs,
+        }) {
+            self.system_line(App::enqueue_failure_line("recap", e));
+            return;
+        }
+        let state = if enabled { "on" } else { "off" };
+        self.system_line(format!("recap: {state} · idle after {}m", idle_secs / 60));
     }
 }

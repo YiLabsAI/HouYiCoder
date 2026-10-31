@@ -3,7 +3,7 @@ use houyicoder_protocol::llm::EffortLevel;
 use super::*;
 use crate::input::InputField;
 use crate::state::Pane;
-use crate::test_harness::{render_text, working_app};
+use crate::test_harness::{connected_app_with_events, render_text, working_app};
 use crate::view::status::config_rows::ConfigRow;
 
 /// The sub-tab header renders Status / Config / Usage, with the active one
@@ -290,4 +290,71 @@ fn test_timer_row_changes() {
         "the Config row shows the new value: {row}"
     );
     assert!(!row.contains("7s"), "and stops showing the old one: {row}");
+}
+
+/// The recap switch flips against the snapshot, and the window row steps to
+/// the next value in its ring. Both rows ask the host to write, so the echo
+/// is what the reader sees; the assertion is on that echo rather than on
+/// local state the host would overwrite.
+#[test]
+fn test_recap_rows_act() {
+    let (mut app, events) = connected_app_with_events();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Config;
+    app.sync_config_cursor();
+    {
+        let mut snap = app.snapshot_or_stub();
+        snap.recap_enabled = false;
+        snap.recap_idle_secs = 300;
+        app.sessions.current.capabilities.status.status_cache = Some(snap);
+    }
+
+    let switch = CONFIG_ROWS
+        .iter()
+        .position(|r| *r == ConfigRow::Recap)
+        .expect("the recap switch is a row");
+    app.ui.navigation.status_pane.config_cursor = Some(switch);
+    app.activate_config_row();
+
+    let idle = CONFIG_ROWS
+        .iter()
+        .position(|r| *r == ConfigRow::RecapIdle)
+        .expect("the idle window is a row");
+    app.ui.navigation.status_pane.config_cursor = Some(idle);
+    app.activate_config_row();
+
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("recap: on"),
+        "the switch flip is reported: {out}"
+    );
+    assert!(
+        out.contains("idle after 10m"),
+        "the window steps 5m to 10m: {out}"
+    );
+    drop(events);
+}
+
+/// A tab used without a connection says so instead of silently doing nothing:
+/// the row is reachable from a detached session, and a press that produced no
+/// line would read as a broken key.
+#[test]
+fn test_recap_disconnected_says() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Config;
+    app.sync_config_cursor();
+    let switch = CONFIG_ROWS
+        .iter()
+        .position(|r| *r == ConfigRow::Recap)
+        .expect("a recap row");
+    app.ui.navigation.status_pane.config_cursor = Some(switch);
+
+    app.activate_config_row();
+
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("recap: not connected"),
+        "a detached press is reported: {out}"
+    );
 }

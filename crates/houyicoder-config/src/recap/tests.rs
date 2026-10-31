@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use crate::recap::DEFAULT_RECAP_IDLE_SECS;
 use std::env::temp_dir;
 use std::fs;
 use std::path::PathBuf;
@@ -45,7 +46,8 @@ fn test_load_reads_fields() {
         cfg,
         RecapConfig {
             enabled: true,
-            model: Some("small-1".to_string())
+            model: Some("small-1".to_string()),
+            idle_trigger_secs: DEFAULT_RECAP_IDLE_SECS,
         }
     );
     assert!(warnings.is_empty());
@@ -157,5 +159,68 @@ fn test_disabled_section_is_silent() {
         warnings.is_empty(),
         "a feature the file never turned on has nothing to warn about"
     );
+    fs::remove_file(&path).ok();
+}
+
+/// A file that names an idle window uses it. The field is what the Config tab
+/// steps through, so a value the loader drops would make the tab's change
+/// disappear on the next read.
+#[test]
+fn test_idle_window_read() {
+    let path =
+        temp_settings(r#"{"recap": {"enabled": true, "model": "m", "idle_trigger_secs": 600}}"#);
+    let (cfg, warnings) = load_recap_from(&path);
+    assert_eq!(cfg.idle_trigger_secs, 600, "the configured window is read");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    fs::remove_file(&path).ok();
+}
+
+/// A window of zero would recap a session the instant the user stopped
+/// typing, so it warns and falls back rather than being honoured.
+#[test]
+fn test_zero_window_falls_back() {
+    let path = temp_settings(r#"{"recap": {"idle_trigger_secs": 0}}"#);
+    let (cfg, warnings) = load_recap_from(&path);
+    assert_eq!(
+        cfg.idle_trigger_secs, DEFAULT_RECAP_IDLE_SECS,
+        "zero is not a window, it is a missing one"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.field == "recap.idle_trigger_secs"),
+        "the file is told which field was ignored: {warnings:?}"
+    );
+    fs::remove_file(&path).ok();
+}
+
+/// Writing the pair puts both fields in the settings file and leaves the
+/// recap's model choice alone: a toggle that rewrote the model would silently
+/// retarget every later recap.
+#[test]
+fn test_save_writes_both_fields() {
+    let path = temp_settings(r#"{"recap": {"model": "small-1"}}"#);
+    save_recap_to(&path, true, 600).expect("save");
+    let (cfg, warnings) = load_recap_from(&path);
+    assert!(cfg.enabled, "the switch is written");
+    assert_eq!(cfg.idle_trigger_secs, 600, "the window is written");
+    assert_eq!(
+        cfg.model.as_deref(),
+        Some("small-1"),
+        "the model choice survives the write"
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    fs::remove_file(&path).ok();
+}
+
+/// A settings file with no recap section gains one rather than the write being
+/// dropped: the first flip on a fresh install is the common case.
+#[test]
+fn test_save_creates_section() {
+    let path = temp_settings(r#"{"model": {"id": "m"}}"#);
+    save_recap_to(&path, true, 300).expect("save");
+    let (cfg, _) = load_recap_from(&path);
+    assert!(cfg.enabled, "a fresh file gains the section");
+    assert_eq!(cfg.idle_trigger_secs, 300);
     fs::remove_file(&path).ok();
 }

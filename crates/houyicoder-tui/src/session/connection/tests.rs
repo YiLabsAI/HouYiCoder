@@ -1198,6 +1198,7 @@ async fn test_drive_translates_memory_responses() {
     engine.response(ResponsePayload::ToggleState(ToggleState {
         auto_memory: true,
         auto_dream: false,
+        recap: false,
     }));
     engine.close();
     let run = engine.drive(Vec::new()).await;

@@ -298,6 +298,7 @@ impl Default for MemoryCapability {
             toggles: ToggleState {
                 auto_memory: true,
                 auto_dream: true,
+                recap: false,
             },
             seen_changes: HashSet::new(),
             actions: HashMap::new(),

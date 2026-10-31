@@ -119,6 +119,7 @@ fn test_toggle_which_serializes_lowercase() {
 #[test]
 fn test_toggle_state_round_trips() {
     let state = ToggleState {
+        recap: false,
         auto_memory: true,
         auto_dream: false,
     };

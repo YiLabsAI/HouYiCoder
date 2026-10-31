@@ -327,6 +327,7 @@ fn test_toggle_state_applies_view() {
             state: ToggleState {
                 auto_memory: false,
                 auto_dream: true,
+                recap: false,
             },
         },
     });
@@ -359,6 +360,7 @@ fn test_toggle_state_applies_view() {
             state: ToggleState {
                 auto_memory: false,
                 auto_dream: true,
+                recap: false,
             },
         },
     });

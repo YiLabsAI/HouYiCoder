@@ -599,6 +599,12 @@ pub enum FrontendRequest {
     MemoryToggle {
         which: crate::frontend::memory::MemoryToggleWhich,
     },
+    /// Write the recap switch and its idle window, answering with the
+    /// snapshot the Config tab renders from.
+    RecapConfigSet {
+        enabled: bool,
+        idle_secs: u64,
+    },
     /// Forget one memory by key (the /memory pane d action or the
     /// /memory forget command). The server deletes the topic + replies with
     /// the refreshed MemoryList so the pane narrows without a second request.
