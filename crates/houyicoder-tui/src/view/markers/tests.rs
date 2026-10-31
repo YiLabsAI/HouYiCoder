@@ -778,3 +778,74 @@ fn test_diff_sigil_split() {
         );
     }
 }
+
+/// A diff block is coloured as one document, so a grammar sees a comment
+/// opened on one line and closed on another. Colouring each row on its own
+/// loses that state, and every line after the opener then paints as code while
+/// the text still says it is a comment.
+#[test]
+fn test_diff_comment_spans_lines() {
+    let rows = vec![
+        (TAG_DIFF_ADD, "    1 + /* the opener".to_string(), None),
+        (TAG_DIFF_ADD, "    2 + still inside".to_string(), None),
+        (TAG_DIFF_ADD, "    3 + and still */".to_string(), None),
+    ];
+    let lines = diff_rows(&rows, 40, Some("rs"));
+    // A comment colour is the same on every line of the comment and differs
+    // from the colour of code, so a line that reads as code inside the block
+    // is the defect this guards.
+    let body_colour = |line: &Line<'static>| -> Option<Color> {
+        line.spans
+            .iter()
+            .rev()
+            .find(|s| !s.content.trim().is_empty())
+            .and_then(|s| s.style.fg)
+    };
+    let opener = body_colour(&lines[0]);
+    let middle = body_colour(&lines[1]);
+    assert_eq!(
+        middle, opener,
+        "a line inside the comment keeps the comment's colour: {lines:?}"
+    );
+    // The proof that this is the fix and not a coincidence: the same middle
+    // row, coloured on its own, reads as code.
+    let alone = diff_row("    2 + still inside", TAG_DIFF_ADD, 40, None, Some("rs"));
+    assert_ne!(
+        body_colour(&alone),
+        middle,
+        "colouring the row by itself loses the comment state"
+    );
+}
+
+/// The same state carries across a multi-line string, which is the other shape
+/// that spans rows. A raw string opened on one line makes every row up to the
+/// closing quote one string, and colouring rows separately breaks it the same
+/// way it breaks a comment.
+#[test]
+fn test_diff_string_spans_lines() {
+    let rows = vec![
+        (TAG_DIFF_ADD, "    1 + let q = r#\"".to_string(), None),
+        (TAG_DIFF_ADD, "    2 + SELECT * FROM t".to_string(), None),
+        (TAG_DIFF_ADD, "    3 + \"#;".to_string(), None),
+    ];
+    let lines = diff_rows(&rows, 40, Some("rs"));
+    let body_colour = |line: &Line<'static>| -> Option<Color> {
+        line.spans
+            .iter()
+            .find(|s| s.content.contains("SELECT"))
+            .and_then(|s| s.style.fg)
+    };
+    let quoted = body_colour(&lines[1]).expect("the query is coloured");
+    let alone = body_colour(&diff_row(
+        "    2 + SELECT * FROM t",
+        TAG_DIFF_ADD,
+        40,
+        None,
+        Some("rs"),
+    ))
+    .expect("the row coloured alone is still coloured");
+    assert_ne!(
+        quoted, alone,
+        "inside the raw string the query is not read as code"
+    );
+}

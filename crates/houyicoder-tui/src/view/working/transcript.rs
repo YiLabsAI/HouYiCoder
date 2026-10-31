@@ -30,7 +30,7 @@ use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
 use crate::view::line_wrap::truncate_width;
 use crate::view::line_wrap::wrap_line;
-use crate::view::markers::{diff_row, styled_row};
+use crate::view::markers::{diff_row, diff_rows, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
 use ratatui::buffer::CellDiffOption;
 use std::time::Duration;
@@ -381,15 +381,23 @@ pub(crate) fn push_line_rows(
         let results = &app.ui.transcript_view.expanded.results;
         let expanded = results.contains(call_id.as_str()) || app.ui.verbose;
         let lang = line.diff_lang();
-        for (tag, text, oc, cid, word) in app
+        let rows = app
             .ui
             .renderer
             .lines
             .borrow_mut()
-            .tool_rows(&body, call_id, outcome, expanded, is_diff, width)
-        {
+            .tool_rows(&body, call_id, outcome, expanded, is_diff, width);
+        // One block, one grammar: a comment or string opened on one row decides
+        // how the rows after it read.
+        let diff_input: Vec<_> = rows
+            .iter()
+            .filter(|(tag, ..)| matches!(*tag, DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX))
+            .map(|(tag, text, _, _, word)| (*tag, text.clone(), word.clone()))
+            .collect();
+        let mut coloured = diff_rows(&diff_input, width, lang).into_iter();
+        for (tag, text, oc, cid, _word) in rows {
             let pre = if matches!(tag, DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX) {
-                Some(diff_row(&text, tag, width, word.as_deref(), lang))
+                coloured.next()
             } else {
                 None
             };

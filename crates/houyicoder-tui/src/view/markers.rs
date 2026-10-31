@@ -17,6 +17,7 @@ use crate::transcript::markdown::{highlighter_for_path, syn_to_ratatui, syntax_s
 use crate::view::word_diff::WordDiffPart;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use syntect::easy::HighlightLines;
 use unicode_width::UnicodeWidthStr;
 
 mod diff_plan;
@@ -393,13 +394,42 @@ pub(crate) fn result_row_count(body: &str, expanded: bool, is_diff: bool, width:
 /// When word-parts are present (an adjacent remove+add pair below the
 /// change threshold), the content splits into word-spans so just the
 /// changed words get a darker, more-saturated background. The width is
-/// the pane inner width so the padding reaches the right edge.
+/// the pane inner width so the padding reaches the right edge. State does not
+/// carry to the next row, so a caller rendering a whole block uses diff_rows.
 pub(crate) fn diff_row(
     row: &str,
     tag: u8,
     width: u16,
     word: Option<&[WordDiffPart]>,
     lang: Option<&str>,
+) -> Line<'static> {
+    let mut highlighter = lang.and_then(highlighter_for_path);
+    diff_row_with(row, tag, width, word, highlighter.as_mut())
+}
+
+/// Colour a whole diff block, keeping the grammar's state across its rows. A
+/// block comment or a multi-line string opened on one row decides how the rows
+/// after it read, so one highlighter per block is what keeps the colours and
+/// the text agreeing.
+pub(crate) fn diff_rows(
+    rows: &[(u8, String, Option<Vec<WordDiffPart>>)],
+    width: u16,
+    lang: Option<&str>,
+) -> Vec<Line<'static>> {
+    let mut highlighter = lang.and_then(highlighter_for_path);
+    rows.iter()
+        .map(|(tag, text, word)| {
+            diff_row_with(text, *tag, width, word.as_deref(), highlighter.as_mut())
+        })
+        .collect()
+}
+
+fn diff_row_with(
+    row: &str,
+    tag: u8,
+    width: u16,
+    word: Option<&[WordDiffPart]>,
+    highlighter: Option<&mut HighlightLines<'static>>,
 ) -> Line<'static> {
     let dim = Style::new().fg(Color::DarkGray);
     // The dashed frame border (top + bottom of a structured-diff block):
@@ -445,7 +475,7 @@ pub(crate) fn diff_row(
     {
         spans.extend(word_diff_spans(parts, tag, style, word_green, word_red));
     } else {
-        spans.extend(content_spans(&row[content_start..], style, lang));
+        spans.extend(content_spans(&row[content_start..], style, highlighter));
     }
 
     // Pad to the pane width with bg-styled spaces so the bar fills the row
@@ -472,7 +502,11 @@ pub(crate) fn diff_row(
 /// A line whose language is unknown, or whose grammar declines it, renders as
 /// one plain span: a wrong colour is worse than none, and the row already says
 /// add or remove through its bar.
-fn content_spans(text: &str, base: Style, lang: Option<&str>) -> Vec<Span<'static>> {
+fn content_spans(
+    text: &str,
+    base: Style,
+    highlighter: Option<&mut HighlightLines<'static>>,
+) -> Vec<Span<'static>> {
     // The change sigil leads the content and marks what happened to the line,
     // so it keeps the row's own colour. Handing it to the grammar makes an
     // added line's plus sign render as an operator in the text colour, which
@@ -486,10 +520,7 @@ fn content_spans(text: &str, base: Style, lang: Option<&str>) -> Vec<Span<'stati
         spans.push(Span::styled(sigil.to_string(), base));
     }
     let plain = || vec![Span::styled(code.to_string(), base)];
-    let Some(ranges) = lang
-        .and_then(highlighter_for_path)
-        .and_then(|mut h| h.highlight_line(code, syntax_set()).ok())
-    else {
+    let Some(ranges) = highlighter.and_then(|h| h.highlight_line(code, syntax_set()).ok()) else {
         spans.extend(plain());
         return spans;
     };
