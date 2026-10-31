@@ -963,16 +963,14 @@ fn test_usage_tab_shows_audit() {
         !screen.contains("no verdict"),
         "every card was answered: {screen}"
     );
-    // The completed share is gone: it told a reader nothing they could act
-    // on. What remains is the ending that did not finish in a readable way,
-    // which is the only thing the turn row was ever able to explain.
+    // The turn row is gone entirely. A completed share tells a reader nothing
+    // they can act on, and over a log from an older build it divides by a
+    // denominator that leaves most turns out, so it reads as a clean run
+    // beside a large unknown count. Nothing on this tab needs the row.
+    assert!(!screen.contains("Turns:"), "no turn row at all: {screen}");
     assert!(
-        !screen.contains("completed ("),
-        "no completed share: {screen}"
-    );
-    assert!(
-        screen.contains("1 interrupted"),
-        "the adverse ending is still stated: {screen}"
+        !screen.contains("1 interrupted"),
+        "and no ending restated elsewhere: {screen}"
     );
 }
 
@@ -1040,24 +1038,24 @@ fn test_audit_rows_survive_clipping() {
         "the counts lead the row: {screen}"
     );
     assert!(
-        !screen.contains("completed ("),
-        "no completed share over a denominator that omits the unknown turns: {screen}"
+        !screen.contains("Turns:"),
+        "no turn row, so no share over a denominator that omits the unknown turns: {screen}"
     );
     assert!(
-        screen.contains("1 unknown"),
-        "the unreadable ending leads the row: {screen}"
+        !screen.contains("1 unknown"),
+        "and the unknown count is not restated: {screen}"
     );
 
     let wide = render_text(&app, 120, 24);
     assert!(
-        wide.contains("1 unknown · 1 interrupted · 1 unfinished"),
-        "the full breakdown fits a wide terminal: {wide}"
+        !wide.contains("1 unknown"),
+        "a wide terminal does not bring the row back: {wide}"
     );
 }
 
-/// An ending this build cannot read is neither a finished turn nor a lost
-/// one: the row states the count and computes no share, so a log written
-/// before endings were recorded never reads as a measured zero percent.
+/// A turn ending this build cannot read is not shown at all. The row that
+/// used to state it is gone, so a log written before endings were recorded
+/// cannot surface the count on this tab in any form.
 #[test]
 fn test_unknown_endings_show_count() {
     let mut app = working_app();
@@ -1075,12 +1073,12 @@ fn test_unknown_endings_show_count() {
 
     let screen = render_text(&app, 80, 24);
     assert!(
-        screen.contains("3 unknown"),
-        "the unreadable endings are stated: {screen}"
+        !screen.contains("unknown"),
+        "the unreadable endings are not stated: {screen}"
     );
     assert!(
         !screen.contains("completed"),
-        "no share is computed over them: {screen}"
+        "and no share is computed over them: {screen}"
     );
 }
 

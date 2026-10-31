@@ -220,25 +220,6 @@ fn render_session_audit(snap: &StatusSnapshot, f: &impl Fn(&str, &str) -> String
         }
         s.push_str(&f("Approvals", &row));
     }
-    // The turn rows exist only to explain a turn that did not finish in a
-    // readable way. A share of completed turns tells a reader nothing they
-    // can act on, and over a log written by an older build the share divides
-    // by a denominator that leaves most of the turns out, so it reads as a
-    // complete run beside a large unknown count.
-    let turns = audit.turns;
-    let mut parts: Vec<String> = Vec::new();
-    if turns.unknown > 0 {
-        parts.push(format!("{} unknown", turns.unknown));
-    }
-    if turns.interrupted > 0 {
-        parts.push(format!("{} interrupted", turns.interrupted));
-    }
-    if turns.unfinished > 0 {
-        parts.push(format!("{} unfinished", turns.unfinished));
-    }
-    if !parts.is_empty() {
-        s.push_str(&f("Turns", &parts.join(" · ")));
-    }
 }
 
 /// The tool-call row: the session's calls and how they were judged. A call
