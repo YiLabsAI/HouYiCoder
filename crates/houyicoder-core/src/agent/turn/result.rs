@@ -135,8 +135,11 @@ impl Display for RunError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Context(e) => write!(f, "context error: {e}"),
-            Self::ProviderFatal(e) => write!(f, "provider fatal: {e}"),
-            Self::ProviderExhausted(e) => write!(f, "provider exhausted: {e}"),
+            // The inner provider error is already a complete sentence; naming
+            // the failure class in front of it only adds a second colon and
+            // buries the cause. Which class it was rides the wire category.
+            Self::ProviderFatal(e) => write!(f, "{e}"),
+            Self::ProviderExhausted(e) => write!(f, "{e} (retries exhausted)"),
             Self::MaxTurnsExceeded { turns } => {
                 write!(f, "fork hit max turns limit after {turns} turns")
             }

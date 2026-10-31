@@ -192,11 +192,13 @@ fn test_with_error_propagates() {
     );
 }
 
-/// ModelNotFound Display renders the model id in the message.
+/// ModelNotFound Display names the model id and says the provider has no such
+/// model. The sentence is the user-facing text, so it carries the meaning
+/// directly instead of stacking a not-found prefix in front of the id.
 #[test]
 fn test_model_not_found_display() {
     let e = ProviderError::ModelNotFound("qwen3.8-max".into());
     let s = e.to_string();
     assert!(s.contains("qwen3.8-max"), "id in display: {s}");
-    assert!(s.contains("not found"), "not found in display: {s}");
+    assert!(s.contains("no model named"), "absence in display: {s}");
 }

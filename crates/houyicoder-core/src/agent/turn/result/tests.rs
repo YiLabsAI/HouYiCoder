@@ -64,3 +64,49 @@ fn test_terminal_status_keeps_summary() {
         (RunCompletionStatus::TurnLimitReached, String::new())
     );
 }
+
+/// A provider failure reads as the provider's own sentence. Naming the
+/// failure class in front of it would add a second colon and push the cause
+/// the user can act on to the end of the line; the wire category already
+/// carries the class, so the text does not repeat it.
+#[test]
+fn test_provider_failure_display() {
+    assert_eq!(
+        RunError::ProviderFatal(ProviderError::Network).to_string(),
+        "the connection to the model provider dropped",
+    );
+    assert_eq!(
+        RunError::ProviderExhausted(ProviderError::Network).to_string(),
+        "the connection to the model provider dropped (retries exhausted)",
+    );
+    // The class is not named in the text for either variant.
+    for err in [
+        RunError::ProviderFatal(ProviderError::Auth),
+        RunError::ProviderExhausted(ProviderError::Auth),
+    ] {
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains("provider fatal") && !rendered.contains("provider exhausted:"),
+            "the class prefix is gone: {rendered}"
+        );
+    }
+    // Every other variant still names its own condition.
+    assert!(
+        RunError::MaxTurnsExceeded { turns: 3 }
+            .to_string()
+            .contains("3 turns")
+    );
+    assert!(
+        RunError::ContextOverflowBounded {
+            retries: 2,
+            enforced_limit: Some(128_000),
+        }
+        .to_string()
+        .contains("128000")
+    );
+    assert!(
+        RunError::ContextOverflowNoProgress
+            .to_string()
+            .contains("no progress")
+    );
+}

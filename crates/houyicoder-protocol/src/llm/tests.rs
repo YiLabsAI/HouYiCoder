@@ -326,3 +326,72 @@ fn test_cache_pct_reserves_hundred() {
     };
     assert_eq!(partial.cache_hit_display_pct(830_000, 831_000), None);
 }
+
+/// Every provider error renders as one readable sentence. A nested prefix
+/// chain turns the line a user reads into a colon ladder, and the cause —
+/// which is the only part they can act on — ends up last and smallest.
+#[test]
+fn test_error_display_sentence() {
+    let cases = [
+        (
+            ProviderError::Network,
+            "the connection to the model provider dropped",
+        ),
+        (
+            ProviderError::RateLimit {
+                retry_after_ms: None,
+            },
+            "the model provider is rate-limiting requests",
+        ),
+        (
+            ProviderError::RateLimit {
+                retry_after_ms: Some(1_500),
+            },
+            "the model provider is rate-limiting requests (retry after 1500 ms)",
+        ),
+        (
+            ProviderError::QuotaExceeded,
+            "the model provider quota is exhausted",
+        ),
+        (
+            ProviderError::Auth,
+            "the model provider rejected the credentials",
+        ),
+        (
+            ProviderError::InvalidRequest("no messages".into()),
+            "the model provider rejected the request (no messages)",
+        ),
+        (
+            ProviderError::ContextOverflow {
+                enforced_limit: Some(128_000),
+            },
+            "the request exceeded the model's context window",
+        ),
+        (
+            ProviderError::ProviderInternal,
+            "the model provider hit an internal error",
+        ),
+        (
+            ProviderError::ContentPolicy,
+            "the model provider refused the content on policy grounds",
+        ),
+        (
+            ProviderError::Unknown("bad chunk".into()),
+            "the model provider failed unexpectedly (bad chunk)",
+        ),
+        (
+            ProviderError::ModelNotFound("qwen3".into()),
+            "the model provider has no model named qwen3",
+        ),
+    ];
+    for (err, expected) in cases {
+        let rendered = err.to_string();
+        assert_eq!(rendered, expected, "one sentence, no nested prefix");
+        // The rate-limit sentence names its wait in parentheses, so the guard
+        // is on the ladder shape rather than on any colon at all.
+        assert!(
+            !rendered.contains("error: ") && !rendered.contains("exceeded: "),
+            "no colon ladder in {rendered}"
+        );
+    }
+}

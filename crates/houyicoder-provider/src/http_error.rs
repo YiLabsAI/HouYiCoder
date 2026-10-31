@@ -176,13 +176,20 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
     }
 }
 
-/// Map a transport error to ProviderError. Timeouts and connection failures
-/// are retryable; other failures retain their context as Unknown.
+/// Map a transport error to ProviderError. Every failure whose bytes stopped
+/// arriving is a network fault and stays retryable; only a failure the client
+/// cannot attribute to transport keeps its context as Unknown.
+///
+/// A streaming response that is cut off mid-body arrives as a body or decode
+/// error, not as a connect, timeout, or request error. Leaving those two out
+/// classified a dropped connection as Unknown, which is not retryable, so one
+/// truncated chunk ended the whole run with a fatal error instead of being
+/// retried like every other transport fault.
 pub(crate) fn map_reqwest_err(e: reqwest::Error) -> ProviderError {
-    if e.is_timeout() || e.is_connect() || e.is_request() {
+    if e.is_timeout() || e.is_connect() || e.is_request() || e.is_body() || e.is_decode() {
         ProviderError::Network
     } else {
-        ProviderError::Unknown(format!("transport: {e}"))
+        ProviderError::Unknown(format!("{e}"))
     }
 }
 

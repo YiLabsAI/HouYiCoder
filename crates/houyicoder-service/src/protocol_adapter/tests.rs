@@ -575,6 +575,73 @@ fn test_not_found_omits_key() {
     );
 }
 
+/// A dropped connection says what happened and what to do next. Naming the
+/// retry counter or stacking a second prefix would bury the one fact the
+/// reader can act on, and a single colon is the whole budget for a label.
+#[test]
+fn test_network_error_sentence() {
+    let e = RunError::ProviderExhausted(ProviderError::Network);
+    let wire = super::map_run_error(&e);
+    assert_eq!(wire.category, "provider_exhausted");
+    assert!(
+        wire.message.contains("connection") && wire.message.contains("send the request again"),
+        "network → cause plus what to do: {}",
+        wire.message
+    );
+    assert!(
+        !wire.message.contains("unknown provider error")
+            && !wire.message.contains("provider exhausted"),
+        "no nested prefix chain in: {}",
+        wire.message
+    );
+    assert!(
+        wire.message.matches(": ").count() <= 1,
+        "at most one colon in: {}",
+        wire.message
+    );
+}
+
+/// Every engine run failure maps to a category the frontend records and a
+/// message it can print. A variant that fell through without a category would
+/// reach the client as an unnamed failure, so each one is named here.
+#[test]
+fn test_run_error_categories() {
+    let cases: [(RunError, &str); 6] = [
+        (
+            RunError::Context(houyicoder_context::ContextError::Io),
+            "context",
+        ),
+        (
+            RunError::ProviderFatal(ProviderError::Network),
+            "provider_fatal",
+        ),
+        (
+            RunError::ProviderExhausted(ProviderError::Network),
+            "provider_exhausted",
+        ),
+        (
+            RunError::MaxTurnsExceeded { turns: 2 },
+            "fork_max_turns_exceeded",
+        ),
+        (
+            RunError::ContextOverflowBounded {
+                retries: 1,
+                enforced_limit: None,
+            },
+            "context_overflow_bounded",
+        ),
+        (
+            RunError::ContextOverflowNoProgress,
+            "context_overflow_no_progress",
+        ),
+    ];
+    for (engine, expected) in cases {
+        let wire = super::map_run_error(&engine);
+        assert_eq!(wire.category, expected, "category names the variant");
+        assert!(!wire.message.is_empty(), "message is never empty");
+    }
+}
+
 #[test]
 fn test_build_trajectory_carries_duration() {
     let mk = |kind| SessionLogEntry {

@@ -1,5 +1,8 @@
 use super::*;
 use reqwest::header::HeaderMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread::spawn;
 
 fn headers(raw: &str) -> HeaderMap {
     let mut h = HeaderMap::new();
@@ -271,4 +274,44 @@ fn test_invalid_redacts_echoed_key() {
 fn test_classify_auth_not_model() {
     let e = classify_with_body(401, None, "invalid api key");
     assert!(matches!(e, ProviderError::Auth), "401 → Auth, got {e:?}");
+}
+
+/// A body that stops before its declared length is a transport fault. The
+/// client reports it as a body or decode error, not as a connect or timeout,
+/// so a classifier that only checks the latter two calls it Unknown. Unknown
+/// is not retryable, which turned one truncated chunk into the end of the
+/// whole run.
+#[tokio::test]
+async fn test_truncated_body_is_network() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+    let addr = listener.local_addr().expect("read the bound address");
+    // One canned response: headers that promise more body than is written.
+    // Closing the socket short leaves the reader with an incomplete message.
+    let server = spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut scratch = [0u8; 1024];
+        drop(stream.read(&mut scratch));
+        drop(stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\nContent-Type: application/json\r\n\r\n{\"partial\":",
+        ));
+    });
+    let err = reqwest::Client::new()
+        .get(format!("http://{addr}/"))
+        .send()
+        .await
+        .expect("the headers arrive before the body stops")
+        .bytes()
+        .await
+        .expect_err("the body stops short of the declared length");
+    assert!(
+        err.is_body() || err.is_decode(),
+        "the fixture must produce a body fault, got {err}"
+    );
+    assert!(
+        matches!(map_reqwest_err(err), ProviderError::Network),
+        "a truncated body is a transport fault and stays retryable"
+    );
+    server.join().expect("the fixture server exits");
 }

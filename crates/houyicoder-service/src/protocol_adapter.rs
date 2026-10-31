@@ -26,7 +26,9 @@ pub(crate) use durable_grant::{FENCED, UNFENCED};
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
 use houyicoder_context::SessionEvent;
-use houyicoder_core::agent::{ApprovalRequest as EngineApprovalRequest, StatusSnapshot};
+use houyicoder_core::agent::{
+    ApprovalRequest as EngineApprovalRequest, RunError as EngineRunError, StatusSnapshot,
+};
 use houyicoder_permission::PermissionMode as M;
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
@@ -325,35 +327,40 @@ pub(crate) fn map_context_breakdown(
 /// Map a run failure to the protocol message form. The category is the
 /// variant name the frontend records; the message is the Display string it
 /// surfaces as an error line.
-pub(crate) fn map_run_error(e: &houyicoder_core::agent::RunError) -> RunError {
+pub(crate) fn map_run_error(e: &EngineRunError) -> RunError {
     let category = match e {
-        houyicoder_core::agent::RunError::Context(..) => "context",
-        houyicoder_core::agent::RunError::ProviderFatal(..) => "provider_fatal",
-        houyicoder_core::agent::RunError::ProviderExhausted(..) => "provider_exhausted",
-        houyicoder_core::agent::RunError::MaxTurnsExceeded { .. } => "fork_max_turns_exceeded",
-        houyicoder_core::agent::RunError::ContextOverflowBounded { .. } => {
-            "context_overflow_bounded"
-        }
-        houyicoder_core::agent::RunError::ContextOverflowNoProgress => {
-            "context_overflow_no_progress"
-        }
+        EngineRunError::Context(..) => "context",
+        EngineRunError::ProviderFatal(..) => "provider_fatal",
+        EngineRunError::ProviderExhausted(..) => "provider_exhausted",
+        EngineRunError::MaxTurnsExceeded { .. } => "fork_max_turns_exceeded",
+        EngineRunError::ContextOverflowBounded { .. } => "context_overflow_bounded",
+        EngineRunError::ContextOverflowNoProgress => "context_overflow_no_progress",
     };
     // The message branches on the inner ProviderError so the user sees an
-    // actionable hint, not a generic "provider fatal". Auth points at the
+    // actionable hint rather than only the cause sentence. Auth points at the
     // API key; ModelNotFound points at the catalog and never mentions the key
     // (the design's "don't mislead" rule — a model typo read as a key error
     // sends the user debugging credentials, not the model id).
     let message = match e {
-        houyicoder_core::agent::RunError::ProviderFatal(ProviderError::Auth)
-        | houyicoder_core::agent::RunError::ProviderExhausted(ProviderError::Auth) => {
+        EngineRunError::ProviderFatal(ProviderError::Auth)
+        | EngineRunError::ProviderExhausted(ProviderError::Auth) => {
             "authentication failed — check your API key (DASHSCOPE_API_KEY or OPENAI_API_KEY)"
                 .to_string()
         }
-        houyicoder_core::agent::RunError::ProviderFatal(ProviderError::ModelNotFound(m))
-        | houyicoder_core::agent::RunError::ProviderExhausted(ProviderError::ModelNotFound(m)) => {
+        EngineRunError::ProviderFatal(ProviderError::ModelNotFound(m))
+        | EngineRunError::ProviderExhausted(ProviderError::ModelNotFound(m)) => {
             format!(
                 "model not found ({m}) — check model.catalog in settings.json, the id may be misspelled"
             )
+        }
+        // A dropped connection is the one provider failure the user can simply
+        // retry, so the message names the cause and the action instead of the
+        // failure class.
+        EngineRunError::ProviderFatal(ProviderError::Network)
+        | EngineRunError::ProviderExhausted(ProviderError::Network) => {
+            "the connection to the model provider dropped before the answer finished — \
+             send the request again to continue"
+                .to_string()
         }
         other => other.to_string(),
     };

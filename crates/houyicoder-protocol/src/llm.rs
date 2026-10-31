@@ -621,21 +621,29 @@ impl ProviderError {
 impl Display for ProviderError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Network => write!(f, "provider network error"),
-            Self::RateLimit { retry_after_ms } => {
+            Self::Network => write!(f, "the connection to the model provider dropped"),
+            Self::RateLimit { retry_after_ms } => match retry_after_ms {
+                Some(ms) => write!(
+                    f,
+                    "the model provider is rate-limiting requests (retry after {ms} ms)"
+                ),
+                None => write!(f, "the model provider is rate-limiting requests"),
+            },
+            Self::QuotaExceeded => write!(f, "the model provider quota is exhausted"),
+            Self::Auth => write!(f, "the model provider rejected the credentials"),
+            Self::ModelNotFound(m) => write!(f, "the model provider has no model named {m}"),
+            Self::InvalidRequest(m) => write!(f, "the model provider rejected the request ({m})"),
+            Self::ContextOverflow { .. } => {
+                write!(f, "the request exceeded the model's context window")
+            }
+            Self::ContentPolicy => {
                 write!(
                     f,
-                    "provider rate-limited (retry_after_ms: {retry_after_ms:?})"
+                    "the model provider refused the content on policy grounds"
                 )
             }
-            Self::QuotaExceeded => write!(f, "provider quota exceeded"),
-            Self::Auth => write!(f, "provider auth error"),
-            Self::ModelNotFound(m) => write!(f, "model not found: {m}"),
-            Self::InvalidRequest(m) => write!(f, "invalid request: {m}"),
-            Self::ContextOverflow { .. } => write!(f, "context window exceeded"),
-            Self::ContentPolicy => write!(f, "content policy violation"),
-            Self::ProviderInternal => write!(f, "provider internal error"),
-            Self::Unknown(m) => write!(f, "unknown provider error: {m}"),
+            Self::ProviderInternal => write!(f, "the model provider hit an internal error"),
+            Self::Unknown(m) => write!(f, "the model provider failed unexpectedly ({m})"),
         }
     }
 }

@@ -899,7 +899,10 @@ async fn test_foreground_failure_reaches_parent() {
         "a failed child surfaces status=failed to the parent tool result",
     );
     assert!(
-        outcome.summary.as_ref().is_some_and(|s| s.contains("auth")),
+        outcome
+            .summary
+            .as_ref()
+            .is_some_and(|s| s.contains("credentials")),
         "the failure summary carries the error reason so the model can act on it",
     );
     // The durable SubagentReturn boundary records the failure so replay
@@ -945,7 +948,10 @@ async fn test_foreground_failure_loses_partial() {
         "a mid-stream failure surfaces status=failed",
     );
     assert!(
-        outcome.summary.as_ref().is_some_and(|s| s.contains("auth")),
+        outcome
+            .summary
+            .as_ref()
+            .is_some_and(|s| s.contains("credentials")),
         "the summary carries the failure reason: {:?}",
         outcome.summary,
     );
@@ -1032,7 +1038,7 @@ async fn test_background_failure_notifies_parent() {
                 "the failure notification carries the failed status",
             );
             assert!(
-                snap[0].contains("auth"),
+                snap[0].contains("credentials"),
                 "the failure notification carries the error reason, not just the status label",
             );
             found = true;
