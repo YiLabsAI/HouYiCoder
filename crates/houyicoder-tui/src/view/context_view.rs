@@ -23,6 +23,7 @@ use crate::view::line_wrap::wrap_hanging;
 use crate::view::skill_origin::cost_label;
 use crate::view::skill_origin::display_order;
 use crate::view::skill_origin::heading_spans;
+use crate::view::skill_origin::heading_text;
 use houyicoder_protocol::frontend::context::{ContextBreakdown, DelegatedContext, GridCell};
 use unicode_width::UnicodeWidthStr;
 
@@ -432,6 +433,67 @@ fn suggestions_rows(suggestions: &[ContextSuggestion]) -> Vec<Vec<Span<'static>>
         rows.push(vec![Span::raw("  "), Span::styled(sug.detail.clone(), dim)]);
     }
     rows
+}
+
+/// Flat-text fallback for the /context grid block. The working-surface
+/// renderer draws the real multi-row grid+legend widget; this string exists
+/// so /search and any path that flattens the line still surfaces the legend
+/// text (model, categories, suggestions) for matching.
+pub(crate) fn context_grid_text(view: &ContextView) -> String {
+    let bd = &view.breakdown;
+    let pct = if bd.context_window > 0 {
+        100.0 * bd.total_tokens as f64 / bd.context_window as f64
+    } else {
+        0.0
+    };
+    let mut s = String::from("\u{23BF} Context Usage\n");
+    s.push_str(&format!(
+        "  {} \u{00b7} {}/{} tokens ({:.0}%)\n",
+        bd.model, bd.total_tokens, bd.context_window, pct,
+    ));
+    s.push_str("  Estimated usage by category\n");
+    for cat in &bd.categories {
+        if cat.tokens == 0 || cat.is_deferred || cat.is_reserved || cat.label == "Free space" {
+            continue;
+        }
+        let c_pct = if bd.context_window > 0 {
+            100.0 * cat.tokens as f64 / bd.context_window as f64
+        } else {
+            0.0
+        };
+        s.push_str(&format!(
+            "  {}: {} tokens ({:.1}%)\n",
+            cat.label, cat.tokens, c_pct
+        ));
+    }
+    if !view.drill.memory_files.is_empty() {
+        s.push_str("  Memory files\n");
+        for f in &view.drill.memory_files {
+            s.push_str(&format!("  \u{2514} {}: {} tokens\n", f.label, f.tokens));
+        }
+    }
+    if !view.drill.skills.is_empty() {
+        s.push_str("  Skills\n");
+        let ordered = display_order(&view.drill.skills);
+        for (i, k) in ordered.iter().enumerate() {
+            if i == 0 || ordered[i - 1].source != k.source {
+                s.push_str(&format!("  {}\n", heading_text(&k.source)));
+            }
+            s.push_str(&format!("  \u{2514} {}: {}\n", k.name, cost_label(k)));
+        }
+    }
+    if !view.suggestions.is_empty() {
+        s.push_str("  Suggestions\n");
+        for sug in &view.suggestions {
+            s.push_str(&format!(
+                "  {} {}\n    {}\n",
+                sug.severity.glyph(),
+                sug.title,
+                sug.detail
+            ));
+        }
+    }
+    s.trim_end().to_string()
 }
 
 #[cfg(test)]

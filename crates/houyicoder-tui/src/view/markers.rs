@@ -13,6 +13,7 @@ use crate::records::ToolOutcome;
 use crate::selection::{
     TAG_DIFF_ADD, TAG_DIFF_BORDER, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_PLAIN,
 };
+use crate::transcript::markdown::{highlighter_for_path, syn_to_ratatui, syntax_set};
 use crate::view::word_diff::WordDiffPart;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -398,6 +399,7 @@ pub(crate) fn diff_row(
     tag: u8,
     width: u16,
     word: Option<&[WordDiffPart]>,
+    lang: Option<&str>,
 ) -> Line<'static> {
     let dim = Style::new().fg(Color::DarkGray);
     // The dashed frame border (top + bottom of a structured-diff block):
@@ -443,7 +445,7 @@ pub(crate) fn diff_row(
     {
         spans.extend(word_diff_spans(parts, tag, style, word_green, word_red));
     } else {
-        spans.push(Span::styled(row[content_start..].to_string(), style));
+        spans.extend(content_spans(&row[content_start..], style, lang));
     }
 
     // Pad to the pane width with bg-styled spaces so the bar fills the row
@@ -457,6 +459,53 @@ pub(crate) fn diff_row(
         }
     }
     Line::from(spans)
+}
+
+/// Split a diff line's content into syntax-coloured spans.
+///
+/// The foreground carries what the code is; the background carries what
+/// changed. That split is the whole point of a coloured diff: a reader must be
+/// able to see a new keyword and a new local variable at once, which a single
+/// green line cannot show. The row's own style is the base, so its background
+/// survives under every syntax colour and the bar still reads solid.
+///
+/// A line whose language is unknown, or whose grammar declines it, renders as
+/// one plain span: a wrong colour is worse than none, and the row already says
+/// add or remove through its bar.
+fn content_spans(text: &str, base: Style, lang: Option<&str>) -> Vec<Span<'static>> {
+    // The change sigil leads the content and marks what happened to the line,
+    // so it keeps the row's own colour. Handing it to the grammar makes an
+    // added line's plus sign render as an operator in the text colour, which
+    // is the one glyph on the row that must not lose its meaning.
+    let (sigil, code) = match text.char_indices().nth(1) {
+        Some((_, ' ')) if text.starts_with(['+', '-', ' ']) => text.split_at(1),
+        _ => ("", text),
+    };
+    let mut spans = Vec::new();
+    if !sigil.is_empty() {
+        spans.push(Span::styled(sigil.to_string(), base));
+    }
+    let plain = || vec![Span::styled(code.to_string(), base)];
+    let Some(ranges) = lang
+        .and_then(highlighter_for_path)
+        .and_then(|mut h| h.highlight_line(code, syntax_set()).ok())
+    else {
+        spans.extend(plain());
+        return spans;
+    };
+    spans.extend(
+        ranges
+            .into_iter()
+            .filter(|(_, piece)| !piece.is_empty())
+            .map(|(syn, piece)| {
+                let syntax = syn_to_ratatui(syn);
+                // The syntax colour wins on the foreground and the row's
+                // style keeps the background, so the change bar is never
+                // overwritten by a grammar's idea of a comment's colour.
+                Span::styled(piece.to_string(), base.patch(syntax))
+            }),
+    );
+    spans
 }
 
 /// The per-word spans for a word-diff content row. On a remove row show the

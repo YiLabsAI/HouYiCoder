@@ -26,7 +26,7 @@ use unicode_width::UnicodeWidthStr;
 /// The default syntax set (all bundled grammars) and theme set, resolved once
 /// and shared for the process lifetime. syntect loads these from its
 /// default-assets feature so no external grammar files are needed.
-fn syntax_set() -> &'static SyntaxSet {
+pub(crate) fn syntax_set() -> &'static SyntaxSet {
     static SS: OnceLock<SyntaxSet> = OnceLock::new();
     SS.get_or_init(SyntaxSet::load_defaults_newlines)
 }
@@ -38,15 +38,26 @@ fn theme_set() -> &'static ThemeSet {
 
 /// Map a syntect foreground color to a ratatui Rgb color. syntect styles carry
 /// an RGBA foreground; ratatui has no alpha, so the alpha is dropped.
-fn syn_to_ratatui(s: SynStyle) -> Style {
+pub(crate) fn syn_to_ratatui(s: SynStyle) -> Style {
     let c = s.foreground;
     Style::new().fg(Color::Rgb(c.r, c.g, c.b))
+}
+
+/// Build a per-line highlighter from a file path, for a caller that knows the
+/// file rather than a fence label. The extension is what a diff carries: the
+/// patch body names no language, but the tool call that produced it names the
+/// file it edited.
+pub(crate) fn highlighter_for_path(path: &str) -> Option<HighlightLines<'static>> {
+    let ext = path.rsplit('.').next()?;
+    // A path with no dot yields the whole string as its extension, which no
+    // grammar claims; the lookup below returns None and the row renders plain.
+    make_code_highlighter(ext)
 }
 
 /// Build a stateful per-line highlighter for the given language token. Falls
 /// back to None (plain text) when the language is unrecognized, so an unknown
 /// fence still renders as plain code rather than panicking.
-fn make_code_highlighter(lang: &str) -> Option<HighlightLines<'static>> {
+pub(crate) fn make_code_highlighter(lang: &str) -> Option<HighlightLines<'static>> {
     let ss = syntax_set();
     let ts = theme_set();
     let syntax = ss

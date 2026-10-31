@@ -68,11 +68,17 @@ fn test_dropped_argument() {
         .filter(|p| p.removed)
         .map(|p| p.value.as_str())
         .collect();
-    // The whole dropped call fragment goes as one run: the reader must not see
-    // a fragment that begins with an orphan closing paren.
+    // A leading dot is the method chain the removed call hung from, which is
+    // exactly right: the removed text is .arg(&self.shell), not a bare
+    // argument. What must not appear is an orphan closer, the sign that the
+    // run began inside a group whose opener stayed on the kept side.
     assert!(
-        !removed.starts_with(')') && !removed.starts_with('.'),
-        "the removed run must start at a word, not a dangling separator: {removed:?}"
+        !removed.starts_with(')') && !removed.starts_with('('),
+        "the removed run must not begin inside a group: {removed:?}"
+    );
+    assert_eq!(
+        removed, ".arg(&self.shell)",
+        "the removed text is the call that went, chain and brackets included"
     );
     // The run that stays must still be a syntactically whole expression, so
     // the shared prefix has to end after the argument list that closed.
@@ -84,5 +90,28 @@ fn test_dropped_argument() {
     assert!(
         kept.matches('(').count() == kept.matches(')').count(),
         "the surviving text is parenthesis-balanced: {kept:?}"
+    );
+}
+
+/// Removing one chained argument marks the whole call that went away. The
+/// marked run used to start on the argument and end on the next call's opener,
+/// which read as a fragment with an unbalanced bracket at each end.
+#[test]
+fn test_removed_call_is_whole() {
+    let old = "    cmd.arg(&self.shell).arg(\"-c\").arg(&command);";
+    let new = "    cmd.arg(\"-c\").arg(&command);";
+    let parts = word_diff(old, new);
+    let removed: String = parts
+        .iter()
+        .filter(|p| p.removed)
+        .map(|p| p.value.as_str())
+        .collect();
+    eprintln!("TOK {old:?}");
+    for (i, t) in tokenize(old).iter().enumerate() {
+        eprintln!("  [{i}] {t:?}");
+    }
+    assert_eq!(
+        removed, ".arg(&self.shell)",
+        "the removed text is the call that went, brackets included"
     );
 }

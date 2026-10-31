@@ -9,7 +9,7 @@ pub(crate) mod state;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -35,22 +35,30 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     if let Some(fg) = view.color.as_deref().and_then(badge_color) {
         name_style = name_style.fg(fg);
     }
-    // The hint names the two keys that work here and what each does. Esc
-    // leaves the view whatever the child is doing, so it reads the same in
-    // both states; only a running child offers the second key, because only a
-    // running child has a turn to stop.
-    let running = app
-        .fleet_entry(&view.child_sid)
-        .is_some_and(|e| e.completed.is_none());
+    // Esc leaves the view in both states; only a running child offers the stop
+    // key, because only a running child has a turn to stop.
+    //
+    // A child that finishes while its view is open announces it here: the
+    // parent has already resumed, so a static completed label would leave the
+    // reader in a view whose work is over with nothing saying so.
+    let entry = app.fleet_entry(&view.child_sid);
+    let running = entry.is_some_and(|e| e.completed.is_none());
     let hint = if running {
         " (running) · Esc return · ctrl+x stop"
     } else {
-        " (completed) · Esc return"
+        " (finished) · Esc to return to the main session"
+    };
+    let hint_style = if running {
+        Style::default().add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     };
     let title = Line::from(vec![
         Span::raw("Viewing "),
         Span::styled(format!("@{name}"), name_style),
-        Span::styled(hint, Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(hint, hint_style),
     ]);
     // The task line is one row: the prompt can carry newlines and markdown
     // headings, and either would push the hint off the banner or draw a

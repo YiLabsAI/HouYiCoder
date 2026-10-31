@@ -200,7 +200,7 @@ fn render_transcript_lines(f: &mut Frame, inner: Rect, app: &App, visible: &RowS
                         dim
                     }),
                     TAG_DIFF_ADD | TAG_DIFF_DEL | TAG_DIFF_HUNK | TAG_DIFF_CTX => {
-                        diff_row(r, *tag, inner.width, None)
+                        diff_row(r, *tag, inner.width, None, None)
                     }
                     _ => {
                         let base = if q.is_empty() {
@@ -380,6 +380,7 @@ pub(crate) fn push_line_rows(
         let (body, is_diff) = line.result_body();
         let results = &app.ui.transcript_view.expanded.results;
         let expanded = results.contains(call_id.as_str()) || app.ui.verbose;
+        let lang = line.diff_lang();
         for (tag, text, oc, cid, word) in app
             .ui
             .renderer
@@ -388,7 +389,7 @@ pub(crate) fn push_line_rows(
             .tool_rows(&body, call_id, outcome, expanded, is_diff, width)
         {
             let pre = if matches!(tag, DIFF_ADD | DIFF_DEL | DIFF_HUNK | DIFF_CTX) {
-                Some(diff_row(&text, tag, width, word.as_deref()))
+                Some(diff_row(&text, tag, width, word.as_deref(), lang))
             } else {
                 None
             };

@@ -5,6 +5,7 @@ use houyicoder_protocol::frontend::session_update::{
 };
 
 use crate::records::TranscriptLine;
+use crate::transcript::call_rows::tool_result_line;
 use crate::transcript::{TranscriptFrame, transcript_from_frames};
 
 fn tool_call(id: &str, tool: &str, input: serde_json::Value) -> TranscriptFrame {
@@ -80,4 +81,37 @@ fn test_silent_bash_with_output() {
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
     let body = result_body(&lines);
     assert_eq!(body, "renamed a -> b");
+}
+
+/// The grammar comes from the file the call edited, so a diff body knows its
+/// language without the patch carrying one. Without this the render path has
+/// nothing to colour by and every diff stays one green or red bar.
+#[test]
+fn test_diff_language_from_path() {
+    let output = serde_json::json!({
+        "diff": "Edited 1 line\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+    });
+    let input = serde_json::json!({"file_path": "crates/foo/src/bar.rs"});
+    let line = tool_result_line("c1", "edit", &output, Some(&input));
+    assert_eq!(
+        line.diff_lang(),
+        Some("rs"),
+        "the edited file's extension names the grammar"
+    );
+}
+
+/// A shell command prints a diff too, but names no file, so no grammar is
+/// guessed: the row renders plain rather than being coloured as something it
+/// is not.
+#[test]
+fn test_diff_language_absent() {
+    let output = serde_json::json!({
+        "stdout": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
+    });
+    let line = tool_result_line("c1", "bash", &output, None);
+    assert_eq!(
+        line.diff_lang(),
+        None,
+        "a shell-printed diff names no language"
+    );
 }

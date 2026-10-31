@@ -130,7 +130,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
                     TAG_USER => user_row(r, &q, is_current, inner.width),
                     TAG_SYSTEM => highlighted_line(r, &q, is_current).style(dim),
                     TAG_DIFF_ADD | TAG_DIFF_DEL | TAG_DIFF_HUNK | TAG_DIFF_CTX => {
-                        diff_row(r, *tag, inner.width, None)
+                        diff_row(r, *tag, inner.width, None, None)
                     }
                     _ => {
                         if q.is_empty() {

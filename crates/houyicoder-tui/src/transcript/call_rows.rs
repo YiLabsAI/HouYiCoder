@@ -64,7 +64,7 @@ pub(super) fn tool_result_line(
         name: "result".to_string(),
         tool: tool_name.to_string(),
         status: String::new(),
-        invocation: String::new(),
+        invocation: edited_extension(call_input).unwrap_or_default(),
         outcome: ToolOutcome::from_output_with(
             output,
             tool_name,
@@ -74,6 +74,23 @@ pub(super) fn tool_result_line(
         body,
         is_diff: output_has_diff(&out_str),
     }
+}
+
+/// The extension of the file a tool call edited, when the call named one.
+///
+/// A diff body carries no language of its own, so the colouring has to come
+/// from the call that produced it. A shell command's diff names no file and
+/// gets None, which renders the row plain rather than guessing a grammar.
+fn edited_extension(call_input: Option<&Value>) -> Option<String> {
+    let path = call_input?
+        .get("file_path")
+        .or_else(|| call_input?.get("path"))?
+        .as_str()?;
+    let ext = path.rsplit('.').next()?;
+    if ext.is_empty() || ext == path {
+        return None;
+    }
+    Some(ext.to_ascii_lowercase())
 }
 
 /// What a call row says when it names the call whose frames left the view: the

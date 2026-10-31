@@ -72,7 +72,7 @@ fn test_banner_renders_name_hint() {
         "banner names the agent, got:\n{out}"
     );
     assert!(
-        out.contains("Esc return"),
+        out.contains("Esc to return"),
         "banner states how to leave, got:\n{out}"
     );
     assert!(
@@ -143,7 +143,7 @@ fn test_banner_hint_follows_state() {
     });
     let idle = render_text(&app, 80, 24);
     assert!(
-        idle.contains("Esc return"),
+        idle.contains("Esc to return"),
         "an idle child is left with Esc, got:\n{idle}"
     );
     assert!(
@@ -378,15 +378,126 @@ fn test_banner_hint_matches_state() {
         .find(|l| l.contains("Viewing @verify"))
         .unwrap_or_else(|| panic!("no banner:\n{done}"));
     assert!(
-        title.contains("completed"),
-        "the finished state is named: {title}"
+        title.contains("finished"),
+        "the transition into the finished state is announced: {title}"
     );
     assert!(
-        title.contains("Esc return"),
+        !title.contains("(completed)"),
+        "a static state label is not what the reader needs: {title}"
+    );
+    assert!(
+        title.contains("Esc to return"),
         "the way out is still named: {title}"
     );
     assert!(
         !title.contains("ctrl+x"),
         "a finished view offers no stop key: {title}"
+    );
+}
+
+/// Two children finishing in a row while the reader is inside one view. The
+/// row the reader leaves has to survive its own goodbye window, and the child
+/// that finished earlier keeps the clock it already had, so leaving one view
+/// cannot extend another child's row.
+#[test]
+fn test_exit_with_two_finished() {
+    let mut app = working_app();
+    let long_ago = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .expect("a minute ago");
+    for id in ["c1", "c2"] {
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .push(FleetEntry {
+                agent_id: id.into(),
+                subagent_type: "explore".into(),
+                description: String::new(),
+                turn: 2,
+                tokens: 100,
+                tool_uses: 1,
+                last_activity: None,
+                completed: Some("completed".into()),
+                completed_at: Some(long_ago),
+                started_at: None,
+            });
+    }
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+
+    app.exit_teammate_view();
+
+    let viewed = app.fleet_entry("c1").expect("the viewed row survives");
+    assert!(
+        viewed
+            .completed_at
+            .is_some_and(|t| t.elapsed() < FLEET_GRACE),
+        "the viewed row starts its window on exit"
+    );
+    let other = app
+        .fleet_entry("c2")
+        .expect("the other row is still listed");
+    assert_eq!(
+        other.completed_at,
+        Some(long_ago),
+        "the child that finished earlier keeps its own clock"
+    );
+    // The row whose window is already over leaves on the next sweep, and the
+    // one just left stays, so the two decisions are made independently.
+    let dropped = app.drop_completed_fleet();
+    assert!(dropped, "the expired row is swept");
+    assert!(
+        app.fleet_entry("c1").is_some(),
+        "the row the reader just left is still shown"
+    );
+    assert!(
+        app.fleet_entry("c2").is_none(),
+        "the row that expired while the reader was elsewhere is gone"
+    );
+}
+
+/// Leaving the view twice cannot extend the window twice: a second exit on a
+/// view that is already gone restarts nothing, so the row still expires on
+/// schedule.
+#[test]
+fn test_second_exit_changes_nothing() {
+    let mut app = working_app();
+    let long_ago = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .expect("a minute ago");
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            description: String::new(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Some(long_ago),
+            started_at: None,
+        });
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.exit_teammate_view();
+    let first = app.fleet_entry("c1").and_then(|e| e.completed_at);
+
+    app.exit_teammate_view();
+
+    assert_eq!(
+        app.fleet_entry("c1").and_then(|e| e.completed_at),
+        first,
+        "a second exit with no view open restarts nothing"
     );
 }

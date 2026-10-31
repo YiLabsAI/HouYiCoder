@@ -2,9 +2,10 @@
 //! so records.rs stays under the file-size gate.
 
 use crate::records::subagent_line;
-use crate::records::{ContextDrillDown, ContextSkillEntry, ContextView, context_grid_text};
+use crate::records::{ContextDrillDown, ContextSkillEntry, ContextView};
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::toggle_hint::ToggleHint;
+use crate::view::context_view::context_grid_text;
 use crate::view::context_view::render_as_rows;
 use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
 use serde_json::Value;

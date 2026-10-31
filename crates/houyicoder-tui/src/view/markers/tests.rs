@@ -1,6 +1,7 @@
 use super::*;
 use crate::records::ToolOutcome;
 use crate::selection::diff_gutter_skip;
+use ratatui::style::Color;
 use unicode_width::UnicodeWidthStr;
 
 #[test]
@@ -515,20 +516,36 @@ fn test_diff_wraps_long_line() {
 
 #[test]
 fn test_diff_row_tag_colors() {
-    // At an exact-fit width there is no padding span: indent + body = 2.
-    let line = diff_row("    1 + new", TAG_DIFF_ADD, 11, None);
+    // The rendered text is what the reader sees; how many spans it takes to
+    // draw is an implementation detail, so the assertions below are on the
+    // text and on the background that fills the bar.
+    let line = diff_row("    1 + new", TAG_DIFF_ADD, 11, None, None);
     let joined: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(joined, "    1 + new");
-    assert_eq!(line.spans.len(), 2);
-    // A wider width appends a bg-styled padding span so the bar fills.
-    let padded = diff_row("    1 + new", TAG_DIFF_ADD, 20, None);
-    assert_eq!(padded.spans.len(), 3);
+    assert!(
+        line.spans
+            .iter()
+            .all(|s| s.style.bg == Some(Color::Rgb(28, 38, 32))),
+        "every span carries the add bar: {:?}",
+        line.spans
+    );
+    let padded = diff_row("    1 + new", TAG_DIFF_ADD, 20, None, None);
     let joined: String = padded.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(joined.len(), 20);
-    assert_eq!(padded.spans[2].style.bg, Some(Color::Rgb(28, 38, 32)));
-    let del = diff_row("    2 - old", TAG_DIFF_DEL, 11, None);
+    assert_eq!(
+        padded.spans.last().expect("a padding span").style.bg,
+        Some(Color::Rgb(28, 38, 32))
+    );
+    let del = diff_row("    2 - old", TAG_DIFF_DEL, 11, None, None);
     let joined: String = del.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(joined, "    2 - old");
+    assert!(
+        del.spans
+            .iter()
+            .all(|s| s.style.fg == Some(Color::Rgb(255, 107, 128))),
+        "every span carries the remove colour when no grammar applies: {:?}",
+        del.spans
+    );
 }
 
 /// diff_gutter_skip lands at the content start across number widths + all
@@ -555,7 +572,7 @@ fn test_diff_gutter_skip_widths() {
 /// the tag has no bg so no padding span is appended.
 #[test]
 fn test_diff_row_gap_dim() {
-    let line = diff_row("...", TAG_DIFF_HUNK, 20, None);
+    let line = diff_row("...", TAG_DIFF_HUNK, 20, None, None);
     let joined: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(joined, "...");
     assert_eq!(line.spans.len(), 1); // body only, no padding (no bg)
@@ -651,4 +668,113 @@ fn test_unrelated_lines_stay_plain() {
         plan.iter().all(|r| r.word.is_none()),
         "unrelated lines carry no word marks: {plan:?}"
     );
+}
+
+/// A diff row whose file has a grammar colours its code by what the tokens
+/// are, not only by whether the line was added. Without it a reader cannot
+/// tell a new keyword from a new identifier in one green bar.
+#[test]
+fn test_diff_row_colours_syntax() {
+    let plain = diff_row("    1 + let x = 1;", TAG_DIFF_ADD, 40, None, None);
+    let coloured = diff_row("    1 + let x = 1;", TAG_DIFF_ADD, 40, None, Some("rs"));
+    let fg = |line: &Line<'static>| -> Vec<String> {
+        line.spans
+            .iter()
+            .filter_map(|s| s.style.fg)
+            .map(|c| format!("{c:?}"))
+            .collect()
+    };
+    assert!(
+        fg(&coloured).len() > fg(&plain).len(),
+        "the grammar splits the line into more than one colour"
+    );
+    // The bar survives under the syntax colours: every span keeps the add
+    // background, so the row still reads as an addition.
+    let bg = |line: &Line<'static>| -> Vec<Option<Color>> {
+        line.spans.iter().map(|s| s.style.bg).collect()
+    };
+    assert!(
+        bg(&coloured).iter().any(|b| *b == bg(&plain)[0]),
+        "the change background is preserved under the syntax colour"
+    );
+}
+
+/// A file with no grammar renders the line plain rather than wrong. An
+/// invented colour would be worse than none, and the bar already says what
+/// changed.
+#[test]
+fn test_diff_row_unknown_lang() {
+    let plain = diff_row("    1 + let x = 1;", TAG_DIFF_ADD, 40, None, None);
+    let unknown = diff_row(
+        "    1 + let x = 1;",
+        TAG_DIFF_ADD,
+        40,
+        None,
+        Some("notalang"),
+    );
+    assert_eq!(
+        unknown.spans.len(),
+        plain.spans.len(),
+        "an unknown grammar adds no spans of its own"
+    );
+}
+
+/// The change sigil keeps the row's colour even when the code beside it is
+/// grammar-coloured. An added line's plus sign handed to the grammar renders
+/// as an operator in the text colour, so the one glyph saying what happened to
+/// the line stops saying it.
+#[test]
+fn test_diff_sigil_keeps_color() {
+    let line = diff_row("    1 + let x = 1;", TAG_DIFF_ADD, 40, None, Some("rs"));
+    let sigil = line
+        .spans
+        .iter()
+        .find(|s| s.content.trim() == "+")
+        .unwrap_or_else(|| {
+            panic!("no sigil span among {:?}", line.spans);
+        });
+    assert_eq!(
+        sigil.style.fg,
+        Some(Color::Rgb(78, 186, 101)),
+        "the plus stays the add colour"
+    );
+    assert_eq!(
+        sigil.style.bg,
+        Some(Color::Rgb(28, 38, 32)),
+        "and keeps the bar it sits on"
+    );
+    // The code after it is still grammar-coloured, so the sigil is what was
+    // carved out rather than the whole line going flat.
+    let colours: Vec<_> = line
+        .spans
+        .iter()
+        .filter(|s| !s.content.trim().is_empty())
+        .filter_map(|s| s.style.fg)
+        .collect();
+    assert!(
+        colours.len() > 2,
+        "the code keeps several colours: {colours:?}"
+    );
+}
+
+/// Splitting the sigil off the content never loses or reorders a character.
+/// The content can itself begin with a space, hold a plus sign inside a string
+/// literal, or be written in a wide-glyph script, and each of those is a place
+/// where a one-character split could eat something the reader needs.
+#[test]
+fn test_diff_sigil_split() {
+    for (text, tag, lang) in [
+        ("    1 +     indented();", TAG_DIFF_ADD, Some("rs")),
+        ("    1 - let s = \"a + b\";", TAG_DIFF_DEL, Some("rs")),
+        ("    1 + 中文注释", TAG_DIFF_ADD, Some("rs")),
+        ("    1 + x", TAG_DIFF_ADD, Some("nosuchlang")),
+    ] {
+        let row = diff_row(text, tag, 40, None, lang);
+        let joined: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+        let trimmed = joined.trim_end();
+        assert_eq!(
+            trimmed, text,
+            "the split must not lose or reorder a character, tag={tag} lang={lang:?}"
+        );
+    }
 }
