@@ -286,6 +286,43 @@ fn leading_number(text: &str) -> Option<usize> {
 /// add row; the renderer filters by tag (remove shows equal+removed, add
 /// shows equal+added).
 const WORD_DIFF_CHANGE_THRESHOLD: f64 = 0.4;
+
+/// The least similarity two lines need before their inline words are drawn
+/// against each other. Below this they are different lines that happen to sit
+/// in one remove/add block, and pairing them annotates a rewrite that never
+/// happened.
+const PAIR_MIN_SIMILARITY: f64 = 0.4;
+
+/// How alike two lines are, as the share of their words the two hold in
+/// common. A cheap multiset measure is enough here: the question is only which
+/// added line a removed line became, and the answer is almost always the only
+/// candidate that shares most of its words.
+fn line_similarity(left: &str, right: &str) -> f64 {
+    let words = |s: &str| -> Vec<String> {
+        s.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let a = words(left);
+    let b = words(right);
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let mut pool = b.clone();
+    let mut shared = 0usize;
+    for word in &a {
+        if let Some(pos) = pool.iter().position(|w| w == word) {
+            pool.remove(pos);
+            shared += 1;
+        }
+    }
+    let union = a.len() + b.len() - shared;
+    if union == 0 {
+        return 0.0;
+    }
+    shared as f64 / union as f64
+}
 fn pair_word_diffs(rows: &mut [PlanRow]) {
     let mut i = 0;
     while i < rows.len() {
@@ -309,11 +346,36 @@ fn pair_word_diffs(rows: &mut [PlanRow]) {
             // No add block follows → no pairing.
             continue;
         }
-        let pair_count = (r_end - r_start).min(a_end - a_start);
-        for k in 0..pair_count {
-            let r_idx = r_start + k;
-            let a_idx = a_start + k;
+        // Pair by content, not by position. Index-for-index pairing assumes
+        // the k-th removed line became the k-th added line, which holds only
+        // when a block rewrites every line in place. A block that deletes one
+        // line and adds five puts the rewrite at an arbitrary offset, and
+        // pairing del[0] with add[0] then highlights two unrelated lines
+        // against each other. Each removed line takes the most similar added
+        // line, which is the one it actually became.
+        let mut used_add = vec![false; a_end - a_start];
+        for r_idx in r_start..r_end {
             let old_text = rows[r_idx].text.clone();
+            let mut best: Option<(usize, f64)> = None;
+            for offset in 0..(a_end - a_start) {
+                if used_add[offset] {
+                    continue;
+                }
+                let score = line_similarity(&old_text, &rows[a_start + offset].text);
+                if best.is_none_or(|(_, top)| score > top) {
+                    best = Some((offset, score));
+                }
+            }
+            let Some((offset, score)) = best else {
+                break;
+            };
+            // Below this the two lines share nothing worth drawing: pairing
+            // them annotates a rewrite that never happened.
+            if score < PAIR_MIN_SIMILARITY {
+                continue;
+            }
+            used_add[offset] = true;
+            let a_idx = a_start + offset;
             let new_text = rows[a_idx].text.clone();
             let parts = word_diff(&old_text, &new_text);
             let total = old_text.chars().count() + new_text.chars().count();

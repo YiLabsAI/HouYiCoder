@@ -53,3 +53,36 @@ fn test_empty_sides() {
     let joined: String = parts.iter().map(|p| p.value.as_str()).collect();
     assert_eq!(joined, "old line");
 }
+
+/// Two calls differ only by one dropped argument. The greedy longest-prefix
+/// match aligns the first .arg( and leaves a fragment that begins with a
+/// closing paren, so the reader sees a broken expression instead of the one
+/// call that went away.
+#[test]
+fn test_dropped_argument() {
+    let old = "    cmd.arg(&self.shell).arg(\"-c\").arg(&command);";
+    let new = "    cmd.arg(\"-c\").arg(&command);";
+    let parts = word_diff(old, new);
+    let removed: String = parts
+        .iter()
+        .filter(|p| p.removed)
+        .map(|p| p.value.as_str())
+        .collect();
+    // The whole dropped call fragment goes as one run: the reader must not see
+    // a fragment that begins with an orphan closing paren.
+    assert!(
+        !removed.starts_with(')') && !removed.starts_with('.'),
+        "the removed run must start at a word, not a dangling separator: {removed:?}"
+    );
+    // The run that stays must still be a syntactically whole expression, so
+    // the shared prefix has to end after the argument list that closed.
+    let kept: String = parts
+        .iter()
+        .filter(|p| !p.removed)
+        .map(|p| p.value.as_str())
+        .collect();
+    assert!(
+        kept.matches('(').count() == kept.matches(')').count(),
+        "the surviving text is parenthesis-balanced: {kept:?}"
+    );
+}

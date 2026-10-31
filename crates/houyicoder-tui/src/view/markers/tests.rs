@@ -609,3 +609,46 @@ fn test_diff_hunks_number_sides() {
         "the next hunk continues from there, so no number repeats across the gap"
     );
 }
+
+/// One line removed, five added, the real rewrite at the end. Pairing by
+/// position ties the removed line to the first added line, which is unrelated,
+/// and highlights two different statements against each other. Pairing by
+/// content finds the line it actually became.
+#[test]
+fn test_pairing_finds_rewrite() {
+    let body = "\n@@ -10,1 +10,5 @@\n-let total = a + b;\n+// explain\n+// more\n+// detail\n+// context\n+let total = a + b + c;\n";
+    let plan = plan_diff_body(body, 80).expect("parses");
+    let paired: Vec<&PlanRow> = plan.iter().filter(|r| r.word.is_some()).collect();
+    assert_eq!(
+        paired.len(),
+        2,
+        "exactly the removed line and the one it became carry word marks: {plan:?}"
+    );
+    // The removed line's partner is the last added row, not the first.
+    let removed = paired
+        .iter()
+        .find(|r| r.kind == PlanKind::Diff(DiffKind::Remove))
+        .expect("removed row");
+    let partner = plan
+        .iter()
+        .find(|r| r.kind == PlanKind::Diff(DiffKind::Add) && r.word.is_some())
+        .expect("partner row");
+    assert!(
+        partner.text.contains("a + b + c"),
+        "the rewrite is the partner, not the comment above it: {:?}",
+        partner.text
+    );
+    assert!(removed.text.contains("a + b"), "{:?}", removed.text);
+}
+
+/// A remove/add block whose lines share nothing gets no word marks at all.
+/// Drawing them annotates a rewrite that never happened.
+#[test]
+fn test_unrelated_lines_stay_plain() {
+    let body = "\n@@ -10,1 +10,1 @@\n-import os\n+return 42;\n";
+    let plan = plan_diff_body(body, 80).expect("parses");
+    assert!(
+        plan.iter().all(|r| r.word.is_none()),
+        "unrelated lines carry no word marks: {plan:?}"
+    );
+}
