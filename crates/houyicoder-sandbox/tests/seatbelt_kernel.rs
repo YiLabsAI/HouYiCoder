@@ -18,11 +18,34 @@ use std::fs::remove_file;
 use std::fs::write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command, exit, id};
+use std::process::{Command, id};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
+
+/// Whether this process can bind its own seatbelt.
+///
+/// It cannot when the suite was launched from a session that fences its own
+/// commands: the kernel refuses to apply a second one. Cached because every
+/// test in the suite asks the same question and the answer cannot change.
+fn fence_is_bindable() -> bool {
+    static CAN: OnceLock<bool> = OnceLock::new();
+    *CAN.get_or_init(|| {
+        Command::new("sandbox-exec")
+            .args([
+                "-p",
+                "(version 1)(allow default)",
+                "--",
+                "/bin/sh",
+                "-c",
+                "true",
+            ])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    })
+}
 
 #[path = "seatbelt_kernel/network.rs"]
 mod network;
@@ -184,19 +207,6 @@ impl Fence {
         })
     }
 
-    /// Stop a suite whose measurement is impossible here, naming the reason.
-    ///
-    /// The kernel refuses to apply a seatbelt inside an existing one. Reporting
-    /// that as a test failure would blame the profile for an environment the
-    /// profile cannot see, and it would train a reader to ignore the suite.
-    fn skip_fenced_suite() -> ! {
-        eprintln!(
-            "skipping: this process already runs inside a sandbox and cannot bind \
-             another; run this suite outside a fenced session to measure the kernel"
-        );
-        exit(0)
-    }
-
     /// Run one command inside the fence under an explicit shell, so a test can
     /// use the same shell the session hands its commands to.
     fn probe_via(&self, label: &str, shell: &Path, cmd: &str) -> Outcome {
@@ -214,10 +224,18 @@ impl Fence {
         // a real fence around each probe. A process that is already fenced
         // cannot bind a second one, and asking leaves every probe reporting
         // "the fence denied it" for a reason that has nothing to do with the
-        // profile under test. The suite is skipped rather than failed: the
-        // configuration is not wrong, it simply cannot be measured here.
+        // profile under test.
         if !Self::can_bind_own_fence() {
-            Self::skip_fenced_suite();
+            eprintln!(
+                "[{label}] skipped: this process already runs inside a sandbox \
+                 and cannot bind another; run this suite outside a fenced session"
+            );
+            return Outcome {
+                code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                elapsed: started.elapsed(),
+            };
         }
         let out = Command::new("sandbox-exec")
             .arg("-p")
@@ -264,6 +282,10 @@ impl Drop for Fence {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_passwd() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("passwd");
     let o = f.probe("control", "cat /etc/passwd >/dev/null");
     assert!(
@@ -286,6 +308,10 @@ fn test_denies_passwd() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_reads_etc() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("etc");
     let o = f.probe("etc-leaf", "cat /etc/paths >/dev/null");
     assert!(
@@ -304,6 +330,10 @@ fn test_reads_etc() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_resolves_etc() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("resolve");
     let o = f.probe("etc-stat", "ls -l /etc/gitconfig");
     assert!(
@@ -331,6 +361,10 @@ fn test_resolves_etc() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_config_home_write() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("confighome");
     let dir = PathBuf::from(&f.home).join(".houyicoder");
     if dir.exists() {
@@ -380,6 +414,10 @@ fn test_denies_config_home_write() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_allows_workspace_write() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("wswrite");
     let o = f.probe("ordinary", "printf 'x' >> probe.txt");
     assert!(
@@ -405,6 +443,10 @@ fn test_allows_workspace_write() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_allows_skill_dir_read() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("skillread");
     let dir = f.workspace.join(".houyicoder/skills/commit");
     create_dir_all(&dir).expect("create skill dir");
@@ -425,6 +467,10 @@ fn test_allows_skill_dir_read() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_skill_dir_write() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("skillwrite");
     let dir = f.workspace.join(".houyicoder/skills/commit");
     create_dir_all(&dir).expect("create skill dir");
@@ -447,6 +493,10 @@ fn test_denies_skill_dir_write() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_ecosystem_skill_read() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("skillclaude");
     for family in [".claude/skills", ".agents/skills"] {
         let dir = f.workspace.join(family).join("commit");
@@ -490,6 +540,10 @@ fn test_denies_ecosystem_skill_read() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_permission_store_write() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("permstore");
     let project = f.workspace.join(".houyicoder");
     create_dir_all(&project).expect("create project store dir");
@@ -543,6 +597,10 @@ fn test_denies_permission_store_write() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_denies_foreign_snapshot_store() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::with_granted("foreignsnap");
     let granted = f.granted.first().expect("the fence holds its grant");
     let store = granted.join(".houyicoder/snapshots");
@@ -578,6 +636,10 @@ fn test_denies_foreign_snapshot_store() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_scratch_snapshot_store_writable() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("scratch-snapshots");
     let store = f.tmpdir.join("fixture/.houyicoder/snapshots");
     create_dir_all(&store).expect("create fixture snapshot store");
@@ -614,6 +676,10 @@ fn test_scratch_snapshot_store_writable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_scratch_settings_file_writable() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("scratch-settings");
     let fixture = f.tmpdir.join("fixture/.houyicoder");
     create_dir_all(&fixture).expect("create fixture dir");
@@ -683,6 +749,10 @@ fn test_scratch_settings_file_writable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_runs_git() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("git");
     let o = f.probe("git-config", "git config --list >/dev/null");
     assert!(
@@ -700,6 +770,10 @@ fn test_runs_git() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_tmpdir_git_init() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("git-init");
     let init = f.probe(
         "git-init",
@@ -743,6 +817,10 @@ fn test_tmpdir_git_init() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_splits_gitconfig() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("gitconfig");
     let path = format!("{}/.gitconfig", f.home);
     if !Path::new(&path).exists() {
@@ -778,6 +856,10 @@ fn test_splits_gitconfig() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_shared_temp_writable() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("shared-temp");
     // A per-run name, so a concurrent session's probe cannot answer for this
     // one.
@@ -805,6 +887,10 @@ fn test_shared_temp_writable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_shared_temp_guarded_paths() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("shared-temp-guard");
     for (label, cmd) in [
         ("com.apple", "printf x > /private/tmp/com.apple.houyi-probe"),
@@ -832,6 +918,10 @@ fn test_shared_temp_guarded_paths() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_trust_store_and_clock() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("ca-time");
     let ca = f.probe("ca-read", "head -c 32 /etc/ssl/cert.pem > /dev/null");
     assert!(

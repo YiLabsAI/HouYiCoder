@@ -4,6 +4,7 @@
 
 #![cfg(target_os = "macos")]
 
+use crate::consistency::can_bind_own_fence;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_sandbox::MacSeatbeltSession;
 use std::fs::remove_file;
@@ -11,6 +12,10 @@ use std::path::Path;
 
 #[tokio::test]
 async fn test_seatbelt_runs_echo() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let s = MacSeatbeltSession::new().unwrap();
     let r = s.exec("echo hello").await.unwrap();
     assert_eq!(r.stdout.trim(), "hello");
@@ -19,6 +24,10 @@ async fn test_seatbelt_runs_echo() {
 
 #[tokio::test]
 async fn test_seatbelt_writes() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let s = MacSeatbeltSession::new().unwrap();
     let r = s.exec("printf 'world' > out.txt").await.unwrap();
     assert!(r.is_success(), "stderr: {}", r.stderr);
@@ -29,6 +38,10 @@ async fn test_seatbelt_writes() {
 
 #[tokio::test]
 async fn test_seatbelt_denies_escape() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     // Writing to /etc must be refused by the kernel fence. Assert by file
     // existence (the probe must NOT be created) rather than by the shell's
     // exit code: zsh inside the sandbox's eval wrapper does not reliably set
@@ -58,6 +71,10 @@ async fn test_seatbelt_denies_escape() {
 
 #[tokio::test]
 async fn test_list_dir_path() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let s = MacSeatbeltSession::new().unwrap();
     s.exec("mkdir -p sub && printf a > sub/f").await.unwrap();
     let entries = s.list_dir("sub").await.unwrap();

@@ -14,6 +14,10 @@ use std::fs::write;
 #[cfg(target_os = "macos")]
 #[test]
 fn test_bash_constructs_run() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("session-replay");
     let shell = command_shell();
     // The grep case needs a pattern with no match, so the glob has to reach
@@ -67,6 +71,10 @@ fn test_bash_constructs_run() {
 #[cfg(target_os = "macos")]
 #[test]
 fn test_shared_paths_work() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::new("session-replay-path");
     let shell = command_shell();
     let cases = [

@@ -19,7 +19,9 @@ use std::fs::remove_dir_all;
 use std::fs::remove_file;
 use std::fs::write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::process::id;
+use std::sync::OnceLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 #[cfg(not(windows))]
@@ -79,7 +81,36 @@ fn outlive_cmd(wall_ms: u64) -> String {
 /// True when the host's kernel path fence is live for this session, so
 /// spawn-level allow and deny assertions are meaningful.
 fn kernel_path_fence_live(s: &PlatformSession) -> bool {
-    !cfg!(windows) && matches!(s.fence_status(), FenceStatus::Enforced)
+    !cfg!(windows) && matches!(s.fence_status(), FenceStatus::Enforced) && can_bind_own_fence()
+}
+
+/// Whether this process can apply a seatbelt of its own.
+///
+/// The kernel refuses to apply one inside an existing fence. When the suite is
+/// launched from a session that fences its own commands, the session reports
+/// its fence as enforced because the enclosing one is real, yet every probe
+/// inside it fails to bind before the profile is consulted. The group that
+/// asserts denials therefore has nothing to measure and returns.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test scaffolding asking the kernel a question, not an engine spawn"
+)]
+pub(crate) fn can_bind_own_fence() -> bool {
+    static CAN: OnceLock<bool> = OnceLock::new();
+    *CAN.get_or_init(|| {
+        Command::new("sandbox-exec")
+            .args([
+                "-p",
+                "(version 1)(allow default)",
+                "--",
+                "/bin/sh",
+                "-c",
+                "true",
+            ])
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +247,10 @@ fn test_duplicate_grant_single_entry() {
 
 #[tokio::test]
 async fn test_exec_round_trip() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let s = session();
     let r = s.exec(&streams_cmd()).await.expect("exec streams");
     assert!(r.is_success(), "stderr: {}", r.stderr);
@@ -232,6 +267,10 @@ async fn test_exec_round_trip() {
 
 #[tokio::test]
 async fn test_exec_wall_timeout() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let s = session();
     let config = ExecConfig {
         wall_timeout_ms: 500,
@@ -257,6 +296,10 @@ async fn test_exec_wall_timeout() {
 #[cfg(not(windows))]
 #[tokio::test]
 async fn test_exec_background_holder_returns() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let s = session();
     let config = ExecConfig {
         wall_timeout_ms: 20_000,

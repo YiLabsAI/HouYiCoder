@@ -34,6 +34,10 @@ fn loopback_listener() -> (TcpListener, u16) {
 /// against the kernel rather than against the profile text.
 #[test]
 fn test_contained_blocks_egress() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let f = Fence::with_network("net-off", NetworkPolicy::contained());
     let o = f.probe("egress", &format!("nc -v -G 1 -w 1 -z {UNROUTABLE} 80"));
     assert!(!o.allowed(), "the contained posture must refuse egress");
@@ -51,6 +55,10 @@ fn test_contained_blocks_egress() {
 /// everything regardless of policy would satisfy it.
 #[test]
 fn test_open_permits_egress() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let mut p = NetworkPolicy::contained();
     p.egress = Egress::Unrestricted;
     let f = Fence::with_network("net-open", p);
@@ -68,6 +76,10 @@ fn test_open_permits_egress() {
 /// the default posture would be an opening nobody asked for.
 #[test]
 fn test_contained_blocks_loopback() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let (_l, port) = loopback_listener();
     let f = Fence::with_network("net-lo-off", NetworkPolicy::contained());
     let o = f.probe("loopback", &format!("nc -v -G 1 -w 1 -z 127.0.0.1 {port}"));
@@ -88,6 +100,10 @@ fn test_contained_blocks_loopback() {
 /// together so the outbound rule cannot fire wider than intended.
 #[test]
 fn test_loopback_grants_no_egress() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let (_l, port) = loopback_listener();
     let mut p = NetworkPolicy::contained();
     p.allow_local_binding = true;
@@ -111,6 +127,10 @@ fn test_loopback_grants_no_egress() {
 /// Unix sockets must be unreachable by default, and reachable when listed.
 #[test]
 fn test_socket_allowback_works() {
+    if !super::fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
     let dir = temp_dir().join(format!("houyi-sock-{}", id()));
     create_dir_all(&dir).expect("create socket dir");
     let dir = canonicalize(&dir).expect("canonicalize socket dir");
