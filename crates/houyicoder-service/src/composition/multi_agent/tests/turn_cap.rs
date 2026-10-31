@@ -6,7 +6,7 @@ use super::*;
 /// parent sized for a long session must not hand a short read-only child the
 /// same budget, or one question can spend the whole session's turns.
 #[tokio::test]
-async fn test_child_own_turn_cap() {
+async fn test_child_turn_cap_wins() {
     let mut def = built_in_all()
         .into_iter()
         .find(|d| d.subagent_type == "explore")
@@ -59,7 +59,11 @@ async fn test_child_own_turn_cap() {
 
     let outcome = runtime.spawn(&ctx, args).await.expect("spawn");
     let sid = SessionId::from_display_string(&outcome.child_session_id).expect("sid");
-    let tail = child_log.trajectory_tail(sid);
+    let turns = child_log
+        .trajectory_tail(sid)
+        .iter()
+        .filter(|record| matches!(record.event, SessionEvent::TurnStarted { .. }))
+        .count();
 
     assert_eq!(
         outcome.status.as_deref(),
@@ -67,8 +71,7 @@ async fn test_child_own_turn_cap() {
         "the cap stops the child"
     );
     // The status alone cannot tell the two caps apart: both end as max_turns.
-    // The child's own log can, because each turn appends its call and result.
-    // Two turns write 17 records; with the parent's 3 it writes 24, so this
-    // count is what separates reading the definition from reading the parent.
-    assert_eq!(tail.len(), 17, "two turns of work, not the parent's three");
+    // The count of turns started can, and unlike the size of the log it does
+    // not move when a later change adds or removes an unrelated record.
+    assert_eq!(turns, 2, "two turns of work, not the parent's three");
 }
