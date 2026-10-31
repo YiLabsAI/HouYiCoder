@@ -1,6 +1,7 @@
 //! View module: pure rendering of App state. No mutation, no I/O. Each screen
 //! and overlay has its own submodule so files stay small.
 
+pub(crate) mod byte_size;
 pub(crate) mod fleet;
 pub(crate) mod list_pane_state;
 

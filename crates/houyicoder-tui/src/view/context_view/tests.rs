@@ -12,11 +12,11 @@ use crate::state::Screen;
 use crate::test_harness::render_buffer;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::context::stub_breakdown;
-use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
 use houyicoder_protocol::frontend::context::{
-    ContextFileEntry as WireFileEntry, ContextSkillEntry as WireSkillEntry, DelegatedContext,
-    ToolFootprint,
+    CasAssemblyUsage, CasIndexUsage, CasSizeUnit, CasUsage, ContextFileEntry as WireFileEntry,
+    ContextSkillEntry as WireSkillEntry, DelegatedContext, ToolFootprint,
 };
+use houyicoder_protocol::frontend::context::{CategoryBreakdown, ContextBreakdown, GridCell};
 use ratatui::buffer::Buffer;
 
 fn working_app() -> App {
@@ -862,6 +862,296 @@ fn test_context_rows_narrow() {
         assert!(
             UnicodeWidthStr::width(plain.as_str()) <= 1,
             "a one-column pane must not receive a wider row: {plain:?}"
+        );
+    }
+}
+
+/// A session that stored results measures every figure in the account, so
+/// the legend names them all on one line.
+fn cas_usage() -> CasUsage {
+    CasUsage {
+        results: Some(3),
+        blocks: 4,
+        raw_bytes: Some(23_040),
+        unmeasured_results: Some(0),
+        save_failed: Some(0),
+        truncated: Some(0),
+        assembly: Some(CasAssemblyUsage {
+            assembly_id: 7,
+            full: 1,
+            preview: 2,
+            pointer: 1,
+            unavailable: 0,
+            unclassified: 0,
+            size: 1_200,
+            unit: CasSizeUnit::Tokens,
+        }),
+        model_reads: 2,
+        ui_reads: Some(1),
+        failed_reads: 0,
+        unknown_reads: 0,
+        reads_recorded: true,
+        tracked: true,
+        indexed: Some(CasIndexUsage {
+            indexed: 3,
+            complete: true,
+            corrupt: 0,
+            as_of: Some("1900".to_string()),
+        }),
+    }
+}
+
+/// The legend line carries every measured figure, and a non-zero failure
+/// count joins it rather than hiding behind the stored total.
+#[test]
+fn test_cas_legend_renders_account() {
+    let mut bd = base_breakdown();
+    let mut cas = cas_usage();
+    cas.save_failed = Some(1);
+    cas.truncated = Some(2);
+    bd.cas = Some(cas);
+    let text = rows_text(bd);
+    assert!(
+        text.contains(
+            "cas: 3 results \u{00b7} raw 22.5 KiB \u{00b7} model ~1.2k tokens \
+             \u{00b7} 1 save failed \u{00b7} 2 truncated"
+        ),
+        "{text}"
+    );
+}
+
+/// A session that measured no results still reports the measured zero. The
+/// line must not read as an unkept account just because the total is zero.
+#[test]
+fn test_cas_legend_zero_results() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(CasUsage {
+        results: Some(0),
+        blocks: 0,
+        raw_bytes: Some(0),
+        assembly: None,
+        ..cas_usage()
+    });
+    let text = rows_text(bd);
+    let line = text
+        .lines()
+        .find(|line| line.contains("cas:"))
+        .expect("the legend names the account");
+    assert_eq!(
+        line.trim_start(),
+        "cas: 0 results \u{00b7} raw 0 B \u{00b7} model unknown"
+    );
+    // With no stored result the index share has no denominator to divide by,
+    // so the row names what it holds without a ratio.
+    assert!(
+        text.contains("indexed: 3 \u{00b7} complete \u{00b7} as of event 1900"),
+        "{text}"
+    );
+}
+
+/// A log written before the capture account existed still names its blocks
+/// through the markers its tool results carry, so the block count stays on
+/// both lines while every other figure reads as unknown.
+#[test]
+fn test_cas_unknown_untracked() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(CasUsage {
+        results: None,
+        blocks: 4,
+        raw_bytes: None,
+        unmeasured_results: None,
+        save_failed: None,
+        truncated: None,
+        assembly: None,
+        reads_recorded: false,
+        tracked: false,
+        indexed: None,
+        ..cas_usage()
+    });
+    let text = rows_text(bd);
+    assert!(text.contains("cas: unknown \u{00b7} 4 blocks"), "{text}");
+    assert!(
+        text.contains("results: unknown \u{00b7} unique blocks: 4"),
+        "{text}"
+    );
+    assert!(
+        text.contains("this log predates the capture account"),
+        "{text}"
+    );
+}
+
+/// An account that measured its results but not its failures names the
+/// unknown count instead of dropping it from the line.
+#[test]
+fn test_cas_legend_unknown_failures() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(CasUsage {
+        save_failed: None,
+        truncated: None,
+        ..cas_usage()
+    });
+    let text = rows_text(bd);
+    let line = text
+        .lines()
+        .find(|line| line.contains("cas:"))
+        .expect("the legend names the account");
+    assert!(
+        line.contains("save failures unknown") && line.contains("truncations unknown"),
+        "{line}"
+    );
+}
+
+/// A host that serves a stored-result request without naming when its index
+/// was taken leaves the day unknown and the share a count of unknown results.
+#[test]
+fn test_cas_rows_unknown_index() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(CasUsage {
+        results: None,
+        indexed: Some(CasIndexUsage {
+            indexed: 2,
+            complete: false,
+            corrupt: 1,
+            as_of: None,
+        }),
+        ..cas_usage()
+    });
+    let text = rows_text(bd);
+    assert!(
+        text.contains(
+            "indexed: 2 of unknown \u{00b7} partial \u{00b7} as of event unknown \u{00b7} 1 corrupt"
+        ),
+        "{text}"
+    );
+}
+
+/// A session that never reported the store prints no block-store line or
+/// section at all.
+#[test]
+fn test_cas_absent_renders_none() {
+    let mut bd = base_breakdown();
+    bd.cas = None;
+    let text = rows_text(bd);
+    assert!(!text.contains("cas:"), "{text}");
+    assert!(!text.contains("CAS storage"), "{text}");
+}
+
+/// A save that failed is the fact the account exists to state, so it stays on
+/// both lines even when the session stored no block and measured no size.
+#[test]
+fn test_cas_rows_show_failure() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(CasUsage {
+        results: Some(0),
+        blocks: 0,
+        raw_bytes: None,
+        save_failed: Some(2),
+        truncated: Some(0),
+        assembly: None,
+        indexed: None,
+        ..cas_usage()
+    });
+    let text = rows_text(bd);
+    assert!(
+        text.contains("results: 0 \u{00b7} unique blocks: 0 \u{00b7} verified: unknown"),
+        "{text}"
+    );
+    assert!(
+        text.contains("captured: raw unknown \u{00b7} 2 save failed \u{00b7} 0 truncated"),
+        "{text}"
+    );
+    assert!(text.contains("current assembly: unknown"), "{text}");
+    assert!(text.contains("indexed: unavailable"), "{text}");
+}
+
+/// A log written before read records existed reports reads as not recorded,
+/// and a terminal with no read path leaves its own count unknown.
+#[test]
+fn test_cas_rows_reads_unrecorded() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(CasUsage {
+        reads_recorded: false,
+        ui_reads: None,
+        unknown_reads: 1,
+        ..cas_usage()
+    });
+    let text = rows_text(bd.clone());
+    assert!(text.contains("reads: not recorded"), "{text}");
+    bd.cas.as_mut().unwrap().reads_recorded = true;
+    let text = rows_text(bd);
+    assert!(
+        text.contains("reads: model 2 \u{00b7} UI unknown \u{00b7} failed 0 \u{00b7} /trajectory"),
+        "{text}"
+    );
+}
+
+/// The assembly row names the forms the newest request carried, including the
+/// ones that could not be read, and the index row says how far behind the log
+/// its coverage sits.
+#[test]
+fn test_cas_rows_show_assembly() {
+    let mut bd = base_breakdown();
+    let mut cas = cas_usage();
+    cas.unmeasured_results = Some(1);
+    let assembly = cas.assembly.as_mut().unwrap();
+    assembly.unavailable = 1;
+    assembly.unclassified = 2;
+    assembly.unit = CasSizeUnit::Bytes;
+    assembly.size = 12_288;
+    let index = cas.indexed.as_mut().unwrap();
+    index.complete = false;
+    index.corrupt = 1;
+    bd.cas = Some(cas);
+    let text = rows_text(bd);
+    assert!(text.contains(" \u{00b7} 1 unmeasured"), "{text}");
+    assert!(text.contains("model 12.0 KiB"), "{text}");
+    assert!(
+        text.contains(
+            "current assembly: 12.0 KiB (1 full, 2 preview, 1 pointer, \
+             1 unavailable, 2 unclassified)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("indexed: 3/3 \u{00b7} partial \u{00b7} as of event 1900 \u{00b7} 1 corrupt"),
+        "{text}"
+    );
+}
+
+/// An assembly whose record names no unit this build knows prints no number
+/// at all: a byte count shown as tokens would misstate what the request cost.
+#[test]
+fn test_cas_rows_unknown_unit() {
+    let mut bd = base_breakdown();
+    let mut cas = cas_usage();
+    cas.assembly.as_mut().unwrap().unit = CasSizeUnit::Unknown;
+    bd.cas = Some(cas);
+    let text = rows_text(bd);
+    assert!(text.contains("current assembly: unknown size"), "{text}");
+    assert!(!text.contains("1200"), "{text}");
+}
+
+/// Every block-store row hangs inside the pane at a forty-column terminal, so
+/// the account cannot spill past the edge of a narrow window.
+#[test]
+fn test_cas_rows_wrap_narrow() {
+    let mut bd = base_breakdown();
+    bd.cas = Some(cas_usage());
+    let drill = ContextDrillDown::from_breakdown(&bd);
+    let view = ContextView {
+        breakdown: Box::new(bd),
+        drill,
+        suggestions: vec![],
+    };
+    let rows = render_as_rows(&view, 40);
+    let storage_start = rows
+        .iter()
+        .position(|(plain, _)| plain.contains("CAS storage"))
+        .expect("the account renders");
+    for (plain, _) in &rows[storage_start..] {
+        assert!(
+            UnicodeWidthStr::width(plain.as_str()) <= 40,
+            "a 40-column pane must not receive a wider row: {plain:?}"
         );
     }
 }
