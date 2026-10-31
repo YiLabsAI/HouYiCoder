@@ -4,6 +4,7 @@
 mod detail;
 mod paging;
 mod records;
+mod storage;
 mod test_support;
 mod usage;
 mod view;

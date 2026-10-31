@@ -8,18 +8,19 @@
 use std::collections::HashMap;
 
 use super::view::preview;
-use houyicoder_context::{SessionEvent, SessionLogEntry};
+use houyicoder_context::{CachedModelView, CachedRead, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::llm::UsageProvenance;
 use houyicoder_tui::result_body::extract_body;
 use houyicoder_tui::state::TrajectoryTurnKey;
 use houyicoder_tui::view::trajectory_pane::{
-    EventTiming, EventUsage, RecordOutcome, TrajectoryRecord, TrajectoryRecordKind, TrajectoryTurn,
-    TurnBoundary,
+    BlockForm, EventTiming, EventUsage, RecordOutcome, StorageFact, StorageRead, TrajectoryRecord,
+    TrajectoryRecordKind, TrajectoryTurn, TurnBoundary,
 };
 use std::mem::take;
 
 pub(super) mod agents;
 pub(super) mod dispatch;
+pub(super) mod storage;
 
 /// What a fold keeps of each record.
 ///
@@ -85,6 +86,28 @@ pub(super) struct TurnBuilder {
     open_tools: HashMap<String, usize>,
     /// Delegations awaiting their return, keyed by child session id.
     open_agents: HashMap<String, usize>,
+    /// The form the newest assembly took for each stored block it names,
+    /// keyed by address. An assembly lands after the result that produced the
+    /// block, so the form is joined onto the result when the turn closes.
+    block_forms: HashMap<String, AssemblyFacts>,
+    /// Records that name a stored result, by record index, with the call id
+    /// that keys the reads of that result.
+    stored_results: Vec<(usize, String)>,
+    /// Reads this turn recorded, with the row each one was written to, so a
+    /// read whose result stream is known only later can still name its block.
+    stored_reads: Vec<(usize, StorageRead)>,
+    /// The block each stream of this turn's stored results lives in, keyed by
+    /// the name the catalog gives that stream.
+    stream_blocks: HashMap<String, String>,
+}
+
+/// The newest assembly that carried one stored block: the form it took, which
+/// assembly it was, and when that request was assembled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct AssemblyFacts {
+    form: BlockForm,
+    assembly_id: u64,
+    at_ms: u64,
 }
 
 impl TurnBuilder {
@@ -117,6 +140,10 @@ impl TurnBuilder {
             open_model: None,
             open_tools: HashMap::new(),
             open_agents: HashMap::new(),
+            block_forms: HashMap::new(),
+            stored_results: Vec::new(),
+            stored_reads: Vec::new(),
+            stream_blocks: HashMap::new(),
         }
     }
 
@@ -217,7 +244,8 @@ impl TurnBuilder {
             | TrajectoryRecordKind::Memory
             | TrajectoryRecordKind::Cache
             | TrajectoryRecordKind::Hook
-            | TrajectoryRecordKind::Compaction => RecordOutcome::Ok,
+            | TrajectoryRecordKind::Compaction
+            | TrajectoryRecordKind::Storage => RecordOutcome::Ok,
         };
         TrajectoryRecord {
             kind,
@@ -234,6 +262,7 @@ impl TurnBuilder {
             timing: None,
             retries: 0,
             model_switch_from: None,
+            storage: None,
         }
     }
 
@@ -471,6 +500,101 @@ impl TurnBuilder {
         if failed {
             self.tool_fail += 1;
         }
+        // What the store kept of this result travels with the row even though
+        // the bounded text reads as the whole answer, and the block each
+        // stream lives in is what a later read names.
+        if let Some(stored) = storage::of_result(call_id, output) {
+            self.records[index].storage = Some(stored.fact);
+            self.stored_results.push((index, call_id.to_string()));
+            for (result_id, hash) in stored.streams {
+                self.stream_blocks.insert(result_id, hash);
+            }
+        }
+    }
+
+    /// Record the form the newest assembly carried for each block it names.
+    pub(super) fn apply_model_view(
+        &mut self,
+        assembly_id: u64,
+        views: &[CachedModelView],
+        ts: u64,
+    ) {
+        for view in views {
+            self.block_forms.insert(
+                view.block_ref.clone(),
+                AssemblyFacts {
+                    form: storage::form_of(view),
+                    assembly_id,
+                    at_ms: ts,
+                },
+            );
+        }
+    }
+
+    /// Append one row per read the log recorded, with the facts that row
+    /// states. A read lands before the result that answers it, so the row's
+    /// text is completed when the turn closes rather than at its position in
+    /// the log.
+    pub(super) fn push_reads(&mut self, reads: &[CachedRead], ts: u64) {
+        for read in reads {
+            self.touch(ts);
+            let fact = storage::read_of(read);
+            let mut record = self.record(
+                TrajectoryRecordKind::Storage,
+                Some(fact.actor.label().to_string()),
+                storage::read_summary(&fact),
+                ts,
+            );
+            record.outcome = fact.outcome.outcome();
+            record.storage = Some(StorageFact {
+                reads: vec![fact.clone()],
+                ..StorageFact::default()
+            });
+            let index = self.push(record);
+            self.stored_reads.push((index, fact));
+        }
+    }
+
+    /// Complete the storage rows now that every event of the turn is folded:
+    /// the form an assembly took for a block, the block a read opened, and the
+    /// reads of each stored result.
+    ///
+    /// The three joins cannot run where the events arrive. An assembly lands
+    /// after the result that produced its block, a read lands before the
+    /// result that answers it, and a read of a result this turn never stored
+    /// stays unknown rather than being counted as a miss.
+    fn resolve_storage(&mut self) {
+        for (index, call_id) in &self.stored_results {
+            let Some(fact) = self.records[*index].storage.as_mut() else {
+                continue;
+            };
+            let address = format!("{call_id}:");
+            fact.reads = self
+                .stored_reads
+                .iter()
+                .filter(|(_, read)| read.result_id.starts_with(&address))
+                .map(|(_, read)| read.clone())
+                .collect();
+            if let Some(facts) = fact
+                .block
+                .as_ref()
+                .and_then(|block| self.block_forms.get(&block.hash))
+            {
+                fact.form = Some(facts.form);
+                fact.assembly_id = Some(facts.assembly_id);
+                fact.assembly_at_ms = Some(facts.at_ms);
+            }
+        }
+        for (index, read) in &mut self.stored_reads {
+            if let Some(hash) = self.stream_blocks.get(&read.result_id) {
+                read.block = Some(hash.clone());
+            }
+            let record = &mut self.records[*index];
+            record.summary = storage::read_summary(read);
+            if let Some(fact) = record.storage.as_mut() {
+                fact.reads = vec![read.clone()];
+            }
+        }
     }
 
     /// Drop the record a delegation's trigger call opened.
@@ -488,6 +612,18 @@ impl TurnBuilder {
             }
         }
         for other in self.open_agents.values_mut() {
+            if *other > index {
+                *other -= 1;
+            }
+        }
+        self.stored_results.retain(|(other, _)| *other != index);
+        for (other, _) in &mut self.stored_results {
+            if *other > index {
+                *other -= 1;
+            }
+        }
+        self.stored_reads.retain(|(other, _)| *other != index);
+        for (other, _) in &mut self.stored_reads {
             if *other > index {
                 *other -= 1;
             }
@@ -610,6 +746,7 @@ impl TurnBuilder {
         &mut self,
         n: usize,
     ) -> Option<(TrajectoryTurn, TrajectoryTurnKey, Vec<TrajectoryRecord>)> {
+        self.resolve_storage();
         let turn = self.snapshot(n)?;
         let key = self.key.take()?;
         let records = take(&mut self.records);

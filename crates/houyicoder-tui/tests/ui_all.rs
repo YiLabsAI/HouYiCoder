@@ -68,6 +68,8 @@ mod ui_thinking;
 mod ui_todo;
 #[path = "ui_tools.rs"]
 mod ui_tools;
+#[path = "ui_trajectory_storage.rs"]
+mod ui_trajectory_storage;
 #[path = "ui_worktree.rs"]
 mod ui_worktree;
 #[path = "ux_commands.rs"]

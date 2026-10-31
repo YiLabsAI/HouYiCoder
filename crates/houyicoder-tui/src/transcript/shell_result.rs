@@ -7,9 +7,7 @@
 //! complete answer from a cut one.
 
 use houyicoder_protocol::block_ref::block_sizes;
-use houyicoder_protocol::capture_record::{
-    CAPTURE_FAILED_KEY, CAPTURE_KEY, RECORD_KEY, STOP_REASON_KEY,
-};
+use houyicoder_protocol::capture_record::read_capture_reference;
 use serde_json::Value;
 
 use crate::view::byte_size::format_byte_size;
@@ -33,14 +31,14 @@ pub enum ShellStorage {
 /// the missing record is the one the reader cannot otherwise learn: the
 /// bounded text still shows where the capture stopped.
 pub(crate) fn storage_state(output: &Value) -> Option<ShellStorage> {
-    let capture = output.get(CAPTURE_KEY)?;
-    if capture.get(CAPTURE_FAILED_KEY).is_some() {
+    let capture = read_capture_reference(output)?;
+    if capture.failed {
         return Some(ShellStorage::SaveFailed);
     }
-    if capture.get(STOP_REASON_KEY).is_some() {
+    if capture.stop.is_some() {
         return Some(ShellStorage::Truncated);
     }
-    capture.get(RECORD_KEY).map(|_| ShellStorage::Saved)
+    capture.record.map(|_| ShellStorage::Saved)
 }
 
 /// The facts a shell result states beyond its text, gathered so the row reads

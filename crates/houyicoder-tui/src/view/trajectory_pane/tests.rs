@@ -9,6 +9,7 @@ mod fixtures;
 mod formatting;
 mod scroll;
 mod selection;
+mod storage;
 mod timeline;
 
 use super::sample::sample_detail;
@@ -292,6 +293,7 @@ fn test_level2_renders_record_detail() {
             timing: None,
             retries: 0,
             model_switch_from: None,
+            storage: None,
         }
     }
     let turn = TrajectoryTurn {
@@ -413,6 +415,7 @@ fn test_event_detail_redacts_secrets() {
         timing: None,
         retries: 0,
         model_switch_from: None,
+        storage: None,
     }]);
     let (_, body, _, _) = record_detail::draw_event_detail(&turn, &detail, 0, Rect::ZERO, 0);
     let text = body
@@ -944,6 +947,7 @@ fn test_record_kind_labels() {
         TrajectoryRecordKind::Hook,
         TrajectoryRecordKind::Compaction,
         TrajectoryRecordKind::Error,
+        TrajectoryRecordKind::Storage,
     ]
     .iter()
     .map(|k| k.label())
@@ -951,7 +955,8 @@ fn test_record_kind_labels() {
     assert_eq!(
         labels,
         vec![
-            "context", "model", "tool", "agent", "memory", "cache", "hook", "compact", "error"
+            "context", "model", "tool", "agent", "memory", "cache", "hook", "compact", "error",
+            "storage"
         ]
     );
 }

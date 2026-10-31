@@ -2,6 +2,9 @@
 
 use houyicoder_protocol::block_ref::BLOCK_BYTES_KEY;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
+use houyicoder_protocol::capture_record::{
+    CAPTURE_FAILED_KEY, CAPTURE_KEY, RECORD_KEY, STOP_REASON_KEY,
+};
 
 use super::*;
 

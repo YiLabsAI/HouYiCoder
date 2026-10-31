@@ -215,6 +215,10 @@ pub(in crate::trajectory) fn apply_turn_content(
         SessionEvent::RunCompleted { ms: Some(ms), .. } => {
             builder.run_completed_ms = *ms;
         }
+        SessionEvent::CasModelView {
+            assembly_id, views, ..
+        } => builder.apply_model_view(*assembly_id, views, ev.ts),
+        SessionEvent::CasRead { reads } => builder.push_reads(reads, ev.ts),
         _ => {}
     }
 }

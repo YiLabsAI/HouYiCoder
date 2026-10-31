@@ -114,6 +114,12 @@ pub(super) fn draw_event_detail(
         ev_head.push(sp(format!(" · model call {n} of {total}"), Color::DarkGray));
     }
     header.push(line(ev_head));
+    // The four stages stay fixed above the body: they answer at a glance which
+    // of capture, save, model view, and read lost the output, and a reader
+    // scrolling the output must not have to come back for them.
+    if let Some(stages) = storage_stages(ev, area.width) {
+        header.push(stages);
+    }
     header.push(blank());
     let body = event_body(ev, area.width);
     let footer = vec![blank(), key_hint(&[("Up/Down", "scroll"), ("Esc", "back")])];
@@ -171,6 +177,7 @@ fn event_body(ev: &TrajectoryRecord, width: u16) -> Vec<Line<'static>> {
         body.push(blank());
     }
     let before_facts = body.len();
+    push_storage(&mut body, ev, &push_field);
     push_model_facts(&mut body, ev, &push_field);
     push_record_span(&mut body, ev);
     // A record whose log carries no measurement is not left with a blank where
@@ -192,6 +199,156 @@ fn event_body(ev: &TrajectoryRecord, width: u16) -> Vec<Line<'static>> {
         body.push(blank());
     }
     body
+}
+
+/// The four stages one stored result passes through, drawn as one fixed header
+/// line: what the host captured, whether it was saved, how the model view
+/// carried it, and who read it back.
+///
+/// A stage the log has no evidence for reads unknown rather than being left
+/// out, so a gap stays visible instead of the line merely getting shorter. The
+/// assembly named here is the durable record of the request that carried that
+/// view; nothing durable states what a request still running is assembling, and
+/// the two must not be read as one.
+fn storage_stages(ev: &TrajectoryRecord, width: u16) -> Option<Line<'static>> {
+    let stored = ev.storage.as_ref()?;
+    if !stored.has_capture_evidence() {
+        return None;
+    }
+    let captured = match stored.raw_bytes {
+        Some(raw) => format!("captured {}", format_byte_size(raw)),
+        None => "captured unknown".to_string(),
+    };
+    let saved = if stored.save_failed {
+        "save failed".to_string()
+    } else if let Some(stop) = &stored.stopped {
+        format!("saved, stopped at {stop}")
+    } else if stored.raw_bytes.is_some() {
+        "saved".to_string()
+    } else {
+        "save unknown".to_string()
+    };
+    let view = match stored.block.as_ref() {
+        Some(block) => {
+            let mut text = format!("{} {}", block.short(), format_byte_size(block.bytes));
+            if let Some(form) = stored.form {
+                text.push(' ');
+                text.push_str(form.label());
+            }
+            if let Some(id) = stored.assembly_id {
+                text.push_str(&format!(" in assembly {id}"));
+            }
+            // A zero timestamp is not a time the log ever wrote: it reads as
+            // no recorded moment, the same as an absent one.
+            if let Some(at) = stored.assembly_at_ms.filter(|at| *at > 0) {
+                let when = relative_time(now_epoch_secs(), at / 1000);
+                text.push_str(&format!(", {when}"));
+            }
+            text
+        }
+        None => "unknown".to_string(),
+    };
+    let text = format!(
+        " {captured} → {saved} → view {view} → read {}",
+        read_count(stored)
+    );
+    let label = " storage: ";
+    let room = (width as usize).saturating_sub(UnicodeWidthStr::width(label));
+    Some(line(vec![
+        sp(label, Color::DarkGray),
+        sp(truncate_width(&text, room), Color::Cyan),
+    ]))
+}
+
+/// How many reads this turn recorded of a result, split by who made them. A
+/// reader this build does not know is counted in neither, so it is named on
+/// its own rather than folded into model or UI.
+fn read_count(stored: &StorageFact) -> String {
+    if stored.reads.is_empty() {
+        return "none this turn".to_string();
+    }
+    let model = stored
+        .reads
+        .iter()
+        .filter(|read| read.actor == ReadActor::Model)
+        .count();
+    let ui = stored
+        .reads
+        .iter()
+        .filter(|read| read.actor == ReadActor::Ui)
+        .count();
+    let unknown = stored.reads.len() - model - ui;
+    let mut text = format!("{} (model {model}, UI {ui}", stored.reads.len());
+    if unknown > 0 {
+        text.push_str(&format!(", unknown {unknown}"));
+    }
+    text.push(')');
+    text
+}
+
+/// The storage field of a stored result, or the facts of a read row. A part
+/// the log does not record stays absent rather than printing a zero.
+fn push_storage(
+    body: &mut Vec<Line<'static>>,
+    ev: &TrajectoryRecord,
+    push_field: &impl Fn(&mut Vec<Line<'static>>, &str, &str, Color),
+) {
+    let Some(stored) = ev.storage.as_ref().filter(|stored| !stored.is_empty()) else {
+        return;
+    };
+    // A read row accounts for its own read; the capture stages belong to the
+    // result it addressed.
+    if ev.kind == TrajectoryRecordKind::Storage {
+        let text = stored
+            .reads
+            .first()
+            .map(read_facts)
+            .unwrap_or_else(|| "no read recorded".to_string());
+        push_field(body, "read", &text, Color::Cyan);
+        return;
+    }
+    let mut parts = Vec::new();
+    match stored.block.as_ref() {
+        Some(block) => parts.push(format!(
+            "CAS block {} ({})",
+            block.short(),
+            format_byte_size(block.bytes)
+        )),
+        None => parts.push("no model-view block".to_string()),
+    }
+    if let Some(raw) = stored.raw_bytes {
+        parts.push(format!("{} raw", format_byte_size(raw)));
+    }
+    if let Some(form) = stored.form {
+        parts.push(format!("tier: {}", form.label()));
+    }
+    if stored.save_failed {
+        parts.push("raw output not kept".to_string());
+    }
+    if let Some(stop) = &stored.stopped {
+        parts.push(format!("stopped: {stop}"));
+    }
+    push_field(body, "storage", &parts.join(" · "), Color::Cyan);
+}
+
+/// One read as the fields the log recorded it with.
+fn read_facts(read: &StorageRead) -> String {
+    let mut parts = vec![read.result_id.clone()];
+    if let Some(block) = &read.block {
+        parts.push(format!("CAS {}", short_address(block)));
+    }
+    parts.push(format!("by {}", read.actor.label()));
+    match read.outcome {
+        ReadOutcome::Failed => parts.push("failed".to_string()),
+        ReadOutcome::Unknown => parts.push("outcome unknown".to_string()),
+        ReadOutcome::Read if read.start > 0 => parts.push(format!(
+            "{} from byte {}",
+            format_byte_size(read.bytes),
+            read.start
+        )),
+        ReadOutcome::Read => parts.push(format_byte_size(read.bytes)),
+    }
+    parts.join(" · ")
 }
 
 /// The latency split, provider usage, and retry count of a model call or

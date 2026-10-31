@@ -5,7 +5,7 @@
 /// A byte count as a short decimal size with a binary unit. Sizes below a
 /// kibibyte stay whole bytes, because that is the scale where a fraction says
 /// nothing.
-pub(crate) fn format_byte_size(bytes: u64) -> String {
+pub fn format_byte_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if bytes < 1024 {
         return format!("{bytes} B");

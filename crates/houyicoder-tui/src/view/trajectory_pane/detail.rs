@@ -321,11 +321,19 @@ fn compact_record_row(ev: &TrajectoryRecord, selected: bool, width: usize) -> Li
     } else {
         String::new()
     };
+    let tag = cas_tag(ev);
+    // A tag cut in half reads as noise, so it is dropped whole when the room
+    // for it is not there; the detail still states the block.
+    let summary = if UnicodeWidthStr::width(tag.as_str()) <= left {
+        format!("{tag}{}", ev.summary)
+    } else {
+        ev.summary.clone()
+    };
     line(vec![
         sp(prefix, Color::Cyan),
         sp(kind, Color::DarkGray),
         sp(name, Color::Cyan),
-        sp(truncate_width(&ev.summary, left), Color::White),
+        sp(truncate_width(&summary, left), Color::White),
         sp(tail, bc),
     ])
 }
@@ -442,6 +450,17 @@ fn timing_cells(ev: &TrajectoryRecord) -> (String, String) {
     (parts.join(" · "), compact.join(" · "))
 }
 
+/// The store tag a row leads with when the tool result kept its output in the
+/// block store instead of carrying it whole. It sits ahead of the summary
+/// text, so a narrow column drops the prose before it drops which call was
+/// externalized.
+fn cas_tag(ev: &TrajectoryRecord) -> String {
+    match ev.storage.as_ref().and_then(|stored| stored.block.as_ref()) {
+        Some(block) => format!("[CAS {}] ", format_byte_size(block.bytes)),
+        None => String::new(),
+    }
+}
+
 /// The summary column: the switch and the measured split lead, because the
 /// tail is what a narrow column drops.
 fn row_summary(ev: &TrajectoryRecord, name: &str, summary_w: usize) -> String {
@@ -461,12 +480,21 @@ fn row_summary(ev: &TrajectoryRecord, name: &str, summary_w: usize) -> String {
         .as_ref()
         .map(|prior| format!("[switch: {} -> {}] ", display_model_id(prior), name))
         .unwrap_or_default();
+    let tag = cas_tag(ev);
+    // A tag cut in half reads as noise, so it is dropped whole when the column
+    // leaves no room for it.
+    let tag = if UnicodeWidthStr::width(tag.as_str()) <= summary_w {
+        tag
+    } else {
+        String::new()
+    };
     let lead = match (switch.is_empty(), timing.is_empty()) {
         (false, false) => format!("{switch}{timing} · "),
         (false, true) => switch,
         (true, false) => format!("{timing} · "),
         (true, true) => String::new(),
     };
+    let lead = format!("{tag}{lead}");
     let room = summary_w.saturating_sub(UnicodeWidthStr::width(lead.as_str()));
     format!("{}{}", lead, truncate_width(&ev.summary, room))
 }

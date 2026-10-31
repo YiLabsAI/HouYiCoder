@@ -115,3 +115,55 @@ fn test_truncated_state_survives() {
     let stored = serde_json::to_value(&written).expect("the record serializes");
     assert_eq!(stored["stop_reason"], json!("wall_budget"));
 }
+
+/// A result that published its capture names every block it wrote, the bytes
+/// each stream kept, and nothing that stopped it.
+#[test]
+fn test_reference_reads_published() {
+    let output = json!({
+        "stdout": "ok",
+        CAPTURE_KEY: {
+            RECORD_KEY: { BLOCK_REF_KEY: "record-hash" },
+            STDOUT_BYTES_KEY: 12,
+            STDERR_BYTES_KEY: 0,
+            STDOUT_KEY: { BLOCK_REF_KEY: "stdout-hash" },
+        }
+    });
+    let reference = read_capture_reference(&output).expect("the result names a capture");
+    assert_eq!(
+        reference,
+        CaptureReference {
+            record: Some("record-hash".into()),
+            stdout: Some("stdout-hash".into()),
+            stderr: None,
+            stdout_bytes: Some(12),
+            stderr_bytes: Some(0),
+            stop: None,
+            failed: false,
+        }
+    );
+}
+
+/// A capture that refused to publish says so and keeps the stop it applied:
+/// the command was ended either way, so the bounded result must not read as a
+/// complete one.
+#[test]
+fn test_reference_names_refusal() {
+    let output = json!({
+        CAPTURE_KEY: {
+            CAPTURE_FAILED_KEY: "not kept",
+            STOP_REASON_KEY: "wall_budget",
+        }
+    });
+    let reference = read_capture_reference(&output).expect("the result names a capture");
+    assert!(reference.failed);
+    assert_eq!(reference.stop, Some(CaptureStopReason::WallBudget));
+    assert_eq!(reference.record, None);
+}
+
+/// An output the model view held whole carries no capture, so there is
+/// nothing kept beside it to read.
+#[test]
+fn test_reference_absent() {
+    assert_eq!(read_capture_reference(&json!({ "stdout": "ok" })), None);
+}

@@ -40,6 +40,10 @@ pub struct TrajectoryRecord {
     /// rather than folded into the summary so a reply that later replaces the
     /// summary cannot erase the switch.
     pub model_switch_from: Option<String>,
+    /// What the block store kept of a tool result, or the read a storage row
+    /// reports. None for every record that never touched the store, so the
+    /// rows for ordinary work carry nothing about it.
+    pub storage: Option<StorageFact>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -341,6 +345,9 @@ pub enum TrajectoryRecordKind {
     Compaction,
     /// A turn-level failure or interruption marker.
     Error,
+    /// What the block store did in this turn: a read of a stored result, or a
+    /// turn that never kept one.
+    Storage,
 }
 
 impl TrajectoryRecordKind {
@@ -356,6 +363,7 @@ impl TrajectoryRecordKind {
             Self::Hook => "hook",
             Self::Compaction => "compact",
             Self::Error => "error",
+            Self::Storage => "storage",
         }
     }
 }
@@ -445,4 +453,166 @@ pub struct CompactedBoundary {
     pub pre_tokens: u64,
     pub post_tokens: u64,
     pub at_secs: u64,
+}
+
+/// A stored block a tool result was replaced by: its address, shortened where
+/// a row has no room for the full one, and the bytes it holds.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StoredBlock {
+    pub hash: String,
+    pub bytes: u64,
+}
+
+impl StoredBlock {
+    /// The first eight characters of the address, which is what a row prints.
+    pub fn short(&self) -> &str {
+        short_address(&self.hash)
+    }
+}
+
+/// The prefix of a block address a row prints. One rule for every view that
+/// names a block: an address is compared by its prefix and never shown whole
+/// in a row. Block addresses are hex hashes, so the first eight bytes are
+/// always ASCII and the byte slice is a char boundary.
+pub fn short_address(address: &str) -> &str {
+    &address[..address.len().min(8)]
+}
+
+/// The form an assembly took for a stored block. The names match the account
+/// the context view prints, so one block is described one way across views.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BlockForm {
+    /// The full stored content, retrieved from the store.
+    Materialize,
+    /// The inline preview the tool result carried, with no retrieval.
+    Summarize,
+    /// The pointer alone, with no retrieval.
+    Evict,
+    /// The stored content could not be read.
+    Unavailable,
+    /// A form written by a build this one does not know.
+    Unknown,
+}
+
+impl BlockForm {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Materialize => "full",
+            Self::Summarize => "preview",
+            Self::Evict => "pointer",
+            Self::Unavailable => "unavailable",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Who read a stored result. A reader this build does not know reads back as
+/// unknown rather than being counted as either.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReadActor {
+    Model,
+    Ui,
+    Unknown,
+}
+
+impl ReadActor {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Ui => "UI",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Whether a read delivered the bytes it asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ReadOutcome {
+    Read,
+    Failed,
+    Unknown,
+}
+
+impl ReadOutcome {
+    /// The row glyph, on the same three-way scale every other record uses: a
+    /// read that delivered nothing is not a success.
+    pub fn outcome(self) -> RecordOutcome {
+        match self {
+            Self::Read => RecordOutcome::Ok,
+            Self::Failed => RecordOutcome::Failed,
+            Self::Unknown => RecordOutcome::Pending,
+        }
+    }
+}
+
+/// One read of a stored result, as the log recorded it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StorageRead {
+    /// The result the read addressed, as the host's catalog names it.
+    pub result_id: String,
+    /// The block holding that result's bytes, when the log names it.
+    pub block: Option<String>,
+    pub actor: ReadActor,
+    pub outcome: ReadOutcome,
+    /// First byte of the range the read covered; zero when it delivered
+    /// nothing.
+    pub start: u64,
+    /// Bytes the read returned.
+    pub bytes: u64,
+}
+
+/// What the block store kept of one tool result, and what the turn's request
+/// and reads said about it.
+///
+/// The four stages are separate facts, because a command can print its full
+/// output and still lose it: captured states what the host kept raw, the block
+/// states what the model view was given in place of it, the form states how
+/// that block was carried, and the reads state who later opened it. A reader
+/// that merges them cannot say which stage lost the output.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct StorageFact {
+    /// Raw bytes the capture kept, when the result names one.
+    pub raw_bytes: Option<u64>,
+    /// What stopped the command before its output ended.
+    pub stopped: Option<String>,
+    /// Whether the capture refused to publish the raw output.
+    pub save_failed: bool,
+    /// The block the model view carried in place of the output, when the
+    /// result names one with its stored size.
+    pub block: Option<StoredBlock>,
+    /// The form the newest assembly took for that block, which assembly
+    /// carried it, and when that request was assembled.
+    pub form: Option<BlockForm>,
+    pub assembly_id: Option<u64>,
+    pub assembly_at_ms: Option<u64>,
+    /// Reads of this result the log recorded in the turn that was folded.
+    /// Empty means this fold saw none, which is not the same as a measured
+    /// zero: a read recorded in a turn outside the loaded window is invisible
+    /// here.
+    pub reads: Vec<StorageRead>,
+}
+
+impl StorageFact {
+    /// True when there is anything to say about the store, so an ordinary
+    /// tool result carries no storage facts at all.
+    pub fn is_empty(&self) -> bool {
+        self.raw_bytes.is_none()
+            && self.stopped.is_none()
+            && !self.save_failed
+            && self.block.is_none()
+            && self.form.is_none()
+            && self.assembly_id.is_none()
+            && self.assembly_at_ms.is_none()
+            && self.reads.is_empty()
+    }
+
+    /// True when the fact states something about what the capture kept, which
+    /// is the record a four-stage account describes. A read row carries only
+    /// its own read, so it states none of it.
+    pub fn has_capture_evidence(&self) -> bool {
+        self.raw_bytes.is_some()
+            || self.stopped.is_some()
+            || self.save_failed
+            || self.block.is_some()
+    }
 }

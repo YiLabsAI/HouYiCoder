@@ -142,6 +142,7 @@ fn ev(
         timing: None,
         retries: 0,
         model_switch_from: None,
+        storage: None,
     }
 }
 fn bg(kind: &str, summary: &str, ms: u64) -> TrajectoryBg {

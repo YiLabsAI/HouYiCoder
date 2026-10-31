@@ -10,6 +10,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::block_ref::BLOCK_REF_KEY;
+
 /// The key a bounded tool result names its capture under.
 pub const CAPTURE_KEY: &str = "raw_capture";
 
@@ -194,6 +196,54 @@ pub fn read_capture_record(bytes: &[u8]) -> Result<CaptureRecord, CaptureRecordE
         return Err(CaptureRecordError::UnsupportedVersion(version));
     }
     serde_json::from_value(value).map_err(|e| CaptureRecordError::Malformed(e.to_string()))
+}
+
+/// The capture a bounded tool result carries, read from the result value.
+///
+/// The result states the shape of its capture — which blocks were published,
+/// how many raw bytes each stream kept, and what stopped the command — without
+/// carrying the record body, which is a block of its own. A reader that holds
+/// only the log therefore learns what the capture did and not what it
+/// contained.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CaptureReference {
+    /// The block holding the capture record.
+    pub record: Option<String>,
+    /// The block holding each stream's raw bytes.
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    /// Raw bytes kept from each stream.
+    pub stdout_bytes: Option<u64>,
+    pub stderr_bytes: Option<u64>,
+    /// What stopped the command before its output ended.
+    pub stop: Option<CaptureStopReason>,
+    /// Whether the capture refused to publish the raw output, leaving only the
+    /// bounded result.
+    pub failed: bool,
+}
+
+/// Read the capture a tool result carries, or None when it carries none: an
+/// output the model view held whole has nothing kept beside it.
+pub fn read_capture_reference(value: &Value) -> Option<CaptureReference> {
+    let reference = value.get(CAPTURE_KEY)?;
+    Some(CaptureReference {
+        record: marker_hash(reference.get(RECORD_KEY)),
+        stdout: marker_hash(reference.get(STDOUT_KEY)),
+        stderr: marker_hash(reference.get(STDERR_KEY)),
+        stdout_bytes: reference.get(STDOUT_BYTES_KEY).and_then(Value::as_u64),
+        stderr_bytes: reference.get(STDERR_BYTES_KEY).and_then(Value::as_u64),
+        stop: reference
+            .get(STOP_REASON_KEY)
+            .and_then(|reason| serde_json::from_value(reason.clone()).ok()),
+        failed: reference.get(CAPTURE_FAILED_KEY).is_some(),
+    })
+}
+
+/// The address a block marker carries. A marker that names no address, or
+/// names one that is not text, contributes nothing.
+fn marker_hash(marker: Option<&Value>) -> Option<String> {
+    let address = marker?.get(BLOCK_REF_KEY)?.as_str()?;
+    Some(address.to_owned())
 }
 
 #[cfg(test)]

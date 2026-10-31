@@ -23,6 +23,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::command::render::format_tokens;
 use crate::state::{TrajectoryDrill, TrajectoryPaneState, TrajectoryTurnKey};
+use crate::view::byte_size::format_byte_size;
 use crate::view::line_wrap::{truncate_width, wrap_line};
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::{format_span_ms, now_epoch_secs, relative_time};
@@ -49,9 +50,10 @@ use crate::state::App;
 pub use detail::{TrajectoryDetailState, TrajectoryDetailView};
 use ratatui::layout::{Constraint, Direction, Layout};
 pub use view::{
-    CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, RecapSpend, RecordOutcome,
-    SessionTiming, SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRecordKind,
-    TrajectoryRow, TrajectoryTurn, TrajectoryView, TrajectoryViewState, TurnBoundary,
+    BlockForm, CompactedBoundary, EventTiming, EventUsage, ModelSwitchBoundary, ReadActor,
+    ReadOutcome, RecapSpend, RecordOutcome, SessionTiming, StorageFact, StorageRead, StoredBlock,
+    SubagentUsage, TrajectoryBg, TrajectoryRecord, TrajectoryRecordKind, TrajectoryRow,
+    TrajectoryTurn, TrajectoryView, TrajectoryViewState, TurnBoundary, short_address,
 };
 
 /// The trajectory-data seam the render path calls. Matches the disk-search
