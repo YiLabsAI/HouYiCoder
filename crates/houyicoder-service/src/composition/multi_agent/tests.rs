@@ -2000,4 +2000,6 @@ mod join_children;
 #[cfg(test)]
 mod shutdown_gate;
 #[cfg(test)]
+mod turn_cap;
+#[cfg(test)]
 mod worktree_reclaim;
