@@ -10,7 +10,7 @@ use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::row_set::RowSet;
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::view::working::transcript::truncate_call_with_paren;
 
 use super::super::tail_rows::build_tail_rows;

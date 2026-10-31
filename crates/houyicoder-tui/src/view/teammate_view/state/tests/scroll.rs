@@ -14,7 +14,7 @@ use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult, HistoryS
 use crate::test_harness::MockSnapshot;
 use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};

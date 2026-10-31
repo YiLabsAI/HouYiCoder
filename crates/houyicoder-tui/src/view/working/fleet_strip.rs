@@ -5,8 +5,6 @@
 //! and Enter drills into its teammate view. The strip caps at three rows
 //! and scrolls toward the selection when the fleet is longer.
 
-use std::time::Duration;
-
 use ratatui::{
     Frame,
     layout::Rect,
@@ -18,6 +16,7 @@ use ratatui::{
 use crate::agent_message::FleetEntry;
 use crate::command::render::format_tokens;
 use crate::state::App;
+use crate::view::relative_time::format_span_secs;
 
 /// Max child rows the strip ever shows. A longer fleet scrolls within the
 /// strip so the transcript is never pushed off-screen.
@@ -205,13 +204,13 @@ fn build_row<'a>(
     } else if awaiting == Some(entry.agent_id.as_str()) {
         let elapsed = entry
             .started_at
-            .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
+            .map(|t| format!(" · {}", format_span_secs(t.elapsed().as_secs())))
             .unwrap_or_default();
         format!("{label}: waiting for approval · {spend}{elapsed}")
     } else {
         let elapsed = entry
             .started_at
-            .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
+            .map(|t| format!(" · {}", format_span_secs(t.elapsed().as_secs())))
             .unwrap_or_default();
         format!(
             "{label}: {} · {spend} · turn {}{elapsed}",
@@ -238,23 +237,6 @@ fn verb_for(tool: Option<&str>) -> &'static str {
         Some("test") => "verifying",
         Some(_) => "working",
         None => "thinking",
-    }
-}
-
-/// Compact elapsed: under 60s as "Ns", under 1h as "Nm Ms", otherwise
-/// "Nh Nm Ns" so a long-running child does not show "312s" and retains
-/// the finer unit at each scale.
-fn format_elapsed(d: Duration) -> String {
-    let secs = d.as_secs();
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m {}s", secs / 60, secs % 60)
-    } else {
-        let h = secs / 3600;
-        let m = (secs % 3600) / 60;
-        let s = secs % 60;
-        format!("{}h {}m {}s", h, m, s)
     }
 }
 

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::state::EventCursor;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 
 /// Time a completed task remains visible before clearing from the transcript.
 pub(crate) const RECENT_COMPLETION_TTL: Duration = Duration::from_secs(30);

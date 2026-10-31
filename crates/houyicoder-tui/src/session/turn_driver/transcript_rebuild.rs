@@ -16,7 +16,7 @@ use crate::state::App;
 use crate::state::transcript::blocks::{
     Block, BlockAnchor, BlockId, TranscriptChange, TranscriptChangeSet,
 };
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
 use crate::transcript::{
     TurnCheckpoint, delivered_marker_at, starts_inside_turn, transcript_from_frames_at,

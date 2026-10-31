@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::records::RECAP_MARKER;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::transcript_from_frames;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::acpx::AcpxNotification;

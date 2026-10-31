@@ -5,7 +5,7 @@
 use houyicoder_protocol::frontend::run::{RunOutcome, RunResult};
 
 use crate::records::TranscriptLine;
-use crate::transcript::FrontendRow;
+use crate::transcript::frame::FrontendRow;
 use crate::turn_driver::should_preserve_interrupted_turn;
 
 impl super::App {

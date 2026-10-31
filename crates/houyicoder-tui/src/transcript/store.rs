@@ -16,9 +16,10 @@ use crate::row_id::RowId;
 use crate::scroll::bound_scrollback;
 use crate::state::transcript::blocks::TranscriptBlocks;
 use crate::state::{App, CurrentTurnBoundary};
+use crate::transcript::SequencedFrame;
+use crate::transcript::frame::{FrontendRow, TranscriptFrame};
 use crate::transcript::rows::NamedRows;
 use crate::transcript::turn_fold::{TurnCheckpoint, turn_state_from_frames_at};
-use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame};
 use std::slice::Iter;
 
 #[derive(Debug)]

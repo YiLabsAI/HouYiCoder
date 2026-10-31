@@ -337,3 +337,43 @@ fn test_strip_enter_running_child() {
         s.screen().contents()
     );
 }
+
+/// A finished child leaves a trace row in the parent transcript, arriving as
+/// a status frame like any other. The strip row that reported the same
+/// child drops after its grace window; the trace row is what the user keeps,
+/// so the completion stays legible in the timeline and selectable long after
+/// the footer cleared.
+#[test]
+#[ignore]
+fn test_finished_trace_row() {
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"Text","text":"auth is in src/auth"}],
+        [{"type":"Text","text":"done"}]
+    ]"#;
+    let mut s = pty_session_scripted(script);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("find auth");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("\u{25cf}Agent\"findauth\"finished", RENDER_TIMEOUT * 3),
+        "the finished child should leave a trace row in the transcript:\n{}",
+        s.output()
+    );
+    // The trace is a way back into the child after its footer row cleared:
+    // an empty-input Enter with no explicit cursor targets the child the
+    // transcript names, and shift+down returns to the timeline holding it.
+    s.clear_output();
+    s.send_str("\r");
+    assert!(
+        s.wait_for_compact("Viewing@explore", RENDER_TIMEOUT),
+        "Enter should open the child the trace names:\n{}",
+        s.output()
+    );
+    s.send_key(&Key::ShiftDown);
+    assert!(
+        s.wait_for_screen("Agent \"find auth\" finished", RENDER_TIMEOUT),
+        "shift+down returns to the timeline holding the trace:\n{}",
+        s.screen().contents()
+    );
+}

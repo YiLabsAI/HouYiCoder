@@ -417,16 +417,6 @@ fn test_row_shows_waiting_approval() {
     );
 }
 
-#[test]
-fn test_format_elapsed_compact() {
-    assert_eq!(format_elapsed(Duration::from_secs(0)), "0s");
-    assert_eq!(format_elapsed(Duration::from_secs(59)), "59s");
-    assert_eq!(format_elapsed(Duration::from_secs(60)), "1m 0s");
-    assert_eq!(format_elapsed(Duration::from_secs(312)), "5m 12s");
-    assert_eq!(format_elapsed(Duration::from_secs(3600)), "1h 0m 0s");
-    assert_eq!(format_elapsed(Duration::from_secs(3725)), "1h 2m 5s");
-}
-
 /// A strip row names the job, not the role. The type is what the parent
 /// already chose, so a row repeating it tells the reader nothing; the task
 /// summary is what separates two children of one type from each other.

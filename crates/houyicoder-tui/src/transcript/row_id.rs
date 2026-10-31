@@ -11,7 +11,7 @@ use std::fmt;
 
 use houyicoder_protocol::envelope::DurableEventId;
 
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 
 /// The identity of a row no durable entry named: an in-process monotonic
 /// number, taken from the row's absolute frame position, which stays put

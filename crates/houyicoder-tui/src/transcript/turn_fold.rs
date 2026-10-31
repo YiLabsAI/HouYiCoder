@@ -26,9 +26,9 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::tool::is_user_shell_call_id;
 
 use super::SequencedFrame;
-use super::TranscriptFrame;
 use super::call_rows::tool_renders_chip;
-use super::frame_payload::chunk_text;
+use super::frame::TranscriptFrame;
+use super::frame::payload::chunk_text;
 use crate::records::TranscriptLine;
 use crate::row_id::RowId;
 

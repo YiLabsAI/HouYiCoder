@@ -6,7 +6,8 @@ use houyicoder_protocol::frontend::session_update::{
 
 use crate::records::TranscriptLine;
 use crate::transcript::call_rows::tool_result_line;
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::frame::TranscriptFrame;
+use crate::transcript::transcript_from_frames;
 
 fn tool_call(id: &str, tool: &str, input: serde_json::Value) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(

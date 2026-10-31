@@ -12,6 +12,8 @@ pub mod blocks;
 pub(crate) mod brief;
 pub(crate) mod cursors;
 pub(crate) mod fold;
+pub(crate) mod frame;
+pub use frame::{FrontendRow, TranscriptFrame};
 pub(crate) mod git_op;
 pub(crate) mod history_state;
 pub(crate) mod markdown;
@@ -39,13 +41,12 @@ use houyicoder_protocol::frontend::recap::RecapNotice;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::brief::tool_call_brief;
-use crate::records::{ContextView, ToolOutcome, TranscriptLine};
+use crate::records::{ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
-use crate::transcript::frame_payload::chunk_text;
+use crate::transcript::frame::payload::chunk_text;
 use crate::transcript::rows::NamedRows;
 
 mod call_rows;
-pub(crate) mod frame_payload;
 pub mod snapshot;
 mod tool_updates;
 mod turn_fold;
@@ -60,8 +61,6 @@ pub use turn_fold::TurnCheckpoint;
 use crate::brief::tool_user_facing_name;
 use crate::records::subagent_line;
 use houyicoder_protocol::acpx::AcpxMethod;
-use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
-use houyicoder_protocol::envelope::ChildTranscriptFrame;
 use houyicoder_protocol::tool::is_user_shell_call_id;
 use houyicoder_protocol::tool::strip_ansi;
 use houyicoder_protocol::tool::tool_invocation;
@@ -72,91 +71,6 @@ pub(crate) use turn_fold::delivered_marker_at;
 pub(crate) use turn_fold::is_user_frame;
 pub(crate) use turn_fold::starts_inside_turn;
 pub(crate) use turn_fold::turn_state_from_frames_at;
-
-/// One frame of the turn stream, preserved in arrival order so the
-/// transcript rebuild keeps the time-ordered interleave of session/update
-/// chunks and acpx/context/* audit notifications (a compaction checkpoint
-/// lands between the tool calls that bracketed it, not at the tail). The
-/// driver accumulates the server's frames as it pushes them, and the
-/// frontend appends its own rows to the same log; the transcript is a
-/// faithful fold of that ordered stream, never a stub.
-#[derive(Debug, Clone)]
-pub enum TranscriptFrame {
-    /// An ACP session/update chunk (user / agent / thought message, tool call,
-    /// tool-call update). The standard turn stream the base protocol carries.
-    Session(SessionUpdate),
-    /// An acpx/* extension notification — durable-context audit kinds the
-    /// base session/update has no variant for (compaction boundary, summary,
-    /// permission decision, meta user), or a token-level provider event.
-    Acpx(AcpxNotification),
-    /// A row the frontend raises on its own account, listed in FrontendRow:
-    /// no server frame carries it, so the frontend puts it in this log at the
-    /// position it happened. Every view of the log renders it there — the live
-    /// turn, a window that slid past older frames, scrollback loading frames
-    /// above it — and a view that no longer covers its frame shows it no more.
-    Frontend(FrontendRow),
-}
-
-/// A row the frontend raises on its own account. It renders through the same
-/// fold as the server's frames, so it lands where it was raised and
-/// stays there while the window slides, rather than drifting to the head of
-/// whatever rows a rebuild happens to keep.
-#[derive(Debug, Clone)]
-pub enum FrontendRow {
-    /// A system line: command feedback, a notice, a warning, a failure.
-    System(String),
-    /// A /context breakdown rendered inline as conversation content. Boxed:
-    /// the view is far larger than any other row, and every row is cloned on
-    /// a rebuild.
-    Context(Box<ContextView>),
-    /// The abort notice, welded under the message the abort cut off.
-    Interrupted,
-    /// The notice that the interrupted submission went back to the input box.
-    InputRestored,
-    /// The echo of a submitted command.
-    Echo(String),
-}
-
-impl FrontendRow {
-    /// The row the frontend raises for a line no server frame carries, or None
-    /// for a line the log itself reproduces. A user message the frontend echoes
-    /// back as a prompt row is tentative: it renders from its own Echo frame
-    /// until the server sends the UserMessageChunk for the same text, at which
-    /// point push_frame drops the Echo so the row renders once from the server
-    /// frame. The text decides nothing about routing: a slash echo is still
-    /// frontend-raised, and a plain message echo is too.
-    pub(crate) fn from_line(line: &TranscriptLine) -> Option<Self> {
-        match line {
-            TranscriptLine::System(text) => Some(Self::System(text.clone())),
-            TranscriptLine::ContextGrid(view) => Some(Self::Context(Box::new(view.clone()))),
-            TranscriptLine::Interrupted => Some(Self::Interrupted),
-            TranscriptLine::User(text) => Some(Self::Echo(text.clone())),
-            _ => None,
-        }
-    }
-
-    /// The row this frame renders as.
-    fn line(&self) -> TranscriptLine {
-        match self {
-            Self::System(text) => TranscriptLine::System(text.clone()),
-            Self::Context(view) => TranscriptLine::ContextGrid((**view).clone()),
-            Self::Interrupted => TranscriptLine::Interrupted,
-            Self::InputRestored => TranscriptLine::System("input restored".into()),
-            Self::Echo(text) => TranscriptLine::User(text.clone()),
-        }
-    }
-}
-
-/// Convert a fetched child frame to the live-frame shape the fold
-/// reads, so child rows render through the same pipeline as the parent flow.
-impl From<ChildTranscriptFrame> for TranscriptFrame {
-    fn from(frame: ChildTranscriptFrame) -> Self {
-        match frame {
-            C::Session(u) => TranscriptFrame::Session(u),
-            C::Acpx(n) => TranscriptFrame::Acpx(n),
-        }
-    }
-}
 
 /// A transcript frame plus the stream metadata its envelope carried. A frame
 /// from the server stream holds the envelope's event seq — the resume

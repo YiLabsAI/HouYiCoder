@@ -9,7 +9,7 @@ use houyicoder_protocol::frontend::session_update::{
 
 use super::super::{RowNames, TurnFold};
 use super::{MAX_CALL_ID, MAX_TOOL_NAME, NAMED_TOOLS, PENDING_CALLS, TurnCheckpoint};
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 
 /// The most the state holds of what a frame carried: the names it keeps, which
 /// are the tool names and call ids a frame supplied. The identities it holds

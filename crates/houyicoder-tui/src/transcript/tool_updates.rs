@@ -3,7 +3,7 @@
 //! and carry the precomputed body without re-reading the update.
 
 use crate::records::ToolOutcome;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::frontend::session_update::ToolCallStatus;
 use houyicoder_protocol::frontend::session_update::ToolCallUpdate;

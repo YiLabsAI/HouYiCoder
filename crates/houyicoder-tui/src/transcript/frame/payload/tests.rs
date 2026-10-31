@@ -1,4 +1,5 @@
 use super::*;
+use crate::transcript::records::{SubagentFinished, SubagentOutcome};
 use houyicoder_protocol::frontend::session_update::{
     Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate, ToolCallUpdate,
     ToolCallUpdateFields,
@@ -53,5 +54,26 @@ fn test_sizes_plan_entries() {
     assert!(
         sized(plan) >= FRAME_OVERHEAD + step.len(),
         "a plan's step text is resident"
+    );
+}
+
+/// A trace the frontend raised carries the task text and the child's id, and
+/// both are resident for as long as the row is. Counting it as overhead alone
+/// would let a window of long task descriptions sit past its budget.
+#[test]
+fn test_sizes_trace_text() {
+    let task = "map every route the auth middleware guards".repeat(4);
+    let trace = TranscriptFrame::Frontend(FrontendRow::SubagentFinished(SubagentFinished {
+        child_sid: "child-xyz".into(),
+        subagent_type: "explore".into(),
+        description: task.clone(),
+        outcome: SubagentOutcome::Finished,
+        duration_ms: Some(12_000),
+        tool_uses: 7,
+    }));
+
+    assert!(
+        sized(trace) >= FRAME_OVERHEAD + task.len(),
+        "the trace's task text is resident"
     );
 }

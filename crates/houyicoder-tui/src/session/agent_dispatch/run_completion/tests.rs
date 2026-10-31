@@ -8,7 +8,7 @@ use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate}
 use houyicoder_protocol::llm::Usage;
 
 use crate::composition::app;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 
 /// A turn that produced neither reasoning nor a tool call is a plain
 /// text reply; the rebuild must not surface a summary row for it, whose

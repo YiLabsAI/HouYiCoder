@@ -24,10 +24,19 @@ pub(crate) fn span_label(ms: u64) -> String {
 pub(crate) fn session_span_label(ms: Option<u64>) -> String {
     match ms {
         None => "—".to_string(),
-        // A span under a second states its milliseconds: dividing it to whole
-        // seconds would print a session that took 620ms as no time at all.
-        Some(ms) if ms < 1000 => format!("{ms}ms"),
-        Some(ms) => format_span_secs(ms / 1000),
+        Some(ms) => summary_span_label(ms),
+    }
+}
+
+/// A measured span at the coarse step a one-line summary reads: milliseconds
+/// below a second, then the compact label that steps up through the units.
+/// Dividing a span under a second to whole seconds would print work that took
+/// 620ms as no time at all.
+pub(crate) fn summary_span_label(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format_span_secs(ms / 1000)
     }
 }
 

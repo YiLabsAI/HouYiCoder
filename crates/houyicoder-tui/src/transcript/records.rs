@@ -9,6 +9,9 @@ use houyicoder_protocol::frontend::context::ContextBreakdown;
 mod approval;
 pub use approval::{APPROVAL_OPTIONS, Approval};
 
+mod subagent;
+pub use subagent::{SubagentFinished, SubagentOutcome};
+
 use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
@@ -291,6 +294,11 @@ pub enum TranscriptLine {
         /// row share one source. None when the agent has no color set.
         color: Option<String>,
     },
+    /// The terminal moment of a child agent, raised in the parent timeline
+    /// when its final status arrives. The view of a running child closes on
+    /// exit; this row is what lets the reader go back to the delegation after
+    /// it ended.
+    SubagentFinished(SubagentFinished),
 }
 
 /// The one-line label a compaction row shows. The statistics sit in
@@ -609,6 +617,9 @@ impl TranscriptLine {
             // A delegation surfaces its summary as the searchable text; the
             // child transcript is fetched on expand, not inlined here.
             Self::Subagent { summary, .. } => summary.clone(),
+            // The trace reads the same way here as on its own row, so a
+            // search for the ending finds it and the row it lands on agrees.
+            Self::SubagentFinished(child) => child.text(),
             Self::Compaction { stats, .. } => {
                 // The search fallback carries no affordance: nothing on this
                 // path toggles anything, so only the event and its

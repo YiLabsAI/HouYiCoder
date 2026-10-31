@@ -1,7 +1,7 @@
 use super::*;
 use crate::records::TURN_CONTENT_OUT_OF_VIEW;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
-use crate::transcript::FrontendRow;
+use crate::transcript::frame::FrontendRow;
 
 /// Trim runs only at the tail. A scrolled-back reader pins a fixed viewport,
 /// so draining the oldest lines would shift the content under it; a scroll-up

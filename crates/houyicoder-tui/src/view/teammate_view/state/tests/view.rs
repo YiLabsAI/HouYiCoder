@@ -15,7 +15,7 @@ use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::render_text;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 

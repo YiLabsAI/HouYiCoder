@@ -6,7 +6,8 @@
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 
-use super::{FrontendRow, SequencedFrame, TranscriptFrame};
+use super::{FrontendRow, TranscriptFrame};
+use crate::transcript::SequencedFrame;
 
 /// The text carried by a content chunk, when the chunk wraps a text block.
 /// Non-text blocks (Image) have no flat text; an empty string degenerates the
@@ -50,6 +51,11 @@ fn frame_payload_bytes(frame: &TranscriptFrame) -> usize {
         // The context grid is a small bounded structure of counters and
         // labels; a flat estimate covers it without walking every field.
         TranscriptFrame::Frontend(FrontendRow::Context(_)) => CONTEXT_FRAME_BYTES,
+        // A trace holds the child id, the agent type, and the task text; the
+        // rest of the record is a handful of numbers.
+        TranscriptFrame::Frontend(FrontendRow::SubagentFinished(child)) => {
+            child.child_sid.len() + child.subagent_type.len() + child.description.len()
+        }
         TranscriptFrame::Frontend(_) => 0,
     }
 }

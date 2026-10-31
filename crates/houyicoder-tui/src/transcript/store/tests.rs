@@ -1,7 +1,7 @@
 use super::*;
 use crate::records::ToolOutcome;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
-use crate::transcript::frame_payload::chunk_text;
+use crate::transcript::frame::payload::chunk_text;
 use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};

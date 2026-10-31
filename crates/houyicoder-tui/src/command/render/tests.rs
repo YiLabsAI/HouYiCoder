@@ -1,6 +1,6 @@
 use super::*;
 use crate::command::render::render_trajectory_wire;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::transcript_from_frames;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::memory::MemoryDetail;

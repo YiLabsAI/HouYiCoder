@@ -1,5 +1,5 @@
 use super::*;
-use crate::transcript::FrontendRow;
+use crate::transcript::frame::FrontendRow;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};

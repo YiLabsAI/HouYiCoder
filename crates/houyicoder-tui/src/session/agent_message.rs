@@ -15,7 +15,8 @@ use houyicoder_protocol::llm::EffortLevel;
 use std::time::{Duration, Instant};
 
 use crate::records::TranscriptLine;
-use crate::transcript::{SequencedFrame, TranscriptFrame};
+use crate::transcript::SequencedFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::frontend::agents::AgentEntry;
 use houyicoder_protocol::frontend::checkpoint::CheckpointListView;
 use houyicoder_protocol::frontend::checkpoint::CheckpointRestoreView;

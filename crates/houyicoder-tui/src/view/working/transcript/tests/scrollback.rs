@@ -16,7 +16,7 @@ use crate::records::TranscriptLine;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::{App, EventCursor, Screen};
 use crate::test_harness::render_text;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 
 fn agent_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(

@@ -5,7 +5,7 @@ use crate::composition;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{BashProgress, Screen};
 use crate::test_harness::render_text;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };

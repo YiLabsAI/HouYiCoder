@@ -12,7 +12,7 @@ use crate::state::history_read::{HistoryReadOutcome, HistoryReadResult, HistoryS
 use crate::state::transcript::DiskFront;
 use crate::state::{App, Screen};
 use crate::test_harness::render_text;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::run::ContentBlock;

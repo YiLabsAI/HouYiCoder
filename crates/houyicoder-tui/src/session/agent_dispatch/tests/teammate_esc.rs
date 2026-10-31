@@ -7,7 +7,7 @@ use crate::records::TeammateView;
 use crate::records::TranscriptLine;
 use crate::state::Screen;
 use crate::test_harness::attach_connection;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::frontend::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 

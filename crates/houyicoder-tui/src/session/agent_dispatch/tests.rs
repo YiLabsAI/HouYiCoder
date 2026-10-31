@@ -4,7 +4,7 @@ use crate::records::TranscriptLine;
 use crate::state::Pane;
 use crate::state::enums::LiveBlock;
 use crate::test_harness::{connected_app_events, wait_for_request};
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::memory::{
@@ -28,6 +28,7 @@ mod model;
 #[path = "tests/panels.rs"]
 mod panels;
 mod shell;
+mod subagent_finished;
 #[path = "tests/subagent_fold.rs"]
 mod subagent_fold;
 #[path = "tests/subagent_render.rs"]

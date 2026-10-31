@@ -20,7 +20,7 @@ use crate::test_harness::MockSnapshot;
 use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
 use crate::todo_view::TodoStatus;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
 use crate::transcript::snapshot::{
     ReadError, ScanProgress, SnapshotLoad, TranscriptSnapshot, WindowLoad,

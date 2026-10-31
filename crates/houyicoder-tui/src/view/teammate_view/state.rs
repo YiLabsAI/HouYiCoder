@@ -4,9 +4,10 @@
 
 use crate::agent_message::ClientCommand;
 use crate::agent_message::FleetEntry;
-use crate::records::{TeammateView, TranscriptLine};
+use crate::session::approval::SubagentTarget;
 use crate::state::App;
 use crate::state::parked_view_states::ParkedViewState;
+use crate::transcript::records::{SubagentFinished, TeammateView, TranscriptLine};
 use houyicoder_protocol::frontend::SessionId;
 
 impl App {
@@ -23,15 +24,18 @@ impl App {
             .find(|e| e.agent_id == sid)
     }
 
-    /// Enter the teammate view for the Subagent line at the cursor, or the
-    /// most recent Subagent line when no cursor is set. Reuses the cursor
-    /// walk shared with toggle_subagent_expand so the line targeted for
-    /// inline expand is the line drilled into. When the child transcript is
-    /// already loaded into the fold-group, copies it into the view; otherwise
-    /// fires the on-demand fetch and the view fills when it returns. Returns
-    /// false when no Subagent line exists.
+    /// Enter the teammate view for the child row at the cursor, or the most
+    /// recent one when no cursor is set. Reuses the cursor walk shared with
+    /// toggle_subagent_expand, so the child named for inline expand is the
+    /// one drilled into. When the child transcript is already loaded into the
+    /// fold-group, copies it into the view; otherwise fires the on-demand
+    /// fetch and the view fills when it returns. Returns false when the
+    /// transcript names no child.
     pub(crate) fn enter_teammate_view(&mut self) -> bool {
-        let Some((child_sid, needs_fetch)) = self.subagent_target_or_last() else {
+        let Some((child_sid, needs_fetch)) = self
+            .subagent_target_or_last()
+            .map(SubagentTarget::into_parts)
+        else {
             return false;
         };
         self.enter_teammate_view_for_sid(&child_sid, needs_fetch)
@@ -58,32 +62,48 @@ impl App {
             ..Default::default()
         };
         let mut fire_fetch = needs_fetch;
+        let mut traced: Option<&SubagentFinished> = None;
         for line in self.sessions.current.transcript.lines() {
-            if let TranscriptLine::Subagent {
-                child_sid: sid,
-                subagent_type,
-                summary: _,
-                prompt,
-                folded_transcript,
-                color,
-            } = line
-                && sid == child_sid
-            {
-                view.subagent_type = subagent_type.clone();
-                view.prompt = prompt.clone();
-                view.color = color.clone();
-                if !folded_transcript.is_empty() {
-                    view.transcript = folded_transcript.clone();
-                    fire_fetch = false;
+            match line {
+                TranscriptLine::Subagent {
+                    child_sid: sid,
+                    subagent_type,
+                    summary: _,
+                    prompt,
+                    folded_transcript,
+                    color,
+                } if sid == child_sid => {
+                    view.subagent_type = subagent_type.clone();
+                    view.prompt = prompt.clone();
+                    view.color = color.clone();
+                    if !folded_transcript.is_empty() {
+                        view.transcript = folded_transcript.clone();
+                        fire_fetch = false;
+                    }
+                    break;
                 }
-                break;
+                TranscriptLine::SubagentFinished(child) if child.child_sid == child_sid => {
+                    traced = Some(child);
+                }
+                _ => {}
             }
         }
         // A running child has no fold-group row yet (the row is created
-        // when the result lands). Fall back to the live agent entry for
-        // the agent type, which is known at spawn. prompt is not on the
-        // live entry (left empty); color is only set by the result frame
-        // (left None).
+        // when the result lands), so fall back for the type. The trace is
+        // tried first: once a finished child's fleet row leaves the strip,
+        // its trace is the only row left naming the task, and the view it
+        // opens should read the same as the row that opened it. The live
+        // agent entry is the last resort; its type was known when the child
+        // started, but the entry carries no task, and color is only set by
+        // the result frame.
+        if view.subagent_type.is_empty()
+            && let Some(child) = traced
+        {
+            view.subagent_type = child.subagent_type.clone();
+            if !child.description.is_empty() {
+                view.prompt = child.description.clone();
+            }
+        }
         if view.subagent_type.is_empty()
             && let Some(e) = self.fleet_entry(child_sid)
         {

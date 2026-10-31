@@ -20,7 +20,8 @@ use crate::keys::handle_working;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{App, Screen, ViewportMode};
 use crate::test_harness::{MockSnapshot, render_buffer, render_text};
-use crate::transcript::{SequencedFrame, TranscriptFrame};
+use crate::transcript::SequencedFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::envelope::DurableEventId;
 use ratatui::buffer::Buffer;
 

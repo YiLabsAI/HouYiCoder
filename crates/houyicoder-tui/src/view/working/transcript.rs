@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use super::compaction_rows::push_compaction_rows;
-use super::delegation_rows::{Delegation, push_delegation_rows};
+use super::delegation_rows::{Delegation, push_delegation_rows, push_finished_rows};
 use super::notice_rows::push_notice_rows;
 use super::shell_row::ShellRow;
 use super::shell_row::shell_command_line;
@@ -472,6 +472,14 @@ pub(crate) fn push_line_rows(
             color: color.as_deref(),
         };
         push_delegation_rows(&delegation, grp, width, app, sink);
+        return true;
+    }
+    if let TranscriptLine::SubagentFinished(child) = line {
+        // One row: the trace is a line in the timeline, not a block to fold.
+        // It carries no fold key, so a click selects its text like any other
+        // content; Enter on it opens the child's view through the cursor
+        // walk.
+        push_finished_rows(child, width, sink);
         return true;
     }
     if let TranscriptLine::Compaction {

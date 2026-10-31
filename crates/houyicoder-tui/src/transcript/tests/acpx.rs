@@ -5,7 +5,8 @@ use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 
 use crate::records::TranscriptLine;
-use crate::transcript::{TranscriptFrame, transcript_from_frames};
+use crate::transcript::frame::TranscriptFrame;
+use crate::transcript::transcript_from_frames;
 
 fn user_msg(text: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::UserMessageChunk(ContentChunk::new(

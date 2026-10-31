@@ -19,7 +19,7 @@ use crate::composition;
 use crate::records::TranscriptLine;
 use crate::state::{App, Screen};
 use crate::test_harness::render_buffer;
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
 
 /// The pane the tests read: wide enough that a marker takes one row, narrow

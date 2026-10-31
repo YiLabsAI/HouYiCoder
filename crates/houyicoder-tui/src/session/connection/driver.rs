@@ -18,7 +18,8 @@ use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as Fr
 use crate::agent_message::{
     ClientCommand, ConnectionEvent, ServerEvent, ServerRequest, ServerResponse, SessionMessage,
 };
-use crate::transcript::{SequencedFrame, TranscriptFrame};
+use crate::transcript::SequencedFrame;
+use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::acpx::AcpxMethod;
 use tokio::sync::mpsc::UnboundedReceiver;
 

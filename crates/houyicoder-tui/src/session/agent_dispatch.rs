@@ -30,8 +30,9 @@ use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::terminal_title::sync as sync_terminal_title;
-use crate::transcript::frame_payload::chunk_text;
-use crate::transcript::{SequencedFrame, TranscriptFrame, transcript_from_frames};
+use crate::transcript::frame::TranscriptFrame;
+use crate::transcript::frame::payload::chunk_text;
+use crate::transcript::{SequencedFrame, transcript_from_frames};
 
 impl App {
     /// Apply an inbound agent message to application state. Dispatch follows

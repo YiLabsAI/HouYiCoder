@@ -15,6 +15,40 @@ use crate::ui::selection::anchor_row;
 use crate::view::todo_list::TODO_FOLD_KEY;
 use houyicoder_protocol::frontend::SessionId;
 
+/// The child a transcript row names, as a key target. The two forms answer
+/// different keys, and the difference is the point of the type: a live
+/// delegation is a fold block the expand chord opens in place, while the
+/// trace of a finished child holds no rows to expand and only the drill-in
+/// key acts on it. Flattened into one shape, the expand chord claimed the
+/// trace row it could not open, reported the chord handled, and left the
+/// screen unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubagentTarget {
+    /// The live delegation line, with whether its child transcript still
+    /// needs fetching.
+    Delegation {
+        child_sid: String,
+        needs_fetch: bool,
+    },
+    /// The trace a finished child left in the timeline.
+    Trace { child_sid: String },
+}
+
+impl SubagentTarget {
+    /// The child session id either form names, and whether opening it must
+    /// fetch the transcript. A delegation knows from its fold block; a trace
+    /// never holds rows, so it always asks.
+    pub(crate) fn into_parts(self) -> (String, bool) {
+        match self {
+            Self::Delegation {
+                child_sid,
+                needs_fetch,
+            } => (child_sid, needs_fetch),
+            Self::Trace { child_sid } => (child_sid, true),
+        }
+    }
+}
+
 impl App {
     /// Approve the artifact/hunk/finding/proposal for the current pane. Each
     /// pane knows what approval means: spec/plan approve the design; diff
@@ -108,11 +142,16 @@ impl App {
     }
 
     /// Toggle the inline expansion of the delegation the cursor is on. False
-    /// when the cursor is elsewhere, so the caller can offer the row to the
-    /// other expandable kinds. A first expand of an unloaded line fires a
-    /// one-shot fetch; a re-expand reuses the cached rows.
+    /// when the cursor is elsewhere or on a finished child's trace, so the
+    /// caller can offer the row to the other expandable blocks. A first expand
+    /// of an unloaded line fires a one-shot fetch; a re-expand reuses the
+    /// cached rows.
     pub(crate) fn toggle_subagent_expand(&mut self) -> bool {
-        let Some((child_sid, needs_fetch)) = self.subagent_target_at_cursor() else {
+        let Some(SubagentTarget::Delegation {
+            child_sid,
+            needs_fetch,
+        }) = self.subagent_target_at_cursor()
+        else {
             return false;
         };
         self.apply_subagent_toggle(child_sid, needs_fetch);
@@ -267,8 +306,7 @@ impl App {
         }
     }
 
-    /// Resolve the delegation under the selection cursor: the child session id
-    /// and whether its transcript still needs fetching. None when the cursor
+    /// Resolve the child row under the selection cursor. None when the cursor
     /// is unset or on another kind of line; a caller wanting a default names
     /// its own.
     ///
@@ -277,7 +315,7 @@ impl App {
     /// slot, so the cursor's content-row lives in the fold-aware slot
     /// space. A flat walk diverges whenever a folded group precedes the
     /// target line and mis-resolves to the wrong Subagent.
-    pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
+    pub(crate) fn subagent_target_at_cursor(&self) -> Option<SubagentTarget> {
         let transcript = self.active_transcript();
         let groups = self.active_fold_groups();
         let slots = display_slots(
@@ -296,21 +334,29 @@ impl App {
                 row += 1;
             }
             if row + rows > content_row {
-                // Cursor lands in this slot. A Summary slot or a non-Subagent
-                // Line is not a delegation, so the answer is None -- this walk
-                // does not look elsewhere.
+                // Cursor lands in this slot. A Summary slot or a line that is
+                // not about a child is not a delegation, so the answer is None
+                // -- this walk does not look elsewhere.
                 let DisplaySlot::Line(i, _) = slot else {
                     return None;
                 };
-                let TranscriptLine::Subagent {
-                    child_sid,
-                    folded_transcript,
-                    ..
-                } = &transcript[*i]
-                else {
-                    return None;
+                return match &transcript[*i] {
+                    TranscriptLine::Subagent {
+                        child_sid,
+                        folded_transcript,
+                        ..
+                    } => Some(SubagentTarget::Delegation {
+                        child_sid: child_sid.clone(),
+                        needs_fetch: folded_transcript.is_empty(),
+                    }),
+                    // The trace a finished child left behind opens the same
+                    // view. It holds no rows of its own, so the expand chord
+                    // declines it and only the drill-in key takes it.
+                    TranscriptLine::SubagentFinished(child) => Some(SubagentTarget::Trace {
+                        child_sid: child.child_sid.clone(),
+                    }),
+                    _ => None,
                 };
-                return Some((child_sid.clone(), folded_transcript.is_empty()));
             }
             row += rows;
             if rows > 0 {
@@ -320,10 +366,10 @@ impl App {
         None
     }
 
-    /// The delegation the cursor is on, else the most recent. The drill-in key
-    /// means "open a child", so with no line named it opens the newest; the
-    /// expand key has other kinds of block to weigh and defaults differently.
-    pub(crate) fn subagent_target_or_last(&self) -> Option<(String, bool)> {
+    /// The child the cursor is on, else the most recent. The drill-in key means
+    /// "open a child", so with no line named it opens the newest; the expand
+    /// key has other blocks to weigh and defaults differently.
+    pub(crate) fn subagent_target_or_last(&self) -> Option<SubagentTarget> {
         let lines = self.transcript().lines();
         self.subagent_target_at_cursor().or_else(|| {
             lines.iter().rev().find_map(|line| match line {
@@ -331,7 +377,16 @@ impl App {
                     child_sid,
                     folded_transcript,
                     ..
-                } => Some((child_sid.clone(), folded_transcript.is_empty())),
+                } => Some(SubagentTarget::Delegation {
+                    child_sid: child_sid.clone(),
+                    needs_fetch: folded_transcript.is_empty(),
+                }),
+                // The trace names the same child as the fold head does, so
+                // an idle enter takes whichever of the two sits nearest the
+                // tail.
+                TranscriptLine::SubagentFinished(child) => Some(SubagentTarget::Trace {
+                    child_sid: child.child_sid.clone(),
+                }),
                 _ => None,
             })
         })

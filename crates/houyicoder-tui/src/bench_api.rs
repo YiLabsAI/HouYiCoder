@@ -9,8 +9,9 @@
 use crate::composition;
 use crate::fold::compute_fold_groups;
 use crate::state::App;
+use crate::transcript::SequencedFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::store::Transcript;
-use crate::transcript::{SequencedFrame, TranscriptFrame};
 
 /// Build a bare App carrying the given frame log. A bare App has no
 /// server or runtime, which is all the rebuild and fold paths need. Takes

@@ -17,8 +17,10 @@ use crate::scroll::RowRelease;
 use crate::session::PollOutcome;
 use crate::state::App;
 use crate::state::enums::LiveBlock;
-use crate::transcript::frame_payload::chunk_text;
-use crate::transcript::{FrontendRow, SequencedFrame, TranscriptFrame, is_user_frame};
+use crate::transcript::SequencedFrame;
+use crate::transcript::frame::payload::chunk_text;
+use crate::transcript::frame::{FrontendRow, TranscriptFrame};
+use crate::transcript::is_user_frame;
 
 const MAX_REBUILD_FRAMES: usize = 500;
 const PREPEND_BATCH: usize = 100;

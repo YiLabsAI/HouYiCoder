@@ -109,6 +109,12 @@ impl App {
                 }
                 n
             }
+            // The trace draws as one row at every width: the name takes the
+            // room that is left and the figures give way before the row
+            // does. Its text is one line even when the task summary carried
+            // a newline, so the fallback's line split would count the same
+            // row twice.
+            TranscriptLine::SubagentFinished(_) => 1,
             // count==render: a user prompt wraps + caps like the render path.
             TranscriptLine::User(text) => {
                 self.ui.renderer.lines.borrow_mut().user_row_count(text, w)

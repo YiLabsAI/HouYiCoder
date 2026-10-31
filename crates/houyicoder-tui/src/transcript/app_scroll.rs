@@ -11,7 +11,7 @@ use crate::scroll::{
     NewMessageCount, RowRelease, ScrollAnchor, ScrollTransition, TranscriptScroll,
 };
 use crate::state::{App, EventCursor};
-use crate::transcript::TranscriptFrame;
+use crate::transcript::frame::TranscriptFrame;
 use crate::view::working::history_window::window_rows;
 use crate::view::working::transcript::ensure_cached_slots;
 use houyicoder_protocol::frontend::run::ContentBlock;

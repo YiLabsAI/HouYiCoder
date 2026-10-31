@@ -5,14 +5,15 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use super::transcript::push_line_rows;
-use crate::records::TranscriptLine;
 use crate::rows::row_set::{Row, RowSet};
 use crate::selection::TAG_PLAIN;
 use crate::selection::TAG_SYSTEM;
 use crate::state::App;
 use crate::toggle_hint::ToggleHint;
+use crate::transcript::records::{SubagentFinished, SubagentOutcome, TranscriptLine};
 use crate::view::badge_color;
 use crate::view::line_wrap::truncate_width;
+use crate::view::{ERROR_RED, SUCCESS_GREEN};
 
 /// One delegation's render inputs, borrowed from its transcript line. Grouped
 /// because they describe one thing; as loose parameters they said nothing
@@ -100,6 +101,96 @@ pub(crate) fn push_delegation_rows(
     });
 }
 
+/// The finished-child trace as one row: the status mark carries the ending's
+/// color, and the rest reads as ordinary text so the row stays selectable and
+/// searchable. Green is the same success color the tool-call marks use, red
+/// the same error color; interrupted takes yellow, and an ending this build
+/// cannot name stays neutral rather than borrowing a verdict it never saw.
+pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mut RowSet) {
+    let (name, suffix) = fit_finished(child, width);
+    let rest = match &name {
+        Some(name) => format!(" Agent \"{name}{suffix}"),
+        None => format!(" Agent {suffix}"),
+    };
+    sink.push(
+        Row::new(TAG_PLAIN, format!("\u{25cf}{rest}")).pre(Some(Line::from(vec![
+            Span::styled("\u{25cf}".to_string(), finished_mark_style(child.outcome)),
+            Span::raw(rest),
+        ]))),
+    );
+}
+
+/// The mark and the opening quote every trace row with a name draws before
+/// it. Every part but the name is measured before the name takes its share
+/// of the row.
+const FINISHED_PREFIX: &str = "\u{25cf} Agent \"";
+
+/// The same lead without the quote pair, for a row too narrow to draw any
+/// name: empty quotes would read as a delegation with a blank task rather
+/// than one whose name had to be dropped.
+const UNNAMED_PREFIX: &str = "\u{25cf} Agent ";
+
+fn finished_mark_style(outcome: SubagentOutcome) -> Style {
+    let color = match outcome {
+        SubagentOutcome::Finished | SubagentOutcome::TurnLimit | SubagentOutcome::Budget => {
+            SUCCESS_GREEN
+        }
+        SubagentOutcome::Failed => ERROR_RED,
+        SubagentOutcome::Interrupted => Color::Yellow,
+        SubagentOutcome::Unknown => Color::DarkGray,
+    };
+    Style::default().fg(color)
+}
+
+/// Fit the trace to one row, in the order its parts matter.
+///
+/// The ending and the measured figures are whole facts and the name is a
+/// label, so they keep their columns first and the name takes what is left.
+/// When nothing is left, the row drops the quote pair and reads as the
+/// ending alone: a clipped ending reports an outcome nobody can read, while
+/// an empty pair of quotes reads as a delegation with a blank task. Only a
+/// row too narrow for the ending itself shortens the ending.
+///
+/// Every measurement is display columns, not characters: a name written in
+/// wide characters takes two columns each, and counting characters would
+/// hand the row a line twice its width.
+fn fit_finished(child: &SubagentFinished, width: u16) -> (Option<String>, String) {
+    let ending = child.ending();
+    let duration = child.duration_text().unwrap_or_default();
+    let tools = child.tools_text();
+    let budget = (width as usize).saturating_sub(UnicodeWidthStr::width(FINISHED_PREFIX));
+    let suffix = [
+        format!("{ending}{duration}{tools}"),
+        format!("{ending}{duration}"),
+    ]
+    .into_iter()
+    .find(|candidate| UnicodeWidthStr::width(candidate.as_str()) <= budget)
+    .unwrap_or_else(|| ending.clone());
+    let room = budget.saturating_sub(UnicodeWidthStr::width(suffix.as_str()));
+    if room > 0 {
+        return (Some(truncate_width(&child.name(), room)), suffix);
+    }
+    fit_unnamed(child, width)
+}
+
+/// The same fit without a name. The quote pair gives its two columns back to
+/// the ending and its figures, so more of them survive on a narrow row.
+fn fit_unnamed(child: &SubagentFinished, width: u16) -> (Option<String>, String) {
+    let budget = (width as usize).saturating_sub(UnicodeWidthStr::width(UNNAMED_PREFIX));
+    let label = child.outcome.label();
+    let duration = child.duration_text().unwrap_or_default();
+    let tools = child.tools_text();
+    let suffix = [
+        format!("{label}{duration}{tools}"),
+        format!("{label}{duration}"),
+        label.to_string(),
+    ]
+    .into_iter()
+    .find(|candidate| UnicodeWidthStr::width(candidate.as_str()) <= budget)
+    .unwrap_or_else(|| label.to_string());
+    (None, truncate_width(&suffix, budget))
+}
+
 /// The head as a styled line: dim throughout, with the agent type in its
 /// badge color when it has one. Dim is this transcript's mark of a collapsed
 /// block -- every other fold handle carries it, and the head was the one
@@ -126,10 +217,10 @@ fn head_line(subagent_type: &str, summary: &str, hint: &str, color: Option<&str>
 /// the row. The hint is dropped whole only when the row cannot hold the marker,
 /// the type and the hint together, where drawing it would mean clipping it.
 ///
-/// Every measurement here is display columns, not characters. A summary in a
-/// wide-glyph script occupies two columns per character, so a character count
-/// undercounts by half and hands the row a line twice its width, which clips
-/// the chord just as the unbounded summary did.
+/// Every measurement here is display columns, not characters. A summary
+/// written in wide characters occupies two columns each, so a character
+/// count undercounts by half and hands the row a line twice its width,
+/// which clips the chord just as the unbounded summary did.
 fn fit_head(subagent_type: &str, summary: &str, hint: &str, width: u16) -> (String, String) {
     // The marker, the type, and the separator between the type and the
     // summary: all three are drawn whatever the summary does.
