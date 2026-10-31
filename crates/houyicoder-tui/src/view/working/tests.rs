@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::run::ApprovalRequest;
 use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -19,7 +20,9 @@ use crate::selection::RecordingClipboard;
 use crate::selection::is_non_selectable;
 use crate::selection::{Selection, extract_text};
 use crate::state::App;
+use crate::state::Pane;
 use crate::state::Screen;
+use crate::state::ViewportMode;
 use crate::test_harness::{render_buffer, render_text};
 use crate::todo_view::{TodoStatus, TodoView};
 use crate::view::draw;
@@ -66,6 +69,69 @@ fn test_approval_keeps_prior_content() {
         out.contains("Do you want to proceed?"),
         "the approval card must still render in its own region:\n{out}"
     );
+}
+
+/// A run raising an approval must show its card wherever the user is
+/// looking. A pane drawn full screen hides the transcript the card lives in,
+/// so the run sits paused on a verdict and the user, seeing only the pane,
+/// waits on a turn that is waiting on them.
+#[test]
+fn test_approval_folds_focus_view() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.viewport = ViewportMode::Focus;
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Do you want to proceed?"),
+        "the card must be on screen after the ask arrives:\n{out}"
+    );
+}
+
+/// The transcript viewport replaces the working layout too, so an ask raised
+/// while the reader is scrolled into the transcript must bring that layout
+/// back or the run waits on a verdict nobody can see.
+#[test]
+fn test_approval_folds_transcript_view() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.viewport = ViewportMode::Scroll;
+    app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Do you want to proceed?"),
+        "the card must be on screen after the ask arrives:\n{out}"
+    );
+}
+
+/// The login and review console screens replace the working layout
+/// wholesale, and their keys act on the pane rather than the ask. An ask
+/// raised while either is up must return to the screen that draws the card,
+/// or the run waits on a verdict nobody can see.
+#[test]
+fn test_approval_returns_to_working() {
+    for screen in [Screen::Login, Screen::Console] {
+        let mut app = composition::app();
+        app.ui.navigation.screen = screen;
+        app.raise_agent_approval(approval_ask("c1"), RequestId(1));
+        let out = render_text(&app, 80, 24);
+        assert!(
+            out.contains("Do you want to proceed?"),
+            "the card must be on screen after the ask arrives:\n{out}"
+        );
+    }
+}
+
+fn approval_ask(call_id: &str) -> ApprovalRequest {
+    ApprovalRequest {
+        call_id: call_id.into(),
+        tool_name: "bash".into(),
+        input: serde_json::json!({"command": "ls"}),
+        options: Vec::new(),
+        reason: None,
+        delegation: None,
+    }
 }
 
 /// Reasoning folds into the "thought for Ns (ctrl+o)" line

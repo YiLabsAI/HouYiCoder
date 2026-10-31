@@ -14,6 +14,7 @@ use crate::agent_message::ClientCommand;
 use crate::ask_question_model::AskQuestion;
 use crate::records::Approval;
 use crate::state::App;
+use crate::state::Screen;
 use crate::state::enums::{LiveBlock, TrustChoice};
 
 /// A reverse request the host is waiting on, of one of two forms. At most one
@@ -315,6 +316,15 @@ impl App {
         self.sessions
             .current
             .raise_permission(req_id, vec![ask.clone()]);
+        // The card is drawn only by the working layout. A pane replaces that
+        // layout in Focus, the transcript replaces it in Scroll, and the
+        // login and review console screens replace it wholesale. Left where
+        // the user was looking, the ask would be invisible while the run sat
+        // paused on a verdict nobody can see, so raising an ask returns to
+        // the working screen and layout. The open pane stays selected; only
+        // what is drawn changes.
+        self.fold_to_working();
+        self.ui.navigation.screen = Screen::Working;
         self.refresh_fold_active();
         if tool == "AskUserQuestion"
             && let Some(aq) = AskQuestion::parse(&call_id, &ask.input)
