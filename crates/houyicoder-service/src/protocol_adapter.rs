@@ -17,7 +17,6 @@ mod trajectory_row;
 pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
 
-use houyicoder_core::agent::RunError as EngineRunError;
 use houyicoder_core::agent::RunOutcome as EngineOutcome;
 
 use AcpxMethod::*;

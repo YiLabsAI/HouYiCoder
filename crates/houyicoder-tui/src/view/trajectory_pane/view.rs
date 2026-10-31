@@ -410,6 +410,10 @@ pub enum RecordOutcome {
     Failed,
     /// Started but not finished inside the loaded window.
     Pending,
+    /// The outcome a durable record states when the log left it unreadable:
+    /// not in progress, just unknowable. Distinct from Pending so a past read
+    /// does not borrow the in-progress glyph.
+    Unknown,
 }
 
 impl RecordOutcome {
@@ -419,6 +423,7 @@ impl RecordOutcome {
             Self::Ok => "✓",
             Self::Failed => "✗",
             Self::Pending => "…",
+            Self::Unknown => "?",
         }
     }
 }
@@ -540,7 +545,7 @@ impl ReadOutcome {
         match self {
             Self::Read => RecordOutcome::Ok,
             Self::Failed => RecordOutcome::Failed,
-            Self::Unknown => RecordOutcome::Pending,
+            Self::Unknown => RecordOutcome::Unknown,
         }
     }
 }

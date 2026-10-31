@@ -115,7 +115,6 @@ fn test_ctrl_u_kills_line() {
     );
 }
 
-<<<<<<< HEAD
 /// Ctrl+U at the start of a wrapped line has nothing behind it to delete, so
 /// the readline meaning alone leaves the key dead at exactly the moment the
 /// draft should go. It clears the field instead, which is the whole-buffer

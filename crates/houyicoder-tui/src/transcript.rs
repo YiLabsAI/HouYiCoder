@@ -43,7 +43,6 @@ use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
 use crate::transcript::frame_payload::chunk_text;
 use crate::transcript::rows::NamedRows;
-use crate::transcript::shell_result::shell_facts;
 
 mod call_rows;
 pub(crate) mod frame_payload;
@@ -723,49 +722,6 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 ));
                 self.ids.push(id.clone());
             }
-        }
-    }
-
-    /// Emit a user-typed command as its own dollar-prompt row, then the result
-    /// row the tool result produces. The call stays out of the turn's tool
-    /// summary: it is the user's action, and a summary of what the agent ran
-    /// would misplace it.
-    fn emit_shell_call(&mut self, tc: &ToolCall, id: &RowId, upd: Option<PendingUpdate>) {
-        let call_id = tc.tool_call_id.0.clone();
-        let command = tc
-            .raw_input
-            .as_ref()
-            .and_then(|input| input.get("command"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let (outcome, output, duration_ms) = match &upd {
-            Some(update) => (
-                update.outcome.unwrap_or(ToolOutcome::Running),
-                update.output.as_ref(),
-                update.duration_ms,
-            ),
-            None => (ToolOutcome::Running, None, None),
-        };
-        let facts = output.map(shell_facts).unwrap_or_default();
-        self.out.push(TranscriptLine::ShellCommand {
-            command,
-            outcome,
-            duration_ms,
-            exit_code: facts.exit_code,
-            timed_out: facts.timed_out,
-            storage: facts.storage,
-            cas: facts.cas,
-        });
-        self.ids.push(id.clone());
-        if let Some(output) = output {
-            self.out.push(tool_result_line(
-                &call_id,
-                &tc.title,
-                output,
-                tc.raw_input.as_ref(),
-            ));
-            self.ids.push(id.clone());
         }
     }
 

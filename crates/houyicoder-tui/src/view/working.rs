@@ -13,7 +13,6 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::Color,
 };
 
 use super::approval::{
@@ -23,14 +22,8 @@ use super::teammate_view::draw_banner;
 use crate::keys::pane_replaces_input;
 use crate::selection::TAG_PLAIN;
 use crate::state::{App, Pane, ViewportMode};
-use crate::view::agents_pane::AGENTS_PANE_HEIGHT;
-use crate::view::agents_pane::draw_content;
-use crate::view::pane::render;
-use crate::view::status::pane::{STATUS_PANE_HEIGHT, draw_content as status_draw_content};
 use crate::view::{
-    artifact, capability, hooks_pane, input_bar, memory_pane, model_pane, palette, queue_overlay,
-    queue_pane, resume_picker, sandbox_pane, skill_picker, skills_pane, status, toast,
-    trajectory_pane, worktree_pane,
+    artifact, capability, input_bar, palette, queue_overlay, skill_picker, status, toast,
 };
 
 mod compaction_rows;
@@ -39,6 +32,7 @@ pub(crate) mod fleet_strip;
 mod footer_budget;
 pub(crate) mod history_window;
 mod notice_rows;
+mod panes;
 mod shell_row;
 mod tail_rows;
 pub(crate) mod transcript;
@@ -120,7 +114,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     }
     if let Some(i) = layout.slots.approval {
         approval_draw(f, app, outer[i]);
-        stash_approval_rows(f, outer[i], app);
+        panes::stash_approval_rows(f, outer[i], app);
     }
     if let Some(i) = layout.slots.ask {
         super::ask_question::draw(f, app, outer[i]);
@@ -409,17 +403,17 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
     match app.ui.navigation.pane {
         Pane::Diff => capability::draw_diff_full(f, area, app),
         Pane::Transcript => transcript::draw_transcript(f, area, app),
-        Pane::Memory => draw_memory_pane(f, area, app),
-        Pane::Sandbox => draw_sandbox_pane(f, area, app),
-        Pane::Worktree => draw_worktree_pane(f, area, app),
-        Pane::Trajectory => draw_trajectory_pane(f, area, app),
-        Pane::Status => draw_status_pane(f, area, app),
-        Pane::Resume => draw_resume_pane(f, area, app),
-        Pane::Hooks => draw_hooks_pane(f, area, app),
-        Pane::Skills => draw_skills_pane(f, area, app),
-        Pane::Model => draw_model_pane(f, area, app),
-        Pane::Agents => draw_agents_pane(f, area, app),
-        Pane::Queue => draw_queue_pane(f, area, app),
+        Pane::Memory => panes::draw_memory_pane(f, area, app),
+        Pane::Sandbox => panes::draw_sandbox_pane(f, area, app),
+        Pane::Worktree => panes::draw_worktree_pane(f, area, app),
+        Pane::Trajectory => panes::draw_trajectory_pane(f, area, app),
+        Pane::Status => panes::draw_status_pane(f, area, app),
+        Pane::Resume => panes::draw_resume_pane(f, area, app),
+        Pane::Hooks => panes::draw_hooks_pane(f, area, app),
+        Pane::Skills => panes::draw_skills_pane(f, area, app),
+        Pane::Model => panes::draw_model_pane(f, area, app),
+        Pane::Agents => panes::draw_agents_pane(f, area, app),
+        Pane::Queue => panes::draw_queue_pane(f, area, app),
         _ => capability::draw(f, area, app),
     }
 }
@@ -440,7 +434,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // no stub-vs-wired style divergence (/permissions renders
     // below the REPL prompt in both contexts).
     if matches!(app.ui.navigation.pane, Pane::Permission) {
-        draw_permission_pane(f, area, app);
+        panes::draw_permission_pane(f, area, app);
         return;
     }
     // The /memory pane renders inline (the Pane primitive, shared with
@@ -448,7 +442,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // toggle rows in the lower band. NOT an external editor — the user stays
     // in-TUI, mirroring /permissions and /search. One path for stub + wired.
     if matches!(app.ui.navigation.pane, Pane::Memory) {
-        draw_memory_pane(f, area, app);
+        panes::draw_memory_pane(f, area, app);
         return;
     }
     // The /worktrees pane renders inline (the Pane primitive, shared with
@@ -458,18 +452,18 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // copy come free via the shared PaneRegion (the mouse router keys on
     // the pane rect, which draw_command_pane stashes).
     if matches!(app.ui.navigation.pane, Pane::Worktree) {
-        draw_worktree_pane(f, area, app);
+        panes::draw_worktree_pane(f, area, app);
         return;
     }
     // The /sandbox pane renders inline (the Pane primitive, shared with
     // /permissions /worktrees /memory): transcript tail above, the
     // boundaries or the recorded checkpoints in the lower band.
     if matches!(app.ui.navigation.pane, Pane::Sandbox) {
-        draw_sandbox_pane(f, area, app);
+        panes::draw_sandbox_pane(f, area, app);
         return;
     }
     if matches!(app.ui.navigation.pane, Pane::Trajectory) {
-        draw_trajectory_pane(f, area, app);
+        panes::draw_trajectory_pane(f, area, app);
         return;
     }
     // The /status pane renders inline (the Pane primitive, shared with
@@ -478,7 +472,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // live pane so Esc dismisses + the field set stays visible while the
     // cache refreshes.
     if matches!(app.ui.navigation.pane, Pane::Status) {
-        draw_status_pane(f, area, app);
+        panes::draw_status_pane(f, area, app);
         return;
     }
     // The /resume picker renders inline (the Pane primitive): transcript tail
@@ -486,39 +480,39 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // the shared template keeps the transcript tail visible + selection +
     // copy working for free.
     if matches!(app.ui.navigation.pane, Pane::Resume) {
-        draw_resume_pane(f, area, app);
+        panes::draw_resume_pane(f, area, app);
         return;
     }
     // The /hooks pane renders inline (the Pane primitive): transcript tail
     // above, the hook list below.
     if matches!(app.ui.navigation.pane, Pane::Hooks) {
-        draw_hooks_pane(f, area, app);
+        panes::draw_hooks_pane(f, area, app);
         return;
     }
     // The /skills pane renders inline (the Pane primitive): transcript tail
     // above, the discovered-skill list below.
     if matches!(app.ui.navigation.pane, Pane::Skills) {
-        draw_skills_pane(f, area, app);
+        panes::draw_skills_pane(f, area, app);
         return;
     }
     // The /model pane renders inline (the Pane primitive): transcript tail
     // above, the selectable model list below.
     if matches!(app.ui.navigation.pane, Pane::Model) {
-        draw_model_pane(f, area, app);
+        panes::draw_model_pane(f, area, app);
         return;
     }
     // The /agents pane renders inline (the Pane primitive): transcript tail
     // above, the live children, the returned delegations, and the delegatable
     // types below.
     if matches!(app.ui.navigation.pane, Pane::Agents) {
-        draw_agents_pane(f, area, app);
+        panes::draw_agents_pane(f, area, app);
         return;
     }
     // The queue pane renders inline (the Pane primitive): transcript tail
     // above, the queued-item list below. Opened by clicking the collapsed
     // +N more strip, not by a slash command.
     if matches!(app.ui.navigation.pane, Pane::Queue) {
-        draw_queue_pane(f, area, app);
+        panes::draw_queue_pane(f, area, app);
         return;
     }
     if app.sessions.current.connection.is_some() {
@@ -552,248 +546,6 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     transcript::draw_transcript(f, cols[0], app);
     capability::draw(f, cols[1], app);
 }
-
-/// Render a slash-command pane: transcript tail in the upper band, the Pane
-/// frame (─ divider + cleared region) in the lower band with the command's
-/// content closure. The shared shape for /permissions, /search, and future
-/// slash-command panes — one template, not a copy per command. Capped at half
-/// the main area so the transcript stays visible.
-fn draw_command_pane<C>(f: &mut Frame, area: Rect, app: &App, pane_h: u16, content: C)
-where
-    C: Fn(&mut Frame, Rect, &App),
-{
-    let pane_h = pane_h.min(f.area().height / 2).max(8).min(area.height);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(pane_h)])
-        .split(area);
-    transcript::draw_transcript(f, chunks[0], app);
-    render(f, chunks[1], Color::Cyan, |f, inner| {
-        content(f, inner, app);
-        stash_pane_rows(f, inner, app);
-    });
-}
-
-/// Stash the rendered pane content rows and inner rect so the in-app
-/// selection + copy path can reach text the slash-command pane drew. The
-/// panes (/permissions /search /memory) render through arbitrary widgets
-/// (List, Paragraph, SearchBox); rather than duplicate each widget's row
-/// construction, the rendered cells are read straight from the frame buffer
-/// after the content closure draws — the buffer is the single source of
-/// truth for what the user sees. Trailing blanks are trimmed per row so a
-/// drag to the right edge past text does not pad the clipboard. The content
-/// closure has already finished drawing by the time this runs, so the cells
-/// reflect the final pane content for the frame.
-fn stash_pane_rows(f: &mut Frame, inner: Rect, app: &App) {
-    app.ui.frame.layout.pane_rect.set(inner);
-    let mut rows = app.ui.frame.layout.last_pane_rows.borrow_mut();
-    rows.clear();
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    let buf = f.buffer_mut();
-    for ry in 0..inner.height {
-        let y = inner.y + ry;
-        let mut row = String::with_capacity(inner.width as usize);
-        for rx in 0..inner.width {
-            let x = inner.x + rx;
-            if let Some(cell) = buf.cell((x, y)) {
-                row.push_str(cell.symbol());
-            }
-        }
-        rows.push((TAG_PLAIN, row.trim_end().to_string()));
-    }
-}
-
-/// Stash the rendered approval card rows + rect so the in-app selection
-/// path can reach the text the approval card drew. Mirrors stash_pane_rows.
-fn stash_approval_rows(f: &mut Frame, area: Rect, app: &App) {
-    app.ui.frame.layout.approval_rect.set(area);
-    let mut rows = app.ui.frame.layout.last_approval_rows.borrow_mut();
-    rows.clear();
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let buf = f.buffer_mut();
-    for ry in 0..area.height {
-        let y = area.y + ry;
-        let mut row = String::with_capacity(area.width as usize);
-        for rx in 0..area.width {
-            let x = area.x + rx;
-            if let Some(cell) = buf.cell((x, y)) {
-                row.push_str(cell.symbol());
-            }
-        }
-        rows.push((TAG_PLAIN, row.trim_end().to_string()));
-    }
-}
-
-/// Render the /permissions Pane: transcript tail above, the rule manager in the
-/// lower band. Capped at half the main area so the transcript stays visible.
-fn draw_permission_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        PERMISSION_PANE_HEIGHT,
-        capability::draw_permission_content,
-    );
-}
-
-/// Default height /permissions asks for: tabs + description + SearchBox + an
-/// 8-row list + footer. Capped at half the main area by the caller.
-const PERMISSION_PANE_HEIGHT: u16 = 18;
-
-/// Render the /memory pane: transcript tail above, the stored-memory list in
-/// the lower band under a header carrying the auto-memory / auto-dream status
-/// row. Shares the draw_command_pane template with /permissions and /search so
-/// the three slash-command panes have one shape. The pane stays in-TUI (no
-/// external editor): the user browses, shows a body, and flips toggles without
-/// leaving the conversation.
-fn draw_memory_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(f, area, app, MEMORY_PANE_HEIGHT, memory_pane::draw_content);
-}
-
-/// Default height /memory asks for: a header with the status row + an 8-row
-/// list + a two- or three-row footer depending on width. Capped at half the
-/// main area by the caller.
-const MEMORY_PANE_HEIGHT: u16 = 16;
-
-/// Render the queue pane: transcript tail above, the queued-item list in
-/// the lower band. Opened by clicking the collapsed +N more strip.
-fn draw_queue_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(f, area, app, QUEUE_PANE_HEIGHT, queue_pane::draw_content);
-}
-
-const QUEUE_PANE_HEIGHT: u16 = 12;
-
-/// Render the /worktrees pane: transcript tail above, the linked-worktree
-/// list in the lower band. Shares the draw_command_pane template with
-/// /permissions /search /memory so the slash-command panes have one shape.
-/// The pane is the in-TUI worktree manager: browse, Enter for one's detail,
-/// e to enter it, d to remove it.
-fn draw_worktree_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        WORKTREE_PANE_HEIGHT,
-        worktree_pane::draw_content,
-    );
-}
-
-/// Render the /trajectory pane. Level 0 (turn list) shares the
-/// draw_command_pane template so the transcript tail stays visible above while
-/// the user scans the session timeline. Drilling into a turn (Level 1) or an
-/// event (Level 2) goes fullscreen: the user is now focused on one span, the
-/// transcript tail is not useful context, and a turn's event list plus its
-/// header and key-hint footer need the full height to stay visible. Follows
-/// the /search detail fullscreen pattern. Shows mock trajectory data until the
-/// observability log is wired into the agent loop.
-fn draw_trajectory_pane(f: &mut Frame, area: Rect, app: &App) {
-    if app.ui.trajectory.level() >= 1 {
-        render(f, area, Color::Cyan, |f, inner| {
-            trajectory_pane::draw_content(f, inner, app);
-            stash_pane_rows(f, inner, app);
-        });
-    } else {
-        draw_command_pane(
-            f,
-            area,
-            app,
-            TRAJECTORY_PANE_HEIGHT,
-            trajectory_pane::draw_content,
-        );
-    }
-}
-
-const TRAJECTORY_PANE_HEIGHT: u16 = 20;
-
-/// Render the /status pane: transcript tail above, the status fields
-/// (identity + runtime + session + tasks) in the lower band. Shares the
-/// draw_command_pane template with /permissions /memory /worktrees /resume.
-/// A live pane (not a transcript dump): Esc dismisses, and the field set
-/// stays visible while the cache refreshes.
-fn draw_status_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(f, area, app, STATUS_PANE_HEIGHT, status_draw_content);
-}
-
-/// Render the /resume picker pane: transcript tail above, the filtered
-/// session list in the lower band. Shares the draw_command_pane template
-/// with /permissions /memory /worktrees /status. The picker state machine
-/// (SessionPickerState) + keys (Up/Down/Enter/Esc/char) stay; only the
-/// container moves from a bottom-anchored popover to the shared template.
-fn draw_resume_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        RESUME_PANE_HEIGHT,
-        resume_picker::draw_content,
-    );
-}
-
-/// Default height /resume asks for: a header + up to 10 visible rows + a
-/// footer. Capped at half the main area by draw_command_pane.
-const RESUME_PANE_HEIGHT: u16 = 16;
-
-/// Render the /hooks pane: transcript tail above, the hook list below.
-fn draw_hooks_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        hooks_pane::HOOKS_PANE_HEIGHT,
-        hooks_pane::draw_content,
-    );
-}
-
-fn draw_agents_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(f, area, app, AGENTS_PANE_HEIGHT, draw_content);
-}
-
-fn draw_skills_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        skills_pane::SKILLS_PANE_HEIGHT,
-        skills_pane::draw_content,
-    );
-}
-
-/// Render the /model pane: transcript tail above, the selectable model list in
-/// the lower band. Shares the draw_command_pane template with the other
-/// slash-command panes. Up/Down navigate, Enter sets the default, s uses this
-/// session only, Esc closes.
-fn draw_model_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        model_pane::MODEL_PANE_HEIGHT,
-        model_pane::draw_content,
-    );
-}
-
-/// Default height /worktrees asks for: a header + an 8-row list + a footer
-/// hint. Capped at half the main area by the caller.
-const WORKTREE_PANE_HEIGHT: u16 = 14;
-
-fn draw_sandbox_pane(f: &mut Frame, area: Rect, app: &App) {
-    draw_command_pane(
-        f,
-        area,
-        app,
-        SANDBOX_PANE_HEIGHT,
-        sandbox_pane::draw_content,
-    );
-}
-
-/// Default height /sandbox asks for. The checkpoints list needs the most
-/// rows of the four levels it shows; the Sandbox tab and the two detail
-/// levels fill what they need and leave the rest to the transcript.
-const SANDBOX_PANE_HEIGHT: u16 = 14;
 
 #[cfg(test)]
 mod tests;

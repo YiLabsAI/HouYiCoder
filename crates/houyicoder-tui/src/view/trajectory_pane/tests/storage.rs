@@ -81,7 +81,7 @@ fn test_header_states_four_stages() {
         record_detail::draw_event_detail(&turn(1, "ask"), &detail, 0, Rect::new(0, 0, 200, 20), 0);
     let text = lines_text(&header);
     assert!(
-        text.contains("captured 100.0 KiB → saved → view a1b2c3d4 22.5 KiB preview"),
+        text.contains("captured 100.0 KiB → saved → model view a1b2c3d4 22.5 KiB preview"),
         "{text}"
     );
     assert!(text.contains("in assembly 7"), "{text}");

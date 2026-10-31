@@ -49,6 +49,7 @@ pub(super) fn outcome_color(outcome: RecordOutcome) -> Color {
         RecordOutcome::Ok => Color::Green,
         RecordOutcome::Failed => Color::Red,
         RecordOutcome::Pending => Color::DarkGray,
+        RecordOutcome::Unknown => Color::DarkGray,
     }
 }
 

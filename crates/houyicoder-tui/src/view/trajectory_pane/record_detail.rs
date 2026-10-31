@@ -249,7 +249,7 @@ fn storage_stages(ev: &TrajectoryRecord, width: u16) -> Option<Line<'static>> {
         None => "unknown".to_string(),
     };
     let text = format!(
-        " {captured} → {saved} → view {view} → read {}",
+        " {captured} → {saved} → model view {view} → read {}",
         read_count(stored)
     );
     let label = " storage: ";

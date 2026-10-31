@@ -932,6 +932,7 @@ fn test_outcome_glyphs() {
     assert_eq!(RecordOutcome::Ok.glyph(), "✓");
     assert_eq!(RecordOutcome::Failed.glyph(), "✗");
     assert_eq!(RecordOutcome::Pending.glyph(), "…");
+    assert_eq!(RecordOutcome::Unknown.glyph(), "?");
 }
 
 /// Every record kind has a stable label for the L1 kind column.

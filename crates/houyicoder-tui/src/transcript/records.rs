@@ -12,8 +12,8 @@ pub use approval::{APPROVAL_OPTIONS, Approval};
 use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
-use crate::view::context_view::context_grid_text;
 use crate::transcript::shell_result::ShellStorage;
+use crate::view::context_view::context_grid_text;
 use crate::view::relative_time::turn_span_label;
 
 /// Drill-down rows under the /context grid: per-source memory and per-skill

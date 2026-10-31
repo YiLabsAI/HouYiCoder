@@ -19,15 +19,12 @@ use crate::records::ContextFileEntry;
 use crate::records::ContextSkillEntry;
 use crate::records::ContextSuggestion;
 use crate::records::{ContextView, SuggestionSeverity};
-use crate::view::byte_size::format_byte_size;
 use crate::view::line_wrap::wrap_hanging;
 use crate::view::skill_origin::cost_label;
 use crate::view::skill_origin::display_order;
 use crate::view::skill_origin::heading_spans;
 use crate::view::skill_origin::heading_text;
-use houyicoder_protocol::frontend::context::{
-    CasAssemblyUsage, CasSizeUnit, CasUsage, ContextBreakdown, DelegatedContext, GridCell,
-};
+use houyicoder_protocol::frontend::context::{ContextBreakdown, DelegatedContext, GridCell};
 use unicode_width::UnicodeWidthStr;
 
 /// Midpoint glyph threshold: a cell at least this full draws the filled ball.
@@ -109,7 +106,7 @@ pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'st
     let memory = memory_rows(&view.drill.memory_files);
     let skills = skills_rows(&view.drill.skills);
     let delegated = delegated_rows(bd.delegated.as_ref());
-    let storage = cas_rows(bd.cas.as_ref());
+    let storage = cas::cas_rows(bd.cas.as_ref());
     if !memory.is_empty() || !skills.is_empty() || !delegated.is_empty() || !storage.is_empty() {
         out.push(blank_row());
         push_section(&mut out, &indent, memory);
@@ -297,203 +294,10 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
     // The stored-block account: what the session kept, what it cost raw, and
     // what its newest request carried. A log that records none of it says so
     // rather than printing the zeros of an account that was never kept.
-    if let Some(line) = cas_legend(bd.cas.as_ref()) {
+    if let Some(line) = cas::cas_legend(bd.cas.as_ref()) {
         rows.push(vec![Span::styled(line, dim)]);
     }
     rows
-}
-
-/// The legend's one block-store line, or None when the session reported no
-/// stored-block account at all. A figure the log does not carry reads as
-/// unknown; a measured zero stays a zero.
-fn cas_legend(cas: Option<&CasUsage>) -> Option<String> {
-    let cas = cas?;
-    // A build that predates the capture account states no result figure, but
-    // its tool results still name the blocks they used, so the marker count is
-    // a measured fact and stays on the line.
-    if !cas.tracked {
-        return Some(if cas.blocks > 0 {
-            format!("cas: unknown \u{00b7} {} blocks", cas.blocks)
-        } else {
-            "cas: unknown".to_string()
-        });
-    }
-    let mut parts = vec![match cas.results {
-        Some(results) => format!("{results} results"),
-        None => "unknown results".to_string(),
-    }];
-    parts.push(match cas.raw_bytes {
-        Some(bytes) => format!("raw {}", format_byte_size(bytes)),
-        None => "raw unknown".to_string(),
-    });
-    // The assembled size comes from the one formatter the drill uses, so the
-    // two representations of one assembly cannot state it differently.
-    parts.push(match cas.assembly.as_ref().and_then(assembly_size) {
-        Some(size) => format!("model {size}"),
-        None => "model unknown".to_string(),
-    });
-    // A failed save is the fact this account exists to state, so it stays on
-    // the line even when the session stored nothing. A count the account
-    // measured its results but not its failures for is named as unknown
-    // rather than dropped.
-    match cas.save_failed {
-        Some(failed) if failed > 0 => parts.push(format!("{failed} save failed")),
-        None => parts.push("save failures unknown".to_string()),
-        Some(_) => {}
-    }
-    match cas.truncated {
-        Some(truncated) if truncated > 0 => parts.push(format!("{truncated} truncated")),
-        None => parts.push("truncations unknown".to_string()),
-        Some(_) => {}
-    }
-    Some(format!("cas: {}", parts.join(" \u{00b7} ")))
-}
-
-/// An assembly's carried size in the unit its record named, or None when the
-/// unit is one this build does not know: a byte count printed as tokens would
-/// misstate the cost.
-fn assembly_size(assembly: &CasAssemblyUsage) -> Option<String> {
-    match assembly.unit {
-        CasSizeUnit::Tokens => Some(format!("~{} tokens", format_tokens(assembly.size))),
-        CasSizeUnit::Bytes => Some(format_byte_size(assembly.size)),
-        CasSizeUnit::Unknown => None,
-    }
-}
-
-/// The block-store drill-down: the account itself, what the newest request
-/// carried, what the host's index covers, and who read a stored result. Empty
-/// when the session reported no account. The three stages stay on separate
-/// rows, because a request carrying a block, a read of it, and the save that
-/// made it readable are different facts.
-fn cas_rows(cas: Option<&CasUsage>) -> Vec<Vec<Span<'static>>> {
-    let Some(cas) = cas else {
-        return Vec::new();
-    };
-    let bold = Style::new().add_modifier(Modifier::BOLD);
-    let dim = Style::new().fg(Color::DarkGray);
-    let mut rows: Vec<Vec<Span>> = Vec::new();
-    rows.push(vec![
-        Span::styled("CAS storage", bold),
-        Span::styled(" \u{00b7} /trajectory", dim),
-    ]);
-    let results = match cas.results {
-        Some(n) => n.to_string(),
-        None => "unknown".to_string(),
-    };
-    // A captured figure that some result could not measure is a floor, so the
-    // row says how much of the account it does not cover.
-    let captured = format!(
-        "captured: raw {} \u{00b7} {} save failed \u{00b7} {} truncated",
-        cas.raw_bytes
-            .map(format_byte_size)
-            .unwrap_or_else(|| "unknown".to_string()),
-        cas.save_failed
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        cas.truncated
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-    );
-    let mut lines = vec![
-        format!(
-            "results: {results} \u{00b7} unique blocks: {} \u{00b7} verified: unknown",
-            cas.blocks
-        ),
-        match cas.unmeasured_results.filter(|n| *n > 0) {
-            Some(unmeasured) => format!("{captured} \u{00b7} {unmeasured} unmeasured"),
-            None => captured,
-        },
-        assembly_row(cas.assembly.as_ref()),
-        index_row(cas),
-        reads_row(cas),
-    ];
-    if !cas.tracked {
-        // The build that wrote this log kept no capture account, so every
-        // figure but the marker count is unknown. The rows above still speak
-        // for the blocks the tool results name, which the log does measure;
-        // this note says why the rest reads as unknown.
-        lines.push(
-            "this log predates the capture account \u{00b7} only the block count is measured"
-                .to_string(),
-        );
-    }
-    let last = lines.len().saturating_sub(1);
-    for (i, line) in lines.drain(..).enumerate() {
-        rows.push(vec![
-            Span::styled(if i == last { "\u{2514} " } else { "\u{251C} " }, dim),
-            Span::styled(line, dim),
-        ]);
-    }
-    rows
-}
-
-/// Who read a stored result. A log that carries no read record says so
-/// instead of reporting a zero the session never measured, and a terminal
-/// with no read path leaves its own count unknown.
-fn reads_row(cas: &CasUsage) -> String {
-    if !cas.reads_recorded {
-        return "reads: not recorded".to_string();
-    }
-    let mut row = format!(
-        "reads: model {} \u{00b7} UI {} \u{00b7} failed {} \u{00b7} /trajectory",
-        cas.model_reads,
-        cas.ui_reads
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        cas.failed_reads,
-    );
-    if cas.unknown_reads > 0 {
-        row.push_str(&format!(" \u{00b7} unknown {}", cas.unknown_reads));
-    }
-    row
-}
-
-/// What the newest assembly carried from the store, in its own unit, with the
-/// forms it used. A log with no assembly record leaves the model view unknown
-/// rather than reporting a request that carried nothing.
-fn assembly_row(assembly: Option<&CasAssemblyUsage>) -> String {
-    let Some(assembly) = assembly else {
-        return "current assembly: unknown".to_string();
-    };
-    let mut forms = vec![
-        format!("{} full", assembly.full),
-        format!("{} preview", assembly.preview),
-        format!("{} pointer", assembly.pointer),
-    ];
-    if assembly.unavailable > 0 {
-        forms.push(format!("{} unavailable", assembly.unavailable));
-    }
-    if assembly.unclassified > 0 {
-        forms.push(format!("{} unclassified", assembly.unclassified));
-    }
-    let size = assembly_size(assembly).unwrap_or_else(|| "unknown size".to_string());
-    format!("current assembly: {} ({})", size, forms.join(", "))
-}
-
-/// What the host's index covers, as a share of the results the session
-/// stored. A host that serves no stored-result request leaves the index
-/// unknown rather than reporting an empty one, and a log that cannot count
-/// its results leaves the share unknown rather than inventing a denominator.
-fn index_row(cas: &CasUsage) -> String {
-    let Some(index) = cas.indexed.as_ref() else {
-        return "indexed: unavailable".to_string();
-    };
-    let coverage = if index.complete {
-        "complete"
-    } else {
-        "partial"
-    };
-    let as_of = index.as_of.as_deref().unwrap_or("unknown");
-    let held = match cas.results {
-        Some(results) if results > 0 => format!("{}/{}", index.indexed, results),
-        Some(_) => index.indexed.to_string(),
-        None => format!("{} of unknown", index.indexed),
-    };
-    let mut row = format!("indexed: {held} \u{00b7} {coverage} \u{00b7} as of event {as_of}");
-    if index.corrupt > 0 {
-        row.push_str(&format!(" \u{00b7} {} corrupt", index.corrupt));
-    }
-    row
 }
 
 /// The memory source rows: a bold header plus dim suffix, then one tree-glyph
@@ -699,6 +503,8 @@ pub(crate) fn context_grid_text(view: &ContextView) -> String {
     }
     s.trim_end().to_string()
 }
+
+pub(crate) mod cas;
 
 #[cfg(test)]
 mod tests;

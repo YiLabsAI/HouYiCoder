@@ -8,9 +8,16 @@
 
 use houyicoder_protocol::block_ref::block_sizes;
 use houyicoder_protocol::capture_record::read_capture_reference;
+use houyicoder_protocol::frontend::session_update::ToolCall;
 use serde_json::Value;
 
+use crate::records::{ToolOutcome, TranscriptLine};
+use crate::row_id::RowId;
 use crate::view::byte_size::format_byte_size;
+
+use super::call_rows::tool_result_line;
+use super::tool_updates::PendingUpdate;
+use super::{LineBuilder, TranscriptFrame};
 
 /// What the host kept of a command's raw output beyond the bounded text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +86,56 @@ pub(crate) fn cas_tag(output: &Value) -> Option<String> {
         .find_map(|(hash, bytes)| bytes.map(|bytes| (hash, bytes)))?;
     let short: String = hash.chars().take(8).collect();
     Some(format!("CAS {short} ({})", format_byte_size(bytes)))
+}
+
+impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
+    /// Emit a user-typed command as its own dollar-prompt row, then the result
+    /// row the tool result produces. The call stays out of the turn's tool
+    /// summary: it is the user's action, and a summary of what the agent ran
+    /// would misplace it.
+    pub(super) fn emit_shell_call(
+        &mut self,
+        tc: &ToolCall,
+        id: &RowId,
+        upd: Option<PendingUpdate>,
+    ) {
+        let call_id = tc.tool_call_id.0.clone();
+        let command = tc
+            .raw_input
+            .as_ref()
+            .and_then(|input| input.get("command"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let (outcome, output, duration_ms) = match &upd {
+            Some(update) => (
+                update.outcome.unwrap_or(ToolOutcome::Running),
+                update.output.as_ref(),
+                update.duration_ms,
+            ),
+            None => (ToolOutcome::Running, None, None),
+        };
+        let facts = output.map(shell_facts).unwrap_or_default();
+        self.out.push(TranscriptLine::ShellCommand {
+            command,
+            outcome,
+            duration_ms,
+            exit_code: facts.exit_code,
+            timed_out: facts.timed_out,
+            storage: facts.storage,
+            cas: facts.cas,
+        });
+        self.ids.push(id.clone());
+        if let Some(output) = output {
+            self.out.push(tool_result_line(
+                &call_id,
+                &tc.title,
+                output,
+                tc.raw_input.as_ref(),
+            ));
+            self.ids.push(id.clone());
+        }
+    }
 }
 
 #[cfg(test)]
