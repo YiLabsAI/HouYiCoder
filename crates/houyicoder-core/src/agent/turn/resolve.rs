@@ -186,6 +186,7 @@ impl Runner {
         // so the live delta renders per-tool progress, not a batch dump when
         // the slowest parallel call returns. Blocked results (Deny/Feedback/
         // Ask) and unrunnable calls had no execution, so they append after.
+        withhold::withhold_shell_after_refused_edit(&mut exec, &blocked, &call_names);
         let mut results = self.execute_partitioned(session, &exec, token).await?;
         for (id, output) in &blocked {
             self.append_tool_result(session, id.clone(), "", output.clone(), 0)
@@ -316,3 +317,4 @@ fn scan_for_authorizable(
 
 #[cfg(test)]
 mod tests;
+mod withhold;

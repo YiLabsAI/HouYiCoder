@@ -1,5 +1,6 @@
 //! Tests for this module.
 
+use super::withhold::withhold_shell_after_refused_edit;
 use super::*;
 use houyicoder_api::skill::{SkillFamily, SkillProvenance, SkillSource};
 use houyicoder_api::tool::ToolCtx;
@@ -245,4 +246,77 @@ fn test_plan_judges_translated_input() {
         plan.input["command"], "run >/dev/null",
         "execution runs the command the verdict addressed"
     );
+}
+
+/// A tool that carries a fixed name, so a plan can stand for edit, read, or
+/// bash without three separate stubs.
+struct NamedTool(&'static str);
+
+impl Tool for NamedTool {
+    fn name(&self) -> &str {
+        self.0
+    }
+    fn description(&self) -> &str {
+        "test stub"
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(serde_json::json!({})) })
+    }
+}
+
+fn named_plan(id: &str, name: &'static str) -> ToolCallPlan {
+    ToolCallPlan::new(id.to_string(), Arc::new(NamedTool(name)), Value::Null)
+}
+
+/// A refused edit withdraws the shell calls queued beside it. The model pairs
+/// a write with a verification in one turn; when the write is refused the
+/// verification would run against source that was never written and report a
+/// failure about the wrong thing.
+#[test]
+fn test_refused_edit_withholds_shell() {
+    let mut exec = vec![named_plan("e1", "edit"), named_plan("b1", "bash")];
+    let blocked = vec![("e1".to_string(), serde_json::json!({"error": "denied"}))];
+    let mut names = HashMap::new();
+    names.insert("e1".to_string(), "edit".to_string());
+    names.insert("b1".to_string(), "bash".to_string());
+
+    withhold_shell_after_refused_edit(&mut exec, &blocked, &names);
+
+    assert!(
+        exec.iter().all(|p| p.tool.name() != "bash"),
+        "the verification is withdrawn"
+    );
+    assert_eq!(exec.len(), 1, "the edit plan itself is untouched");
+}
+
+/// A refused call that is not a file edit withdraws nothing. A denied read
+/// must not take the rest of the turn's work with it.
+#[test]
+fn test_refused_read_keeps_shell() {
+    let mut exec = vec![named_plan("r1", "read"), named_plan("b1", "bash")];
+    let blocked = vec![("r1".to_string(), serde_json::json!({"error": "denied"}))];
+    let mut names = HashMap::new();
+    names.insert("r1".to_string(), "read".to_string());
+    names.insert("b1".to_string(), "bash".to_string());
+
+    withhold_shell_after_refused_edit(&mut exec, &blocked, &names);
+
+    assert_eq!(exec.len(), 2, "an unrelated refusal withdraws nothing");
+}
+
+/// No refusal means no withdrawal, so a write and its check still run in the
+/// same turn.
+#[test]
+fn test_no_refusal_keeps_shell() {
+    let mut exec = vec![named_plan("e1", "edit"), named_plan("b1", "bash")];
+    let mut names = HashMap::new();
+    names.insert("e1".to_string(), "edit".to_string());
+    names.insert("b1".to_string(), "bash".to_string());
+
+    withhold_shell_after_refused_edit(&mut exec, &[], &names);
+
+    assert_eq!(exec.len(), 2, "an unrefused turn runs everything it queued");
 }

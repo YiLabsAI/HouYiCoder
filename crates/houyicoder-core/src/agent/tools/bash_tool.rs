@@ -186,6 +186,7 @@ impl Tool for BashTool {
          Input: {command: string, timeout_ms?: number}. \
          Returns stdout/stderr/exit_code; a call stopped at its budget returns \
          timed_out and what the command printed before the stop. \
+         Use this for builds, tests, git; a source rewrite from here is refused. \
          When issuing multiple commands: if they are independent, make \
          multiple Bash calls in a single message so they run in parallel \
          (example: run git status and git diff as two calls in one message, \

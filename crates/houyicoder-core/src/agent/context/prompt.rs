@@ -375,16 +375,17 @@ fn efficiency_section() -> String {
 fn using_tools_section() -> String {
     "# Using your tools\n\
      Do not use Bash to run commands when a relevant dedicated tool is \
-     provided. Using dedicated tools allows the user to better understand \
-     and review your work. This is critical:\n\
+     provided. Using dedicated tools allows the user to understand and review \
+     your work. This is critical:\n\
      - To read files use Read instead of cat, head, tail, or sed.\n\
-     - To edit files use Edit instead of sed or awk.\n\
+     - To edit files use Edit or MultiEdit instead of sed, perl, or awk.\n\
      - To create files use Write instead of cat heredoc or echo redirection.\n\
      - To search for files use Glob instead of find or ls.\n\
      - To search file contents use Grep instead of grep or rg.\n\
-     - Reserve Bash for system commands and terminal operations that require \
-     shell execution. When unsure and a dedicated tool exists, default to it; \
-     fall back to Bash only when necessary.\n\
+     Never rewrite a source file from a shell command: a python one-liner, a \
+     sed in-place edit, or a scripted write skips the checks, the undo ledger, \
+     and the diff, so it is refused. Use Bash for builds and tests; send an edit \
+     and its check in one turn.\n\
      For compound shell commands: if the commands are independent and can run \
      in parallel, make multiple Bash calls in a single message (example: to \
      run git status and git diff, send one message with two Bash calls in \
