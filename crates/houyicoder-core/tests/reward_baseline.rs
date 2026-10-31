@@ -80,6 +80,7 @@ fn test_dry_run_structure() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         }),
         mk(SessionEvent::MemoryRecall {
             text: "lesson".into(),

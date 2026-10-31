@@ -4,7 +4,8 @@
 //! block it was meant to replace.
 
 use houyicoder_api::result_catalog::{ResultCatalog, ResultCatalogError};
-use houyicoder_context::SessionId;
+use houyicoder_api::session::SessionLog;
+use houyicoder_context::{CachedRead, ReadActor, ReadOutcome, SessionEvent, SessionId};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::result_catalog::{
     ResultCompleteness, ResultContent, ResultCursor, ResultEntry, ResultFilter, ResultId,
@@ -13,7 +14,7 @@ use houyicoder_protocol::result_catalog::{
 };
 use serde::Deserialize;
 
-use crate::agent::tools::results::SessionResultCatalog;
+use crate::agent::append::new_event;
 
 /// Bytes one read returns when the caller asks for no particular length.
 const READ_BYTES: u32 = 4096;
@@ -63,11 +64,25 @@ pub(super) enum Request {
     Stats,
 }
 
-/// Answer one stored-result request from the catalog.
+/// One stored-result read, unpacked from the request so the read path takes
+/// one value rather than six fields.
+struct ReadWindow {
+    id: String,
+    offset: Option<u64>,
+    len: Option<u32>,
+    line: Option<u64>,
+    count: Option<u32>,
+    cursor: Option<String>,
+}
+
+/// Answer one stored-result request from the catalog. A read is written to the
+/// session's log as it happens, so the account names the session that asked
+/// rather than whichever writer drains next.
 pub(super) async fn serve(
-    catalog: &SessionResultCatalog,
+    catalog: &dyn ResultCatalog,
     session: SessionId,
     request: Request,
+    log: &dyn SessionLog,
 ) -> Result<String, ToolError> {
     match request {
         Request::List {
@@ -125,33 +140,98 @@ pub(super) async fn serve(
             count,
             cursor,
         } => {
-            let range = match line {
-                Some(start) => ResultRange::Lines {
-                    start,
-                    count: count.unwrap_or(DEFAULT_LINES),
+            serve_read(
+                catalog,
+                session,
+                ReadWindow {
+                    id,
+                    offset,
+                    len,
+                    line,
+                    count,
+                    cursor,
                 },
-                None => ResultRange::Bytes {
-                    offset: offset.unwrap_or(0),
-                    len: len.unwrap_or(READ_BYTES).min(READ_BYTES_MAX),
-                },
-            };
-            let read = catalog
-                .read(
-                    session,
-                    ResultReadQuery {
-                        id: ResultId::new(id),
-                        range,
-                        cursor: cursor.map(ResultCursor::new),
-                    },
-                )
-                .await
-                .map_err(catalog_error)?;
-            Ok(render_read(&read))
+                log,
+            )
+            .await
         }
         Request::Stats => {
             let stats = catalog.stats(session).await.map_err(catalog_error)?;
             Ok(render_stats(&stats))
         }
+    }
+}
+
+/// Answer a read, recording the attempt for the session's read record whether
+/// it delivered or not: a failed read is what tells a reader the store could
+/// not serve content it was asked for.
+async fn serve_read(
+    catalog: &dyn ResultCatalog,
+    session: SessionId,
+    window: ReadWindow,
+    log: &dyn SessionLog,
+) -> Result<String, ToolError> {
+    let range = match window.line {
+        Some(start) => ResultRange::Lines {
+            start,
+            count: window.count.unwrap_or(DEFAULT_LINES),
+        },
+        None => ResultRange::Bytes {
+            offset: window.offset.unwrap_or(0),
+            len: window.len.unwrap_or(READ_BYTES).min(READ_BYTES_MAX),
+        },
+    };
+    let result_id = ResultId::new(window.id);
+    let read = catalog
+        .read(
+            session,
+            ResultReadQuery {
+                id: result_id.clone(),
+                range,
+                cursor: window.cursor.map(ResultCursor::new),
+            },
+        )
+        .await;
+    let read = match read {
+        Ok(read) => read,
+        Err(error) => {
+            record_read(
+                log,
+                session,
+                CachedRead {
+                    result_id: result_id.as_str().to_string(),
+                    actor: ReadActor::Model,
+                    start: 0,
+                    bytes: 0,
+                    outcome: ReadOutcome::Failed,
+                },
+            )
+            .await;
+            return Err(catalog_error(error));
+        }
+    };
+    record_read(
+        log,
+        session,
+        CachedRead {
+            result_id: result_id.as_str().to_string(),
+            actor: ReadActor::Model,
+            start: read.covered.start,
+            bytes: read.covered.len,
+            outcome: ReadOutcome::Read,
+        },
+    )
+    .await;
+    Ok(render_read(&read))
+}
+
+/// Write one read to the session log. A read the log cannot record is reported
+/// as a diagnostic and does not fail the answer: the bytes reached the caller,
+/// so the loss is the account, not the content.
+async fn record_read(log: &dyn SessionLog, session: SessionId, read: CachedRead) {
+    let event = SessionEvent::CasRead { reads: vec![read] };
+    if let Err(error) = log.append(new_event(session, event)).await {
+        tracing::warn!(%error, "stored-result read could not be recorded");
     }
 }
 

@@ -416,13 +416,13 @@ fn skill_row(origin: &str, name: &str, announced: bool) -> ContextSkillEntry {
 /// rendered rows do not short-circuit on an empty grid.
 fn view_with_skills(skills: Vec<ContextSkillEntry>) -> ContextView {
     ContextView {
-        breakdown: ContextBreakdown {
+        breakdown: Box::new(ContextBreakdown {
             grid: vec![vec![GridCell {
                 category_idx: 0,
                 fullness: 1.0,
             }]],
             ..Default::default()
-        },
+        }),
         drill: ContextDrillDown {
             memory_files: Vec::new(),
             skills,

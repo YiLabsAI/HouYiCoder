@@ -31,6 +31,7 @@ fn usage(ts: u64, input: u64, output: u64, model: &str) -> SessionLogEntry {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
 }

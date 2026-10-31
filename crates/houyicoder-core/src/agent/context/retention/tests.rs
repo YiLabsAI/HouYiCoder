@@ -936,3 +936,76 @@ fn test_budget_skips_oversized_block() {
         "a block whose stored size reaches the budget is demoted without a fetch"
     );
 }
+
+/// The view record describes what a request carries, so only a mutating
+/// assembly reports: a measurement of the same block reads it without
+/// telling the log that the provider received it.
+#[test]
+fn test_views_only_on_request() {
+    let backend = CountingBackend::new();
+    let big = serde_json::json!({"out": "x".repeat(300)});
+    let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
+    let marker = marker_with_preview(&hash.0, "first 200 chars...");
+    let views = Arc::new(CasViewState::new("tokens"));
+    let mut policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), Tokenizer::new());
+    policy.set_cas_views(Arc::clone(&views));
+
+    let measuring = RetentionContext {
+        mutating: false,
+        ..budget_ctx(3)
+    };
+    drop(materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &policy,
+        &measuring,
+    ));
+    assert!(
+        views.take().is_empty(),
+        "a measurement sends nothing, so it records nothing"
+    );
+
+    let requesting = budget_ctx(3);
+    drop(materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &policy,
+        &requesting,
+    ));
+    let taken = views.take();
+    assert_eq!(taken.len(), 1, "one assembly reported");
+    assert_eq!(taken[0].0, 3, "under the assembly the request carries");
+    assert_eq!(taken[0].1.len(), 1, "one view for the block");
+    assert_eq!(taken[0].1[0].block_ref, hash.0);
+    assert_eq!(taken[0].1[0].form, ViewForm::Materialize);
+    assert!(taken[0].1[0].size > 0, "the carried size is counted");
+}
+
+/// A marker with no preview serves the pointer under a summarize decision,
+/// so the record names the pointer form rather than the decision that chose
+/// it.
+#[test]
+fn test_pointer_form_recorded() {
+    let backend = CountingBackend::new();
+    let big = serde_json::json!({"out": "x".repeat(300)});
+    let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
+    let marker = serde_json::json!({ "block_ref": hash.0 });
+    let views = Arc::new(CasViewState::new("tokens"));
+    let mut policy = BudgetedRetentionPolicy::new(Arc::new(AlwaysMaterialize), Tokenizer::new());
+    policy.set_turn_budget(0);
+    policy.set_cas_views(Arc::clone(&views));
+
+    let out = materialize_block(
+        &marker,
+        Some(&backend as &dyn ContextBackend),
+        &policy,
+        &budget_ctx(1),
+    );
+    assert_eq!(out, marker, "the pointer is what reaches the model");
+    let taken = views.take();
+    assert_eq!(
+        taken[0].1[0].form,
+        ViewForm::Evict,
+        "the record names the form carried, not the decision taken"
+    );
+}

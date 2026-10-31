@@ -94,6 +94,7 @@ fn fixture() -> ContextBreakdown {
             child_tokens: Some(38_000),
             returns: 2,
         }),
+        cas: None,
     }
 }
 

@@ -95,6 +95,7 @@ pub fn seed_session_with_usage(
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     ];
     write_session(root, sid_str, model, &cwd, &events);

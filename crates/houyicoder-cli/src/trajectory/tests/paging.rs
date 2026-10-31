@@ -237,6 +237,7 @@ fn test_session_totals_cover_hidden() {
                     input_reported: true,
                     cache_read_reported: true,
                     cache_write_reported: false,
+                    cas_recorded: false,
                 },
             ),
             ev(
@@ -366,6 +367,7 @@ fn test_subagent_usage_summed() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         child("child-1", 180_000, 4_000, 170_000),
@@ -474,6 +476,7 @@ fn test_subagent_usage_unmeasured_unknown() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         ev(

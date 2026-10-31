@@ -19,6 +19,8 @@ pub fn event_name(kind: &SessionEvent) -> &'static str {
         SessionEvent::CompactionBoundary { .. } => "boundary",
         SessionEvent::CacheBreak { .. } => "cache_break",
         SessionEvent::CacheDecisions { .. } => "cache_decisions",
+        SessionEvent::CasModelView { .. } => "cas_model_view",
+        SessionEvent::CasRead { .. } => "cas_read",
         SessionEvent::Summary { .. } => "summary",
         SessionEvent::PermissionAsked { .. } => "asked",
         SessionEvent::PermissionDecision { .. } => "verdict",

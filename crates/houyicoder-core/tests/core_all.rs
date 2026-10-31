@@ -11,6 +11,8 @@
 mod budget_pressure_gate;
 #[path = "cache_prefix_reuse.rs"]
 mod cache_prefix_reuse;
+#[path = "cas_records.rs"]
+mod cas_records;
 #[path = "compaction_pipeline.rs"]
 mod compaction_pipeline;
 #[path = "loop_with_sandbox.rs"]

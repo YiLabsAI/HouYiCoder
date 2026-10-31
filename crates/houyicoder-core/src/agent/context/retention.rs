@@ -35,8 +35,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use super::Tokenizer;
-
-use houyicoder_context::{BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry};
+use crate::agent::context::cas_views::CasViewState;
+use houyicoder_context::{
+    BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry, ViewForm,
+};
 use houyicoder_protocol::block_ref::BLOCK_BYTES_KEY;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::block_ref::HINT_KEY;
@@ -275,6 +277,14 @@ pub trait RetentionPolicy: Send + Sync {
     /// assembly, so measuring the same assembly again does not consume the
     /// quota a second time. The default ignores it.
     fn charge_assembly_tokens(&self, _assembly_id: u64, _tokens: u32) {}
+
+    /// The record the assembly reports the forms it carried to, or None for
+    /// a policy that keeps no such record. The default reports nothing,
+    /// which a reader sees as an unknown model view rather than an assembly
+    /// that carried no blocks.
+    fn cas_views(&self) -> Option<&CasViewState> {
+        None
+    }
 }
 
 /// Default policy: superseded results evict regardless of age; recent
@@ -340,6 +350,9 @@ pub struct BudgetedRetentionPolicy {
     accumulated: AtomicU64,
     charged: AtomicU64,
     assembly: AtomicU64,
+    /// Where the assembler reports the forms it carried, once the host
+    /// installs the record. None in tests that only exercise the budget.
+    cas_views: Option<Arc<CasViewState>>,
 }
 
 impl BudgetedRetentionPolicy {
@@ -351,7 +364,14 @@ impl BudgetedRetentionPolicy {
             accumulated: AtomicU64::new(0),
             charged: AtomicU64::new(0),
             assembly: AtomicU64::new(u64::MAX),
+            cas_views: None,
         }
+    }
+
+    /// Install the record the assembler reports its forms to. Called before
+    /// the policy is shared, so every assembly reports to one record.
+    pub fn set_cas_views(&mut self, views: Arc<CasViewState>) {
+        self.cas_views = Some(views);
     }
 
     /// Start this assembly's quota over when it is not the one the counters
@@ -446,6 +466,10 @@ impl RetentionPolicy for BudgetedRetentionPolicy {
         self.start_assembly(assembly_id);
         self.charged.store(u64::from(tokens), Ordering::Relaxed);
     }
+
+    fn cas_views(&self) -> Option<&CasViewState> {
+        self.cas_views.as_deref()
+    }
 }
 
 /// Decide how a block_ref ToolResult output is served. When the output
@@ -494,6 +518,10 @@ pub(crate) fn materialize_block(
 /// original content via block_get; Summarize serves the inline preview;
 /// Evict keeps only the pointer. No backend: the marker stays (content is
 /// in the CAS, unreachable until a backend is available — not lost).
+///
+/// A mutating assembly reports each form it carried to the policy's view
+/// record, so the session log states what the request carried. A
+/// measurement does not report, because nothing was sent.
 fn apply_tier(
     hash_str: &str,
     marker: &serde_json::Value,
@@ -512,7 +540,13 @@ fn apply_tier(
         stored_bytes: marker.get(BLOCK_BYTES_KEY).and_then(Value::as_u64),
         ..*ctx
     };
-    match policy.decide(&ctx) {
+    // A measurement reads the same blocks without recording, so only a
+    // request the provider will receive pays for the size count.
+    let recording = ctx.mutating && policy.cas_views().is_some();
+    // The form and its size come back together: the recorded view must
+    // name what the model actually received, which can differ from the
+    // decision (a marker without a preview serves the pointer).
+    let (value, form, size) = match policy.decide(&ctx) {
         RetentionDecision::Materialize => {
             let hash = BlockHash(hash_str.to_string());
             match pollster::block_on(backend.block_get(&hash)) {
@@ -520,23 +554,43 @@ fn apply_tier(
                     Ok(value) => {
                         policy.record_materialized_bytes(hash_str, bytes.len());
                         policy.record_materialized_content(hash_str, &bytes);
-                        value
+                        // The stored bytes are the JSON the model receives
+                        // here, so the figure counts them rather than
+                        // serializing the value again.
+                        let size = if recording {
+                            str::from_utf8(&bytes)
+                                .map(|text| policy.count_tokens(text) as u64)
+                                .unwrap_or(bytes.len() as u64)
+                        } else {
+                            0
+                        };
+                        (value, ViewForm::Materialize, size)
                     }
                     // Stored bytes did not deserialize: the block is corrupt or
                     // schema-drifted. Surface a typed unavailable marker so the
                     // model knows the content is unreachable, not absent.
-                    Err(_) => unavailable_marker(hash_str, "block content corrupt or unreadable"),
+                    Err(_) => unavailable_view(
+                        policy,
+                        hash_str,
+                        "block content corrupt or unreadable",
+                        recording,
+                    ),
                 },
                 // A block whose bytes do not match its address is corrupt, not
                 // missing: re-invoking the tool would store the bytes again,
                 // not recover them, so the model is told the content is
                 // unreachable.
-                Err(ContextError::Corrupt(_)) => {
-                    unavailable_marker(hash_str, "block content corrupt or unreadable")
-                }
-                Err(_) => unavailable_marker(
+                Err(ContextError::Corrupt(_)) => unavailable_view(
+                    policy,
+                    hash_str,
+                    "block content corrupt or unreadable",
+                    recording,
+                ),
+                Err(_) => unavailable_view(
+                    policy,
                     hash_str,
                     "block_get failed; the stored content could not be read",
+                    recording,
                 ),
             }
         }
@@ -548,14 +602,20 @@ fn apply_tier(
             // run the command again: the content is already in the log, and a
             // second run may not reproduce it.
             if marker.get(PREVIEW_KEY).is_some() {
-                serde_json::json!({
+                let value = serde_json::json!({
                     "summarized": true,
                     PREVIEW_KEY: marker.get(PREVIEW_KEY).cloned().unwrap_or_default(),
                     BLOCK_REF_KEY: hash_str,
                     HINT_KEY: "large output summarized; search the conversation to read it",
-                })
+                });
+                let size = view_size(policy, &value, recording);
+                (value, ViewForm::Summarize, size)
             } else {
-                marker.clone()
+                // The pointer is what reached the model, so that is the form
+                // the record names, not the decision that chose it.
+                let value = marker.clone();
+                let size = view_size(policy, &value, recording);
+                (value, ViewForm::Evict, size)
             }
         }
         RetentionDecision::Evict => {
@@ -563,13 +623,47 @@ fn apply_tier(
             // "removed by policy" from "backend cannot retrieve." No
             // retrieval; the hint names the stored result the model can
             // search for.
-            serde_json::json!({
+            let value = serde_json::json!({
                 BLOCK_REF_KEY: hash_str,
                 "evicted": true,
                 HINT_KEY: "large output left out of this request; search the conversation to read it",
-            })
+            });
+            let size = view_size(policy, &value, recording);
+            (value, ViewForm::Evict, size)
         }
+    };
+    if recording
+        && let Some(views) = policy.cas_views()
+        && let Some(block_ref) = ctx.block_ref
+    {
+        views.record(ctx.assembly_id, block_ref, form, size);
     }
+    value
+}
+
+/// The assembled size of one carried value, in the policy's counting unit.
+/// A measurement asks for no size, so it pays no tokenizer call.
+fn view_size(policy: &dyn RetentionPolicy, value: &serde_json::Value, recording: bool) -> u64 {
+    if !recording {
+        return 0;
+    }
+    // A JSON value always serializes; the fallback covers only a serializer
+    // this call cannot observe failing.
+    let text = serde_json::to_string(value).unwrap_or_default();
+    policy.count_tokens(&text) as u64
+}
+
+/// The form, value, and size for a block whose stored content could not be
+/// read.
+fn unavailable_view(
+    policy: &dyn RetentionPolicy,
+    hash_str: &str,
+    reason: &str,
+    recording: bool,
+) -> (serde_json::Value, ViewForm, u64) {
+    let value = unavailable_marker(hash_str, reason);
+    let size = view_size(policy, &value, recording);
+    (value, ViewForm::Unavailable, size)
 }
 
 /// A typed marker for a block the assembly could not materialize (backend

@@ -48,7 +48,9 @@ fn test_second_context_one_grid() {
     fresh.total_tokens = 4_242;
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(7),
-        response: ServerResponse::Context { breakdown: fresh },
+        response: ServerResponse::Context {
+            breakdown: Box::new(fresh),
+        },
     });
     // Bug: the reply grid lands beside the fast-path one, leaving two grids.
     assert_eq!(

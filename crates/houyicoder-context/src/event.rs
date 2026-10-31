@@ -1,15 +1,18 @@
-//! The append-only log's wire types: one logged record (SessionLogEntry), the
-//! vocabulary of what a record can be (SessionEvent), and the two verdict
-//! enums a record carries. These are a compatibility surface - every variant
-//! is serialized into a session log that a later build has to read back - so
-//! they live in one module rather than in the crate root, which holds only
-//! the module wiring and the public surface.
+//! The append-only log's durable types: one logged record (SessionLogEntry)
+//! and the vocabulary of what a record can be (SessionEvent). Every variant
+//! is serialized into a session log that a later build has to read back, so
+//! these types carry the log's compatibility contract and the module owns its
+//! record families directly rather than leaving them in the crate root.
 
 use serde::{Deserialize, Serialize};
 
 use crate::hook_types::{HookErrorKind, HookEventKind, HookVerdictKind};
 use crate::ids::AgentId;
 use crate::ids::{CheckpointId, EventId, PrevHash, SessionId};
+
+/// The block-store observability records the log carries.
+mod cas;
+pub use cas::{CachedModelView, CachedRead, ReadActor, ReadOutcome, ViewForm};
 
 /// One record in the append-only session log. The wire type stored by a
 /// ContextBackend. Replay walks entries in append order; the tool_use/
@@ -26,71 +29,9 @@ pub struct SessionLogEntry {
     pub event: SessionEvent,
 }
 
-/// How a run ended, as its terminal record states it. A finished run and a
-/// cancelled one both write a terminal record, so the record alone cannot say
-/// whether the work was done; this is what lets a completion rate count a
-/// cancelled run as cancelled rather than as work that finished.
-///
-/// The durable log records it on every finished run, so the definition lives
-/// beside the event that carries it: the log, the run observer events, and the
-/// status pane report one taxonomy rather than three interpretations of the
-/// same terminals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RunCompletionStatus {
-    /// The run produced its final output.
-    Completed,
-    /// The run transferred control to another agent.
-    HandedOff,
-    /// The run was cancelled while it was running.
-    Interrupted,
-    /// The run failed before producing final output.
-    Failed,
-    /// Post-run verification rejected the output.
-    VerificationFailed,
-    /// The run exhausted its configured turn limit.
-    TurnLimitReached,
-}
-
-/// The outcome of a human permission verdict on a tool call. The durable
-/// companion to the transient approval popup: every approve / deny decision is
-/// appended to the session log so the audit trail is replayable and queryable
-/// (logging verdicts only in-memory would leave an audit gap — a denied
-/// destructive call would leave no durable trace; appending to the log
-/// closes this).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PermissionVerdict {
-    Approved,
-    Denied,
-}
-
-impl PermissionVerdict {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Approved => "approved",
-            Self::Denied => "denied",
-        }
-    }
-}
-
-/// Which silent-truncation signal fired for a turn. The drive loop computes
-/// this once from the folded turn state so it both synthesizes the cap-cut
-/// finish_reason and records the cause in the verdict, without re-running
-/// the heuristic. Stays None when the provider signaled the cut directly —
-/// the raw finish_reason already carries the cause.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TruncationSignal {
-    /// Server-reported output_tokens reached the max cap (within slack).
-    ServerUsageNearCap,
-    /// Self-counted output tokens (the shared Tokenizer) reached the max cap
-    /// (within slack). Fires when the server did not report usage — common
-    /// for streaming proxies that omit the usage block.
-    SelfCountNearCap,
-    /// An odd triple-backtick count means a code fence opened but never
-    /// closed — the cut landed mid-block.
-    UnclosedCodeBlock,
-    /// No silent-truncation signal fired.
-    None,
-}
+/// The classifications a logged record states about an outcome.
+mod verdicts;
+pub use verdicts::{PermissionVerdict, RunCompletionStatus, TruncationSignal};
 
 /// One block_ref's frozen retention decision as the session log records it.
 /// The decision is a label rather than the policy enum so this crate stays a
@@ -342,6 +283,12 @@ pub enum SessionEvent {
         /// Whether this call's endpoint reported the cache-write count.
         #[serde(default)]
         cache_write_reported: bool,
+        /// Whether the build that wrote this record also records what its
+        /// assemblies carried from the block store. False on a log written
+        /// before that record existed, where a reader must report the model
+        /// view as unknown rather than infer zero blocks.
+        #[serde(default)]
+        cas_recorded: bool,
     },
     /// A reward-loop observation: redundant + blind-retry counts flagged this
     /// batch. Durable so a later dream can scan cross-session reward trends
@@ -546,6 +493,29 @@ pub enum SessionEvent {
         decisions: Vec<CachedBlockDecision>,
         #[serde(default)]
         model: String,
+    },
+    /// The forms one assembly carried from the block store. Written once the
+    /// turn's usage lands, so a replay states what the request carried
+    /// without re-running the retention decisions. The unit names what the
+    /// token figures count in, so a reader labels a byte count as one.
+    #[serde(rename = "CasModelView")]
+    CasModelView {
+        #[serde(default)]
+        assembly_id: u64,
+        #[serde(default)]
+        views: Vec<CachedModelView>,
+        #[serde(default)]
+        estimate_unit: String,
+    },
+    /// Reads of stored results this session issued, written by the reader at
+    /// the read so the record names the session that asked. It lands before
+    /// the tool result that answers the read, because the bytes are in hand
+    /// first and the answer is assembled after. The log states what the model
+    /// read, not only what the request carried.
+    #[serde(rename = "CasRead")]
+    CasRead {
+        #[serde(default)]
+        reads: Vec<CachedRead>,
     },
     /// A parent runner spawned a sub-agent. The durable boundary so a parent
     /// log replay reconstructs the spawn + its config; the child's turns live

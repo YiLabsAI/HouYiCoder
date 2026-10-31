@@ -176,6 +176,105 @@ pub struct ContextBreakdown {
     /// child, so a childless session reports nothing rather than zeros.
     #[serde(default)]
     pub delegated: Option<DelegatedContext>,
+    /// What the session's stored blocks cost and how its assemblies carried
+    /// them. None when the session has nothing to report about the store: it
+    /// stored nothing, saved nothing, failed no save, and its log carries no
+    /// block address. A session whose save failed still reports, because the
+    /// failure is what this account exists to show.
+    #[serde(default)]
+    pub cas: Option<CasUsage>,
+}
+
+/// The unit an assembly's size figure counts in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CasSizeUnit {
+    /// The log names no unit this build knows.
+    #[default]
+    Unknown,
+    /// The figure counts tokens the assembly's tokenizer measured.
+    Tokens,
+    /// The figure counts the bytes of the carried forms.
+    Bytes,
+}
+
+/// What the newest assembly carried from the block store, wire form.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CasAssemblyUsage {
+    /// The assembly this account describes.
+    pub assembly_id: u64,
+    /// Blocks carried with their stored content.
+    pub full: u64,
+    /// Blocks carried as the inline preview of their marker.
+    pub preview: u64,
+    /// Blocks carried as the address alone.
+    pub pointer: u64,
+    /// Blocks whose stored content could not be read.
+    pub unavailable: u64,
+    /// Blocks whose form this build does not know.
+    pub unclassified: u64,
+    /// The assembled size of every form the assembly carried.
+    pub size: u64,
+    /// The unit the size counts in.
+    pub unit: CasSizeUnit,
+}
+
+/// What the host's index covers, wire form. Absent when the host serves no
+/// stored-result requests, which a reader must not read as an empty index.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CasIndexUsage {
+    /// Results the index holds.
+    pub indexed: u64,
+    /// Whether the index had folded the whole log when it answered.
+    pub complete: bool,
+    /// Results the index found but could not read.
+    pub corrupt: u64,
+    /// The newest log event the index folded.
+    pub as_of: Option<String>,
+}
+
+/// The session's stored-block account, wire form. A figure the log does not
+/// carry is absent or reported as unknown, never as zero.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CasUsage {
+    /// Results the session stored, counted once per capture that published
+    /// its record block. None on a log written before the capture record
+    /// existed, where a zero would claim the session stored nothing.
+    pub results: Option<u64>,
+    /// Distinct blocks the session's results address.
+    pub blocks: u64,
+    /// Raw bytes the session captured. None when no capture reported a size.
+    pub raw_bytes: Option<u64>,
+    /// Results whose capture reported no size, so raw_bytes is a floor. None
+    /// when the result count itself is unknown.
+    pub unmeasured_results: Option<u64>,
+    /// Results whose stored copy failed to land.
+    pub save_failed: Option<u64>,
+    /// Results whose capture stopped the command before its output ended.
+    pub truncated: Option<u64>,
+    /// What the newest assembly carried. None on a log that records no
+    /// assemblies, where the model view is unknown.
+    pub assembly: Option<CasAssemblyUsage>,
+    /// Reads of a stored result the model issued that delivered bytes.
+    pub model_reads: u64,
+    /// Reads a terminal view answered that delivered bytes. None until a record
+    /// names the view as the reader, so a session whose terminal has no read
+    /// path does not report a measured zero.
+    pub ui_reads: Option<u64>,
+    /// Reads that delivered nothing.
+    pub failed_reads: u64,
+    /// Reads whose actor or outcome this build does not know.
+    pub unknown_reads: u64,
+    /// Whether the log carries a read record, so a reader tells "read
+    /// nothing" apart from "reads not recorded".
+    pub reads_recorded: bool,
+    /// Whether the build that wrote the log records the block store at all.
+    pub tracked: bool,
+    /// What the host's index covers, when the host serves stored results.
+    pub indexed: Option<CasIndexUsage>,
 }
 
 /// Build the proportional-area grid the renderer draws: each category's cell
@@ -336,6 +435,7 @@ pub fn stub_breakdown() -> ContextBreakdown {
         cache_hit_rate: None,
         tool_footprints: Vec::new(),
         delegated: None,
+        cas: None,
     }
 }
 

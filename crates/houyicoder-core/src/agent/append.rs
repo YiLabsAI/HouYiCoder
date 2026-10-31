@@ -6,6 +6,7 @@ pub(crate) mod reducer;
 
 mod cache_break;
 mod cache_decisions;
+mod cas_events;
 use cache_break::now_millis;
 mod hook;
 mod input;
@@ -614,6 +615,7 @@ impl Runner {
                     input_reported: usage.provenance.input_reported,
                     cache_read_reported: usage.provenance.cache_read_reported,
                     cache_write_reported: usage.provenance.cache_write_reported,
+                    cas_recorded: true,
                 },
             ))
             .await?;
@@ -656,6 +658,7 @@ impl Runner {
                 .await?;
         }
         self.append_cache_decisions(session, model).await?;
+        self.append_cas_views(session).await?;
         // Remember the prefix this response was served against, so the next
         // break can tell which half of it moved.
         if let Ok(mut slot) = self.cache_prev_prefix.lock() {

@@ -62,6 +62,7 @@ fn turn_usage(
             input_reported: reported,
             cache_read_reported: reported,
             cache_write_reported: reported,
+            cas_recorded: false,
         },
     }
 }

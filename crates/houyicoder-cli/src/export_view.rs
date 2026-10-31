@@ -326,6 +326,8 @@ fn collect_checkpoints_and_errors(
             | SessionEvent::WorktreeExit { .. }
             | SessionEvent::CacheBreak { .. }
             | SessionEvent::CacheDecisions { .. }
+            | SessionEvent::CasModelView { .. }
+            | SessionEvent::CasRead { .. }
             | SessionEvent::SubagentSpawn { .. }
             | SessionEvent::SubagentReturn { .. }
             | SessionEvent::ChildDelegated { .. }

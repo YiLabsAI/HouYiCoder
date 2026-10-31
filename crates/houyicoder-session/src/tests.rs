@@ -360,6 +360,7 @@ async fn test_head_model_interned() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
     .await;
@@ -414,6 +415,7 @@ async fn test_restore_respects_last_clear() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
         .await;
@@ -446,6 +448,7 @@ async fn test_restore_respects_last_clear() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
         .await;

@@ -4,6 +4,7 @@
 
 mod acp_permission;
 pub(crate) mod agents;
+pub(crate) mod cas_usage;
 pub(crate) mod checkpoint_view;
 pub(crate) mod compaction;
 mod durable_grant;
@@ -338,6 +339,9 @@ pub(crate) fn map_context_breakdown(
         cache_hit_rate: bd.cache_hit_rate,
         tool_footprints: bd.tool_footprints.clone(),
         delegated: bd.delegated.clone(),
+        // The stored-block account is measured from the session's log, not
+        // derived from the context measurement, so the handler fills it.
+        cas: None,
     }
 }
 
@@ -591,6 +595,8 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::CacheDecisions { .. }
+        | SessionEvent::CasModelView { .. }
+        | SessionEvent::CasRead { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }
@@ -699,6 +705,8 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::CacheBreak { .. }
         | SessionEvent::CacheDecisions { .. }
+        | SessionEvent::CasModelView { .. }
+        | SessionEvent::CasRead { .. }
         | SessionEvent::SubagentSpawn { .. }
         | SessionEvent::SubagentReturn { .. }
         | SessionEvent::ChildDelegated { .. }

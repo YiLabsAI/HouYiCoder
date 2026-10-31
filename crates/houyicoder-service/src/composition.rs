@@ -42,6 +42,7 @@ use tokio::sync::Notify;
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
@@ -60,8 +61,8 @@ use houyicoder_core::agent::model_window;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
-    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, TodoWriteTool, ToolRegistry,
-    parse_event,
+    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, SessionResultCatalog,
+    TodoWriteTool, ToolRegistry, parse_event,
 };
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
@@ -290,7 +291,7 @@ pub(crate) fn assemble(
     let provider_for_extractor = Arc::clone(&provider);
     let agent_registry = multi_agent::built_in_registry();
     let recall_meter = Arc::new(AtomicU32::new(0));
-    let mut tools = build_base_tools(&store, &recall_meter, &agent_registry);
+    let (mut tools, stored_results) = build_base_tools(&store, &recall_meter, &agent_registry);
     let fences = build_session_fences(project, rule_store.clone());
     let gate_dyn: Arc<dyn ModeGate> = fences.gate.clone();
     let worktree_controller = worktree::wire_worktree_controller(
@@ -339,7 +340,7 @@ pub(crate) fn assemble(
         .with_worktree_controller(worktree_controller.clone())
         .with_descriptor_store(Arc::clone(&descriptor_store))
         .with_reducer(Arc::new(HotPathReducer));
-    runner.seed_session_from_log(session);
+    let runner = stored_results.prepare(runner, session);
     let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());
     runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));
     multi_agent::install_agent_types(&runner, agent_registry.as_ref(), &denied_agents);
@@ -453,6 +454,28 @@ fn recap_settings(
     }
 }
 
+/// The catalog and the read record the search tool and the context view share.
+///
+/// One catalog serves both readers: the tool answers stored-result requests
+/// through it, and the context view reports the index the same catalog holds.
+/// Two catalogs would fold the same session log twice and report an index the
+/// other half did not produce.
+struct StoredResultHandles {
+    catalog: Arc<dyn ResultCatalog>,
+}
+
+impl StoredResultHandles {
+    /// Prepare the runner's session-scoped records: reseed it from the log so
+    /// a resumed session starts from what the log already holds, and give it
+    /// the same catalog the search tool answers from, so both report one
+    /// index.
+    fn prepare(&self, runner: Runner, session: SessionId) -> Runner {
+        let runner = runner.with_result_catalog(Arc::clone(&self.catalog));
+        runner.seed_session_from_log(session);
+        runner
+    }
+}
+
 /// The tools every session starts with: the todo writer, the search over this
 /// session's own log, and delegation to the built-in agent types. The recall
 /// meter stays with the caller because the runner reports through the same one.
@@ -460,16 +483,18 @@ fn build_base_tools(
     store: &Arc<SessionStore>,
     recall_meter: &Arc<AtomicU32>,
     agent_registry: &Arc<dyn AgentRegistry>,
-) -> ToolRegistry {
+) -> (ToolRegistry, StoredResultHandles) {
     let mut tools = ToolRegistry::new();
     let session_log: Arc<dyn SessionLog> = store.clone();
+    let catalog: Arc<dyn ResultCatalog> =
+        Arc::new(SessionResultCatalog::new(Arc::clone(&session_log)));
     tools.register(Arc::new(TodoWriteTool::new()));
-    tools.register(Arc::new(ConversationSearchTool::new(
-        session_log,
-        Arc::clone(recall_meter),
-    )));
+    tools.register(Arc::new(
+        ConversationSearchTool::new(session_log, Arc::clone(recall_meter))
+            .with_catalog(Arc::clone(&catalog)),
+    ));
     tools.register(Arc::new(DelegationTool::new(Arc::clone(agent_registry))));
-    tools
+    (tools, StoredResultHandles { catalog })
 }
 
 /// Build the RunnerConfig and collect any settings warnings from runner_settings.

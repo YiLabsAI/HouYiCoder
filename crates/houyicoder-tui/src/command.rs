@@ -133,7 +133,7 @@ impl App {
                     let suggestions = composition::suggestions_for(&breakdown);
                     let drill = ContextDrillDown::from_breakdown(&breakdown);
                     let view = ContextView {
-                        breakdown,
+                        breakdown: Box::new(breakdown),
                         drill,
                         suggestions,
                     };

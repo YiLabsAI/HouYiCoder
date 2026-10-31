@@ -38,7 +38,7 @@ pub fn context_view() -> ContextView {
     let suggestions = super::suggestions_for(&breakdown);
     let drill = ContextDrillDown::from_breakdown(&breakdown);
     ContextView {
-        breakdown,
+        breakdown: Box::new(breakdown),
         drill,
         suggestions,
     }

@@ -33,7 +33,7 @@ fn working_app_with_drill() -> App {
     let breakdown = stub_breakdown();
     let suggestions = composition::suggestions_for(&breakdown);
     let view = ContextView {
-        breakdown,
+        breakdown: Box::new(breakdown),
         drill: ContextDrillDown {
             memory_files: vec![ContextFileEntry {
                 label: "~/.houyicoder/memory/MEMORY.md".to_string(),
@@ -119,13 +119,14 @@ fn base_breakdown() -> ContextBreakdown {
         cache_hit_rate: None,
         tool_footprints: Vec::new(),
         delegated: None,
+        cas: None,
     }
 }
 
 fn rows_text(bd: ContextBreakdown) -> String {
     let drill = ContextDrillDown::from_breakdown(&bd);
     let view = ContextView {
-        breakdown: bd,
+        breakdown: Box::new(bd),
         drill,
         suggestions: vec![],
     };
@@ -281,6 +282,7 @@ fn test_legend_renders_reserved_row() {
         cache_hit_rate: None,
         tool_footprints: Vec::new(),
         delegated: None,
+        cas: None,
     };
     let text = rows_text(bd);
     assert!(
@@ -413,6 +415,7 @@ fn full_context_breakdown() -> ContextBreakdown {
             result_tokens: 17_000,
         }],
         delegated: None,
+        cas: None,
     }
 }
 
@@ -450,7 +453,7 @@ fn test_real_data_renders_suggestions() {
     );
     // The suggestion titles land in the rendered rows (suggestions_rows).
     let view = ContextView {
-        breakdown: bd,
+        breakdown: Box::new(bd),
         drill: ContextDrillDown::default(),
         suggestions,
     };
@@ -794,7 +797,7 @@ fn test_suggestion_detail_wraps() {
                   Recalled memories (10 entries) (4k), Memory index (36 entries) \
                   (2.3k). Use /memory to review and prune stale entries.";
     let view = ContextView {
-        breakdown: stub_breakdown(),
+        breakdown: Box::new(stub_breakdown()),
         drill: ContextDrillDown::default(),
         suggestions: vec![ContextSuggestion {
             severity: SuggestionSeverity::Info,
@@ -838,7 +841,7 @@ fn test_context_rows_narrow() {
     let detail = "Largest: AGENTS.md (8.5k), Memory index (36 entries) (2.3k). \
                   Use /memory to review and prune stale entries.";
     let view = ContextView {
-        breakdown: stub_breakdown(),
+        breakdown: Box::new(stub_breakdown()),
         drill: ContextDrillDown::default(),
         suggestions: vec![ContextSuggestion {
             severity: SuggestionSeverity::Info,

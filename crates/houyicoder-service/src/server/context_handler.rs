@@ -2,9 +2,11 @@
 
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::frontend::context::CasUsage;
 
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
+use crate::protocol_adapter::cas_usage::{map_cas_usage, reports_cas};
 use houyicoder_core::agent::CategoryBreakdown;
 use houyicoder_core::agent::SectionKind;
 use pa::compaction::map_compact_reply;
@@ -69,9 +71,40 @@ impl Server {
         let usage = &snap.cumulative_usage;
         // The same ratio the status Usage rows render, from one definition.
         bd.cache_hit_rate = usage.cache_hit_rate();
-        let context = pa::map_context_breakdown(&bd);
+        let mut context = pa::map_context_breakdown(&bd);
+        context.cas = self.cas_usage().await;
         self.send_response(io, req_id, ResponsePayload::Context(context))
             .await
+    }
+
+    /// The session's stored-block account in the wire form the context view
+    /// reads, or None when the session used the store not at all.
+    ///
+    /// The folded half comes from the session log, so a resumed session reports
+    /// what its previous process recorded. The index half comes from the
+    /// catalog the search tool answers through; a catalog failure leaves the
+    /// index unknown rather than reporting an empty one.
+    async fn cas_usage(&self) -> Option<CasUsage> {
+        let summary = self
+            .runner
+            .store()
+            .trajectory_head(self.session)
+            .summary
+            .cas;
+        if !reports_cas(&summary) {
+            return None;
+        }
+        let index = match self.runner.result_catalog() {
+            Some(catalog) => match catalog.stats(self.session).await {
+                Ok(stats) => Some(stats),
+                Err(error) => {
+                    tracing::warn!(%error, "stored-result index unavailable for the context view");
+                    None
+                }
+            },
+            None => None,
+        };
+        Some(map_cas_usage(&summary, index.as_ref()))
     }
 
     /// Fold older events into a summary and reply with the outcome. The runner

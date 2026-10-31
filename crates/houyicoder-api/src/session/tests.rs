@@ -38,6 +38,7 @@ fn turn_usage(model: &str) -> SessionLogEntry {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     }
 }

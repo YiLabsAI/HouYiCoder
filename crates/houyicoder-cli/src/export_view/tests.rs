@@ -38,6 +38,7 @@ fn usage_event(ts: u64, model: &str, input: u64, output: u64) -> SessionLogEntry
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
 }

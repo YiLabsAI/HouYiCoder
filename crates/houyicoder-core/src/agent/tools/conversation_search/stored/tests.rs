@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use houyicoder_api::capture::{CallEnd, CapturedStream, CapturedStreams, ResultCaptureSource};
 use houyicoder_api::session::SessionLog;
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{
+    EventId, ReadActor, ReadOutcome, SessionEvent, SessionId, SessionLogEntry,
+};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::extension::ToolError;
@@ -113,11 +115,25 @@ fn seed_missing_block(log: &Arc<dyn SessionLog>, session: SessionId) {
 /// Answer one request the way the tool does, from the request text.
 async fn ask(
     catalog: &SessionResultCatalog,
+    log: &dyn SessionLog,
     session: SessionId,
     request: Value,
 ) -> Result<String, ToolError> {
     let request: Request = serde_json::from_value(request).expect("the request parses");
-    serve(catalog, session, request).await
+    serve(catalog, session, request, log).await
+}
+
+/// The read records the session log holds, in append order.
+async fn reads(log: &dyn SessionLog, session: SessionId) -> Vec<houyicoder_context::CachedRead> {
+    log.replay(session)
+        .await
+        .expect("the log replays")
+        .into_iter()
+        .flat_map(|entry| match entry.event {
+            SessionEvent::CasRead { reads } => reads,
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 /// One captured call with both streams plus its log record, so the tests below
@@ -135,8 +151,8 @@ fn seeded(stdout: &[u8], stderr: &[u8]) -> (Arc<dyn SessionLog>, SessionId) {
 #[tokio::test]
 async fn test_list_names_each_stream() {
     let (log, session) = seeded(b"out", b"err");
-    let catalog = SessionResultCatalog::new(log);
-    let all = ask(&catalog, session, json!({"op": "list"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let all = ask(&catalog, &*log, session, json!({"op": "list"}))
         .await
         .expect("the listing answers");
     assert!(
@@ -144,9 +160,14 @@ async fn test_list_names_each_stream() {
         "{all}"
     );
     assert!(all.contains("call-1:stderr | bash | stderr | 3 B"), "{all}");
-    let other = ask(&catalog, session, json!({"op": "list", "tool": "edit"}))
-        .await
-        .expect("the filtered listing answers");
+    let other = ask(
+        &catalog,
+        &*log,
+        session,
+        json!({"op": "list", "tool": "edit"}),
+    )
+    .await
+    .expect("the filtered listing answers");
     assert!(
         other.contains("Nothing this session kept matches that filter."),
         "{other}"
@@ -159,8 +180,8 @@ async fn test_list_names_each_stream() {
 async fn test_list_reports_nothing_kept() {
     let log = store();
     let session = SessionId::new();
-    let catalog = SessionResultCatalog::new(log);
-    let answer = ask(&catalog, session, json!({"op": "list"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let answer = ask(&catalog, &*log, session, json!({"op": "list"}))
         .await
         .expect("the listing answers");
     assert!(
@@ -176,8 +197,8 @@ async fn test_empty_list_names_unread() {
     let log = store();
     let session = SessionId::new();
     seed_missing_block(&log, session);
-    let catalog = SessionResultCatalog::new(log);
-    let answer = ask(&catalog, session, json!({"op": "list"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let answer = ask(&catalog, &*log, session, json!({"op": "list"}))
         .await
         .expect("the listing answers");
     assert!(
@@ -196,8 +217,8 @@ async fn test_list_page_reports_unread() {
     let session = SessionId::new();
     seed_block(&log, session, b"kept", Some("captured"));
     seed_missing_block(&log, session);
-    let catalog = SessionResultCatalog::new(log);
-    let answer = ask(&catalog, session, json!({"op": "list"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let answer = ask(&catalog, &*log, session, json!({"op": "list"}))
         .await
         .expect("the listing answers");
     assert!(answer.contains("field captured"), "{answer}");
@@ -220,8 +241,8 @@ async fn test_list_pages_with_cursor() {
     for call in ["call-1", "call-2", "call-3"] {
         seed(&log, session, call, "bash", b"out", b"");
     }
-    let catalog = SessionResultCatalog::new(log);
-    let first = ask(&catalog, session, json!({"op": "list", "limit": 1}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let first = ask(&catalog, &*log, session, json!({"op": "list", "limit": 1}))
         .await
         .expect("the listing answers");
     assert!(first.contains("call-1:stdout"), "{first}");
@@ -233,6 +254,7 @@ async fn test_list_pages_with_cursor() {
         .to_string();
     let second = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "list", "limit": 1, "cursor": cursor}),
     )
@@ -250,9 +272,10 @@ async fn test_list_pages_with_cursor() {
 #[tokio::test]
 async fn test_read_serves_text() {
     let (log, session) = seeded(b"abcdefg", b"");
-    let catalog = SessionResultCatalog::new(log);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
     let answer = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "read", "id": "call-1:stdout", "offset": 0, "len": 4}),
     )
@@ -263,6 +286,7 @@ async fn test_read_serves_text() {
     assert!(answer.contains("Continues with cursor:"), "{answer}");
     let capped = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "read", "id": "call-1:stdout", "len": 9000}),
     )
@@ -276,9 +300,10 @@ async fn test_read_serves_text() {
 #[tokio::test]
 async fn test_read_line_range_default() {
     let (log, session) = seeded(b"first\nsecond\nthird\n", b"");
-    let catalog = SessionResultCatalog::new(log);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
     let answer = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "read", "id": "call-1:stdout", "line": 1}),
     )
@@ -292,9 +317,10 @@ async fn test_read_line_range_default() {
 #[tokio::test]
 async fn test_search_reports_matches() {
     let (log, session) = seeded(b"a needle here", b"");
-    let catalog = SessionResultCatalog::new(log);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
     let found = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "search", "query": "needle", "id": "call-1:stdout"}),
     )
@@ -304,6 +330,7 @@ async fn test_search_reports_matches() {
     assert!(found.contains("a needle here"), "{found}");
     let none = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "search", "query": "absent", "id": "call-1:stdout"}),
     )
@@ -317,10 +344,11 @@ async fn test_search_reports_matches() {
 #[tokio::test]
 async fn test_search_empty_query_refused() {
     let (log, session) = seeded(b"a needle here", b"");
-    let catalog = SessionResultCatalog::new(log);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
     for blank in ["", "   "] {
         let err = ask(
             &catalog,
+            &*log,
             session,
             json!({"op": "search", "query": blank, "id": "call-1:stdout"}),
         )
@@ -341,9 +369,10 @@ async fn test_search_partial_says_more() {
         b"needle needle needle needle needle needle needle needle needle needle needle needle",
         b"",
     );
-    let catalog = SessionResultCatalog::new(log);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
     let page = ask(
         &catalog,
+        &*log,
         session,
         json!({"op": "search", "query": "needle", "id": "call-1:stdout"}),
     )
@@ -359,8 +388,8 @@ async fn test_search_partial_says_more() {
 #[tokio::test]
 async fn test_stats_reports_totals() {
     let (log, session) = seeded(b"abc", b"z");
-    let catalog = SessionResultCatalog::new(log);
-    let stats = ask(&catalog, session, json!({"op": "stats"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let stats = ask(&catalog, &*log, session, json!({"op": "stats"}))
         .await
         .expect("the aggregate answers");
     assert!(stats.contains("- results: 1"), "{stats}");
@@ -380,8 +409,8 @@ async fn test_stats_reports_unreadable() {
     let log = store();
     let session = SessionId::new();
     seed_missing_block(&log, session);
-    let catalog = SessionResultCatalog::new(log);
-    let stats = ask(&catalog, session, json!({"op": "stats"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let stats = ask(&catalog, &*log, session, json!({"op": "stats"}))
         .await
         .expect("the aggregate answers");
     assert!(
@@ -398,8 +427,8 @@ async fn test_stats_reports_unmeasured() {
     let log = store();
     let session = SessionId::new();
     seed_block(&log, session, br#""kept text""#, Some("captured"));
-    let catalog = SessionResultCatalog::new(log);
-    let stats = ask(&catalog, session, json!({"op": "stats"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let stats = ask(&catalog, &*log, session, json!({"op": "stats"}))
         .await
         .expect("the aggregate answers");
     assert!(
@@ -415,8 +444,8 @@ async fn test_list_names_stored_shapes() {
     let log = store();
     let session = SessionId::new();
     seed_block(&log, session, br#"{"stdout":"hi"}"#, None);
-    let catalog = SessionResultCatalog::new(log);
-    let whole = ask(&catalog, session, json!({"op": "list"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let whole = ask(&catalog, &*log, session, json!({"op": "list"}))
         .await
         .expect("the listing answers");
     assert!(whole.contains("| whole output | "), "{whole}");
@@ -428,8 +457,8 @@ async fn test_list_names_stored_shapes() {
     let log = store();
     let session = SessionId::new();
     seed_block(&log, session, br#""kept text""#, Some("captured"));
-    let catalog = SessionResultCatalog::new(log);
-    let field = ask(&catalog, session, json!({"op": "list"}))
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let field = ask(&catalog, &*log, session, json!({"op": "list"}))
         .await
         .expect("the listing answers");
     assert!(field.contains("| field captured | "), "{field}");
@@ -437,4 +466,48 @@ async fn test_list_names_stored_shapes() {
         field.contains("| size unknown |"),
         "an escaped string states no size: {field}"
     );
+}
+
+/// A read the tool answers is written to the session log under the model actor
+/// with the window it covered, so the session's read count names what left the
+/// store.
+#[tokio::test]
+async fn test_read_records_range() {
+    let (log, session) = seeded(b"abcdefg", b"");
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    ask(
+        &catalog,
+        &*log,
+        session,
+        json!({"op": "read", "id": "call-1:stdout", "offset": 2, "len": 3}),
+    )
+    .await
+    .expect("the read answers");
+    let recorded = reads(&*log, session).await;
+    assert_eq!(recorded.len(), 1, "one read recorded");
+    assert_eq!(recorded[0].result_id, "call-1:stdout");
+    assert_eq!(recorded[0].actor, ReadActor::Model);
+    assert_eq!(recorded[0].outcome, ReadOutcome::Read);
+    assert_eq!(recorded[0].start, 2, "the window it asked for");
+    assert_eq!(recorded[0].bytes, 3, "and the bytes it delivered");
+}
+
+/// A read of a name the session never kept is recorded as failed, so a reader
+/// is not told the store delivered content it could not find.
+#[tokio::test]
+async fn test_failed_read_marked() {
+    let (log, session) = seeded(b"abc", b"");
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let answer = ask(
+        &catalog,
+        &*log,
+        session,
+        json!({"op": "read", "id": "missing:stdout"}),
+    )
+    .await;
+    assert!(answer.is_err(), "the tool reports the failure");
+    let recorded = reads(&*log, session).await;
+    assert_eq!(recorded.len(), 1, "the attempt is recorded");
+    assert_eq!(recorded[0].outcome, ReadOutcome::Failed);
+    assert_eq!(recorded[0].bytes, 0, "nothing was delivered");
 }

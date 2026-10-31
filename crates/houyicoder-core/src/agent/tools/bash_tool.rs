@@ -19,8 +19,8 @@ use serde_json::{Value, json};
 
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::capture_record::{
-    BlockMarker, CAPTURE_FAILED_KEY, CAPTURE_KEY, RECORD_KEY, STDERR_KEY, STDOUT_KEY,
-    STOP_REASON_KEY,
+    BlockMarker, CAPTURE_FAILED_KEY, CAPTURE_KEY, RECORD_KEY, STDERR_BYTES_KEY, STDERR_KEY,
+    STDOUT_BYTES_KEY, STDOUT_KEY, STOP_REASON_KEY,
 };
 use houyicoder_protocol::extension::ToolError;
 
@@ -489,8 +489,8 @@ impl CaptureOutcome {
             Self::Published(captured) => {
                 let mut reference = json!({
                     RECORD_KEY: BlockMarker::new(captured.record.0.clone()),
-                    "stdout_bytes": captured.stdout_bytes,
-                    "stderr_bytes": captured.stderr_bytes,
+                    STDOUT_BYTES_KEY: captured.stdout_bytes,
+                    STDERR_BYTES_KEY: captured.stderr_bytes,
                 });
                 if let Some(hash) = &captured.stdout {
                     reference[STDOUT_KEY] = json!(BlockMarker::new(hash.0.clone()));

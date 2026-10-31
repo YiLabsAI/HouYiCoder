@@ -88,6 +88,7 @@ pub use durable::{WriteError, write_atomic};
 /// record can be).
 mod event;
 pub use event::{
-    CachedBlockDecision, PermissionVerdict, RecapSource, RecapUsage, RunCompletionStatus,
-    SessionEvent, SessionLogEntry, TruncationSignal,
+    CachedBlockDecision, CachedModelView, CachedRead, PermissionVerdict, ReadActor, ReadOutcome,
+    RecapSource, RecapUsage, RunCompletionStatus, SessionEvent, SessionLogEntry, TruncationSignal,
+    ViewForm,
 };

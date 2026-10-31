@@ -380,6 +380,7 @@ fn test_event_variants_round_trip() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         event(
@@ -766,4 +767,5 @@ fn test_timing_spans_absent_unknown() {
     }
 }
 
+mod cas;
 mod turn_usage;

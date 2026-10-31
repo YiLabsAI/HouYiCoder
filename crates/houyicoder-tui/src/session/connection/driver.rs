@@ -384,7 +384,9 @@ async fn drive_connection(
                             redundant: resp.redundant,
                         }),
                         ResponsePayload::Context(bd) => {
-                            Some(ServerResponse::Context { breakdown: bd })
+                            Some(ServerResponse::Context {
+                                breakdown: Box::new(bd),
+                            })
                         }
                         ResponsePayload::Compact(reply) => {
                             Some(ServerResponse::Compact { reply })

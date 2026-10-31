@@ -26,7 +26,7 @@ pub mod worktree;
 pub(crate) use append::reducer;
 pub(crate) use compaction::{backbone, economy, manifest};
 pub(crate) use context::prompt::cache::PromptHash;
-pub(crate) use context::{cache_liveness, prompt, selection, turn_group};
+pub(crate) use context::{cache_liveness, cas_views, prompt, selection, turn_group};
 pub use inference::{effort, model_window};
 pub use memory::{auto_dream, extract, extractor};
 pub(crate) use memory::{durable_scan, extraction_window, fact, reward_snapshot};
@@ -55,14 +55,14 @@ pub use exports::{
     HookPolicy, HookRegistry, HookSource, HookVerdict, HotPathReducer, LlmSummarizer,
     MakeCheckGate, MemoryAddTool, MemoryGateState, MemoryGates, MemoryRuntime, MultiEditTool,
     NextStep, RECAP_INPUT_TOKENS, RECAP_MESSAGE_LIMIT, ReadTool, RecapWindowSkip,
-    RecordedCompaction, ReduceCtx, ReducedOutput, Section, SectionKind, SkillHookRegistrar,
-    SkillReloadGuard, SkillTool, StatusSnapshot, StubTool, StubWorkspaceProbe, SummarizeError,
-    Summarizer, SystemPrompt, TodoItem, TodoStatus, TodoWriteTool, Tokenizer, ToolOutputReducer,
-    ToolRegistry, ToolResult, TrustLevel, TurnOutcome, UsageAccumulator, VerifyFailure, VerifyGate,
-    WebFetchTool, WorkspaceProbe, WorktreeController, WriteTool, apply_manifest,
-    assemble_model_input, build_grid, build_hook_fire, build_manifest, build_recap_input,
-    combine_verdicts, derive_backbone, extraction_prompt, merge_summary, never_worse, parse_event,
-    render_backbone_block, thinking_brief, unified_diff,
+    RecordedCompaction, ReduceCtx, ReducedOutput, Section, SectionKind, SessionResultCatalog,
+    SkillHookRegistrar, SkillReloadGuard, SkillTool, StatusSnapshot, StubTool, StubWorkspaceProbe,
+    SummarizeError, Summarizer, SystemPrompt, TodoItem, TodoStatus, TodoWriteTool, Tokenizer,
+    ToolOutputReducer, ToolRegistry, ToolResult, TrustLevel, TurnOutcome, UsageAccumulator,
+    VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController, WriteTool,
+    apply_manifest, assemble_model_input, build_grid, build_hook_fire, build_manifest,
+    build_recap_input, combine_verdicts, derive_backbone, extraction_prompt, merge_summary,
+    never_worse, parse_event, render_backbone_block, thinking_brief, unified_diff,
 };
 pub use inference::{InferenceConfig, RequestInferenceConfig};
 
@@ -74,6 +74,7 @@ use tokio_util::sync::CancellationToken;
 
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_context::{EventId, SessionDescriptorStore, SessionId};
 use houyicoder_protocol::frontend::model::{ModelChoice, SpeedMode};
 use houyicoder_protocol::llm::CompletionResponse;
@@ -296,6 +297,14 @@ pub struct Runner {
     /// Cached-prefix liveness + per-block stable retention decisions; shared
     /// with the ContextBuilder (see cache_liveness).
     cached_prefix: Arc<cache_liveness::CachedPrefixState>,
+    /// The forms each assembly carried from the block store. The retention
+    /// policy reports them here and the runner drains them into the session
+    /// log once the turn's usage lands.
+    cas_views: Arc<cas_views::CasViewState>,
+    /// The index the search tool answers from, shared with the host so the
+    /// context view reports the same index the tool serves. None when the
+    /// host serves no stored-result requests.
+    result_catalog: Option<Arc<dyn ResultCatalog>>,
     /// Consecutive transient auto-compaction failures. Repeated failures
     /// become sticky to stop retry churn. Reset by success or budget changes.
     compaction_transient_failures: AtomicU32,

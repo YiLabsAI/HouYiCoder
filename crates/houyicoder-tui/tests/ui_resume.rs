@@ -1649,6 +1649,7 @@ fn switch_session_events() -> Vec<SessionEvent> {
         input_reported: true,
         cache_read_reported: true,
         cache_write_reported: false,
+        cas_recorded: false,
     };
     let timing = |turn: u32, step: u32| SessionEvent::ModelStepTiming {
         turn,

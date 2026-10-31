@@ -165,10 +165,6 @@ pub enum ChildTranscriptFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "wire DTO: serialized, size irrelevant"
-)] // wire DTO: serialized, size is irrelevant
 pub enum ResponsePayload {
     /// A run completed. The outcome (final output / interruption / handoff /
     /// interrupted / verify-failed) carries the same shape the engine

@@ -30,6 +30,12 @@ pub const CAPTURE_FAILED_KEY: &str = "capture_failed";
 /// The key a capture names the reason it stopped the command under.
 pub const STOP_REASON_KEY: &str = "stop_reason";
 
+/// The key a capture reports the bytes it read from standard output under.
+pub const STDOUT_BYTES_KEY: &str = "stdout_bytes";
+
+/// The key a capture reports the bytes it read from standard error under.
+pub const STDERR_BYTES_KEY: &str = "stderr_bytes";
+
 /// The record version this crate writes.
 ///
 /// Bump it when a field changes meaning or when one of the enums below gains

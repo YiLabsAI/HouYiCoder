@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::agent::model_window::span_for_lowercase_offsets;
 use crate::agent::skill_body::frame_untrusted_body;
+use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::session::{SessionLog, TrajectoryPosition};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
@@ -46,19 +47,27 @@ const TURN_ROW_CHARS: usize = 1000;
 pub struct ConversationSearchTool {
     store: Arc<dyn SessionLog>,
     recall_meter: Arc<AtomicU32>,
-    catalog: SessionResultCatalog,
+    catalog: Arc<dyn ResultCatalog>,
 }
 
 impl ConversationSearchTool {
     /// Construct with a shared session-log handle and a recall meter the
     /// compaction path reads. The composition root passes the same store the
-    /// runner holds and the same meter the compaction path reads.
+    /// runner holds and the same meter the compaction path reads. The tool
+    /// folds its own index unless the host installs one with with_catalog.
     pub fn new(store: Arc<dyn SessionLog>, recall_meter: Arc<AtomicU32>) -> Self {
         Self {
-            catalog: SessionResultCatalog::new(Arc::clone(&store)),
+            catalog: Arc::new(SessionResultCatalog::new(Arc::clone(&store))),
             store,
             recall_meter,
         }
+    }
+
+    /// Answer from an index the host also holds, so a session's stored
+    /// results are folded once rather than once per reader.
+    pub fn with_catalog(mut self, catalog: Arc<dyn ResultCatalog>) -> Self {
+        self.catalog = catalog;
+        self
     }
 }
 
@@ -190,7 +199,7 @@ impl Tool for ConversationSearchTool {
                 ));
             }
             if let Some(request) = params.results {
-                let output = stored::serve(&self.catalog, session, request).await?;
+                let output = stored::serve(&*self.catalog, session, request, &*self.store).await?;
                 return Ok(json!({ "result": output }));
             }
             if let Some(q) = params.query.as_ref()
@@ -500,7 +509,9 @@ fn transcript_item(event: &SessionLogEntry) -> Option<(&'static str, Cow<'_, str
         | SessionEvent::RunCompleted { .. }
         | SessionEvent::NotificationInjected { .. }
         | SessionEvent::ModelStepTiming { .. }
-| SessionEvent::CacheDecisions { .. }
+        | SessionEvent::CacheDecisions { .. }
+        | SessionEvent::CasModelView { .. }
+        | SessionEvent::CasRead { .. }
         // A recap is a summary the host wrote about the run, not a turn of
         // it; it is also excluded from model context, so recalling it as
         // conversation would feed the model its own second-hand account.

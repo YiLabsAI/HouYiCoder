@@ -65,14 +65,14 @@ struct CursorBinding<'a> {
 }
 
 /// The host's view of every session's stored results.
-pub(crate) struct SessionResultCatalog {
+pub struct SessionResultCatalog {
     log: Arc<dyn SessionLog>,
     indexes: Mutex<HashMap<SessionId, Index>>,
 }
 
 impl SessionResultCatalog {
     /// Build a catalog that folds the given log's sessions.
-    pub(crate) fn new(log: Arc<dyn SessionLog>) -> Self {
+    pub fn new(log: Arc<dyn SessionLog>) -> Self {
         Self {
             log,
             indexes: Mutex::new(HashMap::new()),

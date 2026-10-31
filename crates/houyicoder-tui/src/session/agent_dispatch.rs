@@ -276,7 +276,7 @@ impl App {
                 self.system_line(render_trajectory_wire(&entries, &redundant));
             }
             ServerResponse::Context { breakdown } => {
-                self.apply_context_breakdown(breakdown);
+                self.apply_context_breakdown(*breakdown);
             }
             ServerResponse::Compact { reply } => {
                 self.apply_compact(reply);
@@ -422,7 +422,7 @@ impl App {
         let suggestions = suggestions_for(&breakdown);
         let drill = ContextDrillDown::from_breakdown(&breakdown);
         let view = ContextView {
-            breakdown,
+            breakdown: Box::new(breakdown),
             drill,
             suggestions,
         };

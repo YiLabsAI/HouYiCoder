@@ -41,6 +41,7 @@ fn test_effort_absent_defaults_none() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -78,6 +79,7 @@ fn test_usage_effort_round_trips() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         );
         let json = serde_json::to_string(&e).expect("serialize");
@@ -109,6 +111,7 @@ fn test_flags_absent_read_unreported() {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: true,
+            cas_recorded: false,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -130,6 +133,43 @@ fn test_flags_absent_read_unreported() {
                 !input_reported && !cache_read_reported && !cache_write_reported,
                 "absent flags read as unreported, not as reported zeroes"
             );
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// A log written before the block-store record existed reads as untracked, so
+/// a reader reports the model view as unknown rather than as nothing stored.
+#[test]
+fn test_cas_absent_reads_untracked() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 1,
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "test".into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            cas_recorded: true,
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let legacy = json.replace(r#","cas_recorded":true"#, "");
+    assert!(!legacy.contains("cas_recorded"), "field stripped: {legacy}");
+    let back: SessionLogEntry = serde_json::from_str(&legacy).expect("deserialize");
+    match back.event {
+        SessionEvent::TurnUsage { cas_recorded, .. } => {
+            assert!(!cas_recorded, "absent field reads as untracked");
         }
         _ => unreachable!(),
     }

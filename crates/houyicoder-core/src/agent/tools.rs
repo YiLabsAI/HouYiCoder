@@ -54,6 +54,7 @@ pub use memory_search::SearchMemoryTool;
 pub use memory_show::ShowMemoryTool;
 pub use multiedit::MultiEditTool;
 pub use read::ReadTool;
+pub use results::SessionResultCatalog;
 pub use skill::SkillTool;
 pub use todo::{TodoItem, TodoStatus, TodoWriteTool};
 pub use webfetch::WebFetchTool;

@@ -62,6 +62,7 @@ fn logged_turn(
             input_reported: reported,
             cache_read_reported: reported,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
 }
@@ -653,6 +654,7 @@ fn logged_turn_on(session: SessionId, model: &str, cache_read: u64) -> SessionLo
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
 }

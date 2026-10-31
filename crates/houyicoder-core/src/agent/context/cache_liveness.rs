@@ -38,11 +38,13 @@ impl Runner {
         let cache_policy = Arc::new(CacheLivenessRetentionPolicy::new(Arc::clone(
             &self.cached_prefix,
         )));
-        let budgeted = Arc::new(BudgetedRetentionPolicy::new(
-            cache_policy,
-            self.context_builder.tokenizer_clone(),
-        ));
-        self.context_builder.set_retention_policy(budgeted);
+        let mut budgeted =
+            BudgetedRetentionPolicy::new(cache_policy, self.context_builder.tokenizer_clone());
+        // The budget policy counts with the tokenizer, so the forms it
+        // reports are sized in tokens.
+        budgeted.set_cas_views(Arc::clone(&self.cas_views));
+        self.context_builder
+            .set_retention_policy(Arc::new(budgeted));
     }
 
     /// Stamp the completed turn's clock and reported cache read. A collapse

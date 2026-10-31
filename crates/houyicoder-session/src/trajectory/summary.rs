@@ -19,8 +19,10 @@ use houyicoder_protocol::llm::UsageProvenance;
 use houyicoder_protocol::tool::{simple_command_word, tool_result_failed, tool_result_not_run};
 use serde_json::Value;
 
+use self::cas_usage::CasUsageFold;
 use self::ttft::TtftHistogram;
 
+mod cas_usage;
 mod ttft;
 
 /// What a tool call carried, so a later result can be judged against it.
@@ -315,6 +317,10 @@ pub(crate) struct TrajectorySummaryState {
     approvals: ApprovalFold,
     turn_ends: TurnEnds,
 
+    /// What the session's stored blocks cost and how its assemblies carried
+    /// them.
+    cas: CasUsageFold,
+
     first_ts: Option<u64>,
     last_ts: Option<u64>,
 
@@ -358,6 +364,11 @@ impl TrajectorySummaryState {
                     // read as incomplete for the rest of its life.
                     | SessionEvent::AssistantTextDelta { .. }
                     | SessionEvent::CacheDecisions { .. }
+                    // The block-store records are written beside the turn's
+                    // own events, never in place of one, so a view opening on
+                    // either opens between the measurements, not mid-run.
+                    | SessionEvent::CasModelView { .. }
+                    | SessionEvent::CasRead { .. }
             )
         {
             self.seen_any_event = true;
@@ -390,19 +401,23 @@ impl TrajectorySummaryState {
                 input_reported,
                 cache_read_reported,
                 cache_write_reported,
+                cas_recorded,
                 model,
                 ..
-            } => self.fold_usage(
-                *input_tokens,
-                *output_tokens,
-                *cache_read_input_tokens,
-                UsageProvenance {
-                    input_reported: *input_reported,
-                    cache_read_reported: *cache_read_reported,
-                    cache_write_reported: *cache_write_reported,
-                },
-                model,
-            ),
+            } => {
+                self.cas.observe_writer(*cas_recorded);
+                self.fold_usage(
+                    *input_tokens,
+                    *output_tokens,
+                    *cache_read_input_tokens,
+                    UsageProvenance {
+                        input_reported: *input_reported,
+                        cache_read_reported: *cache_read_reported,
+                        cache_write_reported: *cache_write_reported,
+                    },
+                    model,
+                )
+            }
             SessionEvent::ModelStepTiming {
                 total_ms,
                 ttft_ms,
@@ -421,7 +436,16 @@ impl TrajectorySummaryState {
                 call_id,
                 output,
                 duration_ms,
-            } => self.fold_tool_result(call_id, output, *duration_ms),
+            } => {
+                self.cas.fold_tool_result(output);
+                self.fold_tool_result(call_id, output, *duration_ms);
+            }
+            SessionEvent::CasModelView {
+                assembly_id,
+                views,
+                estimate_unit,
+            } => self.cas.fold_model_view(*assembly_id, views, estimate_unit),
+            SessionEvent::CasRead { reads } => self.cas.fold_reads(reads),
             SessionEvent::SubagentReturn {
                 tool_calls,
                 tool_failures,
@@ -675,6 +699,7 @@ impl TrajectorySummaryState {
             },
             approvals: self.approvals.audit(),
             turns: self.turn_ends.audit(),
+            cas: self.cas.snapshot(),
         }
     }
 }

@@ -51,6 +51,7 @@ pub(super) fn usage_ev(
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
 }
@@ -79,6 +80,7 @@ pub(super) fn usage_ev_unreported(
             input_reported: false,
             cache_read_reported: false,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     )
 }
@@ -135,6 +137,7 @@ fn test_turn_groups_by_input() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         ev(
@@ -183,6 +186,7 @@ fn test_turn_groups_by_input() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
     ];
@@ -353,6 +357,7 @@ fn test_recovery_retry_same_turn() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         ev(
@@ -378,6 +383,7 @@ fn test_recovery_retry_same_turn() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
     ];
@@ -893,6 +899,7 @@ fn test_timing_percentiles_and_speed() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         ev(
@@ -1142,6 +1149,7 @@ fn test_model_switch_boundary() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         ev(200, SessionEvent::UserInput { text: "t2".into() }),
@@ -1168,6 +1176,7 @@ fn test_model_switch_boundary() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
     ];
@@ -1257,6 +1266,7 @@ fn test_two_boundaries_kept() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
     };
@@ -1331,6 +1341,7 @@ fn test_switch_inside_turn() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
     };
@@ -1535,6 +1546,7 @@ fn test_fold_modes_agree() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         ),
         ev(
@@ -1662,6 +1674,7 @@ fn test_seam_keeps_boundaries() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
     };

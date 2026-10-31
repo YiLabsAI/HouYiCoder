@@ -318,7 +318,9 @@ pub enum ServerResponse {
     },
     /// The context-window breakdown the /context command requested over the
     /// wire. The state renders the grid without importing the engine crate.
-    Context { breakdown: ContextBreakdown },
+    /// Boxed because the breakdown is a few hundred bytes of measured DTO and
+    /// every response would otherwise carry its size in the response enum.
+    Context { breakdown: Box<ContextBreakdown> },
     /// The compaction outcome the /compact command requested over the wire.
     /// Carries whether progress was made, the folded event count, the
     /// persisted manifest id, and pre/post token estimates so the state

@@ -87,6 +87,7 @@ fn usage_events(sid: SessionId) -> Vec<SessionLogEntry> {
             input_reported: true,
             cache_read_reported: true,
             cache_write_reported: false,
+            cas_recorded: false,
         }),
     ]
 }

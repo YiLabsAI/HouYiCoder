@@ -25,6 +25,7 @@ fn test_intra_turn_switch_stated() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
     };
@@ -124,6 +125,7 @@ fn test_switch_states_empty_summary() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
     };
@@ -187,6 +189,7 @@ fn test_switch_roundtrip_chain() {
                 input_reported: true,
                 cache_read_reported: true,
                 cache_write_reported: false,
+                cas_recorded: false,
             },
         )
     };

@@ -17,6 +17,7 @@
 
 pub(crate) mod budget;
 pub(crate) mod cache_liveness;
+pub(crate) mod cas_views;
 pub(crate) mod conversation;
 pub(crate) mod prompt;
 pub(crate) mod recap;
@@ -191,6 +192,7 @@ impl ContextMeasurement {
             cache_hit_rate: None,
             tool_footprints: self.tool_footprints.clone(),
             delegated: self.delegated.clone(),
+            cas: None,
         }
     }
 

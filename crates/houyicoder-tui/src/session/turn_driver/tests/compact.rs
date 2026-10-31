@@ -16,7 +16,7 @@ fn test_context_result_pushes_line() {
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(8),
         response: ServerResponse::Context {
-            breakdown: stub_breakdown(),
+            breakdown: Box::new(stub_breakdown()),
         },
     });
     assert!(

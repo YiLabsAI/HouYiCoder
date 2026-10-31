@@ -526,6 +526,7 @@ fn usage_entry(
             input_reported: reported,
             cache_read_reported: reported,
             cache_write_reported: false,
+            cas_recorded: false,
         },
     }
 }

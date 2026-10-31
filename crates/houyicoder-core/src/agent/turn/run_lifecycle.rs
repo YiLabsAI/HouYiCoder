@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::append::new_event;
 use crate::agent::cache_liveness::CachedPrefixState;
+use crate::agent::context::cas_views::CasViewState;
 use crate::agent::fact;
 use crate::agent::input_queue::InputQueue;
 use crate::agent::memory::MemoryRuntime;
@@ -109,6 +110,8 @@ impl Runner {
             cache_prev_prefix: Mutex::new(None),
             last_request_model: Mutex::new(None),
             cached_prefix: Arc::new(CachedPrefixState::new()),
+            cas_views: Arc::new(CasViewState::new("tokens")),
+            result_catalog: None,
             reducer: None,
             input_queue: InputQueue::new(),
             queued_notifications: Mutex::new(VecDeque::new()),

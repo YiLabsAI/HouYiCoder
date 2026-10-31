@@ -94,9 +94,13 @@ pub enum SuggestionSeverity {
 /// The full /context view payload: the proportional grid + categories, the
 /// drill-down rows, and the suggestions. Carried by the ContextGrid transcript
 /// line so the inline renderer has everything it needs.
+///
+/// The measured breakdown is boxed: it is a few hundred bytes of wire DTO, and
+/// every transcript row would otherwise pay for it inside the row enum, while
+/// the view is read by reference on each render.
 #[derive(Debug, Clone, Default)]
 pub struct ContextView {
-    pub breakdown: ContextBreakdown,
+    pub breakdown: Box<ContextBreakdown>,
     pub drill: ContextDrillDown,
     pub suggestions: Vec<ContextSuggestion>,
 }

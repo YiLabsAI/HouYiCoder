@@ -14,7 +14,7 @@ mod fold;
 mod search;
 mod windows;
 
-pub(crate) use catalog::SessionResultCatalog;
+pub use catalog::SessionResultCatalog;
 
 #[cfg(test)]
 mod tests;

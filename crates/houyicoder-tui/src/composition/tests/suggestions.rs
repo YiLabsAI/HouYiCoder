@@ -37,6 +37,7 @@ fn breakdown(
         cache_hit_rate: None,
         tool_footprints: footprints,
         delegated: None,
+        cas: None,
     }
 }
 

@@ -28,6 +28,7 @@ use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::cache_policy::CachePolicyProvider;
 use houyicoder_api::cost_model::CostModelProvider;
 use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::skill::{SkillRegistry, SkillSnapshot};
 use houyicoder_api::trust::TrustState;
 use houyicoder_context::Disposition;
@@ -285,6 +286,18 @@ impl Runner {
     pub fn with_recall_meter(mut self, meter: Arc<AtomicU32>) -> Self {
         self.recall_meter = meter;
         self
+    }
+
+    /// Install the index the search tool answers from, so the host reports
+    /// the same index the tool serves rather than a second fold of the log.
+    pub fn with_result_catalog(mut self, catalog: Arc<dyn ResultCatalog>) -> Self {
+        self.result_catalog = Some(catalog);
+        self
+    }
+
+    /// The index the host and the search tool share, when one is installed.
+    pub fn result_catalog(&self) -> Option<Arc<dyn ResultCatalog>> {
+        self.result_catalog.as_ref().map(Arc::clone)
     }
 
     /// Install the skill registry used to build the
