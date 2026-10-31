@@ -4,6 +4,7 @@
 
 use crate::state::App;
 use crate::state::enums::LiveBlock;
+use crate::view::ERROR_RED_RGB;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::f32::consts::TAU;
@@ -81,9 +82,6 @@ const STALL_THRESHOLD_REASONING_SECS: u64 = 25;
 
 /// Duration of the red intensity fade-in after the stall threshold (seconds).
 const STALL_FADE_SECS: u64 = 2;
-
-/// Error red target color for the stall gradient.
-const ERROR_RED: (u8, u8, u8) = (255, 107, 128);
 
 /// Dim gray base color for the spinner glyph.
 const DIM_GRAY: (u8, u8, u8) = (88, 88, 88);
@@ -189,7 +187,7 @@ pub fn spinner_line(
     let dim = Style::new().fg(Color::DarkGray);
     // Glyph base is always the Rgb dim gray so the stall gradient starts from
     // the exact color it lerps from (no ANSI-to-Rgb jump at intensity > 0).
-    let glyph_style = Style::new().fg(lerp_color(DIM_GRAY, ERROR_RED, intensity));
+    let glyph_style = Style::new().fg(lerp_color(DIM_GRAY, ERROR_RED_RGB, intensity));
     let bright = Style::new().fg(Color::Cyan);
     // Row shape: "{glyph} {verb}… ({suffix})". Pull the verb out for shimmer.
     let mut chars = row.char_indices();

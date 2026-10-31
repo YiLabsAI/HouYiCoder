@@ -8,9 +8,7 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-/// A removed line takes this red, an added one the green below it.
-const REMOVED: Color = Color::Rgb(255, 107, 128);
-const ADDED: Color = Color::Rgb(78, 186, 101);
+use crate::view::{ERROR_RED, SUCCESS_GREEN};
 
 /// The unchanged lines shown on each side of a change, and the point past
 /// which the two middles are compared as one block instead of line by line.
@@ -134,11 +132,11 @@ fn render(steps: &[Step<'_>], collapse: bool) -> Vec<Line<'static>> {
                 );
             }
             Step::Gone(text) => {
-                lines.push(marked("-", text, REMOVED));
+                lines.push(marked("-", text, ERROR_RED));
                 i += 1;
             }
             Step::Came(text) => {
-                lines.push(marked("+", text, ADDED));
+                lines.push(marked("+", text, SUCCESS_GREEN));
                 i += 1;
             }
         }

@@ -48,6 +48,22 @@ use ratatui::{Frame, layout::Rect, style::Color};
 
 use crate::state::{App, Screen};
 
+/// The green this view layer draws a success in: a tool call that worked, a
+/// child that finished, an added line. One constant so the same verdict does
+/// not come out in two slightly different hues across the transcript, the
+/// footer, and a diff.
+pub(crate) const SUCCESS_GREEN: Color = Color::Rgb(78, 186, 101);
+
+/// The error red as its three channels. A gradient is built by mixing
+/// channels, so the caller that fades toward this color needs the components
+/// rather than the finished color, and it reads them here so the two forms
+/// stay one hue.
+pub(crate) const ERROR_RED_RGB: (u8, u8, u8) = (255, 107, 128);
+
+/// The red the view layer draws an error in, shared for the same reason: a
+/// call that failed, a child that stopped on an error, a removed line.
+pub(crate) const ERROR_RED: Color = Color::Rgb(ERROR_RED_RGB.0, ERROR_RED_RGB.1, ERROR_RED_RGB.2);
+
 /// Map an agent badge color name to a foreground color. Unknown names fall
 /// back to None so a misspelled color renders the default foreground rather
 /// than a wrong hue. Shared by the teammate banner + the inline fold-group

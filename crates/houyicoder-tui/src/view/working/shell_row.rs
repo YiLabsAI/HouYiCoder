@@ -18,6 +18,7 @@ use crate::records::TranscriptLine;
 use crate::transcript::shell_result::ShellStorage;
 use crate::view::line_wrap::truncate_width;
 use crate::view::relative_time::format_span_ms;
+use crate::view::{ERROR_RED, SUCCESS_GREEN};
 
 /// Everything one command row reports, gathered so the layout function takes
 /// one value rather than a list of loose arguments.
@@ -96,9 +97,9 @@ fn status_style(outcome: ToolOutcome, timed_out: bool, cancelling: bool) -> Styl
     let dim = Style::new().fg(Color::DarkGray);
     let yellow = Style::new().fg(Color::Yellow);
     match outcome {
-        ToolOutcome::Success => Style::new().fg(Color::Rgb(78, 186, 101)),
+        ToolOutcome::Success => Style::new().fg(SUCCESS_GREEN),
         ToolOutcome::Error if timed_out => yellow,
-        ToolOutcome::Error => Style::new().fg(Color::Rgb(255, 107, 128)),
+        ToolOutcome::Error => Style::new().fg(ERROR_RED),
         ToolOutcome::NotRun => dim,
         ToolOutcome::Running if cancelling => yellow,
         ToolOutcome::Running => Style::new().fg(Color::Cyan),

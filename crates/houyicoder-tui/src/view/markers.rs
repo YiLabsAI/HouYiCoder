@@ -15,6 +15,7 @@ use crate::selection::{
 };
 use crate::transcript::markdown::{highlighter_for_path, syn_to_ratatui, syntax_set};
 use crate::view::word_diff::WordDiffPart;
+use crate::view::{ERROR_RED, SUCCESS_GREEN};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use syntect::easy::HighlightLines;
@@ -87,8 +88,8 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
     let cyan = Style::new().fg(Color::Cyan);
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().fg(Color::DarkGray);
-    let green = Style::new().fg(Color::Rgb(78, 186, 101));
-    let red = Style::new().fg(Color::Rgb(255, 107, 128));
+    let green = Style::new().fg(SUCCESS_GREEN);
+    let red = Style::new().fg(ERROR_RED);
     let glyph_style = match outcome {
         Some(ToolOutcome::Success) => green,
         Some(ToolOutcome::Error) => red,
@@ -439,12 +440,8 @@ fn diff_row_with(
         let line = "┄".repeat(usize::from(width).max(1));
         return Line::from(Span::styled(line, dim));
     }
-    let green = Style::new()
-        .fg(Color::Rgb(78, 186, 101))
-        .bg(Color::Rgb(28, 38, 32));
-    let red = Style::new()
-        .fg(Color::Rgb(255, 107, 128))
-        .bg(Color::Rgb(42, 28, 32));
+    let green = Style::new().fg(SUCCESS_GREEN).bg(Color::Rgb(28, 38, 32));
+    let red = Style::new().fg(ERROR_RED).bg(Color::Rgb(42, 28, 32));
     // Darker, more-saturated word backgrounds so a changed word stands out
     // against the dim line bar (darker per-word backgrounds for added/removed
     // words).
