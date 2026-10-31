@@ -1224,3 +1224,60 @@ fn test_tick_without_countdown() {
     let mut app = card_app(0);
     assert!(!app.tick_auto_approve(Instant::now()));
 }
+
+/// ATTACK by counterexample: a countdown that is cancelled and then re-armed.
+/// start_auto_approve leaves shown_secs carrying the figure from the cancelled
+/// run, so the re-armed countdown opens on a stale number and the first second
+/// of movement is never painted.
+#[test]
+fn test_rearm_repaints() {
+    let mut app = card_app(0);
+    {
+        let card = app.approval_mut().expect("card");
+        card.start_auto_approve(7);
+    }
+    let t0 = Instant::now();
+    assert!(app.tick_auto_approve(t0), "first figure recorded");
+
+    // The user presses a navigation key, which cancels the countdown.
+    {
+        let card = app.approval_mut().expect("card");
+        card.cancel_auto_approve();
+    }
+
+    // A later keystroke puts the cursor back on Yes and the card re-arms.
+    {
+        let card = app.approval_mut().expect("card");
+        card.start_auto_approve(30);
+    }
+    // The re-armed countdown opens at 30s. Nothing has painted that figure
+    // yet, so the next tick must report a change.
+    assert!(
+        app.tick_auto_approve(Instant::now()),
+        "a re-armed countdown paints its opening figure"
+    );
+}
+
+/// ATTACK by counterexample, the same delay twice. The user cancels on Yes,
+/// moves away, comes back: the card re-arms with the same seven seconds. The
+/// recorded figure still says seven, so the opening tick of the new countdown
+/// reports no change and the card draws the old deadline's number.
+#[test]
+fn test_rearm_same_delay_paints() {
+    let mut app = card_app(0);
+    {
+        let card = app.approval_mut().expect("card");
+        card.start_auto_approve(7);
+    }
+    assert!(app.tick_auto_approve(Instant::now()));
+
+    {
+        let card = app.approval_mut().expect("card");
+        card.cancel_auto_approve();
+        card.start_auto_approve(7);
+    }
+    assert!(
+        app.tick_auto_approve(Instant::now()),
+        "a countdown re-armed with the same delay still paints its opening figure"
+    );
+}

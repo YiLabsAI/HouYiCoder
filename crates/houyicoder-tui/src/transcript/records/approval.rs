@@ -160,6 +160,12 @@ impl Approval {
         if delay_secs > 0 && self.focused_approves() && self.auto_approve_eligible() {
             self.auto_approve_at = Some(Instant::now() + Duration::from_secs(delay_secs));
             self.auto_approve_cancelled = false;
+            // A new deadline makes the recorded figure describe a countdown
+            // that no longer exists. Leaving it in place means a card that is
+            // cancelled and re-armed with the same delay never repaints: the
+            // opening tick matches the stale figure, so the countdown appears
+            // frozen at a number belonging to the run the user cancelled.
+            self.shown_secs = None;
         }
     }
 
