@@ -7,6 +7,7 @@
 use super::*;
 
 use crate::input::queue::resume_command_target;
+use std::env::var;
 use std::mem::take;
 
 impl App {
@@ -164,7 +165,12 @@ impl App {
         // sandbox is re-set to the wired-runner label (a swap always wires a
         // real runner); the applied model is committed beside it; and the run
         // outcome is carried from the pre-switch read above.
-        self.sessions.current.sandbox = "mac-seatbelt".to_string();
+        self.sessions.current.sandbox =
+            if var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+                "off (no-sandbox)".to_string()
+            } else {
+                "mac-seatbelt".to_string()
+            };
         self.sessions.current.last_run_final = carried_last_run_final;
         self.sessions.current.capabilities.model.catalog.applied.id = model;
         // A swap is always initiated from the working screen (the user is on

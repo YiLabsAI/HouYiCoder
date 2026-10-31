@@ -211,3 +211,10 @@ async fn test_runs_bash_semantics() {
         "an unmatched glob does not abort the line: {out:?}"
     );
 }
+
+#[test]
+fn test_set_unfenced_state() {
+    crate::set_unfenced(true);
+    assert!(crate::is_unfenced());
+    crate::set_unfenced(false);
+}

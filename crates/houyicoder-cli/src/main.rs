@@ -105,6 +105,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             exit(2);
         }
     };
+    if cmd.no_sandbox() {
+        houyicoder_service::set_unfenced(true);
+    }
     // Install the process-wide diagnostic sink before any server or bundle
     // is built. Starts disabled: a normal run pays a filter check per call
     // site and nothing else. The sink is file-backed because the TUI runs in
@@ -154,15 +157,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             project,
             socket,
             model,
+            ..
         } => {
             run_serve(project, socket, model)?;
             Ok(())
         }
-        CliCommand::Acp { project, model } => {
+        CliCommand::Acp { project, model, .. } => {
             run_acp_stdio(project, model)?;
             Ok(())
         }
-        CliCommand::Tui { project, model } => {
+        CliCommand::Tui { project, model, .. } => {
             let provider = resolve_provider(project.as_deref());
             let (bundle, startup, host, runner) =
                 build_bundle(project.clone(), model, provider.clone());
@@ -174,8 +178,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             value,
             project,
             fork,
+            ..
         } => run_resume(value, project, fork),
-        CliCommand::Continue { project, fork } => run_continue(project, fork),
+        CliCommand::Continue { project, fork, .. } => run_continue(project, fork),
         CliCommand::Cleanup {
             apply,
             verbose,

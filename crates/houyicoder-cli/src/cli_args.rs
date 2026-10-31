@@ -5,17 +5,19 @@
 
 use std::vec::IntoIter;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CliCommand {
     /// Run the interactive TUI (default when no mode flag is given).
     Tui {
         project: Option<String>,
         model: Option<String>,
+        no_sandbox: bool,
     },
     /// Run the ACP server over stdio instead of the TUI.
     Acp {
         project: Option<String>,
         model: Option<String>,
+        no_sandbox: bool,
     },
     /// Run a detached session bound to a Unix domain socket.
     #[cfg(unix)]
@@ -24,6 +26,7 @@ pub(crate) enum CliCommand {
         /// Custom socket path; None means the conventional per-user path.
         socket: Option<String>,
         model: Option<String>,
+        no_sandbox: bool,
     },
     /// Attach a TUI to a detached session.
     #[cfg(unix)]
@@ -40,11 +43,16 @@ pub(crate) enum CliCommand {
         value: String,
         project: Option<String>,
         fork: bool,
+        no_sandbox: bool,
     },
     /// Continue the most-recently-active session (--continue): resolve the
     /// latest-mtime session on disk and resume it, no sid needed. --fork-
     /// session mints a new sid seeded from that session instead.
-    Continue { project: Option<String>, fork: bool },
+    Continue {
+        project: Option<String>,
+        fork: bool,
+        no_sandbox: bool,
+    },
     /// Print usage help.
     Help,
     /// Review or apply the session prune plan. Default (dry-run) prints a
@@ -58,6 +66,22 @@ pub(crate) enum CliCommand {
     },
 }
 
+impl CliCommand {
+    /// Whether the user launched the session with --no-sandbox to skip the
+    /// operating system kernel sandbox fence.
+    pub(crate) fn no_sandbox(&self) -> bool {
+        match self {
+            Self::Tui { no_sandbox, .. }
+            | Self::Acp { no_sandbox, .. }
+            | Self::Resume { no_sandbox, .. }
+            | Self::Continue { no_sandbox, .. } => *no_sandbox,
+            #[cfg(unix)]
+            Self::Serve { no_sandbox, .. } => *no_sandbox,
+            _ => false,
+        }
+    }
+}
+
 /// Parse CLI arguments into a command. Pure function: no I/O, no process
 /// exit. Returns Err(message) for usage errors the caller prints to stderr
 /// before exiting with code 2.
@@ -68,6 +92,7 @@ struct Flags {
     continue_flag: bool,
     fork: bool,
     model: Option<String>,
+    no_sandbox: bool,
     #[cfg(unix)]
     serve: Option<Option<String>>,
 }
@@ -77,6 +102,8 @@ fn parse_flag(iter: &mut IntoIter<String>, arg: &str, flags: &mut Flags) -> Resu
         flags.project = Some(iter.next().ok_or("--project requires a path argument")?);
     } else if arg == "--model" {
         flags.model = Some(iter.next().ok_or("--model requires a model id argument")?);
+    } else if arg == "--no-sandbox" {
+        flags.no_sandbox = true;
     } else if arg == "--acp" {
         flags.acp = true;
     } else if arg == "--detached" {
@@ -116,7 +143,7 @@ fn parse_flag(iter: &mut IntoIter<String>, arg: &str, flags: &mut Flags) -> Resu
         flags.fork = true;
     } else {
         return Err(format!(
-            "unknown argument: {arg} (use --project <path>, --acp, --detached, --serve <socket>, --resume <file|sid>, --continue, --fork-session, attach, or ps)"
+            "unknown argument: {arg} (use --project <path>, --model <id>, --no-sandbox, --acp, --detached, --serve <socket>, --resume <file|sid>, --continue, --fork-session, attach, or ps)"
         ));
     }
     Ok(true)
@@ -139,12 +166,14 @@ fn validate_and_build(flags: Flags) -> Result<CliCommand, String> {
             value,
             project: flags.project,
             fork: flags.fork,
+            no_sandbox: flags.no_sandbox,
         });
     }
     if flags.continue_flag {
         return Ok(CliCommand::Continue {
             project: flags.project,
             fork: flags.fork,
+            no_sandbox: flags.no_sandbox,
         });
     }
     #[cfg(unix)]
@@ -153,17 +182,20 @@ fn validate_and_build(flags: Flags) -> Result<CliCommand, String> {
             project: flags.project,
             socket: socket_opt,
             model: flags.model,
+            no_sandbox: flags.no_sandbox,
         });
     }
     if flags.acp {
         Ok(CliCommand::Acp {
             project: flags.project,
             model: flags.model,
+            no_sandbox: flags.no_sandbox,
         })
     } else {
         Ok(CliCommand::Tui {
             project: flags.project,
             model: flags.model,
+            no_sandbox: flags.no_sandbox,
         })
     }
 }
@@ -217,6 +249,7 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
         continue_flag: false,
         fork: false,
         model: None,
+        no_sandbox: false,
         #[cfg(unix)]
         serve: None,
     };
@@ -232,7 +265,7 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
 /// Usage help text printed to stderr on -h / --help.
 pub(crate) fn print_help() {
     eprintln!(
-        "houyi [--project <path>] [--model <id>] [--acp | --detached | --serve <socket> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind a conventional per-user socket (prints\n                    session_id + pid to stderr); ps lists detached sessions.\n  --serve <socket>  run detached at a custom socket path (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <socket> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)\n  cleanup [--apply] [--verbose] [--yes]
+        "houyi [--project <path>] [--model <id>] [--no-sandbox] [--acp | --detached | --serve <socket> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --no-sandbox      run without operating system sandbox fence\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind a conventional per-user socket (prints\n                    session_id + pid to stderr); ps lists detached sessions.\n  --serve <socket>  run detached at a custom socket path (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <socket> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)\n  cleanup [--apply] [--verbose] [--yes]
                    review (or --apply to execute) the prune plan; --verbose lists
                    every entry; --yes skips the prompt (non-interactive)"
     );

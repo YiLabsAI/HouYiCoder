@@ -305,6 +305,19 @@ fn test_host_carries_provider_facts() {
     assert_eq!(host.provider_facts(), Some(&carried));
 }
 
+/// Passing no_sandbox = true to build_runner updates the unfenced sandbox state
+/// so commands execute without the operating system kernel fence.
+#[test]
+fn test_build_runner_no_sandbox() {
+    let options = BuildRunnerOptions {
+        no_sandbox: true,
+        ..Default::default()
+    };
+    let _assembled = super::build_runner(options);
+    assert!(houyicoder_sandbox::is_unfenced());
+    houyicoder_sandbox::set_unfenced(false);
+}
+
 /// The recap runs only on a model the catalog declares and whose dialect can
 /// turn thinking off. Each refusal leaves the feature off and says why at
 /// startup, rather than sending a request that spends on a model the user did

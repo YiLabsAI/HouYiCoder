@@ -30,3 +30,4 @@ pub mod uds;
 /// Re-exported so the binary entry can mint a cancel token for the serve
 /// path without a direct dependency on the async foundation crate.
 pub use houyicoder_async::CancellationToken;
+pub use houyicoder_sandbox::{is_unfenced, set_unfenced};

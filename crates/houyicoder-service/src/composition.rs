@@ -175,6 +175,8 @@ pub struct BuildRunnerOptions {
     /// None resolves one here; a caller reusing a provider across sessions
     /// passes its own.
     pub provider: Option<ProviderResolution>,
+    /// Skip the operating system kernel sandbox fence (the --no-sandbox CLI flag).
+    pub no_sandbox: bool,
 }
 
 impl BuildRunnerOptions {
@@ -195,6 +197,7 @@ impl BuildRunnerOptions {
             backend: Some(Box::new(LocalFileBackend::new(root.clone()))),
             descriptor_store: Some(Arc::new(FileDescriptorStore::new(root))),
             provider: None,
+            no_sandbox: false,
         }
     }
 }
@@ -218,6 +221,9 @@ pub fn disk_descriptor_store_at(root: PathBuf) -> Arc<dyn SessionDescriptorStore
 /// provider keeps the loop driving with a canned reply, never silently
 /// going offline.
 pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
+    if options.no_sandbox {
+        houyicoder_sandbox::set_unfenced(true);
+    }
     let append_notify = Arc::new(Notify::new());
     let backend = options
         .backend

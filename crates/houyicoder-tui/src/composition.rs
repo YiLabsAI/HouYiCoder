@@ -64,6 +64,7 @@ use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use std::env::current_dir;
 #[cfg(test)]
 use std::env::temp_dir;
+use std::env::var;
 use std::error::Error;
 use std::path::PathBuf;
 #[cfg(test)]
@@ -192,7 +193,11 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     let driver_agent_tx = agent_tx.clone();
     let live_session =
         SessionConnection::spawn(client, driver_agent_tx, agent_rx, &shared_runtime());
-    app.sessions.current.sandbox = "mac-seatbelt".to_string();
+    app.sessions.current.sandbox = if var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
+        "off (no-sandbox)".to_string()
+    } else {
+        "mac-seatbelt".to_string()
+    };
     // The launch model stands in for the applied model until the host
     // snapshot lands, so the status bar names what the session runs.
     app.sessions.current.capabilities.model.catalog.applied.id = model;

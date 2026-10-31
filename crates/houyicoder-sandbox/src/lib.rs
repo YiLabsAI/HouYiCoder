@@ -58,6 +58,23 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::WindowsJobSession;
 
+use std::env::var;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static UNFENCED_OVERRIDE: AtomicBool = AtomicBool::new(false);
+
+/// Explicitly disable the operating system kernel sandbox fence for the session.
+pub fn set_unfenced(unfenced: bool) {
+    UNFENCED_OVERRIDE.store(unfenced, Ordering::SeqCst);
+}
+
+/// Whether the sandbox operates without the operating system kernel fence
+/// (via the --no-sandbox CLI flag or the HOUYICODER_SANDBOX_NO_ENFORCE environment variable).
+pub fn is_unfenced() -> bool {
+    UNFENCED_OVERRIDE.load(Ordering::Relaxed)
+        || var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1")
+}
+
 /// The native sandbox session for the host platform. Each backend implements
 /// SandboxSession; callers get the right kernel-level fence (or the audited
 /// no-op v1 on platforms whose real backend is still pending) without a cfg

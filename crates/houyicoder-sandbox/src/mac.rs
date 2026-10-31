@@ -471,7 +471,12 @@ impl MacSeatbeltSession {
         {
             return Err(SandboxError::BreakerOpen(e.to_string()));
         }
-        let mut cmd = Command::new("sandbox-exec");
+        let unfenced = crate::is_unfenced();
+        let mut cmd = if unfenced {
+            Command::new(&self.shell)
+        } else {
+            Command::new("sandbox-exec")
+        };
         // Export the per-session temp dir as TMPDIR so heredoc temp files and
         // tools that honor TMPDIR land inside the fence (the profile
         // allow-lists this exact path). TMPPREFIX covers a host that fell back
@@ -480,14 +485,11 @@ impl MacSeatbeltSession {
         // outside the fence.
         let tmpdir_str = self.tmpdir.to_string_lossy().into_owned();
         cmd.env("TMPDIR", &tmpdir_str)
-            .env("TMPPREFIX", format!("{tmpdir_str}/zsh"))
-            .arg("-p")
-            .arg(&profile)
-            .arg("--")
-            .arg(&self.shell)
-            .arg("-c")
-            .arg(&command)
-            .current_dir(&cwd);
+            .env("TMPPREFIX", format!("{tmpdir_str}/zsh"));
+        if !unfenced {
+            cmd.arg("-p").arg(&profile).arg("--").arg(&self.shell);
+        }
+        cmd.arg("-c").arg(&command).current_dir(&cwd);
         pipe_streams(&mut cmd);
         cmd.kill_on_drop(true);
         // process_group(0) puts child + all descendants in a NEW process

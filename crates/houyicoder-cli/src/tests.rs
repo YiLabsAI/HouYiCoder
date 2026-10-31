@@ -103,12 +103,28 @@ fn test_parse_model_with_project() {
     ])
     .expect("must parse");
     match cmd {
-        CliCommand::Tui { project, model } => {
+        CliCommand::Tui { project, model, .. } => {
             assert_eq!(project.as_deref(), Some("/repo"));
             assert_eq!(model.as_deref(), Some("glm-5.2"));
         }
         other => panic!("expected Tui, got {other:?}"),
     }
+}
+
+#[test]
+fn test_parse_no_sandbox_flag() {
+    let cmd = parse_args(vec!["--no-sandbox".into()]).expect("must parse");
+    assert!(cmd.no_sandbox(), "flag sets no_sandbox");
+    match cmd {
+        CliCommand::Tui { no_sandbox, .. } => assert!(no_sandbox),
+        other => panic!("expected Tui, got {other:?}"),
+    }
+
+    let cmd_acp = parse_args(vec!["--acp".into(), "--no-sandbox".into()]).expect("must parse");
+    assert!(cmd_acp.no_sandbox());
+
+    let default_cmd = parse_args(vec![]).expect("must parse");
+    assert!(!default_cmd.no_sandbox(), "default has no_sandbox = false");
 }
 
 #[test]
