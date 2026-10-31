@@ -139,7 +139,7 @@ async fn test_materialize_block_restores_output() {
     let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
     let marker = serde_json::json!({
         "block_ref": hash.0,
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     });
     // The result event already carries the marker (as Isolate would write).
     let events = vec![
@@ -181,7 +181,8 @@ async fn test_materialize_block_restores_output() {
 async fn test_materialize_fail_closed() {
     // When the backend cannot retrieve the block (Unsupported block_get),
     // materialize_block returns the block_ref marker as-is. The model
-    // sees the hint and can re-invoke the tool. No content is lost
+    // sees the hint and can search the conversation for the full text. No
+    // content is lost
     // (the raw output is in the CAS) and no dangling pointer is sent.
     struct StubBackend;
     impl houyicoder_context::ContextBackend for StubBackend {
@@ -229,7 +230,7 @@ async fn test_materialize_fail_closed() {
     let ids = ids(5);
     let marker = serde_json::json!({
         "block_ref": "deadbeef",
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     });
     let events = vec![
         ev(ids[0], s, user("task")),

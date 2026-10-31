@@ -75,8 +75,8 @@ impl Runner {
 /// the cache is live, a wider recent band materializes so the prefix stays
 /// intact; after a reported miss, the age-based 3-tier applies with no
 /// stability constraint. Supersession still evicts regardless: a stale result
-/// is never worth serving, and the surrounding content changes once the
-/// model re-invokes.
+/// is never worth serving, and the surrounding content changes once the tool
+/// runs again.
 pub struct CacheLivenessRetentionPolicy {
     cached: Arc<CachedPrefixState>,
     /// Conservative band (cache live): materialize under this many turns.

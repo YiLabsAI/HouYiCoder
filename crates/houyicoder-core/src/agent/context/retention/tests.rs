@@ -103,7 +103,7 @@ fn marker_with_preview(hash: &str, preview: &str) -> serde_json::Value {
     serde_json::json!({
         "block_ref": hash,
         "preview": preview,
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     })
 }
 
@@ -125,6 +125,7 @@ fn test_rehydrate_3tier_not_unconditional() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 0,
         mutating: true,
     };
@@ -194,6 +195,7 @@ fn test_rehydrate_3tier_not_unconditional() {
         is_superseded: true,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 0,
         mutating: true,
     };
@@ -225,7 +227,7 @@ fn test_summarize_without_preview_marker() {
     let hash = pollster::block_on(backend.block_put(serde_json::to_vec(&big).unwrap())).unwrap();
     let marker_no_preview = serde_json::json!({
         "block_ref": hash.0,
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     });
     let policy = AgeRetentionPolicy::default();
     let ctx = RetentionContext {
@@ -233,6 +235,7 @@ fn test_summarize_without_preview_marker() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 0,
         mutating: true,
     };
@@ -318,7 +321,7 @@ fn test_materialize_field_summarize() {
     );
     assert!(
         out["content"]["block_ref"].is_string(),
-        "block_ref kept so a later re-invoke can retrieve"
+        "block_ref kept so the stored result stays addressable"
     );
     assert_eq!(backend.gets(), 0, "Summarize skips the block_get");
 }
@@ -369,7 +372,7 @@ fn test_materialize_top_level_compat() {
     let marker = serde_json::json!({
         "block_ref": hash.0,
         "preview": "...",
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     });
     let ctx = age_ctx(0);
     let out = materialize_block(
@@ -446,7 +449,7 @@ fn nested_marker(content: &str, backend: &CountingBackend) -> (serde_json::Value
             "block_ref": hash.0,
             "preview": "preview...",
             "data_tag": false,
-            "hint": "large output compacted; re-invoke the tool to retrieve it",
+            "hint": "large output compacted; search the conversation to read it",
         },
         "agentId": "child-xyz",
         "color": "red",
@@ -461,6 +464,7 @@ fn age_ctx(age: u32) -> RetentionContext<'static> {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 0,
         mutating: true,
     }
@@ -730,6 +734,7 @@ fn test_holds_decision_while_alive() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 1,
         mutating: true,
     };
@@ -750,6 +755,7 @@ fn test_holds_decision_while_alive() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 2,
         mutating: true,
     };
@@ -782,6 +788,7 @@ fn test_miss_recomputes_aggressively() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 1,
         mutating: true,
     };
@@ -799,6 +806,7 @@ fn test_miss_recomputes_aggressively() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 2,
         mutating: true,
     };
@@ -821,6 +829,7 @@ fn test_miss_recomputes_aggressively() {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 3,
         mutating: true,
     };
@@ -852,6 +861,7 @@ fn budget_ctx(id: u64) -> RetentionContext<'static> {
         is_superseded: false,
         block_ref: None,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: id,
         mutating: true,
     }

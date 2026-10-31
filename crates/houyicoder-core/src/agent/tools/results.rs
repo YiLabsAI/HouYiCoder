@@ -11,7 +11,6 @@ mod catalog;
 mod cursor;
 mod entry;
 mod fold;
-pub(crate) mod keys;
 mod search;
 mod windows;
 

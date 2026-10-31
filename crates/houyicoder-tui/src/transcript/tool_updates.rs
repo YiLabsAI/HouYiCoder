@@ -11,8 +11,15 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 /// A resolved tool update awaiting pairing with its call: the call id, the
-/// outcome the result row colors by, and the raw output the body reads.
-pub(super) type PendingUpdate = (String, Option<ToolOutcome>, Option<Value>);
+/// outcome the result row colors by, the raw output the body reads, and the
+/// host's measured duration for the call, which a row shows when the host
+/// timed it.
+pub(super) struct PendingUpdate {
+    pub call_id: String,
+    pub outcome: Option<ToolOutcome>,
+    pub output: Option<Value>,
+    pub duration_ms: Option<u64>,
+}
 
 /// The title and raw input a ToolCall frame carries, keyed by call id so an
 /// orphan result can still name its tool. First-write is fine for orphans.
@@ -54,7 +61,8 @@ pub(super) fn collect_tool_updates<F: AsRef<TranscriptFrame>>(
 /// Push one resolved update for a ToolCallUpdate frame, drawing the tool name
 /// and call input from the registry the matching ToolCall populated.
 fn push_update(updates: &mut Vec<PendingUpdate>, tools: &mut ToolRegistry, upd: &ToolCallUpdate) {
-    let id = upd.tool_call_id.0.clone();
+    let call_id = upd.tool_call_id.0.clone();
+    let duration_ms = upd.fields.duration_ms;
     let Some(out) = &upd.fields.raw_output else {
         if let Some(status) = upd.fields.status {
             let oc = match status {
@@ -62,15 +70,25 @@ fn push_update(updates: &mut Vec<PendingUpdate>, tools: &mut ToolRegistry, upd: 
                 ToolCallStatus::Completed => ToolOutcome::Success,
                 _ => ToolOutcome::Running,
             };
-            updates.push((id, Some(oc), None));
+            updates.push(PendingUpdate {
+                call_id,
+                outcome: Some(oc),
+                output: None,
+                duration_ms,
+            });
         }
         return;
     };
     // Semantic error judgment needs the tool name + call input (grep/diff exit
     // 1 is not an error). The tools map is populated by the ToolCall frame,
     // which arrives before its update, so the entry is present here.
-    let (tool_name, call_input) = tools.get(&id).cloned().unwrap_or_default();
+    let (tool_name, call_input) = tools.get(&call_id).cloned().unwrap_or_default();
     let outcome =
         ToolOutcome::from_output_with(out, &tool_name, call_input.as_ref().unwrap_or(&Value::Null));
-    updates.push((id, Some(outcome), Some(out.clone())));
+    updates.push(PendingUpdate {
+        call_id,
+        outcome: Some(outcome),
+        output: Some(out.clone()),
+        duration_ms,
+    });
 }

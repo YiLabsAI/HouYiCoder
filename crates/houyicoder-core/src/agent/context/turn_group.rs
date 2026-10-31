@@ -13,6 +13,7 @@
 
 use houyicoder_context::{ContextBackend, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::llm::{AssistantToolCall, InputItem};
+use houyicoder_protocol::tool::is_user_shell_call_id;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
@@ -21,6 +22,8 @@ use crate::agent::context::retention::RetentionContext;
 use crate::agent::context::retention::materialize_block;
 use crate::agent::context::retention::superseded_by_later;
 use crate::agent::context::retention::{AgeRetentionPolicy, RetentionPolicy};
+use crate::agent::context::shell_history::ShellHistoryPlan;
+use crate::agent::context::shell_history::plan_shell_history;
 use crate::agent::skill_body::frame_untrusted_body;
 
 /// How an assembly relates to the provider request it serves. A turn that
@@ -35,7 +38,7 @@ pub(crate) struct AssemblyMode {
 
 /// Assemble the model-input history from a replayed event log, in order.
 ///
-/// In debug builds this guards the tool_use/tool_result pair invariant: a
+/// In debug builds this guards the adjacency of a tool call and its result: a
 /// ToolResult whose ToolCall is not in the same window trips a
 /// debug_assert!. full-replay never triggers it; it fires the first time
 /// a compaction plan drops a ToolCall while keeping its ToolResult — the
@@ -75,7 +78,8 @@ fn append_user_text(items: &mut Vec<InputItem>, text: &str) {
 /// A request is rejected when an assistant message carrying tool calls is not
 /// answered by one tool message per call straight after it. Background work
 /// appends at any point, so a recall or an interjection can land between a call
-/// and its result. Appending it where the log holds it would split the pair;
+/// and its result. Appending it where the log holds it would split the call
+/// from its answer;
 /// dropping it would lose a message the user or the runtime wrote. The queue
 /// keeps such text until every open call is answered, so the projection stays
 /// valid while the durable log keeps its own order.
@@ -128,13 +132,12 @@ impl HeldUserText {
         items: &mut Vec<InputItem>,
         events: &[SessionLogEntry],
         from: usize,
-        backend: Option<&dyn ContextBackend>,
-        policy: &dyn RetentionPolicy,
-        scope: AssemblyScope,
+        walk: RetentionWalk<'_>,
+        plan: &ShellHistoryPlan,
     ) {
         for call_id in self.open.drain(..) {
             let output = match find_late_result(events, from, &call_id) {
-                Some((idx, raw)) => materialize_result(events, idx, raw, backend, policy, scope),
+                Some((idx, raw)) => materialize_result(events, idx, raw, walk, plan),
                 None => serde_json::json!({"error": "no tool result recorded"}),
             };
             items.push(InputItem::ToolResult { call_id, output });
@@ -213,6 +216,17 @@ fn push_tool_call(items: &mut Vec<InputItem>, call: AssistantToolCall) {
     }
 }
 
+/// The collaborators one assembly walk shares: the block store a result may
+/// be read from, the policy that decides how it is served, and the assembly
+/// the decisions belong to. Grouped so a helper that serves one result does
+/// not carry three parameters of its own.
+#[derive(Clone, Copy)]
+struct RetentionWalk<'a> {
+    backend: Option<&'a dyn ContextBackend>,
+    policy: &'a dyn RetentionPolicy,
+    scope: AssemblyScope,
+}
+
 /// Assemble the model-input history from a replayed event log with an explicit
 /// retention policy and assembly id. The cache-liveness policy scopes a batch
 /// recompute to the assembly boundary; the default path (tests and the
@@ -225,7 +239,13 @@ pub fn assemble_model_input_with(
     scope: AssemblyScope,
 ) -> Vec<InputItem> {
     #[cfg(debug_assertions)]
-    let mut seen_call_ids: HashSet<&str> = HashSet::new();
+    let mut seen_call_ids: HashSet<String> = HashSet::new();
+    let plan = charged_shell_plan(events, policy, scope.id);
+    let walk = RetentionWalk {
+        backend,
+        policy,
+        scope,
+    };
     let mut items = Vec::with_capacity(events.len());
     let mut i = 0;
     let mut held = HeldUserText::default();
@@ -237,27 +257,11 @@ pub fn assemble_model_input_with(
         }
         match &events[i].event {
             SessionEvent::AssistantMessage { text, .. } => {
-                held.finish_open_group(&mut items, events, i, backend, policy, scope);
-                let mut tool_calls = Vec::new();
-                let mut j = i + 1;
-                while j < events.len() {
-                    match &events[j].event {
-                        SessionEvent::ToolCall {
-                            call_id,
-                            tool,
-                            input,
-                        } => {
-                            #[cfg(debug_assertions)]
-                            seen_call_ids.insert(call_id.as_str());
-                            tool_calls.push(AssistantToolCall {
-                                id: call_id.clone(),
-                                name: tool.clone(),
-                                input: input.clone(),
-                            });
-                            j += 1;
-                        }
-                        _ => break,
-                    }
+                held.finish_open_group(&mut items, events, i, walk, &plan);
+                let (tool_calls, next) = gather_tool_calls(events, i + 1, &plan);
+                #[cfg(debug_assertions)]
+                for call in &tool_calls {
+                    seen_call_ids.insert(call.id.clone());
                 }
                 for call in &tool_calls {
                     held.open_call(&call.id);
@@ -266,15 +270,19 @@ pub fn assemble_model_input_with(
                     content: text.clone(),
                     tool_calls,
                 });
-                i = j;
+                i = next;
             }
             SessionEvent::ToolCall {
                 call_id,
                 tool,
                 input,
             } => {
+                if is_user_shell_call_id(call_id) && !plan.keeps(call_id) {
+                    i += 1;
+                    continue;
+                }
                 #[cfg(debug_assertions)]
-                seen_call_ids.insert(call_id.as_str());
+                seen_call_ids.insert(call_id.clone());
                 held.open_call(call_id);
                 push_tool_call(
                     &mut items,
@@ -289,15 +297,22 @@ pub fn assemble_model_input_with(
             SessionEvent::ToolResult {
                 call_id, output, ..
             } => {
+                // The call was dropped with its group, so the result has no
+                // call to answer and must not enter the request alone: a
+                // result without its call is a request the provider rejects.
+                if is_user_shell_call_id(call_id) && !plan.keeps(call_id) {
+                    i += 1;
+                    continue;
+                }
                 #[cfg(debug_assertions)]
                 debug_assert!(
                     seen_call_ids.contains(call_id.as_str()),
-                    "assemble_model_input: orphan ToolResult {call_id} has no matching ToolCall in the window — a compaction plan dropped the pair"
+                    "assemble_model_input: orphan ToolResult {call_id} has no matching ToolCall in the window — a compaction plan dropped the call and its answer"
                 );
                 if held.is_open(call_id) {
                     items.push(InputItem::ToolResult {
                         call_id: call_id.clone(),
-                        output: materialize_result(events, i, output, backend, policy, scope),
+                        output: materialize_result(events, i, output, walk, &plan),
                     });
                     held.close_call(&mut items, call_id);
                 }
@@ -314,8 +329,78 @@ pub fn assemble_model_input_with(
             }
         }
     }
-    held.finish_open_group(&mut items, events, events.len(), backend, policy, scope);
+    held.finish_open_group(&mut items, events, events.len(), walk, &plan);
+    append_shell_notice(&mut items, &plan);
     items
+}
+
+/// The tool calls an assistant message carries: the consecutive call events
+/// after it that the request keeps. A folded command is skipped, and the walk
+/// runs past it so the calls after it still join this message. The returned
+/// index is where the walk stopped: the first event that is not a call.
+fn gather_tool_calls(
+    events: &[SessionLogEntry],
+    start: usize,
+    plan: &ShellHistoryPlan,
+) -> (Vec<AssistantToolCall>, usize) {
+    let mut calls = Vec::new();
+    let mut index = start;
+    while index < events.len() {
+        let SessionEvent::ToolCall {
+            call_id,
+            tool,
+            input,
+        } = &events[index].event
+        else {
+            break;
+        };
+        if !is_user_shell_call_id(call_id) || plan.keeps(call_id) {
+            calls.push(AssistantToolCall {
+                id: call_id.clone(),
+                name: tool.clone(),
+                input: input.clone(),
+            });
+        }
+        index += 1;
+    }
+    (calls, index)
+}
+
+/// Decide the command history before the walk, so the tokens it commits are
+/// charged before any block retrieval is decided: text the request already
+/// carries must not also be spent on a retrieval.
+///
+/// The plan pays for each kept command as the log holds it, never for the
+/// stored length of a block it names, and the retention pre-check admits that
+/// block against what the plan left unspent. One result therefore reaches the
+/// request once: either as the logged text the plan accounted, or as a
+/// retrieval charged at the moment it is decided.
+fn charged_shell_plan(
+    events: &[SessionLogEntry],
+    policy: &dyn RetentionPolicy,
+    assembly_id: u64,
+) -> ShellHistoryPlan {
+    let budget = policy.shell_history_budget();
+    let plan = plan_shell_history(events, budget, &|text| policy.count_tokens(text));
+    policy.charge_assembly_tokens(assembly_id, plan.charged_tokens);
+    tracing::debug!(
+        assembly = assembly_id,
+        charged = plan.charged_tokens,
+        budget,
+        kept = plan.kept_count(),
+        folded = plan.notice.is_some(),
+        "user shell history planned"
+    );
+    plan
+}
+
+/// The one line describing the folded commands rides at the tail: every kept
+/// call and its answer then render exactly as before, so the notice costs no cache
+/// prefix, and a turn whose folding changed still reuses the history above it.
+fn append_shell_notice(items: &mut Vec<InputItem>, plan: &ShellHistoryPlan) {
+    if let Some(notice) = &plan.notice {
+        append_user_text(items, notice);
+    }
 }
 
 /// Materialize a ToolResult output under the retention policy. The age in
@@ -328,24 +413,31 @@ fn materialize_result(
     events: &[SessionLogEntry],
     i: usize,
     output: &serde_json::Value,
-    backend: Option<&dyn ContextBackend>,
-    policy: &dyn RetentionPolicy,
-    scope: AssemblyScope,
+    walk: RetentionWalk<'_>,
+    plan: &ShellHistoryPlan,
 ) -> serde_json::Value {
     let age_in_turns = events[i + 1..]
         .iter()
         .filter(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }))
         .count() as u32;
     let is_superseded = superseded_by_later(events, i);
+    // The plan may already count this result as the log holds it. A retrieval
+    // of the block replaces that logged form, so the decision needs the term
+    // to keep one result from spending the assembly's quota twice.
+    let logged_result_tokens = match &events[i].event {
+        SessionEvent::ToolResult { call_id, .. } => plan.charged_result_tokens(call_id),
+        _ => None,
+    };
     let ctx = RetentionContext {
         age_in_turns,
         is_superseded,
         block_ref: None,
         stored_bytes: None,
-        assembly_id: scope.id,
-        mutating: scope.mutating,
+        logged_result_tokens,
+        assembly_id: walk.scope.id,
+        mutating: walk.scope.mutating,
     };
-    materialize_block(output, backend, policy, &ctx)
+    materialize_block(output, walk.backend, walk.policy, &ctx)
 }
 
 #[cfg(test)]

@@ -1175,3 +1175,5 @@ mod bash_progress;
 mod highlight;
 
 mod recap;
+
+mod shell_row;

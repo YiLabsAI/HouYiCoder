@@ -57,6 +57,7 @@ fn test_update_carries_payload() {
                 title: Some(filler.clone()),
                 raw_input: Some(json!({ "path": filler.clone() })),
                 raw_output: Some(json!({ "stdout": filler.clone() })),
+                duration_ms: None,
             },
         )),
         SessionUpdate::Plan(Plan {
@@ -216,6 +217,7 @@ fn test_nested_arguments_count() {
             title: None,
             raw_input: Some(json!({ "edits": [{ "path": filler }] })),
             raw_output: None,
+            duration_ms: None,
         },
     ));
 

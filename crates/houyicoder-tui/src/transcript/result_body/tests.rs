@@ -60,7 +60,7 @@ fn test_extract_body_nested_marker() {
             "block_ref": "a3a1dde5b075cee6",
             "preview": "the child explored src/auth and found the module",
             "data_tag": false,
-            "hint": "large output compacted; re-invoke the tool to retrieve it",
+            "hint": "large output compacted; search the conversation to read it",
         },
         "agentId": "child-xyz",
         "color": "red",
@@ -72,7 +72,7 @@ fn test_extract_body_nested_marker() {
         "field preview surfaces: {body}"
     );
     assert!(
-        body.contains("re-invoke the tool"),
+        body.contains("search the conversation"),
         "retrieval hint surfaces: {body}"
     );
     assert!(!body.contains("block_ref"), "no raw marker key: {body}");
@@ -93,7 +93,7 @@ fn test_extract_body_block_ref() {
         "block_ref": "a3a1dde5b075cee6",
         "preview": "src/auth/login.rs:42: fn login()",
         "data_tag": false,
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     })
     .to_string();
     let body = extract_body(&out);
@@ -102,7 +102,7 @@ fn test_extract_body_block_ref() {
         "preview content must surface, got: {body}"
     );
     assert!(
-        body.contains("re-invoke the tool"),
+        body.contains("search the conversation"),
         "retrieval hint must surface, got: {body}"
     );
     assert!(
@@ -115,6 +115,34 @@ fn test_extract_body_block_ref() {
     );
 }
 
+/// A marker names its stored length under the bytes key, the same key a write
+/// result reports. The body must read it as a marker: the preview and hint
+/// say what the output was, while a wrote line for a path the marker never
+/// named says nothing.
+#[test]
+fn test_marker_size_not_write() {
+    let out = serde_json::json!({
+        "block_ref": "a3a1dde5b075cee6",
+        "bytes": 23040,
+        "preview": "src/auth/login.rs:42: fn login()",
+        "hint": "large output compacted; search the conversation to read it",
+    })
+    .to_string();
+    let body = extract_body(&out);
+    assert!(
+        body.contains("src/auth/login.rs:42: fn login()"),
+        "preview content must surface, got: {body}"
+    );
+    assert!(
+        body.contains("search the conversation"),
+        "retrieval hint must surface, got: {body}"
+    );
+    assert!(
+        !body.contains("wrote"),
+        "a marker's stored size is not a write result, got: {body}"
+    );
+}
+
 /// A block_ref with an empty preview (the reducer stripped it to nothing)
 /// falls back to the hint alone, not the raw JSON.
 #[test]
@@ -123,12 +151,12 @@ fn test_extract_body_empty_block() {
         "block_ref": "deadbeef",
         "preview": "",
         "data_tag": true,
-        "hint": "large output compacted; re-invoke the tool to retrieve it",
+        "hint": "large output compacted; search the conversation to read it",
     })
     .to_string();
     let body = extract_body(&out);
     assert!(
-        body.contains("re-invoke the tool"),
+        body.contains("search the conversation"),
         "hint surfaces when preview is empty, got: {body}"
     );
     assert!(!body.contains("block_ref"), "no raw key: {body}");

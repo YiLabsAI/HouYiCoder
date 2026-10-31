@@ -9,7 +9,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
-use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -25,11 +25,13 @@ use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::frontend::session_update::ToolCallUpdate;
 use houyicoder_protocol::handshake::Hello;
+use houyicoder_protocol::tool::user_shell_call_id;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 use serde_json::json;
 use std::future::pending;
+use std::mem;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,6 +44,12 @@ use tokio::time::timeout;
 /// host that awaits the command inline never answers the cancel request, so
 /// this bound is what turns that defect into a failure rather than a hang.
 const REPLY_BUDGET: Duration = Duration::from_secs(5);
+
+/// How long a command may take to settle once the client disconnects. The
+/// cancel reaches a command that has installed its handle at once, so a
+/// settle that reaches the fallback bound has lost the race the settle
+/// exists to close.
+const PROMPT_SETTLE_BUDGET: Duration = Duration::from_secs(2);
 
 /// Stands in for the sandbox shell: answers what it was asked to run and
 /// counts the times it ran.
@@ -139,12 +147,22 @@ struct Host {
 
 impl Host {
     async fn start(tool: Option<Arc<dyn Tool>>) -> Self {
-        let session = SessionId::new();
+        let store: Arc<SessionStore> =
+            Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+        Self::start_with_store(store, SessionId::new(), tool).await
+    }
+
+    /// Start on a store the caller holds, so a test can seed the log before a
+    /// client attaches.
+    async fn start_with_store(
+        store: Arc<SessionStore>,
+        session: SessionId,
+        tool: Option<Arc<dyn Tool>>,
+    ) -> Self {
         let mut tools = ToolRegistry::new();
         if let Some(tool) = tool {
             tools.register(tool);
         }
-        let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         let runner = Arc::new(Runner::new(
             store,
             // An empty reply sequence panics on any model call, so a test that
@@ -182,6 +200,15 @@ impl Host {
             &mut self.client_tx,
             &ClientFrame::Request(RequestEnvelope::new(RequestId(id), payload)),
         );
+    }
+
+    /// End the client side of the connection. The server's frame read ends
+    /// while whatever it started keeps running, which is the state a closed
+    /// terminal leaves behind.
+    fn close_client(&mut self) {
+        let (dead_tx, _dead_rx) = mpsc::channel::<String>(1);
+        let old = mem::replace(&mut self.client_tx, dead_tx);
+        drop(old);
     }
 
     fn cancel(&mut self, id: u64) {
@@ -271,7 +298,7 @@ async fn test_command_records_transcript() {
 /// acknowledgement sent first would drop the hint while the rows still stream
 /// in.
 #[tokio::test]
-async fn test_ack_follows_transcript_frames() {
+async fn test_reply_lands_last() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut host = Host::start(Some(Arc::new(EchoShell { calls }))).await;
     host.shell(2, "echo hi");
@@ -301,8 +328,9 @@ async fn test_ack_follows_transcript_frames() {
 
 /// A registry with no shell tool cannot run a typed command, and the refusal
 /// names the missing tool instead of acknowledging work that never happened.
-/// The category says the host cannot take the work now, a state that may
-/// differ on a later attempt, not a defect in the command.
+/// The category says the host cannot take the work, not that the command is
+/// malformed; the refusal is not retryable, because the registry does not
+/// change while the host runs, so the same request meets the same answer.
 #[tokio::test]
 async fn test_without_shell_tool_errors() {
     let mut host = Host::start(None).await;
@@ -312,10 +340,7 @@ async fn test_without_shell_tool_errors() {
     match payload {
         ResponsePayload::Error(e) => {
             assert_eq!(e.category, ErrorCategory::Unavailable);
-            assert!(
-                e.retriable,
-                "a refusal the user can leave is marked retryable"
-            );
+            assert!(!e.retriable, "the missing tool stays missing for this host");
             assert!(
                 e.message.contains("no bash tool is registered"),
                 "the refusal names the missing tool: {}",
@@ -350,6 +375,80 @@ async fn test_blank_command_invalid() {
     }
 }
 
+/// A session whose log already holds a command hands it to a reattaching
+/// client as it was recorded: the call and its result arrive as frames, and
+/// the command is not run a second time.
+#[tokio::test]
+async fn test_reconnect_replays_command() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let session = SessionId::new();
+    let store: Arc<SessionStore> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let call_id = user_shell_call_id(&EventId::new().to_string());
+    let output = json!({ "stdout": "from the log", "success": true });
+    let recorded = [
+        SessionEvent::ToolCall {
+            call_id: call_id.clone(),
+            tool: "bash".into(),
+            input: json!({ "command": "echo hi" }),
+        },
+        SessionEvent::tool_result(call_id.clone(), output.clone()),
+    ];
+    for event in recorded {
+        store
+            .append(SessionLogEntry {
+                id: EventId::new(),
+                session,
+                ts: 0,
+                prev_hash: None,
+                event,
+            })
+            .await
+            .expect("the log takes the seeded record");
+    }
+    let mut host = Host::start_with_store(
+        store,
+        session,
+        Some(Arc::new(EchoShell {
+            calls: Arc::clone(&calls),
+        })),
+    )
+    .await;
+    let mut saw_call = false;
+    let mut saw_result = false;
+    for _ in 0..20 {
+        let ServerFrame::Event(event) = recv_frame(&mut host.client_rx).await else {
+            continue;
+        };
+        match &event.payload {
+            FrontendEvent::SessionUpdate {
+                update: SessionUpdate::ToolCall(call),
+            } if call.tool_call_id.0 == call_id => saw_call = true,
+            FrontendEvent::SessionUpdate {
+                update: SessionUpdate::ToolCallUpdate(update),
+            } if update.tool_call_id.0 == call_id
+                && update.fields.raw_output.as_ref() == Some(&output) =>
+            {
+                saw_result = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_call,
+        "the reattaching client receives the recorded call"
+    );
+    assert!(
+        saw_result,
+        "the recorded result reaches the client as recorded"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a replayed command is not run again"
+    );
+}
+
 /// A cancel issued while the command runs reaches the host's loop and stops
 /// it: the acknowledgement to the cancel arrives before the command's own
 /// reply, and the log holds one interrupted result.
@@ -376,4 +475,75 @@ async fn test_cancel_stops_running_command() {
         json!(true),
         "the result reports the interruption: {results:?}"
     );
+}
+
+/// A client that disconnects while its command runs does not leave the call
+/// unanswered: the host cancels the command the way an Escape key press does
+/// and records the result before it lets the connection go, so the log the
+/// next connection replays holds a complete pair. The serving task ending is
+/// the proof the record landed, because the settle completes before it.
+#[tokio::test]
+async fn test_disconnect_settles_command() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let mut host = Host::start(Some(Arc::new(HangingShell {
+        started: Mutex::new(Some(started_tx)),
+    })))
+    .await;
+    host.shell(2, "sleep 60");
+    started_rx.await.expect("the command starts");
+    host.close_client();
+    let serving = timeout(REPLY_BUDGET, &mut host.serving)
+        .await
+        .expect("the host lets the connection go within the reply budget")
+        .expect("the serving task does not panic");
+    assert!(
+        serving.is_err(),
+        "the host reports the closed connection: {serving:?}"
+    );
+    let results = host.results().await;
+    assert_eq!(results.len(), 1, "the disconnected call keeps a result");
+    assert_eq!(
+        results[0]["not_run"],
+        json!(true),
+        "the result reports the interruption: {results:?}"
+    );
+}
+
+/// A client that leaves before its command was polled at all still gets an
+/// answered call. The settle drives the work to the point where it installs
+/// its cancel handle before it aborts, so the command records the interrupted
+/// result rather than starting with the connection already gone. The wait
+/// loop picks among its ready branches in random order, so the scenario runs
+/// until every ordering has had its chance: a settle that only works when the
+/// work happened to be polled first fails here at the fallback bound.
+#[tokio::test]
+async fn test_early_disconnect_settles() {
+    for round in 0..8 {
+        let (started_tx, _started_rx) = oneshot::channel();
+        let mut host = Host::start(Some(Arc::new(HangingShell {
+            started: Mutex::new(Some(started_tx)),
+        })))
+        .await;
+        host.shell(2, "sleep 60");
+        host.close_client();
+        let serving = timeout(PROMPT_SETTLE_BUDGET, &mut host.serving)
+            .await
+            .unwrap_or_else(|_| panic!("round {round}: the command settles when the client leaves"))
+            .expect("the serving task does not panic");
+        assert!(
+            serving.is_err(),
+            "round {round}: the host reports the closed connection"
+        );
+        let results = host.results().await;
+        assert_eq!(
+            results.len(),
+            1,
+            "round {round}: the call left by the client keeps a result: {results:?}"
+        );
+        assert_eq!(
+            results[0]["not_run"],
+            json!(true),
+            "round {round}: the result reports the interruption: {results:?}"
+        );
+    }
 }

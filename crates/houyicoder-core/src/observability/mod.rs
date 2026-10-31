@@ -29,6 +29,7 @@ use std::time::Instant;
 use houyicoder_api::session::recorded_turn_usage;
 use houyicoder_context::SessionLogEntry;
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
+use houyicoder_protocol::tool::tool_result_not_run;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::compaction::RecordedCompaction;
@@ -484,6 +485,12 @@ impl ObservabilityLog {
     /// executor when latency stats are needed; count + fail are accurate now.
     /// An error-shaped payload (object with an error field) counts as an
     /// error, same convention as the agent loop count_tool_outcomes.
+    ///
+    /// A call answered without executing it is dropped entirely: a call that
+    /// never ran would drag a tool's failure rate without being its failure.
+    /// The agent loop count still counts it as a call, because that count
+    /// answers what the model asked for; the two totals differ by exactly
+    /// the unrun calls.
     pub fn record_tool_outcomes(
         &mut self,
         results: &[(String, serde_json::Value)],
@@ -493,6 +500,12 @@ impl ObservabilityLog {
             let Some(name) = call_names.get(id) else {
                 continue;
             };
+            // A call the runner answered without executing it is neither a
+            // success nor a failure: counting it as either reports a tool
+            // that never ran and skews the failure rate it feeds.
+            if tool_result_not_run(output) {
+                continue;
+            }
             let reason = tool_failure_reason(output);
             let err_str: Option<&str> = reason.as_deref();
             self.record_tool_call(name, 0, reason.is_some(), err_str);

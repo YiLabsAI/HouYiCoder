@@ -4,6 +4,7 @@ use super::evolution::*;
 use super::*;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::agent::HookError;
@@ -139,6 +140,26 @@ fn test_failure_reason_grep_none() {
 fn test_failure_reason_success() {
     let o = serde_json::json!({"success": true, "exit_code": 0});
     assert!(tool_failure_reason(&o).is_none());
+}
+
+/// A call the runner answered without executing it never ran, so it must not
+/// appear in the per-tool record: a recorded failure would report a tool that
+/// broke when the user simply stopped the turn.
+#[test]
+fn test_unexecuted_call_absent() {
+    let mut log = ObservabilityLog::new(200_000);
+    let names = HashMap::from([("c1".to_string(), "bash".to_string())]);
+    log.record_tool_outcomes(
+        &[(
+            "c1".to_string(),
+            serde_json::json!({ "error": "interrupted by user", "not_run": true }),
+        )],
+        &names,
+    );
+    assert!(
+        log.tool_stats().is_empty(),
+        "a call that did not run leaves no tool record"
+    );
 }
 
 #[test]

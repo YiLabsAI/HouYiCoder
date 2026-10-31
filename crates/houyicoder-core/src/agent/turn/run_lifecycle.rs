@@ -77,6 +77,7 @@ impl Runner {
             cancel: Mutex::new(None),
             aborted: AtomicBool::new(false),
             paused: AtomicBool::new(false),
+            drive_active: AtomicBool::new(false),
             turn_cancel: Mutex::new(None),
             user_turn: Mutex::new(UserTurn::default()),
             verify_gate: None,
@@ -141,6 +142,11 @@ impl Runner {
     /// loop: RunAgain → prepare + complete + append + resolve; FinalOutput →
     /// return; Handoff → return; Interruption → return (caller resumes).
     pub async fn run(&self, session: SessionId, user_input: String) -> Result<RunResult, RunError> {
+        // Held for the whole call, so a shell command submitted meanwhile is
+        // refused instead of taking the cancel slot out from under this run.
+        let Some(_drive) = self.begin_drive() else {
+            return Err(RunError::Busy);
+        };
         self.prune_snapshots();
         self.reset_run_state();
         // A new user turn starts with a fresh max_turns budget and no carried
@@ -238,6 +244,9 @@ impl Runner {
         prefix: &[SessionLogEntry],
         user_input: String,
     ) -> Result<RunResult, RunError> {
+        let Some(_drive) = self.begin_drive() else {
+            return Err(RunError::Busy);
+        };
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         for ev in prefix {
@@ -264,6 +273,9 @@ impl Runner {
         session: SessionId,
         decisions: &[ApprovalDecision],
     ) -> Result<RunResult, RunError> {
+        let Some(_drive) = self.begin_drive() else {
+            return Err(RunError::Busy);
+        };
         let aborted = match self.aborted_short_circuit(session).await {
             Ok(aborted) => aborted,
             Err(e) => {

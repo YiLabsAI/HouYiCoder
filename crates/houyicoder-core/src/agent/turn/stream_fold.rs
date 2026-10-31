@@ -5,7 +5,10 @@
 //! ends. Split from call.rs so the fold state stays a self-contained concern
 //! separate from the turn-driving orchestration.
 
+use std::collections::HashSet;
+
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+use houyicoder_protocol::tool::unique_model_call_id;
 
 /// The accumulator the drive loop folds streaming events into. The fields are
 /// pub(crate) so call.rs's fold_event mutates them inline as deltas land; the
@@ -41,7 +44,22 @@ impl StreamFold {
                 text: self.assistant_text,
             });
         }
-        output.extend(self.tool_calls);
+        // The provider picks call ids, and the user shell shape is reserved:
+        // a model call that spells it would be read as a command the user
+        // typed. Normalizing here covers every model response, because every
+        // one passes through this fold before the call is appended. The ids
+        // are also kept distinct within the response: renaming one can land
+        // on a sibling the provider sent, and two calls sharing an id would
+        // route a result to the wrong one.
+        let mut taken = HashSet::new();
+        output.extend(self.tool_calls.into_iter().map(|item| match item {
+            OutputItem::ToolCall { id, name, input } => OutputItem::ToolCall {
+                id: unique_model_call_id(&id, &mut taken),
+                name,
+                input,
+            },
+            other => other,
+        }));
         CompletionResponse {
             output,
             usage: self.usage,
@@ -49,3 +67,6 @@ impl StreamFold {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

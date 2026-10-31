@@ -1,7 +1,13 @@
 //! Tests for this module.
 
 use super::*;
+use std::sync::Arc;
+
+use crate::agent::context::Tokenizer;
+use crate::agent::context::retention::BudgetedRetentionPolicy;
+use crate::agent::context::retention::RetentionDecision;
 use houyicoder_context::{EventId, RecapSource, SessionId};
+use houyicoder_protocol::tool::user_shell_call_id;
 
 fn evt(kind: SessionEvent) -> SessionLogEntry {
     SessionLogEntry {
@@ -484,4 +490,235 @@ fn test_skill_body_trusted_unframed() {
         }
         _ => panic!("expected a User item"),
     }
+}
+
+/// A policy that bounds the command history at a fixed byte count and never
+/// reports a live cache, so a test can drive the fold without a tokenizer.
+struct FixedShellBudget(u32);
+
+impl RetentionPolicy for FixedShellBudget {
+    fn decide(&self, _ctx: &RetentionContext<'_>) -> RetentionDecision {
+        RetentionDecision::Summarize
+    }
+
+    fn shell_history_budget(&self) -> u32 {
+        self.0
+    }
+}
+
+fn shell_id(n: u8) -> String {
+    user_shell_call_id(&format!("01ARZ3NDEKTSV4RRFFQ69G5F{n:02}"))
+}
+
+fn shell_pair(n: u8, command: &str, stdout: &str) -> Vec<SessionLogEntry> {
+    vec![
+        evt(SessionEvent::ToolCall {
+            call_id: shell_id(n),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": command }),
+        }),
+        evt(SessionEvent::tool_result(
+            shell_id(n),
+            serde_json::json!({ "stdout": stdout }),
+        )),
+    ]
+}
+
+fn tool_call_ids(items: &[InputItem]) -> Vec<String> {
+    items
+        .iter()
+        .flat_map(|item| match item {
+            InputItem::Assistant { tool_calls, .. } => tool_calls
+                .iter()
+                .map(|call| call.id.clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+fn result_ids(items: &[InputItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::ToolResult { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The oldest commands leave the request once the newest fill the budget, and
+/// one line says how many went. Both halves of a folded pair leave together,
+/// so every call the request carries is still answered.
+#[test]
+fn test_shell_commands_fold() {
+    let stdout = "y".repeat(300);
+    let mut events = vec![evt(user("go"))];
+    for n in 1..=3 {
+        events.extend(shell_pair(n, "echo", &stdout));
+    }
+    let items = assemble_model_input_with(
+        &events,
+        None,
+        &FixedShellBudget(1000),
+        AssemblyScope {
+            id: 1,
+            mutating: true,
+        },
+    );
+    let calls = tool_call_ids(&items);
+    let results = result_ids(&items);
+    assert_eq!(calls, vec![shell_id(3)], "only the newest command stays");
+    assert_eq!(results, calls, "a kept call keeps its own answer");
+    match items.last() {
+        Some(InputItem::User { content }) => assert!(
+            content.contains("2 earlier user shell commands"),
+            "the tail says what left: {content}"
+        ),
+        other => panic!("expected the fold notice last, got {other:?}"),
+    }
+}
+
+/// A folded command written between a model call and its result must not take
+/// the model's pair with it: the request the provider sees holds the model's
+/// call and its answer, with no gap and no orphan result.
+#[test]
+fn test_fold_preserves_model_pair() {
+    let events = vec![
+        evt(user("read it")),
+        evt(SessionEvent::AssistantMessage {
+            text: "reading".into(),
+            thinking: None,
+        }),
+        evt(SessionEvent::ToolCall {
+            call_id: "call-1".into(),
+            tool: "read".into(),
+            input: serde_json::json!({ "path": "a.rs" }),
+        }),
+        evt(SessionEvent::ToolCall {
+            call_id: shell_id(9),
+            tool: "bash".into(),
+            input: serde_json::json!({ "command": "ls" }),
+        }),
+        evt(SessionEvent::tool_result(
+            shell_id(9),
+            serde_json::json!({ "stdout": "a.rs" }),
+        )),
+        evt(SessionEvent::tool_result(
+            "call-1",
+            serde_json::json!({ "content": "fn a() {}" }),
+        )),
+    ];
+    let items = assemble_model_input_with(
+        &events,
+        None,
+        &FixedShellBudget(0),
+        AssemblyScope {
+            id: 1,
+            mutating: true,
+        },
+    );
+    assert_eq!(tool_call_ids(&items), vec!["call-1"]);
+    assert_eq!(result_ids(&items), vec!["call-1"]);
+    assert!(
+        !format!("{items:?}").contains(&shell_id(9)),
+        "the folded command is gone"
+    );
+    match items.last() {
+        Some(InputItem::User { content }) => assert!(
+            content.contains("not available"),
+            "a request with no room still says the history is gone: {content}"
+        ),
+        other => panic!("expected the absence notice last, got {other:?}"),
+    }
+}
+
+/// A policy that bounds the command history at the token count the real
+/// budget is stated in, measured with the tokenizer the assembler charges.
+struct ShellTokenBudget {
+    tokens: u32,
+    tokenizer: Tokenizer,
+}
+
+impl RetentionPolicy for ShellTokenBudget {
+    fn decide(&self, _ctx: &RetentionContext<'_>) -> RetentionDecision {
+        RetentionDecision::Summarize
+    }
+
+    fn shell_history_budget(&self) -> u32 {
+        self.tokens
+    }
+
+    fn count_tokens(&self, text: &str) -> usize {
+        self.tokenizer.count(text) as usize
+    }
+}
+
+/// A long session of commands does not outgrow the turn budget: the newest
+/// commands that fit stay, the rest fold into one line, and the whole request
+/// serialized, counted in the budget's own unit, stays within the budget.
+#[test]
+fn test_fifty_commands_fit_budget() {
+    let budget = 8192u32;
+    let output: String = (0..60)
+        .map(|line| format!("probe output line {line}\n"))
+        .collect();
+    let mut events = vec![evt(user("go"))];
+    for n in 1..=50u8 {
+        events.extend(shell_pair(n, "cargo test -p houyicoder-core", &output));
+    }
+    let policy = BudgetedRetentionPolicy::new(
+        Arc::new(ShellTokenBudget {
+            tokens: budget,
+            tokenizer: Tokenizer::new(),
+        }),
+        Tokenizer::new(),
+    );
+    policy.set_turn_budget(budget);
+    let items = assemble_model_input_with(
+        &events,
+        None,
+        &policy,
+        AssemblyScope {
+            id: 11,
+            mutating: true,
+        },
+    );
+    let shell_ids: Vec<String> = (1..=50u8).map(shell_id).collect();
+    let kept = items
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::Assistant { tool_calls, .. } => Some(
+                tool_calls
+                    .iter()
+                    .filter(|call| shell_ids.contains(&call.id))
+                    .count(),
+            ),
+            _ => None,
+        })
+        .sum::<usize>();
+    assert!(kept < 50, "the history is bounded: {kept} commands kept");
+    assert!(kept > 0, "the newest commands stay: {kept}");
+    let carried = policy.count_tokens(&serde_json::to_string(&items).expect("items serialize"));
+    assert!(
+        carried <= budget as usize,
+        "the request carries {carried} tokens against its {budget} token budget"
+    );
+    // The next assembly starts with an unspent quota: the charge belongs to
+    // the assembly it was paid in, so replaying the same log keeps the same
+    // commands instead of folding one more with each turn.
+    let replay = assemble_model_input_with(
+        &events,
+        None,
+        &policy,
+        AssemblyScope {
+            id: 12,
+            mutating: true,
+        },
+    );
+    assert_eq!(
+        serde_json::to_string(&replay).expect("items serialize"),
+        serde_json::to_string(&items).expect("items serialize"),
+        "a second assembly of the same log carries the same commands"
+    );
 }

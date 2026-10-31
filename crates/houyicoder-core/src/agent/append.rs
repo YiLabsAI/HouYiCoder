@@ -21,7 +21,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::agent::turn::result::run_completion_status;
 use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
 use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_protocol::block_ref::{BLOCK_REF_KEY, CONTAINS_KEY, block_addresses};
+use houyicoder_protocol::block_ref::{
+    BLOCK_BYTES_KEY, BLOCK_REF_KEY, CONTAINS_KEY, HINT_KEY, PREVIEW_KEY, block_addresses,
+};
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use serde_json::Value;
 
@@ -517,10 +519,10 @@ impl Runner {
         };
         serde_json::json!({
             BLOCK_REF_KEY: hash,
-            "preview": preview,
+            PREVIEW_KEY: preview,
             "data_tag": data_tag,
-            "bytes": bytes.len(),
-            "hint": "large output compacted; re-invoke the tool to retrieve it",
+            BLOCK_BYTES_KEY: bytes.len(),
+            HINT_KEY: "large output compacted; search the conversation to read it",
         })
     }
 

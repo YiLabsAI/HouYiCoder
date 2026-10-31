@@ -14,6 +14,8 @@ use ratatui::{
 use super::compaction_rows::push_compaction_rows;
 use super::delegation_rows::{Delegation, push_delegation_rows};
 use super::notice_rows::push_notice_rows;
+use super::shell_row::ShellRow;
+use super::shell_row::shell_command_line;
 use super::tail_rows::build_tail_rows;
 use crate::fold::DisplaySlot;
 use crate::fold::{display_slots, render_summary};
@@ -412,6 +414,15 @@ pub(crate) fn push_line_rows(
                     .pre(pre),
             );
         }
+        return true;
+    }
+    if let Some(row) = ShellRow::from_line(line, app.sessions.current.shell.is_cancelling()) {
+        let (text, pre) = shell_command_line(&row, width);
+        sink.push(
+            Row::new(PLAIN, text)
+                .outcome(Some(row.outcome))
+                .pre(Some(pre)),
+        );
         return true;
     }
     if let TranscriptLine::ContextGrid(view) = line {

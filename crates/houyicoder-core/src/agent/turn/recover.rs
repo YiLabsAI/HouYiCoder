@@ -24,6 +24,12 @@ impl Runner {
     /// including the partial turn tool results, so it regenerates the reply
     /// without re-requesting tools whose results are already durable.
     pub async fn recover_turn(&self, session: SessionId) -> Result<RunResult, RunError> {
+        // Held for the whole call, so a run or a shell command that is already
+        // driving is refused instead of replacing the cancel slot this
+        // re-drive watches.
+        let Some(_drive) = self.begin_drive() else {
+            return Err(RunError::Busy);
+        };
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         let marked = self

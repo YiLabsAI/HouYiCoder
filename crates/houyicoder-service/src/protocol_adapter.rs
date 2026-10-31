@@ -16,6 +16,7 @@ mod trajectory_row;
 pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
 
+use houyicoder_core::agent::RunError as EngineRunError;
 use houyicoder_core::agent::RunOutcome as EngineOutcome;
 
 use AcpxMethod::*;
@@ -351,6 +352,7 @@ pub(crate) fn map_run_error(e: &EngineRunError) -> RunError {
         EngineRunError::MaxTurnsExceeded { .. } => "fork_max_turns_exceeded",
         EngineRunError::ContextOverflowBounded { .. } => "context_overflow_bounded",
         EngineRunError::ContextOverflowNoProgress => "context_overflow_no_progress",
+        EngineRunError::Busy => "busy",
     };
     // The message branches on the inner ProviderError so the user sees an
     // actionable hint rather than only the cause sentence. Auth points at the
@@ -557,13 +559,20 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
                 .status(ToolCallStatus::InProgress),
         ),
         SessionEvent::ToolResult {
-            call_id, output, ..
-        } => SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-            call_id.clone(),
-            ToolCallUpdateFields::new()
+            call_id,
+            output,
+            duration_ms,
+        } => {
+            let mut fields = ToolCallUpdateFields::new()
                 .status(ToolCallStatus::Completed)
-                .raw_output(output.clone()),
-        )),
+                .raw_output(output.clone());
+            // Zero means the host did not time the call, an absent measurement
+            // rather than an instant call, so it is left out of the update.
+            if *duration_ms > 0 {
+                fields = fields.duration_ms(*duration_ms);
+            }
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(call_id.clone(), fields))
+        }
         SessionEvent::AssistantTextDelta { .. }
         | SessionEvent::MetaUser { .. }
         | SessionEvent::MemoryRecall { .. }

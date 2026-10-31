@@ -18,11 +18,13 @@ use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::{Value, json};
 
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_protocol::capture_record::BlockMarker;
+use houyicoder_protocol::capture_record::{
+    BlockMarker, CAPTURE_FAILED_KEY, CAPTURE_KEY, RECORD_KEY, STDERR_KEY, STDOUT_KEY,
+    STOP_REASON_KEY,
+};
 use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
-use super::results::keys::{CAPTURE_KEY, RECORD_KEY, STDERR_KEY, STDOUT_KEY};
 use crate::agent::fallback::FallbackToolOutcome;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
@@ -477,10 +479,10 @@ impl CaptureOutcome {
             Self::NotKept => None,
             Self::Failed { stop } => {
                 let mut reference = json!({
-                    "capture_failed": "the raw output above the bound was not kept",
+                    CAPTURE_FAILED_KEY: "the raw output above the bound was not kept",
                 });
                 if let Some(stop) = stop {
-                    reference["stop_reason"] = json!(stop.reason);
+                    reference[STOP_REASON_KEY] = json!(stop.reason);
                 }
                 Some(reference)
             }
@@ -497,7 +499,7 @@ impl CaptureOutcome {
                     reference[STDERR_KEY] = json!(BlockMarker::new(hash.0.clone()));
                 }
                 if let Some(reason) = captured.stop_reason {
-                    reference["stop_reason"] = json!(reason);
+                    reference[STOP_REASON_KEY] = json!(reason);
                 }
                 Some(reference)
             }

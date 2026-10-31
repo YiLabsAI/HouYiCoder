@@ -3,6 +3,7 @@
 //! values. Extracted from state.rs so state.rs holds only App and the core
 //! navigation enums (Screen / Stage / Pane).
 
+use houyicoder_protocol::block_ref::PREVIEW_KEY;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 
 mod approval;
@@ -12,6 +13,7 @@ use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view::context_grid_text;
+use crate::transcript::shell_result::ShellStorage;
 use crate::view::relative_time::turn_span_label;
 
 /// Drill-down rows under the /context grid: per-source memory and per-skill
@@ -161,6 +163,32 @@ pub enum TranscriptLine {
         body: String,
         is_diff: bool,
     },
+    /// A command the user typed at the dollar prompt. It renders as a prompt
+    /// row holding the command and, on the right, what the host measured;
+    /// its output is the result row below it, which expands through the same
+    /// path a model-issued shell call uses. The row never folds into a turn's
+    /// tool summary: the user ran the command, so it stays where it happened.
+    ShellCommand {
+        /// The command text, as typed.
+        command: String,
+        outcome: ToolOutcome,
+        /// The host's measured wall clock, in ms. None when it did not time
+        /// the call, a fact kept distinct from a measured zero.
+        duration_ms: Option<u64>,
+        /// The command's exit status from the result. None while the call
+        /// runs, and when the call never ran.
+        exit_code: Option<i64>,
+        /// The command hit its time limit. A timeout is not a failure the
+        /// command returned, so it reads yellow rather than red, even though
+        /// the result is an error.
+        timed_out: bool,
+        /// What the host kept of the raw output beyond the bounded text.
+        /// None when the result named no capture.
+        storage: Option<ShellStorage>,
+        /// The one-line label for an output moved to the block store, when
+        /// the result carried such a marker.
+        cas: Option<String>,
+    },
     /// System or slash-command feedback.
     System(String),
     /// A summary of the session the user left: the work in progress and the
@@ -306,8 +334,8 @@ pub(crate) fn subagent_line(output: &Value, call_input: Option<&Value>) -> Optio
     // The full multiline content shows on Ctrl+O expand.
     let summary = match output.get("content") {
         Some(Value::String(s)) => fold_summary(s),
-        Some(c) if c.get("preview").is_some() => {
-            fold_summary(c.get("preview").and_then(|p| p.as_str()).unwrap_or(""))
+        Some(c) if c.get(PREVIEW_KEY).is_some() => {
+            fold_summary(c.get(PREVIEW_KEY).and_then(|p| p.as_str()).unwrap_or(""))
         }
         _ => String::new(),
     };
@@ -537,6 +565,10 @@ impl TranscriptLine {
                     let display = capitalize(name);
                     format!("⏺ {display}({arg})")
                 }
+            }
+            Self::ShellCommand { command, .. } => {
+                let flat = command.lines().map(str::trim).collect::<Vec<_>>().join(" ");
+                format!("$ {flat}")
             }
             Self::System(s) => format!("✻ {s}"),
             Self::Recap(s) => format!("{RECAP_MARKER}{s}"),

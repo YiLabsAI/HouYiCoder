@@ -23,6 +23,7 @@ use std::ops::Range;
 
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_protocol::tool::is_user_shell_call_id;
 
 use super::SequencedFrame;
 use super::TranscriptFrame;
@@ -485,7 +486,9 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
                 self.state
                     .pending_calls
                     .add(&call.tool_call_id.0, &call.title);
-                if tool_renders_chip(&call.title) {
+                // A command the user ran is not work the turn did, so it
+                // never counts toward the summary of what the agent ran.
+                if tool_renders_chip(&call.title) && !is_user_shell_call_id(&call.tool_call_id.0) {
                     self.state.tool_counts.add(&call.title);
                     self.state.calls += 1;
                 }

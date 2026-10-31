@@ -14,7 +14,6 @@ use houyicoder_context::SessionEvent;
 use houyicoder_protocol::llm::{CompletionResponse, EffortLevel, LlmEvent, OutputItem, Usage};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::yield_now;
 use tokio::time::timeout;
 
 fn usage_response() -> CompletionResponse {
@@ -296,14 +295,11 @@ async fn test_cancelled_records_no_usage() {
     // never fires on the cancel path — consistent with "cancelled calls do
     // not record usage".
     let p = Arc::new(HangingProvider::new(vec![LlmEvent::StepStart { index: 0 }]));
-    let runner = Arc::new(runner_with(p, ToolRegistry::new()));
+    let runner = Arc::new(runner_with(p.clone(), ToolRegistry::new()));
+    p.abort_at_tail(&runner);
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    for _ in 0..20 {
-        yield_now().await;
-    }
-    runner.abort();
     let result = timeout(Duration::from_secs(2), task)
         .await
         .expect("run resolves on abort within 2s")
@@ -415,11 +411,11 @@ async fn test_approved_call_counts() {
     assert_eq!(after.tool_errors, 0, "and not as an error");
 }
 
-/// A rejected call counts too, as an error outcome: the model was told the
-/// call failed, so the tally must not report the run as having fewer calls
-/// than the model emitted, nor as a success.
+/// A rejected call counts as a call but as neither outcome: nothing ran, so
+/// it is not a success, and the user declining is not a tool failure. The
+/// tally still holds every call the model emitted.
 #[tokio::test]
-async fn test_rejected_call_counts_error() {
+async fn test_rejected_call_counts_neither() {
     let p = Arc::new(FakeProvider::new(guarded_then_answer()));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedTool::new()));
@@ -437,6 +433,6 @@ async fn test_rejected_call_counts_error() {
         after.tool_calls, 1,
         "a rejected call still counts as a call"
     );
-    assert_eq!(after.tool_errors, 1, "the model saw an error result");
+    assert_eq!(after.tool_errors, 0, "declining is not a tool failure");
     assert_eq!(after.tool_success, 0, "nothing ran, so nothing succeeded");
 }

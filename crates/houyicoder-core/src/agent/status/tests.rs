@@ -818,6 +818,7 @@ async fn test_turn_records_dirty() {
         is_superseded: false,
         block_ref: Some("h1"),
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id: 1,
         mutating: true,
     };

@@ -37,7 +37,10 @@ use std::sync::atomic::Ordering;
 use super::Tokenizer;
 
 use houyicoder_context::{BlockHash, ContextBackend, ContextError, SessionEvent, SessionLogEntry};
+use houyicoder_protocol::block_ref::BLOCK_BYTES_KEY;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
+use houyicoder_protocol::block_ref::HINT_KEY;
+use houyicoder_protocol::block_ref::PREVIEW_KEY;
 use serde_json::Value;
 
 /// A resource key for supersession: a later tool call for the same resource
@@ -159,8 +162,8 @@ pub enum RetentionDecision {
     /// middle-aged result the model rarely revisits in full.
     Summarize,
     /// Serve the block_ref pointer alone, no retrieval — for an old or
-    /// superseded result; the model is told to re-invoke the tool if it needs
-    /// the content.
+    /// superseded result; the hint points the model at the stored result it
+    /// can search for.
     Evict,
 }
 
@@ -217,6 +220,12 @@ pub struct RetentionContext<'a> {
     /// bound (a UTF-8 byte count is never below the token count) so it can
     /// decide to demote without reading the block first.
     pub stored_bytes: Option<u64>,
+    /// The tokens this assembly already counts for the result as the log
+    /// holds it, when a plan outside the retention path paid for that form.
+    /// A retrieval replaces the logged form, so the budget check drops this
+    /// term before adding the stored length: the two forms stand in for one
+    /// another and must not both spend the assembly's quota.
+    pub logged_result_tokens: Option<u64>,
     /// The assembly this decision is computed for.
     pub assembly_id: u64,
     /// Whether this assembly will be sent to the provider.
@@ -245,6 +254,27 @@ pub trait RetentionPolicy: Send + Sync {
     /// window-proportional ceiling rather than a fixed constant. The default
     /// ignores it (non-budgeted policies do not gate).
     fn set_turn_budget(&self, _tokens: u32) {}
+
+    /// The tokens one request may spend on the history of user-typed shell
+    /// commands. The default is the fixed ceiling: every assembly bounds the
+    /// command history, and a policy that knows the model window tightens it.
+    fn shell_history_budget(&self) -> u32 {
+        TURN_RESULT_BUDGET_CAP_TOKENS
+    }
+
+    /// Count request text in the budget's unit. The default counts bytes,
+    /// which no token count exceeds, so an assembly without a tokenizer still
+    /// folds at an upper bound rather than overshooting.
+    fn count_tokens(&self, text: &str) -> usize {
+        text.len()
+    }
+
+    /// Charge tokens the assembly commits outside the retention path against
+    /// this assembly's quota, so text the request already carries cannot be
+    /// spent twice. The charge replaces the previous one for the same
+    /// assembly, so measuring the same assembly again does not consume the
+    /// quota a second time. The default ignores it.
+    fn charge_assembly_tokens(&self, _assembly_id: u64, _tokens: u32) {}
 }
 
 /// Default policy: superseded results evict regardless of age; recent
@@ -308,6 +338,7 @@ pub struct BudgetedRetentionPolicy {
     tokenizer: Tokenizer,
     budget_tokens: AtomicU32,
     accumulated: AtomicU64,
+    charged: AtomicU64,
     assembly: AtomicU64,
 }
 
@@ -318,8 +349,36 @@ impl BudgetedRetentionPolicy {
             tokenizer,
             budget_tokens: AtomicU32::new(TURN_RESULT_BUDGET_CAP_TOKENS),
             accumulated: AtomicU64::new(0),
+            charged: AtomicU64::new(0),
             assembly: AtomicU64::new(u64::MAX),
         }
+    }
+
+    /// Start this assembly's quota over when it is not the one the counters
+    /// were left on. Both halves reset together: the tokens the assembler
+    /// committed and the ones the retention path retrieved belong to one
+    /// assembly, and a half-reset quota would either over- or under-count it.
+    fn start_assembly(&self, assembly_id: u64) {
+        if self.assembly.swap(assembly_id, Ordering::Relaxed) != assembly_id {
+            self.accumulated.store(0, Ordering::Relaxed);
+            self.charged.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Drop the tokens the assembly holds for a logged form the retrieval
+    /// replaces. The retrieved content is accounted by
+    /// record_materialized_content as it is read, so a hold left in place
+    /// would spend one result's quota twice. A hold a later assembly already
+    /// lowered saturates at zero rather than wrapping.
+    fn release_charge(&self, tokens: u64) {
+        if tokens == 0 {
+            return;
+        }
+        let _ = self
+            .charged
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                Some(held.saturating_sub(tokens))
+            });
     }
 }
 
@@ -327,23 +386,30 @@ impl RetentionPolicy for BudgetedRetentionPolicy {
     fn decide(&self, ctx: &RetentionContext<'_>) -> RetentionDecision {
         let decision = self.inner.decide(ctx);
         if decision == RetentionDecision::Materialize {
-            // A new assembly starts the quota over. The reset is checked here
-            // rather than on every call so a turn whose first blocks summarize
-            // does not touch the counter until one wants to materialize.
-            if self.assembly.swap(ctx.assembly_id, Ordering::Relaxed) != ctx.assembly_id {
-                self.accumulated.store(0, Ordering::Relaxed);
-            }
+            // The reset is checked here rather than on every call so a turn
+            // whose first blocks summarize does not touch the counters until
+            // one wants to materialize.
+            self.start_assembly(ctx.assembly_id);
             let budget = self.budget_tokens.load(Ordering::Relaxed) as u64;
             // Pre-check: the stored byte length is a token upper bound, so a
             // block that would push the turn past its budget is demoted before
-            // the retrieval. A marker without a stored length is decided on
-            // the accumulated total alone (the inner policy already bounds
-            // single blocks upstream via the isolate and bash caps).
-            let projected =
-                self.accumulated.load(Ordering::Relaxed) + ctx.stored_bytes.unwrap_or(0);
-            if projected >= budget {
+            // the retrieval. A result the assembly already counts for its
+            // logged form has that term dropped first: the retrieval replaces
+            // the logged text, so counting both would spend one result's
+            // quota twice. A marker without a stored length is decided on the
+            // accumulated total alone (the inner policy already bounds single
+            // blocks upstream via the isolate and bash caps).
+            let replaced = ctx.logged_result_tokens.unwrap_or(0);
+            let estimated = self.accumulated.load(Ordering::Relaxed)
+                + self
+                    .charged
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(replaced)
+                + ctx.stored_bytes.unwrap_or(0);
+            if estimated >= budget {
                 return RetentionDecision::Summarize;
             }
+            self.release_charge(replaced);
         }
         decision
     }
@@ -366,6 +432,19 @@ impl RetentionPolicy for BudgetedRetentionPolicy {
 
     fn set_turn_budget(&self, tokens: u32) {
         self.budget_tokens.store(tokens, Ordering::Relaxed);
+    }
+
+    fn shell_history_budget(&self) -> u32 {
+        self.budget_tokens.load(Ordering::Relaxed)
+    }
+
+    fn count_tokens(&self, text: &str) -> usize {
+        self.tokenizer.count(text) as usize
+    }
+
+    fn charge_assembly_tokens(&self, assembly_id: u64, tokens: u32) {
+        self.start_assembly(assembly_id);
+        self.charged.store(u64::from(tokens), Ordering::Relaxed);
     }
 }
 
@@ -414,7 +493,7 @@ pub(crate) fn materialize_block(
 /// marker, the field for a field-level marker). Materialize restores the
 /// original content via block_get; Summarize serves the inline preview;
 /// Evict keeps only the pointer. No backend: the marker stays (content is
-/// in the CAS, unreachable until a backend is wired — not lost).
+/// in the CAS, unreachable until a backend is available — not lost).
 fn apply_tier(
     hash_str: &str,
     marker: &serde_json::Value,
@@ -430,7 +509,7 @@ fn apply_tier(
     // names so a budget policy can pre-check the size without fetching.
     let ctx = RetentionContext {
         block_ref: Some(hash_str),
-        stored_bytes: marker.get("bytes").and_then(|v| v.as_u64()),
+        stored_bytes: marker.get(BLOCK_BYTES_KEY).and_then(Value::as_u64),
         ..*ctx
     };
     match policy.decide(&ctx) {
@@ -455,20 +534,25 @@ fn apply_tier(
                 Err(ContextError::Corrupt(_)) => {
                     unavailable_marker(hash_str, "block content corrupt or unreadable")
                 }
-                Err(_) => unavailable_marker(hash_str, "block_get failed; re-invoke the tool"),
+                Err(_) => unavailable_marker(
+                    hash_str,
+                    "block_get failed; the stored content could not be read",
+                ),
             }
         }
         RetentionDecision::Summarize => {
             // Serve the inline preview the marker carries; skip the block_get.
             // A marker without a preview (an old-style marker) falls back to
-            // the pointer form rather than paying a retrieval — the model is
-            // told to re-invoke.
-            if marker.get("preview").is_some() {
+            // the pointer form rather than paying a retrieval. Both forms
+            // point the model at the stored result instead of telling it to
+            // run the command again: the content is already in the log, and a
+            // second run may not reproduce it.
+            if marker.get(PREVIEW_KEY).is_some() {
                 serde_json::json!({
                     "summarized": true,
-                    "preview": marker.get("preview").cloned().unwrap_or_default(),
+                    PREVIEW_KEY: marker.get(PREVIEW_KEY).cloned().unwrap_or_default(),
                     BLOCK_REF_KEY: hash_str,
-                    "hint": "large output summarized; re-invoke the tool for full content",
+                    HINT_KEY: "large output summarized; search the conversation to read it",
                 })
             } else {
                 marker.clone()
@@ -477,28 +561,28 @@ fn apply_tier(
         RetentionDecision::Evict => {
             // The pointer alone, typed evicted so the model can distinguish
             // "removed by policy" from "backend cannot retrieve." No
-            // retrieval; the model is told to re-invoke if it needs the
-            // content.
+            // retrieval; the hint names the stored result the model can
+            // search for.
             serde_json::json!({
                 BLOCK_REF_KEY: hash_str,
                 "evicted": true,
-                "hint": "large output evicted by retention policy; re-invoke the tool to retrieve it",
+                HINT_KEY: "large output left out of this request; search the conversation to read it",
             })
         }
     }
 }
 
 /// A typed marker for a block the assembly could not materialize (backend
-/// failure, corrupt bytes). Carries the block_ref so a later re-invoke can
-/// still resolve it, and a reason so the model knows the content is
-/// unreachable, not absent. The turn does not fail — the model is told to
-/// re-invoke the tool.
+/// failure, corrupt bytes). Carries the block_ref so a later read can still
+/// resolve it, and a reason so the model knows the content is unreachable,
+/// not absent. The turn does not fail; the hint says plainly that the stored
+/// content could not be read, in place of an action that would not work.
 fn unavailable_marker(hash_str: &str, reason: &str) -> serde_json::Value {
     serde_json::json!({
         BLOCK_REF_KEY: hash_str,
         "unavailable": true,
         "reason": reason,
-        "hint": "large output unavailable; re-invoke the tool to retrieve it",
+        HINT_KEY: "large output unavailable; its stored content could not be read",
     })
 }
 

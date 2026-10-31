@@ -175,6 +175,11 @@ pub struct Runner {
     cancel: Mutex<Option<CancellationToken>>,
     aborted: AtomicBool,
     paused: AtomicBool,
+    /// Whether a call that drives this runner is in flight: a model run, a
+    /// resume, or a user shell command. All three write the cancel slot and
+    /// the transcript, so a second entry is refused rather than allowed to
+    /// take the slot and leave the running call unstoppable.
+    drive_active: AtomicBool,
     /// The active turn's cancellation token, set at each turn start +
     /// cleared when the turn ends. A per-turn abort (the viewed-child Esc
     /// path) cancels it so the in-flight model fetch for this turn aborts

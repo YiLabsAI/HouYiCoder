@@ -37,8 +37,8 @@ fn shell_row_cleared(screen: &str) -> bool {
 /// awaited text is produced by the command, not typed into it, so seeing it
 /// can only mean the command executed and its output reached the transcript;
 /// the launch uses the stub provider, so a model turn would instead show its
-/// stub reply. A finished call folds to one summary line, so the expansion key
-/// opens the rows carrying the output.
+/// stub reply. The prompt row reports the exit status, and the expansion key
+/// opens the result row carrying the output.
 #[test]
 #[ignore]
 fn test_dollar_command_runs() {
@@ -46,8 +46,8 @@ fn test_dollar_command_runs() {
     s.send_str("$ printf 'shell-probe-%s' 4242");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for_screen("Ran 1 shell command", RENDER_TIMEOUT),
-        "the command answers and folds into one summary line:\n{}",
+        s.wait_for_screen("exit 0", RENDER_TIMEOUT),
+        "the prompt row reports the finished command:\n{}",
         s.screen().contents()
     );
     s.send_key(&Key::Ctrl('o'));
@@ -72,7 +72,7 @@ fn test_dollar_command_runs() {
 /// and Tab takes it into the box without running anything.
 ///
 /// The first run's transcript is archived before the second starts, so the
-/// summary line and the expanded output the assertion waits for can only come
+/// prompt row and the expanded output the assertion waits for can only come
 /// from the completed second command: the first run's identical output is no
 /// longer on screen to satisfy it.
 #[test]
@@ -82,7 +82,7 @@ fn test_tab_takes_ghost() {
     s.send_str("$ printf 'ghost-%s' full-tail");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for_screen("Ran 1 shell command", RENDER_TIMEOUT),
+        s.wait_for_screen("exit 0", RENDER_TIMEOUT),
         "the first run records the command in the shell history:\n{}",
         s.screen().contents()
     );
@@ -106,7 +106,7 @@ fn test_tab_takes_ghost() {
     s.send_key(&Key::Tab);
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for_screen("Ran 1 shell command", RENDER_TIMEOUT),
+        s.wait_for_screen("exit 0", RENDER_TIMEOUT),
         "the completed command runs:\n{}",
         s.screen().contents()
     );
@@ -138,11 +138,16 @@ fn test_ctrl_c_stops_shell() {
         "the status row clears once the host answers the stop:\n{}",
         s.screen().contents()
     );
+    // The stopped command keeps its own prompt row: the verdict reads stopped
+    // and the result row names the interruption reason, so the transcript
+    // records the stop instead of claiming the command ran.
     assert!(
         screen_settles(&mut s, |screen| {
-            screen.contains("interrupted by user") && !screen.contains("Ran 1 shell command")
+            screen.contains("$ sleep 30")
+                && screen.contains("stopped")
+                && screen.contains("interrupted by user")
         }),
-        "the transcript names the interruption and counts no run:\n{}",
+        "the transcript names the interruption on the command's own row:\n{}",
         s.screen().contents()
     );
 }
@@ -167,14 +172,16 @@ fn test_esc_stops_dollar_command() {
         "the status row clears once the host answers the stop:\n{}",
         s.screen().contents()
     );
-    // A stopped command is not counted as run: its rows stay visible on their
-    // own, so the interruption reads without an expansion key and no summary
-    // claims the command executed.
+    // The stopped command keeps its own prompt row: the verdict reads stopped
+    // and the result row names the interruption reason, so the transcript
+    // records the stop instead of claiming the command ran.
     assert!(
         screen_settles(&mut s, |screen| {
-            screen.contains("interrupted by user") && !screen.contains("Ran 1 shell command")
+            screen.contains("$ sleep 30")
+                && screen.contains("stopped")
+                && screen.contains("interrupted by user")
         }),
-        "the transcript names the interruption and counts no run:\n{}",
+        "the transcript names the interruption on the command's own row:\n{}",
         s.screen().contents()
     );
 }

@@ -39,6 +39,7 @@ pub(crate) mod fleet_strip;
 mod footer_budget;
 pub(crate) mod history_window;
 mod notice_rows;
+mod shell_row;
 mod tail_rows;
 pub(crate) mod transcript;
 

@@ -465,7 +465,11 @@ fn test_status_rename_emits_title() {
         s.output()
     );
     s.send_key(&Key::Char('e'));
-    thread::sleep(Duration::from_millis(200));
+    assert!(
+        s.wait_for_plain("(Enter save · Esc cancel)", RENDER_TIMEOUT),
+        "the rename editor should open:\n{}",
+        s.output_plain()
+    );
     // The editor opens empty (no prefill) so an Auto name is not silently
     // promoted to User by seeding the buffer; typing lands on a clean buffer.
     s.send_str("shiny-new-name");
@@ -478,13 +482,26 @@ fn test_status_rename_emits_title() {
         "pane should show the renamed session:\n{}",
         s.screen().contents()
     );
+    // The tab title follows a status snapshot, which the host polls once a
+    // second, so the rename paints long before the OSC arrives. Poll for the
+    // bytes; checking the stream once would lose that window under load.
     assert!(
-        s.output().contains("\u{1b}]0;shiny-new-name"),
+        s.wait_for("\u{1b}]0;shiny-new-name", RENDER_TIMEOUT),
         "OSC 0/2 tab title bytes should be in the stream:\n{}",
         s.output()
     );
-    let descriptor = fs::read_to_string(sessions_dir.join(sid).join("session.json"))
-        .unwrap_or_else(|_| String::new());
+    // The descriptor write is durable and may still be in flight while the
+    // pane already shows the name, so poll for the persisted form too.
+    let descriptor_path = sessions_dir.join(sid).join("session.json");
+    let deadline = Instant::now() + RENDER_TIMEOUT;
+    let mut descriptor = String::new();
+    while Instant::now() < deadline {
+        descriptor = fs::read_to_string(&descriptor_path).unwrap_or_default();
+        if descriptor.contains("\"name\": \"shiny-new-name\"") && descriptor.contains("\"user\"") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
     assert!(
         descriptor.contains("\"name\": \"shiny-new-name\""),
         "descriptor should persist the renamed name:\n{descriptor}"

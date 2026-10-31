@@ -7,7 +7,7 @@ use crate::test_harness::{connected_app_events, render_text, wait_for_request};
 /// The host answers a finished command with Ack, and that reply is what
 /// clears the running state the status bar advertises.
 #[test]
-fn test_ack_clears_shell() {
+fn test_reply_clears_shell() {
     let (mut app, events) = connected_app_events();
     assert!(app.submit_direct_shell("echo hi".into()));
     let env = wait_for_request(&events, |payload| {
@@ -27,7 +27,7 @@ fn test_ack_clears_shell() {
 /// A reply that answers a different request must not clear the command: the
 /// request id is what tells two commands apart.
 #[test]
-fn test_stale_ack_leaves_running() {
+fn test_stale_reply_leaves_running() {
     let (mut app, events) = connected_app_events();
     assert!(app.submit_direct_shell("echo hi".into()));
     let env = wait_for_request(&events, |payload| {

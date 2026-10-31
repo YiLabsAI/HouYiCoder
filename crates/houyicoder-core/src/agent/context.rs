@@ -22,6 +22,7 @@ pub(crate) mod prompt;
 pub(crate) mod recap;
 pub(crate) mod retention;
 pub(crate) mod selection;
+pub(crate) mod shell_history;
 pub(crate) mod turn_group;
 
 use std::collections::HashMap;

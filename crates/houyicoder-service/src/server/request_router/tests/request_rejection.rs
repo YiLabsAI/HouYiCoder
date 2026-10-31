@@ -14,7 +14,7 @@ use houyicoder_context::{
     ExecResult, SandboxError, SessionId, SessionLogEntry,
 };
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_core::agent::{Runner, ToolRegistry};
+use houyicoder_core::agent::{RunError, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{
     Decision, DefaultModeGate, ModeError, ModeGate, PermissionMode, Rule, Scope, StoreError,
@@ -294,6 +294,43 @@ async fn test_direct_shell_session_mismatch() {
     .await;
     assert_eq!(err.category, ErrorCategory::InvalidRequest);
     assert_eq!(err.message, "session id mismatch: got bogus");
+}
+
+/// The refusal table a client reads to decide whether to retry: only a host
+/// state that changes on its own is retryable, and a missing shell tool never
+/// is because the registry does not change while the host runs.
+#[test]
+fn test_shell_refusal_table() {
+    let cases = [
+        (
+            DirectShellError::RunnerPaused,
+            ErrorCategory::Unavailable,
+            true,
+        ),
+        (DirectShellError::Busy, ErrorCategory::Unavailable, true),
+        (
+            DirectShellError::NoShellTool,
+            ErrorCategory::Unavailable,
+            false,
+        ),
+        (
+            DirectShellError::EmptyCommand,
+            ErrorCategory::InvalidRequest,
+            false,
+        ),
+        (
+            DirectShellError::Transcript(RunError::from(ContextError::Io)),
+            ErrorCategory::Internal,
+            false,
+        ),
+    ];
+    for (err, category, retriable) in cases {
+        assert_eq!(
+            direct_shell_refusal(&err),
+            (category, retriable),
+            "refusal for {err}"
+        );
+    }
 }
 
 /// A gate that refuses the mode cycle surfaces its refusal as a typed error

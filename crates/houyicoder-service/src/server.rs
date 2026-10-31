@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use houyicoder_async::bus::MessageBus;
-use houyicoder_core::agent::multi_agent::bus_types::{BusMessage, permission_request_topic};
+use houyicoder_core::agent::multi_agent::bus_types::permission_request_topic;
 
 use tokio::sync::Notify;
 
@@ -57,10 +57,11 @@ use houyicoder_protocol::acp_wire::AcpNotification;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::broadcast::error::RecvError;
+
 use tokio::time::Instant;
 use tokio::time::sleep_until;
+
+use driving::OnClose;
 
 use crate::server::recap::RecapAttachment;
 use crate::server::recap::RecapSession;
@@ -94,6 +95,9 @@ mod model_apply;
 /// audit, apply consent.
 mod approval;
 mod trust;
+
+/// The wait loop that keeps a running host operation answered.
+mod driving;
 
 /// Outbound frame emission: push durable events, send typed responses/events
 /// on the seq stream.
@@ -596,67 +600,6 @@ impl Server {
         });
     }
 
-    async fn dispatch_during_run_frame(&mut self, io: &mut FrameCarrier, frame: &str) {
-        if let Ok(notif) = serde_json::from_str::<AcpNotification>(frame) {
-            self.handle_session_notification(&notif);
-        } else if let Ok(ClientFrame::Request(req)) = serde_json::from_str::<ClientFrame>(frame) {
-            self.handle_request_during_run(io, req).await;
-        }
-    }
-
-    /// Drive one host operation to completion while the connection stays live:
-    /// client frames are dispatched, queued events flushed, and a client
-    /// disconnect ends the wait. A model turn, a resume, and a direct shell
-    /// command all run through here, so Esc, event delivery, and disconnect
-    /// behave the same whichever one is running.
-    async fn drive_while<F>(
-        &mut self,
-        io: &mut FrameCarrier,
-        work: F,
-        closed: &str,
-        permissions: Option<&mut Receiver<BusMessage>>,
-    ) -> Result<F::Output, ProtocolError>
-    where
-        F: Future,
-    {
-        tokio::pin!(work);
-        let mut permissions = permissions;
-        loop {
-            let notify_fut = match &self.append_notify {
-                Some(n) => Either::Left(n.notified()),
-                None => Either::Right(pending::<()>()),
-            };
-            let event_fut = self.event_sequencer.notified();
-            let permission_fut = match permissions.as_deref_mut() {
-                Some(receiver) => Either::Left(receiver.recv()),
-                None => Either::Right(pending::<Result<BusMessage, RecvError>>()),
-            };
-            tokio::select! {
-                done = &mut work => return Ok(done),
-                frame = io.next_frame() => match frame {
-                    Ok(Some(f)) => self.dispatch_during_run_frame(io, &f).await,
-                    Ok(None) => {
-                        return Err(ProtocolError::new(
-                            ErrorCategory::Unavailable,
-                            closed,
-                            false,
-                        ));
-                    }
-                    Err(e) => return Err(e),
-                },
-                _ = notify_fut => self.flush_events(io).await?,
-                _ = event_fut => self.flush_events(io).await?,
-                req = permission_fut => {
-                    if let Ok(msg) = req
-                        && let Err(e) = child_permission::handle(self, io, msg).await
-                    {
-                        tracing::warn!("child permission ask failed: {e}");
-                    }
-                },
-            }
-        }
-    }
-
     async fn drive_run_step(
         &mut self,
         io: &mut FrameCarrier,
@@ -668,8 +611,14 @@ impl Server {
             .bus
             .as_ref()
             .map(|b| b.subscribe(permission_request_topic()));
-        self.drive_while(io, run_fut, "client closed mid-run", perm_rx.as_mut())
-            .await
+        self.drive_while(
+            io,
+            run_fut,
+            "client closed mid-run",
+            perm_rx.as_mut(),
+            OnClose::Abandon,
+        )
+        .await
     }
 
     async fn collect_interruption_decisions(
@@ -716,8 +665,14 @@ impl Server {
     ) -> Result<Result<RunResult, RunError>, ProtocolError> {
         let runner = Arc::clone(&self.runner);
         let resume_fut = runner.resume(self.session, decisions);
-        self.drive_while(io, resume_fut, "client closed mid-resume", None)
-            .await
+        self.drive_while(
+            io,
+            resume_fut,
+            "client closed mid-resume",
+            None,
+            OnClose::Abandon,
+        )
+        .await
     }
 }
 

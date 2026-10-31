@@ -4,6 +4,7 @@ use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
+use houyicoder_protocol::tool::user_shell_call_id;
 use serde_json::Value;
 
 use crate::brief::{result_summary, tool_call_brief};
@@ -38,6 +39,74 @@ fn tool_result(id: &str, output: Value) -> TranscriptFrame {
             .status(ToolCallStatus::Completed)
             .raw_output(output),
     )))
+}
+
+fn timed_tool_result(id: &str, output: Value, duration_ms: u64) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        id,
+        ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
+            .raw_output(output)
+            .duration_ms(duration_ms),
+    )))
+}
+
+/// A command typed at the dollar prompt draws its own prompt row carrying the
+/// command, the exit status, and the measured time, with the output as the
+/// result row below.
+#[test]
+fn test_shell_row_shows_outcome() {
+    let call_id = user_shell_call_id("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    let frames = vec![
+        tool_call(&call_id, "bash", serde_json::json!({"command": "echo hi"})),
+        timed_tool_result(
+            &call_id,
+            serde_json::json!({"stdout": "hi", "exit_code": 0, "success": true}),
+            1250,
+        ),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    assert_eq!(lines.len(), 2, "prompt row plus output row: {lines:?}");
+    assert!(
+        matches!(
+            &lines[0],
+            TranscriptLine::ShellCommand {
+                command,
+                outcome: ToolOutcome::Success,
+                duration_ms: Some(1250),
+                exit_code: Some(0),
+                ..
+            } if command == "echo hi"
+        ),
+        "{lines:?}"
+    );
+    assert!(matches!(
+        &lines[1],
+        TranscriptLine::Tool { name, body, .. } if name == "result" && body == "hi"
+    ));
+}
+
+/// A command the user ran inside a turn is not work the agent did, so the
+/// turn summary never counts it.
+#[test]
+fn test_shell_call_skips_summary() {
+    let call_id = user_shell_call_id("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+    let frames = vec![
+        user_msg("go"),
+        tool_call(&call_id, "bash", serde_json::json!({"command": "ls"})),
+        tool_result(
+            &call_id,
+            serde_json::json!({"stdout": "src", "exit_code": 0, "success": true}),
+        ),
+        agent_msg("done"),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| matches!(line, TranscriptLine::ThoughtFor { .. })),
+        "no summary row claims the user's command: {lines:?}"
+    );
 }
 
 #[test]

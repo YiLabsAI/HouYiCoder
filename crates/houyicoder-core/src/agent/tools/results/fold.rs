@@ -13,7 +13,8 @@ use houyicoder_api::session::{SessionLog, TrajectoryPosition};
 use houyicoder_context::{BlockHash, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::capture_record::{
-    CaptureCompleteness, CaptureRecord, StreamEncoding, StreamRecord, read_capture_record,
+    CAPTURE_KEY, CaptureCompleteness, CaptureRecord, RECORD_KEY, STDERR_KEY, STDOUT_KEY,
+    StreamEncoding, StreamRecord, read_capture_record,
 };
 use houyicoder_protocol::result_catalog::{
     ResultCompleteness, ResultEncoding, ResultEntry, ResultId, ResultStream,
@@ -21,7 +22,6 @@ use houyicoder_protocol::result_catalog::{
 use serde_json::Value;
 
 use super::entry::{BlockSource, IndexedResult, StoredShape};
-use super::keys::{CAPTURE_KEY, RECORD_KEY, STDERR_KEY, STDOUT_KEY};
 use super::windows;
 
 /// Records one page of the log carries. Each page is released as the next is

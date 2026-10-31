@@ -62,6 +62,23 @@ fn test_tool_call_update_flattens() {
 }
 
 #[test]
+fn test_update_duration_on_wire() {
+    // The duration rides the flattened update as camelCase and is left out
+    // when the host did not time the call, so an untimed call and a timed one
+    // are distinguishable on the wire rather than both reading as zero.
+    let timed = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "shell-1",
+        ToolCallUpdateFields::new().duration_ms(1250),
+    ));
+    let json = serde_json::to_string(&timed).expect("serialize");
+    assert!(json.contains(r#""durationMs":1250"#), "{json}");
+    let untimed =
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("shell-1", ToolCallUpdateFields::new()));
+    let json = serde_json::to_string(&untimed).expect("serialize");
+    assert!(!json.contains("durationMs"), "{json}");
+}
+
+#[test]
 fn test_ignores_unknown_fields() {
     // A peer emission carrying _meta / annotations the server does not
     // emit still parses: serde ignores unknown fields, so decode parity

@@ -172,7 +172,7 @@ fn test_subagent_line_field_marker() {
             "block_ref": "a3a1dde5b075cee6",
             "preview": "found auth module in src/auth",
             "data_tag": false,
-            "hint": "large output compacted; re-invoke the tool to retrieve it",
+            "hint": "large output compacted; search the conversation to read it",
         },
         "agentId": "child-xyz",
         "color": "red",

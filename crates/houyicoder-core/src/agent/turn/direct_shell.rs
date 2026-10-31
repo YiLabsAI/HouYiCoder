@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use houyicoder_context::EventId;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::tool::user_shell_call_id;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -39,6 +40,9 @@ pub enum DirectShellError {
     /// A model turn is paused on an approval decision, and that wait owns the
     /// cancel slot a command would take.
     RunnerPaused,
+    /// A model turn or another command is running. Taking the cancel slot now
+    /// would leave that call unstoppable, so the command waits for it.
+    Busy,
     /// The session log could not keep the call or its result.
     Transcript(RunError),
 }
@@ -56,6 +60,10 @@ impl fmt::Display for DirectShellError {
                     "direct shell: the run is waiting for an approval decision"
                 )
             }
+            Self::Busy => write!(
+                f,
+                "direct shell: another run or command is still in progress"
+            ),
             Self::Transcript(error) => write!(f, "direct shell transcript write failed: {error}"),
         }
     }
@@ -85,6 +93,11 @@ impl Runner {
         if command.trim().is_empty() {
             return Err(DirectShellError::EmptyCommand);
         }
+        // Held for the whole command: a model run that starts while it runs,
+        // or a second command, would otherwise take the cancel slot.
+        let Some(_drive) = self.begin_drive() else {
+            return Err(DirectShellError::Busy);
+        };
         let Some(tool) = self.tools().get(DIRECT_SHELL_TOOL) else {
             return Err(DirectShellError::NoShellTool);
         };
@@ -93,9 +106,10 @@ impl Runner {
         if self.paused.load(Ordering::Acquire) {
             return Err(DirectShellError::RunnerPaused);
         }
-        // The id joins the call to its result and keys the approval scan, so it
-        // stays unique across restarts where a per-process counter would not.
-        let call_id = format!("shell-{}", EventId::new());
+        // The id joins the call to its result, keys the approval scan, and
+        // marks the call as user-typed for every reader of the log, so it stays
+        // unique across restarts where a per-process counter would not.
+        let call_id = user_shell_call_id(&EventId::new().to_string());
         let typed = json!({ "command": command });
         let mut plans = vec![ToolCallPlan::new(
             call_id.clone(),

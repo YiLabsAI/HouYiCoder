@@ -138,6 +138,10 @@ pub enum RunError {
     /// Fail-closed: further compress attempts would not shrink the window.
     /// The caller surfaces a user choice.
     ContextOverflowNoProgress,
+    /// Another call is already driving this runner. The run is refused before
+    /// it writes anything, because it would otherwise replace the cancel slot
+    /// of the call in flight and make that call unstoppable.
+    Busy,
 }
 
 impl Display for RunError {
@@ -171,6 +175,7 @@ impl Display for RunError {
                     "context overflow: compress made no progress (fail-closed)"
                 )
             }
+            Self::Busy => write!(f, "another run is already in progress on this session"),
         }
     }
 }

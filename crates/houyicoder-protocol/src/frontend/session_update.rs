@@ -223,6 +223,11 @@ pub struct ToolCallUpdateFields {
     pub raw_input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<Value>,
+    /// Wall-clock duration of the call this update answers, in ms. Set on the
+    /// completion update only, so a client can show how long the call took
+    /// without reading the session log. Absent when the host did not time it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 impl ToolCallUpdateFields {
@@ -237,6 +242,11 @@ impl ToolCallUpdateFields {
 
     pub fn raw_output(mut self, output: Value) -> Self {
         self.raw_output = Some(output);
+        self
+    }
+
+    pub fn duration_ms(mut self, duration_ms: u64) -> Self {
+        self.duration_ms = Some(duration_ms);
         self
     }
 }

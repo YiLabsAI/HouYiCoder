@@ -27,6 +27,7 @@ pub(crate) mod scan_state;
 pub(crate) mod scroll;
 pub(crate) mod search_read;
 pub(crate) mod search_view;
+pub mod shell_result;
 pub mod store;
 pub mod view;
 
@@ -42,6 +43,7 @@ use crate::records::{ContextView, ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
 use crate::transcript::frame_payload::chunk_text;
 use crate::transcript::rows::NamedRows;
+use crate::transcript::shell_result::shell_facts;
 
 mod call_rows;
 pub(crate) mod frame_payload;
@@ -61,6 +63,7 @@ use crate::records::subagent_line;
 use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::envelope::ChildTranscriptFrame as C;
 use houyicoder_protocol::envelope::ChildTranscriptFrame;
+use houyicoder_protocol::tool::is_user_shell_call_id;
 use houyicoder_protocol::tool::strip_ansi;
 use houyicoder_protocol::tool::tool_invocation;
 use serde_json::Value;
@@ -436,10 +439,9 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// duplicate id ever reaches here, the earlier call silently steals the
     /// first-arrived result for that id (pending_approvals and apply_decisions
     /// in agent/mod.rs mis-route the same invariant the same way).
-    fn take_update(&mut self, id: &str) -> Option<(Option<ToolOutcome>, Option<Value>)> {
-        let pos = self.updates.iter().position(|(cid, _, _)| cid == id)?;
-        let (_, oc, out) = self.updates.remove(pos);
-        Some((oc, out))
+    fn take_update(&mut self, id: &str) -> Option<PendingUpdate> {
+        let pos = self.updates.iter().position(|u| u.call_id == id)?;
+        Some(self.updates.remove(pos))
     }
 
     /// Emit the lines one frame contributes at this log position, each named
@@ -483,7 +485,9 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 // interleave between them. Defer; the reposition pass attaches
                 // each late result right after its call row.
                 let call_id = &upd.tool_call_id.0;
-                if let Some((_, Some(output))) = self.take_update(call_id) {
+                if let Some(update) = self.take_update(call_id)
+                    && let Some(output) = update.output
+                {
                     let (tool_name, _) = self.tools.get(call_id).cloned().unwrap_or_default();
                     // The tools map holds the window's own call frames, so an
                     // empty name means the call left the view: there is no call
@@ -676,16 +680,20 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
         // that would read this name is consumed here, and a window that reads
         // on has no use for it. The rows below are skipped for a tool that
         // draws none, so the close runs ahead of them.
-        if matches!(&upd, Some((_, Some(_)))) {
+        if upd.as_ref().is_some_and(|update| update.output.is_some()) {
             self.fold.close_call(call_id);
         }
         if tc.title == "todo_write" {
             return;
         }
+        if is_user_shell_call_id(call_id) {
+            self.emit_shell_call(tc, id, upd);
+            return;
+        }
         if tool_renders_chip(&tc.title) {
             let outcome = upd
                 .as_ref()
-                .and_then(|(oc, _)| *oc)
+                .and_then(|update| update.outcome)
                 .unwrap_or(ToolOutcome::Running);
             let input = tc.raw_input.as_ref().cloned().unwrap_or(Value::Null);
             self.out.push(TranscriptLine::Tool {
@@ -700,7 +708,9 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
             });
             self.ids.push(id.clone());
         }
-        if let Some((_, Some(output))) = upd {
+        if let Some(update) = upd
+            && let Some(output) = update.output
+        {
             if let Some(sub) = subagent_line(&output, tc.raw_input.as_ref()) {
                 self.out.push(sub);
                 self.ids.push(id.clone());
@@ -713,6 +723,49 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 ));
                 self.ids.push(id.clone());
             }
+        }
+    }
+
+    /// Emit a user-typed command as its own dollar-prompt row, then the result
+    /// row the tool result produces. The call stays out of the turn's tool
+    /// summary: it is the user's action, and a summary of what the agent ran
+    /// would misplace it.
+    fn emit_shell_call(&mut self, tc: &ToolCall, id: &RowId, upd: Option<PendingUpdate>) {
+        let call_id = tc.tool_call_id.0.clone();
+        let command = tc
+            .raw_input
+            .as_ref()
+            .and_then(|input| input.get("command"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let (outcome, output, duration_ms) = match &upd {
+            Some(update) => (
+                update.outcome.unwrap_or(ToolOutcome::Running),
+                update.output.as_ref(),
+                update.duration_ms,
+            ),
+            None => (ToolOutcome::Running, None, None),
+        };
+        let facts = output.map(shell_facts).unwrap_or_default();
+        self.out.push(TranscriptLine::ShellCommand {
+            command,
+            outcome,
+            duration_ms,
+            exit_code: facts.exit_code,
+            timed_out: facts.timed_out,
+            storage: facts.storage,
+            cas: facts.cas,
+        });
+        self.ids.push(id.clone());
+        if let Some(output) = output {
+            self.out.push(tool_result_line(
+                &call_id,
+                &tc.title,
+                output,
+                tc.raw_input.as_ref(),
+            ));
+            self.ids.push(id.clone());
         }
     }
 

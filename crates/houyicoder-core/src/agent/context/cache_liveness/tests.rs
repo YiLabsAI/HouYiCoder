@@ -9,6 +9,7 @@ fn ctx<'a>(age: u32, block_ref: Option<&'a str>, assembly_id: u64) -> RetentionC
         is_superseded: false,
         block_ref,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id,
         mutating: true,
     }
@@ -20,6 +21,7 @@ fn measure<'a>(age: u32, block_ref: Option<&'a str>, assembly_id: u64) -> Retent
         is_superseded: false,
         block_ref,
         stored_bytes: None,
+        logged_result_tokens: None,
         assembly_id,
         mutating: false,
     }

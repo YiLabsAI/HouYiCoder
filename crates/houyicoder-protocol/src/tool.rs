@@ -1,5 +1,6 @@
 //! The tool domain as the wire layer reads it: the untruncated invocation
-//! text a call carries, and whether a result reports a failure.
+//! text a call carries, whether a result reports a failure, and whether a
+//! call is a user-typed shell command.
 //!
 //! Untruncated tool-call invocation text, shared by the verbose transcript
 //! render and the search index. A single mapping for both is what makes
@@ -21,9 +22,11 @@ use serde_json::Value;
 mod ansi;
 mod bash_command;
 mod failure;
+mod user_shell;
 pub use ansi::strip_ansi;
 pub use bash_command::simple_command_word;
 pub use failure::{tool_result_failed, tool_result_not_run};
+pub use user_shell::{is_user_shell_call_id, unique_model_call_id, user_shell_call_id};
 
 /// The untruncated call-line argument for a tool call. Known tools pick the
 /// scalar field the chip already shows; unknown tools keep the full input so

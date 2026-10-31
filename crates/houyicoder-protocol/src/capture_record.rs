@@ -10,6 +10,26 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The key a bounded tool result names its capture under.
+pub const CAPTURE_KEY: &str = "raw_capture";
+
+/// The key inside a capture that holds the record block.
+pub const RECORD_KEY: &str = "record";
+
+/// The key a capture uses for the standard output block, which is also the
+/// name that stream answers to in the catalog.
+pub const STDOUT_KEY: &str = "stdout";
+
+/// The key a capture uses for the standard error block, which is also the
+/// name that stream answers to in the catalog.
+pub const STDERR_KEY: &str = "stderr";
+
+/// The key a failed capture names its refusal under, in place of a record.
+pub const CAPTURE_FAILED_KEY: &str = "capture_failed";
+
+/// The key a capture names the reason it stopped the command under.
+pub const STOP_REASON_KEY: &str = "stop_reason";
+
 /// The record version this crate writes.
 ///
 /// Bump it when a field changes meaning or when one of the enums below gains

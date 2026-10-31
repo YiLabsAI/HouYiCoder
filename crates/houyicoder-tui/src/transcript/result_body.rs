@@ -5,7 +5,10 @@
 use serde_json::Value;
 
 use crate::brief::{edit_diff_summary, result_summary, value_brief};
+use houyicoder_protocol::block_ref::BLOCK_BYTES_KEY;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
+use houyicoder_protocol::block_ref::HINT_KEY;
+use houyicoder_protocol::block_ref::PREVIEW_KEY;
 use houyicoder_protocol::tool::{simple_command_word, strip_ansi};
 
 /// Build the Write tool result body: the "Wrote N lines to {path}" chip
@@ -123,11 +126,6 @@ fn raw_body(output: &str) -> String {
         let list: Vec<&str> = files.iter().filter_map(|f| f.as_str()).collect();
         return list.join("\n");
     }
-    if v.get("bytes").is_some() {
-        let path = v.get("path").and_then(|p| p.as_str()).unwrap_or("?");
-        let bytes = v.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
-        return format!("wrote {path} ({bytes} bytes)");
-    }
     // A field-level marker: isolate_large_output externalized one top-level
     // string field (the largest — content for an agent result, stdout for a
     // large bash result) so the envelope's other keys stay inline. That
@@ -143,15 +141,23 @@ fn raw_body(output: &str) -> String {
     // not the raw marker JSON. Resumed old sessions benefit too: their
     // logged results carry top-level block_ref markers.
     if v.get(BLOCK_REF_KEY).is_some() {
-        let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("");
+        let preview = v.get(PREVIEW_KEY).and_then(|p| p.as_str()).unwrap_or("");
         let hint = v
-            .get("hint")
+            .get(HINT_KEY)
             .and_then(|h| h.as_str())
-            .unwrap_or("output compacted; re-invoke the tool to retrieve it");
+            .unwrap_or("output compacted; search the conversation to read it");
         if preview.is_empty() {
             return hint.to_string();
         }
         return format!("{preview}\n[{hint}]");
+    }
+    // A write result: the path it wrote and the byte count. Read after the
+    // marker arms because a marker names its stored length under the same
+    // key, and the preview and hint say more than the size alone.
+    if v.get(BLOCK_BYTES_KEY).is_some() {
+        let path = v.get("path").and_then(|p| p.as_str()).unwrap_or("?");
+        let bytes = v.get(BLOCK_BYTES_KEY).and_then(|b| b.as_u64()).unwrap_or(0);
+        return format!("wrote {path} ({bytes} bytes)");
     }
     value_brief(&v)
 }
@@ -167,11 +173,14 @@ fn field_level_marker_body(v: &Value) -> Option<String> {
         if field.get(BLOCK_REF_KEY).is_none() {
             continue;
         }
-        let preview = field.get("preview").and_then(|p| p.as_str()).unwrap_or("");
+        let preview = field
+            .get(PREVIEW_KEY)
+            .and_then(|p| p.as_str())
+            .unwrap_or("");
         let hint = field
-            .get("hint")
+            .get(HINT_KEY)
             .and_then(|h| h.as_str())
-            .unwrap_or("output compacted; re-invoke the tool to retrieve it");
+            .unwrap_or("output compacted; search the conversation to read it");
         return if preview.is_empty() {
             Some(hint.to_string())
         } else {

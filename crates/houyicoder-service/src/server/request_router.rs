@@ -5,6 +5,7 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::model::EffectiveFrom;
 use houyicoder_protocol::frontend::{FrontendRequest, SessionId};
 
+use super::driving::OnClose;
 use super::model_apply::ModelSelection;
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
@@ -115,7 +116,7 @@ impl Server {
         let runner = Arc::clone(&self.runner);
         let work = runner.run_direct_shell(self.session, command);
         let result = self
-            .drive_while(io, work, "client closed mid-shell", None)
+            .drive_while(io, work, "client closed mid-shell", None, OnClose::Settle)
             .await?;
         match result {
             Ok(_) => {
@@ -127,16 +128,7 @@ impl Server {
                 self.send_response(io, req_id, ResponsePayload::Ack).await
             }
             Err(e) => {
-                // The category separates a host state that may differ on a
-                // later attempt, which is retryable, from input the host
-                // cannot accept as sent, and from this host failing.
-                let (category, retriable) = match &e {
-                    DirectShellError::NoShellTool | DirectShellError::RunnerPaused => {
-                        (ErrorCategory::Unavailable, true)
-                    }
-                    DirectShellError::EmptyCommand => (ErrorCategory::InvalidRequest, false),
-                    DirectShellError::Transcript(_) => (ErrorCategory::Internal, false),
-                };
+                let (category, retriable) = direct_shell_refusal(&e);
                 self.send_response(
                     io,
                     req_id,
@@ -591,6 +583,26 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
             | FrontendRequest::PermissionRules
             | FrontendRequest::PermissionAskBeforeGit { .. }
     )
+}
+
+/// How the host refuses a direct shell run: the category a client reads to
+/// decide what to do next, and whether the same request may succeed on a
+/// later attempt.
+///
+/// A paused host and one already driving a run are retryable, because both
+/// states change on their own. A missing shell tool is not: the registry does
+/// not change while the host runs, so the same request meets the same answer.
+/// A command the host cannot accept as sent is a client fault, and a failed
+/// transcript write is this host failing.
+fn direct_shell_refusal(err: &DirectShellError) -> (ErrorCategory, bool) {
+    match err {
+        DirectShellError::RunnerPaused | DirectShellError::Busy => {
+            (ErrorCategory::Unavailable, true)
+        }
+        DirectShellError::NoShellTool => (ErrorCategory::Unavailable, false),
+        DirectShellError::EmptyCommand => (ErrorCategory::InvalidRequest, false),
+        DirectShellError::Transcript(_) => (ErrorCategory::Internal, false),
+    }
 }
 
 #[cfg(test)]

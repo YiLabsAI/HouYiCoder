@@ -20,12 +20,15 @@ use houyicoder_context::{
 };
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+use houyicoder_protocol::tool::is_user_shell_call_id;
 use houyicoder_session::SessionStore;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+use crate::agent::RunOutcome;
 use crate::agent::Runner;
 use crate::agent::ToolRegistry;
 use crate::agent::hook::{
@@ -334,6 +337,10 @@ async fn test_call_and_result_recorded() {
         EventId::from_display_string(suffix).is_some(),
         "the id stays unique across restarts, not a counter that starts over: {call_id}"
     );
+    assert!(
+        is_user_shell_call_id(call_id),
+        "a log reader tells the user's own command from a model call: {call_id}"
+    );
 }
 
 #[tokio::test]
@@ -527,6 +534,110 @@ async fn test_denied_entry_refused() {
         "the refusal is the result: {output}"
     );
     assert_eq!(tool_results(&runner, session).await.len(), 1);
+}
+
+/// A model-issued tool call that starts, reports, and never returns: only the
+/// abort can end the turn it runs in.
+struct SlowTool {
+    started: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl Tool for SlowTool {
+    fn name(&self) -> &str {
+        "slow"
+    }
+    fn description(&self) -> &str {
+        "stands in for a model tool call that does not finish"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        let started = self.started.lock().expect("started slot").take();
+        Box::pin(async move {
+            if let Some(report) = started {
+                let _ = report.send(());
+            }
+            pending::<()>().await;
+            Ok(Value::Null)
+        })
+    }
+}
+
+fn tool_call_response(tool: &str) -> CompletionResponse {
+    CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "call-1".into(),
+            name: tool.into(),
+            input: json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    }
+}
+
+fn final_response() -> CompletionResponse {
+    CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    }
+}
+
+/// A command submitted while a model turn is still running is refused before
+/// it writes anything, and the turn keeps the cancel slot: the abort that
+/// follows still stops it. A command that took the slot would leave the turn
+/// running with no way to stop it.
+#[tokio::test]
+async fn test_command_refused_during_turn() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(EchoShell {
+        calls: Arc::clone(&calls),
+        failure: None,
+    }));
+    tools.register(Arc::new(SlowTool {
+        started: Mutex::new(Some(started_tx)),
+    }));
+    let provider = FakeProvider::new(vec![tool_call_response("slow"), final_response()]);
+    let runner = Arc::new(runner_with(Arc::new(provider), tools));
+    let session = SessionId::new();
+    let run = tokio::spawn({
+        let runner = Arc::clone(&runner);
+        async move { runner.run(session, "work".into()).await }
+    });
+    started_rx.await.expect("the model call reached the tool");
+    let error = runner
+        .run_direct_shell(session, "echo hi".into())
+        .await
+        .expect_err("a command cannot start beside a running turn");
+    assert!(
+        error.to_string().contains("in progress"),
+        "the refusal names the running turn: {error}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "the command did not run");
+    runner.abort();
+    let result = timeout(Duration::from_secs(2), run)
+        .await
+        .expect("the abort still reaches the running turn")
+        .expect("the run task does not panic")
+        .expect("the aborted turn answers");
+    assert!(
+        matches!(result.outcome, RunOutcome::Interrupted(_)),
+        "the abort reached the turn: {:?}",
+        result.outcome
+    );
+    let events = runner.store().replay(session).await.expect("replay");
+    assert!(
+        !events.iter().any(|entry| matches!(
+            &entry.event,
+            SessionEvent::ToolCall { call_id, .. } if is_user_shell_call_id(call_id)
+        )),
+        "a refused command writes no call: {events:?}"
+    );
 }
 
 #[tokio::test]

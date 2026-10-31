@@ -335,6 +335,29 @@ fn test_tool_result_maps_update() {
     assert_eq!(upd.fields.raw_output, Some(Value::String("ok".into())));
 }
 
+/// The recorded duration reaches a replaying client so its prompt row can show
+/// how long the command took. An untimed result carries none: zero records the
+/// absence of a measurement, not a call that took no time.
+#[test]
+fn test_replay_duration_on_wire() {
+    let timed = SessionEvent::ToolResult {
+        call_id: "shell-1".into(),
+        output: Value::Null,
+        duration_ms: 1250,
+    };
+    let update = map_session_update(&timed).expect("a result maps");
+    let SessionUpdate::ToolCallUpdate(upd) = update else {
+        panic!("tool result is a tool-call update");
+    };
+    assert_eq!(upd.fields.duration_ms, Some(1250));
+    let untimed = SessionEvent::tool_result("shell-1", Value::Null);
+    let update = map_session_update(&untimed).expect("a result maps");
+    let SessionUpdate::ToolCallUpdate(upd) = update else {
+        panic!("tool result is a tool-call update");
+    };
+    assert_eq!(upd.fields.duration_ms, None);
+}
+
 #[test]
 fn test_permission_decision_maps_acpx() {
     let kind = SessionEvent::PermissionDecision {
@@ -555,6 +578,14 @@ fn test_auth_error_mentions_key() {
         "auth → key hint: {}",
         wire.message
     );
+}
+
+/// A run refused because another call already drives the runner reports a
+/// category of its own, so a frontend can tell a busy host from a failure.
+#[test]
+fn test_busy_run_category() {
+    let mapped = super::map_run_error(&RunError::Busy);
+    assert_eq!(mapped.category, "busy");
 }
 
 /// A ModelNotFound error surfaces a message that points at the catalog and
