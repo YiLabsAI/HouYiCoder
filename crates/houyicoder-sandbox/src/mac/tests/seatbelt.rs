@@ -6,6 +6,7 @@
 
 #![allow(clippy::disallowed_methods)]
 
+use super::super::fence_status_for;
 use super::super::process::kill_process_group;
 use super::super::temp_dir::COUNTER;
 use super::super::*;
@@ -17,8 +18,7 @@ use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use houyicoder_api::skill::grant::is_denied;
 use houyicoder_resilience::BreakerState;
 use houyicoder_resilience::resource_breaker::{ResourceBreakerConfig, TripReason};
-use std::env::temp_dir;
-use std::env::var;
+use std::env::{temp_dir, var};
 use std::fs::canonicalize;
 use std::fs::create_dir;
 use std::fs::create_dir_all;
@@ -956,29 +956,22 @@ async fn test_login_snapshot_restores_path() {
     );
 }
 
-/// The session must report its fence as enforced. Every command it runs goes
-/// through sandbox-exec with the rendered profile, so the fence is live
-/// whenever the session exists. The trait supplies a default returning
-/// Unavailable, which the composition root turns into a user-visible
-/// "running unfenced" notice; inheriting that default told the user the
-/// opposite of the truth while the fence was in fact refusing their writes,
-/// with nothing failing to catch it. Assert the reported status so the
-/// omission cannot come back silently.
+/// The fence status a session reports follows the no-enforce hatch: enforced
+/// when the hatch is off, not enforced when it is on. A false Enforced would
+/// send kernel-level denial tests into an unfenced session where every write
+/// succeeds.
 #[test]
-fn test_fence_status_reports_enforced() {
-    let root = temp_dir().join(format!(
-        "houyi-fence-status-{}-{}",
-        id(),
-        COUNTER.fetch_add(1, Ordering::SeqCst)
-    ));
-    create_dir_all(&root).expect("mkdir root");
-    let s = MacSeatbeltSession::new_in_cwd(&root).expect("session");
+fn test_fence_status_follows_hatch() {
     assert_eq!(
-        s.fence_status(),
+        fence_status_for(false),
         FenceStatus::Enforced,
-        "a live seatbelt session must not report the trait default"
+        "a fenced session reports enforced"
     );
-    remove_dir_all(&root).ok();
+    assert_eq!(
+        fence_status_for(true),
+        FenceStatus::NotEnforced,
+        "the no-enforce hatch reports not enforced"
+    );
 }
 
 /// set_extra_mach_services adds an allow mach-lookup line, and clear

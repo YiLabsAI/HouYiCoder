@@ -255,7 +255,7 @@ impl MacSeatbeltSession {
     /// repo config; the write deny still holds). Split out of exec so the
     /// re-derivation is unit-testable without spawning sandbox-exec. Each
     /// sandbox-exec is a fresh process, so mutating the profile between execs
-    /// honors the new dirs (a running sandbox cannot be relaxed, but none is
+    /// applies the new dirs (a running sandbox cannot be relaxed, but none is
     /// running between execs).
     fn current_profile(&self) -> String {
         let read_only = self.dirs.read_only();
@@ -594,11 +594,24 @@ impl MacSeatbeltSession {
     }
 }
 
-impl SandboxSession for MacSeatbeltSession {
-    /// Enforced whenever the session exists: every command goes through
-    /// sandbox-exec with the rendered profile.
-    fn fence_status(&self) -> FenceStatus {
+/// The fence status for a session given whether the no-enforce hatch is set.
+/// Separated from the trait method so the decision is testable without
+/// manipulating the process environment.
+fn fence_status_for(unfenced: bool) -> FenceStatus {
+    if unfenced {
+        FenceStatus::NotEnforced
+    } else {
         FenceStatus::Enforced
+    }
+}
+
+impl SandboxSession for MacSeatbeltSession {
+    /// Enforced whenever the session exists and the fence is not bypassed by
+    /// the no-enforce escape hatch. When the hatch is set, commands run through
+    /// the shell directly and the status reports as not enforced so tests that
+    /// assert kernel-level denials skip instead of running unfenced.
+    fn fence_status(&self) -> FenceStatus {
+        fence_status_for(crate::is_unfenced())
     }
 
     fn as_containment(&self) -> Option<&dyn Containment> {

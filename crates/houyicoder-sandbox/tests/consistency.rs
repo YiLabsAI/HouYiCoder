@@ -356,7 +356,7 @@ async fn test_kernel_denies_external_write() {
 }
 
 #[tokio::test]
-async fn test_kernel_honors_runtime_grant() {
+async fn test_runtime_grant_lifecycle() {
     let s = session();
     if !kernel_path_fence_live(&s) {
         return;
