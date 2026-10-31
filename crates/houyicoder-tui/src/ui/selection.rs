@@ -24,10 +24,10 @@ use unicode_width::UnicodeWidthStr;
 const MULTI_CLICK_TIMEOUT_MS: u128 = 500;
 const MULTI_CLICK_DISTANCE: u16 = 1;
 
-/// Per-row style/kind tag stashed alongside the rendered text so copy and the
-/// overlay can skip non-content rows (the spinner) — a cheaper stand-in for
-/// a per-cell no-select bitmap, since the engine's only inline chrome is
-/// the transient spinner row at the tail.
+/// Per-row style tag stashed alongside the rendered text so copy can skip
+/// non-content rows (the spinner) — a cheaper stand-in for a per-cell
+/// no-select bitmap, since the engine's only inline chrome is the transient
+/// spinner row at the tail.
 pub const TAG_PLAIN: u8 = 0;
 pub const TAG_USER: u8 = 1;
 pub const TAG_SYSTEM: u8 = 2;
@@ -67,10 +67,12 @@ pub const TAG_DIFF_CTX: u8 = 10;
 pub const TAG_DIFF_BORDER: u8 = 11;
 
 /// True when the row tag marks a non-content row (spinner, widget-painted,
-/// the inter-hunk "..." gap, or a diff border): excluded from selection,
-/// overlay paint, and copy. A fold summary (TAG_FOLD) is NOT here: its text
-/// is selectable so a user can copy the chip summary, and the toggle is
-/// dispatched on a clean release instead of swallowing the press.
+/// the inter-hunk gap, or a diff border): no selection starts or snaps on
+/// one, and copy drops it. The overlay paints these rows like any other, so
+/// a range that spans one keeps one unbroken highlight. A fold summary
+/// (TAG_FOLD) is NOT here: its text is selectable so a user can copy the
+/// chip summary, and the toggle is dispatched on a clean release instead of
+/// swallowing the press.
 pub fn is_non_selectable(tag: u8) -> bool {
     tag == TAG_SPINNER || tag == TAG_WIDGET || tag == TAG_DIFF_HUNK || tag == TAG_DIFF_BORDER
 }
@@ -145,15 +147,24 @@ pub struct Span {
 /// positions are never stored: mouse coordinates convert to content space
 /// at event time (via the scroll offset the user was looking at), and the
 /// overlay maps content rows back to screen rows at paint time via the
-/// then-current offset. Keeping a single coordinate space removes the
-/// whole class of screen/content sync-drift bugs the previous dual
-/// bookkeeping produced.
+/// then-current offset. A content row is only an index into one row set,
+/// though, so each end also records the line it stands on: every read
+/// resolves the end through that name first, and the ends follow their text
+/// when the rows above them change count.
 #[derive(Default, Clone, Debug)]
 pub struct Selection {
     /// Where the drag started: (column, content row).
     pub anchor: Option<(u16, usize)>,
     /// Current drag position: (column, content row).
     pub focus: Option<(u16, usize)>,
+    /// The line the anchor row belongs to, recorded beside it.
+    pub anchor_point: Option<LinePoint>,
+    /// The line the focus row belongs to, recorded beside it.
+    pub focus_point: Option<LinePoint>,
+    /// The line each span corner stands on, recorded beside the span so a
+    /// later drag extends from the word or line the reader picked rather than
+    /// from the row number that word held when it was picked.
+    pub span_points: Option<(LinePoint, LinePoint)>,
     /// The last mouse position in SCREEN space, cached as an input for the
     /// poll-tick edge auto-scroll (the mouse is stationary at the edge, so
     /// no new event arrives; the tick re-derives the focus content row from
@@ -256,6 +267,9 @@ impl Selection {
     pub fn clear(&mut self) {
         self.anchor = None;
         self.focus = None;
+        self.anchor_point = None;
+        self.focus_point = None;
+        self.span_points = None;
         self.cursor = None;
         self.is_dragging = false;
         self.span_origin = None;
@@ -769,7 +783,11 @@ fn word_bounds_at(row: &str, col: usize, max_w: usize) -> (usize, usize) {
     (starts[lo], starts[hi] + widths[hi])
 }
 
+mod anchor;
 mod linux;
 pub mod region;
 #[cfg(test)]
 mod tests;
+
+pub use anchor::LinePoint;
+pub(crate) use anchor::anchor_row;

@@ -198,6 +198,12 @@ impl RowSet {
         &self.turn_ids
     }
 
+    /// The identity of each row, in row order. A reader that must name a row
+    /// again after the set is rebuilt reads this beside the text rows.
+    pub(crate) fn row_ids(&self) -> &[Option<RowId>] {
+        &self.row_ids
+    }
+
     pub(crate) fn pre_rendered(&self) -> &[Option<Line<'static>>] {
         &self.pre_rendered
     }

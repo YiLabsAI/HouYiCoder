@@ -397,29 +397,51 @@ fn test_subagent_expand_stable_index() {
 
 /// line_display_rows must match the render row count for a Subagent:
 /// 1 when collapsed, 2 when expanded with empty folded_transcript
-/// (head + placeholder), and 1 + child rows when expanded with loaded
-/// children. Pins the count==render invariant the scroll math depends on.
+/// (head + placeholder), and head + spacer + child rows when expanded with
+/// loaded children. The child is drawn below the head, so the draw pass
+/// charges it the blank spacer an opening block takes; a count of the child
+/// rows alone left the scroll total one short per expanded delegation.
 #[test]
 fn test_subagent_row_count() {
     let mut app = app();
-    let sub = TranscriptLine::Subagent {
-        child_sid: "c1".into(),
-        subagent_type: "explore".into(),
-        summary: "found auth".into(),
-        prompt: String::new(),
-        folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
-        color: None,
-    };
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+            color: None,
+        });
+    let sub = app.sessions.current.transcript.lines()[0].clone();
     // Collapsed: 1 head row.
     assert_eq!(app.line_display_rows(&sub), 1);
-    // Expanded with loaded children: 1 head + child rows.
+    // Expanded with loaded children: head, its spacer, then the child rows.
     app.ui
         .transcript_view
         .expanded
         .subagents
         .insert("c1".into());
     let child_rows = app.line_display_rows(&TranscriptLine::Agent("child reply".into()));
-    assert_eq!(app.line_display_rows(&sub), 1 + child_rows);
+    assert_eq!(app.line_display_rows(&sub), 1 + 1 + child_rows);
+    let out = render_text(&app, 80, 24);
+    let rows: Vec<&str> = out.lines().collect();
+    let head = rows
+        .iter()
+        .position(|r| r.contains("explore"))
+        .expect("head row renders");
+    let child = rows
+        .iter()
+        .position(|r| r.contains("child reply"))
+        .expect("child row renders");
+    assert_eq!(
+        child,
+        head + 2,
+        "the child starts below one blank row: {out}"
+    );
     // Expanded with empty folded_transcript: 1 head + 1 placeholder.
     let empty_sub = TranscriptLine::Subagent {
         child_sid: "c2".into(),

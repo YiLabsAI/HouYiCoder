@@ -389,17 +389,18 @@ fn test_no_snapshot_answers_empty() {
 /// verbose_count_matches cannot cover it. The corpus carries a fold group
 /// (proves the slot layer is skipped: a completed group renders as individual
 /// call+result rows, not a Summary), a Thinking line (0 rows, skipped), an
-/// Interrupted line (the no-spacer-before-child rule), and an expanded
-/// ThoughtFor (header + reasoning rows), so every per-line branch of
+/// Interrupted line and a tool result (child rows that open no block), and an
+/// expanded ThoughtFor (header + reasoning rows), so every per-line branch of
 /// push_line_rows + the spacer rule land in the walk.
 ///
-/// Mutation verification (per AGENTS.md): reverting any divergence between
-/// history_walk's row count and draw_history_window's row emission -- e.g.
-/// history_walk counting a spacer draw_history_window skips, history_walk NOT
-/// skipping Thinking while the draw path does, or history_walk dropping the
-/// Interrupted no-spacer guard -- reddens this test at every width. Asserts
-/// the published total (visible-output-adjacent), not an
-/// internal flag.
+/// Mutation verification (per AGENTS.md): the count path and the draw path
+/// read one shared spacer rule, so this test sees a divergence between them,
+/// not a change to the rule itself. Reverting one side alone -- history_walk
+/// counting a spacer the draw path skips, or history_walk not skipping
+/// Thinking while the draw path does -- reddens it at every width. The rule
+/// itself is asserted against rendered rows in test_result_follows_call and
+/// test_interrupt_follows_message. Asserts the published total
+/// (visible-output-adjacent), not an internal flag.
 #[test]
 fn test_flat_count_matches_render() {
     let mut app = working();
@@ -409,10 +410,8 @@ fn test_flat_count_matches_render() {
         .join("\n");
     let window = vec![
         TranscriptLine::User("go".into()),
-        // Interrupted is a child row of the message above (no blank spacer
-        // before it) -- exercises the no-spacer-before-Interrupted rule both
-        // push_line_rows and history_walk share, so a regression to that guard
-        // reddens this test.
+        // Interrupted is a child row of the message above, so it opens no
+        // block; the walk and the draw path read that one rule.
         TranscriptLine::Interrupted,
         TranscriptLine::Thinking {
             text: "hidden thinking".into(),

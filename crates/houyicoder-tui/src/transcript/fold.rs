@@ -594,7 +594,7 @@ pub(crate) fn display_slots(
 // takes, so the count and the rendered rows cannot diverge.
 impl App {
     /// Total display rows the transcript renders to: a line may span several
-    /// rows, a blank spacer precedes each message but the first, and a
+    /// rows, a line that opens a block takes a blank spacer above it, and a
     /// collapsed group contributes its summary row instead of its lines.
     ///
     /// Reads the value the last render of the surface on view published,
@@ -628,6 +628,34 @@ impl App {
         }
     }
 
+    /// The rows one display slot emits and whether the draw pass puts a blank
+    /// spacer before it. A slot that emits nothing takes no spacer either:
+    /// the draw path returns before reaching one, so charging it would move
+    /// every row below in the count.
+    pub(crate) fn slot_rows_and_opens(
+        &self,
+        slot: &DisplaySlot,
+        transcript: &[TranscriptLine],
+    ) -> (usize, bool) {
+        match slot {
+            DisplaySlot::Line(i, group) => {
+                let line = &transcript[*i];
+                let full = self.ui.verbose
+                    || group.as_ref().is_some_and(|key| {
+                        self.ui.transcript_view.expanded.fold_groups.contains(key)
+                    });
+                let rows = self.line_display_rows_mode(line, full);
+                (rows, rows > 0 && line.opens_block())
+            }
+            DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, true),
+            DisplaySlot::NoticeCollapsed { idx, .. } | DisplaySlot::NoticeExpanded { idx, .. } => {
+                let width = self.ui.frame.feedback.transcript_width.get();
+                let rows = notice_slot_rows(slot, &transcript[*idx], width);
+                (rows, rows > 0)
+            }
+        }
+    }
+
     /// Walk the transcript summing display rows: the row where line target
     /// starts, or the total when target is None. A completed turn's calls
     /// collapse to one summary row or expand to their lines, and the trailing
@@ -642,25 +670,11 @@ impl App {
             &self.ui.transcript_view.expanded.fold_groups,
             self.ui.verbose,
         );
-        let width = self.ui.frame.feedback.transcript_width.get();
         let mut total = 0;
         let mut first = true;
         for slot in &slots {
-            let (needs_spacer, rows) = match slot {
-                DisplaySlot::Line(i, group) => {
-                    let full = self.ui.verbose
-                        || group.as_ref().is_some_and(|key| {
-                            self.ui.transcript_view.expanded.fold_groups.contains(key)
-                        });
-                    (true, self.line_display_rows_mode(&transcript[*i], full))
-                }
-                DisplaySlot::Summary(g) => (true, 1 + g.hint.is_some() as usize),
-                DisplaySlot::NoticeCollapsed { idx, .. }
-                | DisplaySlot::NoticeExpanded { idx, .. } => {
-                    (true, notice_slot_rows(slot, &transcript[*idx], width))
-                }
-            };
-            if !first && needs_spacer {
+            let (rows, spacer) = self.slot_rows_and_opens(slot, transcript);
+            if !first && spacer {
                 total += 1;
             }
             if let Some(t) = target {
@@ -675,7 +689,9 @@ impl App {
                 }
             }
             total += rows;
-            first = false;
+            if rows > 0 {
+                first = false;
+            }
         }
         // The live rows drawn after the slot region belong to the total; a
         // target always resolves inside the loop above.

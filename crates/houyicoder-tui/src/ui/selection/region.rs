@@ -26,7 +26,7 @@ use ratatui::{
 };
 
 use crate::renderer::PreparedFrame;
-use crate::selection::{self, ClipboardWriter, Selection, extract_text, is_non_selectable};
+use crate::selection::{self, ClipboardWriter, Selection, anchor_row, extract_text};
 use crate::selections::Selections;
 use crate::state::App;
 
@@ -236,6 +236,12 @@ pub(crate) trait Region {
         false
     }
     fn is_dragging(&self) -> bool;
+    /// Move the selection's ends onto the rows their lines hold in the set the
+    /// last frame drew, before a read or a gesture that extends the range. The
+    /// default keeps every end where it is: a pane's rows are rebuilt each
+    /// frame and its highlight does not outlive the gesture, so nothing there
+    /// can drift.
+    fn reanchor(&mut self) {}
 
     /// Default down for a pure-selection surface: lost-release recovery (a
     /// fresh press while still dragging finishes the stale gesture directly
@@ -243,6 +249,10 @@ pub(crate) trait Region {
     /// carry a clean-click collapse guard that must not fire on a lost
     /// release), then on_click + apply_click.
     fn handle_down(&mut self, x: u16, y: u16) -> RegionIntent {
+        // A press that arrives while the previous release was never
+        // delivered finishes that gesture first, and that copy reads the
+        // ends. Resolve them onto their lines before that read.
+        self.reanchor();
         down_body(self, x, y);
         RegionIntent::None
     }
@@ -254,6 +264,7 @@ pub(crate) trait Region {
     /// A surface that intercepts a clean click for a toggle calls this when
     /// no toggle applied, so the click still clears its caret.
     fn release(&mut self) -> RegionIntent {
+        self.reanchor();
         let persist = self.persist();
         let p = self.parts();
         match finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist) {
@@ -273,6 +284,7 @@ pub(crate) trait Region {
     /// independent visual affordance — it clears on Esc or the next click,
     /// not on copy. Returns the copied text so the caller can show a toast.
     fn copy_current(&mut self) -> RegionIntent {
+        self.reanchor();
         let p = self.parts();
         if !p.sel.has_selection() {
             return RegionIntent::None;
@@ -367,10 +379,31 @@ impl Region for TranscriptRegion<'_> {
     /// Press always starts a selection (the shared down body): a fold,
     /// subagent, or thought toggle is decided on release, not here, so a drag
     /// can select the summary text instead of being swallowed by the toggle.
-    /// The clean-click toggle dispatch lives in handle_up.
+    /// The clean-click toggle dispatch lives in handle_up. The ends a press
+    /// sets come from the rows under the cursor and are named at once; the
+    /// ends of a gesture whose release was lost are resolved first, because
+    /// finishing that gesture reads them.
     fn handle_down(&mut self, x: u16, y: u16) -> RegionIntent {
+        self.resolve_ends();
         down_body(self, x, y);
+        self.bind_ends();
         RegionIntent::None
+    }
+
+    /// A drag step extends the range, so the end it extends from must first be
+    /// moved onto its line's rows: the frame between two steps may have
+    /// removed rows above it, and the span math would then mix a fresh row
+    /// with a stale one.
+    fn handle_drag(&mut self, x: u16, y: u16) -> RegionIntent {
+        self.resolve_ends();
+        drag_body(self, x, y);
+        self.bind_ends();
+        RegionIntent::None
+    }
+
+    fn reanchor(&mut self) {
+        self.resolve_ends();
+        self.bind_ends();
     }
 
     /// A clean click (no drag motion) asks for a fold/subagent/thought toggle,
@@ -416,11 +449,28 @@ impl Region for TranscriptRegion<'_> {
 }
 
 impl TranscriptRegion<'_> {
+    /// Move both ends onto the rows their lines hold in the set the last frame
+    /// drew, keeping the names.
+    fn resolve_ends(&mut self) {
+        let ids = self.view.frame.layout.last_all_ids.borrow();
+        let sel = &mut self.view.selections.transcript;
+        *sel = sel.resolved(&ids);
+    }
+
+    /// Name the line each end stands on, from the rows the last frame drew.
+    fn bind_ends(&mut self) {
+        let ids = self.view.frame.layout.last_all_ids.borrow();
+        self.view.selections.transcript.bind(&ids);
+    }
+
     /// The visible row the selection anchor sits on, or None when it scrolled
-    /// off. Maps through the same top the caller's gesture used, so the row it
-    /// names is the one that top was applied to.
+    /// off. The anchor is resolved through its line first, so a frame that
+    /// renumbered the rows between the click and its release names the row
+    /// that now holds the clicked text. Maps through the same top the caller's
+    /// gesture used, so the row it names is the one that top was applied to.
     fn anchor_visible_row(&self) -> Option<usize> {
-        let (_, content_row) = self.view.selections.transcript.anchor?;
+        let ids = self.view.frame.layout.last_all_ids.borrow();
+        let content_row = anchor_row(&self.view.selections.transcript, &ids)?;
         let ri = content_row.checked_sub(self.view.scroll_top)?;
         let height = self.view.frame.layout.transcript_rect.get().height as usize;
         (ri < height).then_some(ri)
@@ -516,12 +566,14 @@ impl Region for StatusRegion<'_> {
 
 // ---- overlay (draw path) -------------------------------------------------
 
-/// Paint a solid selection background over the surface's cells. The range is
+/// Paint a solid selection background over the region's cells. The range is
 /// walked in CONTENT-row space and mapped to screen rows through scroll_top
-/// (the transcript's offset; 0 for a pane, which is screen-space). Non-content
-/// rows (spinner, fold summaries, collapse hints) are skipped so they never
-/// get a highlight and never pollute copied text. Endpoint columns stay tied
-/// to their own rows. Applied after the view draw, before the buffer flushes.
+/// (the transcript's offset; 0 for a pane, which is screen-space). Every row
+/// in the range is painted, including diff borders and hunk gaps, so the
+/// highlight stays one continuous block; the rows that carry no copyable text
+/// are filtered when the selection is extracted, not here. Endpoint columns
+/// stay tied to their own rows. Applied after the view draw, before the
+/// buffer flushes.
 pub(crate) fn paint_overlay(
     buf: &mut Buffer,
     rect: Rect,
@@ -545,10 +597,8 @@ pub(crate) fn paint_overlay(
     let last = bot_row.min(scroll_top + vh - 1);
     for cr in first..=last {
         let ri = cr - scroll_top;
-        match rows.get(ri) {
-            Some((t, _)) if is_non_selectable(*t) => continue,
-            None => continue,
-            _ => {}
+        if rows.get(ri).is_none() {
+            continue;
         }
         let y = rect.y + ri as u16;
         let (sx, ex) = if top_row == bot_row {
@@ -594,16 +644,14 @@ pub(crate) fn edge_scroll_if_at_edge(app: &mut App) -> bool {
         RegionIntent::ScrollDown => app.scroll_transcript_line_down(1),
         _ => return false,
     }
-    let top = app.active_scroll().top_offset();
-    let (col, content_row) = transcript_mouse_to_content(&app.ui.frame, top, cx, cy);
-    let rows = app.ui.frame.layout.last_all_rows.borrow();
-    extend_drag(
-        &mut app.ui.selection.transcript,
-        &rows,
-        rect,
-        col,
-        content_row,
-    );
+    // One drag step through the same path a mouse event takes, so the ends are
+    // re-resolved onto their lines and named again exactly as they are
+    // outside the poll tick. The view maps through the offset the scroll above
+    // just moved, which is the one the next render draws.
+    let mut region = TranscriptRegion {
+        view: app.region_view(),
+    };
+    region.handle_drag(cx, cy);
     true
 }
 

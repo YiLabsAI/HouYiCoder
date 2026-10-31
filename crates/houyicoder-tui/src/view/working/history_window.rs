@@ -56,6 +56,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
     // distinct from the five total consumers. The stash lands before the
     // resolution, which reads the rows back through it.
     *app.ui.frame.layout.last_all_rows.borrow_mut() = sink.text_rows();
+    *app.ui.frame.layout.last_all_ids.borrow_mut() = sink.row_ids().to_vec();
     *app.ui.frame.layout.last_window_rows.borrow_mut() = sink;
     // Name the window these rows describe, so a step that lands before the
     // next frame can tell them from the rows of the window this one replaced.

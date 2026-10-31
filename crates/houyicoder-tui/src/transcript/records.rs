@@ -466,6 +466,18 @@ impl TranscriptLine {
         self.render_with(true)
     }
 
+    /// Whether a blank spacer separates this line from the one above it. The
+    /// interrupt notice and a tool result are children of the line above, so
+    /// they open no block of their own; every renderer and every row-count
+    /// path that mirrors one reads this single answer.
+    pub(crate) fn opens_block(&self) -> bool {
+        match self {
+            Self::Interrupted => false,
+            Self::Tool { name, .. } => name != "result",
+            _ => true,
+        }
+    }
+
     /// The thought-row label for a given expand affordance, built here so the
     /// flat render, the search text, and the row emitter agree on the index.
     /// hint is the toggle the caller offers, None when nothing can expand or

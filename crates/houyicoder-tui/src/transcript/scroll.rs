@@ -63,12 +63,13 @@ pub(crate) fn bound_scrollback(transcript: &mut NamedRows) -> usize {
     }
 }
 
-/// New agent turns since the user scrolled away, as far as the resident frames
-/// still show. is_lower_bound marks a count whose anchor frame was evicted:
-/// turns before the resident front are no longer countable, so the count is
-/// only what the window can still prove, and the label reads it as a floor.
+/// New agent messages since the user scrolled away, as far as the resident
+/// frames still show. is_lower_bound marks a count whose anchor frame was
+/// evicted: messages before the resident front are no longer countable, so the
+/// count is only what the window can still prove, and the label reads it as a
+/// floor.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NewTurnCount {
+pub struct NewMessageCount {
     pub count: usize,
     pub is_lower_bound: bool,
 }

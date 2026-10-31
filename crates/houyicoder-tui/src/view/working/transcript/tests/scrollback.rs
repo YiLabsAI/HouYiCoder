@@ -1,4 +1,4 @@
-//! Reading the scrollback: the rows above the viewport, the turns that land
+//! Reading the scrollback: the rows above the viewport, the messages that land
 //! while the reader is scrolled back, the label that offers a return to the
 //! tail, and the wheel that moves the viewport. Each test states the
 //! invariant it pins.
@@ -6,7 +6,7 @@
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
-    ContentChunk, SessionUpdate, ToolCall, ToolCallStatus,
+    ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 
 use crate::agent_message::{ServerEvent, SessionMessage};
@@ -24,11 +24,21 @@ fn agent_msg(text: &str) -> TranscriptFrame {
     )))
 }
 
-/// A tool-only frame (no adjacent agent text) — must not tick the turn count.
+/// A tool-only frame (no adjacent agent text) — must not tick the message count.
 fn tool_call_frame(id: &str) -> TranscriptFrame {
     TranscriptFrame::Session(SessionUpdate::ToolCall(
         ToolCall::new(id, "grep").status(ToolCallStatus::InProgress),
     ))
+}
+
+/// A tool result frame: the call finished and its output arrived.
+fn tool_result_frame(id: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        id,
+        ToolCallUpdateFields::new()
+            .status(ToolCallStatus::Completed)
+            .raw_output(serde_json::json!({ "output": "ok" })),
+    )))
 }
 
 fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
@@ -54,39 +64,193 @@ fn app_scrolled_back() -> App {
     app
 }
 
-/// Agent content arriving while scrolled back increments the count by one
-/// per user-to-assistant turn, not per response segment: a tool call within
-/// one turn does not split it. Driven through the production path
-/// (handle_agent_message), not a hand-built frame Vec.
+/// Agent text arriving while scrolled back counts once per visible message.
+/// A tool call does not split the reply above it: the call and the text
+/// introducing it are one reply to the reader. Driven through the production
+/// path (handle_agent_message), not a hand-built frame Vec.
 #[test]
 fn test_agent_count_rises() {
     let mut app = app_scrolled_back();
-    assert_eq!(app.new_turn_count().count, 0, "no new agent content yet");
+    assert_eq!(app.new_message_count().count, 0, "no new agent content yet");
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         agent_msg("first response").into(),
     )));
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
-        "one agent turn since snapshot"
+        "one agent message since snapshot"
     );
-    // A tool call within the same turn does NOT start a new count.
+    // A tool call within the same reply does NOT start a new count.
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         tool_call_frame("c1").into(),
     )));
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
-        "tool call within a turn does not split the count"
+        "tool call within a reply does not split the count"
     );
-    // More agent text after the tool is still the same turn — still 1.
+    // More agent text after the call, before its result, is still the
+    // reply that introduced the call — still 1.
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         agent_msg("continuing").into(),
     )));
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
-        "later agent text in the same turn does not tick"
+        "text between a call and its result belongs to the same reply"
+    );
+}
+
+/// The reply that answers a tool result is a message of its own: a reply that
+/// searches, reads, and then answers lands as several messages, and the label
+/// states that number. A tool call alone does not split the reply above it,
+/// and a chunk carrying no text neither counts nor ends that reply.
+#[test]
+fn test_count_rises_per_reply() {
+    let mut app = app_scrolled_back();
+    for frame in [
+        agent_msg("searching"),
+        agent_msg("   "),
+        tool_call_frame("c1"),
+        agent_msg("reading"),
+    ] {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+    }
+    assert_eq!(
+        app.new_message_count().count,
+        1,
+        "one reply, with its call and a blank chunk, is still one message"
+    );
+    for frame in [tool_result_frame("c1"), agent_msg("answering")] {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+    }
+    assert_eq!(
+        app.new_message_count().count,
+        2,
+        "text reasoning about a result is a new message"
+    );
+    // The user speaking ends the reply above it: the next agent text answers
+    // a new prompt and is a message of its own.
+    for frame in [user_msg("next question"), agent_msg("reply")] {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+    }
+    assert_eq!(
+        app.new_message_count().count,
+        3,
+        "the reply to a new prompt counts as a new message"
+    );
+    // A chunk that paints nothing must not count where a reply would begin:
+    // the label would otherwise claim a message the reader cannot see.
+    for frame in [tool_result_frame("c2"), agent_msg("\n")] {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+    }
+    assert_eq!(
+        app.new_message_count().count,
+        3,
+        "a chunk with no visible text does not count as a message"
+    );
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("3 new messages"),
+        "the label states the count:\n{out}"
+    );
+}
+
+/// The label states at most 99. Past that the exact number stops informing
+/// the reader, so the count reads 99+ instead of growing without bound.
+#[test]
+fn test_count_caps_label() {
+    let mut app = app_scrolled_back();
+    for i in 0..120 {
+        let call = format!("c{i}");
+        for frame in [
+            agent_msg(&format!("reply {i}")),
+            tool_call_frame(&call),
+            tool_result_frame(&call),
+        ] {
+            app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+        }
+    }
+    assert_eq!(app.new_message_count().count, 120, "every reply counts");
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("99+ new messages"),
+        "the label caps the stated count:\n{out}"
+    );
+}
+
+/// The cap is a boundary, not a saturation point: at exactly the cap the
+/// label states the true count, and the at-least marker appears only once
+/// one more message lands. A reader must never see "99+" for 99 messages.
+#[test]
+fn test_label_cap_boundary() {
+    let mut app = app_scrolled_back();
+    for i in 0..99 {
+        let call = format!("c{i}");
+        for frame in [
+            agent_msg(&format!("reply {i}")),
+            tool_call_frame(&call),
+            tool_result_frame(&call),
+        ] {
+            app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+        }
+    }
+    assert_eq!(app.new_message_count().count, 99);
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("99 new messages"),
+        "the label states the exact count at the cap:\n{out}"
+    );
+    assert!(
+        !out.contains("99+ new messages"),
+        "no at-least marker while the count is exactly the cap:\n{out}"
+    );
+    for frame in [
+        agent_msg("reply 99"),
+        tool_call_frame("c99"),
+        tool_result_frame("c99"),
+    ] {
+        app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
+    }
+    assert_eq!(app.new_message_count().count, 100);
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("99+ new messages"),
+        "one past the cap reads as a floor:\n{out}"
+    );
+}
+
+/// A narrow viewport must clip the label to the transcript's width instead of
+/// overflowing it, and a click on what is left still returns to the tail.
+#[test]
+fn test_label_fits_narrow_width() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    for i in 0..50 {
+        app.system_line(format!("history line {i:02}"));
+    }
+    let _out = render_text(&app, 16, 24);
+    app.scroll_transcript_line_up(3);
+    let out = render_text(&app, 16, 24);
+    let t = app.ui.frame.layout.transcript_rect.get();
+    let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
+    assert_eq!(rect.height, 1, "the label keeps its row at 16 columns");
+    assert!(
+        rect.width <= t.width && rect.x >= t.x && rect.x + rect.width <= t.x + t.width,
+        "the label must stay inside the transcript: label={rect:?} transcript={t:?}"
+    );
+    assert!(
+        out.contains("Jump to"),
+        "the label still names its action when clipped:\n{out}"
+    );
+    let px = rect.x + rect.width / 2;
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), px, rect.y),
+    );
+    assert!(
+        app.whole_scroll().is_following_tail(),
+        "the clipped label keeps its click target"
     );
 }
 
@@ -114,7 +278,7 @@ fn test_evicted_keeps_count() {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(
         agent_msg("response").into(),
     )));
-    assert_eq!(app.new_turn_count().count, 1);
+    assert_eq!(app.new_message_count().count, 1);
     // One row past the cap while scrolled back: trim skips a scrolled-back
     // reader, so the line accumulates past the cap rather than draining. The
     // echo rows live in the frame log (frontend Echo frames), and the log is
@@ -129,7 +293,7 @@ fn test_evicted_keeps_count() {
     // The count is frame-based, so a length change during scroll-away does
     // not zero it: it still names the frames since the snapshot.
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
         "the frame-based count is independent of the transcript length"
     );
@@ -158,7 +322,7 @@ fn test_evicted_keeps_count() {
     );
     // Resume cleared the scroll-away snapshot, so the count returns to zero.
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         0,
         "resume clears the scroll-away snapshot"
     );
@@ -187,7 +351,7 @@ fn test_rescroll_keeps_count() {
         Some(snapshot),
         "second scroll-away must not reset the baseline"
     );
-    assert_eq!(app.new_turn_count().count, 1);
+    assert_eq!(app.new_message_count().count, 1);
 }
 
 /// Clicking the label returns to the tail and clears the snapshot.
@@ -326,9 +490,9 @@ fn pump(app: &mut App, frame: TranscriptFrame) {
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Frame(frame.into())));
 }
 
-/// An anchor frame the byte budget evicted leaves the label counting the turns
-/// the window still shows and reporting the count as a floor, rather than
-/// reading zero new turns because the frames it stood on are gone.
+/// An anchor frame the byte budget evicted leaves the label counting the
+/// messages the window still shows and reporting the count as a floor, rather
+/// than reading zero new messages because the frames it stood on are gone.
 #[test]
 fn test_floor_count_after_drain() {
     let mut app = composition::app();
@@ -349,14 +513,14 @@ fn test_floor_count_after_drain() {
         pump(&mut app, agent_msg(&format!("a{i} {text}")));
     }
     let base = app.sessions.current.transcript.frame_window_start();
-    let new = app.new_turn_count();
+    let new = app.new_message_count();
     assert!(
         base > 1000,
         "the drain evicted the anchor frame: base={base}"
     );
     assert!(
         new.count > 0,
-        "the label counts the turns the window still shows: {new:?}"
+        "the label counts the messages the window still shows: {new:?}"
     );
     assert!(new.is_lower_bound, "a gone anchor reports a floor");
     // The park names the row it stands on from the rows a draw built; without

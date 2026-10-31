@@ -8,9 +8,10 @@ use crate::agent_message::ClientCommand;
 use crate::artifact::{ArtifactMode, ChangeProposer};
 use crate::evidence::{Divergence, Verdict};
 use crate::fold::is_memory_notice;
-use crate::fold::{DisplaySlot, display_slots, notice_slot_rows};
+use crate::fold::{DisplaySlot, display_slots};
 use crate::records::TranscriptLine;
 use crate::state::{App, Pane, Stage};
+use crate::ui::selection::anchor_row;
 use crate::view::todo_list::TODO_FOLD_KEY;
 use houyicoder_protocol::frontend::SessionId;
 
@@ -53,7 +54,8 @@ impl App {
     /// through the current scroll offset. None when no anchor is set or the
     /// anchor row is scrolled out of the viewport.
     pub(crate) fn anchor_visible_row(&self) -> Option<usize> {
-        let (_, content_row) = self.ui.selection.transcript.anchor?;
+        let ids = self.ui.frame.layout.last_all_ids.borrow();
+        let content_row = anchor_row(&self.ui.selection.transcript, &ids)?;
         let top = self.active_scroll().top_offset();
         let ri = content_row.checked_sub(top)?;
         (ri < self.ui.frame.layout.transcript_rect.get().height as usize).then_some(ri)
@@ -276,62 +278,46 @@ impl App {
     /// space. A flat walk diverges whenever a folded group precedes the
     /// target line and mis-resolves to the wrong Subagent.
     pub(crate) fn subagent_target_at_cursor(&self) -> Option<(String, bool)> {
-        let transcript = self.sessions.current.transcript.lines();
+        let transcript = self.active_transcript();
+        let groups = self.active_fold_groups();
         let slots = display_slots(
             transcript,
-            self.sessions.current.transcript.fold_groups(),
+            groups.as_ref(),
             &self.ui.transcript_view.expanded.fold_groups,
             self.ui.verbose,
         );
-        let width = self.ui.frame.feedback.transcript_width.get();
-        self.ui
-            .selection
-            .transcript
-            .anchor
-            .and_then(|(_, content_row)| {
-                let mut row = 0usize;
-                let mut first = true;
-                for slot in &slots {
-                    let (rows, line_idx, is_interrupted) = match slot {
-                        DisplaySlot::Line(i, _) => {
-                            let l = &transcript[*i];
-                            (
-                                self.line_display_rows(l),
-                                Some(*i),
-                                matches!(l, TranscriptLine::Interrupted),
-                            )
-                        }
-                        DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, None, false),
-                        DisplaySlot::NoticeCollapsed { idx, .. }
-                        | DisplaySlot::NoticeExpanded { idx, .. } => (
-                            notice_slot_rows(slot, &transcript[*idx], width),
-                            Some(*idx),
-                            false,
-                        ),
-                    };
-                    if !first && !is_interrupted {
-                        row += 1;
-                    }
-                    if row + rows > content_row {
-                        // Cursor lands in this slot. A Summary slot or a
-                        // non-Subagent Line is not a delegation, so the answer
-                        // is None -- this walk does not look elsewhere.
-                        if let Some(i) = line_idx
-                            && let TranscriptLine::Subagent {
-                                child_sid,
-                                folded_transcript,
-                                ..
-                            } = &transcript[i]
-                        {
-                            return Some((child_sid.clone(), folded_transcript.is_empty()));
-                        }
-                        return None;
-                    }
-                    row += rows;
-                    first = false;
-                }
-                None
-            })
+        let ids = self.ui.frame.layout.last_all_ids.borrow();
+        let content_row = anchor_row(&self.ui.selection.transcript, &ids)?;
+        let mut row = 0usize;
+        let mut first = true;
+        for slot in &slots {
+            let (rows, opens) = self.slot_rows_and_opens(slot, transcript);
+            if !first && opens {
+                row += 1;
+            }
+            if row + rows > content_row {
+                // Cursor lands in this slot. A Summary slot or a non-Subagent
+                // Line is not a delegation, so the answer is None -- this walk
+                // does not look elsewhere.
+                let DisplaySlot::Line(i, _) = slot else {
+                    return None;
+                };
+                let TranscriptLine::Subagent {
+                    child_sid,
+                    folded_transcript,
+                    ..
+                } = &transcript[*i]
+                else {
+                    return None;
+                };
+                return Some((child_sid.clone(), folded_transcript.is_empty()));
+            }
+            row += rows;
+            if rows > 0 {
+                first = false;
+            }
+        }
+        None
     }
 
     /// The delegation the cursor is on, else the most recent. The drill-in key

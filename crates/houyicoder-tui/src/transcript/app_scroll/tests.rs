@@ -78,9 +78,9 @@ fn test_cursor_across_front_drain() {
         .push_frame(stamped_frame("e3", "third"));
     app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("e2".into()));
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
-        "the third entry is the one unseen turn"
+        "the third entry is the one unseen message"
     );
 
     let total = app.sessions.current.transcript.resident_bytes();
@@ -94,15 +94,15 @@ fn test_cursor_across_front_drain() {
         "the drain takes the first entry alone"
     );
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
         "the anchor resolves by identity after the drain shifted it"
     );
-    assert!(!app.new_turn_count().is_lower_bound);
+    assert!(!app.new_message_count().is_lower_bound);
 
     app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
     assert!(
-        app.new_turn_count().is_lower_bound,
+        app.new_message_count().is_lower_bound,
         "an anchor the drain took leaves the count a floor"
     );
 }
@@ -124,20 +124,20 @@ fn test_cursor_resolves_durable_anchor() {
 
     app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("e1".into()));
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
-        "an anchor on the first entry leaves the second turn to count"
+        "an anchor on the first entry leaves the second message to count"
     );
-    assert!(!app.new_turn_count().is_lower_bound);
+    assert!(!app.new_message_count().is_lower_bound);
 
     app.ui.transcript_view.unseen_since = Some(EventCursor::Durable("absent".into()));
     assert_eq!(
-        app.new_turn_count().count,
+        app.new_message_count().count,
         1,
         "an anchor off the resident range counts the window it still shows"
     );
     assert!(
-        app.new_turn_count().is_lower_bound,
+        app.new_message_count().is_lower_bound,
         "the count is a floor when the anchor frame is gone"
     );
 }

@@ -201,8 +201,11 @@ ACTIVE_OWNERS = {
         # with the range and width they were built from, because that path
         # rebuilds them every frame and keeps no cache of its own. The input
         # and click paths read the rects and rows; the status-bar hint reads
-        # the granted height.
-        "fields": 15,
+        # the granted height. The identity of each row in the full set sits
+        # here beside the rows, written in the same step: a selection names
+        # each end by the line under it, and that name can only be resolved
+        # against the rows and names of one frame.
+        "fields": 16,
     },
     "crates/houyicoder-tui/src/ui/selections.rs:Selections": {
         # The four per-region drag selections, each in its own coordinate space.

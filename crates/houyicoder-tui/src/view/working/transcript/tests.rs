@@ -7,12 +7,14 @@ use unicode_width::UnicodeWidthStr;
 use crate::agent_message::{FleetEntry, ServerResponse, SessionMessage};
 use crate::brief::tool_call_brief;
 use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
+use crate::rows::row_set::RowSet;
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
 use crate::transcript::TranscriptFrame;
 use crate::view::working::transcript::truncate_call_with_paren;
 
 use super::super::tail_rows::build_tail_rows;
+use super::push_line_rows;
 
 fn bash_call(command: &str) -> TranscriptLine {
     TranscriptLine::Tool {
@@ -38,6 +40,63 @@ fn bash_result() -> TranscriptLine {
         body: String::new(),
         is_diff: false,
     }
+}
+
+/// The result of a tool call is the child row of that call, so no blank row
+/// separates them: a gap would break the tree gutter and read as a separate
+/// utterance. Only the line that opens a group gets the spacer.
+#[test]
+fn test_result_follows_call() {
+    let app = working_app();
+    let mut result = bash_result();
+    if let TranscriptLine::Tool { body, .. } = &mut result {
+        body.push_str("done");
+    }
+    let mut sink = RowSet::default();
+    assert!(push_line_rows(
+        &bash_call("make check"),
+        None,
+        60,
+        &app,
+        &mut sink
+    ));
+    let call_rows = sink.len();
+    assert!(push_line_rows(&result, None, 60, &app, &mut sink));
+    let rows = sink.rows();
+    assert!(
+        rows[call_rows].1.starts_with("  \u{23bf}"),
+        "the result row comes right after the call row: {:?}",
+        rows.iter().map(|row| row.1.as_str()).collect::<Vec<_>>()
+    );
+}
+
+/// The interrupt notice ends the turn it stopped, so it sits directly against
+/// the message above instead of opening a block of its own.
+#[test]
+fn test_interrupt_follows_message() {
+    let app = working_app();
+    let mut sink = RowSet::default();
+    assert!(push_line_rows(
+        &TranscriptLine::User("go".into()),
+        None,
+        60,
+        &app,
+        &mut sink
+    ));
+    let message_rows = sink.len();
+    assert!(push_line_rows(
+        &TranscriptLine::Interrupted,
+        None,
+        60,
+        &app,
+        &mut sink
+    ));
+    let rows = sink.rows();
+    assert!(
+        rows[message_rows].1.contains("Interrupted"),
+        "the notice comes right after the message it stopped: {:?}",
+        rows.iter().map(|row| row.1.as_str()).collect::<Vec<_>>()
+    );
 }
 
 #[test]

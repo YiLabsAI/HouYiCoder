@@ -74,21 +74,23 @@ fn test_extract_skips_spinner_row() {
 
 // A structured-diff content row carries a line-number + sigil gutter that
 // must NOT be copied (the gutter is wrapped in a no-select span so a
-// fullscreen drag yields clean code), and the inter-hunk "..." gap row is
-// dropped entirely. A drag across an add + gap + context row copies the
-// two content lines with no gutter and no gap.
+// fullscreen drag yields clean code), and the frame's border rows and the
+// inter-hunk "..." gap are dropped entirely. A drag across a border, an add,
+// a gap, a border, and a context row copies the two content lines bare.
 #[test]
 fn test_copy_diff_strips_gutter() {
     let rows: Vec<(u8, String)> = vec![
+        (TAG_DIFF_BORDER, String::new()),
         (TAG_DIFF_ADD, "+ 3 let x = 1;".to_string()),
         (TAG_DIFF_HUNK, "...".to_string()),
+        (TAG_DIFF_BORDER, String::new()),
         (TAG_DIFF_CTX, "  2 fn foo() {".to_string()),
     ];
     let mut s = Selection::default();
     s.start(0, 0);
-    s.update(20, 2);
+    s.update(20, 4);
     s.finish();
-    let t = extract_text(&rows, rect(0, 0, 80, 3), &s);
+    let t = extract_text(&rows, rect(0, 0, 80, 5), &s);
     assert_eq!(t, "let x = 1;\nfn foo() {");
 }
 

@@ -460,18 +460,22 @@ fn in_rect(r: Rect, x: u16, y: u16) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 
-/// Paint each surface selection after layout and before the frame flush.
+/// Paint each region's selection after layout and before the frame flush.
 /// Transcript coordinates include scroll offset; pane coordinates are local.
 pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
     let buf = f.buffer_mut();
     let scroll_top = app.active_scroll().top_offset();
     {
         let rows = app.ui.frame.layout.last_transcript_rows.borrow();
+        // The ends are named by the lines under them, so resolve them into
+        // the rows this frame drew before the range is mapped to screen rows.
+        let ids = app.ui.frame.layout.last_all_ids.borrow();
+        let sel = app.ui.selection.transcript.resolved(&ids);
         paint_overlay(
             buf,
             app.ui.frame.layout.transcript_rect.get(),
             &rows,
-            &app.ui.selection.transcript,
+            &sel,
             scroll_top,
         );
     }

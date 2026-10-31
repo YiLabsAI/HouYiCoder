@@ -38,6 +38,10 @@ use ratatui::buffer::CellDiffOption;
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
+/// The highest message count the jump-to-bottom label states. Past it the
+/// label reads "99+" and the exact number is left to the transcript.
+const MESSAGE_COUNT_CAP: usize = 99;
+
 pub(crate) fn ensure_cached_slots(area: Rect, app: &App) {
     // The slot rows depend on the source and its revisions, the wrap width,
     // the mode flags, and the bash ticker. SlotsKey names those inputs and
@@ -85,11 +89,17 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     // One traversal over (slots ++ live) slices the six arrays by the same
     // bounds, so the visible window stays in step by construction.
     let visible = app.ui.renderer.slots.with(|c| c.visible(&live, top, cap));
-    // Stash the full row set (slots + live) for selection/copy.
+    // Stash the full row set (slots + live) for selection/copy, with each
+    // row's identity beside it: a selection resolves its ends through these
+    // names, and a row set whose text and names came from different frames
+    // would hand the ends the wrong rows.
     {
         let mut all = app.ui.renderer.slots.with(|c| c.text_rows());
         all.extend(live.text_rows());
         *app.ui.frame.layout.last_all_rows.borrow_mut() = all;
+        let mut ids = app.ui.renderer.slots.with(|c| c.row_ids().to_vec());
+        ids.extend_from_slice(live.row_ids());
+        *app.ui.frame.layout.last_all_ids.borrow_mut() = ids;
     }
     // Stash the visible rows + callid table for mouse/copy/Ctrl+O.
     *app.ui.frame.layout.last_transcript_rows.borrow_mut() = visible.text_rows();
@@ -229,7 +239,7 @@ fn render_transcript_lines(f: &mut Frame, inner: Rect, app: &App, visible: &RowS
 
 fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
     // Jump-to-bottom label: a bright centered overlay on the transcript's
-    // bottom row while the user is scrolled back, showing the agent turns
+    // bottom row while the user is scrolled back, showing the agent messages
     // that landed since the scroll-away snapshot. Clicking it returns to the
     // tail. Hidden while following the tail, with a search or queue overlay
     // open, or in Scroll mode, whose status bar already advertises Esc=tail.
@@ -240,11 +250,21 @@ fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
         && !app.active_scroll().is_following_tail()
         && !app.ui.transcript_view.search_active();
     if label_visible {
-        let new = app.new_turn_count();
+        let new = app.new_message_count();
         let label = if new.count > 0 {
-            let floor = if new.is_lower_bound { "+" } else { "" };
+            // Past two digits the exact number stops informing the reader and
+            // starts competing with the transcript for width: what they need
+            // to know is that much has landed, not how much. A count that
+            // only covers part of the window carries the same at-least marker.
+            let shown = new.count.min(MESSAGE_COUNT_CAP);
+            let floor = if new.count > MESSAGE_COUNT_CAP || new.is_lower_bound {
+                "+"
+            } else {
+                ""
+            };
+            let count = format!("{shown}{floor}");
             let plural = if new.count == 1 { "" } else { "s" };
-            format!(" {}{floor} new message{plural} ↓", new.count)
+            format!(" {count} new message{plural} ↓")
         } else {
             " Jump to bottom (click) ↓".to_string()
         };
@@ -371,9 +391,9 @@ pub(crate) fn push_line_rows(
         _ => None,
     };
     let grp_key: Option<String> = grp.map(|g| g.to_string());
-    // No spacer before the interrupt notice: it is a child row of the message
-    // above, so a blank line between them would read as a separate utterance.
-    if !sink.is_empty() && !matches!(line, TranscriptLine::Interrupted) {
+    // A child row (the interrupt notice, a tool result) stays against its
+    // parent: a blank line between them would read as a separate utterance.
+    if !sink.is_empty() && line.opens_block() {
         sink.push(Row::spacer().group(grp_key.clone()));
     }
     if let TranscriptLine::Tool { name, call_id, .. } = line

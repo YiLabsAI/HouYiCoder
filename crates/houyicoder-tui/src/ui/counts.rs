@@ -94,9 +94,16 @@ impl App {
                     if folded_transcript.is_empty() {
                         n += 1; // placeholder row
                     } else {
+                        // Each child is drawn below the head row, so a child
+                        // that opens a block takes its spacer even when it is
+                        // the first: the draw path sees the head already in the
+                        // rows and charges the blank line.
                         n += folded_transcript
                             .iter()
-                            .map(|c| self.line_display_rows(c))
+                            .map(|c| {
+                                let rows = self.line_display_rows(c);
+                                rows + usize::from(rows > 0 && c.opens_block())
+                            })
                             .sum::<usize>();
                     }
                 }
@@ -198,13 +205,13 @@ impl App {
     }
 
     /// Walk the active transcript in FLAT order (no fold slots), summing
-    /// display rows + the blank spacer before each emitted line. The history
-    /// window's count and render paths emit
-    /// exactly these rows, so history_display_rows == the rendered total +
-    /// history_row_of_line(idx) == the row where idx starts. Matches fold_aware_rows
-    /// minus the slot layer (fold grouping) -- the slot layer has no meaning
-    /// when one screen is materialized at a time, so the window view skips it.
-    /// Thinking is skipped (0 rows, no spacer), matching the draw path.
+    /// display rows plus the blank spacer before each line that opens a block.
+    /// The history window's count and render paths emit exactly these rows, so
+    /// history_display_rows is the rendered total and history_row_of_line(idx)
+    /// is the row where idx starts. The slot layer has no meaning there, since
+    /// one screen is materialized at a time. The draw puts no spacer above the
+    /// first row it emits, so a leading line that renders nothing leaves the
+    /// next line at the top without one.
     pub(crate) fn history_walk(&self, target: Option<usize>) -> usize {
         let transcript = self.active_transcript();
         let mut total = 0;
@@ -216,16 +223,22 @@ impl App {
                 }
                 continue;
             }
-            // Spacer before each emitted line except the first; Interrupted
-            // is a child row of the message above (no blank between).
-            if !first && !matches!(line, TranscriptLine::Interrupted) {
+            // Spacer before each line that opens a block; a child row such as
+            // the interrupt notice or a tool result stays against its parent.
+            if !first && line.opens_block() {
                 total += 1;
             }
             if target.is_some_and(|t| t == i) {
                 return total;
             }
-            total += self.line_display_rows(line);
-            first = false;
+            let rows = self.line_display_rows(line);
+            total += rows;
+            // First means "no rows emitted yet", matching the draw's is_empty
+            // check. A line that renders nothing must not enable a spacer for
+            // the line below it.
+            if rows > 0 {
+                first = false;
+            }
         }
         total
     }

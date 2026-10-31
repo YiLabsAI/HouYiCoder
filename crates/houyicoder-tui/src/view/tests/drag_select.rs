@@ -4,11 +4,13 @@
 //! viewport shifts between mouse events (tail-follow append).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::style::Color;
 use std::sync::{Arc, Mutex};
 
 use crate::app::handle_key;
 use crate::app::handle_mouse;
+use crate::brief::tool_call_brief;
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::Approval;
@@ -242,6 +244,244 @@ fn test_copy_tracks_shifted_content() {
     assert_eq!(
         got[1], first[0],
         "re-copy must return the originally selected row, not shifted rows"
+    );
+}
+
+/// A foldable call whose rows sit above the target line, so opening or closing
+/// its group changes how many rows the target stands past.
+fn tool_line(call_id: &str) -> TranscriptLine {
+    TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: tool_call_brief("bash", &serde_json::json!({ "command": "echo hi" })),
+        invocation: "echo hi".into(),
+        outcome: ToolOutcome::Success,
+        call_id: call_id.into(),
+        body: "hi".into(),
+        is_diff: false,
+    }
+}
+
+/// The selection highlight paints with this background.
+const SELECTION_BG: Color = Color::Indexed(24);
+
+/// A transcript whose foldable call sits above the line "target words here",
+/// rendered with the group closed. Returns the app, the transcript rect, and
+/// the target's row while the group is closed, so a caller that opens the
+/// group can tell which way the target moved.
+fn app_group_above_target() -> (App, Rect, usize) {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript = vec![
+        TranscriptLine::User("go".into()),
+        tool_line("c1"),
+        TranscriptLine::Agent("target words here".into()),
+    ]
+    .into();
+    let _out = render_text(&app, 80, 24);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let closed = row_index(&app, "target words");
+    (app, rect, closed)
+}
+
+/// A selection is held by the rows it covers, not by their numbers. Closing a
+/// group above it removes rows, so every row number below the group moves; the
+/// highlight must stay on the selected words at their new position instead of
+/// sliding onto whatever took the old numbers.
+#[test]
+fn test_overlay_follows_collapse() {
+    let (mut app, rect, opened) = app_group_above_target();
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    // Open the group: its call rows now stand between the prompt and the
+    // target.
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    let _out = render_text(&app, 80, 24);
+    let ri = row_index(&app, "target words");
+    assert!(ri > opened, "opening the group pushes the target down");
+    let y = screen_y(&app, ri);
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 8, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 8, y),
+    );
+    let first = captured.lock().expect("captured").clone();
+    assert_eq!(first.len(), 1, "the release copies what was selected");
+    // Close the group while the selection is held.
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    let buf = render_buffer(&app, 80, 24);
+    let moved = row_index(&app, "target words");
+    assert!(moved < ri, "closing the group pulls the target back up");
+    let y_new = screen_y(&app, moved);
+    let cell = buf.cell((rect.x + 3, y_new)).expect("target cell");
+    assert_eq!(
+        cell.bg, SELECTION_BG,
+        "the highlight must stay on the selected words at their new row"
+    );
+    let stale = buf.cell((rect.x + 3, y)).expect("old cell");
+    assert_ne!(
+        stale.bg, SELECTION_BG,
+        "the old screen row holds other text and must not stay highlighted"
+    );
+    // The same names must drive extraction: a re-copy returns the text the
+    // user selected, not the rows that took its numbers.
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+    let got = captured.lock().expect("captured").clone();
+    assert_eq!(got.len(), 2, "ctrl+c copies again: {got:?}");
+    assert_eq!(
+        got[1], first[0],
+        "the re-copy must return the originally selected words"
+    );
+}
+
+/// The rows a release copies come from the lines the drag selected. A group
+/// that closes between the last drag step and the release removes rows above,
+/// so a release that still reads the old numbers would copy a different line.
+#[test]
+fn test_release_follows_collapse() {
+    let (mut app, rect, opened) = app_group_above_target();
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    let _out = render_text(&app, 80, 24);
+    let ri = row_index(&app, "target words");
+    assert!(ri > opened, "opening the group pushes the target down");
+    let y = screen_y(&app, ri);
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 20, y),
+    );
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    // The render publishes the closed group's rows; the release reads those.
+    let _out = render_text(&app, 80, 24);
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 20, y),
+    );
+    let got = captured.lock().expect("captured").clone();
+    assert_eq!(got.len(), 1, "the release copies once: {got:?}");
+    assert_eq!(
+        got[0], "target words here",
+        "the release must copy exactly the dragged line, not the rows that \
+         took its numbers: {got:?}"
+    );
+}
+
+/// The mirror of the collapse case: a selection made while the group is
+/// closed must follow the words DOWN when the group above opens and pushes
+/// rows in. An anchor kept as a bare row number stays on the old number while
+/// the words move past it.
+#[test]
+fn test_overlay_follows_expand() {
+    let (mut app, rect, closed) = app_group_above_target();
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    let y = screen_y(&app, closed);
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 8, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 8, y),
+    );
+    let first = captured.lock().expect("captured").clone();
+    assert_eq!(first.len(), 1, "the release copies what was selected");
+    // Open the group while the selection is held.
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    let buf = render_buffer(&app, 80, 24);
+    let moved = row_index(&app, "target words");
+    assert!(moved > closed, "opening the group pushes the target down");
+    let y_new = screen_y(&app, moved);
+    assert_ne!(y, y_new, "the push must move the target on screen");
+    let cell = buf.cell((rect.x + 3, y_new)).expect("target cell");
+    assert_eq!(
+        cell.bg, SELECTION_BG,
+        "the highlight must follow the selected words to their new row"
+    );
+    let stale = buf.cell((rect.x + 3, y)).expect("old cell");
+    assert_ne!(
+        stale.bg, SELECTION_BG,
+        "the old screen row now shows a group body and must not be highlighted"
+    );
+    // The same names must drive extraction: a re-copy returns the text the
+    // user selected, not the rows that took its numbers.
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+    let got = captured.lock().expect("captured").clone();
+    assert_eq!(got.len(), 2, "ctrl+c copies again: {got:?}");
+    assert_eq!(
+        got[1], first[0],
+        "the re-copy must return the originally selected words"
+    );
+}
+
+/// A double click selects a whole word on its press, and no drag step follows
+/// to name the ends again. A group that closes while the button is still down
+/// must still leave the highlight on that word at its new row.
+#[test]
+fn test_word_select_follows_collapse() {
+    let (mut app, rect, opened) = app_group_above_target();
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    let _out = render_text(&app, 80, 24);
+    let ri = row_index(&app, "target words");
+    assert!(ri > opened, "opening the group pushes the target down");
+    let word_col = {
+        let rows = app.ui.frame.layout.last_all_rows.borrow();
+        rows[ri].1.find("target").expect("the word is on its row") as u16
+    };
+    let x = rect.x + word_col + 1;
+    let y = screen_y(&app, ri);
+    // First click: place the caret. Second click: select the word.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    app.ui.transcript_view.toggle_fold("c1#0".into());
+    let buf = render_buffer(&app, 80, 24);
+    let moved = row_index(&app, "target words");
+    assert!(moved < ri, "closing the group pulls the target back up");
+    let y_new = screen_y(&app, moved);
+    let cell = buf.cell((rect.x + word_col, y_new)).expect("target cell");
+    assert_eq!(
+        cell.bg, SELECTION_BG,
+        "the word highlight must follow its line to the new row"
+    );
+    let stale = buf.cell((rect.x + word_col, y)).expect("old cell");
+    assert_ne!(
+        stale.bg, SELECTION_BG,
+        "the old screen row holds other text and must not stay highlighted"
     );
 }
 

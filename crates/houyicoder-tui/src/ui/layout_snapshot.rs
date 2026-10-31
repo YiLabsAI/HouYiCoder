@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use ratatui::layout::Rect;
 
 use crate::rows::row_set::RowSet;
+use crate::transcript::row_id::RowId;
 
 #[derive(Debug)]
 pub(crate) struct LayoutSnapshot {
@@ -17,6 +18,12 @@ pub(crate) struct LayoutSnapshot {
     pub(crate) jump_to_bottom_rect: Cell<Rect>,
     pub(crate) last_transcript_rows: RefCell<Vec<(u8, String)>>,
     pub(crate) last_all_rows: RefCell<Vec<(u8, String)>>,
+    /// The identity of each row in last_all_rows, written in the same step so
+    /// the two always describe one row set. A selection names the rows it
+    /// covers by these identities: a frame that adds or removes rows above it
+    /// renumbers every row below, and the numbers alone would then point at
+    /// other text.
+    pub(crate) last_all_ids: RefCell<Vec<Option<RowId>>>,
     /// The whole row set the byte-window view built this frame, identities
     /// included. The window rebuilds its rows every frame and keeps no cache,
     /// so this is the only place a scroll step can name the row it lands on.
@@ -52,6 +59,7 @@ impl Default for LayoutSnapshot {
             jump_to_bottom_rect: Cell::new(Rect::new(0, 0, 0, 0)),
             last_transcript_rows: RefCell::new(Vec::new()),
             last_all_rows: RefCell::new(Vec::new()),
+            last_all_ids: RefCell::new(Vec::new()),
             last_window_rows: RefCell::new(RowSet::default()),
             window_rows_key: Cell::new(None),
             pane_rect: Cell::new(Rect::new(0, 0, 0, 0)),

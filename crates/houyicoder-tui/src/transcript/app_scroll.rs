@@ -7,12 +7,17 @@
 
 use crate::row_id::RowId;
 use crate::rows::row_set::RowSet;
-use crate::scroll::{NewTurnCount, RowRelease, ScrollAnchor, ScrollTransition, TranscriptScroll};
+use crate::scroll::{
+    NewMessageCount, RowRelease, ScrollAnchor, ScrollTransition, TranscriptScroll,
+};
 use crate::state::{App, EventCursor};
 use crate::transcript::TranscriptFrame;
 use crate::view::working::history_window::window_rows;
 use crate::view::working::transcript::ensure_cached_slots;
-use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::{
+    ContentChunk, SessionUpdate, ToolCallStatus, ToolCallUpdate,
+};
 
 impl App {
     /// The scroll state of the view on screen: the teammate's own while its
@@ -432,44 +437,59 @@ impl App {
         }
     }
 
-    /// Number of new agent turns since the user scrolled away from the tail
-    /// — the N in the "N new messages" label. Zero while following the tail.
+    /// Number of new agent messages since the user scrolled away from the
+    /// tail — the N in the "N new messages" label. Zero while following the
+    /// tail.
     ///
-    /// One turn counts once, however many agent chunks, tool calls, or
-    /// thoughts it contains: only a user message resets prev_was_agent, so
-    /// the count follows turn boundaries rather than frame arrivals. The
-    /// baseline is an absolute or durable cursor rather than a transcript
-    /// length, so the cap that drops the oldest pushed rows does not silently
-    /// zero the count.
-    pub fn new_turn_count(&self) -> NewTurnCount {
+    /// A message is a run of agent text the reader sees: one reply counts
+    /// once however many chunks stream it, and the text that answers a tool
+    /// result counts again, so a turn that searches, reads, and then answers
+    /// reads as several messages rather than one. A chunk carrying no text
+    /// (an empty delta, an image) counts nothing and does not end the run
+    /// above it. A tool call on its own does not end a run either: the call
+    /// and the text introducing it are one reply to the reader. The baseline
+    /// is an absolute or durable cursor rather than a transcript length, so
+    /// the cap that drops the oldest pushed rows does not silently zero the
+    /// count.
+    pub fn new_message_count(&self) -> NewMessageCount {
         let Some(cursor) = self.ui.transcript_view.unseen_since.as_ref() else {
-            return NewTurnCount::default();
+            return NewMessageCount::default();
         };
         let (from, is_lower_bound) = match self.frame_index_for_cursor(cursor) {
             Some(from) => (from, false),
             None => (0, true),
         };
         let mut count = 0usize;
-        let mut prev_was_agent = false;
+        let mut prev_was_agent_text = false;
         for f in &self.sessions.current.transcript.frames()[from..] {
             match f.as_ref() {
                 // Turn boundary: a new user message starts a new assistant
                 // turn, so the next agent text counts again.
                 TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => {
-                    prev_was_agent = false;
+                    prev_was_agent_text = false;
                 }
-                TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(_)) => {
-                    if !prev_was_agent {
+                TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(chunk)) => {
+                    if !shows_text(chunk) {
+                        continue;
+                    }
+                    if !prev_was_agent_text {
                         count += 1;
                     }
-                    prev_was_agent = true;
+                    prev_was_agent_text = true;
                 }
-                // Tool / thought / other frames do NOT reset prev_was_agent,
-                // so a tool call within one turn does not start a new count.
+                // The result ends the reply it answered, so the text that
+                // reasons about it is a message of its own.
+                TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(update))
+                    if finishes_call(update) =>
+                {
+                    prev_was_agent_text = false;
+                }
+                // A call, a thought, or any other frame leaves the run of
+                // text alone.
                 _ => {}
             }
         }
-        NewTurnCount {
+        NewMessageCount {
             count,
             is_lower_bound,
         }
@@ -479,7 +499,7 @@ impl App {
     /// Anchors Durable on the tail frame's row identity when the frame carries
     /// one, else Local on the absolute frame count, which a front drain does
     /// not shift. Both resolve to the frame count, so the label reads zero new
-    /// turns at the moment of capture.
+    /// messages at the moment of capture.
     fn event_cursor_at_tail(&self) -> EventCursor {
         let abs = self.sessions.current.transcript.abs_frame_count() as u64;
         match self.sessions.current.transcript.frames().last() {
@@ -575,6 +595,24 @@ impl App {
             "scroll"
         );
     }
+}
+
+/// Whether an agent chunk puts text on screen. A chunk that carries none (an
+/// empty delta, an image) is not a message the reader can see, so the count
+/// neither ticks for it nor treats the reply above it as finished.
+fn shows_text(chunk: &ContentChunk) -> bool {
+    matches!(&chunk.content, ContentBlock::Text { text } if !text.trim().is_empty())
+}
+
+/// Whether this update reports a tool call finishing: the result arrived or
+/// the call reached a terminal status. Anything earlier in the call's life is
+/// progress, and the reply above it is still the one the reader is reading.
+fn finishes_call(update: &ToolCallUpdate) -> bool {
+    update.fields.raw_output.is_some()
+        || matches!(
+            update.fields.status,
+            Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
+        )
 }
 
 #[cfg(test)]

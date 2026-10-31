@@ -803,6 +803,11 @@ fn test_count_matches_render() {
     let reasoning = "reasoning that also wraps onto several rows when the pane is narrow";
     app.sessions.current.transcript = vec![
         TranscriptLine::User("go".into()),
+        // A thought row renders no rows of its own and takes no spacer: the
+        // walk must not charge one between the user line and the answer.
+        TranscriptLine::Thinking {
+            text: "pondering the request".into(),
+        },
         TranscriptLine::Agent(long_agent.into()),
         TranscriptLine::User("中文宽字符测试界面".into()),
         TranscriptLine::ThoughtFor {

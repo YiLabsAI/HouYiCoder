@@ -1,6 +1,6 @@
 use super::*;
 use crate::composition::app;
-use crate::records::TranscriptLine;
+use crate::records::{ToolOutcome, TranscriptLine};
 use crate::selection::region::{Region, TranscriptRegion};
 use crate::state::Screen;
 use crate::test_harness::render_text;
@@ -386,6 +386,107 @@ fn test_subagent_cursor_targeting() {
     assert!(
         app.ui.transcript_view.expanded.subagents.contains("c2"),
         "and it is the later line"
+    );
+}
+
+/// Cursor targeting walks the drawn row space, so the tool result row above
+/// the head stays against its call: only a line that opens a block takes a
+/// spacer. Charging one for the result moved the head's row number down and
+/// the walk landed inside the result instead of the delegation.
+#[test]
+fn test_subagent_target_ignores_result() {
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::User("go".into()));
+    app.sessions.current.transcript.push(TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: "$ ls".into(),
+        invocation: "ls".into(),
+        outcome: ToolOutcome::Success,
+        call_id: "call-1".into(),
+        body: String::new(),
+        is_diff: false,
+    });
+    app.sessions.current.transcript.push(TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "bash".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: "call-1".into(),
+        body: "a.rs".into(),
+        is_diff: false,
+    });
+    app.sessions.current.transcript.push(TranscriptLine::Tool {
+        name: "bash".into(),
+        tool: "bash".into(),
+        status: "$ pwd".into(),
+        invocation: "pwd".into(),
+        outcome: ToolOutcome::Success,
+        call_id: "call-2".into(),
+        body: String::new(),
+        is_diff: false,
+    });
+    app.sessions.current.transcript.push(TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "bash".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: "call-2".into(),
+        body: "repo".into(),
+        is_diff: false,
+    });
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "sub-1".into(),
+            subagent_type: "explore".into(),
+            summary: "found auth".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+            color: None,
+        });
+    // A second delegation makes the answer discriminating: with no cursor
+    // match the caller falls back to the newest, so a walk that misses the
+    // first head still expands something.
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::Subagent {
+            child_sid: "sub-2".into(),
+            subagent_type: "plan".into(),
+            summary: "drafted steps".into(),
+            prompt: String::new(),
+            folded_transcript: vec![TranscriptLine::Agent("child reply".into())],
+            color: None,
+        });
+    let out = render_text(&app, 80, 24);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let head_screen_row = out
+        .lines()
+        .position(|r| r.contains("explore"))
+        .expect("the head renders");
+    let content_row = head_screen_row - rect.y as usize + app.active_scroll().top_offset();
+    app.ui.selection.transcript.start(0, content_row);
+    assert!(
+        app.toggle_subagent_expand(),
+        "the cursor names a delegation: {out}"
+    );
+    assert!(
+        app.ui.transcript_view.expanded.subagents.contains("sub-1"),
+        "the clicked head expands: {:?}",
+        app.ui.transcript_view.expanded.subagents
+    );
+    assert!(
+        !app.ui.transcript_view.expanded.subagents.contains("sub-2"),
+        "the newest delegation stays closed: {:?}",
+        app.ui.transcript_view.expanded.subagents
     );
 }
 

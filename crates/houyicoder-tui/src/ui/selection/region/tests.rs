@@ -4,11 +4,17 @@
 
 use std::time::Instant;
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::Color;
+
 use crate::brief::tool_call_brief;
 use crate::composition;
 use crate::records::{ToolOutcome, TranscriptLine};
-use crate::selection::Selection;
-use crate::selection::region::{RegionIntent, clear_stale_click, edge_scroll_if_at_edge};
+use crate::selection::region::{
+    RegionIntent, clear_stale_click, edge_scroll_if_at_edge, paint_overlay,
+};
+use crate::selection::{Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN};
 use crate::state::App;
 use crate::test_harness::{render_text, working_app};
 
@@ -19,6 +25,31 @@ fn sel_with(anchor: (u16, usize), focus: (u16, usize)) -> Selection {
         focus: Some(focus),
         span_origin: None,
         ..Default::default()
+    }
+}
+
+/// A drag that crosses a diff's border and hunk gap keeps one continuous
+/// highlight: those rows carry no copyable text, but they are still painted.
+/// Copying them out is the extraction step's job, not the paint step's.
+#[test]
+fn test_overlay_covers_diff() {
+    let rect = Rect::new(0, 0, 10, 4);
+    let mut buf = Buffer::empty(rect);
+    let rows = vec![
+        (TAG_PLAIN, "one".to_string()),
+        (TAG_DIFF_BORDER, String::new()),
+        (TAG_DIFF_HUNK, "...".to_string()),
+        (TAG_PLAIN, "two".to_string()),
+    ];
+    let sel = sel_with((0, 0), (3, 3));
+    paint_overlay(&mut buf, rect, &rows, &sel, 0);
+    for y in 0..4 {
+        let cell = buf.cell(Position::new(1, y)).expect("cell in range");
+        assert_eq!(
+            cell.bg,
+            Color::Indexed(24),
+            "row {y} is painted as part of the block"
+        );
     }
 }
 
