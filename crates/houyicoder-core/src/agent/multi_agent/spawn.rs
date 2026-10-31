@@ -113,6 +113,16 @@ pub struct SpawnRequest {
     /// asked to do. None leaves the child with whatever descriptor the
     /// store materializes, which the child never updates.
     pub descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+    /// A child session to continue instead of minting a new one.
+    ///
+    /// The child's turns are already durable in its own log, so resuming
+    /// replays that conversation and appends the new prompt to it. Without
+    /// this an interrupted delegation has to be paid for again from the
+    /// start, which for a long research child is the expensive half.
+    pub resume: Option<SessionId>,
+    /// A wall-clock ceiling for this child, in seconds. None runs until the
+    /// child reaches a terminal of its own.
+    pub timeout_secs: Option<u64>,
 }
 
 /// A handle to a spawned child. Carries the child session id + a cancel
@@ -156,7 +166,10 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         return Err(SpawnError::SpawnRecursive);
     }
 
-    let child_sid = SessionId::new();
+    // A resume continues the named child's own session, so the conversation
+    // its log already holds is the one the new prompt lands in. Any other
+    // value mints a fresh session as before.
+    let child_sid = req.resume.unwrap_or_default();
     // The child's lifecycle cancel token is supplied by the caller, so the
     // token on the handle is the exact one the caller holds in its shutdown
     // admission credential. Foreground linkage vs background independence is

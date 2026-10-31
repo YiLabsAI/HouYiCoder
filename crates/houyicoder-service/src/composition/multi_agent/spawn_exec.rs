@@ -22,9 +22,11 @@ use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
+use std::time::Duration;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 use super::announce_spawn;
 use super::drive::drive_child_to_terminal;
@@ -543,6 +545,9 @@ fn foreground_driver(
     // The delegating call's task summary, read before the request moves into
     // the task so the fleet row is labelled from the first status.
     let description = req.prompt_summary.clone();
+    // Read before the request moves into the task; the ceiling belongs to the
+    // caller's request, not to the child.
+    let timeout_secs = req.timeout_secs;
     tokio::spawn(async move {
         // The completion signal fires when this driver ends, however it ends:
         // the guard rides the whole task, so the shutdown join's wait on it
@@ -580,7 +585,7 @@ fn foreground_driver(
         // exists, SubagentSpawn recorded, run not started); pairs with the
         // later SubagentStop across the SubagentSpawn-to-Return span.
         fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
-        let (status, summary, usage) = finalize_child(
+        let drive = finalize_child(
             handle,
             this.store.clone(),
             this.bus.clone(),
@@ -590,8 +595,18 @@ fn foreground_driver(
             child,
             hook_fire,
             task,
-        )
-        .await;
+        );
+        // A delegation with no ceiling can hold the parent's turn open for as
+        // long as it likes, with no way to reclaim it. The ceiling cancels the
+        // child the way a shutdown does, so the fence is released and the run
+        // reaches a terminal instead of leaving a half-driven runner behind.
+        let (status, summary, usage) = match timeout_secs {
+            Some(secs) => match timeout(Duration::from_secs(secs), drive).await {
+                Ok(done) => done,
+                Err(_) => return Err(SpawnFailure::TimedOut { secs }),
+            },
+            None => drive.await,
+        };
         Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
     })
 }
@@ -660,6 +675,11 @@ fn child_spawn_request(
         skill_registry: this.skill_registry.clone(),
         conditional: this.conditional.clone(),
         hooks: this.hooks.clone(),
+        resume: args
+            .resume
+            .as_deref()
+            .and_then(SessionId::from_display_string),
+        timeout_secs: args.timeout_secs,
     }
 }
 

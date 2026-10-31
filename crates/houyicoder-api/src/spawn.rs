@@ -54,6 +54,17 @@ pub struct SpawnArgs {
     /// False runs the child in the foreground. True returns after startup and
     /// lets the child continue in the background.
     pub run_in_background: bool,
+    /// A child session id to continue instead of starting a fresh child.
+    ///
+    /// The child's turns are already durable in its own log, so resuming
+    /// appends to that conversation rather than replaying the work from the
+    /// start. This is what makes an interrupted long delegation recoverable:
+    /// without it the only option is to pay for the same tokens again.
+    pub resume: Option<String>,
+    /// A wall-clock ceiling for the child, in seconds. None uses the parent's
+    /// policy. A delegation that never returns otherwise holds the parent's
+    /// turn open with no way to reclaim it.
+    pub timeout_secs: Option<u64>,
 }
 
 impl SpawnArgs {
@@ -69,6 +80,8 @@ impl SpawnArgs {
             prompt_summary: prompt_summary.into(),
             isolation: "none".to_string(),
             run_in_background: false,
+            resume: None,
+            timeout_secs: None,
         }
     }
 }
@@ -149,6 +162,12 @@ pub enum SpawnFailure {
     /// child, outside a shutdown — an internal failure (a construction panic),
     /// surfaced as a failed start rather than a false "host is shutting down".
     ConstructionFailed,
+    /// The delegation exceeded the wall-clock ceiling its caller named. The
+    /// child is cancelled the way a shutdown cancels it, so the fence is
+    /// released rather than held by a run nobody is waiting for.
+    TimedOut {
+        secs: u64,
+    },
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner

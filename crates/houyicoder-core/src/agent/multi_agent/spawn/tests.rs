@@ -53,6 +53,8 @@ fn req_at_depth(
         child_cancel: CancellationToken::new(),
         bus: None,
         descriptor_store: None,
+        resume: None,
+        timeout_secs: None,
         skill_registry: None,
         conditional: None,
         hooks: None,
@@ -595,4 +597,38 @@ async fn test_child_inherits_hooks() {
         vec!["refuse-all".to_string()],
         "the child answers to the parent's gates"
     );
+}
+
+/// A resume continues the named child session instead of minting a new one.
+/// The child's earlier turns are durable in that session's log, so this is
+/// what makes an interrupted delegation recoverable rather than a full rerun.
+#[tokio::test]
+async fn test_resume_keeps_child_session() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let mut req = req_at_depth(SessionId::new(), store.clone(), provider, 0);
+    let existing = SessionId::new();
+    req.resume = Some(existing);
+
+    let handle = spawn_child(req).await.expect("spawn");
+
+    assert_eq!(
+        handle.session, existing,
+        "the resumed child keeps the session it was asked to continue"
+    );
+}
+
+/// A spawn with no resume mints a child session that is not the one the
+/// parent runs in and not a session the caller named, so the field is opt-in
+/// and a plain delegation starts clean.
+#[tokio::test]
+async fn test_plain_spawn_mints_session() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let parent = SessionId::new();
+    let req = req_at_depth(parent, store.clone(), provider, 0);
+
+    let handle = spawn_child(req).await.expect("spawn");
+
+    assert_ne!(handle.session, parent, "the child is its own session");
 }

@@ -107,6 +107,14 @@ impl Tool for DelegationTool {
                     "type": "string",
                     "enum": ["none", "worktree"],
                     "description": "Where the child runs; \"none\" shares the parent tree, \"worktree\" uses a per-child fence. Defaults to none."
+                },
+                "resume": {
+                    "type": "string",
+                    "description": "A child session id to continue instead of starting a new child. Its earlier turns are already on disk, so this appends to that conversation rather than paying for the same work twice."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "A wall-clock ceiling for this delegation. Omit to use the parent's policy."
                 }
             },
             "required": ["description", "prompt"]
@@ -153,6 +161,16 @@ impl Tool for DelegationTool {
             let mut args = SpawnArgs::new(subagent_type.clone(), prompt, summary);
             args.isolation = isolation;
             args.run_in_background = run_in_background;
+            args.resume = input
+                .get("resume")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            args.timeout_secs = input
+                .get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .filter(|secs| *secs > 0);
             let Some(handle) = ctx.spawn_handle.as_ref() else {
                 return Err(ToolError::Failed(
                     "agent: no spawn port wired on this dispatch".into(),
@@ -223,6 +241,11 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
         SpawnFailure::ConstructionFailed => {
             "agent: spawn rejected: the child failed to start".into()
         }
+        SpawnFailure::TimedOut { secs } => format!(
+            "agent: the delegation hit its {secs}s ceiling and was stopped; \
+             report what it produced and re-delegate with a longer ceiling \
+             or a narrower task"
+        ),
     }
 }
 
