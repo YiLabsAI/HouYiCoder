@@ -197,6 +197,20 @@ def main() -> int:
     if again.get("RUSTFLAGS") != env.get("RUSTFLAGS"):
         failures.append("cov_env: reapplying the env doubled a flag")
 
+    # 10. the same env carries the test-only flags. A caller that set one and
+    #     not the other ran the kernel-fence tests fenced: one such test cannot
+    #     apply a second seatbelt inside this process's own fence, so it fails
+    #     on the environment and reddens a gate that measures coverage.
+    if env.get("HOUYICODER_FAST_TOKENS") != "1":
+        failures.append("cov_env: tokenizer fast path not set")
+    if env.get("HOUYICODER_SANDBOX_NO_ENFORCE") != "1":
+        failures.append("cov_env: sandbox fence not skipped for the test suite")
+    # A caller that genuinely wants the fence still wins, so the flags are
+    # defaults rather than overrides.
+    forced = cov_lcov.cov_env("/tmp/covx", {"HOUYICODER_SANDBOX_NO_ENFORCE": "0"})
+    if forced.get("HOUYICODER_SANDBOX_NO_ENFORCE") != "0":
+        failures.append("cov_env: a caller's explicit fence setting was overridden")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)

@@ -88,6 +88,14 @@ def cov_env(cov_dir: str, base: dict | None = None) -> dict:
         env["RUSTC_WRAPPER"] = "sccache"
     env.setdefault("CARGO_INCREMENTAL", "0")
     env.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
+    # Every gate that runs the unit suite sets the same two test-only flags,
+    # and both live here rather than at each call site. A call site that set
+    # only the tokenizer flag ran the sandbox tests fenced, and one kernel
+    # fence test then refuses to nest inside the fence the whole suite may
+    # already run under, reddening the coverage gate for an environment
+    # reason. Keeping them here means a new caller cannot omit one.
+    env.setdefault("HOUYICODER_FAST_TOKENS", "1")
+    env.setdefault("HOUYICODER_SANDBOX_NO_ENFORCE", "1")
     return env
 
 

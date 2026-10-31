@@ -400,7 +400,9 @@ def instrumented_report(cov_dir: str, rebuild: bool) -> Path | None:
         drop_profraw(cov_dir)
     with tempfile.NamedTemporaryFile(suffix=".lcov", delete=False) as tf:
         out = Path(tf.name)
-    env = cov_env(cov_dir, {**os.environ, "HOUYICODER_FAST_TOKENS": "1"})
+    # The test-only flags come from cov_env, so this gate and the unit
+    # gate cannot drift apart on what environment the suite runs under.
+    env = cov_env(cov_dir)
     cov = subprocess.run(
         ["cargo", "llvm-cov", "--no-clean", "--no-cfg-coverage", "--lib",
          "--workspace", "--lcov", "--output-path", str(out)],
