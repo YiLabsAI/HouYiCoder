@@ -90,15 +90,30 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     if app.ui.navigation.skill_picker.open && skill_picker::handle(app, k) {
         return; // consumed by picker (Up/Down/Enter/Esc/Backspace)
     }
-    // Esc while viewing a teammate only interrupts the viewed child's
-    // current turn; it never exits the view and never leaks to the parent
-    // (an input draft does not redirect it to abort_run on the parent).
-    // Exit is on Shift+Up/Down. A pane that owns Esc closes first.
+    // Esc while viewing a teammate returns to the main session, which is what
+    // Esc means everywhere else in the product: leave one level. It must never
+    // cancel the viewed child's turn. A per-turn cancel is destructive — it
+    // throws away work the child may have spent a long time on, and it leaves
+    // a half-written protocol tag in the transcript — while leaving the view
+    // costs the user nothing, since the child keeps running and the strip still
+    // lists it. A pane that owns Esc closes first.
     if app.ui.teammate_view.is_some()
         && k.code == KeyCode::Esc
         && !pane_owns_esc(app.ui.navigation.pane)
     {
-        app.abort_viewed_child_turn();
+        app.exit_teammate_view();
+        return;
+    }
+    // Stopping the viewed child is its own keystroke. It used to share Esc
+    // with leaving the view, which made the destructive meaning reachable by
+    // the muscle memory for the harmless one; a dedicated chord keeps the
+    // ability without putting it under a key people press to go back.
+    if app.ui.teammate_view.is_some()
+        && k.modifiers.contains(KeyModifiers::CONTROL)
+        && k.code == KeyCode::Char('x')
+        && !pane_owns_esc(app.ui.navigation.pane)
+    {
+        app.cancel_viewed_child_turn();
         return;
     }
     // A pane owns its keys wherever it is drawn, and Focus draws it full

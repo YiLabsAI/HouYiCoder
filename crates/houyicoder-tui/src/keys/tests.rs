@@ -3,6 +3,7 @@ use super::input::{cycle_pane, handle_input};
 use super::palette::handle_palette;
 use super::*;
 use crate::agent_message::FleetEntry;
+use crate::app::handle_key;
 use crate::composition;
 use crate::composition::app;
 use crate::evidence::Verdict;
@@ -1536,13 +1537,13 @@ fn test_shift_arrow_exits_teammate() {
     );
 }
 
-/// Esc in the teammate view never leaks to the parent, even with a draft
-/// in the input box and a parent run in flight. The old input.is_empty()
-/// guard let Esc fall through to abort_run on the parent; the teammate arm
-/// now consumes Esc unconditionally (interrupt the viewed child, or a
-/// no-op toast when idle) so the parent run is never interrupted.
+/// Esc in the teammate view leaves the view and touches nothing else: the
+/// parent run keeps going, the child keeps generating, and the draft survives.
+/// The key means leave one level everywhere in the product, and a destructive
+/// per-turn cancel on the most-used escape key is how the user loses work they
+/// spent a long time producing.
 #[test]
-fn test_teammate_esc_no_leak() {
+fn test_teammate_esc_exits_view() {
     let mut app = fleet_app(1);
     app.start_run_for_test(0);
     app.ui.input.editor.set("a draft steering note".into());
@@ -1556,13 +1557,58 @@ fn test_teammate_esc_no_leak() {
         "Esc in the teammate view must not interrupt the parent run"
     );
     assert!(
-        app.ui.teammate_view.is_some(),
-        "Esc keeps the view open (exit is on Shift+Up/Down)"
+        app.ui.teammate_view.is_none(),
+        "Esc returns to the main session"
     );
     assert!(
         !app.ui.input.editor.is_empty(),
         "Esc does not clear the draft (Ctrl+U owns that)"
     );
+}
+
+/// Esc never cancels the viewed child's turn. The card that used to fire here
+/// abandoned a long-running generation and left the half-written protocol tag
+/// in the transcript.
+#[test]
+fn test_teammate_esc_keeps_child() {
+    let (mut app, events) = connected_app_with_events();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.viewport = ViewportMode::Working;
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "child-0".into(),
+            subagent_type: "verify".into(),
+            description: String::new(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "child-0".into(),
+        ..Default::default()
+    });
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let window = std::time::Duration::from_millis(300);
+    let deadline = std::time::Instant::now() + window;
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match events.recv_timeout(remaining) {
+            Ok(TransportEvent::Frame(frame)) => assert!(
+                !frame.contains("cancel_child_turn"),
+                "Esc must not cancel the viewed child: {frame}"
+            ),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(app.ui.teammate_view.is_none(), "and the view is left");
 }
 
 /// A pane that owns Esc closes before the teammate Esc arm fires, so the
@@ -1849,11 +1895,12 @@ fn test_focus_trajectory_esc_levels() {
         "the viewport is untouched"
     );
 }
-
-/// Down at the last input line moves the keyboard into the child strip; with
-/// no strip the key keeps its history meaning.
+/// A plain Down at the end of the draft moves through history and never
+/// enters the child strip. The strip is drawn above the input box, so a key
+/// that moves down and lands on a row higher on screen inverts the spatial
+/// direction; it also takes the key history owns.
 #[test]
-fn test_down_enters_strip() {
+fn test_down_keeps_history() {
     let mut app = working_app();
     app.sessions
         .current
@@ -1875,10 +1922,37 @@ fn test_down_enters_strip() {
     app.ui.input.editor.set("a".into());
     handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert!(
-        app.ui.fleet.is_focused(),
-        "the strip below the input takes the keyboard"
+        !app.ui.fleet.is_focused(),
+        "Down does not reach a strip drawn above the input"
     );
     assert_eq!(app.ui.input.editor.value(), "a", "the draft is untouched");
+}
+
+/// Shift+Down is the pair that enters the strip, which is the direction the
+/// strip's position on screen actually matches.
+#[test]
+fn test_shift_down_enters_strip() {
+    let mut app = working_app();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "verify".into(),
+            description: String::new(),
+            turn: 1,
+            tokens: 0,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.input.editor.set("a".into());
+    handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    assert!(app.ui.fleet.is_focused(), "Shift+Down enters the strip");
 }
 
 mod fold_chord;

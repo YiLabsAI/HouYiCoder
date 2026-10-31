@@ -157,17 +157,14 @@ impl App {
         self.bump_transcript_version();
     }
 
-    /// Esc while viewing a teammate.
+    /// Cancel the viewed child's current turn, leaving the view open so the
+    /// user can watch the interrupt land.
     ///
-    /// A running child gets a per-turn cancel: the drive loop cancels the
-    /// in-flight model fetch, appends an interrupt marker, and starts the next
-    /// turn, which is what the user asked for when they pressed Esc on work in
-    /// progress. An idle child has no turn to cancel, so Esc is the way back
-    /// out: it returns to wherever the view was entered from, which is the
-    /// gesture the user already expects from every other surface. Explaining a
-    /// different key instead made leaving a finished child harder than leaving
-    /// a running one.
-    pub(crate) fn abort_viewed_child_turn(&mut self) {
+    /// This is the destructive half of what Esc used to do, on its own chord.
+    /// A child that is not running has no turn to cancel, so the keystroke
+    /// does nothing rather than exiting: exiting is Esc's job, and giving one
+    /// key two meanings is how the destructive one gets pressed by accident.
+    pub(crate) fn cancel_viewed_child_turn(&mut self) {
         let Some(view) = self.ui.teammate_view.as_ref() else {
             return;
         };
@@ -177,12 +174,6 @@ impl App {
             .map(|e| e.completed.is_none())
             .unwrap_or(false);
         if !running {
-            // A draft in the box is a steering message being written, not an
-            // empty box the user pressed Esc on. Leaving would throw away the
-            // place they were typing into.
-            if self.ui.input.editor.is_empty() {
-                self.exit_teammate_view();
-            }
             return;
         }
         if let Err(e) = self.enqueue(ClientCommand::CancelChildTurn { child_sid }) {

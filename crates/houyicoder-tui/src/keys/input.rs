@@ -12,7 +12,6 @@ use crate::view::skill_origin::display_order;
 
 use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
-use super::fleet;
 use super::pane_predicates::{
     artifact_editing, pane_approvable, pane_navigable, pane_rejectable, pane_replaces_input,
     pane_reworkable,
@@ -512,17 +511,12 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             {
                 return;
             }
-            // The caret is on the last line: the next surface down is the
-            // child strip, when there is one to move into. Without a strip the
-            // key keeps its history meaning.
-            if !editing
-                && fleet::focus_strip(
-                    &mut app.ui.fleet,
-                    app.sessions.current.capabilities.fleet.entries.len(),
-                )
-            {
-                return;
-            }
+            // The caret is on the last line. The child strip is drawn ABOVE
+            // the input box, so Down must not reach it: a key that moves down
+            // and lands on a row higher on screen inverts the spatial
+            // direction, and it also takes the history key. The strip is
+            // entered with Shift+Up/Down, which is the pair that exists for
+            // exactly this.
             if !editing {
                 app.ui.input.history.down(&mut app.ui.input.editor);
             }

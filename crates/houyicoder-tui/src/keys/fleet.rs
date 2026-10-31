@@ -113,6 +113,12 @@ pub(super) fn handle_focused(
 /// Move the keyboard into the child strip, if it has a row to land on. The
 /// selection snaps to the first running child so the user lands on something
 /// rather than on a stale index.
+///
+/// The shell now enters the strip through Shift+Up/Down, so this is the
+/// shared fixture the strip's own tests use to reach the focused state. It is
+/// not a dead helper: the tests would otherwise each rebuild the same two
+/// lines, and the selection rule would drift between them.
+#[cfg(test)]
 pub(super) fn focus_strip(strip: &mut FleetStripState, len: usize) -> bool {
     if len == 0 {
         return false;

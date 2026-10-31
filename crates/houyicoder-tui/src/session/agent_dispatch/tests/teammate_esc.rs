@@ -10,56 +10,6 @@ use crate::test_harness::attach_connection;
 use crate::transcript::TranscriptFrame;
 use houyicoder_protocol::frontend::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
-/// Esc on a viewed child: a running child gets a per-turn cancel and the
-/// view stays, so the user can watch the interrupt land. An idle child has no
-/// turn to cancel, so Esc leaves the view.
-#[test]
-fn test_abort_viewed_child_turn() {
-    let mut app = app();
-    app.ui.teammate_view = Some(TeammateView {
-        child_sid: "c1".into(),
-        ..Default::default()
-    });
-    app.sessions
-        .current
-        .capabilities
-        .fleet
-        .entries
-        .push(FleetEntry {
-            agent_id: "c1".into(),
-            subagent_type: "explore".into(),
-            description: String::new(),
-            turn: 2,
-            tokens: 100,
-            tool_uses: 0,
-            last_activity: None,
-            completed: None,
-            completed_at: None,
-            started_at: None,
-        });
-    app.abort_viewed_child_turn();
-    assert!(
-        app.ui.teammate_view.is_some(),
-        "Esc on a running child aborts the turn but keeps the view open"
-    );
-    assert!(
-        app.ui.notifications.current().is_none(),
-        "a running child sends a cancel, not the exit-hint toast"
-    );
-    // An idle child has no turn to cancel, so Esc is the way back out: it
-    // returns to wherever the view was entered from, the gesture every other
-    // surface uses.
-    app.sessions.current.capabilities.fleet.entries[0].completed = Some("completed".into());
-    app.abort_viewed_child_turn();
-    assert!(
-        app.ui.teammate_view.is_none(),
-        "Esc on an idle child leaves the view"
-    );
-    assert!(
-        app.ui.notifications.current().is_none(),
-        "leaving needs no gesture hint"
-    );
-}
 
 /// A pending optimistic echo (a steering message sent while viewing) is
 /// preserved across a live refetch that lands before the child drains the
@@ -550,5 +500,73 @@ fn test_teammate_submit_steers() {
     assert!(
         app.ui.input.queue.is_empty(),
         "steering does not queue on the parent"
+    );
+}
+
+/// Stopping the viewed child has its own chord and keeps the view open, so the
+/// user can watch the interrupt land. The ability must survive the move off
+/// Esc, or a runaway child becomes unstoppable from the viewport.
+#[test]
+fn test_ctrl_x_cancels_child() {
+    let mut app = app();
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            description: String::new(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: None,
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.cancel_viewed_child_turn();
+    assert!(
+        app.ui.teammate_view.is_some(),
+        "cancelling keeps the view open so the interrupt is visible"
+    );
+}
+
+/// The chord answers to a running child only. An idle child has no turn to
+/// cancel, and the keystroke must not quietly exit the view either, since that
+/// is Esc's job.
+#[test]
+fn test_ctrl_x_idle_noop() {
+    let mut app = app();
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            description: String::new(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: None,
+            started_at: None,
+        });
+    app.cancel_viewed_child_turn();
+    assert!(
+        app.ui.teammate_view.is_some(),
+        "an idle child leaves the view alone"
     );
 }
