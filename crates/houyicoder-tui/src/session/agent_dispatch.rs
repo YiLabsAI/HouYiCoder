@@ -1,6 +1,7 @@
 //! Maps inbound agent messages to application state transitions.
 //! Run completion is delegated so this module remains focused on dispatch.
 
+mod connection_loss;
 mod run_completion;
 
 mod memory;
@@ -25,7 +26,6 @@ use crate::agent_message::{
 };
 use crate::command::render::{render_permission_rules_wire, render_trajectory_wire};
 use crate::composition::suggestions_for;
-use crate::pending_prompt::PendingPrompt;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::App;
 use crate::state::enums::LiveBlock;
@@ -69,83 +69,6 @@ impl App {
                 self.apply_server_request(request, payload);
             }
         }
-    }
-
-    /// Settle a connection loss, returning whether this call performed the
-    /// non-Lost → Lost cleanup. The first-cause-wins transition gates the
-    /// work, so an announced death followed by a closed channel (or a repeat
-    /// closed observation) neither overwrites the cause nor repeats the
-    /// completion. A session-less App (the no-backend path) has no cause to
-    /// record but still sweeps that observation.
-    ///
-    /// not_sent lists request ids the driver can prove it never attempted;
-    /// the active run and memory actions whose ids appear in it are not sent
-    /// (never left this process). Every other in-flight request is
-    /// conservatively unknown — a write or flush may have delivered the frame.
-    pub(crate) fn apply_connection_loss(
-        &mut self,
-        cause: String,
-        not_sent: Vec<RequestId>,
-    ) -> bool {
-        let first = match self.sessions.current.connection.as_mut() {
-            Some(s) => s.mark_lost(cause.clone()),
-            // No connection: nothing was lost twice, but run the sweep anyway.
-            // A session-less App (tests, the stub path) still clears run and pane state.
-            None => true,
-        };
-        if !first {
-            return false;
-        }
-        // Distinguish not sent (never attempted) from unknown (a flush may
-        // have partially delivered); the run line tells the user which.
-        let run_req = self.active_run_req_id();
-        let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
-        self.clear_memory_pending();
-        self.ui.skills_pane.clear_pending();
-        // A request whose transport is gone can never be answered, and both
-        // confirmation pages ignore every key while one is out. Settling them
-        // is what returns the keys: without it the page has no button, no key,
-        // and no answer coming, so the only way out is abandoning the session.
-        self.settle_pending_worktree_removal();
-        self.settle_pending_restore();
-        let run_line = if run_not_sent {
-            "run not sent — connection failed before the request reached the transport"
-        } else {
-            cause.as_str()
-        };
-        if run_req.is_some() {
-            self.handle_run_completion(Err(run_line.to_string()));
-        } else {
-            // A pending trust verdict can never reach a dead transport. Clear
-            // it locally (no fake decline), surface project + cause, and
-            // release the exit keys the card was swallowing. Other prompts
-            // return to the field so a later settle still owns them.
-            let trust_path = match self.sessions.current.prompt.as_ref() {
-                Some(PendingPrompt::Trust { prompt: tp, .. }) => Some(tp.project_path.clone()),
-                _ => None,
-            };
-            if let Some(path) = trust_path {
-                self.sessions.current.clear_prompt();
-                self.system_line(format!("trust verdict undelivered for {path}: {run_line}"));
-            } else {
-                self.system_line(format!("agent error: {run_line}"));
-            }
-        }
-        true
-    }
-
-    /// Release a worktree page that is waiting on the host for an answer the
-    /// dead transport can never carry.
-    fn settle_pending_worktree_removal(&mut self) {
-        let mut draft = self.ui.worktree_pane.draft.borrow_mut();
-        draft.finish_removal();
-        draft.finish_preview();
-        draft.finish_enter();
-    }
-
-    /// The same release for the sandbox page's restore confirmation.
-    fn settle_pending_restore(&mut self) {
-        self.ui.sandbox_pane.end_restore();
     }
 
     /// Fill the teammate view with the fetched child transcript. A pending
@@ -333,14 +256,12 @@ impl App {
                     self.handle_run_completion(result.map_err(|e| e.message));
                 }
             }
-            ServerResponse::Error { message } => {
-                self.apply_response_error(request, message);
-            }
+            ServerResponse::Error { message } => self.apply_response_error(request, message),
+            // A direct shell command answers with Ack, and its request id
+            // keeps a stale Ack from settling a newer command. Other
+            // fire-and-forget requests leave nothing here to apply.
             ServerResponse::Ack => {
-                // A fire-and-forget request (e.g. SessionReset) came back
-                // acknowledged. The host acted locally at send time, so
-                // there is nothing to apply — the acknowledgement only
-                // closes the request's identity at the event loop.
+                self.sessions.current.shell.settle(request);
             }
             ServerResponse::Status { snapshot } => {
                 // Cache the snapshot for the status bar + /status pane. NOTE:
@@ -447,6 +368,11 @@ impl App {
     fn apply_response_error(&mut self, request: RequestId, message: String) {
         if self.active_run_req_id().is_some_and(|r| r == request) {
             self.handle_run_completion(Err(message));
+        } else if self.sessions.current.shell.settle(request) {
+            // The command was refused before it ran or its record could not
+            // be kept, so the host names the cause and nothing was executed.
+            // The message describes itself; the row repeats it unchanged.
+            self.system_line(message);
         } else if self
             .sessions
             .current

@@ -36,6 +36,30 @@ fn tool_result(cid: &str, oc: ToolOutcome) -> TranscriptLine {
     }
 }
 
+/// A call whose result says it never ran renders on its own. The summary
+/// counts executions, so folding it would report a stopped command as run and
+/// hide the reason it did not.
+#[test]
+fn test_not_run_renders_alone() {
+    let ran = vec![
+        tool_call("c1", "bash", "printf hi", ToolOutcome::Success),
+        tool_result("c1", ToolOutcome::Success),
+    ];
+    assert_eq!(
+        compute_fold_groups(&ran, false).len(),
+        1,
+        "a completed call folds into one summary group"
+    );
+    let stopped = vec![
+        tool_call("c2", "bash", "sleep 30", ToolOutcome::NotRun),
+        tool_result("c2", ToolOutcome::NotRun),
+    ];
+    assert!(
+        compute_fold_groups(&stopped, false).is_empty(),
+        "a call that never ran is not folded away"
+    );
+}
+
 /// A call whose chip name is the user-facing Update (raw title edit) must
 /// bucket as edit, not other — the fold summary must not read
 /// "ran 1 other tool". Drives the raw-title path through tool_call_at.

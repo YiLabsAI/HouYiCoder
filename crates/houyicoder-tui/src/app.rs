@@ -584,8 +584,9 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         keys::handle_trust(app, k);
         return;
     }
-    // ctrl+C copies a selection (with a toast); interrupts a running turn;
-    // otherwise no-op. It never quits -- the panic key is not an exit.
+    // ctrl+C copies a selection (with a toast); interrupts a running turn or
+    // a running direct shell command; otherwise no-op. It never quits -- the
+    // panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
         if app.ui.selection.transcript.has_selection() {
             let intent = TranscriptRegion {
@@ -595,7 +596,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             app.apply_region_intent(intent);
             return;
         }
-        if app.agent_busy() {
+        if app.agent_busy() || app.shell_run_active() {
             app.abort_run();
         }
         return;

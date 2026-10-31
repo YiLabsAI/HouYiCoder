@@ -411,6 +411,31 @@ fn test_idle_drain_consumes_idle() {
     assert!(app.ui.input.queue.is_empty(), "head drained");
 }
 
+/// A running direct shell command holds the host the same way a run does, so
+/// idle_drain consumes nothing: a swap would drop the state watching the
+/// command, and the queued message would be refused there.
+#[test]
+fn test_idle_drain_noop_shell() {
+    let mut app = test_app();
+    enqueue_resume_target(&mut app, "sid-target");
+    app.sessions.current.last_run_final = true;
+    app.sessions.current.shell.begin(RequestId(1));
+    app.ui.input.queue.push(InputItem::Message("queued".into()));
+    let mut dirty = false;
+    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
+    app.idle_drain(Some(&*builder), &mut dirty);
+    assert!(!dirty, "a running command = no swap and no drain");
+    assert!(
+        queued_target(&app).is_some(),
+        "the switch waits for the command to end"
+    );
+    assert_eq!(
+        app.ui.input.queue.len(),
+        2,
+        "the switch request and the message both stay queued until it ends"
+    );
+}
+
 /// Busy (a run in flight): idle_drain is a no-op -- neither swap nor
 /// drain. The continuous-state poll runs every frame but consumes nothing.
 #[test]

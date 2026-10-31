@@ -7,3 +7,5 @@ mod export;
 mod hooks;
 #[cfg(test)]
 mod slash_command;
+#[cfg(test)]
+mod submit;

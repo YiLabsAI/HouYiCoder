@@ -42,7 +42,7 @@ pub(crate) struct ShellHistory {
     cache: Vec<String>,
     loaded_at: Option<Instant>,
     /// The history file path injected by the composition root. Empty means no
-    /// history is wired; lookups answer None.
+    /// history file is configured; lookups answer None.
     path: String,
     project: String,
     session: String,
@@ -100,7 +100,7 @@ impl ShellHistory {
     /// Find the first command in history that starts with the exact input
     /// (spaces included) and is not the input itself. Returns None for input
     /// shorter than two characters or an empty trim, so a lone dollar or a
-    /// single keystroke does not surface a completion.
+    /// single keystroke is not offered a completion.
     pub(crate) fn completion(&mut self, input: &str, now: Instant) -> Option<ShellHistoryMatch> {
         if input.len() < 2 || input.trim().is_empty() {
             return None;

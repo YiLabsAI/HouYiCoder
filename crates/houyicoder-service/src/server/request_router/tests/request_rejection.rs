@@ -280,25 +280,20 @@ async fn test_compact_backend_failure() {
     );
 }
 
-/// A dollar-mode direct-shell run is refused with a structured error until the
-/// host execution path lands; the frontend can tell that apart from an ack.
+/// A dollar-mode direct-shell run carries the same session gate as every other
+/// session-scoped verb: another session's command is refused, not run.
 #[tokio::test]
-async fn test_direct_shell_run_refused() {
-    let server = plain_server();
+async fn test_direct_shell_session_mismatch() {
     let err = error_reply(
-        server,
+        plain_server(),
         FrontendRequest::DirectShellRun {
-            session_id: FrontendSessionId("s".into()),
+            session_id: FrontendSessionId::new("bogus"),
             command: "echo hi".into(),
         },
     )
     .await;
     assert_eq!(err.category, ErrorCategory::InvalidRequest);
-    assert!(
-        err.message.contains("not implemented"),
-        "the stub names the missing path: {}",
-        err.message
-    );
+    assert_eq!(err.message, "session id mismatch: got bogus");
 }
 
 /// A gate that refuses the mode cycle surfaces its refusal as a typed error

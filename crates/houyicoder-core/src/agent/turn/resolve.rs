@@ -56,7 +56,7 @@ pub(crate) fn resolved_input(tool: Option<&Arc<dyn Tool>>, input: &Value) -> Val
 }
 
 impl ToolCallPlan {
-    fn new(id: String, tool: Arc<dyn Tool>, input: Value) -> Self {
+    pub(crate) fn new(id: String, tool: Arc<dyn Tool>, input: Value) -> Self {
         // The text the host runs may differ from the one the model wrote (a
         // shell translation). It resolves before the call is judged, so the
         // verdict, the approval card, and the execution all address the same

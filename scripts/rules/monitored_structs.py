@@ -61,8 +61,8 @@ ACTIVE_OWNERS = {
         "fields": 2,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
-        # The presented session: identity, connection, run lifecycle, tally, pending ask, restore stash, checklist, capabilities, the history and search read states, and transcript.
-        "fields": 16,
+        # The presented session: identity, connection, run lifecycle, the direct shell command running beside it, tally, pending ask, restore stash, checklist, capabilities, the history and search read states, and transcript.
+        "fields": 17,
     },
     "crates/houyicoder-tui/src/session/sessions.rs:Sessions": {
         # The presented session, the resumable catalog, and the current session's persistence ports, swapped together.

@@ -10,7 +10,38 @@ use crate::composition::app;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{connected_app, render_text};
+use houyicoder_protocol::envelope::RequestId;
 use std::time::Instant;
+
+/// The status bar carries a running shell command and the key that stops it,
+/// and drops both as soon as the command answers.
+#[test]
+fn test_status_bar_shows_shell() {
+    let mut app = connected_app();
+    let quiet = render_text(&app, 100, 24);
+    assert!(
+        !quiet.contains("shell running"),
+        "no command runs at startup: {quiet}"
+    );
+    app.sessions.current.shell.begin(RequestId(1));
+    let running = render_text(&app, 100, 24);
+    assert!(
+        running.contains("shell running \u{b7} Ctrl+C to cancel"),
+        "the row names the command and the key that stops it: {running}"
+    );
+    app.sessions.current.shell.begin_cancel();
+    let stopping = render_text(&app, 100, 24);
+    assert!(
+        stopping.contains("shell stopping"),
+        "a pending stop reads as one: {stopping}"
+    );
+    assert!(app.sessions.current.shell.settle(RequestId(1)));
+    let cleared = render_text(&app, 100, 24);
+    assert!(
+        !cleared.contains("shell running") && !cleared.contains("shell stopping"),
+        "the row clears itself when the command ends: {cleared}"
+    );
+}
 
 #[test]
 fn test_tiny_mark_two_spans() {

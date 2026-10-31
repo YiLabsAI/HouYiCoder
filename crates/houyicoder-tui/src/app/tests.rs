@@ -350,6 +350,23 @@ fn test_ctrl_c_idle_noop() {
     );
 }
 
+/// Ctrl+C stops the direct shell command the status row displays, whether or
+/// not a model run is active: the design binds cancel to that command as well
+/// as to the run, so the key ends whichever work is under way.
+#[test]
+fn test_ctrl_c_cancels_shell() {
+    let (mut app, _events) = connected_app_events();
+    app.sessions.current.shell.begin(RequestId(1));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.sessions.current.shell.is_cancelling(),
+        "the running command is asked to stop"
+    );
+}
+
 #[test]
 fn test_ctrl_d_twice_quits() {
     let mut app = working_app();

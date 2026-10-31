@@ -6,7 +6,9 @@
 use super::handle_input;
 use crate::composition;
 use crate::state::{App, Screen};
+use crate::test_harness::{connected_app_events, wait_for_request};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_protocol::frontend::FrontendRequest;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -264,17 +266,50 @@ fn test_shell_tab_accepts_ghost() {
     assert_eq!(app.ui.input.mode, InputMode::DirectShell);
 }
 
-/// Enter in DirectShell mode runs the typed command (never the ghost), clears
-/// the editor, and returns the composer to Chat. The send itself needs a live
-/// connection, which the working app lacks, so it is a no-op here.
+/// Enter in DirectShell mode sends the typed command (never the ghost), clears
+/// the editor, and returns the composer to Chat once the host took it.
 #[test]
 fn test_shell_enter_runs_typed() {
-    let mut app = shell_app_with_ghost("cargo t", "est");
+    let (mut app, events) = connected_app_events();
+    app.ui.input.mode = InputMode::DirectShell;
+    app.ui.input.editor.set("cargo t".into());
+    app.ui.input.ghost = Some("est".into());
     handle_input(&mut app, key(KeyCode::Enter));
     assert_eq!(app.ui.input.mode, InputMode::Chat);
     assert!(
         app.ui.input.editor.is_empty(),
-        "the editor clears after Enter"
+        "the editor clears after the host took the command"
+    );
+    wait_for_request(
+        &events,
+        |payload| matches!(payload, FrontendRequest::DirectShellRun { command, .. } if command == "cargo t"),
+    );
+    assert!(
+        app.sessions.current.shell.request_id().is_some(),
+        "the submitted command is the one running"
+    );
+}
+
+/// A command the host cannot take leaves the composer exactly as the user
+/// typed it, in shell mode, so retrying after the blocking work finishes costs
+/// no retyping.
+#[test]
+fn test_shell_enter_keeps_refused() {
+    let mut app = shell_app_with_ghost("cargo t", "est");
+    handle_input(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.ui.input.mode,
+        InputMode::DirectShell,
+        "a refused command stays in the shell composer"
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "cargo t",
+        "the typed command survives the refusal"
+    );
+    assert!(
+        !app.sessions.current.shell.is_active(),
+        "nothing runs after a refusal"
     );
 }
 

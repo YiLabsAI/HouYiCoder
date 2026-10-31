@@ -287,10 +287,10 @@ fn test_dollar_space_enters_shell() {
     assert_eq!(input.editor.value(), "cargo test");
 }
 
-/// A dollar followed by a letter or digit stays in Chat, so variables and
+/// A dollar followed directly by text stays in Chat, so variables and
 /// numbers do not false-trigger.
 #[test]
-fn test_dollar_nonspace_stays_chat() {
+fn test_dollar_text_stays_chat() {
     let mut input = Input::default();
     for text in ["$100", "$HOME", "$var"] {
         input.editor.set(text.to_string());
@@ -362,21 +362,19 @@ fn test_record_shell_command_persists() {
     );
 }
 
-/// The ghost and command accessors guard their branches: refresh_ghost clears
-/// when not in DirectShell, when the draft is multiline, or when the cursor is
-/// mid-text; accept_ghost returns false with no ghost; shell_command returns None
-/// in Chat or on an empty draft.
+/// The ghost completion only appears where Tab can take it: in the direct
+/// shell mode, at the end of a single-line draft. A draft the completion
+/// cannot be appended to shows none, and accepting with none is a no-op.
 #[test]
-fn test_shell_accessors_guard_branches() {
+fn test_ghost_needs_shell_end() {
     let now = Instant::now();
-    // Chat mode: refresh clears, shell_command is None.
+    // Chat mode: refresh clears.
     let mut input = Input {
         ghost: Some("x".into()),
         ..Default::default()
     };
     input.refresh_ghost(now);
     assert!(input.ghost.is_none());
-    assert!(input.shell_command().is_none());
     // DirectShell with a multiline draft: refresh clears.
     let mut input = Input {
         mode: InputMode::DirectShell,
@@ -385,7 +383,7 @@ fn test_shell_accessors_guard_branches() {
     input.editor.set("a\nb".into());
     input.refresh_ghost(now);
     assert!(input.ghost.is_none());
-    // DirectShell with cursor mid-text: refresh clears.
+    // DirectShell with the cursor mid-text: refresh clears.
     let mut input = Input {
         mode: InputMode::DirectShell,
         ..Default::default()
@@ -394,19 +392,29 @@ fn test_shell_accessors_guard_branches() {
     input.editor.move_left();
     input.refresh_ghost(now);
     assert!(input.ghost.is_none());
-    // accept_ghost with no ghost is a no-op.
+    // With no completion to take, accepting changes nothing.
     let mut input = Input {
         mode: InputMode::DirectShell,
         ..Default::default()
     };
     assert!(!input.accept_ghost(now));
-    // DirectShell with an empty draft: shell_command is None.
+}
+
+/// The draft is offered as a command only where one is meant: the command is
+/// absent in Chat and on an empty shell draft, and recomputing the mode keeps
+/// the text it already holds.
+#[test]
+fn test_shell_command_needs_text() {
+    let input = Input {
+        ghost: Some("x".into()),
+        ..Default::default()
+    };
+    assert!(input.shell_command().is_none(), "Chat holds no command");
     let input = Input {
         mode: InputMode::DirectShell,
         ..Default::default()
     };
-    assert!(input.shell_command().is_none());
-    // recompute_mode is a no-op when already in DirectShell.
+    assert!(input.shell_command().is_none(), "an empty draft holds none");
     let mut input = Input {
         mode: InputMode::DirectShell,
         ..Default::default()
@@ -414,4 +422,27 @@ fn test_shell_accessors_guard_branches() {
     input.editor.set("cargo".into());
     input.recompute_mode();
     assert_eq!(input.editor.value(), "cargo");
+}
+
+/// A pasted block in a shell draft runs its real text. The editor shows a
+/// placeholder, so submitting the editor's text as-is would hand the shell a
+/// command the user never typed.
+#[test]
+fn test_shell_command_expands_paste() {
+    let mut input = Input {
+        mode: InputMode::DirectShell,
+        ..Default::default()
+    };
+    let full = "cargo test --all\n".repeat(200);
+    let token = input.pasted.ingest(&full);
+    assert!(
+        token.starts_with("[Pasted text"),
+        "a large paste becomes a placeholder: {token}"
+    );
+    input.editor.set(token);
+    assert_eq!(
+        input.shell_command().as_deref(),
+        Some(full.trim_end_matches('\n')),
+        "the shell receives the pasted text, not the placeholder"
+    );
 }

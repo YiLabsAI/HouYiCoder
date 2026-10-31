@@ -393,7 +393,8 @@ impl App {
 
     /// The one-time message when a state-changing command is deferred onto the
     /// queue (busy). Resume keeps its busy-aware switch message; the others
-    /// get a uniform "will run when the run finishes" line.
+    /// name the work they are waiting on, so a command held behind a direct
+    /// shell does not claim a model run is what blocks it.
     pub(crate) fn deferred_command_message(&self, stripped: &str) -> String {
         let mut parts = stripped.split_whitespace();
         let cmd = parts.next().unwrap_or("");
@@ -401,7 +402,12 @@ impl App {
             let label = parts.next().unwrap_or("");
             return self.resume_switch_message(label);
         }
-        format!("{cmd}: will run when the run finishes")
+        let waiting_on = if self.agent_busy() {
+            "the run finishes"
+        } else {
+            "the shell command finishes"
+        };
+        format!("{cmd}: will run when {waiting_on}")
     }
 
     /// Consume the pending queue head in first-in, first-out order. Clean

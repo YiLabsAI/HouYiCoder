@@ -54,6 +54,8 @@ mod ui_sandbox;
 mod ui_search;
 #[path = "ui_session.rs"]
 mod ui_session;
+#[path = "ui_shell.rs"]
+mod ui_shell;
 #[path = "ui_skill_ecosystem.rs"]
 mod ui_skill_ecosystem;
 #[path = "ui_skill_hotreload.rs"]

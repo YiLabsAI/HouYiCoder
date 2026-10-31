@@ -117,6 +117,10 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" · ", dim),
     ];
     left.push(Span::styled(mode_label, mode_style));
+    if let Some(hint) = shell_hint(app) {
+        left.push(Span::styled(" · ", dim));
+        left.push(Span::styled(hint, Style::new().fg(Color::Cyan)));
+    }
     if let Some(hint) = agents_hint(app) {
         left.push(Span::styled(" · ", dim));
         left.push(Span::styled(hint, dim));
@@ -156,6 +160,27 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
             );
         }
         None => f.render_widget(Paragraph::new(Line::from(left)), area),
+    }
+}
+
+/// The direct shell command the session is running, worded so the row that
+/// never degrades carries both the state and the key that changes it. It
+/// clears when the command answers, so the row holds nothing stale.
+///
+/// The hint names Ctrl+C because that key reaches the command even while a
+/// pane owns Esc, a teammate view holds the focus, or a pane has it; Esc is
+/// taken by those owners first. Advertising a key the current pane intercepts
+/// would charge the user a press that closes something else. A copied
+/// selection still takes the key, so the hint describes the usual case, not
+/// every one.
+fn shell_hint(app: &App) -> Option<String> {
+    if !app.shell_run_active() {
+        return None;
+    }
+    if app.sessions.current.shell.is_cancelling() {
+        Some("shell stopping".to_string())
+    } else {
+        Some("shell running · Ctrl+C to cancel".to_string())
     }
 }
 

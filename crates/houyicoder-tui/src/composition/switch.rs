@@ -82,7 +82,7 @@ impl App {
     /// last_run_final. An interrupt/error does NOT auto-send: the queued item
     /// stays parked for the user to recall to the input box, edit, and re-send.
     pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
-        if !self.agent_busy() && !self.reverse_request_in_flight() {
+        if !self.agent_busy() && !self.shell_run_active() && !self.reverse_request_in_flight() {
             let switched = self.try_switch_session(resume_builder, dirty);
             // A no-builder try_switch_session sets quit and leaves the /resume
             // queued for the external caller; draining it here would remove +

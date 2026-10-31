@@ -90,7 +90,9 @@ fn is_export_file_path(arg: &str) -> bool {
 /// (run_resume / picker Enter); the convergence point stays silent.
 impl App {
     pub(crate) fn resume_switch_message(&self, label: &str) -> String {
-        if self.agent_busy() {
+        if self.shell_run_active() {
+            format!("resume: will switch to {label} when the shell command finishes")
+        } else if self.agent_busy() {
             format!("resume: will switch to {label} when the run finishes")
         } else {
             format!("resume: switching to {label}...")

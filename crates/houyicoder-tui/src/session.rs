@@ -12,6 +12,7 @@ pub mod pending_prompt;
 pub(crate) mod run_metrics;
 pub(crate) mod run_state;
 pub(crate) mod sessions;
+pub(crate) mod shell_run;
 pub(crate) mod todo_view;
 pub(crate) mod turn_driver;
 
@@ -23,6 +24,7 @@ use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;
 use crate::session::capabilities::SessionCapabilities;
 use crate::session::identity::SessionIdentity;
+use crate::shell_run::ShellRunState;
 use crate::state::history_read::HistoryReads;
 use crate::state::scan_state::ScanState;
 use crate::state::search_read::SearchReads;
@@ -67,6 +69,9 @@ pub(crate) struct Session {
     /// cancelling. The session owns it so a run resolves on the session
     /// that started it rather than on a detached shell field.
     pub(crate) run: RunState,
+    /// The direct shell command running outside that lifecycle: one at a time,
+    /// settled by its own reply, and stopped by the same Esc key.
+    pub(crate) shell: ShellRunState,
     /// The session's cumulative run tally: when its first run started and
     /// the tokens and steps accrued across completed runs.
     pub(crate) run_metrics: RunMetrics,
@@ -134,6 +139,7 @@ impl Session {
             connection: None,
             sandbox: "off".to_string(),
             run: RunState::Idle,
+            shell: ShellRunState::default(),
             run_metrics: RunMetrics::default(),
             last_run_input: None,
             last_run_final: false,

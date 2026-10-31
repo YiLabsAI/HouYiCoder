@@ -57,6 +57,7 @@ use houyicoder_protocol::acp_wire::AcpNotification;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
@@ -603,36 +604,41 @@ impl Server {
         }
     }
 
-    async fn drive_run_step(
+    /// Drive one host operation to completion while the connection stays live:
+    /// client frames are dispatched, queued events flushed, and a client
+    /// disconnect ends the wait. A model turn, a resume, and a direct shell
+    /// command all run through here, so Esc, event delivery, and disconnect
+    /// behave the same whichever one is running.
+    async fn drive_while<F>(
         &mut self,
         io: &mut FrameCarrier,
-        text: String,
-    ) -> Result<Result<RunResult, RunError>, ProtocolError> {
-        let runner = Arc::clone(&self.runner);
-        let run_fut = runner.run(self.session, text);
-        tokio::pin!(run_fut);
-        let mut perm_rx = self
-            .bus
-            .as_ref()
-            .map(|b| b.subscribe(permission_request_topic()));
+        work: F,
+        closed: &str,
+        permissions: Option<&mut Receiver<BusMessage>>,
+    ) -> Result<F::Output, ProtocolError>
+    where
+        F: Future,
+    {
+        tokio::pin!(work);
+        let mut permissions = permissions;
         loop {
             let notify_fut = match &self.append_notify {
                 Some(n) => Either::Left(n.notified()),
                 None => Either::Right(pending::<()>()),
             };
             let event_fut = self.event_sequencer.notified();
-            let perm_fut = match &mut perm_rx {
-                Some(rx) => Either::Left(rx.recv()),
+            let permission_fut = match permissions.as_deref_mut() {
+                Some(receiver) => Either::Left(receiver.recv()),
                 None => Either::Right(pending::<Result<BusMessage, RecvError>>()),
             };
             tokio::select! {
-                r = &mut run_fut => return Ok(r),
+                done = &mut work => return Ok(done),
                 frame = io.next_frame() => match frame {
                     Ok(Some(f)) => self.dispatch_during_run_frame(io, &f).await,
                     Ok(None) => {
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
-                            "client closed mid-run",
+                            closed,
                             false,
                         ));
                     }
@@ -640,7 +646,7 @@ impl Server {
                 },
                 _ = notify_fut => self.flush_events(io).await?,
                 _ = event_fut => self.flush_events(io).await?,
-                req = perm_fut => {
+                req = permission_fut => {
                     if let Ok(msg) = req
                         && let Err(e) = child_permission::handle(self, io, msg).await
                     {
@@ -649,6 +655,21 @@ impl Server {
                 },
             }
         }
+    }
+
+    async fn drive_run_step(
+        &mut self,
+        io: &mut FrameCarrier,
+        text: String,
+    ) -> Result<Result<RunResult, RunError>, ProtocolError> {
+        let runner = Arc::clone(&self.runner);
+        let run_fut = runner.run(self.session, text);
+        let mut perm_rx = self
+            .bus
+            .as_ref()
+            .map(|b| b.subscribe(permission_request_topic()));
+        self.drive_while(io, run_fut, "client closed mid-run", perm_rx.as_mut())
+            .await
     }
 
     async fn collect_interruption_decisions(
@@ -695,30 +716,8 @@ impl Server {
     ) -> Result<Result<RunResult, RunError>, ProtocolError> {
         let runner = Arc::clone(&self.runner);
         let resume_fut = runner.resume(self.session, decisions);
-        tokio::pin!(resume_fut);
-        loop {
-            let notify_fut = match &self.append_notify {
-                Some(notify) => Either::Left(notify.notified()),
-                None => Either::Right(pending::<()>()),
-            };
-            let event_fut = self.event_sequencer.notified();
-            tokio::select! {
-                r = &mut resume_fut => return Ok(r),
-                frame = io.next_frame() => match frame {
-                    Ok(Some(f)) => self.dispatch_during_run_frame(io, &f).await,
-                    Ok(None) => {
-                        return Err(ProtocolError::new(
-                            ErrorCategory::Unavailable,
-                            "client closed mid-resume",
-                            false,
-                        ));
-                    }
-                    Err(e) => return Err(e),
-                },
-                _ = notify_fut => self.flush_events(io).await?,
-                _ = event_fut => self.flush_events(io).await?,
-            }
-        }
+        self.drive_while(io, resume_fut, "client closed mid-resume", None)
+            .await
     }
 }
 

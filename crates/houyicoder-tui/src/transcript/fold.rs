@@ -267,8 +267,9 @@ pub(crate) fn fold_groups_in(
             i += 1;
             continue;
         };
-        // Error calls are exempt: skip the call and its result.
-        if tool_call_outcome(lines, i) == Some(ToolOutcome::Error) {
+        // Calls with a result the summary cannot speak for are exempt: skip
+        // the call and its result so they render on their own.
+        if outcome_renders_alone(tool_call_outcome(lines, i)) {
             i += 1;
             if is_result_for(lines, i, call_id) {
                 i += 1;
@@ -302,7 +303,7 @@ pub(crate) fn fold_groups_in(
         // Extend the group with further consecutive call+result pairs; a
         // non-foldable or error call breaks the run.
         while let Some((cid, nm, st)) = tool_call_at(lines, i) {
-            if tool_call_outcome(lines, i) == Some(ToolOutcome::Error) {
+            if outcome_renders_alone(tool_call_outcome(lines, i)) {
                 break;
             }
             if !is_foldable(nm) {
@@ -449,6 +450,13 @@ fn tool_call_outcome(transcript: &[TranscriptLine], i: usize) -> Option<ToolOutc
         TranscriptLine::Tool { outcome, .. } => Some(*outcome),
         _ => None,
     }
+}
+
+/// Whether a call must render on its own rather than fold into a summary: a
+/// failed call, whose error the collapsed row would hide, or a call that never
+/// ran, which the execution count would otherwise read as done.
+fn outcome_renders_alone(outcome: Option<ToolOutcome>) -> bool {
+    matches!(outcome, Some(ToolOutcome::Error | ToolOutcome::NotRun))
 }
 
 /// True when transcript[i] is a Tool result (name == "result") for the given

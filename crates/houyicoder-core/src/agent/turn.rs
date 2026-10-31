@@ -3,6 +3,7 @@
 pub(crate) mod abort;
 pub(crate) mod approval;
 pub(crate) mod call;
+pub(crate) mod direct_shell;
 pub(crate) mod fallback;
 pub(crate) mod input_queue;
 pub(crate) mod outcome_counts;

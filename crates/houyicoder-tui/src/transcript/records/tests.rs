@@ -32,6 +32,21 @@ fn test_grep_no_match_success() {
     );
 }
 
+/// A result that says its call never ran reaches neither verdict, so the
+/// transcript neither colors it green nor counts it as a command that ran.
+#[test]
+fn test_outcome_not_run() {
+    let out = serde_json::json!({
+        "error": "interrupted by user",
+        "not_run": true,
+    });
+    assert_eq!(
+        ToolOutcome::from_output_with(&out, "bash", &Value::Null),
+        ToolOutcome::NotRun,
+        "a call that never ran is not an execution outcome"
+    );
+}
+
 #[test]
 fn test_diff_differ_success() {
     let out = serde_json::json!({

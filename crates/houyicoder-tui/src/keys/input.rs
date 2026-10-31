@@ -588,12 +588,16 @@ fn handle_direct_shell(app: &mut App, k: KeyEvent) {
             app.ui.input.accept_ghost(now);
         }
         KeyCode::Enter => {
-            if let Some(command) = app.ui.input.shell_command() {
+            // A refused submission leaves the composer as it is: the command
+            // stays in the box in shell mode, so the user can retry it once
+            // the work blocking it finishes.
+            if let Some(command) = app.ui.input.shell_command()
+                && app.submit_direct_shell(command.clone())
+            {
                 app.ui.input.record_shell_command(&command);
                 app.ui.input.editor = Default::default();
                 app.ui.input.mode = InputMode::Chat;
                 app.ui.input.ghost = None;
-                app.submit_direct_shell(command);
             }
         }
         KeyCode::Esc => {

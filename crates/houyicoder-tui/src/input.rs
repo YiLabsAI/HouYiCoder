@@ -574,13 +574,17 @@ impl Input {
         self.ghost = None;
     }
 
-    /// The command a DirectShell Enter would run: the editor text, trimmed of a
-    /// trailing newline. None when the draft is empty or not in DirectShell.
+    /// The command a DirectShell Enter would run: the editor text with pasted
+    /// blocks expanded, trimmed of a trailing newline. None when the draft is
+    /// empty or not in DirectShell. A large paste sits in the editor as a
+    /// placeholder, so submitting the raw text would hand the shell the token
+    /// instead of the pasted command.
     pub(crate) fn shell_command(&self) -> Option<String> {
         if self.mode != InputMode::DirectShell {
             return None;
         }
-        let text = self.editor.value().trim_end_matches('\n');
+        let expanded = PasteStore::expand(self.editor.value(), &self.pasted);
+        let text = expanded.trim_end_matches('\n');
         if text.trim().is_empty() {
             return None;
         }

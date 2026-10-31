@@ -13,6 +13,7 @@ use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::ContextError;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionLogEntry;
+use houyicoder_core::agent::DirectShellError;
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::trajectory::TrajectoryResponse;
@@ -23,6 +24,7 @@ use pa::permission_mode_to_wire;
 use pa::redundancy::map_redundant_entries;
 use pa::skills::skill_entries;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 impl Server {
     /// True when the protocol session id names this server's session. The
@@ -73,24 +75,75 @@ impl Server {
                 self.send_response(io, req_id, self.debug_response(level))
                     .await
             }
-            FrontendRequest::DirectShellRun { .. } => {
-                // The dollar-mode input surface and request wiring land in
-                // The dollar-mode input surface and request wiring land first;
-                // the host execution path follows. Until then the
-                // request is refused with a structured error rather than
-                // silently acked, so the frontend can tell the two apart.
-                self.send_response(
+            FrontendRequest::DirectShellRun {
+                session_id,
+                command,
+            } => {
+                self.dispatch_direct_shell(io, req_id, session_id, command)
+                    .await
+            }
+            payload => self.dispatch_query(io, req_id, payload).await,
+        }
+    }
+
+    /// Run a dollar-mode command in the session sandbox without a model turn. The
+    /// command is driven the way a run is: client frames keep being dispatched
+    /// while it runs, so an Esc-driven cancel reaches the loop that stops it and
+    /// the events it produces flush as they are appended. The transcript gains
+    /// the same call-and-result pair a model call produces, with the user's
+    /// command as the call's input.
+    async fn dispatch_direct_shell(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        session_id: SessionId,
+        command: String,
+    ) -> Result<(), ProtocolError> {
+        if !self.session_matches(&session_id) {
+            return self
+                .send_response(
                     io,
                     req_id,
                     ResponsePayload::Error(ProtocolError::new(
                         ErrorCategory::InvalidRequest,
-                        "direct shell execution is not implemented yet",
-                        true,
+                        format!("session id mismatch: got {session_id}"),
+                        false,
                     )),
+                )
+                .await;
+        }
+        let runner = Arc::clone(&self.runner);
+        let work = runner.run_direct_shell(self.session, command);
+        let result = self
+            .drive_while(io, work, "client closed mid-shell", None)
+            .await?;
+        match result {
+            Ok(_) => {
+                // The command's output frames reach the client before its
+                // acknowledgement: the acknowledgement is what clears the
+                // running hint, and clearing it first would briefly show a
+                // finished command whose output has not arrived.
+                self.flush_events(io).await?;
+                self.send_response(io, req_id, ResponsePayload::Ack).await
+            }
+            Err(e) => {
+                // The category separates a host state that may differ on a
+                // later attempt, which is retryable, from input the host
+                // cannot accept as sent, and from this host failing.
+                let (category, retriable) = match &e {
+                    DirectShellError::NoShellTool | DirectShellError::RunnerPaused => {
+                        (ErrorCategory::Unavailable, true)
+                    }
+                    DirectShellError::EmptyCommand => (ErrorCategory::InvalidRequest, false),
+                    DirectShellError::Transcript(_) => (ErrorCategory::Internal, false),
+                };
+                self.send_response(
+                    io,
+                    req_id,
+                    ResponsePayload::Error(ProtocolError::new(category, e.to_string(), retriable)),
                 )
                 .await
             }
-            payload => self.dispatch_query(io, req_id, payload).await,
         }
     }
 

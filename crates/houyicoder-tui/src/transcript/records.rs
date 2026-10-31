@@ -370,12 +370,14 @@ pub struct TeammateView {
 }
 
 /// A tool call's resolved outcome, for chip coloring. Running = no matching
-/// result yet (in flight); Success/Error = the matching ToolResult's verdict.
+/// result yet; Success/Error = the matching ToolResult's verdict; NotRun =
+/// the result states the call never executed, so it is neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolOutcome {
     Running,
     Success,
     Error,
+    NotRun,
 }
 
 impl ToolOutcome {
@@ -395,11 +397,18 @@ impl ToolOutcome {
     /// Same as from_output, but with the tool name + call input so bash
     /// commands whose non-zero exit is semantic success (grep no-match,
     /// diff files-differ) are not mis-colored as errors.
+    ///
+    /// A result that says its call never ran carries no verdict on an
+    /// execution, so it is NotRun rather than either verdict. A count of what
+    /// ran must leave it out, and the summary line would otherwise report an
+    /// interrupted command as run.
     pub fn from_output_with(output: &Value, tool_name: &str, call_input: &Value) -> Self {
         // One failure rule, shared through the tool protocol: the trajectory
         // header counts failures by the same definition, so a chip cannot
         // disagree with the header about one result.
-        if tool_result_failed(output, tool_name, call_input) {
+        if tool_result_not_run(output) {
+            Self::NotRun
+        } else if tool_result_failed(output, tool_name, call_input) {
             Self::Error
         } else {
             Self::Success
@@ -651,6 +660,7 @@ use crate::brief::fold_summary;
 use crate::view::line_wrap::truncate_width;
 use crate::view::line_wrap::wrap_plain_block;
 use houyicoder_protocol::tool::tool_result_failed;
+use houyicoder_protocol::tool::tool_result_not_run;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 /// Spec context strip data: the current spec, step, and clause list.

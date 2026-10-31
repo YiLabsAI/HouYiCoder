@@ -14,6 +14,12 @@ impl App {
     /// sees the operation is in flight (the outcome line lands when the reply
     /// arrives).
     pub(crate) fn run_compact(&mut self) {
+        if self.shell_run_active() {
+            self.system_line(
+                "compact: a shell command is running; wait for it to finish (or Esc to stop it) before compacting",
+            );
+            return;
+        }
         if self.agent_busy() {
             self.system_line(
                 "compact: a run is in flight; wait for it to finish (or Esc to abort) before compacting",

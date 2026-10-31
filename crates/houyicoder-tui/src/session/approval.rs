@@ -117,20 +117,40 @@ impl App {
         true
     }
 
-    /// Toggle the expandable block the transcript holds latest, delegation or
-    /// reasoning summary. Comparing across kinds is the point: picking the
-    /// latest of one kind first is what let a delegation outrank a newer
-    /// reasoning block. False when the transcript holds neither.
+    /// Toggle the expandable block the transcript holds latest: a delegation,
+    /// a reasoning summary, a completed tool group, or a memory-change notice.
+    /// All four compete by position: answering for each block from its own
+    /// rows is what keeps a delegation from outranking a newer reasoning
+    /// block, and omitting one left the hint it prints with no key that could
+    /// answer it. False when the transcript holds none of the four.
     pub(crate) fn toggle_tail_expand(&mut self) -> bool {
+        enum TailTarget {
+            Group(String),
+            Delegation(String, bool),
+            Thinking,
+            Notice(String),
+        }
         // The tail is taken from the transcript the view renders. Reading the
         // live transcript while a search or delegation view is open picks a
         // line the user cannot see, so the key toggles an off-screen block.
-        let (subagent_wins, picked): (bool, Option<(String, bool)>) = {
+        let mut candidates: Vec<(usize, TailTarget)> = Vec::new();
+        {
             let lines = self.active_transcript();
-            let last_subagent = lines
+            if let Some(idx) = lines
                 .iter()
-                .rposition(|l| matches!(l, TranscriptLine::Subagent { .. }));
-            let last_thinking = lines.iter().rposition(|l| {
+                .rposition(|l| matches!(l, TranscriptLine::Subagent { .. }))
+                && let TranscriptLine::Subagent {
+                    child_sid,
+                    folded_transcript,
+                    ..
+                } = &lines[idx]
+            {
+                candidates.push((
+                    idx,
+                    TailTarget::Delegation(child_sid.clone(), folded_transcript.is_empty()),
+                ));
+            }
+            if let Some(idx) = lines.iter().rposition(|l| {
                 matches!(
                     l,
                     TranscriptLine::ThoughtFor {
@@ -138,54 +158,53 @@ impl App {
                         ..
                     }
                 )
-            });
-            let wins = match (last_subagent, last_thinking) {
-                (Some(s), Some(t)) => s > t,
-                (Some(_), None) => true,
-                _ => false,
-            };
-            let found = if wins {
-                last_subagent.and_then(|idx| match &lines[idx] {
-                    TranscriptLine::Subagent {
-                        child_sid,
-                        folded_transcript,
-                        ..
-                    } => Some((child_sid.clone(), folded_transcript.is_empty())),
-                    _ => None,
-                })
-            } else {
-                None
-            };
-            (wins, found)
-        };
-        if subagent_wins {
-            let Some((sid, needs_fetch)) = picked else {
-                return false;
-            };
-            self.apply_subagent_toggle(sid, needs_fetch);
-            return true;
-        }
-        self.toggle_thinking_expand()
-    }
-
-    /// Toggle the newest memory-change notice, used as the no-cursor Ctrl+O
-    /// fallback so a notice folds like a tool group even without a mouse
-    /// anchor. Keys are the same mg#N occurrence ids display_slots assigns,
-    /// so the expansion state survives across renders.
-    pub(crate) fn toggle_latest_memory_notice(&mut self) -> bool {
-        let mut ordinal = 0usize;
-        let mut latest: Option<String> = None;
-        for line in self.sessions.current.transcript.lines().iter() {
-            if is_memory_notice(line) {
-                latest = Some(format!("mg#{ordinal}"));
-                ordinal += 1;
+            }) {
+                candidates.push((idx, TailTarget::Thinking));
+            }
+            // A group still in the active turn never folds, so it is not a
+            // candidate; the position is the group's last line, where its
+            // summary row renders.
+            if let Some(group) = self.active_fold_groups().iter().rev().find(|g| !g.active) {
+                candidates.push((
+                    group.end.saturating_sub(1),
+                    TailTarget::Group(group.key.clone()),
+                ));
+            }
+            // A notice folds under the same chord, so it competes by position
+            // too: newest wins over an older tool group, and a newer group
+            // wins over an older notice. The key carries the occurrence
+            // ordinal display_slots assigns over this same transcript.
+            let mut notice_ordinal = 0usize;
+            let mut latest_notice: Option<(usize, String)> = None;
+            for (idx, line) in lines.iter().enumerate() {
+                if is_memory_notice(line) {
+                    latest_notice = Some((idx, format!("mg#{notice_ordinal}")));
+                    notice_ordinal += 1;
+                }
+            }
+            if let Some((idx, key)) = latest_notice {
+                candidates.push((idx, TailTarget::Notice(key)));
             }
         }
-        let Some(key) = latest else {
+        let Some((_, target)) = candidates.into_iter().max_by_key(|(at, _)| *at) else {
             return false;
         };
-        self.ui.transcript_view.toggle_fold(key);
-        true
+        match target {
+            TailTarget::Group(key) => {
+                self.ui.transcript_view.toggle_fold(key);
+                self.pin_transcript_top();
+                true
+            }
+            TailTarget::Delegation(sid, needs_fetch) => {
+                self.apply_subagent_toggle(sid, needs_fetch);
+                true
+            }
+            TailTarget::Thinking => self.toggle_thinking_expand(),
+            TailTarget::Notice(key) => {
+                self.ui.transcript_view.toggle_fold(key);
+                true
+            }
+        }
     }
 
     /// Toggle a Subagent delegation's inline expansion by visible row index

@@ -1449,6 +1449,7 @@ fn test_batch_keeps_identity() {
 }
 
 mod send_failure;
+mod shell;
 
 mod approval_render;
 mod compact;

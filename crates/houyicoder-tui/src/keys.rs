@@ -138,13 +138,17 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         handle_focus(app, k);
         return;
     }
-    // Esc while a run is in flight interrupts it and nothing else: the queue
-    // is left intact and the input draft is untouched. Repeated Esc events
-    // remain idempotent abort requests instead of changing meaning while the
-    // asynchronous cancellation is pending. Queue recall is explicit through
-    // its strip or pane, so a delayed terminal event cannot move unsent input.
-    // Panes that own Esc are gated out so Esc closes the pane first.
-    if app.agent_busy() && k.code == KeyCode::Esc && !pane_owns_esc(app.ui.navigation.pane) {
+    // Esc while a run or a direct shell command is active stops it and
+    // nothing else: the queue is left intact and the input draft is
+    // untouched. Repeated Esc events remain idempotent abort requests instead
+    // of changing meaning while the asynchronous cancellation is pending.
+    // Queue recall is explicit through its strip or pane, so a delayed
+    // terminal event cannot move unsent input. Panes that own Esc are gated
+    // out so Esc closes the pane first.
+    if (app.agent_busy() || app.shell_run_active())
+        && k.code == KeyCode::Esc
+        && !pane_owns_esc(app.ui.navigation.pane)
+    {
         tracing::debug!("abort_run (busy, queue left intact)");
         app.abort_run();
         return;
@@ -191,10 +195,10 @@ pub(crate) fn handle_trust(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// Expand or collapse one block. Each kind is offered the cursor's row in
-/// turn and declines a row that is not its own; only when no kind claims the
-/// row does the key fall back to the tail-most block. A kind that answers for
-/// rows it does not own makes every later kind here unreachable.
+/// Expand or collapse one block. Each block owner is offered the cursor's row
+/// in turn and declines a row that is not its own; only when none claims the
+/// row does the key fall back to the tail-most block. An owner that answers
+/// for rows it does not own makes every later check here unreachable.
 pub(crate) fn handle_ctrl_o(app: &mut App) {
     // A pending approval card owns this chord while it is on screen: its
     // argument block is bounded so the question and the options keep their
@@ -228,9 +232,6 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
         return;
     }
     if app.toggle_tail_expand() {
-        return;
-    }
-    if app.toggle_latest_memory_notice() {
         return;
     }
     app.toggle_focused_result_expand();

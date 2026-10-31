@@ -27,6 +27,7 @@ mod frames;
 mod model;
 #[path = "tests/panels.rs"]
 mod panels;
+mod shell;
 #[path = "tests/subagent_fold.rs"]
 mod subagent_fold;
 #[path = "tests/subagent_render.rs"]

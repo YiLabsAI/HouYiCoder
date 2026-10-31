@@ -37,8 +37,8 @@ pub(crate) use skill::{
 pub(crate) use status::{obs_wire, redundancy};
 pub(crate) use tools::{diff, registry as tool};
 pub(crate) use turn::{
-    call, fallback, input_queue, outcome_counts, resolve, result, step, thinking, truncation,
-    user_turn, verify,
+    call, direct_shell, fallback, input_queue, outcome_counts, resolve, result, step, thinking,
+    truncation, user_turn, verify,
 };
 pub use worktree::{controller as worktree_controller, git_safety, session as worktree_session};
 
@@ -94,6 +94,7 @@ use runner_config::RunnerConfig;
 
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
+pub use direct_shell::DirectShellError;
 use houyicoder_api::cache_policy::CachePolicyProvider;
 use houyicoder_api::cost_model::CostModelProvider;
 use houyicoder_api::sandbox::SandboxSession;

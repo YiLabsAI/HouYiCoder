@@ -266,8 +266,10 @@ pub enum SessionEvent {
         text: String,
     },
     ToolCall {
-        /// The provider-generated tool call id (e.g. "toolu_01..."). Links to
-        /// the matching ToolResult. Not an EventId — the model minted it.
+        /// The id the matching ToolResult answers. A model-issued call carries
+        /// the provider's id (for example toolu_01...); a command the user
+        /// typed carries one the host derives from the log entry that
+        /// recorded it. Unique within the log, and not an EventId.
         call_id: String,
         tool: String,
         input: serde_json::Value,

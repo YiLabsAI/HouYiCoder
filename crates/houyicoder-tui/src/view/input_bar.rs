@@ -51,9 +51,23 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border_color));
     if shell_mode {
+        // The title reports the sandbox label the session was composed with;
+        // it cannot prove the fence. A label whose first word is off means the
+        // session runs unfenced, so the warning color marks it; any other
+        // label is shown as written rather than relabeled sandboxed, which
+        // would claim a boundary the terminal has not measured.
+        let label = app.sessions.current.sandbox.split_whitespace().next();
+        let (title, title_color) = if label == Some("off") {
+            (" bash · unfenced ".to_string(), Color::Yellow)
+        } else {
+            (
+                format!(" bash · {} ", app.sessions.current.sandbox),
+                Color::Cyan,
+            )
+        };
         block = block.title(Span::styled(
-            " bash · sandboxed ",
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            title,
+            Style::new().fg(title_color).add_modifier(Modifier::BOLD),
         ));
     }
     let inner = block.inner(area);

@@ -79,7 +79,15 @@ impl App {
             // immediately even mid-run.
             let cmd = stripped.split_whitespace().next().unwrap_or("");
             let bare_resume = cmd == "resume" && stripped.trim() == cmd;
-            if self.agent_busy() && is_state_changing(stripped) && !bare_resume {
+            // A direct shell command holds the host's cancel slot and its
+            // execution lane, so the same deferral applies while one runs:
+            // the host refuses a reset or switch mid-command, and resetting
+            // the frontend anyway would leave it showing a session the host
+            // still holds.
+            if (self.agent_busy() || self.shell_run_active())
+                && is_state_changing(stripped)
+                && !bare_resume
+            {
                 self.ui.input.queue.push(InputItem::Command(text.clone()));
                 self.system_line(self.deferred_command_message(stripped));
                 return;
@@ -116,12 +124,20 @@ impl App {
         // will follow this submission: the frontend raises the row, and the typed
         // task opens the drafting surface it would open with a runner. No reply
         // follows, because there is nothing to reply with.
-        let text = PasteStore::expand(&text, &self.ui.input.pasted);
+        let draft = text;
+        let text = PasteStore::expand(&draft, &self.ui.input.pasted);
         if self.sessions.current.connection.is_some() {
             let project = current_project();
             let session_id = self.sessions.current.identity.session_id.to_string();
-            self.ui.input.history.submit(&text, &project, &session_id);
-            self.spawn_run(text);
+            if self.spawn_run(text.clone()) {
+                self.ui.input.history.submit(&text, &project, &session_id);
+            } else {
+                // A refused submit puts the draft back as it was typed: the
+                // composer already gave it away, a refusal must not cost the
+                // user a draft, and restoring the placeholder keeps the paste
+                // side table meaningful for the retry.
+                self.ui.input.editor.set(draft);
+            }
             return;
         }
         self.push_unanswered_echo(text);

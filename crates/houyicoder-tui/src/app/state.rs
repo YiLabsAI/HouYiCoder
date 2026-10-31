@@ -166,6 +166,13 @@ impl App {
         )
     }
 
+    /// True while a direct shell command is running or being stopped. It is
+    /// a separate lifecycle from a model run, so the spinner and the run
+    /// clock stay idle; the Esc key and the status bar read it directly.
+    pub fn shell_run_active(&self) -> bool {
+        self.sessions.current.shell.is_active()
+    }
+
     /// The wall-clock start of the active run, or None when idle.
     pub fn run_started(&self) -> Option<Instant> {
         self.sessions.current.run.started_at()

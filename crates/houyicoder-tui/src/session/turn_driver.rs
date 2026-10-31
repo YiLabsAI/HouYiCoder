@@ -41,14 +41,27 @@ impl App {
     /// the host runs the command in the session sandbox and streams the result
     /// back as a tool-style entry. The command is real user input, so the host
     /// treats it as trusted-user-sourced, not model-sourced.
-    pub fn submit_direct_shell(&mut self, command: String) {
+    ///
+    /// The host runs one operation at a time, on one cancel slot, so a command
+    /// is refused while a model turn or another command holds it. Returns
+    /// whether the command was sent; a refusal leaves the composer untouched,
+    /// so the caller keeps the typed text.
+    pub fn submit_direct_shell(&mut self, command: String) -> bool {
+        if self.sessions.current.run.is_active() {
+            self.system_line("shell: the agent is working; press Esc to stop it first");
+            return false;
+        }
+        if self.sessions.current.shell.is_active() {
+            self.system_line("shell: a command is already running; press Esc to stop it first");
+            return false;
+        }
         let Some(s) = self.sessions.current.connection.as_ref() else {
             self.system_line("shell: no session connection");
-            return;
+            return false;
         };
         let Ok(req_id) = s.next_request_id() else {
             self.system_line("shell: request ids exhausted");
-            return;
+            return false;
         };
         let session_id = self.sessions.current.identity.session_id.clone();
         if let Err(e) = self.enqueue(ClientCommand::DirectShellRun {
@@ -57,13 +70,23 @@ impl App {
             command,
         }) {
             self.system_line(Self::enqueue_failure_line("shell", e));
+            return false;
         }
+        self.sessions.current.shell.begin(req_id);
+        true
     }
 
     /// Start a user turn, steer input to the viewed child, or queue it while
     /// another turn is active. New turns render an immediate user echo after
     /// the enqueue is accepted. Returns false when the enqueue was refused.
     pub fn spawn_run(&mut self, input: String) -> bool {
+        // A running shell command holds the host's one cancel slot, so a turn
+        // sent now would be refused there. Refuse it here, where the refusal
+        // can keep the draft, and name the way out.
+        if self.sessions.current.shell.is_active() {
+            self.system_line("shell: a command is running; press Esc to stop it first");
+            return false;
+        }
         // A viewed child receives input directly and shows an optimistic echo.
         let steer = self
             .ui
@@ -285,7 +308,11 @@ impl App {
             self.system_line(Self::enqueue_failure_line("run", e));
             return;
         }
+        // The host cancels whichever operation holds its cancel slot. Only one
+        // is ever active, and the other transition is a no-op, so both are
+        // marked without asking which.
         self.sessions.current.run.begin_cancel();
+        self.sessions.current.shell.begin_cancel();
     }
 
     /// Remove the latest submitted turn from the frame log and rebuild the
