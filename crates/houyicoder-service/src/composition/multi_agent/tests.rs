@@ -2001,4 +2001,5 @@ mod join_children;
 mod shutdown_gate;
 mod timeout;
 mod turn_cap;
+mod unclosed_tag;
 mod worktree_reclaim;

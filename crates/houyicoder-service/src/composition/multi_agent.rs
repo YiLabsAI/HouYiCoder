@@ -17,7 +17,6 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
-use houyicoder_context::SessionEvent;
 use houyicoder_context::{
     DescriptorUpdate, HookEventKind, HookFirePayload, PromptCoverage, SessionDescriptor,
     SessionDescriptorStore, SessionId, SessionProvenance,
@@ -48,6 +47,8 @@ use tokio::time::timeout;
 
 mod drive;
 mod spawn_exec;
+mod strip;
+pub(crate) use strip::extract_last_assistant;
 
 /// Per-driver budget the shutdown join gives a child's finalize tail before
 /// aborting it. Generous for real cleanup work (worktree removal, boundary
@@ -755,20 +756,6 @@ fn terminal_summary(
 /// result a non-final terminal leaves behind.
 fn partial_of(child_tail: &[houyicoder_context::SessionLogEntry]) -> String {
     extract_last_assistant(child_tail).unwrap_or_default()
-}
-
-/// Walk the child's rows backwards for the last assistant message carrying
-/// text; the partial result a non-final terminal leaves behind. None when no
-/// assistant message (or none with text) was emitted.
-fn extract_last_assistant(events: &[houyicoder_context::SessionLogEntry]) -> Option<String> {
-    for ev in events.iter().rev() {
-        if let SessionEvent::AssistantMessage { ref text, .. } = ev.event
-            && !text.is_empty()
-        {
-            return Some(text.clone());
-        }
-    }
-    None
 }
 
 #[cfg(test)]

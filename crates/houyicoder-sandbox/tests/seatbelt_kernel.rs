@@ -18,8 +18,8 @@ use std::fs::remove_file;
 use std::fs::write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::id;
+use std::process::{Command, exit, id};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
@@ -164,6 +164,39 @@ impl Fence {
         f
     }
 
+    /// Whether this process can bind its own seatbelt. It cannot when it already
+    /// runs inside one, which is the case whenever the suite is launched from a
+    /// session that fences its commands.
+    fn can_bind_own_fence() -> bool {
+        static CAN: OnceLock<bool> = OnceLock::new();
+        *CAN.get_or_init(|| {
+            let probe = Command::new("sandbox-exec")
+                .args([
+                    "-p",
+                    "(version 1)(allow default)",
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    "true",
+                ])
+                .output();
+            matches!(probe, Ok(out) if out.status.success())
+        })
+    }
+
+    /// Stop a suite whose measurement is impossible here, naming the reason.
+    ///
+    /// The kernel refuses to apply a seatbelt inside an existing one. Reporting
+    /// that as a test failure would blame the profile for an environment the
+    /// profile cannot see, and it would train a reader to ignore the suite.
+    fn skip_fenced_suite() -> ! {
+        eprintln!(
+            "skipping: this process already runs inside a sandbox and cannot bind \
+             another; run this suite outside a fenced session to measure the kernel"
+        );
+        exit(0)
+    }
+
     /// Run one command inside the fence under an explicit shell, so a test can
     /// use the same shell the session hands its commands to.
     fn probe_via(&self, label: &str, shell: &Path, cmd: &str) -> Outcome {
@@ -177,6 +210,15 @@ impl Fence {
 
     fn probe_with(&self, label: &str, shell: &Path, cmd: &str) -> Outcome {
         let started = Instant::now();
+        // This suite measures the kernel's own enforcement, so it has to bind
+        // a real fence around each probe. A process that is already fenced
+        // cannot bind a second one, and asking leaves every probe reporting
+        // "the fence denied it" for a reason that has nothing to do with the
+        // profile under test. The suite is skipped rather than failed: the
+        // configuration is not wrong, it simply cannot be measured here.
+        if !Self::can_bind_own_fence() {
+            Self::skip_fenced_suite();
+        }
         let out = Command::new("sandbox-exec")
             .arg("-p")
             .arg(&self.profile)

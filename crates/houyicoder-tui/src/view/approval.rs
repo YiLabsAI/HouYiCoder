@@ -270,12 +270,17 @@ fn option_label(a: &Approval, selected: usize) -> String {
 /// The hint names the seconds left so the user can see the card is about to
 /// resolve on its own; a touch of any navigation key cancels it.
 fn yes_label(a: &Approval) -> String {
-    let base = "Yes".to_string();
     if let Some(secs) = a.auto_approve_secs_left(Instant::now()) {
-        format!("{base} (auto in {secs}s)")
-    } else {
-        base
+        return format!("Yes (auto in {secs}s)");
     }
+    // A card that can never auto-approve says so on the option itself. The
+    // countdown is absent because the decision is the user's to make, and a
+    // bare Yes reads as a card whose timer has not started yet: users have
+    // reported the countdown as broken on exactly these cards.
+    if !a.auto_approve_eligible() {
+        return "Yes (manual approval required)".to_string();
+    }
+    "Yes".to_string()
 }
 
 /// The rows of chrome the card draws when it has room: the separator, the

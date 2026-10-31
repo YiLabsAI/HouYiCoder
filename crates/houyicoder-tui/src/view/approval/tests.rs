@@ -1281,3 +1281,79 @@ fn test_rearm_same_delay_paints() {
         "a countdown re-armed with the same delay still paints its opening figure"
     );
 }
+
+/// A card that can never auto-approve names that on the option. The absence
+/// of a countdown is the decision being the user's, and a bare Yes reads as a
+/// timer that has not started — which is exactly how the countdown gets
+/// reported as broken.
+#[test]
+fn test_manual_card_names_review() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: r#"{"command":"nc example.com 80"}"#.into(),
+            reason: "this command opens a network connection".into(),
+            validator: Some("network_egress".into()),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 100, 30);
+    let yes = out
+        .lines()
+        .find(|l| l.contains("Yes"))
+        .unwrap_or_else(|| panic!("no Yes option:\n{out}"));
+    assert!(
+        yes.contains("manual approval required"),
+        "the option says the decision is the user's: {yes:?}"
+    );
+    assert!(
+        !yes.contains("auto in"),
+        "and promises no countdown: {yes:?}"
+    );
+}
+
+/// A card that can auto-approve is unchanged: it shows the countdown and no
+/// manual-review note, so the note marks the cards that need it rather than
+/// every card.
+#[test]
+fn test_eligible_card_stays_plain() {
+    let out = {
+        let mut app = composition::app();
+        app.ui.navigation.screen = Screen::Working;
+        app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+            RequestId(0),
+            Approval {
+                tool: "bash".into(),
+                args: r#"{"command":"ls"}"#.into(),
+                reason: "runs a command".into(),
+                selected: 0,
+                call_id: String::new(),
+                options: Vec::new(),
+                ..Default::default()
+            },
+        ));
+        {
+            let card = app.approval_mut().expect("card");
+            card.start_auto_approve(7);
+        }
+        render_text(&app, 100, 30)
+    };
+    let yes = out
+        .lines()
+        .find(|l| l.contains("Yes"))
+        .unwrap_or_else(|| panic!("no Yes option:\n{out}"));
+    assert!(
+        yes.contains("auto in"),
+        "an eligible card keeps its countdown: {yes:?}"
+    );
+    assert!(
+        !yes.contains("manual approval"),
+        "and claims no manual review: {yes:?}"
+    );
+}
