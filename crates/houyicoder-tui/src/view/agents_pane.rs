@@ -388,10 +388,15 @@ fn child_detail_lines(
         body.push(field_line(
             "Progress: ",
             &format!(
-                "turn {} · {} tok · {} calls",
+                "turn {} · {} {} · {} tokens",
                 entry.turn,
-                format_tokens(entry.tokens),
-                entry.tool_uses
+                entry.tool_uses,
+                if entry.tool_uses == 1 {
+                    "tool"
+                } else {
+                    "tools"
+                },
+                format_tokens(entry.tokens)
             ),
         ));
         if let Some(act) = &entry.last_activity {
@@ -420,11 +425,15 @@ fn child_detail_lines(
 /// duration), omitting any field that was not recorded.
 fn completed_metrics(done: &DelegationRow) -> String {
     let mut parts: Vec<String> = Vec::new();
+    // The same two words the fleet strip uses for the same two figures, so a
+    // reader comparing this pane with the footer is comparing one vocabulary
+    // rather than translating between two.
     if done.tool_uses > 0 {
-        parts.push(format!("{} calls", done.tool_uses));
+        let noun = if done.tool_uses == 1 { "tool" } else { "tools" };
+        parts.push(format!("{} {noun}", done.tool_uses));
     }
     if done.tokens > 0 {
-        parts.push(format!("{} tok", format_tokens(done.tokens)));
+        parts.push(format!("{} tokens", format_tokens(done.tokens)));
     }
     let secs = done.duration_ms / 1000;
     if secs > 0 {

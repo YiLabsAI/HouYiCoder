@@ -2,6 +2,7 @@
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use super::transcript::push_line_rows;
 use crate::records::TranscriptLine;
@@ -11,6 +12,7 @@ use crate::selection::TAG_SYSTEM;
 use crate::state::App;
 use crate::toggle_hint::ToggleHint;
 use crate::view::badge_color;
+use crate::view::line_wrap::truncate_width;
 
 /// One delegation's render inputs, borrowed from its transcript line. Grouped
 /// because they describe one thing; as loose parameters they said nothing
@@ -61,6 +63,11 @@ pub(crate) fn push_delegation_rows(
         (false, true) => ToggleHint::Collapse.suffix().to_string(),
         (false, false) => ToggleHint::Expand.suffix().to_string(),
     };
+    // The hint is the row's only affordance, so it is reserved before the
+    // summary takes its share: a summary long enough to fill the row used to
+    // push the closing half of the chord past the right edge, leaving the
+    // reader with a truncated "(ctrl+" and no way to know the row folds.
+    let (summary, hint) = fit_head(subagent_type, summary, &hint, width);
     let head = format!("\u{23bf} {subagent_type}: {summary}{hint}");
     // Plain tag so the head stays drag-selectable, plus the child session id
     // as its fold key: the mouse-down fold-key branch runs before selection
@@ -77,7 +84,7 @@ pub(crate) fn push_delegation_rows(
         Row::new(TAG_PLAIN, head.clone())
             .fold_key(fold_key)
             .group(enclosing.clone())
-            .pre(Some(head_line(subagent_type, summary, &hint, color))),
+            .pre(Some(head_line(subagent_type, &summary, &hint, color))),
     );
     if !expanded {
         return;
@@ -110,3 +117,32 @@ fn head_line(subagent_type: &str, summary: &str, hint: &str, color: Option<&str>
         Span::styled(format!(": {summary}{hint}"), dim),
     ])
 }
+
+/// Fit the head to one row, in the order the parts matter.
+///
+/// The hint names the row's only gesture, so it keeps its width first and the
+/// summary gives way: a reader who sees the opening of a key they cannot
+/// finish reading has learned nothing, while a summary cut short still names
+/// the row. The hint is dropped whole only when the row cannot hold the marker,
+/// the type and the hint together, where drawing it would mean clipping it.
+///
+/// Every measurement here is display columns, not characters. A summary in a
+/// wide-glyph script occupies two columns per character, so a character count
+/// undercounts by half and hands the row a line twice its width, which clips
+/// the chord just as the unbounded summary did.
+fn fit_head(subagent_type: &str, summary: &str, hint: &str, width: u16) -> (String, String) {
+    // The marker, the type, and the separator between the type and the
+    // summary: all three are drawn whatever the summary does.
+    let fixed = DISPLAY_WIDTH_OF_MARKER + UnicodeWidthStr::width(subagent_type) + 2;
+    let width = width as usize;
+    let hint_width = UnicodeWidthStr::width(hint);
+    let (hint, room) = if fixed + hint_width <= width {
+        (hint.to_string(), width - fixed - hint_width)
+    } else {
+        (String::new(), width.saturating_sub(fixed))
+    };
+    (truncate_width(summary, room), hint)
+}
+
+/// Display columns the marker and its trailing space occupy: one each.
+const DISPLAY_WIDTH_OF_MARKER: usize = 2;

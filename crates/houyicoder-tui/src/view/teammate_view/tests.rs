@@ -1,3 +1,7 @@
+use std::time::Duration;
+use std::time::Instant;
+
+use crate::agent_message::FLEET_GRACE;
 use crate::agent_message::FleetEntry;
 use crate::composition::app;
 use crate::records::TeammateView;
@@ -122,9 +126,11 @@ fn test_banner_carries_badge_color() {
     );
 }
 
-/// The hint states what Esc does here. An idle child has no turn to cancel,
-/// so Esc leaves; a running one is interrupted. The banner says which instead
-/// of advertising a key that does nothing.
+/// The hint names the two keys that work in the view and what each does. Esc
+/// leaves the view in both states, so it reads the same; the stop key appears
+/// only while a child is running, because only then is there a turn to stop.
+/// A banner that offered the stop key on a finished child would advertise an
+/// action with no target.
 #[test]
 fn test_banner_hint_follows_state() {
     let mut app = app();
@@ -141,8 +147,8 @@ fn test_banner_hint_follows_state() {
         "an idle child is left with Esc, got:\n{idle}"
     );
     assert!(
-        !idle.contains("Esc interrupt"),
-        "nothing is running to interrupt, got:\n{idle}"
+        !idle.contains("ctrl+x"),
+        "nothing is running to stop, got:\n{idle}"
     );
 
     app.sessions
@@ -164,8 +170,12 @@ fn test_banner_hint_follows_state() {
         });
     let running = render_text(&app, 80, 24);
     assert!(
-        running.contains("Esc interrupt"),
-        "a running child is interrupted, got:\n{running}"
+        running.contains("ctrl+x stop"),
+        "a running child names the stop key, got:\n{running}"
+    );
+    assert!(
+        running.contains("Esc return"),
+        "and still names the way out, got:\n{running}"
     );
 }
 
@@ -189,5 +199,194 @@ fn test_banner_prompt_single_line() {
     assert!(
         out.contains("First: look Then report"),
         "the prompt reads as one line, got:\n{out}"
+    );
+}
+
+/// A finished child's footer row is pinned only while the reader is inside its
+/// view. Without restarting the goodbye window on exit, the row drops on the
+/// very next frame, because its original completion time is long past the
+/// window. Stepping back would erase the row the reader just left.
+#[test]
+fn test_exit_restarts_finished_grace() {
+    let mut app = working_app();
+    let long_ago = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .expect("a minute ago");
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            description: String::new(),
+            turn: 3,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: None,
+            completed: Some("completed".into()),
+            completed_at: Some(long_ago),
+            started_at: None,
+        });
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+
+    app.exit_teammate_view();
+
+    let entry = app.fleet_entry("c1").expect("the row survives the exit");
+    let at = entry.completed_at.expect("a finished child has a stamp");
+    assert!(
+        at.elapsed() < FLEET_GRACE,
+        "the goodbye window starts when the reader leaves, not when the child finished"
+    );
+    assert!(
+        !app.drop_completed_fleet(),
+        "so the row stays on the next frame"
+    );
+}
+
+/// The window is restarted only for the child just viewed. Another finished
+/// child keeps its own clock, so stepping out of one view cannot resurrect a
+/// row that expired while the reader was elsewhere.
+#[test]
+fn test_exit_restarts_only_viewed() {
+    let mut app = working_app();
+    let long_ago = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .expect("a minute ago");
+    for id in ["c1", "c2"] {
+        app.sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .push(FleetEntry {
+                agent_id: id.into(),
+                subagent_type: "explore".into(),
+                description: String::new(),
+                turn: 3,
+                tokens: 100,
+                tool_uses: 0,
+                last_activity: None,
+                completed: Some("completed".into()),
+                completed_at: Some(long_ago),
+                started_at: None,
+            });
+    }
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+
+    app.exit_teammate_view();
+
+    let other = app.fleet_entry("c2").expect("the other row is still there");
+    assert_eq!(
+        other.completed_at,
+        Some(long_ago),
+        "an unviewed child keeps the clock it had"
+    );
+}
+
+/// A child still running has no clock to restart, so leaving its view must not
+/// invent one: a completion stamp on a running child would make it look
+/// finished and drop the row after the window.
+#[test]
+fn test_exit_keeps_running_clock() {
+    let mut app = working_app();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "explore".into(),
+            description: String::new(),
+            turn: 3,
+            tokens: 100,
+            tool_uses: 0,
+            last_activity: Some("grep".into()),
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        ..Default::default()
+    });
+
+    app.exit_teammate_view();
+
+    let entry = app.fleet_entry("c1").expect("a running child stays");
+    assert!(
+        entry.completed_at.is_none(),
+        "a running child gains no completion stamp"
+    );
+}
+
+/// The banner names the key that leaves whatever the child is doing, and names
+/// the stop key only while there is a turn to stop. A finished view has no
+/// turn left, so offering the stop key would promise an action with no target.
+#[test]
+fn test_banner_hint_matches_state() {
+    let mut app = working_app();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "verify".into(),
+            description: String::new(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: Some("grep".into()),
+            completed: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        subagent_type: "verify".into(),
+        ..Default::default()
+    });
+    let running = render_text(&app, 100, 24);
+    let title = running
+        .lines()
+        .find(|l| l.contains("Viewing @verify"))
+        .unwrap_or_else(|| panic!("no banner:\n{running}"));
+    assert!(title.contains("running"), "the state is named: {title}");
+    assert!(
+        title.contains("Esc return"),
+        "the way out is named: {title}"
+    );
+    assert!(
+        title.contains("ctrl+x stop"),
+        "and so is the way to stop it: {title}"
+    );
+
+    app.sessions.current.capabilities.fleet.entries[0].completed = Some("completed".into());
+    let done = render_text(&app, 100, 24);
+    let title = done
+        .lines()
+        .find(|l| l.contains("Viewing @verify"))
+        .unwrap_or_else(|| panic!("no banner:\n{done}"));
+    assert!(
+        title.contains("completed"),
+        "the finished state is named: {title}"
+    );
+    assert!(
+        title.contains("Esc return"),
+        "the way out is still named: {title}"
+    );
+    assert!(
+        !title.contains("ctrl+x"),
+        "a finished view offers no stop key: {title}"
     );
 }

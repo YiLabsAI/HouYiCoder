@@ -174,7 +174,21 @@ fn build_row<'a>(
     } else {
         ("◯ ", Style::default().fg(Color::Cyan))
     };
-    let tokens = format!("{} tok", format_tokens(entry.tokens));
+    // Both figures say what they count. A bare "tok" beside a tool count left
+    // the reader guessing whether it was input, output, or the total, and the
+    // tool count was missing entirely, so a child that had made eighty calls
+    // and a child that had made none read the same. A count of one takes the
+    // singular, the same way the transcript's own counts do.
+    let calls = if entry.tool_uses == 1 {
+        "tool"
+    } else {
+        "tools"
+    };
+    let spend = format!(
+        "{} {calls} · {} tokens",
+        entry.tool_uses,
+        format_tokens(entry.tokens)
+    );
     // The label names the job, not the role. The type is what the parent
     // model already chose, so repeating it on every row of a fleet tells the
     // reader nothing they did not just decide; the task summary is the only
@@ -187,20 +201,20 @@ fn build_row<'a>(
         entry.description.as_str()
     };
     let body = if entry.completed.is_some() {
-        format!("{label} · done · {tokens}")
+        format!("{label} · done · {spend}")
     } else if awaiting == Some(entry.agent_id.as_str()) {
         let elapsed = entry
             .started_at
             .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
             .unwrap_or_default();
-        format!("{label}: waiting for approval · {tokens}{elapsed}")
+        format!("{label}: waiting for approval · {spend}{elapsed}")
     } else {
         let elapsed = entry
             .started_at
             .map(|t| format!(" · {}", format_elapsed(t.elapsed())))
             .unwrap_or_default();
         format!(
-            "{label}: {} · {tokens} · turn {}{elapsed}",
+            "{label}: {} · {spend} · turn {}{elapsed}",
             verb_for(entry.last_activity.as_deref()),
             entry.turn,
         )

@@ -35,16 +35,17 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     if let Some(fg) = view.color.as_deref().and_then(badge_color) {
         name_style = name_style.fg(fg);
     }
-    // The hint states what the keys do here, which depends on whether the
-    // child still has a turn to interrupt: Esc cancels a running turn and
-    // leaves an idle one, so the banner says which.
+    // The hint names the two keys that work here and what each does. Esc
+    // leaves the view whatever the child is doing, so it reads the same in
+    // both states; only a running child offers the second key, because only a
+    // running child has a turn to stop.
     let running = app
         .fleet_entry(&view.child_sid)
         .is_some_and(|e| e.completed.is_none());
     let hint = if running {
-        " (running) · Esc interrupt · shift+↑↓ return"
+        " (running) · Esc return · ctrl+x stop"
     } else {
-        " (completed) · Esc return · shift+↑↓ return"
+        " (completed) · Esc return"
     };
     let title = Line::from(vec![
         Span::raw("Viewing "),

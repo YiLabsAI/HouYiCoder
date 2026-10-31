@@ -184,6 +184,12 @@ fn test_completed_row_terse() {
     );
 }
 
+/// A row's rendered text, for the copy assertions.
+fn row_text(e: &FleetEntry) -> String {
+    let line = build_row(e, false, None, false);
+    line.spans.iter().map(|s| s.content.to_string()).collect()
+}
+
 /// drop_completed drops a finished entry once its grace window elapsed.
 /// A completed_at six seconds ago is past the five-second grace, so the
 /// entry leaves the footer (the result stays in the transcript fold).
@@ -471,5 +477,79 @@ fn test_row_type_fallback() {
     assert!(
         !text.contains("◯  ·") && !text.contains("◯ :"),
         "and the label is never left empty: {text}"
+    );
+}
+
+/// A row states both figures by name. A bare "tok" left the reader guessing
+/// whether the number was input, output or the total, and the tool count was
+/// missing, so a child that had made many calls read the same as one that had
+/// made none.
+#[test]
+fn test_row_names_both_figures() {
+    let mut e = entry("c1", "explore", 2, 3_200_000, "grep");
+    e.tool_uses = 80;
+    let text = row_text(&e);
+    assert!(text.contains("80 tools"), "the call count is named: {text}");
+    assert!(text.contains("tokens"), "the unit is spelled out: {text}");
+    assert!(
+        !text.contains(" tok "),
+        "and the abbreviation is gone: {text}"
+    );
+}
+
+/// The finished row states the same pair, so a completed child and a running
+/// one are compared on the same two numbers.
+#[test]
+fn test_finished_row_names_both() {
+    let mut e = entry("c1", "explore", 2, 1_500, "grep");
+    e.tool_uses = 3;
+    e.completed = Some("completed".into());
+    e.completed_at = Some(Instant::now());
+    let text = row_text(&e);
+    assert!(text.contains("3 tools"), "the call count is named: {text}");
+    assert!(text.contains("1.5k tokens"), "the spend is named: {text}");
+    assert!(
+        text.contains("done"),
+        "and the row still says it ended: {text}"
+    );
+}
+
+/// A count of one takes the singular. The row is read at a glance, and
+/// "1 tools" stops the eye on exactly the number it was glancing at.
+#[test]
+fn test_single_tool_is_singular() {
+    let mut e = entry("c1", "explore", 1, 900, "grep");
+    e.tool_uses = 1;
+    let text = row_text(&e);
+    assert!(text.contains("1 tool ·"), "one call reads singular: {text}");
+    assert!(!text.contains("1 tools"), "and never plural: {text}");
+}
+
+/// A child that has made no calls says so. Dropping the zero would leave the
+/// reader unable to tell "no calls yet" from "the count is not tracked".
+#[test]
+fn test_zero_tools_is_stated() {
+    let mut e = entry("c1", "explore", 1, 0, "grep");
+    e.tool_uses = 0;
+    let text = row_text(&e);
+    assert!(
+        text.contains("0 tools"),
+        "an untouched child states its zero: {text}"
+    );
+}
+
+/// Every formatter extreme the row can carry still fits a narrow footer row.
+/// The widest token form is six columns, so the row is measured at the narrow
+/// width the footer is budgeted to rather than at the comfortable one.
+#[test]
+fn test_widest_row_fits_narrow() {
+    let mut e = entry("c1", "explore", 99, 999_900, "grep");
+    e.tool_uses = 999;
+    let text = row_text(&e);
+    eprintln!("DBGW widest={} text={text}", text.chars().count());
+    assert!(
+        text.chars().count() <= 80,
+        "the widest row still fits a standard footer: {} cols in {text}",
+        text.chars().count()
     );
 }

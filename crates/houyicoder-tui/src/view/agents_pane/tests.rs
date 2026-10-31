@@ -351,17 +351,68 @@ fn test_completed_metrics_render() {
     });
     app.sessions.current.refresh_agents();
     let list_out = render(&app, 80, 14);
+    // The row names both figures with the same words the fleet strip uses, so
+    // one field is not spelled two ways in two views.
     assert!(
-        list_out.contains("18 calls \u{00b7} 24.5k tok \u{00b7} 2m 5s"),
-        "completed L0 row shows calls, tokens, and duration:\n{list_out}"
+        list_out.contains("18 tools \u{00b7} 24.5k tokens \u{00b7} 2m 5s"),
+        "completed L0 row names the call count and the spend:\n{list_out}"
     );
     app.ui
         .agents_pane
         .open_child_detail("verify".into(), "c-metrics".into());
     let detail_out = render(&app, 80, 14);
     assert!(
-        detail_out.contains("Metrics: 18 calls \u{00b7} 24.5k tok \u{00b7} 2m 5s"),
-        "completed L1 detail shows metrics:\n{detail_out}"
+        detail_out.contains("Metrics: 18 tools \u{00b7} 24.5k tokens \u{00b7} 2m 5s"),
+        "completed L1 detail repeats them unchanged:\n{detail_out}"
     );
     assert!(detail_out.contains("Prompt: run suite"), "{detail_out}");
+}
+
+/// The call count and the spend are spelled one way across the two views that
+/// show them. A reader who checks the footer and then the agents pane is
+/// reading one word for one number; "calls" in one and "tools" in the other
+/// makes them stop to work out whether the two figures are even the same.
+#[test]
+fn test_spend_words_agree() {
+    let mut app = composition::app();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c-words".into(),
+            subagent_type: "verify".into(),
+            description: String::new(),
+            turn: 2,
+            tokens: 24_500,
+            tool_uses: 18,
+            last_activity: None,
+            completed: Some("done".into()),
+            completed_at: Some(Instant::now()),
+            started_at: Some(Instant::now() - Duration::from_secs(125)),
+        });
+    app.push_transcript_line(TranscriptLine::Subagent {
+        child_sid: "c-words".into(),
+        subagent_type: "verify".into(),
+        summary: "done".into(),
+        prompt: "run".into(),
+        folded_transcript: Vec::new(),
+        color: None,
+    });
+    app.sessions.current.refresh_agents();
+    let out = render(&app, 80, 14);
+    assert!(
+        out.contains("18 tools · 24.5k tokens"),
+        "the pane names both figures: {out}"
+    );
+    // The old spellings are checked with their separators attached, because
+    // " tok" is a prefix of " tokens" and a bare substring test would flag the
+    // correct text.
+    for stale in [" tok \u{00b7}", " calls"] {
+        assert!(
+            !out.contains(stale),
+            "no abbreviated or alternate word survives: found {stale:?} in {out}"
+        );
+    }
 }

@@ -586,7 +586,7 @@ fn test_posture_reaches_profile() {
 fn test_rerender_keeps_posture() {
     // The drift guard. A session takes two paths to a profile: the one cached at
     // construction, and a fresh render whenever a dir was added or the fence was
-    // narrowed. If only the cached path carried the posture, opening the fence
+    // restricted. If only the cached path carried the posture, opening the fence
     // would appear to work until the user added a directory, at which point the
     // fence would silently close again mid-session. Both paths must agree.
     let mut policy = NetworkPolicy::contained();
@@ -715,7 +715,7 @@ async fn test_read_dir_denies_write() {
 }
 
 /// Spike (Slice -1, go/no-go gate for the worktree feature): prove the
-/// load-bearing bet "narrow fence to a linked worktree + .git allow-back
+/// load-bearing bet "a fence restricted to a linked worktree plus a .git allow-back
 /// lets git commit still work" holds under a real sandbox-exec. This combo
 /// has never been exercised in this repo — the dead new_in_worktree path
 /// passed an empty additional list (no .git allow-back) and was never wired,
@@ -731,7 +731,7 @@ async fn test_read_dir_denies_write() {
 /// regression of the bet so a profile regression is caught):
 /// 1. The .git allow-back path MUST be canonicalized (realpath /private/var,
 ///    not /var on macOS). add_working_dir already canonicalizes; the
-///    narrow_to_worktree port must too.
+///    the worktree entry path must do the same.
 /// 2. The worktree profile MUST read-allow <repo>/.git/config (git needs to
 ///    read repo config, else fatal). The mandatory .git/config deny (which
 ///    blocks credential-helper INSERTION via config writes) is amended to
@@ -754,12 +754,12 @@ async fn test_read_dir_denies_write() {
 ///    git identity and aliases from every command in the session.
 ///
 /// A throwaway temp repo is used so the live repo is never touched. Ignored
-/// (needs macOS sandbox-exec); run with --ignored test_narrow_fence_git_works.
+/// (needs macOS sandbox-exec); run with --ignored test_worktree_fence_commit_works.
 #[tokio::test]
 #[ignore]
-async fn test_narrow_fence_git_works() {
+async fn test_worktree_fence_commit_works() {
     let parent = temp_dir().join(format!(
-        "houyi-spike-narrow-{}-{}",
+        "houyi-spike-restrict-{}-{}",
         id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -820,7 +820,7 @@ async fn test_narrow_fence_git_works() {
         .expect("sandbox-exec");
     assert!(
         fix.status.success(),
-        "BET FAILED: narrow fence + .git allow-back + read-allow .git/config must let git commit work: {}",
+        "BET FAILED: a worktree-scoped fence plus the .git allow-back and the .git/config read-allow must let git commit work: {}",
         String::from_utf8_lossy(&fix.stderr)
     );
     assert!(
@@ -831,16 +831,22 @@ async fn test_narrow_fence_git_works() {
     remove_dir_all(&parent).ok();
 }
 
-/// Narrow state round-trip (no sandbox-exec): build a session fenced to a
-/// throwaway repo, git-worktree-add a worktree under it, narrow the fence,
-/// assert the effective workspace root moved to the worktree + the guard
-/// restore reverts it. Exercises narrow_to_worktree + active_exec_count +
-/// the restore closure without spawning sandbox-exec (the narrow is pure
-/// state mutation; the profile binds only at exec).
+/// Entering a worktree moves the session's fence and leaving it moves the
+/// fence back.
+///
+/// The session starts fenced to a throwaway repo. Entering a worktree created
+/// under that repo calls narrow_to_worktree, which must repoint the effective
+/// workspace root at the worktree, and the guard returned by that call must
+/// restore the repo root when it is dropped. The commit in between proves the
+/// repointed fence still lets git work, which is the whole reason the fence
+/// moves rather than being left over the parent checkout.
+///
+/// No second sandbox-exec is spawned by the state assertions themselves; the
+/// one exec inside covers the profile the moved fence builds.
 #[tokio::test]
-async fn test_narrow_state_round_trip() {
+async fn test_worktree_fence_round_trip() {
     let parent = temp_dir().join(format!(
-        "houyi-narrow-state-{}-{}",
+        "houyi-restrict-state-{}-{}",
         id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -860,7 +866,7 @@ async fn test_narrow_state_round_trip() {
     let wt = repo
         .join(".houyicoder")
         .join("worktrees")
-        .join("test-narrow");
+        .join("test-restrict");
     create_dir_all(wt.parent().unwrap()).expect("mkdir worktree parent");
     assert!(
         run(&["worktree", "add", &wt.to_string_lossy(), "-q"])
@@ -872,24 +878,24 @@ async fn test_narrow_state_round_trip() {
     assert_eq!(s.active_exec_count(), 0, "no in-flight exec at rest");
     let guard = s
         .narrow_to_worktree(&wt, &repo.join(".git"))
-        .expect("narrow");
+        .expect("the fence moves to the worktree");
     // Effective workspace root moved to the worktree.
     assert_eq!(
         s.workspace_root().as_ref(),
         wt.canonicalize().unwrap().as_path()
     );
-    // The real exec path under the narrow profile: the worktree session binds
+    // The real exec path under the worktree profile: the session binds
     // the fence to the worktree and appends the .git/config read-allow, so a
     // git commit in the worktree succeeds (the bet the spike proved). No
     // environment rewriting is involved any more; git reads its real config.
-    // Covers the current_profile narrow branch.
+    // Covers the current_profile worktree branch.
     let commit = s
-        .exec("git commit --allow-empty -m narrow-commit")
+        .exec("git commit --allow-empty -m restricted-fence-commit")
         .await
         .expect("exec");
     assert!(
         commit.is_success(),
-        "narrow fence + .git allow-back lets git commit work: {commit:?}"
+        "the moved fence plus the .git allow-back lets git commit work: {commit:?}"
     );
     // Restore reverts the fence to the repo root.
     guard.restore().expect("restore");

@@ -245,6 +245,23 @@ impl FleetCapability {
         });
         self.entries.len() != before
     }
+
+    /// Start the grace window for one child's finished row now.
+    ///
+    /// The window exists so the user sees the result land before the row
+    /// leaves, but the row is pinned while that child is being viewed: a child
+    /// that finished a while ago keeps its row only because the reader is
+    /// still inside its view. Leaving the view used to drop the row on the
+    /// very next frame, because the original completion time was already past
+    /// the window. Restamping on exit gives the reader the same five seconds
+    /// of goodbye that a child finishing in plain sight gets.
+    pub(crate) fn restart_grace(&mut self, agent_id: &str) {
+        for entry in &mut self.entries {
+            if entry.agent_id == agent_id && entry.completed.is_some() {
+                entry.completed_at = Some(Instant::now());
+            }
+        }
+    }
 }
 
 /// An in-flight pane mutation, keyed by the request id its reply will carry.

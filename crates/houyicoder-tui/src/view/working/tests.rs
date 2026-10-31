@@ -1168,6 +1168,8 @@ fn test_thought_row_subsecond_draw() {
     );
 }
 
+mod delegation_head;
+
 mod bash_progress;
 
 mod highlight;

@@ -152,6 +152,14 @@ impl App {
         {
             self.set_expanded_keys(parent_keys);
         }
+        // The finished child's footer row was pinned only because the reader
+        // was inside its view. Leaving restarts the goodbye window, so the row
+        // does not vanish on the frame the user steps back.
+        self.sessions
+            .current
+            .capabilities
+            .fleet
+            .restart_grace(&view.child_sid);
         // Exiting swaps active_transcript back to the parent, so the render
         // cache must drop the child rows and rebuild from the parent.
         self.bump_transcript_version();
