@@ -3,9 +3,10 @@ use crate::agent::*;
 use crate::provider::test_support::FakeProvider;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
+use futures::Stream;
 use futures::StreamExt;
 use futures::stream::iter;
-use futures::stream::pending;
+use futures::stream::poll_fn;
 use houyicoder_api::agent_event::{
     AgentEventHandlers, ResponseStreamEvent, RunCompletionStatus, RunLifecycleEvent,
 };
@@ -28,7 +29,8 @@ use std::fs::write;
 use std::process::id;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tokio::task::yield_now;
+use std::sync::OnceLock;
+use std::task::Poll;
 pub(crate) mod abort_tool;
 mod ask_question;
 mod budget_pressure_gate;
@@ -892,14 +894,79 @@ impl Tool for GuardedTool {
     }
 }
 
-/// A provider whose stream emits the given LlmEvents then never yields again (esc-interrupt path).
+/// The tail of a stream that never yields another item, plus one cancel to
+/// perform the first time the run reaches it. Cancelling there is what makes
+/// an interrupt test deterministic: the cancel lands while the run waits on
+/// the model, instead of depending on a count of scheduler yields that a slow
+/// build can outlast.
+pub(crate) struct TailCancel {
+    at_tail: OnceLock<Box<dyn Fn() + Send + Sync>>,
+}
+
+impl TailCancel {
+    pub(crate) fn new() -> Self {
+        Self {
+            at_tail: OnceLock::new(),
+        }
+    }
+
+    /// Cancel the run at the tail. The first installation wins; Weak keeps
+    /// the provider from holding the runner alive.
+    pub(crate) fn abort_run_at_tail(&self, runner: &Arc<Runner>) {
+        let runner = Arc::downgrade(runner);
+        drop(self.at_tail.set(Box::new(move || {
+            if let Some(runner) = runner.upgrade() {
+                runner.abort();
+            }
+        })));
+    }
+
+    /// Cancel the active turn at the tail, leaving the run alive.
+    pub(crate) fn cancel_turn_at_tail(&self, runner: &Arc<Runner>) {
+        let runner = Arc::downgrade(runner);
+        drop(self.at_tail.set(Box::new(move || {
+            if let Some(runner) = runner.upgrade() {
+                runner.cancel_turn();
+            }
+        })));
+    }
+
+    /// The tail itself: perform the installed cancel on the first poll, then
+    /// wait for an item that never comes.
+    pub(crate) fn tail(&self) -> impl Stream<Item = Result<LlmEvent, ProviderError>> + '_ {
+        let mut fired = false;
+        poll_fn(move |_cx| {
+            if !fired {
+                fired = true;
+                if let Some(cancel) = self.at_tail.get() {
+                    cancel();
+                }
+            }
+            Poll::<Option<Result<LlmEvent, ProviderError>>>::Pending
+        })
+    }
+}
+
+/// A provider whose stream emits the given LlmEvents then never yields again
+/// (esc-interrupt path). A test can cancel the run the moment the consumer
+/// reaches the tail, so the interrupt lands where the run is waiting on the
+/// model rather than after a guess at how many yields it needs to get there.
 pub(crate) struct HangingProvider {
     events: Vec<LlmEvent>,
+    tail: TailCancel,
 }
 
 impl HangingProvider {
     pub(crate) fn new(events: Vec<LlmEvent>) -> Self {
-        Self { events }
+        Self {
+            events,
+            tail: TailCancel::new(),
+        }
+    }
+
+    /// Abort the run once it has read every event and waits on this stream.
+    pub(crate) fn abort_at_tail(&self, runner: &Arc<Runner>) {
+        self.tail.abort_run_at_tail(runner);
     }
 }
 
@@ -924,8 +991,7 @@ impl ModelProvider for HangingProvider {
         _req: CompletionRequest,
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let prefix = iter(self.events.clone().into_iter().map(Ok));
-        let tail = pending();
-        Box::pin(prefix.chain(tail))
+        Box::pin(prefix.chain(self.tail.tail()))
     }
 }
 
@@ -937,15 +1003,11 @@ async fn test_abort_flushes_partial() {
         id: "t1".into(),
         text: "partial answer".into(),
     }]));
-    let runner = Arc::new(runner_with(p, ToolRegistry::new()));
+    let runner = Arc::new(runner_with(p.clone(), ToolRegistry::new()));
+    p.abort_at_tail(&runner);
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    // Let the run enter the streaming select! (yields until the pending tail).
-    for _ in 0..5 {
-        yield_now().await;
-    }
-    runner.abort();
     let result = task.await.expect("run task").expect("run ok");
     match result.outcome {
         RunOutcome::Interrupted(reason) => assert_eq!(reason, "interrupted by user"),
@@ -980,14 +1042,11 @@ async fn test_abort_reconciles_orphan_results() {
     }]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedTool::new()));
-    let runner = Arc::new(runner_with(p, tools));
+    let runner = Arc::new(runner_with(p.clone(), tools));
+    p.abort_at_tail(&runner);
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    for _ in 0..5 {
-        yield_now().await;
-    }
-    runner.abort();
     let result = task.await.expect("run task").expect("run ok");
     assert!(matches!(result.outcome, RunOutcome::Interrupted(_)));
     let events = runner.store().replay(session).await.expect("replay");

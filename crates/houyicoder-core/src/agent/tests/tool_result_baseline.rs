@@ -23,7 +23,6 @@ use crate::provider::test_support::FakeProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::LlmEvent;
-use tokio::task::yield_now;
 
 /// The seven canonical model-visible tool-result payloads, in dispatch-path
 /// order. The ToolError reshape and the FallbackToolOutcome enum must produce
@@ -214,14 +213,11 @@ async fn test_baseline_interrupted_orphan() {
     }]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(GuardedTool::new()));
-    let runner = Arc::new(runner_with(p, tools));
+    let runner = Arc::new(runner_with(p.clone(), tools));
+    p.abort_at_tail(&runner);
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    for _ in 0..5 {
-        yield_now().await;
-    }
-    runner.abort();
     let result = task.await.expect("run task").expect("run ok");
     assert!(matches!(result.outcome, RunOutcome::Interrupted(_)));
     let output = tool_result_output(&runner, session, "c1").await;

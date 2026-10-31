@@ -5,6 +5,7 @@
 use super::runner_with;
 use super::*;
 use futures::stream::iter;
+use futures::stream::pending;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::TruncationSignal;
 use houyicoder_protocol::llm::CompletionRequest;

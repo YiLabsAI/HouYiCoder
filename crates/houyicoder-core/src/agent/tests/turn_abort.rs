@@ -14,23 +14,23 @@ use houyicoder_protocol::llm::{
 };
 use tokio::sync::Notify;
 
-use super::runner_with;
-use crate::agent::{RunError, RunOutcome, ToolRegistry};
+use super::{TailCancel, runner_with};
+use crate::agent::{RunError, RunOutcome, Runner, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 use futures::StreamExt;
 use futures::stream::iter;
 use futures::stream::pending;
 use futures::stream::unfold;
 use std::time::Duration;
-use tokio::task::yield_now;
 use tokio::time::timeout;
 
 /// A provider whose first stream call never yields (the model fetch is
-/// in-flight, waiting) so a per-turn cancel can race the stream select.
-/// Later calls delegate to a real fake response so the run can finish.
+/// waiting) so a per-turn cancel can race the stream select. Later calls
+/// delegate to a real fake response so the run can finish.
 struct StallOnceProvider {
     inner: Arc<FakeProvider>,
     calls: AtomicU32,
+    tail: TailCancel,
 }
 
 impl StallOnceProvider {
@@ -38,7 +38,13 @@ impl StallOnceProvider {
         Self {
             inner,
             calls: AtomicU32::new(0),
+            tail: TailCancel::new(),
         }
+    }
+
+    /// Cancel the first turn once its model call is waiting for an item.
+    fn cancel_turn_at_tail(&self, runner: &Arc<Runner>) {
+        self.tail.cancel_turn_at_tail(runner);
     }
 }
 
@@ -53,7 +59,7 @@ impl ModelProvider for StallOnceProvider {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             // The first model call stalls forever so the per-turn cancel
             // can fire while the stream select waits on stream.next().
-            Box::pin(pending())
+            Box::pin(self.tail.tail())
         } else {
             self.inner.stream(req)
         }
@@ -77,16 +83,12 @@ async fn test_per_turn_abort_continues() {
         model: "test".into(),
     };
     let inner = Arc::new(FakeProvider::new(vec![finish]));
-    let provider: Arc<dyn ModelProvider> = Arc::new(StallOnceProvider::new(inner));
-    let runner = Arc::new(runner_with(provider, ToolRegistry::new()));
+    let provider = Arc::new(StallOnceProvider::new(inner));
+    let runner = Arc::new(runner_with(provider.clone(), ToolRegistry::new()));
+    provider.cancel_turn_at_tail(&runner);
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    // Let the run enter the first model call + stall on the pending stream.
-    for _ in 0..30 {
-        yield_now().await;
-    }
-    runner.cancel_turn();
     let result = timeout(Duration::from_secs(3), task)
         .await
         .expect("run resolved within 3s after the per-turn abort")
@@ -127,6 +129,7 @@ async fn test_cancel_turn_idle_noop() {
 struct StallMidStreamProvider {
     finish: Arc<FakeProvider>,
     calls: AtomicU32,
+    tail: TailCancel,
 }
 
 impl StallMidStreamProvider {
@@ -134,7 +137,13 @@ impl StallMidStreamProvider {
         Self {
             finish,
             calls: AtomicU32::new(0),
+            tail: TailCancel::new(),
         }
+    }
+
+    /// Cancel the first turn once its stream stalls after the first event.
+    fn cancel_turn_at_tail(&self, runner: &Arc<Runner>) {
+        self.tail.cancel_turn_at_tail(runner);
     }
 }
 
@@ -150,7 +159,7 @@ impl ModelProvider for StallMidStreamProvider {
             // Emit the first event of the real stream, then stall forever
             // so the drive loop is mid-stream when cancel_turn fires.
             let first = self.finish.stream(req);
-            Box::pin(first.take(1).chain(pending()))
+            Box::pin(first.take(1).chain(self.tail.tail()))
         } else {
             self.finish.stream(req)
         }
@@ -174,16 +183,12 @@ async fn test_mid_stream_abort() {
         model: "test".into(),
     };
     let inner = Arc::new(FakeProvider::new(vec![finish]));
-    let provider: Arc<dyn ModelProvider> = Arc::new(StallMidStreamProvider::new(inner));
-    let runner = Arc::new(runner_with(provider, ToolRegistry::new()));
+    let provider = Arc::new(StallMidStreamProvider::new(inner));
+    let runner = Arc::new(runner_with(provider.clone(), ToolRegistry::new()));
+    provider.cancel_turn_at_tail(&runner);
     let session = SessionId::new();
     let r = runner.clone();
     let task = tokio::spawn(async move { r.run(session, "hi".into()).await });
-    // Let the run emit the first event + enter the mid-stream stall.
-    for _ in 0..40 {
-        yield_now().await;
-    }
-    runner.cancel_turn();
     let result = timeout(Duration::from_secs(3), task)
         .await
         .expect("run resolved within 3s after the mid-stream abort")
