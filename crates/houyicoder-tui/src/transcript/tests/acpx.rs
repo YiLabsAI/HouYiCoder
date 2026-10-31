@@ -55,3 +55,50 @@ fn test_compaction_one_row() {
         "the summary is the row's body, not a row of its own"
     );
 }
+
+/// ATTACK by counterexample: boundary, boundary, summary, summary. Two
+/// compactions in one window is rare but the wire permits it, and the join is
+/// by append order alone. The second summary must not land on the same row as
+/// the first, leaving one digest lost and one overwritten.
+#[test]
+fn test_paired_digests() {
+    let frames = vec![
+        user_msg("hi"),
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextCompactionBoundary,
+            serde_json::json!({ "checkpoint": "cp-one" }),
+        )),
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextCompactionBoundary,
+            serde_json::json!({ "checkpoint": "cp-two" }),
+        )),
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextSummary,
+            serde_json::json!({ "text": "first digest" }),
+        )),
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextSummary,
+            serde_json::json!({ "text": "second digest" }),
+        )),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let compactions: Vec<&TranscriptLine> = lines
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::Compaction { .. }))
+        .collect();
+    assert_eq!(compactions.len(), 2, "one row per boundary: {lines:?}");
+    let digests: Vec<String> = compactions
+        .iter()
+        .filter_map(|l| match l {
+            TranscriptLine::Compaction { summary, .. } if !summary.is_empty() => {
+                Some(summary.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        digests.len(),
+        2,
+        "both digests are kept, not one overwriting the other: {lines:?}"
+    );
+}

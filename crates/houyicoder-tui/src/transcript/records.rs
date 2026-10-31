@@ -265,14 +265,28 @@ pub enum TranscriptLine {
 
 /// The one-line label a compaction row shows. The statistics sit in
 /// parentheses only when the boundary reported any, so a checkpoint without
-/// them reads as the bare event rather than as an empty pair of brackets.
-pub(crate) fn compaction_row_text(stats: &str, hint: ToggleHint) -> String {
-    let detail = if stats.is_empty() {
-        String::new()
-    } else {
-        format!(" ({stats})")
-    };
-    format!("\u{273b} Context compacted{detail}{}", hint.suffix())
+/// them reads as the bare event rather than as an empty pair of brackets. The
+/// fold chord rides inside the same parentheses, joined by a middle dot, which
+/// is the shape every other foldable block in the transcript uses.
+///
+/// A row with no fold group passes None: it is still named, but it must not
+/// advertise a chord that has nothing to toggle. A digest that arrives with no
+/// boundary is the one case, and the row is the only trace of that event.
+pub(crate) fn compaction_row_text(stats: &str, hint: Option<ToggleHint>) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if !stats.is_empty() {
+        parts.push(stats);
+    }
+    if let Some(hint) = hint {
+        // suffix() is the whole parenthesised affordance for callers that
+        // concatenate it after a label. Here the list owns the parentheses, so
+        // only the words go in.
+        parts.push(hint.action());
+    }
+    if parts.is_empty() {
+        return "\u{273b} Context compacted".to_string();
+    }
+    format!("\u{273b} Context compacted ({})", parts.join(" \u{00b7} "))
 }
 
 /// Build an inline Subagent fold-group line from an agent-tool result, or
@@ -541,8 +555,10 @@ impl TranscriptLine {
             // child transcript is fetched on expand, not inlined here.
             Self::Subagent { summary, .. } => summary.clone(),
             Self::Compaction { stats, .. } => {
-                let hint = ToggleHint::Expand;
-                compaction_row_text(stats, hint)
+                // The search fallback carries no affordance: nothing on this
+                // path toggles anything, so only the event and its
+                // statistics belong in the searchable text.
+                compaction_row_text(stats, None)
             }
         }
     }

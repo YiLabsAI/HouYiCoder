@@ -32,4 +32,13 @@ impl ToggleHint {
             Self::Collapse => " (ctrl+o to collapse)",
         }
     }
+
+    /// The affordance words without parentheses, for a caller that supplies
+    /// its own grouping around them.
+    pub(crate) const fn action(self) -> &'static str {
+        match self {
+            Self::Expand => "ctrl+o to expand",
+            Self::Collapse => "ctrl+o to collapse",
+        }
+    }
 }

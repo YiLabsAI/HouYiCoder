@@ -2,6 +2,8 @@
 //! plus the model's whole digest pasted into the transcript.
 
 use super::*;
+use crate::records::compaction_row_text;
+use crate::ui::toggle_hint::ToggleHint;
 
 /// Collapsed, a compaction is one dim line naming the event and the chord that
 /// reveals the digest. The digest itself must not be on screen: it is
@@ -107,4 +109,89 @@ fn test_compaction_count_tracks_digest() {
         expanded, 4,
         "expanded adds one row per digest line, matching the draw path"
     );
+}
+
+/// ATTACK: two compactions in one session. The second summary must attach to
+/// the second boundary, not overwrite the first one's digest.
+#[test]
+fn test_digests_stay_apart() {
+    let mut app = working_app();
+    app.sessions.current.transcript = vec![
+        TranscriptLine::Compaction {
+            key: "cp-1".into(),
+            stats: "first".into(),
+            summary: "digest one".into(),
+        },
+        TranscriptLine::Compaction {
+            key: "cp-2".into(),
+            stats: "second".into(),
+            summary: "digest two".into(),
+        },
+    ]
+    .into();
+    app.ui.transcript_view.toggle_fold("cp-1".into());
+    let out = render_text(&app, 100, 30);
+    assert!(out.contains("digest one"), "first digest visible: {out}");
+    assert!(!out.contains("digest two"), "second stays folded: {out}");
+}
+
+/// ATTACK: a summary that arrives with no boundary at all gets a row with an
+/// empty fold key. The row advertises the expand chord, which the user presses,
+/// and nothing can happen because no fold group owns that key. The bug-log
+/// standard says an affordance must be backed by an action.
+#[test]
+fn test_orphan_no_chord() {
+    let mut app = working_app();
+    app.sessions.current.transcript = vec![TranscriptLine::Compaction {
+        key: String::new(),
+        stats: String::new(),
+        summary: "an orphan digest".into(),
+    }]
+    .into();
+    let out = render_text(&app, 100, 30);
+    assert!(
+        !out.contains("ctrl+o to expand"),
+        "an orphan row must not advertise a chord it cannot honour: {out}"
+    );
+    assert!(
+        out.contains("an orphan digest") || out.contains("Context compacted"),
+        "the event is still named: {out}"
+    );
+}
+
+/// ATTACK on the cross-path invariant: verbose mode draws the digest without a
+/// fold, so the row count must account for it. If counts.rs forgets verbose
+/// while the renderer honours it, every scroll offset after the row is wrong.
+#[test]
+fn test_verbose_count_matches_render() {
+    let mut app = working_app();
+    app.ui.verbose = true;
+    let line = TranscriptLine::Compaction {
+        key: "cp-1".into(),
+        stats: "900 -> 120".into(),
+        summary: "one\n two\n three".into(),
+    };
+    app.sessions.current.transcript = vec![line.clone()].into();
+    let out = render_text(&app, 100, 30);
+    let drawn = out.lines().filter(|l| !l.trim().is_empty()).count();
+    let counted = app.line_display_rows(&line);
+    assert_eq!(
+        counted, 4,
+        "verbose draws the head plus three digest rows: counted={counted} drawn={drawn}\n{out}"
+    );
+}
+
+/// The exact label the bug report asked for: statistics and the fold chord in
+/// one parenthesised pair joined by a middle dot.
+#[test]
+fn test_compaction_label_shape() {
+    let row = compaction_row_text("754 turns, 5885 events", Some(ToggleHint::Expand));
+    assert_eq!(
+        row,
+        "\u{273b} Context compacted (754 turns, 5885 events \u{00b7} ctrl+o to expand)"
+    );
+    let bare = compaction_row_text("", Some(ToggleHint::Expand));
+    assert_eq!(bare, "\u{273b} Context compacted (ctrl+o to expand)");
+    let unfolded = compaction_row_text("754 turns", None);
+    assert_eq!(unfolded, "\u{273b} Context compacted (754 turns)");
 }

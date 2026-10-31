@@ -33,21 +33,28 @@ pub(crate) fn push_compaction_rows(
     sink: &mut RowSet,
 ) {
     let expanded = app.ui.transcript_view.expanded.fold_groups.contains(key);
-    let hint = if expanded {
-        ToggleHint::Collapse
+    // A row whose key is empty came from a digest with no boundary. No fold
+    // group owns it, so it is drawn as a plain line: offering the chord would
+    // promise a toggle that has nothing to act on.
+    let foldable = !key.is_empty();
+    let hint = if !foldable {
+        None
+    } else if expanded {
+        Some(ToggleHint::Collapse)
     } else {
-        ToggleHint::Expand
+        Some(ToggleHint::Expand)
     };
     let head = compaction_row_text(stats, hint);
-    sink.push(
-        Row::new(TAG_SYSTEM, head.clone())
-            .fold_key(Some(key.to_string()))
+    let row = Row::new(TAG_SYSTEM, head.clone()).pre(Some(Line::from(Span::styled(
+        head,
+        Style::default().fg(Color::DarkGray),
+    ))));
+    sink.push(if foldable {
+        row.fold_key(Some(key.to_string()))
             .group(Some(key.to_string()))
-            .pre(Some(Line::from(Span::styled(
-                head,
-                Style::default().fg(Color::DarkGray),
-            )))),
-    );
+    } else {
+        row
+    });
     if !expanded || summary.is_empty() {
         return;
     }

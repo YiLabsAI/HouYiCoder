@@ -343,6 +343,7 @@ fn walk_window<'a, F: AsRef<TranscriptFrame>>(
         out: Vec::with_capacity(frames.len()),
         ids: Vec::with_capacity(frames.len()),
         late_results: Vec::new(),
+        open_compactions: Vec::new(),
         fold: TurnFold::new(log, window, names, carried),
     };
     p.run(frames);
@@ -387,6 +388,10 @@ struct LineBuilder<'a, F: AsRef<TranscriptFrame>> {
     out: Vec<TranscriptLine>,
     ids: Vec<RowId>,
     late_results: Vec<LateResult>,
+    /// Compaction rows waiting for their digest, oldest first. The wire puts
+    /// no checkpoint id on the summary, so append order is the only link and
+    /// the oldest unanswered boundary owns the next digest.
+    open_compactions: Vec<usize>,
     fold: TurnFold<'a, F>,
 }
 
@@ -562,6 +567,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// statistics the checkpoint reported. The checkpoint id becomes the row's
     /// fold identity, so two compactions in one session fold separately.
     fn push_compaction_boundary(&mut self, key: String, stats: String, id: RowId) {
+        self.open_compactions.push(self.out.len());
         self.out.push(TranscriptLine::Compaction {
             key,
             stats,
@@ -573,18 +579,14 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     /// Attach the summary to the compaction row it belongs to, so the digest
     /// stays available behind the fold instead of becoming a row of its own.
     ///
-    /// The row is found by scanning back for the most recent compaction, not by
-    /// looking at the tail: a turn boundary can land between the two
-    /// notifications, so "the previous row" is not a reliable join. The summary
-    /// payload carries no checkpoint id, so appending order is the only link
-    /// the wire offers. A summary with no boundary in this window still draws a
-    /// row, because the event happened and dropping the digest would lose it.
+    /// The row is the oldest boundary still waiting for its digest. A window
+    /// holding two boundaries would otherwise give both digests to the second
+    /// row and lose the first. A summary with no boundary still draws a row,
+    /// because the event happened; that row names no fold, since no group owns
+    /// its key.
     fn push_compaction_summary(&mut self, summary: String, id: RowId) {
-        if let Some(pos) = self
-            .out
-            .iter()
-            .rposition(|line| matches!(line, TranscriptLine::Compaction { .. }))
-        {
+        if let Some(pos) = self.open_compactions.first().copied() {
+            self.open_compactions.remove(0);
             if let TranscriptLine::Compaction { summary: body, .. } = &mut self.out[pos] {
                 *body = summary;
             }
