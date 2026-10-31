@@ -97,10 +97,17 @@ def scan(root: Path = Path("crates")):
     cache["files"] = {
         k: v for k, v in cache["files"].items() if k in seen_keys
     }
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(
-        json.dumps(cache, separators=(",", ":")), encoding="utf-8"
-    )
+    # The cache is an optimisation, so failing to write it costs the next run a
+    # full rescan and nothing else. A read-only checkout and a fenced process
+    # both refuse the write, and a gate that dies over its own cache reports a
+    # broken script where the code is clean.
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(
+            json.dumps(cache, separators=(",", ":")), encoding="utf-8"
+        )
+    except OSError:
+        pass
     return inline, repeated
 
 

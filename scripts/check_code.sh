@@ -4,6 +4,19 @@
 
 set -euo pipefail
 
+# A fenced process cannot write the repository's target/ directory, and every
+# gate step below compiles, so each of them would fail on a build-lock error
+# that says nothing about the code. Point the build caches at a writable
+# directory when the default one refuses a write: this changes where objects
+# land, never what the gate verifies. A caller that already chose a directory
+# keeps it.
+if ! mkdir -p target 2>/dev/null || [ ! -w target ]; then
+	_BUILD_ROOT="${TMPDIR:-/tmp}/houyi-gate-target"
+	mkdir -p "$_BUILD_ROOT"
+	export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$_BUILD_ROOT}"
+	export HOUYICODER_COV_DIR="${HOUYICODER_COV_DIR:-$_BUILD_ROOT/cov}"
+fi
+
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
 STARTED_AT=$(python3 -c 'import time; print(time.perf_counter())' 2>/dev/null || echo 0)
 STEP_TIMINGS=()

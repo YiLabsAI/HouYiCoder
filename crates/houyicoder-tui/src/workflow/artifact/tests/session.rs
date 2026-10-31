@@ -3,7 +3,9 @@
 //! replay the applied change. Editing and review occur in one surface, with no
 //! external editor.
 
+use std::env::temp_dir;
 use std::fs::remove_file;
+use std::process::id;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::SlashCommand;
@@ -318,10 +320,14 @@ fn test_artifact_delete_applies() {
 
 #[test]
 fn test_artifact_save_command_writes() {
-    let path = format!(
-        "{}/houyicoder_artifact_save_test.md",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    // The save path must live outside the source tree: a test that writes into
+    // the crate directory fails on any read-only checkout, leaves residue in
+    // the working tree when it panics midway, and makes the suite depend on
+    // where cargo happened to check the code out.
+    let path = temp_dir()
+        .join(format!("houyicoder_artifact_save_{}.md", id()))
+        .to_string_lossy()
+        .into_owned();
     drop(remove_file(&path));
     let mut app = working_app();
     app.ui.navigation.pane = Pane::Artifact;
