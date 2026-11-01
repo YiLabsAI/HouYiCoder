@@ -175,6 +175,49 @@ fn test_file_tools_expose_path() {
     );
 }
 
+/// Every tool that writes files declares a target and gets a read-write
+/// grant on its parent directory, so approving it widens the fence to admit
+/// the write it will perform. The members come from one predicate: a writing
+/// tool missing from the table asks for nothing, and its approval would
+/// authorize a call the fence still refuses.
+#[test]
+fn test_write_tools_grant_parent() {
+    let base = env::temp_dir().join(format!("boundary-grant-{}", process::id()));
+    let root = base.join("workspace");
+    let outside = base.join("outside");
+    fs::create_dir_all(&root).expect("mkdir root");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    let target = outside.join("file.txt");
+    let input = json!({"path": target.to_string_lossy()});
+    let parent = dunce::canonicalize(&outside).expect("outside resolves");
+    for tool in [
+        "write",
+        "edit",
+        "multiedit",
+        "patch",
+        "str_replace",
+        "Write",
+        "STR_REPLACE",
+    ] {
+        let grants = boundary_grants_for(tool, Some(&input), &root, &[], &[]);
+        assert_eq!(grants.len(), 1, "{tool} declares one target");
+        assert_eq!(
+            grants[0].access,
+            BoundaryAccess::ReadWrite,
+            "{tool} writes the file"
+        );
+        assert_eq!(
+            grants[0].directory, parent,
+            "{tool} authorizes the parent directory"
+        );
+    }
+    assert!(
+        boundary_grants_for("read", Some(&input), &root, &[], &[]).is_empty(),
+        "a read approval must not widen a directory's write fence"
+    );
+    fs::remove_dir_all(base).ok();
+}
+
 /// The fence guard runs the restore closure on explicit restore(), and
 /// again on Drop (best-effort) — the second call is a no-op. A guard
 /// dropped WITHOUT explicit restore also runs the closure (best-effort

@@ -241,6 +241,57 @@ fn test_outside_edit_asks_path() {
     remove_dir_all(base).ok();
 }
 
+/// A patch tool pointing outside the workspace asks at the path-bounds
+/// check and names the directory the approval authorizes. It writes files
+/// like edit does, so the same boundary rule must decide it; with the
+/// target never extracted, the call asked for nothing and ran against a
+/// fence that still refused the write.
+#[test]
+fn test_outside_patch_asks_path() {
+    struct BoundsFence(PathBuf);
+    impl Containment for BoundsFence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![self.0.clone()],
+            }
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+        fn boundary_root(&self) -> Option<Arc<Path>> {
+            Some(Arc::from(self.0.clone().into_boxed_path()))
+        }
+    }
+
+    let base = temp_dir().join(format!("gate-patch-{}", id()));
+    let root = base.join("root");
+    let outside = base.join("outside");
+    create_dir_all(&root).unwrap();
+    create_dir_all(&outside).unwrap();
+    let settings = outside.join("settings.json");
+    write(&settings, b"{}").unwrap();
+    let gate = DefaultModeGate::new_without_builtins()
+        .with_containment(Arc::new(BoundsFence(dunce::canonicalize(&root).unwrap())));
+    let input = serde_json::json!({"path": settings.to_string_lossy()});
+    let request = ToolRequest {
+        tool_name: "patch",
+        input: Some(&input),
+        is_destructive: true,
+        is_read_only: false,
+        native_requires_approval: true,
+    };
+    let decision = gate.decide(&request);
+    let parent = dunce::canonicalize(&outside).unwrap();
+    assert!(
+        matches!(decision, Decision::Ask(ref reason)
+            if reason.validator == "path-bounds"
+                && reason.detail.contains("authorizes parent directory")
+                && reason.detail.contains(&parent.to_string_lossy().to_string())),
+        "outside patch must disclose the parent directory grant: {decision:?}"
+    );
+    remove_dir_all(base).ok();
+}
+
 /// A grep/glob path or pattern that canonicalizes outside the workspace +
 /// authorized dirs surfaces an Ask at the gate's path-bounds pre-check, so the
 /// user can grant it — instead of the tool's hard PathEscapes rejection. The

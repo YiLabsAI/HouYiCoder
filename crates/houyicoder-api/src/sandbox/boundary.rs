@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::tool::writes_files;
+
 /// A canonical candidate is in bounds when it is under the workspace root or
 /// an additional authorized directory.
 pub fn is_within_bounds(candidate: &Path, root: &Path, additional: &[PathBuf]) -> bool {
@@ -95,11 +97,13 @@ pub fn boundary_grants_for(
 }
 
 /// Whether approving this tool's file target authorizes its parent directory.
+///
+/// The answer is the file-writing predicate itself, not a second list: a
+/// writing tool left out of the boundary table would have its target never
+/// extracted, so its approval would authorize nothing and the call would
+/// run against a fence that still refuses the write.
 pub fn boundary_path_uses_parent(tool_name: &str) -> bool {
-    matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "write" | "edit" | "multiedit"
-    )
+    writes_files(tool_name)
 }
 
 /// Extract path-bearing arguments for a workspace boundary check.
