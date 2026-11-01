@@ -8,6 +8,7 @@ use houyicoder_api::sandbox::{
     boundary_grants_for,
 };
 use houyicoder_api::skill::SkillScriptRef;
+use houyicoder_api::tool::is_shell_tool;
 use houyicoder_context::{EventId, PermissionVerdict, SandboxError, SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest,
@@ -296,11 +297,7 @@ impl Server {
         tool_name: &str,
         input: &serde_json::Value,
     ) {
-        let is_shell = matches!(
-            tool_name.to_ascii_lowercase().as_str(),
-            "bash" | "sh" | "exec" | "shell"
-        );
-        if !is_shell {
+        if !is_shell_tool(tool_name) {
             return;
         }
         let Some(registry) = self.runner.skill_registry() else {

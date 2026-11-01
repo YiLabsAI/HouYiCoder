@@ -19,6 +19,8 @@
 //! conservative copy. The two stay in sync on the clear-cut forms via a
 //! shared DRIFT_VECTOR duplicated in both crates' tests.
 
+use houyicoder_api::tool::is_shell_tool;
+
 use crate::compound::strip_safe_redirects;
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::pipeline::detection::expand_inline_interpreter;
@@ -114,8 +116,7 @@ pub(crate) fn should_ask_before_git(tool_name: &str, content: &str) -> Option<&'
 /// Every git checkpoint or discard subcommand present across all segments of a
 /// shell command, in order of appearance.
 pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'static str> {
-    let lower = tool_name.to_ascii_lowercase();
-    if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
+    if !is_shell_tool(tool_name) {
         return Vec::new();
     }
     if content.is_empty() {

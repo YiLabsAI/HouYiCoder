@@ -7,6 +7,7 @@
 //! than no choice.
 
 use houyicoder_api::sandbox::BoundaryGrant;
+use houyicoder_api::tool::is_shell_tool;
 use houyicoder_permission::{
     Effect, NETWORK_EGRESS, Rule, RuleContent, Scope, egress_outputs_safe,
 };
@@ -143,11 +144,7 @@ pub(crate) fn durable_grant(
             DurableGrant::Directories
         };
     }
-    if matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "bash" | "sh" | "exec" | "shell"
-    ) && reason.validator == NETWORK_EGRESS
-    {
+    if is_shell_tool(tool_name) && reason.validator == NETWORK_EGRESS {
         // A destination is not a command rule: the network check recognizes
         // programs, not hosts, so a remembered destination is its own entry.
         // A fence that refuses the egress keeps the ask single-shot.

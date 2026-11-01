@@ -7,6 +7,7 @@
 use houyicoder_api::sandbox::{
     BoundaryAccess, BoundaryGrant, Containment, FenceAxis, boundary_grants_for,
 };
+use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
 
 use crate::compound::{
@@ -36,8 +37,7 @@ pub(crate) fn writes_confined(containment: &Option<Arc<dyn Containment>>) -> boo
 /// Un-attestable constructs (redirect, substitution) are escalated by the
 /// compound validator, not here: destructive means a destructive verb.
 fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
-    let lower = tool_name.to_ascii_lowercase();
-    if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
+    if !is_shell_tool(tool_name) {
         return false;
     }
     if content.is_empty() {
@@ -70,8 +70,7 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
 /// when it does not permit egress, and post_transform attaches that verdict
 /// as a containment_note so the user knows approval may not help.
 pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
-    let lower = tool_name.to_ascii_lowercase();
-    if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
+    if !is_shell_tool(tool_name) {
         return false;
     }
     if content.is_empty() {
@@ -401,8 +400,7 @@ impl Validator for CompoundCommandValidator {
         true
     }
     fn check(&self, req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> Option<Decision> {
-        let lower = req.tool_name.to_ascii_lowercase();
-        if !matches!(lower.as_str(), "bash" | "sh" | "exec" | "shell") {
+        if !is_shell_tool(req.tool_name) {
             return None;
         }
         let refs: Vec<&str> = ctx.segments.iter().map(|s| s.as_str()).collect();

@@ -6,6 +6,7 @@
 //! here so both hook types share one implementation and one set of tests.
 
 use super::{HookContext, HookPayload, SessionEndReason};
+use houyicoder_api::tool::{is_shell_tool, writes_files};
 use regex::Regex;
 use regex::RegexBuilder;
 use serde_json::Value;
@@ -272,12 +273,16 @@ fn parse_if_rule(rule: &str) -> (&str, Option<&str>) {
 /// back to walking all strings (a conservative over-approximation that
 /// never silently un-gates a new tool).
 fn primary_content_field<'a>(tool: &str, input: &'a Value) -> Option<&'a str> {
-    let key = match tool.to_ascii_lowercase().as_str() {
-        "bash" | "sh" | "exec" | "shell" => "command",
-        "write" | "edit" | "multiedit" | "patch" | "str_replace" => "path",
-        "webfetch" | "netfetch" | "fetch" | "curl" | "wget" => "url",
-        "skill" => "skill",
-        _ => return None,
+    let key = if is_shell_tool(tool) {
+        "command"
+    } else if writes_files(tool) {
+        "path"
+    } else {
+        match tool.to_ascii_lowercase().as_str() {
+            "webfetch" | "netfetch" | "fetch" | "curl" | "wget" => "url",
+            "skill" => "skill",
+            _ => return None,
+        }
     };
     input.get(key).and_then(|v| v.as_str())
 }

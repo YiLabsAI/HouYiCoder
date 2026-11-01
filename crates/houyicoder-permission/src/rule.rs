@@ -10,6 +10,7 @@
 //! shell tools, the path for file tools, the url for fetch tools.
 
 use glob::{MatchOptions, Pattern};
+use houyicoder_api::tool::{is_shell_tool, writes_files};
 use serde::{Deserialize, Serialize};
 
 use crate::compound::is_attestable;
@@ -308,14 +309,19 @@ pub fn input_content(tool_name: &str, input: Option<&serde_json::Value>) -> Stri
     let Some(v) = input else {
         return String::new();
     };
-    let key = match tool_name.to_ascii_lowercase().as_str() {
-        "bash" | "sh" | "exec" | "shell" => "command",
-        "write" | "edit" | "multiedit" | "patch" | "str_replace" => "path",
-        "webfetch" | "netfetch" | "fetch" | "curl" | "wget" => "url",
-        // The skill tool's identity is the skill name; rules + consent match
-        // per-skill, so the content string is the name, not the full input.
-        "skill" => "skill",
-        _ => return v.to_string(),
+    let key = if is_shell_tool(tool_name) {
+        "command"
+    } else if writes_files(tool_name) {
+        "path"
+    } else {
+        match tool_name.to_ascii_lowercase().as_str() {
+            "webfetch" | "netfetch" | "fetch" | "curl" | "wget" => "url",
+            // The skill tool's identity is the skill name; rules + consent
+            // match per-skill, so the content string is the name, not the
+            // full input.
+            "skill" => "skill",
+            _ => return v.to_string(),
+        }
     };
     v.get(key)
         .and_then(|x| x.as_str())

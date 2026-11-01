@@ -28,6 +28,7 @@ pub(crate) use durable_grant::{
 pub(crate) use durable_grant::{FENCED, UNFENCED};
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
+use houyicoder_api::tool::is_shell_tool;
 use houyicoder_context::SessionEvent;
 use houyicoder_core::agent::{
     ApprovalRequest as EngineApprovalRequest, RunError as EngineRunError, StatusSnapshot,
@@ -424,11 +425,7 @@ pub(crate) fn consent_rule_for(
     tool_name: &str,
     input: &serde_json::Value,
 ) -> Option<houyicoder_permission::Rule> {
-    let is_bash = matches!(
-        tool_name.to_ascii_lowercase().as_str(),
-        "bash" | "sh" | "exec" | "shell"
-    );
-    if is_bash {
+    if is_shell_tool(tool_name) {
         let command = houyicoder_permission::input_content(tool_name, Some(input));
         let prefix = houyicoder_permission::bash_always_allow_prefix(&command)?;
         Rule::with_content(tool_name, RuleContent::Prefix(prefix), Effect::Allow).ok()
