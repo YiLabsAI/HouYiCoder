@@ -7,8 +7,9 @@ use houyicoder_api::sandbox::SideEffect;
 use houyicoder_api::tool::{is_shell_tool, writes_files};
 
 /// Map a tool name to its side-effect level. Unknown tools default to None —
-/// the side-effect is a hint, not a fence; the mode default and the tool's own
-/// requires_approval flag still gate unknown tools.
+/// the side-effect is a hint, not a fence; the mode default reads the tool's
+/// own read-only, destructive, and requires-approval flags to gate a name the
+/// table leaves unclassified.
 pub fn side_effect_for(tool_name: &str) -> SideEffect {
     if is_shell_tool(tool_name) {
         return SideEffect::Exec;

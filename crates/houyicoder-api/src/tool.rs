@@ -231,7 +231,8 @@ pub trait Tool: Send + Sync {
 
     /// True when this tool effects are hard to reverse (delete, overwrite,
     /// network send). Default true (fail-closed: assume destructive). Drives
-    /// the approval gate when requires_approval is overridden.
+    /// the mode default for a name the side-effect table does not classify,
+    /// alongside is_read_only and requires_approval.
     fn is_destructive(&self) -> bool {
         true
     }

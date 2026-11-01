@@ -9,16 +9,19 @@ use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
-/// The agent permission modes. Two modes — Manual asks before any tool that
-/// declares it needs approval (read-only tools still auto-allow); Auto allows
-/// safe operations and only asks for destructive ones (the default). Shift+Tab
-/// cycles Manual ↔ Auto.
+/// The agent permission modes. Two modes — Manual asks before any call it
+/// cannot prove read-only and non-destructive; Auto allows operations the
+/// side-effect table classifies as exec or filesystem (the pipeline has
+/// already caught dangerous commands) and asks before network, before a call
+/// the tool declares it must approve, and before a destructive call whose
+/// name the table leaves unclassified (the default). Shift+Tab cycles Manual
+/// and Auto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PermissionMode {
-    /// Ask before tools that need approval; read-only auto-allows.
+    /// Ask unless the call is read-only and non-destructive.
     Manual,
-    /// Allow safe ops; ask destructive (until the recoverable invariant). The
-    /// default.
+    /// Allow classified exec and filesystem; ask network, native approval,
+    /// and an unclassified destructive call. The default.
     Auto,
 }
 

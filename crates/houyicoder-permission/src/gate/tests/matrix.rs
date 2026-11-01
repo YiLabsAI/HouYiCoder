@@ -2,20 +2,14 @@ use super::*;
 use crate::decision::Outcome;
 use houyicoder_api::sandbox::SideEffect;
 
-// Mode policy matrix tests — tests mode_default directly. The pipeline
-// safety gates (rules, safety, compound, destructive, consent) are tested in
-// the mode-decision suite. Two modes: Manual asks before any tool that
-// declares it needs approval (read-only auto-allows); Auto allows safe ops
-// and only asks for destructive ones.
-//
-// Matrix (mode_default verdict for requests that pass the pipeline):
-// Mode   | None(n=F) | None(n=T) | Filesystem | Exec  | Network |
-// -------|-----------|-----------|------------|-------|---------|
-// Manual | Allow     | Ask       | Ask        | Ask   | Ask     |
-// Auto   | Allow     | Ask       | Allow      | Allow | Ask     |
-//
-// (n = native_requires_approval; destructive shell commands are caught by
-// should_ask_destructive in the pipeline, not by mode_default.)
+// Mode policy matrix tests: mode_default after the pipeline declines.
+// Manual allows only read-only, non-destructive calls; Auto also allows a
+// mutating call the tool declares reversible. None = a call the side-effect
+// table leaves unclassified; known reads and unknown names share it.
+// Mode   | None read-only | None mutating | None destructive | None native | FS/Exec | Network |
+// -------|----------------|---------------|------------------|-------------|---------|---------|
+// Manual | Allow          | Ask           | Ask              | Ask         | Ask     | Ask     |
+// Auto   | Allow          | Allow         | Ask              | Ask         | Allow   | Ask     |
 
 // Manual: None(n=F) -> Allow, None(n=T) -> Ask, FS/Exec/Net -> Ask.
 
@@ -134,4 +128,57 @@ fn test_auto_policy_exec_allows() {
         AutoPolicy.decide(&r, SideEffect::Exec).outcome(),
         Outcome::Allow
     ));
+}
+
+/// A name the effect table does not know is not a pure read merely because
+/// the table has no row for it: an external tool that does not declare itself
+/// both read-only and non-destructive keeps Manual's question.
+#[test]
+fn test_manual_none_mutating_asks() {
+    let r = req("custom_mut", false, false, false);
+    assert!(matches!(
+        mode_default(PermissionMode::Manual, &r).outcome(),
+        Outcome::Ask
+    ));
+    assert!(matches!(
+        mode_default(PermissionMode::Auto, &r).outcome(),
+        Outcome::Allow
+    ));
+}
+
+/// The trait defaults answer mutating and destructive, which is the shape a
+/// remote adapter has unless it says otherwise: both modes ask before it
+/// runs, so no pipeline stage has to have classified its name.
+#[test]
+fn test_unknown_default_tool_asks() {
+    let r = req("mcp_custom", true, false, false);
+    assert!(matches!(
+        mode_default(PermissionMode::Auto, &r).outcome(),
+        Outcome::Ask
+    ));
+    assert!(matches!(
+        mode_default(PermissionMode::Manual, &r).outcome(),
+        Outcome::Ask
+    ));
+}
+
+/// An unknown name that declares itself read-only keeps the read row: the
+/// fallback trusts a positive read-only declaration, only the absence of one
+/// escalates.
+#[test]
+fn test_unknown_read_only_allows() {
+    let r = req("mcp_search", false, true, false);
+    for mode in [PermissionMode::Manual, PermissionMode::Auto] {
+        assert!(matches!(mode_default(mode, &r).outcome(), Outcome::Allow));
+    }
+}
+
+/// A contradictory declaration asks: a tool may not buy the read row while
+/// also reporting its call destructive.
+#[test]
+fn test_destructive_read_claim_asks() {
+    let r = req("odd_claim", true, true, false);
+    for mode in [PermissionMode::Manual, PermissionMode::Auto] {
+        assert!(matches!(mode_default(mode, &r).outcome(), Outcome::Ask));
+    }
 }

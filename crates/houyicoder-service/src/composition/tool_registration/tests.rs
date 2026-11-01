@@ -200,3 +200,49 @@ async fn test_deny_rule_stops_external() {
         other => panic!("expected a gate refusal, got {other:?}"),
     }
 }
+
+/// An external tool whose name the gate's table does not know is judged by
+/// the adapter's fail-closed defaults, so Auto asks before it runs; an allow
+/// rule on the name is what removes the card, not the absence of a
+/// classification.
+#[tokio::test]
+async fn test_external_tool_default_asks() {
+    let gate = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
+    let tools = register_external(
+        Arc::clone(&gate) as Arc<dyn ModeGate>,
+        vec![Arc::new(NamedTool {
+            name: "write_note",
+            description: "a remote writer",
+        })],
+    );
+    let tool = tools
+        .get("write_note")
+        .expect("the external tool is registered");
+    let input = json!({"text": "hi"});
+    let reason = tool
+        .approval_reason(&input)
+        .expect("an unclassified remote tool must reach the human");
+    assert_eq!(reason.validator, "mode_default");
+    assert!(
+        reason.detail.contains("destructive"),
+        "the card names the destructive default: {}",
+        reason.detail
+    );
+    let err = tool
+        .execute(ToolCtx::new("test"), input.clone())
+        .await
+        .expect_err("an unanswered ask must not reach the adapter");
+    assert!(
+        err.to_string().contains("requires approval"),
+        "the refusal names the pending approval: {err}"
+    );
+    gate.add_rule(Rule::new("write_note", Effect::Allow).expect("allow rule"))
+        .expect("the rule is accepted");
+    assert!(
+        tool.approval_reason(&input).is_none(),
+        "an allow rule on the name removes the card"
+    );
+    tool.execute(ToolCtx::new("test"), input)
+        .await
+        .expect("the allowed call reaches the adapter");
+}

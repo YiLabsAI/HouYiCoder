@@ -649,8 +649,11 @@ pub trait ModePolicy {
     fn decide(&self, req: &ToolRequest, se: SideEffect) -> Decision;
 }
 
-/// Manual mode: least-privilege. Pure reads auto-allow unless the tool
-/// declares it needs approval; everything else escalates to Ask.
+/// Manual mode: least-privilege. A pure read auto-allows; every other call
+/// escalates to Ask. A tool name the side-effect table does not know is
+/// judged by what the tool declares: only a call the tool marks read-only
+/// and non-destructive is treated as a pure read, so an unknown remote tool
+/// asks instead of inheriting the read row.
 pub struct DefaultPolicy;
 
 impl ModePolicy for DefaultPolicy {
@@ -659,6 +662,10 @@ impl ModePolicy for DefaultPolicy {
             SideEffect::None => {
                 if req.native_requires_approval {
                     Decision::Ask(mode_ask_reason("tool declares it needs approval"))
+                } else if req.is_destructive || !req.is_read_only {
+                    Decision::Ask(mode_ask_reason(
+                        "manual mode asks before a tool that may change state",
+                    ))
                 } else {
                     Decision::Allow(AllowReason::ModeDefault)
                 }
@@ -670,8 +677,10 @@ impl ModePolicy for DefaultPolicy {
 
 /// Auto mode: execution and filesystem writes are allowed (the destructive
 /// and compound gates in the pipeline already caught dangerous commands);
-/// pure reads auto-allow unless the tool declares it needs approval; network
-/// still escalates to Ask.
+/// network still escalates to Ask. A name the side-effect table does not
+/// know is allowed only when the tool declares its effects reversible and
+/// does not itself ask: a tool that keeps the trait's destructive default
+/// asks, because no pipeline stage classified it.
 pub struct AutoPolicy;
 
 impl ModePolicy for AutoPolicy {
@@ -682,6 +691,8 @@ impl ModePolicy for AutoPolicy {
             SideEffect::None => {
                 if req.native_requires_approval {
                     Decision::Ask(mode_ask_reason("tool declares it needs approval"))
+                } else if req.is_destructive {
+                    Decision::Ask(mode_ask_reason("auto mode asks before a destructive tool"))
                 } else {
                     Decision::Allow(AllowReason::ModeDefault)
                 }
@@ -705,20 +716,22 @@ fn mode_ask_reason(detail: &str) -> AskReason {
 
 /// The per-mode default policy when no rule matches, no safety check fires,
 /// and no consent is stored. Dispatches to the ModePolicy struct for the
-/// given mode. The side-effect level is computed from the tool name and drives
-/// the baseline: under Manual, None auto-allows (pure reads) and Exec /
-/// Network / Filesystem escalate to Ask; Auto relaxes Exec and Filesystem to
-/// Allow so the autonomous edit loop is usable (the pipeline's destructive and
-/// compound gates already caught dangerous commands). A tool's own
-/// requires_approval flag still escalates a None side-effect tool to Ask when
-/// the tool declares it needs a human.
+/// given mode. The side-effect level is computed from the tool name and
+/// drives the baseline: under Manual, Exec, Network, and Filesystem escalate
+/// to Ask, and a name the table leaves unclassified asks unless the tool
+/// declares itself read-only and non-destructive; Auto relaxes Exec and
+/// Filesystem to Allow so the autonomous edit loop is usable (the pipeline's
+/// destructive and compound gates already caught dangerous commands), asks
+/// before Network, and asks before an unclassified name the tool declares
+/// destructive or must approve. The trait defaults assume a tool mutates and
+/// is destructive, so an unknown remote tool asks rather than running silently.
 pub fn mode_default(mode: PermissionMode, req: &ToolRequest) -> Decision {
     let se = side_effect_for(req.tool_name);
     match mode {
-        // Manual: ask before tools that need approval; read-only auto-allows.
+        // Manual: ask unless the call is read-only and non-destructive.
         PermissionMode::Manual => DefaultPolicy.decide(req, se),
-        // Auto: allow safe ops, ask destructive (until the recoverable
-        // invariant replaces the destructive ask).
+        // Auto: allow classified exec and filesystem; ask network and an
+        // unclassified destructive or native-approval call.
         PermissionMode::Auto => AutoPolicy.decide(req, se),
     }
 }

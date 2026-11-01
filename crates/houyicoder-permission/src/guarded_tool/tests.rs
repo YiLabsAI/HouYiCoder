@@ -440,8 +440,9 @@ fn test_wrapper_forwards_translation() {
 
 /// An external tool arrives as a trait object, so the wrapper must accept one
 /// and keep carrying the adapter's per-input verdict. A remote adapter learns
-/// which of its own inputs needs a human; the wrapper forwards that verdict
-/// when the gate itself allows the call, so the card still reaches the human.
+/// which of its own inputs needs a human and declares its effects reversible;
+/// the wrapper forwards that verdict when the gate itself allows the call, so
+/// the card still reaches the human.
 #[test]
 fn test_remote_tool_keeps_approval() {
     struct ExternalTool;
@@ -457,6 +458,9 @@ fn test_remote_tool_keeps_approval() {
         }
         fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
             Box::pin(async { Ok(Value::Null) })
+        }
+        fn is_destructive(&self) -> bool {
+            false
         }
         fn requires_approval_for(&self, input: &Value) -> bool {
             input.get("action").and_then(Value::as_str) == Some("remove")
@@ -474,6 +478,44 @@ fn test_remote_tool_keeps_approval() {
         !tool.requires_approval_for(&keep),
         "an input the adapter allows must not reach the human"
     );
+}
+
+/// A remote adapter that keeps the trait defaults is assumed mutating and
+/// destructive: both modes ask before it runs, even for an input the adapter
+/// itself would not flag, and a direct execute without a human answer fails
+/// closed instead of running.
+#[test]
+fn test_default_external_tool_asks() {
+    struct DefaultExternalTool;
+    impl Tool for DefaultExternalTool {
+        fn name(&self) -> &str {
+            "external_default"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn input_schema(&self) -> Value {
+            Value::Object(Map::new())
+        }
+        fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+        fn requires_approval_for(&self, _input: &Value) -> bool {
+            false
+        }
+    }
+    for mode in [PermissionMode::Auto, PermissionMode::Manual] {
+        let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(mode));
+        let tool: Arc<dyn Tool> = Arc::new(GuardedTool::new(Arc::new(DefaultExternalTool), gate));
+        assert!(tool.requires_approval(), "{mode:?}");
+        assert!(
+            tool.requires_approval_for(&json!({"action": "keep"})),
+            "the gate's ask outranks an adapter that flags no input: {mode:?}"
+        );
+        let err = block_on(tool.execute(ToolCtx::new("t"), json!({"action": "keep"})))
+            .expect_err("an unanswered ask must not run");
+        assert!(err.to_string().contains("requires approval"), "{err}");
+    }
 }
 
 /// A fence over one workspace root, standing in for the session's containment

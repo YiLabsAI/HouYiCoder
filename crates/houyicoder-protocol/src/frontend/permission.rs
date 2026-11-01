@@ -11,21 +11,21 @@
 use serde::{Deserialize, Serialize};
 
 /// The agent permission mode, wire form. Two modes — Manual asks before any
-/// tool that declares it needs approval (read-only tools still auto-allow);
-/// Auto allows safe operations and only asks for destructive ones (the
-/// default — Auto is safe today because it still asks for destructive ops;
-/// the recoverable invariant will let it handle destructive ops later). The
-/// service boundary translates the engine mode to this wire form on /mode;
-/// the TUI renders the label without pulling in the permission crate. Marked
+/// call it cannot prove read-only and non-destructive; Auto allows operations
+/// the side-effect table classifies as exec or filesystem and asks before
+/// network, a call the tool declares it must approve, and a destructive call
+/// whose name the table leaves unclassified (the default). The service
+/// boundary translates the engine mode to this wire form on /mode; the TUI
+/// renders the label without pulling in the permission crate. Marked
 /// non_exhaustive so a future variant fails safe rather than a match error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PermissionMode {
-    /// Ask before any tool that declares it needs approval; read-only tools
-    /// still auto-allow.
+    /// Ask unless the call is read-only and non-destructive.
     Manual,
-    /// Allow safe operations; only ask for destructive ones. The default.
+    /// Allow classified exec and filesystem; ask network, native approval,
+    /// and an unclassified destructive call. The default.
     Auto,
 }
 
