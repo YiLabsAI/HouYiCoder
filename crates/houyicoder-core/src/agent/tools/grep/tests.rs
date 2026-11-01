@@ -5,11 +5,15 @@
 // honest about its scope.
 #![allow(clippy::disallowed_methods)]
 
-use super::*;
+use super::GrepTool;
+use super::Tool;
+use super::input::{DEFAULT_HEAD_LIMIT, GrepOptions, OutputMode, as_number};
+use super::search::run_grep;
 use crate::agent::tools::subprocess_util::find_rg;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_context::SandboxError;
+use serde_json::json;
 use std::env::temp_dir;
 use std::fs;
 use std::path::Path;

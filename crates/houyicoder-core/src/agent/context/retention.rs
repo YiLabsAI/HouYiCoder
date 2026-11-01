@@ -1,13 +1,13 @@
 //! Retention: CAS-backed storage of large ToolResult outputs.
 //!
-//! Two operations on the retention seam:
+//! Two retention operations:
 //! - materialize_block: decide how a block_ref ToolResult output is served.
 //!   A 3-tier policy chooses materialize (retrieve the full content for a
 //!   recent, active result), summarize (serve a small inline preview, no
 //!   retrieval), or evict (serve the pointer alone, no retrieval). The
 //!   default AgeRetentionPolicy keys the decision to how many turns ago the
 //!   result was produced and whether a later result superseded it.
-//! - isolate_large_output (in append.rs): serialize a tool output, store it
+//! - isolate_large_output: serialize a tool output, store it
 //!   via block_put, and return a block_ref marker (with an inline preview)
 //!   so the raw large content is not in the assembled context. A structured result
 //!   externalizes only its largest string field, keeping the envelope's

@@ -50,7 +50,7 @@ from typing import Any, Callable
 REPO = Path(__file__).resolve().parent.parent
 TOOL_SOURCE = REPO / "crates/houyicoder-api/src/tool.rs"
 FALLBACK_SOURCE = REPO / "crates/houyicoder-core/src/agent/turn/fallback.rs"
-OBSERVABILITY_SOURCE = REPO / "crates/houyicoder-core/src/observability/mod.rs"
+TOOL_STATS_SOURCE = REPO / "crates/houyicoder-core/src/observability/tool_stats.rs"
 
 SKIP_PREFIX = "skipped:"
 EDIT_FAMILY = "writes_files"
@@ -198,16 +198,16 @@ def failure_words(source: str) -> frozenset[str]:
 def load_rule_facts(
     tool_source: Path = TOOL_SOURCE,
     fallback_source: Path = FALLBACK_SOURCE,
-    observability_source: Path = OBSERVABILITY_SOURCE,
+    tool_stats_source: Path = TOOL_STATS_SOURCE,
 ) -> RuleFacts:
     """Read the families, failure words, and skip prefix from the rule."""
     tool_text = tool_source.read_text(encoding="utf-8")
     fallback_text = fallback_source.read_text(encoding="utf-8")
-    observability_text = observability_source.read_text(encoding="utf-8")
+    tool_stats_text = tool_stats_source.read_text(encoding="utf-8")
     return RuleFacts(
         writes=literals_in(tool_text, EDIT_FAMILY),
         shells=literals_in(tool_text, SHELL_FAMILY),
-        failure_words=failure_words(observability_text),
+        failure_words=failure_words(tool_stats_text),
         skip_prefix=skip_prefix(fallback_text),
     )
 

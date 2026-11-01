@@ -20,13 +20,13 @@ use tokio_util::sync::CancellationToken;
 
 use houyicoder_protocol::extension::ToolError;
 
-use crate::agent::tools::path_util::{canonical_root, confine_path};
+use crate::agent::tools::path_util::{canonical_root, confine_path, relativize};
 use crate::agent::tools::subprocess_util::{find_rg, spawn_rg_select_cancel};
 
-use super::{
-    GrepOptions, GrepOutput, IGNORE_DIRS, OutputMode, VCS_DIRS, build_output, relativize, run_grep,
-    split_glob_patterns,
-};
+use super::filters::{IGNORE_DIRS, VCS_DIRS, split_glob_patterns};
+use super::input::{GrepOptions, OutputMode};
+use super::output::{GrepOutput, build_output};
+use super::search::{run_grep, truncate_line};
 use std::fs::metadata;
 use tokio::task::spawn_blocking;
 
@@ -248,7 +248,7 @@ fn parse_content(
         // the line number. trim_end drops the trailing newline rg appends so it
         // does not become a spurious empty final row.
         for (i, content) in text.trim_end_matches('\n').split('\n').enumerate() {
-            let content = super::truncate_line(content);
+            let content = truncate_line(content);
             let ln = line_no + i;
             let row = if opts.show_line_numbers {
                 format!("{rel}:{ln}: {content}")

@@ -6,6 +6,7 @@ use houyicoder_protocol::frontend::checkpoint::{
     CheckpointView, FenceState, SandboxBoundariesView, UnreadableView,
 };
 use ratatui::buffer::Buffer;
+use ratatui::style::{Color, Modifier, Style};
 
 use super::*;
 use crate::composition;

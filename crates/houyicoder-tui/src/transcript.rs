@@ -11,6 +11,7 @@ pub(crate) mod app_scroll;
 pub mod blocks;
 pub(crate) mod brief;
 pub(crate) mod cursors;
+pub(crate) mod expand;
 pub(crate) mod fold;
 pub(crate) mod frame;
 pub use frame::{FrontendRow, TranscriptFrame};

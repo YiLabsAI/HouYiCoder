@@ -1,9 +1,11 @@
 //! Artifact closed-loop module (TUI-local). The session aggregate, proposer
 //! trait, and StubProposer live here — the TUI no longer imports the artifact
-//! domain from the engine. The session submodule holds the aggregate + the
+//! domain from the engine. The session submodule holds the aggregate and the
 //! ChangeProposer trait; this module adds the deterministic StubProposer used
-//! by the prototype App.
+//! by the prototype App. The edit submodule holds the artifact editing
+//! commands the composer issues.
 
+mod edit;
 mod session;
 
 pub use session::{

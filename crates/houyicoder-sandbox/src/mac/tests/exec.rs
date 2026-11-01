@@ -10,6 +10,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use super::super::*;
+use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_context::ExecConfig;
 use std::fs::create_dir;
 use std::sync::Arc;

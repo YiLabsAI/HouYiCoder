@@ -63,7 +63,7 @@ pub(crate) fn restore() {
 pub(crate) fn set_title(title: &str) {
     let clean = sanitize(title);
     // ESC ] 0 ; <title> BEL. BEL (0x07) over ST for broader parser support
-    // (OSC 52 makes the same call in selection.rs).
+    // (OSC 52 makes the same call from the clipboard module).
     let seq = format!("\x1b]0;{clean}\x07");
     let mut out = stdout();
     let _r = out.write_all(seq.as_bytes());

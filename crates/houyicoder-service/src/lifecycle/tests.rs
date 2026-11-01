@@ -1,7 +1,5 @@
 //! Tests for the lifecycle store, the registry round trip, and the
-//! state-machine terminal-state guards. Extracted from the lifecycle module
-//! so the module source stays under the file-size gate; the #[path] include
-//! in lifecycle.rs pulls this in for the test build only.
+//! state-machine terminal-state guards.
 
 use super::*;
 use futures::executor::block_on;

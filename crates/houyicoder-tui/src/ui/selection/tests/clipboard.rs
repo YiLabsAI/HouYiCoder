@@ -6,7 +6,7 @@
 
 #![cfg(test)]
 
-use crate::selection::{clipboard_path_for, raw_osc52, tmux_passthrough_osc52};
+use super::super::clipboard::{clipboard_path_for, raw_osc52, tmux_passthrough_osc52};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[test]

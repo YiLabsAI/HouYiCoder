@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use super::CompactTrigger;
 use super::ToolResult;
+use super::event::TaskId;
 use crate::agent::ToolRegistry;
 use crate::agent::tests::runner_with;
 use crate::provider::test_support::FakeProvider;

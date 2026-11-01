@@ -1,48 +1,39 @@
 //! LocalFileBackend: persistent ContextBackend for v0. One directory per
-//! session under a root: <root>/<session>/log.jsonl (append-only, 0o600) +
-//! <root>/<session>/checkpoints/<cp>.json + <root>/<session>/log.index (a
-//! derived offset index). File mode 0o600, dir 0o700 (Unix). Reads and writes
-//! resolve a session's directory from the id in either spelling: the uuid
-//! name, or the ULID name a store written before that format used.
-//!
-//! Main-chain dedup by event id via an in-memory seen set, mirroring
-//! InMemoryBackend. The set is cold on first append to a session: one
-//! streaming read of the existing log builds it, then each append is an
-//! O(1) set lookup. Without the cache every append re-read the whole log
-//! (O(n) per append, O(n^2) over a session -- a 500MB log pays 500MB per
-//! write). That same cold pass builds the offset index. Checkpoints are
-//! per-file so list_checkpoints scans filenames, not contents.
-//!
-//! v0 uses sync std::fs inside Box::pin(async) (consistent with InMemoryBackend).
-//! This blocks the async runtime on IO; a production impl switches to tokio::fs
-//! or a spawned blocking task. Fine for prototype sessions.
+//! session under a root holds log.jsonl (append-only, 0o600), checkpoints,
+//! and log.index; reads and writes resolve a session's directory from either
+//! the uuid name or the ULID name a store written before that format used.
+//! Append dedup uses a seen set built by one streaming read on first append
+//! and then O(1) per append, and that pass also builds the offset index.
+//! Checkpoints are per-file, so listing scans filenames. Sync std::fs runs
+//! inside Box::pin(async), fine for prototype sessions.
 
 use std::collections::HashMap;
 use std::fs;
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::str::from_utf8;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 
 use houyicoder_async::PFut;
+use houyicoder_context::session_class::{CHECKPOINT_DIR, INDEX_FILE, LOG_FILE, session_dir};
 use houyicoder_context::{
     BlockHash, BlockWindow, CheckpointId, CheckpointManifest, ContextBackend, ContextError,
-    EventId, LenientRead, LogIndexEntry, LogIndexReader, LogRangeRead, MAX_WINDOW_BYTES,
-    ReverseRead, SAMPLE_INTERVAL_BYTES, SessionId, SessionLogEntry,
-    session_class::{CHECKPOINT_DIR, INDEX_FILE, LOG_FILE, session_dir},
+    EventId, LenientRead, LogIndexEntry, LogRangeRead, ReverseRead, SessionId, SessionLogEntry,
 };
 
 mod blocks;
+mod checkpoints;
+mod index_check;
 mod log_index;
+mod log_windows;
+mod records;
 pub use blocks::{ReclaimError, ReclaimPolicy, ReclaimReport, ReclaimStop};
 #[cfg(unix)]
 use fs::DirBuilder;
-use fs::File;
 use log_index::SessionWriteState;
 
 #[cfg(test)]
@@ -106,19 +97,6 @@ impl LocalFileBackend {
         self.lossy_line_count.load(Ordering::Relaxed)
     }
 
-    /// Build a session's write state by streaming its log line by line
-    /// (avoids reading a 500MB log into one heap allocation). Called once
-    /// on the first append to a cold session; cached in self.write_state.
-    /// Increments read_count so a per-append rescan regression is visible.
-    fn load_write_state(&self, session: SessionId) -> SessionWriteState {
-        self.read_count.fetch_add(1, Ordering::Relaxed);
-        SessionWriteState::cold_scan(
-            &self.log_path(session),
-            self.index_path(session),
-            SAMPLE_INTERVAL_BYTES,
-        )
-    }
-
     pub(crate) fn log_path(&self, session: SessionId) -> PathBuf {
         session_dir(&self.root, session).join(LOG_FILE)
     }
@@ -147,309 +125,6 @@ impl LocalFileBackend {
         #[cfg(not(unix))]
         {
             fs::create_dir_all(path).map_err(|_| ContextError::Io)
-        }
-    }
-
-    fn append_sync(&self, event: SessionLogEntry) -> Result<EventId, ContextError> {
-        let session = event.session;
-        Self::ensure_dir(&session_dir(&self.root, session))?;
-        let log = self.log_path(session);
-        let id = event.id;
-        // Dedup, and the offset index that has to advance with the log. The lock
-        // is held through the blocking write so a failure cannot leave the state
-        // claiming a record that did not land, and so no second append
-        // interleaves between extending the log and accounting for it.
-        let mut states = self.write_state.lock().expect("write state poisoned");
-        let state = states
-            .entry(session)
-            .or_insert_with(|| self.load_write_state(session));
-        if state.already_written(id) {
-            // A no-op extends neither the log nor the index: an entry for a
-            // record that never landed puts every later offset out of step.
-            return Ok(id);
-        }
-        let mut json = serde_json::to_string(&event)
-            .map_err(|_| ContextError::Corrupt("event failed to serialize".into()))?;
-        json.push('\n');
-        let mut opts = OpenOptions::new();
-        opts.create(true).append(true);
-        #[cfg(unix)]
-        opts.mode(0o600);
-        let mut f = opts.open(&log).map_err(|_| ContextError::Io)?;
-        let mut landed = f.write_all(json.as_bytes());
-        // fsync so a crash after the append does not lose the event: the page
-        // cache is not durable. The block and checkpoint writes fsync too, so a
-        // manifest never references a block that is not on disk.
-        if landed.is_ok() {
-            landed = f.sync_all();
-        }
-        if landed.is_err() {
-            // A write that reports failure may still have left bytes behind, so
-            // the length the index accounts for is no longer the log's. Keep
-            // what it published -- those offsets were real -- and stop there
-            // rather than compute every later one from a length that is wrong.
-            state.log_write_failed();
-            return Err(ContextError::Io);
-        }
-        state.record_durable(id, json.len() as u64);
-        Ok(id)
-    }
-
-    fn read_log(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
-        let log = self.log_path(session);
-        let content = match fs::read_to_string(&log) {
-            Ok(c) => c,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(_) => return Err(ContextError::Io),
-        };
-        let mut events = Vec::new();
-        for line in content.lines() {
-            if line.is_empty() {
-                continue;
-            }
-            let event: SessionLogEntry = serde_json::from_str(line)
-                .map_err(|e| ContextError::Corrupt(format!("bad event line: {e}")))?;
-            events.push(event);
-        }
-        Ok(events)
-    }
-
-    fn read_range_sync(
-        &self,
-        session: SessionId,
-        from: Option<EventId>,
-        to: Option<EventId>,
-    ) -> Result<Vec<SessionLogEntry>, ContextError> {
-        let events = self.read_log(session)?;
-        Ok(events
-            .into_iter()
-            .filter(|e| from.is_none_or(|f| e.id >= f))
-            .filter(|e| to.is_none_or(|t| e.id < t))
-            .collect())
-    }
-
-    fn replay_sync(&self, session: SessionId) -> Result<Vec<SessionLogEntry>, ContextError> {
-        self.read_log(session)
-    }
-
-    fn write_checkpoint_sync(
-        &self,
-        manifest: CheckpointManifest,
-    ) -> Result<CheckpointId, ContextError> {
-        let session = manifest.session;
-        let id = manifest.id;
-        Self::ensure_dir(&self.checkpoint_dir(session))?;
-        let path = self.checkpoint_path(session, id);
-        let json = serde_json::to_string(&manifest)
-            .map_err(|_| ContextError::Corrupt("manifest failed to serialize".into()))?;
-        // Atomic write: serialize to a temp sibling, fsync, rename over the
-        // target so a crash never leaves a partial/truncated manifest (a
-        // reader sees either the old checkpoint or the complete new one).
-        let tmp = path.with_extension("tmp");
-        let mut opts = OpenOptions::new();
-        opts.create(true).truncate(true).write(true);
-        #[cfg(unix)]
-        opts.mode(0o600);
-        let mut f = opts.open(&tmp).map_err(|_| ContextError::Io)?;
-        f.write_all(json.as_bytes()).map_err(|_| ContextError::Io)?;
-        f.sync_all().map_err(|_| ContextError::Io)?;
-        // fsync the directory so the rename is durable (POSIX rename is
-        // atomic but the dir entry needs its own fsync).
-        drop(f);
-        fs::rename(&tmp, &path).map_err(|_| ContextError::Io)?;
-        if let Some(dir) = path.parent()
-            && let Ok(dir_file) = File::open(dir)
-        {
-            drop(dir_file.sync_all());
-        }
-        Ok(id)
-    }
-
-    fn read_checkpoint_sync(&self, id: CheckpointId) -> Result<CheckpointManifest, ContextError> {
-        // Checkpoints are namespaced by session; find the file by scanning the
-        // root's session dirs for <session>/checkpoints/<id>.json.
-        let entries = fs::read_dir(&self.root).map_err(|_| ContextError::Io)?;
-        for entry in entries.flatten() {
-            let cp_dir = entry.path().join(CHECKPOINT_DIR);
-            let cp_file = cp_dir.join(format!("{id}.json"));
-            if cp_file.exists() {
-                let content = fs::read_to_string(&cp_file).map_err(|_| ContextError::Io)?;
-                return serde_json::from_str(&content)
-                    .map_err(|e| ContextError::Corrupt(format!("bad checkpoint: {e}")));
-            }
-        }
-        Err(ContextError::NotFound)
-    }
-
-    fn list_checkpoints_sync(&self, session: SessionId) -> Result<Vec<CheckpointId>, ContextError> {
-        let dir = self.checkpoint_dir(session);
-        let entries = match fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(_) => return Err(ContextError::Io),
-        };
-        let mut ids: Vec<CheckpointId> = entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name();
-                let name = name.to_str()?;
-                let stem = name.strip_suffix(".json")?;
-                CheckpointId::from_display_string(stem)
-            })
-            .collect();
-        ids.sort();
-        Ok(ids)
-    }
-
-    /// The log's first record identity, confirmed once per session and reused
-    /// after. The lock is a leaf: the bounded read that confirms an identity
-    /// runs outside it.
-    fn known_first_record(&self, log: &Path, session: SessionId) -> Option<Option<EventId>> {
-        if let Some(id) = self
-            .first_record_ids
-            .lock()
-            .expect("first-record cache poisoned")
-            .get(&session)
-        {
-            return Some(Some(*id));
-        }
-        let first = first_record_id(log)?;
-        if let Some(id) = first {
-            self.first_record_ids
-                .lock()
-                .expect("first-record cache poisoned")
-                .insert(session, id);
-        }
-        Some(first)
-    }
-}
-
-/// Whether the log's byte at the given offset ends a line. A read holds the
-/// bytes of its own window, so this answers for the one byte either side of it:
-/// the byte before the window's first says whether the window starts at a
-/// line's head, the byte at its newest boundary whether the window's last
-/// stretch is a line the log terminates. A read that fails leaves the caller
-/// without the fact, which costs it the segment rather than the whole batch.
-fn byte_ends_line(f: &mut File, at: u64) -> bool {
-    let mut one = [0u8; 1];
-    f.seek(SeekFrom::Start(at)).is_ok() && f.read_exact(&mut one).is_ok() && one[0] == b'\n'
-}
-
-/// The bytes of a log searched for its first record when an index is checked
-/// against it. The width matches the widest line a window read can name: a log
-/// whose first record is wider cannot be checked, and its index is refused, so
-/// offset queries over that log answer nothing rather than a wrong offset.
-const FIRST_RECORD_READ_BYTES: u64 = 1024 * 1024;
-
-/// The first record a log holds, read within a byte cap. Some(None) for a log
-/// with no record; None when the log cannot be opened or nothing in the cap
-/// parses. The index names the first record the scan found, and a scan skips
-/// corrupt lines, so this searches for the first line that parses rather than
-/// taking the first line: the two must agree for the check to mean anything.
-///
-/// The cap makes the check asymmetric with the scan, which reads the whole log
-/// and names a first record found past the cap. Every reader refuses such an
-/// index the same way, so a rebuild over that log reports refusal rather than
-/// claiming an index no reader can open: the refusal is what is observable.
-fn first_record_id(log: &Path) -> Option<Option<EventId>> {
-    let len = fs::metadata(log).ok()?.len();
-    if len == 0 {
-        return Some(None);
-    }
-    let mut file = File::open(log).ok()?;
-    let take = usize::try_from(len.min(FIRST_RECORD_READ_BYTES)).ok()?;
-    let mut buf = vec![0u8; take];
-    file.read_exact(&mut buf).ok()?;
-    let parsed = buf
-        .split(|b| *b == b'\n')
-        .filter(|line| !line.is_empty())
-        .find_map(|line| serde_json::from_slice::<SessionLogEntry>(line).ok());
-    Some(parsed.map(|entry| entry.id))
-}
-
-/// The bytes one backward read covers, oldest first, and what the log holds
-/// either side of them. Splitting these bytes into lines is all the read needs:
-/// an edge can fall anywhere inside a line, so the pieces are put together from
-/// the window rather than from a carry that has to survive the walk.
-struct LogWindow<'a> {
-    bytes: &'a [u8],
-    /// Absolute offset of the window's first byte.
-    start: u64,
-    /// The read's newest boundary: one past the window's last byte.
-    from_byte: u64,
-    /// The window holds the log from its first byte.
-    covers_log: bool,
-    /// The byte before the window ends a line, so the window's first segment
-    /// has a head the log shows.
-    starts_at_line: bool,
-    /// The byte at from_byte ends a line, so the window's last segment is a
-    /// line the log terminates without the window holding the terminator.
-    ends_with_line: bool,
-}
-
-/// What a window's bytes yield: the whole lines and whether the newest whole
-/// line the log holds at or below the window came back.
-struct WindowLines {
-    /// (byte offset of the line's start, raw line text), newest first.
-    lines: Vec<(u64, String)>,
-    /// True when the batch's first line is the log's newest whole line at or
-    /// below the window. False when the window yields no line, or yields lines
-    /// older than that one: its budget ran out on bytes holding no terminator
-    /// before reaching the line, so no read of that budget returns it.
-    newest_line_returned: bool,
-}
-
-impl LogWindow<'_> {
-    /// The whole lines the window holds, newest first. A segment whose head or
-    /// terminator the window does not show is no line yet: the walk re-reads it
-    /// from a boundary that holds it, or, for a line wider than the read's
-    /// budget, never.
-    fn whole_lines(&self) -> WindowLines {
-        let mut lines: Vec<(u64, String)> = Vec::new();
-        let mut head_shown = self.starts_at_line;
-        let mut start = 0usize;
-        // One past the newest returned line's terminator, or past the line's
-        // own end when the log holds no terminator for it. At the window's
-        // start, so a window that yields no line leaves every byte of itself
-        // to answer whether a terminator sits above the batch.
-        let mut newest_end = self.start;
-        for (i, &b) in self.bytes.iter().enumerate() {
-            if b != b'\n' {
-                continue;
-            }
-            if head_shown {
-                let text = String::from_utf8_lossy(&self.bytes[start..i]).into_owned();
-                newest_end = self.start + i as u64 + 1;
-                lines.push((self.start + start as u64, text));
-            }
-            start = i + 1;
-            head_shown = true;
-        }
-        // The bytes after the last terminator in the window: a whole line when
-        // the log terminates it at the window's boundary, when they are the
-        // whole log, which one line written without a terminator ends as, or
-        // when the window ends on the terminator itself, which ends an empty
-        // line. An empty window holds no line at all.
-        if !self.bytes.is_empty() {
-            let one_line_log = self.covers_log && start == 0;
-            if self.ends_with_line || one_line_log {
-                let text = String::from_utf8_lossy(&self.bytes[start..]).into_owned();
-                newest_end = self.from_byte;
-                lines.push((self.start + start as u64, text));
-            }
-        }
-        lines.reverse();
-        // A terminator among the bytes above the newest returned line ends a
-        // newer line the window does not hold whole, so no read of this window
-        // returns it. A window that yields no line returns none: it holds no
-        // head or no terminator to end one, so a caller has nothing to take for
-        // the log's newest line.
-        let above = (newest_end - self.start) as usize;
-        let newest_line_returned =
-            !lines.is_empty() && !self.bytes[above.min(self.bytes.len())..].contains(&b'\n');
-        WindowLines {
-            newest_line_returned,
-            lines,
         }
     }
 }
@@ -498,142 +173,11 @@ impl ContextBackend for LocalFileBackend {
     }
 
     fn read_log_lenient(&self, session: SessionId) -> LenientRead {
-        // Tolerant: parse what parses, skip + count bad lines. The search
-        // snapshot uses this so one corrupt line does not blank the whole
-        // view. NOT the strict replay path (that errors on a bad line) --
-        // two paths, not one shared helper.
-        let log = self.log_path(session);
-        let Ok(f) = File::open(&log) else {
-            return LenientRead::default();
-        };
-        let reader = BufReader::new(f);
-        let mut events = Vec::new();
-        let mut skipped = 0;
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            if line.is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<SessionLogEntry>(&line) {
-                Ok(ev) => events.push(ev),
-                Err(_) => skipped += 1,
-            }
-        }
-        LenientRead { events, skipped }
+        self.read_log_lenient_sync(session)
     }
+
     fn read_log_range(&self, session: SessionId, byte_offset: u64, max_bytes: u64) -> LogRangeRead {
-        // Forward line-aligned window: seek to byte_offset, skip a partial
-        // first line (if byte_offset lands mid-line) to the next b'\n', then
-        // read complete lines until max_bytes consumed. UTF-8 safe -- the
-        // split is on b'\n' (a single-byte ASCII), never inside a multi-byte
-        // sequence.
-        let log = self.log_path(session);
-        let Ok(f) = File::open(&log) else {
-            return LogRangeRead::default();
-        };
-        let mut f = f;
-        let bytes_total = f.metadata().map(|m| m.len()).unwrap_or(0);
-        if byte_offset >= bytes_total {
-            return LogRangeRead {
-                bytes_total,
-                ..Default::default()
-            };
-        }
-        if f.seek(SeekFrom::Start(byte_offset)).is_err() {
-            return LogRangeRead {
-                bytes_total,
-                ..Default::default()
-            };
-        }
-        let mut buf = vec![0u8; max_bytes.min(MAX_WINDOW_BYTES) as usize];
-        let n = f.read(&mut buf).unwrap_or(0);
-        buf.truncate(n);
-        // Skip a partial first line when byte_offset lands mid-line (the byte
-        // before it is not a newline). When byte_offset is a line start --
-        // which is the case for every window after the first when the caller
-        // advances by next_offset (a line-aligned offset) -- the first
-        // segment is a complete line and must NOT be skipped. Reading the
-        // byte at offset-1 distinguishes the two; a seek-and-read of one
-        // byte is cheap (one syscall per window).
-        let mut start = 0usize;
-        if byte_offset != 0 {
-            let mid_line = if n == 0 {
-                true
-            } else {
-                let prev_byte = f.seek(SeekFrom::Start(byte_offset - 1)).ok().and_then(|_| {
-                    let mut b = [0u8; 1];
-                    f.read(&mut b).ok().filter(|&r| r == 1).map(|_| b[0])
-                });
-                // Restore the read cursor so the line-split below sees the
-                // window from byte_offset. If the seek-back failed, fall back
-                // to the conservative mid-line skip.
-                drop(f.seek(SeekFrom::Start(byte_offset)));
-                prev_byte != Some(b'\n')
-            };
-            if mid_line {
-                if let Some(nl) = buf.iter().position(|&b| b == b'\n') {
-                    start = nl + 1;
-                } else {
-                    // No newline in the window -- the whole window is one
-                    // partial line; advance past it so the next window starts
-                    // clean.
-                    return LogRangeRead {
-                        next_offset: byte_offset + n as u64,
-                        bytes_total,
-                        ..Default::default()
-                    };
-                }
-            }
-        }
-        // Split the complete lines (start..n), tracking byte offsets. One
-        // terminator per returned line, plus the one the mid-line skip passed
-        // over: together they are every terminator in the span the read
-        // consumed, which is what counts the records off the bytes alone.
-        // Validate the complete lines once instead of once per line: a log
-        // written here is valid UTF-8, so the span converts in a single check.
-        // The read is a byte count, so the window can stop inside a character;
-        // that tail is never returned, and validating it would send a valid
-        // log down the per-line path. Bytes that are genuinely invalid still
-        // fall back to the per-line conversion, which keeps the damaged line
-        // readable rather than dropping it.
-        let complete_end = buf[start..]
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map(|last| start + last + 1);
-        let valid_window = complete_end.and_then(|end| from_utf8(&buf[start..end]).ok());
-        let mut lines = Vec::new();
-        let mut line_breaks = if start > 0 { 1 } else { 0 };
-        let mut cur = start;
-        let mut line_start_abs = byte_offset + start as u64;
-        while cur < buf.len() {
-            let nl = buf[cur..].iter().position(|&b| b == b'\n');
-            let line_end = match nl {
-                Some(p) => cur + p,
-                None => break, // last partial line -- drop, the next window reads it whole
-            };
-            let text = match valid_window {
-                Some(window) => window[cur - start..line_end - start].to_owned(),
-                None => {
-                    self.lossy_line_count.fetch_add(1, Ordering::Relaxed);
-                    String::from_utf8_lossy(&buf[cur..line_end]).into_owned()
-                }
-            };
-            lines.push((line_start_abs, text));
-            line_breaks += 1;
-            line_start_abs += (line_end - cur + 1) as u64; // +1 for the \n
-            cur = line_end + 1;
-        }
-        let next_offset = if lines.is_empty() {
-            byte_offset + n as u64
-        } else {
-            line_start_abs
-        };
-        LogRangeRead {
-            lines,
-            next_offset,
-            bytes_total,
-            line_breaks,
-        }
+        self.read_byte_range(session, byte_offset, max_bytes)
     }
 
     fn read_lines_reverse(
@@ -642,108 +186,15 @@ impl ContextBackend for LocalFileBackend {
         from_byte: u64,
         max_bytes: u64,
     ) -> Result<ReverseRead, ContextError> {
-        // Backward whole-line read: take the newest max_bytes of the log as one
-        // window and split it into lines. A window edge can fall inside a line,
-        // so the byte either side of the window is read to learn whether the
-        // segments at its ends are lines the log shows whole. The bytes stay
-        // raw, so a multi-byte UTF-8 sequence never meets a split inside it.
-        let log = self.log_path(session);
-        // An unopenable log is an error, not empty: empty reads as the log's
-        // end and would latch the caller's view closed.
-        let mut f = File::open(&log).map_err(|_| ContextError::Io)?;
-        let size = f
-            .metadata()
-            .map(|m| m.len())
-            .map_err(|_| ContextError::Io)?;
-        if size == 0 {
-            return Ok(ReverseRead::default());
-        }
-        let from_byte = from_byte.min(size);
-        // One byte at the least, so the window's start sits below the read's
-        // boundary and a walk over the log always moves down.
-        let start = from_byte.saturating_sub(max_bytes.max(1));
-        let mut bytes = vec![0u8; (from_byte - start) as usize];
-        f.seek(SeekFrom::Start(start))
-            .map_err(|_| ContextError::Io)?;
-        f.read_exact(&mut bytes).map_err(|_| ContextError::Io)?;
-        let window = LogWindow {
-            bytes: &bytes,
-            start,
-            from_byte,
-            covers_log: start == 0 && from_byte == size,
-            starts_at_line: start == 0 || byte_ends_line(&mut f, start - 1),
-            ends_with_line: from_byte < size && byte_ends_line(&mut f, from_byte),
-        };
-        let whole = window.whole_lines();
-        // Where a walk resumes. A window starting at a line's head left nothing
-        // over, so the next read ends there. One starting inside a line holds
-        // that line's tail only: the next read must end just past its
-        // terminator to hold it whole, or, for a line wider than the read, pass
-        // it. The walk always moves down, which is what ends a walk over a log
-        // whose lines are wider than the read.
-        let next_from = if start == 0 {
-            None
-        } else if window.starts_at_line {
-            Some(start)
-        } else {
-            let past_line = bytes
-                .iter()
-                .position(|&b| b == b'\n')
-                .map(|i| start + i as u64 + 1)
-                .filter(|end| *end < from_byte);
-            Some(past_line.unwrap_or(start))
-        };
-        Ok(ReverseRead {
-            lines: whole.lines,
-            newest_line_returned: whole.newest_line_returned,
-            next_from,
-        })
+        self.read_reverse_lines(session, from_byte, max_bytes)
     }
 
     fn log_index_floor(&self, session: SessionId, ordinal: u64) -> Option<LogIndexEntry> {
-        // The index is checked against the log on every open, so an answer
-        // here means a file that names the log's own first record and claims
-        // no byte past the log's length. What it cannot mean is that an entry
-        // still holds: the offset it carries is confirmed against the bytes
-        // at it by the reader that walks, not here. What the check itself
-        // reads -- a stat, the first record identity once per session, the
-        // index header, and a logarithmic count of entries -- is sidecar
-        // bookkeeping, bounded apart from any window budget a caller keeps
-        // over the log's content.
-        let log = self.log_path(session);
-        let log_len = fs::metadata(&log).ok()?.len();
-        let first = self.known_first_record(&log, session)?;
-        let mut reader = LogIndexReader::open(&self.index_path(session), log_len, first)?;
-        reader.floor_by_ordinal(ordinal)
+        self.index_floor(session, ordinal)
     }
 
-    /// One streaming pass under the same lock an append holds, so a rebuild
-    /// cannot replace the write state between an append extending the log and
-    /// the append accounting for the extension. The pass is the cold scan the
-    /// first append to a session already pays; holding the lock through it
-    /// keeps the rebuild and the appends in one order. A pass that could not
-    /// read the log leaves the warm state in place: it saw no more of the log
-    /// than the state the backend already holds, and replacing that would cost
-    /// the ids it accounts for.
-    ///
-    /// The answer is whether queries work after the call, not whether the pass
-    /// completed: an index published over a log whose first record sits past
-    /// the identity check's bounded read is refused by every reader, and
-    /// reporting it as working would silence the one warning that says offset
-    /// queries degraded.
     fn rebuild_log_index(&self, session: SessionId) -> bool {
-        {
-            let mut states = self.write_state.lock().expect("write state poisoned");
-            let outcome = SessionWriteState::scan(
-                &self.log_path(session),
-                self.index_path(session),
-                SAMPLE_INTERVAL_BYTES,
-            );
-            if outcome.completed {
-                states.insert(session, outcome.state);
-            }
-        }
-        self.log_size(session) == 0 || self.log_index_floor(session, 0).is_some()
+        self.rebuild_index(session)
     }
 
     fn write_checkpoint(

@@ -1,12 +1,13 @@
-//! Sandbox tests, split out of lib.rs so that file stays under the size gate.
-//! Inlined via the path attribute so the tests keep use-super access to the
-//! private process and temp-dir helpers plus the session guards.
-//!
-// ! Tests shell out to pgrep to measure process-tree state; those spawns are test ! scaffolding, not production spawns, so the spawn-chokepoint rule is allowed ! here. Production code routes every spawn through the launcher.
+//! Sandbox tests for the live fence: the profile it renders, the grants it
+//! applies, and the status it reports. Tests shell out to pgrep to measure
+//! process-tree state; those spawns are test scaffolding, not production
+//! spawns, so the spawn-chokepoint rule is allowed here. Production code
+//! routes every spawn through the launcher.
 
 #![allow(clippy::disallowed_methods)]
 
-use super::super::fence_status_for;
+use super::super::fence::fence_status_for;
+use super::super::process::BreakerSpanGuard;
 use super::super::process::kill_process_group;
 use super::super::temp_dir::COUNTER;
 use super::super::*;
@@ -16,8 +17,9 @@ use houyicoder_api::sandbox::FenceStatus;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use houyicoder_api::skill::grant::is_denied;
+use houyicoder_context::ExecConfig;
 use houyicoder_resilience::BreakerState;
-use houyicoder_resilience::resource_breaker::{ResourceBreakerConfig, TripReason};
+use houyicoder_resilience::resource_breaker::{ResourceBreakerConfig, SpawnEvent, TripReason};
 use std::env::{temp_dir, var};
 use std::fs::canonicalize;
 use std::fs::create_dir;

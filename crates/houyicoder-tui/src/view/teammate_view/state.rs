@@ -4,9 +4,9 @@
 
 use crate::agent_message::ClientCommand;
 use crate::agent_message::fleet::FleetEntry;
-use crate::session::approval::SubagentTarget;
 use crate::state::App;
 use crate::state::parked_view_states::ParkedViewState;
+use crate::transcript::expand::SubagentTarget;
 use crate::transcript::records::{SubagentFinished, TeammateView, TranscriptLine};
 use houyicoder_protocol::frontend::SessionId;
 

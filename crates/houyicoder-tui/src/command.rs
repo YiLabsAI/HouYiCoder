@@ -3,8 +3,8 @@
 //! app.rs can depend on keys + state, giving a clean dependency DAG:
 //! keys -> state, command -> state, app -> keys + state. Input submission and
 //! the stage chain have their own modules beside this one; the per-pane
-//! approval state machine and artifact closed-loop actions live in
-//! approval.rs (second impl block).
+//! approval state machine lives in approval.rs and the artifact closed-loop
+//! actions in workflow/artifact/edit.rs.
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SlashCommand;

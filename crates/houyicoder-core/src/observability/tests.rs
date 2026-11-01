@@ -1,6 +1,7 @@
 //! Unit tests for the observability module.
 
 use super::evolution::*;
+use super::tool_stats::FAILURE_REASONS_CAP;
 use super::*;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{Usage, UsageProvenance};
@@ -364,7 +365,8 @@ fn test_seed_usage_folds_rows() {
     assert_eq!(cost.by_model["model-a"].cache_read_tokens, 9_600);
     assert_eq!(cost.by_model["model-b"].input_tokens, 500);
     assert_eq!(
-        log.cumulative_usage.input_tokens, 12_500,
+        log.cumulative_usage().input_tokens,
+        12_500,
         "the cumulative covers the turns the rows cover"
     );
     assert!(
@@ -402,10 +404,11 @@ fn test_reset_usage_keeps_turns() {
         log.cost().by_model.is_empty(),
         "the cleared session has no rows"
     );
-    assert_eq!(log.cumulative_usage, Usage::identity());
+    assert_eq!(log.cumulative_usage(), &Usage::identity());
     assert!(log.last_turn_delta().is_none());
     assert_eq!(
-        log.turn_count, 1,
+        log.turn_coords().0,
+        1,
         "the turns the log has shown keep their numbers"
     );
 }
