@@ -564,6 +564,10 @@ impl App {
                     self.apply_region_intent(intent);
                 }
             }
+            RegionIntent::DrillChild(child_sid) => {
+                self.enter_teammate_view_for_sid(&child_sid, true);
+                self.clear_transcript_click();
+            }
             RegionIntent::ScrollUp => self.scroll_transcript_line_up(1),
             RegionIntent::ScrollDown => self.scroll_transcript_line_down(1),
             RegionIntent::Copied(text) => {

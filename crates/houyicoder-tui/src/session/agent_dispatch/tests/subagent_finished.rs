@@ -1,5 +1,7 @@
 use super::*;
+use crate::app::handle_mouse;
 use crate::composition::app;
+use crate::selection::RecordingClipboard;
 use crate::state::App;
 use crate::state::Screen;
 use crate::state::ViewportMode;
@@ -9,8 +11,10 @@ use crate::test_harness::render_text;
 use crate::transcript::records::SubagentFinished;
 use crate::transcript::records::SubagentOutcome;
 use crate::transcript::records::TranscriptLine;
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
+use std::sync::{Arc, Mutex};
 
 /// An app on the working screen, where the transcript and the fleet strip
 /// both draw.
@@ -470,4 +474,100 @@ fn test_trace_name_one_line() {
     );
     let out = render_text(&app, 60, 20);
     assert!(out.contains("finished"), "the ending stays visible:\n{out}");
+}
+
+/// The screen rows the finished traces draw on, top to bottom.
+fn trace_rows(buf: &Buffer) -> Vec<u16> {
+    let rows: Vec<u16> = (0..buf.area().height)
+        .filter(|&y| row_text(buf, y).contains("Agent \""))
+        .collect();
+    assert!(!rows.is_empty(), "no trace row:\n{}", dump_buffer(buf));
+    rows
+}
+
+/// One left-button event at a cell.
+fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+/// The child the teammate view is showing, if any.
+fn viewed_child(app: &App) -> Option<String> {
+    app.ui.teammate_view.as_ref().map(|v| v.child_sid.clone())
+}
+
+/// A clean click on a finished trace opens the child that row names, not only
+/// selecting its text. Two traces with different types and ids stand on
+/// screen and the lower one is clicked, so a per-row key that arrived one row
+/// off would open the child above it and fail here.
+#[test]
+fn test_click_trace_drills() {
+    let mut app = working_app();
+    for (sid, agent_type) in [("c1", "explore"), ("c2", "verify")] {
+        app.push_transcript_line(TranscriptLine::SubagentFinished(SubagentFinished {
+            child_sid: sid.into(),
+            subagent_type: agent_type.into(),
+            ..trace("find auth")
+        }));
+    }
+    let buf = render_buffer(&app, 100, 30);
+    let y = trace_rows(&buf)[1];
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let x = rect.x + 2;
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("Viewing @verify"),
+        "the clicked row's child is the one on screen:\n{out}"
+    );
+    assert_eq!(
+        viewed_child(&app).as_deref(),
+        Some("c2"),
+        "and the second trace opened the second child"
+    );
+}
+
+/// A drag that starts on a finished trace copies the row's text and leaves
+/// the reader in the parent, so selecting the trace never drills in.
+#[test]
+fn test_drag_trace_copies() {
+    let mut app = working_app();
+    app.push_transcript_line(TranscriptLine::SubagentFinished(trace("find auth")));
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    let buf = render_buffer(&app, 100, 30);
+    let y = trace_rows(&buf)[0];
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), rect.x + 12, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), rect.x + 12, y),
+    );
+    assert!(
+        viewed_child(&app).is_none(),
+        "a drag selects the row's text instead of leaving the parent"
+    );
+    let copied = captured.lock().expect("captured").clone();
+    assert_eq!(copied.len(), 1, "the release copies once: {copied:?}");
+    assert!(
+        copied[0].contains("Agent"),
+        "the copied text is the trace row's: {copied:?}"
+    );
 }

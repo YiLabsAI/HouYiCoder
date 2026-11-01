@@ -106,6 +106,8 @@ pub(crate) fn push_delegation_rows(
 /// searchable. Green is the same success color the tool-call marks use, red
 /// the same error color; interrupted takes yellow, and an ending this build
 /// cannot name stays neutral rather than borrowing a verdict it never saw.
+/// The row also carries the child's session id, so a clean click opens the
+/// same child the drill-in key opens while a drag still copies the text.
 pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mut RowSet) {
     let (name, suffix) = fit_finished(child, width);
     let rest = match &name {
@@ -113,10 +115,12 @@ pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mu
         None => format!(" Agent {suffix}"),
     };
     sink.push(
-        Row::new(TAG_PLAIN, format!("\u{25cf}{rest}")).pre(Some(Line::from(vec![
-            Span::styled("\u{25cf}".to_string(), finished_mark_style(child.outcome)),
-            Span::raw(rest),
-        ]))),
+        Row::new(TAG_PLAIN, format!("\u{25cf}{rest}"))
+            .trace_child(Some(child.child_sid.clone()))
+            .pre(Some(Line::from(vec![
+                Span::styled("\u{25cf}".to_string(), finished_mark_style(child.outcome)),
+                Span::raw(rest),
+            ]))),
     );
 }
 

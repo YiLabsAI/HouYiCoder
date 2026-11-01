@@ -15,6 +15,7 @@ fn tagged_row(i: usize) -> Row {
         .fold_key(Some(format!("fold {i}")))
         .group(Some(format!("group {i}")))
         .turn_id(Some(RowId::from(format!("turn {i}").as_str())))
+        .trace_child(Some(format!("child {i}")))
 }
 
 fn set_of(len: usize, offset: usize) -> RowSet {
@@ -36,6 +37,7 @@ fn test_push_keeps_rows_together() {
     assert_eq!(set.fold_keys().len(), 5);
     assert_eq!(set.expanded_group().len(), 5);
     assert_eq!(set.turn_ids().len(), 5);
+    assert_eq!(set.trace_children().len(), 5);
     assert_eq!(set.pre_rendered().len(), 5);
 }
 
@@ -68,6 +70,16 @@ fn test_window_keeps_row_keys() {
             Some(RowId::from("turn 100")),
             Some(RowId::from("turn 101")),
         ]
+    );
+
+    let traces: Vec<Option<&str>> = window
+        .trace_children()
+        .iter()
+        .map(|c| c.as_deref())
+        .collect();
+    assert_eq!(
+        traces,
+        [Some("child 2"), Some("child 100"), Some("child 101")]
     );
 }
 
@@ -115,6 +127,7 @@ fn test_window_bounds() {
     assert_eq!(whole.len(), 5);
     assert_eq!(whole.callids().len(), 5);
     assert_eq!(whole.turn_ids().len(), 5);
+    assert_eq!(whole.trace_children().len(), 5);
 }
 
 /// The cache publishes the rows and the key they were built for in one
@@ -253,8 +266,8 @@ fn test_width_and_tick_apart() {
     );
 }
 
-/// The key set takes all four vectors from one row set, so a replacement
-/// cannot leave one of them at the previous frame's length.
+/// The key set takes every vector from one row set, so a replacement cannot
+/// leave one of them at the previous frame's length.
 #[test]
 fn test_keys_from_one_set() {
     let mut keys = LastRowKeys::default();
@@ -263,6 +276,7 @@ fn test_keys_from_one_set() {
     assert_eq!(keys.turn_ids().len(), 3);
     assert_eq!(keys.fold_key_at(2).as_deref(), Some("fold 2"));
     assert_eq!(keys.turn_id_at(1), Some(RowId::from("turn 1")));
+    assert_eq!(keys.trace_child_at(2).as_deref(), Some("child 2"));
 
     // A shorter set must not leave the longer one's tail behind: the row the
     // tail belonged to is gone, so its key would resolve a click onto a row
@@ -272,4 +286,5 @@ fn test_keys_from_one_set() {
     assert_eq!(keys.turn_ids().len(), 1);
     assert_eq!(keys.fold_key_at(1), None);
     assert_eq!(keys.turn_id_at(1), None);
+    assert_eq!(keys.trace_child_at(1), None);
 }

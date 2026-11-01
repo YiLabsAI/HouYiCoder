@@ -206,6 +206,8 @@ pub(crate) enum RegionIntent {
     ToggleSubagent(usize),
     /// Toggle the thinking block on the visible row, when it offers one.
     ToggleThinking(usize),
+    /// Open the child session the visible row is the trace of.
+    DrillChild(String),
     /// Collapse whatever expanded block contains the selection anchor.
     CollapseUnderAnchor,
     /// Scroll one line up (edge auto-scroll during a drag).
@@ -407,10 +409,11 @@ impl Region for TranscriptRegion<'_> {
     }
 
     /// A clean click (no drag motion) asks for a fold/subagent/thought toggle,
-    /// or a collapse when it lands on an expanded block's content; a real drag
-    /// copies (drag wins over toggle). The leaf only names the effect: the
-    /// row's tag, fold key, and turn handle decide which, and the router
-    /// performs it on the state the render pass publishes.
+    /// opens the child a trace row stands for, or collapses the expanded block
+    /// it lands in; a real drag copies (drag wins over every one of those). The
+    /// leaf only names the effect: the row's tag, fold key, turn handle, and
+    /// traced child decide which, and the router performs it on the state the
+    /// render pass publishes.
     fn handle_up(&mut self) -> RegionIntent {
         let sel = &self.view.selections.transcript;
         let clean = !sel.drag_moved && sel.is_click_only() && sel.span_origin.is_none();
@@ -424,9 +427,15 @@ impl Region for TranscriptRegion<'_> {
                     .map(|(t, _)| *t)
                     .unwrap_or(selection::TAG_PLAIN);
                 let keys = self.view.frame.keys.borrow();
-                (ri, tag, keys.fold_key_at(ri), keys.turn_id_at(ri))
+                (
+                    ri,
+                    tag,
+                    keys.fold_key_at(ri),
+                    keys.turn_id_at(ri),
+                    keys.trace_child_at(ri),
+                )
             });
-            if let Some((ri, tag, fold_key, turn_id)) = target {
+            if let Some((ri, tag, fold_key, turn_id, trace_child)) = target {
                 if tag == selection::TAG_FOLD {
                     return RegionIntent::ToggleFold(ri);
                 }
@@ -440,6 +449,12 @@ impl Region for TranscriptRegion<'_> {
                 // cannot state.
                 if turn_id.is_some() {
                     return RegionIntent::ToggleThinking(ri);
+                }
+                // Ranked after the toggles so a row that both offers a block
+                // and names a child keeps opening its block; the trace row is
+                // the row that publishes this and no fold or turn handle.
+                if let Some(child_sid) = trace_child {
+                    return RegionIntent::DrillChild(child_sid);
                 }
             }
             return RegionIntent::CollapseUnderAnchor;

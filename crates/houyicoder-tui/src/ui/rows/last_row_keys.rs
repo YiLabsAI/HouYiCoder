@@ -1,22 +1,23 @@
 //! The per-row keys of the last emitted visible row set.
 //!
 //! A click or Ctrl+O maps a screen row straight to the key it acts on, so the
-//! key vectors have to stay in step with the rows they were built for. All
-//! four are taken from one row set in one operation, which is what keeps a
+//! key vectors have to stay in step with the rows they were built for. All of
+//! them are taken from one row set in one operation, which is what keeps a
 //! key from pointing at the row beside the one it was built for.
 
 use crate::row_id::RowId;
 
 use super::row_set::RowSet;
 
-/// The call-id, fold-group key, expanded-group key, and turn id carried by
-/// each visible row of the last render, indexed by visible row.
+/// The call-id, fold-group key, expanded-group key, turn id, and traced child
+/// carried by each visible row of the last render, indexed by visible row.
 #[derive(Debug, Default)]
 pub(crate) struct LastRowKeys {
     callids: Vec<Option<String>>,
     fold_keys: Vec<Option<String>>,
     expanded_group: Vec<Option<String>>,
     turn_ids: Vec<Option<RowId>>,
+    trace_children: Vec<Option<String>>,
 }
 
 impl LastRowKeys {
@@ -31,6 +32,8 @@ impl LastRowKeys {
         self.expanded_group.extend_from_slice(set.expanded_group());
         self.turn_ids.clear();
         self.turn_ids.extend_from_slice(set.turn_ids());
+        self.trace_children.clear();
+        self.trace_children.extend_from_slice(set.trace_children());
     }
 
     /// The marks of the rows inside an expanded group, in row order, for the
@@ -70,6 +73,11 @@ impl LastRowKeys {
     /// The ThoughtFor turn id a visible row carries, by visible-row index.
     pub(crate) fn turn_id_at(&self, ri: usize) -> Option<RowId> {
         self.turn_ids.get(ri).cloned().flatten()
+    }
+
+    /// The child session a trace row opens, by visible-row index.
+    pub(crate) fn trace_child_at(&self, ri: usize) -> Option<String> {
+        self.trace_children.get(ri).cloned().flatten()
     }
 
     #[cfg(test)]

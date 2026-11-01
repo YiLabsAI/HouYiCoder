@@ -476,9 +476,9 @@ pub(crate) fn push_line_rows(
     }
     if let TranscriptLine::SubagentFinished(child) = line {
         // One row: the trace is a line in the timeline, not a block to fold.
-        // It carries no fold key, so a click selects its text like any other
-        // content; Enter on it opens the child's view through the cursor
-        // walk.
+        // It carries the child's session id rather than a fold key, so a clean
+        // click opens the child while a drag still selects the row's text;
+        // the drill-in key reaches the same child by walking the cursor.
         push_finished_rows(child, width, sink);
         return true;
     }

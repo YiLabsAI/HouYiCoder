@@ -1,8 +1,9 @@
 //! The transcript rows and the metadata each row carries, held as one set that
 //! stays in step.
 //!
-//! A click or key resolves a screen row to the call id, fold key, group, or
-//! turn it acts on, so the row text and its metadata have to travel together.
+//! A click or key resolves a screen row to the call id, fold key, group,
+//! turn, or traced child it acts on, so the row text and its metadata have to
+//! travel together.
 //! Separate arrays let a write land on one and not the others, and the reader
 //! then acts on a row beside the one it points at. One value makes that
 //! unrepresentable: the only writers are push and the batch replace on the
@@ -36,6 +37,7 @@ pub(crate) struct Row {
     fold_key: Option<String>,
     group: Option<String>,
     turn_id: Option<RowId>,
+    trace_child: Option<String>,
     pre: Option<Line<'static>>,
 }
 
@@ -49,6 +51,7 @@ impl Row {
             fold_key: None,
             group: None,
             turn_id: None,
+            trace_child: None,
             pre: None,
         }
     }
@@ -90,6 +93,15 @@ impl Row {
         self
     }
 
+    /// The child session a trace row opens, so a clean click on that row opens
+    /// the child while a drag still selects its text. It is separate from the
+    /// fold key: a fold key names a block this row expands, while this names a
+    /// child the row stands for.
+    pub(crate) fn trace_child(mut self, child_sid: Option<String>) -> Self {
+        self.trace_child = child_sid;
+        self
+    }
+
     /// A styled line, for styling the tag cannot express (markdown, diffs,
     /// badge colors).
     pub(crate) fn pre(mut self, pre: Option<Line<'static>>) -> Self {
@@ -113,6 +125,7 @@ pub(crate) struct RowSet {
     fold_keys: Vec<Option<String>>,
     expanded_group: Vec<Option<String>>,
     turn_ids: Vec<Option<RowId>>,
+    trace_children: Vec<Option<String>>,
     row_ids: Vec<Option<RowId>>,
     pre_rendered: Vec<Option<Line<'static>>>,
     in_subagent: bool,
@@ -134,6 +147,7 @@ impl RowSet {
         self.fold_keys.push(row.fold_key);
         self.expanded_group.push(row.group);
         self.turn_ids.push(row.turn_id);
+        self.trace_children.push(row.trace_child);
         self.row_ids.push(self.line_id.clone());
         self.pre_rendered.push(row.pre);
     }
@@ -198,6 +212,11 @@ impl RowSet {
         &self.turn_ids
     }
 
+    /// The child session each row opens, in row order.
+    pub(crate) fn trace_children(&self) -> &[Option<String>] {
+        &self.trace_children
+    }
+
     /// The identity of each row, in row order. A reader that must name a row
     /// again after the set is rebuilt reads this beside the text rows.
     pub(crate) fn row_ids(&self) -> &[Option<RowId>] {
@@ -251,6 +270,12 @@ impl RowSet {
             turn_ids: window(
                 &self.turn_ids,
                 &live.turn_ids,
+                slots_at.clone(),
+                live_at.clone(),
+            ),
+            trace_children: window(
+                &self.trace_children,
+                &live.trace_children,
                 slots_at.clone(),
                 live_at.clone(),
             ),

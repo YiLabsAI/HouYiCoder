@@ -158,7 +158,7 @@ ACTIVE_OWNERS = {
     },
     "crates/houyicoder-tui/src/ui/rows/last_row_keys.rs:LastRowKeys": {
         # The per-row keys of the last visible window, all taken from one row set in a single replace.
-        "fields": 4,
+        "fields": 5,
     },
     "crates/houyicoder-tui/src/ui/rows/display_rows_cache.rs:DisplayRowsCache": {
         # The cached slot rows and the key they were built for.
@@ -170,8 +170,9 @@ ACTIVE_OWNERS = {
         # from here on belong to; push and the batch replace are the only
         # writers. The identity is here because a parked viewport names the row
         # it stands on, and the text beside that row is what resolves the offset
-        # into it.
-        "fields": 9,
+        # into it. The traced child is one more per-row key of that family: a
+        # click resolves it the way it resolves the call id and the fold key.
+        "fields": 10,
     },
     "crates/houyicoder-tui/src/view/capability/state.rs:PermissionPaneState": {
         # The permission pane's tab, cursor, input sub-mode, and search buffer.

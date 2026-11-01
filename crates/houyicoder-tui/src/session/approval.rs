@@ -18,10 +18,10 @@ use houyicoder_protocol::frontend::SessionId;
 /// The child a transcript row names, as a key target. The two forms answer
 /// different keys, and the difference is the point of the type: a live
 /// delegation is a fold block the expand chord opens in place, while the
-/// trace of a finished child holds no rows to expand and only the drill-in
-/// key acts on it. Flattened into one shape, the expand chord claimed the
-/// trace row it could not open, reported the chord handled, and left the
-/// screen unchanged.
+/// trace of a finished child holds no rows to expand, so the drill-in key
+/// takes it and the expand chord declines it. Flattened into one shape, the
+/// expand chord claimed the trace row it could not open, reported the chord
+/// handled, and left the screen unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SubagentTarget {
     /// The live delegation line, with whether its child transcript still
