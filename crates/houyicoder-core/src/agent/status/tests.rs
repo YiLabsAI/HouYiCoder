@@ -23,6 +23,7 @@ use houyicoder_context::{
 use houyicoder_protocol::llm::EffortLevel;
 use std::collections::HashSet;
 use std::path::Path;
+use std::thread;
 
 fn usage(input: u32, output: u32, cache_read: u32) -> Usage {
     Usage {
@@ -280,11 +281,40 @@ fn test_record_tool_batch_sums() {
     // resolve_turn counts a partition batch then records under one lock;
     // successive batches accumulate across turns.
     let mut acc = UsageAccumulator::default();
-    acc.record_tool_batch(10, 7, 3);
-    acc.record_tool_batch(5, 5, 0);
+    acc.record_tool_batch(&ToolOutcomeCounts {
+        calls: 10,
+        ok: 7,
+        err: 3,
+        refused: 0,
+    });
+    acc.record_tool_batch(&ToolOutcomeCounts {
+        calls: 5,
+        ok: 3,
+        err: 0,
+        refused: 2,
+    });
     assert_eq!(acc.tool_calls(), 15);
-    assert_eq!(acc.tool_success(), 12);
+    assert_eq!(acc.tool_success(), 10);
     assert_eq!(acc.tool_errors(), 3);
+    assert_eq!(acc.tool_refused(), 2);
+}
+
+/// The batch's counts are read back as one value, so a snapshot cannot pair
+/// a call total from one moment with a refusal count from another.
+#[test]
+fn test_tool_counts_round_trip() {
+    let mut acc = UsageAccumulator::default();
+    acc.record_tool_batch(&ToolOutcomeCounts {
+        calls: 4,
+        ok: 1,
+        err: 1,
+        refused: 2,
+    });
+    let counts = acc.tool_counts();
+    assert_eq!(
+        (counts.calls, counts.ok, counts.err, counts.refused),
+        (4, 1, 1, 2)
+    );
 }
 
 /// A delegation tool result carries the child's usage, but it is written when
@@ -402,6 +432,33 @@ fn test_snapshot_reports_breaker() {
     assert_eq!(snap.cumulative_usage.input_tokens, 12_400);
     assert_eq!(snap.last_input_tokens, 12_400);
     assert_eq!(snap.context_window, 200_000); // FakeProvider default caps.
+}
+
+/// A poisoned usage lock reports zeros instead of propagating a second panic
+/// into the render path: the host still renders a status line after a writer
+/// panicked, claiming no tool outcomes it cannot read.
+#[test]
+fn test_poisoned_usage_reports_zero() {
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let usage = runner.usage.clone();
+    let panicked = thread::spawn(move || {
+        let _guard = usage.lock().expect("the accumulator lock");
+        panic!("a writer panicked while holding the accumulator");
+    })
+    .join();
+    assert!(panicked.is_err(), "the writer poisoned the lock");
+    let snap = runner.status_snapshot();
+    assert_eq!(snap.tool_calls, 0);
+    assert_eq!(snap.tool_success, 0);
+    assert_eq!(snap.tool_errors, 0);
+    assert_eq!(snap.tool_refused, 0);
+    assert_eq!(snap.cumulative_usage.input_tokens, 0);
+    assert_eq!(snap.last_input_tokens, 0);
 }
 
 #[test]

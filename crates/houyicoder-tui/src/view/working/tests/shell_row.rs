@@ -297,6 +297,26 @@ fn test_shell_row_stopping_yellow() {
     assert_eq!(verdict_color(&app), Color::Yellow, "stopping reads yellow");
 }
 
+/// A command the user refused says so on the row and reads yellow: the
+/// refusal is a decision the user can still revisit, not a failure the
+/// command reported on its own.
+#[test]
+fn test_shell_row_refused_yellow() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript = vec![shell_line(
+        "rm -rf build",
+        ToolOutcome::Refused,
+        Some(0),
+        None,
+    )]
+    .into();
+    let out = render_text(&app, 80, 24);
+    let row = find_shell_row(&out);
+    assert!(row.ends_with("refused · 0ms"), "{row:?}");
+    assert_eq!(verdict_color(&app), Color::Yellow, "a refusal reads yellow");
+}
+
 /// An output moved to the block store adds its tag after the verdict in the
 /// same cyan the prompt uses, so a reader sees the full text still exists
 /// without the row growing.

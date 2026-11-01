@@ -4,8 +4,10 @@
 //! chip, so both must read the same rule: an error key or success false is a
 //! failure, and a bash command whose non-zero exit is its own verdict is not.
 //! A result the runner wrote for a call that never ran is neither, and the
-//! marker it carries says so. Keeping the rule here, beside the event types it
-//! reads, means the consumers cannot drift apart.
+//! marker it carries says so; a call someone refused carries a second marker,
+//! because a refusal is a decision about the call rather than a missing
+//! result. Keeping the rule here, beside the event types it reads, means the
+//! consumers cannot drift apart.
 
 use serde_json::Value;
 
@@ -57,6 +59,23 @@ pub fn tool_result_failed(output: &Value, tool_name: &str, call_input: &Value) -
 /// failure and a count of either must leave it out.
 pub fn tool_result_not_run(output: &Value) -> bool {
     output.get("not_run").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether a durable tool result says the call was refused before it ran.
+///
+/// A refusal is a decision against the call: the user declined the approval
+/// card, or a hook denied, asked about, or gave feedback on it. The runner
+/// records it under a refused object naming who refused the call and which
+/// verdict the refusal came from. A refusal is also a call that never ran,
+/// so a reader that separates the two reads this first.
+///
+/// The test is the presence of the marker, not a recognized verdict inside
+/// it: a refusal recorded by a later engine still counts as one here, and a
+/// reader that also wants the verdict reads the object itself.
+pub fn tool_result_refused(output: &Value) -> bool {
+    output
+        .get("refused")
+        .is_some_and(|refused| refused.is_object())
 }
 
 /// Whether a bash command's non-zero exit is a semantic success (the command

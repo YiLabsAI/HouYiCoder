@@ -109,7 +109,8 @@ fn outcome_byte(o: Option<ToolOutcome>) -> u8 {
         Some(ToolOutcome::Running) => 1,
         Some(ToolOutcome::Success) => 2,
         Some(ToolOutcome::Error) => 3,
-        Some(ToolOutcome::NotRun) => 4,
+        Some(ToolOutcome::Refused) => 4,
+        Some(ToolOutcome::NotRun) => 5,
     }
 }
 

@@ -24,6 +24,14 @@ fn test_row_call_error_red() {
     assert_eq!(line.spans.len(), 4);
 }
 
+/// A refused call reads as a warning rather than as a failure: the decision
+/// is the user's to revisit, and red would report a tool that broke.
+#[test]
+fn test_row_call_refused_yellow() {
+    let line = styled_row("⏺ Bash(rm)", Some(ToolOutcome::Refused)).expect("chip");
+    assert_eq!(line.spans[0].style.fg, Some(Color::Yellow));
+}
+
 #[test]
 fn test_row_result_success_default() {
     // A successful result body uses the default foreground (Reset), not

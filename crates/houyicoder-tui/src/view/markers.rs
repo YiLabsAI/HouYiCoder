@@ -93,6 +93,9 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
     let glyph_style = match outcome {
         Some(ToolOutcome::Success) => green,
         Some(ToolOutcome::Error) => red,
+        // A refusal is a decision the user can revisit, so it reads as a
+        // warning rather than as a failure the tool reported.
+        Some(ToolOutcome::Refused) => Style::new().fg(Color::Yellow),
         Some(ToolOutcome::NotRun) => dim,
         Some(ToolOutcome::Running) | None => cyan,
     };

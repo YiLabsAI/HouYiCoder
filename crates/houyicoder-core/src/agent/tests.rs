@@ -746,7 +746,8 @@ async fn test_resume_emits_final_completion() {
         c2_outcome,
         Some(serde_json::json!({
             "error": "rejected by user",
-            "not_run": true
+            "not_run": true,
+            "refused": { "by": "user", "verdict": "reject" }
         }))
     );
 }

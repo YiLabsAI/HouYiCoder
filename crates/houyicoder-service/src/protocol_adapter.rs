@@ -193,6 +193,7 @@ pub(crate) fn map_status_snapshot(s: &StatusSnapshot) -> ProtocolStatusSnapshot 
         tool_calls: s.tool_calls,
         tool_success: s.tool_success,
         tool_errors: s.tool_errors,
+        tool_refused: s.tool_refused,
         // Session record and provider facts (descriptor, auth, base_url,
         // setting_sources) attach server-side; the engine snapshot has none.
         // ..Default fills them.

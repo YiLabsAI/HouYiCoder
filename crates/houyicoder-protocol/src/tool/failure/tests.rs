@@ -131,3 +131,43 @@ fn test_error_beats_exception() {
         &bash("grep x")
     ));
 }
+
+/// A refused call carries the marker the counts separate it by. The marker's
+/// presence is the fact; the verdict inside it is not consulted here.
+#[test]
+fn test_refused_marker_reads() {
+    assert!(tool_result_refused(&serde_json::json!({
+        "error": "blocked by hook: no writes",
+        "not_run": true,
+        "refused": { "by": "hook", "verdict": "policy" }
+    })));
+    assert!(tool_result_refused(&serde_json::json!({
+        "error": "rejected by user",
+        "not_run": true,
+        "refused": { "by": "user", "verdict": "reject" }
+    })));
+}
+
+/// A refusal recorded by a later engine still reads as one: a verdict name
+/// this build does not know says nothing about whether the call was refused.
+#[test]
+fn test_foreign_verdict_still_refused() {
+    assert!(tool_result_refused(&serde_json::json!({
+        "not_run": true,
+        "refused": { "by": "hook", "verdict": "a later verdict" }
+    })));
+}
+
+/// A call that never ran for another reason is not a refusal, and neither is
+/// an execution failure.
+#[test]
+fn test_plain_results_are_unrefused() {
+    assert!(!tool_result_refused(&serde_json::json!({
+        "error": "interrupted by user",
+        "not_run": true
+    })));
+    assert!(!tool_result_refused(
+        &serde_json::json!({ "error": "boom" })
+    ));
+    assert!(!tool_result_refused(&serde_json::json!({ "stdout": "hi" })));
+}

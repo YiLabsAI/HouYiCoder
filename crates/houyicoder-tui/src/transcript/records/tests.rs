@@ -47,6 +47,22 @@ fn test_outcome_not_run() {
     );
 }
 
+/// A refused call is also marked not run. The refusal is the reason it did
+/// not run, so the chip says refused rather than merely stopped.
+#[test]
+fn test_outcome_refused() {
+    let out = serde_json::json!({
+        "error": "rejected by user",
+        "not_run": true,
+        "refused": { "by": "user", "verdict": "reject" },
+    });
+    assert_eq!(
+        ToolOutcome::from_output_with(&out, "bash", &Value::Null),
+        ToolOutcome::Refused,
+        "the refusal outranks the bare not-run marker"
+    );
+}
+
 #[test]
 fn test_diff_differ_success() {
     let out = serde_json::json!({

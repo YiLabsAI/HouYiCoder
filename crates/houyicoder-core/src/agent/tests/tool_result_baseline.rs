@@ -44,6 +44,17 @@ fn expected_fallback_object(message: &str) -> Value {
     serde_json::json!({ "error": message, "not_run": true })
 }
 
+/// The payload for a call a decision kept from running: a fallback result
+/// that also names who refused it and from which verdict, so the outcome
+/// counts can tell a refusal from a call left unanswered.
+fn expected_refused_object(message: &str) -> Value {
+    serde_json::json!({
+        "error": message,
+        "not_run": true,
+        "refused": { "by": "user", "verdict": "reject" },
+    })
+}
+
 async fn tool_result_output(runner: &Runner, session: SessionId, call_id: &str) -> Value {
     let events = runner.store().replay(session).await.expect("replay");
     for event in &events {
@@ -197,7 +208,7 @@ async fn test_baseline_rejected_approval() {
     let output = tool_result_output(&runner, session, "c1").await;
     assert_eq!(
         output,
-        expected_fallback_object(MSG_REJECTED),
+        expected_refused_object(MSG_REJECTED),
         "rejected approval must produce the exact fallback string, no prefix"
     );
 }
@@ -245,8 +256,12 @@ fn test_all_seven_strings_documented() {
         serde_json::json!({"error": "tool error: baseline tool failure"})
     );
     assert_eq!(
-        expected_fallback_object(MSG_REJECTED),
-        serde_json::json!({"error": "rejected by user", "not_run": true})
+        expected_refused_object(MSG_REJECTED),
+        serde_json::json!({
+            "error": "rejected by user",
+            "not_run": true,
+            "refused": { "by": "user", "verdict": "reject" }
+        })
     );
 }
 

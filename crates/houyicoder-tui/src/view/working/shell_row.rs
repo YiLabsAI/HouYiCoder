@@ -69,6 +69,7 @@ impl<'a> ShellRow<'a> {
         let verdict = match self.outcome {
             ToolOutcome::Running if self.cancelling => "stopping".to_string(),
             ToolOutcome::Running => "running".to_string(),
+            ToolOutcome::Refused => "refused".to_string(),
             ToolOutcome::NotRun => "stopped".to_string(),
             ToolOutcome::Success => self
                 .exit_code
@@ -90,9 +91,9 @@ impl<'a> ShellRow<'a> {
 }
 
 /// The styles of the verdict, keyed to what happened rather than to the
-/// outcome alone: a timeout and a stop in progress are states the user can
-/// still act on, so they read yellow, while a command that failed on its own
-/// reads red.
+/// outcome alone: a timeout, a stop in progress, and a refusal are states
+/// the user can still act on, so they read yellow, while a command that
+/// failed on its own reads red.
 fn status_style(outcome: ToolOutcome, timed_out: bool, cancelling: bool) -> Style {
     let dim = Style::new().fg(Color::DarkGray);
     let yellow = Style::new().fg(Color::Yellow);
@@ -100,6 +101,7 @@ fn status_style(outcome: ToolOutcome, timed_out: bool, cancelling: bool) -> Styl
         ToolOutcome::Success => Style::new().fg(SUCCESS_GREEN),
         ToolOutcome::Error if timed_out => yellow,
         ToolOutcome::Error => Style::new().fg(ERROR_RED),
+        ToolOutcome::Refused => yellow,
         ToolOutcome::NotRun => dim,
         ToolOutcome::Running if cancelling => yellow,
         ToolOutcome::Running => Style::new().fg(Color::Cyan),

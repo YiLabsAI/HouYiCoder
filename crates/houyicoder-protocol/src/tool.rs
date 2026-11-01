@@ -25,7 +25,7 @@ mod failure;
 mod user_shell;
 pub use ansi::strip_ansi;
 pub use bash_command::simple_command_word;
-pub use failure::{tool_result_failed, tool_result_not_run};
+pub use failure::{tool_result_failed, tool_result_not_run, tool_result_refused};
 pub use user_shell::{is_user_shell_call_id, unique_model_call_id, user_shell_call_id};
 
 /// The untruncated call-line argument for a tool call. Known tools pick the

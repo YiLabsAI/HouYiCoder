@@ -110,8 +110,13 @@ fn test_pretooluse_deny_blocks_tool() {
     let mut s = launch_with_hooks(hooks, script);
     s.send_str("run echo hi");
     s.send_key(&Key::Enter);
+    // The denial is not a failed execution, so its body renders in the
+    // default foreground: the terminal writes only the colored cells and
+    // skips the plain spaces between words, which leaves the raw byte
+    // stream as fragments. Read the reconstructed screen, where the words
+    // and their spaces are one line.
     assert!(
-        s.wait_for("no bash allowed", RENDER_TIMEOUT),
+        s.wait_for_screen("blocked by hook: no bash allowed", RENDER_TIMEOUT),
         "deny reason should render:\n{}",
         s.output()
     );

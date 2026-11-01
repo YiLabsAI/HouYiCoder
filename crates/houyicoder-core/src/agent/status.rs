@@ -26,6 +26,7 @@ use crate::agent::context::cache_liveness::CachedPrefixState;
 use crate::agent::hook::registry::HookEntry;
 use crate::agent::memory::MemoryGateState;
 use crate::agent::model_window::resolve_capabilities;
+use crate::agent::turn::outcome_counts::ToolOutcomeCounts;
 use crate::observability::MetricsView;
 use crate::observability::ModelUsage;
 use crate::observability::evolution::RedundantCall;
@@ -85,13 +86,18 @@ pub struct StatusSnapshot {
     /// last_input / window (XX%) without importing provider types. Reads
     /// the live active_model so a /model switch surfaces immediately.
     pub context_window: u32,
-    /// Total tool executions across the session (success + error). Surfaces
-    /// how chatty the agent is.
+    /// Total tool calls the model asked for. Each one is either an execution
+    /// (success or error), a refusal, or a call answered without running.
+    /// Surfaces how chatty the agent is.
     pub tool_calls: u32,
     /// Tool executions that returned a value (not an error payload).
     pub tool_success: u32,
     /// Tool executions that errored (an {"error": ..} payload).
     pub tool_errors: u32,
+    /// Tool calls refused before they ran: the user declined the approval
+    /// card, or a hook denied, asked about, or gave feedback on the call.
+    /// Counted apart from errors because no execution happened.
+    pub tool_refused: u32,
 }
 
 /// Cumulative token usage across turns, shared between the drive loop (writer)
@@ -102,15 +108,18 @@ pub struct StatusSnapshot {
 pub struct UsageAccumulator {
     cumulative: Usage,
     last_input_tokens: u32,
-    /// Total tool executions this session (success + error). Counted in
-    /// resolve_turn after each tool runs; surfaced in /context so the user
-    /// sees how chatty the agent is.
+    /// Total tool calls the model asked for this session: executions,
+    /// refusals, and calls answered without running. Counted in
+    /// resolve_turn after each batch; surfaced in /context so the user sees
+    /// how chatty the agent is.
     tool_calls: u32,
     /// Tool executions that returned a value (not an {"error": ..} payload).
     tool_success: u32,
     /// Tool executions that errored (the drive loop wraps ToolError into an
     /// {"error": ..} payload so the model sees it; counted here for /context).
     tool_errors: u32,
+    /// Tool calls refused before they ran, by the user or a hook.
+    tool_refused: u32,
 }
 
 impl UsageAccumulator {
@@ -166,13 +175,26 @@ impl UsageAccumulator {
     }
 
     /// Fold a batch of tool outcomes into the session tally at once. Used by
-    /// resolve_turn which counts success/error across a partition batch then
+    /// resolve_turn which counts the outcomes across a partition batch then
     /// records under a single lock (the loop holds an await, so the lock
-    /// cannot span it).
-    pub fn record_tool_batch(&mut self, calls: u32, success: u32, errors: u32) {
-        self.tool_calls += calls;
-        self.tool_success += success;
-        self.tool_errors += errors;
+    /// cannot span it). The named counts travel together so a field cannot
+    /// be handed to the wrong slot.
+    pub(crate) fn record_tool_batch(&mut self, counts: &ToolOutcomeCounts) {
+        self.tool_calls += counts.calls;
+        self.tool_success += counts.ok;
+        self.tool_errors += counts.err;
+        self.tool_refused += counts.refused;
+    }
+
+    /// The cumulative tool tallies, read as one value so a snapshot cannot
+    /// mix figures from two different lock scopes.
+    pub(crate) fn tool_counts(&self) -> ToolOutcomeCounts {
+        ToolOutcomeCounts {
+            calls: self.tool_calls,
+            ok: self.tool_success,
+            err: self.tool_errors,
+            refused: self.tool_refused,
+        }
     }
 
     /// The cumulative tally across all recorded turns.
@@ -205,6 +227,11 @@ impl UsageAccumulator {
         self.tool_errors
     }
 
+    /// Tool calls refused before they ran, by the user or a hook.
+    pub fn tool_refused(&self) -> u32 {
+        self.tool_refused
+    }
+
     /// Reset the tally (a new session / clear). The host calls this when the
     /// user starts a fresh session so the cumulative figure reflects only the
     /// current session, not the runner's whole lifetime.
@@ -227,6 +254,7 @@ impl Default for UsageAccumulator {
             tool_calls: 0,
             tool_success: 0,
             tool_errors: 0,
+            tool_refused: 0,
         }
     }
 }
@@ -357,19 +385,21 @@ impl Runner {
             }
             None => (None, None, None),
         };
-        let (cumulative_usage, last_input_tokens, tool_calls, tool_success, tool_errors) =
-            match self.usage.lock() {
-                Ok(g) => (
-                    g.cumulative(),
-                    g.last_input_tokens(),
-                    g.tool_calls(),
-                    g.tool_success(),
-                    g.tool_errors(),
-                ),
-                // A poisoned lock means a panic during a run; report zeros rather
-                // than propagate a second panic into the render path.
-                Err(_) => (Usage::default(), 0, 0, 0, 0),
-            };
+        let (cumulative_usage, last_input_tokens, tools) = match self.usage.lock() {
+            Ok(g) => (g.cumulative(), g.last_input_tokens(), g.tool_counts()),
+            // A poisoned lock means a panic during a run; report zeros rather
+            // than propagate a second panic into the render path.
+            Err(_) => (
+                Usage::default(),
+                0,
+                ToolOutcomeCounts {
+                    calls: 0,
+                    ok: 0,
+                    err: 0,
+                    refused: 0,
+                },
+            ),
+        };
         // Read the live model id + the window it resolves to, not the static
         // config/provider-caps values. A /model switch swaps active_model
         // (RwLock) and the next request resolves the new window; status must
@@ -391,9 +421,10 @@ impl Runner {
             last_input_tokens,
             context_used_tokens: self.last_measurement().map(|m| m.token_count()),
             context_window: resolved_caps.context_window,
-            tool_calls,
-            tool_success,
-            tool_errors,
+            tool_calls: tools.calls,
+            tool_success: tools.ok,
+            tool_errors: tools.err,
+            tool_refused: tools.refused,
         }
     }
 

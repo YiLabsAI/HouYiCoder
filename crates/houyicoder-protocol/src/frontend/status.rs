@@ -45,12 +45,18 @@ pub struct StatusSnapshot {
     pub context_used_tokens: Option<u32>,
     /// The provider-reported context window, from ModelCapabilities.
     pub context_window: u32,
-    /// Total tool executions across the session (success + error).
+    /// Total tool calls the model asked for across the session. Each one is
+    /// either an execution (success or error), a refusal, or a call answered
+    /// without running.
     pub tool_calls: u32,
     /// Tool executions that returned a value (not an error payload).
     pub tool_success: u32,
     /// Tool executions that errored (an error payload).
     pub tool_errors: u32,
+    /// Tool calls refused before they ran, by the user or a hook. Defaulted
+    /// so a payload from a server that predates the count still decodes.
+    #[serde(default)]
+    pub tool_refused: u32,
     /// The session identity fields attached by the server, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub descriptor: Option<SessionDescriptorSummary>,

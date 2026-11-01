@@ -323,7 +323,7 @@ impl Runner {
     ) {
         let counts = outcome_counts::count_tool_outcomes(results);
         if let Ok(mut g) = self.usage.lock() {
-            g.record_tool_batch(counts.calls, counts.ok, counts.err);
+            g.record_tool_batch(&counts);
         }
         obs_wire::record_tool_outcomes(&self.observability, results, call_names);
     }

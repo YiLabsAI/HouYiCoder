@@ -1103,6 +1103,28 @@ fn test_tool_row_states_unresolved() {
     );
 }
 
+/// A refused call was answered, so it is stated beside the execution counts
+/// and taken out of the unresolved remainder. Leaving it in the remainder
+/// would report a decision the user made as a result that went missing.
+#[test]
+fn test_tool_row_states_refused() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Usage;
+    let mut snap = app.snapshot_or_stub();
+    snap.tool_calls = 4;
+    snap.tool_success = 1;
+    snap.tool_errors = 1;
+    snap.tool_refused = 1;
+    app.sessions.current.capabilities.status.status_cache = Some(snap);
+
+    let screen = render_text(&app, 80, 24);
+    assert!(
+        screen.contains("4 (1 ok · 1 failed · 1 refused · 1 no result)"),
+        "the refusal is stated and only the unanswered call remains: {screen}"
+    );
+}
+
 /// A session that answered nothing shows neither row: an empty audit is not
 /// a zero the reader has to interpret.
 #[test]

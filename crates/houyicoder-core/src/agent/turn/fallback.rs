@@ -22,6 +22,66 @@ pub(crate) fn tool_error_json(e: &ToolError) -> Value {
     serde_json::json!({ "error": e.to_string() })
 }
 
+/// Who decided a tool call must not run.
+#[derive(Clone, Copy)]
+pub(crate) enum RefusalBy {
+    /// The user declined the approval card.
+    User,
+    /// A hook fired for the call returned a blocking verdict.
+    Hook,
+}
+
+/// The blocking verdict a refusal came from. The verdict is carried beside
+/// the coarse source so a reader of the durable log can tell a policy
+/// refusal from a self-correction note, and the model can tell that the user
+/// did not reject the call.
+#[derive(Clone, Copy)]
+pub(crate) enum RefusalVerdict {
+    /// The user answered the approval card with no.
+    Reject,
+    /// A deny hook refused the call.
+    Policy,
+    /// A feedback hook asked the model to adjust the call.
+    Feedback,
+    /// An ask hook escalated the call, which cannot run before an answer.
+    Ask,
+}
+
+impl RefusalBy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Hook => "hook",
+        }
+    }
+}
+
+impl RefusalVerdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Reject => "reject",
+            Self::Policy => "policy",
+            Self::Feedback => "feedback",
+            Self::Ask => "ask",
+        }
+    }
+}
+
+/// The model-visible result for a call that was refused before it ran.
+///
+/// The payload carries three facts: the reason text, the not-run marker (the
+/// call never executed, so the outcome counts cannot read it as a failed
+/// run), and a refused object naming who refused the call and from which
+/// verdict. The reason text stays the leading explanation the model reads;
+/// the markers are what the consumers separate it by.
+pub(crate) fn refused_json(message: String, by: RefusalBy, verdict: RefusalVerdict) -> Value {
+    serde_json::json!({
+        "error": message,
+        "not_run": true,
+        "refused": { "by": by.as_str(), "verdict": verdict.as_str() },
+    })
+}
+
 /// A tool-result outcome the runner produces for a call that did not run.
 /// Registry misses, user rejections, run interruptions, and checks withheld
 /// after an edit did not complete are recorded this way, so the model sees a
@@ -44,7 +104,9 @@ impl FallbackToolOutcome {
     ///
     /// Every outcome carries the not-run marker: the reason text explains why
     /// the call never executed, and the marker keeps a reader from counting
-    /// that text as a verdict on an execution that did not happen.
+    /// that text as a verdict on an execution that did not happen. A user
+    /// rejection also carries the refusal marker, because a refusal is a
+    /// decision against the call rather than a call left unanswered.
     pub(crate) fn to_json(&self) -> Value {
         let error = match self {
             Self::UnknownTool {
@@ -54,7 +116,13 @@ impl FallbackToolOutcome {
                 name,
                 on_resume: false,
             } => format!("unknown tool: {name}"),
-            Self::Rejected => "rejected by user".to_string(),
+            Self::Rejected => {
+                return refused_json(
+                    "rejected by user".to_string(),
+                    RefusalBy::User,
+                    RefusalVerdict::Reject,
+                );
+            }
             Self::Interrupted => "interrupted by user".to_string(),
             Self::SkippedAfterEdit => SKIPPED_AFTER_EDIT.to_string(),
         };

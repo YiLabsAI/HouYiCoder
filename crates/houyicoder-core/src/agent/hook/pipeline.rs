@@ -34,9 +34,11 @@ use super::{
     HookContext, HookEvent, HookOutcome, HookPayload, HookRegistry, HookVerdict, ToolResult,
     combine_verdicts,
 };
-use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
 use crate::agent::resolve::ToolCallPlan;
 use crate::agent::tools::SessionResultCapture;
+use crate::agent::turn::fallback::{
+    FallbackToolOutcome, RefusalBy, RefusalVerdict, refused_json, tool_error_json,
+};
 use crate::agent::turn::withhold::{
     CheckAction, CheckPlan, EditOutcome, ran_and_failed, skipped_after_edit,
 };
@@ -142,7 +144,10 @@ impl Runner {
                     if let Some(memory) = self.memory.provider() {
                         memory.record_gate_violation(&reason);
                     }
-                    blocked.push((plan.id.clone(), hook_blocked_json(&reason)));
+                    blocked.push((
+                        plan.id.clone(),
+                        hook_blocked_json(&reason, RefusalVerdict::Policy),
+                    ));
                     false
                 }
                 HookVerdict::Feedback(reason) => {
@@ -155,7 +160,7 @@ impl Runner {
                     // surface the question so the model can answer it.
                     blocked.push((
                         plan.id.clone(),
-                        hook_blocked_json(&format!("hook asks: {question}")),
+                        hook_blocked_json(&format!("hook asks: {question}"), RefusalVerdict::Ask),
                     ));
                     false
                 }
@@ -517,17 +522,29 @@ impl Runner {
     }
 }
 
-/// Model-visible JSON for a tool call blocked by a Deny verdict. The model
-/// sees the reason losslessly + can retry with adjusted input (Deny is
-/// terminal for this call, not for the run).
-fn hook_blocked_json(reason: &str) -> Value {
-    serde_json::json!({ "error": format!("blocked by hook: {reason}") })
+/// Model-visible JSON for a tool call blocked by a Deny or Ask verdict. The
+/// model sees the reason losslessly + can retry with adjusted input (the
+/// block is terminal for this call, not for the run). The refusal marker
+/// names the verdict so the outcome counts separate this from an execution
+/// failure and a reader can tell which verdict the block came from.
+fn hook_blocked_json(reason: &str, verdict: RefusalVerdict) -> Value {
+    refused_json(
+        format!("blocked by hook: {reason}"),
+        RefusalBy::Hook,
+        verdict,
+    )
 }
 
 /// Model-visible JSON for a tool call surfaced a Feedback verdict. The model
-/// sees the self-correction signal + can retry with adjusted input.
+/// sees the self-correction signal + can retry with adjusted input. The
+/// refusal marker keeps the call out of the failure count: a self-correction
+/// request is not a failed execution.
 fn hook_feedback_json(reason: &str) -> Value {
-    serde_json::json!({ "error": format!("hook feedback: {reason}") })
+    refused_json(
+        format!("hook feedback: {reason}"),
+        RefusalBy::Hook,
+        RefusalVerdict::Feedback,
+    )
 }
 
 #[cfg(test)]

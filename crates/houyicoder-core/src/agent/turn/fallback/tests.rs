@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_protocol::tool::{tool_result_failed, tool_result_not_run};
+use houyicoder_protocol::tool::{tool_result_failed, tool_result_not_run, tool_result_refused};
 
 #[test]
 fn test_tool_error_carries_prefix() {
@@ -44,5 +44,33 @@ fn test_outcomes_mark_not_run() {
             !tool_result_failed(&value, "", &Value::Null),
             "{value} is not a failure"
         );
+    }
+}
+
+/// Of the fallback outcomes only a user rejection is a refusal: the run
+/// ending, a missing tool, and a skipped check are not decisions against
+/// the call, so they must not carry the refusal marker.
+#[test]
+fn test_only_rejection_refused() {
+    let rejected = FallbackToolOutcome::Rejected.to_json();
+    assert!(tool_result_refused(&rejected));
+    assert_eq!(
+        rejected.pointer("/refused/by").and_then(Value::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        rejected.pointer("/refused/verdict").and_then(Value::as_str),
+        Some("reject")
+    );
+    let unrefused = [
+        FallbackToolOutcome::Interrupted,
+        FallbackToolOutcome::SkippedAfterEdit,
+        FallbackToolOutcome::UnknownTool {
+            name: "x".into(),
+            on_resume: false,
+        },
+    ];
+    for outcome in unrefused {
+        assert!(!tool_result_refused(&outcome.to_json()));
     }
 }

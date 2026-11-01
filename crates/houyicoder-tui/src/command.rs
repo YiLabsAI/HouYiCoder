@@ -325,6 +325,7 @@ impl App {
             tool_calls: 0,
             tool_success: 0,
             tool_errors: 0,
+            tool_refused: 0,
             descriptor: None,
             ..Default::default()
         })

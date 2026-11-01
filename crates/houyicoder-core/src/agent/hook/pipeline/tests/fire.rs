@@ -9,6 +9,8 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+use houyicoder_protocol::tool::tool_result_refused;
+use serde_json::Value;
 
 use crate::agent::Runner;
 use crate::agent::hook::HookPayload;
@@ -165,6 +167,41 @@ async fn test_pre_tool_use_deny() {
         blocked,
         "the denied tool_result carries the hook block reason"
     );
+    // The result is a refusal, not a failed execution: the marker names the
+    // hook as the source and the deny verdict as the reason.
+    let output = runner
+        .store()
+        .trajectory_tail(session)
+        .into_iter()
+        .find_map(|entry| match entry.event {
+            SessionEvent::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("the denied call has a recorded result");
+    assert!(tool_result_refused(&output), "{output} marks the refusal");
+    assert_eq!(
+        output.pointer("/refused/by").and_then(Value::as_str),
+        Some("hook")
+    );
+    assert_eq!(
+        output.pointer("/refused/verdict").and_then(Value::as_str),
+        Some("policy"),
+        "a deny verdict is recorded as a policy refusal"
+    );
+}
+
+/// A call a hook refused is counted as refused and not as a failure: no
+/// execution happened, and a failed count would report every policy block as
+/// a broken tool.
+#[tokio::test]
+async fn test_denied_call_counts_refused() {
+    let (runner, session, _ran) = deny_runner();
+    runner.run(session, "go".into()).await.expect("run");
+    let snapshot = runner.status_snapshot();
+    assert_eq!(snapshot.tool_calls, 1);
+    assert_eq!(snapshot.tool_success, 0);
+    assert_eq!(snapshot.tool_errors, 0, "a denied call did not fail");
+    assert_eq!(snapshot.tool_refused, 1);
 }
 
 #[tokio::test]
@@ -309,6 +346,30 @@ impl Hook for FeedbackRecordableHook {
     }
 }
 
+/// A hook that escalates the recordable tool on PreToolUse: the call cannot
+/// run before a human answers, so the pipeline blocks it and carries the
+/// question to the model.
+struct AskRecordableHook;
+impl Hook for AskRecordableHook {
+    fn name(&self) -> &str {
+        "ask-recordable"
+    }
+    fn events(&self) -> &[HookEvent] {
+        &[HookEvent::PreToolUse]
+    }
+    fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        match &ctx.payload {
+            HookPayload::PreToolUse { tool_name, .. } if tool_name == "recordable" => {
+                Ok(HookVerdict::Ask("allow this call?".into()))
+            }
+            _ => Ok(HookVerdict::Allow),
+        }
+    }
+    fn source(&self) -> HookSource {
+        HookSource::Project
+    }
+}
+
 /// A tool that always fails execution, so PostToolUseFailure fires.
 struct FailingTool;
 impl Tool for FailingTool {
@@ -374,6 +435,89 @@ async fn test_pre_tool_use_feedback() {
     assert!(
         feedback,
         "the feedback tool_result carries the self-correction signal"
+    );
+    // A feedback block is a refusal with its own verdict: it is neither an
+    // execution failure nor a policy denial.
+    let output = runner
+        .store()
+        .trajectory_tail(session)
+        .into_iter()
+        .find_map(|entry| match entry.event {
+            SessionEvent::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("the blocked call has a recorded result");
+    assert!(tool_result_refused(&output), "{output} marks the refusal");
+    assert_eq!(
+        output.pointer("/refused/verdict").and_then(Value::as_str),
+        Some("feedback")
+    );
+    assert_eq!(
+        runner.status_snapshot().tool_refused,
+        1,
+        "the feedback block counts as a refusal"
+    );
+}
+
+#[tokio::test]
+async fn test_pre_tool_use_ask() {
+    // An ask verdict escalates the call instead of answering it: the call
+    // cannot run before a human responds, so it is refused with the question
+    // attached for the model to read and answer.
+    let ran = Arc::new(AtomicU8::new(0));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(RecordingTool::new(ran.clone())));
+    let first = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "call_1".into(),
+            name: "recordable".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let second = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
+    let registry = HookRegistry::new();
+    registry.register(Arc::new(AskRecordableHook));
+    let runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
+    let session = SessionId::new();
+    runner.run(session, "go".into()).await.expect("run");
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        0,
+        "an escalated call does not execute before an answer"
+    );
+    let output = runner
+        .store()
+        .trajectory_tail(session)
+        .into_iter()
+        .find_map(|entry| match entry.event {
+            SessionEvent::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("the escalated call has a recorded result");
+    assert!(tool_result_refused(&output), "{output} marks the refusal");
+    assert_eq!(
+        output.pointer("/refused/by").and_then(Value::as_str),
+        Some("hook")
+    );
+    assert_eq!(
+        output.pointer("/refused/verdict").and_then(Value::as_str),
+        Some("ask")
+    );
+    assert!(
+        output
+            .pointer("/error")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("hook asks: allow this call?")),
+        "the question reaches the model: {output}"
     );
 }
 

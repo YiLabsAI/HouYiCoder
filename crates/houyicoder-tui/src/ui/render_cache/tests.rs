@@ -1,5 +1,6 @@
 use super::RenderCache;
 use crate::markdown::render_agent_text;
+use crate::records::ToolOutcome;
 use crate::view::markers::result_body_rows;
 
 /// The cache is transparent: a cached agent render matches the direct
@@ -43,6 +44,26 @@ fn test_tool_cache_round_trips() {
     assert_eq!(
         cache.tool_row_count(body, "call_1", None, false, true, 80),
         cached.len()
+    );
+}
+
+/// The outcome is part of the tool cache key: the same body and call id that
+/// ended refused and the one that never ran are two different renderings, so
+/// a shared entry would show the first verdict under the second call's state.
+#[test]
+fn test_tool_cache_keys_outcome() {
+    let body = "command output";
+    let mut cache = RenderCache::default();
+    let refused = cache.tool_rows(body, "call_1", Some(ToolOutcome::Refused), false, false, 80);
+    let not_run = cache.tool_rows(body, "call_1", Some(ToolOutcome::NotRun), false, false, 80);
+    assert_eq!(
+        refused.first().and_then(|row| row.2),
+        Some(ToolOutcome::Refused)
+    );
+    assert_eq!(
+        not_run.first().and_then(|row| row.2),
+        Some(ToolOutcome::NotRun),
+        "a refused entry does not answer for a call that never ran"
     );
 }
 

@@ -453,10 +453,14 @@ fn tool_call_outcome(transcript: &[TranscriptLine], i: usize) -> Option<ToolOutc
 }
 
 /// Whether a call must render on its own rather than fold into a summary: a
-/// failed call, whose error the collapsed row would hide, or a call that never
-/// ran, which the execution count would otherwise read as done.
+/// failed call, whose error the collapsed row would hide, a refused call,
+/// whose reason the summary would hide, or a call that never ran, which the
+/// execution count would otherwise read as done.
 fn outcome_renders_alone(outcome: Option<ToolOutcome>) -> bool {
-    matches!(outcome, Some(ToolOutcome::Error | ToolOutcome::NotRun))
+    matches!(
+        outcome,
+        Some(ToolOutcome::Error | ToolOutcome::Refused | ToolOutcome::NotRun)
+    )
 }
 
 /// True when transcript[i] is a Tool result (name == "result") for the given

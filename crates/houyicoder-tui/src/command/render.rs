@@ -83,15 +83,21 @@ pub(crate) fn render_context(snap: &StatusSnapshot) -> String {
 }
 
 /// How the session's tool calls ended, shared by the status text view and
-/// the Usage tab so both state the same three figures. A call whose result
-/// never arrived is named rather than left to be read as a success: the two
-/// counts do not add up to the calls, and the row says why.
+/// the Usage tab so both state the same figures. A call whose result never
+/// arrived is named rather than left to be read as a success: the counts do
+/// not add up to the calls, and the row says why. A refused call is named
+/// too, and subtracted from that remainder: it was answered, so counting it
+/// as no result would report the decision as a lost result.
 pub(crate) fn tool_outcome_breakdown(snap: &StatusSnapshot) -> String {
     let unresolved = snap
         .tool_calls
         .saturating_sub(snap.tool_success)
-        .saturating_sub(snap.tool_errors);
+        .saturating_sub(snap.tool_errors)
+        .saturating_sub(snap.tool_refused);
     let mut row = format!("{} ok · {} failed", snap.tool_success, snap.tool_errors);
+    if snap.tool_refused > 0 {
+        row.push_str(&format!(" · {} refused", snap.tool_refused));
+    }
     if unresolved > 0 {
         row.push_str(&format!(" · {unresolved} no result"));
     }
