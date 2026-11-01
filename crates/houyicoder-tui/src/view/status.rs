@@ -194,7 +194,7 @@ fn shell_hint(app: &App) -> Option<String> {
 /// not only in the strip.
 fn agents_hint(app: &App) -> Option<String> {
     let entries = &app.sessions.current.capabilities.fleet.entries;
-    let n = entries.iter().filter(|e| e.completed.is_none()).count();
+    let n = entries.iter().filter(|e| e.outcome.is_none()).count();
     if n == 0 {
         return None;
     }

@@ -357,7 +357,7 @@ fn child_detail_lines(
         .fleet
         .entries
         .iter()
-        .find(|e| e.agent_id == child_sid && e.completed.is_none());
+        .find(|e| e.agent_id == child_sid && e.outcome.is_none());
     let completed = app
         .sessions
         .current

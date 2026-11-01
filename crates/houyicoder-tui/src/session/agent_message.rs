@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use crate::records::TranscriptLine;
 use crate::transcript::SequencedFrame;
 use crate::transcript::frame::TranscriptFrame;
+use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::frontend::agents::AgentEntry;
 use houyicoder_protocol::frontend::checkpoint::CheckpointListView;
 use houyicoder_protocol::frontend::checkpoint::CheckpointRestoreView;
@@ -55,8 +56,13 @@ pub struct FleetEntry {
     pub tokens: u64,
     pub tool_uses: u32,
     pub last_activity: Option<String>,
-    pub completed: Option<String>,
-    /// When the child reached a terminal state (the completed string landed).
+    /// How the child ended, once a terminal status named it. None while the
+    /// child runs. It is carried as the typed outcome rather than the word
+    /// the host sent, so every row that reports the ending switches on one
+    /// parsed value; a row that knew only that an ending existed drew it as
+    /// done, which told a failed child's story wrong.
+    pub outcome: Option<SubagentOutcome>,
+    /// When the child reached a terminal state (the ending landed).
     /// Drives the footer auto-background: a completed row stays terse for a
     /// short grace window so the user sees the result landed, then drops
     /// from the footer so the input box rises back under the transcript. The

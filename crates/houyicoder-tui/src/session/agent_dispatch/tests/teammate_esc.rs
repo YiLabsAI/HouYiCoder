@@ -8,6 +8,7 @@ use crate::records::TranscriptLine;
 use crate::state::Screen;
 use crate::test_harness::attach_connection;
 use crate::transcript::frame::TranscriptFrame;
+use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::frontend::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 
@@ -97,7 +98,7 @@ fn test_steer_completed_surfaces_notice() {
             tokens: 100,
             tool_uses: 1,
             last_activity: None,
-            completed: Some("completed".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
         });
@@ -128,7 +129,7 @@ fn test_steer_completed_surfaces_notice() {
     );
     // A running child still steers (echo appended, no notice). The completed
     // steer above exited the view, so re-enter it for the running case.
-    app.sessions.current.capabilities.fleet.entries[0].completed = None;
+    app.sessions.current.capabilities.fleet.entries[0].outcome = None;
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -223,7 +224,7 @@ fn test_child_transcript_no_row() {
             tokens: 50,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -316,7 +317,7 @@ fn test_view_fleet_type_fallback() {
             tokens: 50,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -366,7 +367,7 @@ fn test_view_fold_row_wins() {
             tokens: 100,
             tool_uses: 0,
             last_activity: None,
-            completed: Some("completed".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
         });
@@ -408,7 +409,7 @@ fn test_running_child_starting() {
             tokens: 0,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -457,7 +458,7 @@ fn test_completed_child_unavailable() {
             tokens: 100,
             tool_uses: 1,
             last_activity: None,
-            completed: Some("completed".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
         });
@@ -526,7 +527,7 @@ fn test_ctrl_x_cancels_child() {
             tokens: 100,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -560,7 +561,7 @@ fn test_ctrl_x_idle_noop() {
             tokens: 100,
             tool_uses: 0,
             last_activity: None,
-            completed: Some("completed".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
         });

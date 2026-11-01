@@ -22,7 +22,7 @@ fn push_running(app: &mut App, agent_id: &str) {
             tokens: 10,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });

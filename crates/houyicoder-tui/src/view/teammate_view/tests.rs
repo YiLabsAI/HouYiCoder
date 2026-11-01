@@ -9,6 +9,7 @@ use crate::records::TranscriptLine;
 use crate::state::Screen;
 use crate::test_harness::render_text;
 use crate::test_harness::{render_buffer, working_app};
+use crate::transcript::records::SubagentOutcome;
 use ratatui::style::Color;
 
 #[test]
@@ -164,7 +165,7 @@ fn test_banner_hint_follows_state() {
             tokens: 0,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -225,7 +226,7 @@ fn test_exit_restarts_finished_grace() {
             tokens: 100,
             tool_uses: 0,
             last_activity: None,
-            completed: Some("completed".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(long_ago),
             started_at: None,
         });
@@ -271,7 +272,7 @@ fn test_exit_restarts_only_viewed() {
                 tokens: 100,
                 tool_uses: 0,
                 last_activity: None,
-                completed: Some("completed".into()),
+                outcome: Some(SubagentOutcome::Finished),
                 completed_at: Some(long_ago),
                 started_at: None,
             });
@@ -310,7 +311,7 @@ fn test_exit_keeps_running_clock() {
             tokens: 100,
             tool_uses: 0,
             last_activity: Some("grep".into()),
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -347,7 +348,7 @@ fn test_banner_hint_matches_state() {
             tokens: 100,
             tool_uses: 1,
             last_activity: Some("grep".into()),
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -371,7 +372,7 @@ fn test_banner_hint_matches_state() {
         "and so is the way to stop it: {title}"
     );
 
-    app.sessions.current.capabilities.fleet.entries[0].completed = Some("completed".into());
+    app.sessions.current.capabilities.fleet.entries[0].outcome = Some(SubagentOutcome::Finished);
     let done = render_text(&app, 100, 24);
     let title = done
         .lines()
@@ -392,6 +393,50 @@ fn test_banner_hint_matches_state() {
     assert!(
         !title.contains("ctrl+x"),
         "a finished view offers no stop key: {title}"
+    );
+}
+
+/// The banner names the child's own ending rather than a generic success: a
+/// child that stopped on an error reads failed there, the same word its
+/// footer row gives, so one view cannot report a different outcome than the
+/// other.
+#[test]
+fn test_banner_names_failed_ending() {
+    let mut app = working_app();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c1".into(),
+            subagent_type: "verify".into(),
+            description: String::new(),
+            turn: 2,
+            tokens: 100,
+            tool_uses: 1,
+            last_activity: None,
+            outcome: Some(SubagentOutcome::Failed),
+            completed_at: None,
+            started_at: None,
+        });
+    app.ui.teammate_view = Some(TeammateView {
+        child_sid: "c1".into(),
+        subagent_type: "verify".into(),
+        ..Default::default()
+    });
+    let out = render_text(&app, 100, 24);
+    let title = out
+        .lines()
+        .find(|l| l.contains("Viewing @verify"))
+        .unwrap_or_else(|| panic!("no banner:\n{out}"));
+    assert!(
+        title.contains("(failed)"),
+        "the banner names the ending: {title}"
+    );
+    assert!(
+        !title.contains("(finished)"),
+        "and does not claim a finish: {title}"
     );
 }
 
@@ -419,7 +464,7 @@ fn test_exit_with_two_finished() {
                 tokens: 100,
                 tool_uses: 1,
                 last_activity: None,
-                completed: Some("completed".into()),
+                outcome: Some(SubagentOutcome::Finished),
                 completed_at: Some(long_ago),
                 started_at: None,
             });
@@ -482,7 +527,7 @@ fn test_second_exit_changes_nothing() {
             tokens: 100,
             tool_uses: 1,
             last_activity: None,
-            completed: Some("completed".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(long_ago),
             started_at: None,
         });

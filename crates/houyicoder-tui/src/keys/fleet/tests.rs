@@ -30,7 +30,7 @@ mod focus {
             tokens: 0,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         }
@@ -159,7 +159,7 @@ mod dispatch {
                 tokens: 0,
                 tool_uses: 0,
                 last_activity: None,
-                completed: None,
+                outcome: None,
                 completed_at: None,
                 started_at: None,
             });
@@ -210,7 +210,7 @@ mod dispatch {
                 tokens: 0,
                 tool_uses: 0,
                 last_activity: None,
-                completed: None,
+                outcome: None,
                 completed_at: None,
                 started_at: None,
             });

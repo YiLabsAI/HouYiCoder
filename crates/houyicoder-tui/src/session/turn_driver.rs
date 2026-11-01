@@ -104,7 +104,7 @@ impl App {
                     .entries
                     .iter()
                     .find(|e| e.agent_id == v.child_sid)
-                    .map(|e| e.completed.is_some())
+                    .map(|e| e.outcome.is_some())
                     .unwrap_or(true);
                 (v.child_sid.clone(), completed)
             });

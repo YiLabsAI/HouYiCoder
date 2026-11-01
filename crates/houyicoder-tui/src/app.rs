@@ -645,7 +645,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         && app.ui.teammate_view.is_none()
     {
         let entries = &app.sessions.current.capabilities.fleet.entries;
-        let running = entries.iter().filter(|e| e.completed.is_none()).count();
+        let running = entries.iter().filter(|e| e.outcome.is_none()).count();
         if k.code == KeyCode::Char('K') && running > 0 {
             let pending = app
                 .ui
@@ -675,7 +675,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         if k.code == KeyCode::Char('k')
             && running > 0
             && let Some(i) = app.ui.fleet.selected()
-            && let Some(e) = entries.get(i).filter(|e| e.completed.is_none())
+            && let Some(e) = entries.get(i).filter(|e| e.outcome.is_none())
         {
             if let Err(e) = app.enqueue(ClientCommand::KillChild {
                 child_sid: e.agent_id.clone(),

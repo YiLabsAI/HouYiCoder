@@ -167,7 +167,7 @@ fn test_absent_entry_one_trace() {
         "one trace per ending:\n{done}"
     );
     assert!(
-        !done.contains("\u{00b7} done \u{00b7}"),
+        !done.contains("\u{00b7} finished \u{00b7}"),
         "the echo opens no completed strip row:\n{done}"
     );
 }
@@ -219,6 +219,38 @@ fn test_tail_fallback_opens_child() {
         out.contains("Viewing @explore") && out.contains("background sweep"),
         "the trace names the view it opened:\n{out}"
     );
+}
+
+/// The footer strip's row for a child, found by its task summary, so a
+/// transcript row that shares the summary cannot answer for it.
+fn footer_row(out: &str) -> String {
+    out.lines()
+        .find(|line| line.contains("map the auth path") && line.contains("tokens"))
+        .unwrap_or_else(|| panic!("no footer row on screen:\n{out}"))
+        .trim_end()
+        .to_string()
+}
+
+/// The footer names the ending its status reported. It used to read done for
+/// every ending, so a failed or stopped child's footer row contradicted the
+/// transcript row the reader could see in the same screen.
+#[test]
+fn test_footer_names_ending() {
+    for (word, expected) in [("failed", "failed"), ("killed", "interrupted")] {
+        let mut app = working_app();
+        app.handle_agent_message(status(None, 2));
+        app.handle_agent_message(status(Some(word), 2));
+        let out = render_text(&app, 100, 30);
+        let footer = footer_row(&out);
+        assert!(
+            footer.contains(expected),
+            "a {word} child's footer row names its ending: {footer}"
+        );
+        assert!(
+            !footer.contains("finished"),
+            "and never borrows the word a successful child uses: {footer}"
+        );
+    }
 }
 
 /// One trace for the given task, with the ending and figures every width

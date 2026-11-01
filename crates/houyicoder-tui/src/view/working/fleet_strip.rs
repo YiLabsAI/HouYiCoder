@@ -1,6 +1,7 @@
 //! Footer fleet strip: one row per spawned child, shown only while the
-//! fleet is non-empty. Each row carries the child's hollow-circle glyph,
-//! its type, a verb inferred from the last tool, and cumulative tokens.
+//! fleet is non-empty. A running row carries a hollow circle, the child's
+//! label, a verb inferred from the last tool, and its turn and spend; an
+//! ended row drops the live verb for the ending's own glyph and word.
 //! Shift-arrow moves the strip's selection; the selected row gets a prefix
 //! and Enter drills into its teammate view. The strip caps at three rows
 //! and scrolls toward the selection when the fleet is longer.
@@ -16,6 +17,8 @@ use ratatui::{
 use crate::agent_message::FleetEntry;
 use crate::command::render::format_tokens;
 use crate::state::App;
+use crate::transcript::records::SubagentOutcome;
+use crate::view::ERROR_RED;
 use crate::view::relative_time::format_span_secs;
 
 /// Max child rows the strip ever shows. A longer fleet scrolls within the
@@ -44,13 +47,16 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The collapsed form: how many children are live and how many just landed.
+/// The landed count is stated as ended rather than finished, because a row
+/// that counts a failed child as finished is the same false report the
+/// child's own row no longer makes.
 fn summary_line(app: &App) -> Line<'static> {
     let entries = &app.sessions.current.capabilities.fleet.entries;
-    let done = entries.iter().filter(|e| e.completed.is_some()).count();
-    let running = entries.len() - done;
+    let ended = entries.iter().filter(|e| e.outcome.is_some()).count();
+    let running = entries.len() - ended;
     let mut text = format!("  {running} running");
-    if done > 0 {
-        text.push_str(&format!(" \u{00b7} {done} done"));
+    if ended > 0 {
+        text.push_str(&format!(" \u{00b7} {ended} ended"));
     }
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }
@@ -147,11 +153,12 @@ fn build_lines(app: &App, granted: usize) -> Vec<Line<'_>> {
         .collect()
 }
 
-/// One strip row. Completed children dim and go terse — the live verb drops,
-/// leaving the type + a done marker + the token total — so a finished
-/// delegation reads "explore · done · 1.2k tok" instead of echoing the stale
-/// last verb. The running child keeps the verb and turn counter so the user
-/// sees live progress at a glance.
+/// One strip row. Ended children go terse — the live verb drops, leaving the
+/// label, the ending, and the spend — so a finished delegation reads
+/// "explore · finished · 0 tools · 1.2k tokens" instead of echoing the stale
+/// last verb. The word is the transcript's own, so the two rows that report
+/// one ending cannot disagree. The running child keeps the verb and turn
+/// counter so the user sees live progress at a glance.
 fn build_row<'a>(
     entry: &'a FleetEntry,
     selected: bool,
@@ -168,10 +175,9 @@ fn build_row<'a>(
     } else {
         "  "
     };
-    let (glyph, style) = if entry.completed.is_some() {
-        ("✓ ", Style::default().fg(Color::DarkGray))
-    } else {
-        ("◯ ", Style::default().fg(Color::Cyan))
+    let (glyph, style) = match entry.outcome {
+        Some(outcome) => (ending_glyph(outcome), ending_style(outcome)),
+        None => ("◯ ", Style::default().fg(Color::Cyan)),
     };
     // Both figures say what they count. A bare "tok" beside a tool count left
     // the reader guessing whether it was input, output, or the total, and the
@@ -199,8 +205,8 @@ fn build_row<'a>(
     } else {
         entry.description.as_str()
     };
-    let body = if entry.completed.is_some() {
-        format!("{label} · done · {spend}")
+    let body = if let Some(outcome) = entry.outcome {
+        format!("{label} · {} · {spend}", outcome.label())
     } else if awaiting == Some(entry.agent_id.as_str()) {
         let elapsed = entry
             .started_at
@@ -223,6 +229,38 @@ fn build_row<'a>(
         Span::styled(glyph.to_string(), style),
         Span::styled(body, style),
     ])
+}
+
+/// The glyph a strip row leads with for an ending: a tick for a child that
+/// reached the end of its own work, whether it finished the task or stopped
+/// on a limit it was given, a cross for one that stopped on an error, a
+/// barred circle for one stopped from outside, and a plain dot for an ending
+/// this build cannot name. The tick is not drawn for an unnamed ending,
+/// because a tick claims the work completed and nobody observed that.
+fn ending_glyph(outcome: SubagentOutcome) -> &'static str {
+    match outcome {
+        SubagentOutcome::Finished | SubagentOutcome::TurnLimit | SubagentOutcome::Budget => "✓ ",
+        SubagentOutcome::Failed => "✕ ",
+        SubagentOutcome::Interrupted => "⊘ ",
+        SubagentOutcome::Unknown => "· ",
+    }
+}
+
+/// An ending is drawn subdued rather than in the transcript mark's success
+/// green: a child that finished the task is the ordinary case, and a strip
+/// where every row is colored says nothing about the row that is not. Only an
+/// anomalous ending earns a color, so a failure or an interruption stands out
+/// from its neighbours. An ending this build cannot name stays neutral rather
+/// than borrowing a verdict nobody observed. The teammate banner draws the
+/// same ending through this function, so one child cannot be a plain ending in
+/// the footer and a colored success in the view that names it.
+pub(crate) fn ending_style(outcome: SubagentOutcome) -> Style {
+    let color = match outcome {
+        SubagentOutcome::Failed => ERROR_RED,
+        SubagentOutcome::Interrupted => Color::Yellow,
+        _ => Color::DarkGray,
+    };
+    Style::default().fg(color)
 }
 
 /// Infer a one-word status verb from the child's last tool name. The bus

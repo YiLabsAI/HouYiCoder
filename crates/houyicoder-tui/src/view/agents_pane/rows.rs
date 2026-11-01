@@ -63,7 +63,7 @@ pub(crate) fn agent_rows<'a>(
 ) -> Vec<AgentRow<'a>> {
     let mut rows: Vec<AgentRow<'a>> = fleet
         .iter()
-        .filter(|entry| entry.completed.is_none())
+        .filter(|entry| entry.outcome.is_none())
         .filter(|entry| {
             !completed
                 .iter()

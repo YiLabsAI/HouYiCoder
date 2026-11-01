@@ -5,6 +5,7 @@ use crate::records::TeammateView;
 use crate::records::ToolOutcome;
 use crate::records::TranscriptLine;
 use crate::test_harness::render_text;
+use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
@@ -354,7 +355,7 @@ fn test_agent_status_updates_fleet() {
     assert_eq!(app.sessions.current.capabilities.fleet.entries[0].turn, 1);
     assert!(
         app.sessions.current.capabilities.fleet.entries[0]
-            .completed
+            .outcome
             .is_none()
     );
 
@@ -375,10 +376,8 @@ fn test_agent_status_updates_fleet() {
     );
     assert_eq!(app.sessions.current.capabilities.fleet.entries[0].turn, 3);
     assert_eq!(
-        app.sessions.current.capabilities.fleet.entries[0]
-            .completed
-            .as_deref(),
-        Some("completed")
+        app.sessions.current.capabilities.fleet.entries[0].outcome,
+        Some(SubagentOutcome::Finished)
     );
 }
 

@@ -199,7 +199,7 @@ impl App {
         let child_sid = view.child_sid.clone();
         let running = self
             .fleet_entry(&child_sid)
-            .map(|e| e.completed.is_none())
+            .map(|e| e.outcome.is_none())
             .unwrap_or(false);
         if !running {
             return;

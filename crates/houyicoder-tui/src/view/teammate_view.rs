@@ -9,13 +9,15 @@ pub(crate) mod state;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 
 use crate::state::App;
+use crate::transcript::records::SubagentOutcome;
 use crate::view::badge_color;
+use crate::view::working::fleet_strip::ending_style;
 
 /// Draw the teammate-view banner. No-op when no teammate is in view. The
 /// banner is two lines: the title "Viewing @type · shift+↑↓ return" with
@@ -41,19 +43,22 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
     // A child that finishes while its view is open announces it here: the
     // parent has already resumed, so a static completed label would leave the
     // reader in a view whose work is over with nothing saying so.
+    // The ending is the same typed outcome and the same word the footer row
+    // states, so a child cannot read one way here and another there.
     let entry = app.fleet_entry(&view.child_sid);
-    let running = entry.is_some_and(|e| e.completed.is_none());
+    let running = entry.is_some_and(|e| e.outcome.is_none());
+    let ending = entry
+        .and_then(|e| e.outcome)
+        .unwrap_or(SubagentOutcome::Unknown);
     let hint = if running {
-        " (running) · Esc return · ctrl+x stop"
+        " (running) · Esc return · ctrl+x stop".to_string()
     } else {
-        " (finished) · Esc to return to the main session"
+        format!(" ({}) · Esc to return to the main session", ending.label())
     };
     let hint_style = if running {
         Style::default().add_modifier(Modifier::DIM)
     } else {
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD)
+        ending_style(ending).add_modifier(Modifier::BOLD)
     };
     let title = Line::from(vec![
         Span::raw("Viewing "),

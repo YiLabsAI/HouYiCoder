@@ -108,7 +108,7 @@ impl App {
     fn empty_child_transcript_line(&self, child_sid: &str) -> TranscriptLine {
         let starting = self
             .fleet_entry(child_sid)
-            .map(|e| e.completed.is_none())
+            .map(|e| e.outcome.is_none())
             .unwrap_or(false);
         let msg = if starting {
             "child starting"

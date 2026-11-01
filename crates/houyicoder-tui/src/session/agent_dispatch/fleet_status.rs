@@ -26,12 +26,15 @@ impl App {
             last_activity,
             completed,
         } = status;
-        // A running child (no completed status) drives the live
-        // refetch below; capture it before the fleet update moves
-        // the field.
-        let is_running = completed.is_none();
+        // The ending is parsed once here and every reader below takes it in
+        // that form: the footer row, the teammate view's auto-exit, and the
+        // transcript trace all answer "how did this child end", so they read
+        // one typed value rather than each interpreting the host's word.
+        let ending = completed.as_deref().map(SubagentOutcome::from_status);
+        // A running child drives the live refetch below.
+        let is_running = ending.is_none();
         // Auto-exit the teammate view only when the viewed child is
-        // gone or broken (killed/failed). A turn-limit, budget, or
+        // gone or broken (interrupted or failed). A turn-limit, budget, or
         // normal completion leaves partial output worth reading, so
         // the view stays — the user exits with Shift+Up/Down (Esc
         // only interrupts the viewed child's current turn).
@@ -40,9 +43,9 @@ impl App {
             .teammate_view
             .as_ref()
             .is_some_and(|v| v.child_sid == agent_id)
-            && completed
-                .as_deref()
-                .is_some_and(|s| matches!(s, "killed" | "failed"))
+            && ending.is_some_and(|o| {
+                matches!(o, SubagentOutcome::Interrupted | SubagentOutcome::Failed)
+            })
         {
             self.exit_teammate_view();
         }
@@ -50,8 +53,8 @@ impl App {
         // A terminal word for a child the transcript already records is an
         // echo of an ending the fleet already showed and dropped, not news.
         // Reading the frame log once keeps the echo from opening a fresh
-        // completed row in the footer that has no trace of its own to match.
-        let traced = completed.is_some() && self.transcript_has_trace(&agent_id);
+        // ended row in the footer that has no trace of its own to match.
+        let traced = ending.is_some() && self.transcript_has_trace(&agent_id);
         {
             let entries = &mut self.sessions.current.capabilities.fleet.entries;
             if let Some(entry) = entries.iter_mut().find(|e| e.agent_id == agent_id) {
@@ -69,24 +72,23 @@ impl App {
                 // status echoing the same completion does not reset it. The
                 // same first landing is the one that leaves a trace in the
                 // transcript.
-                if let Some(word) = completed.as_deref().filter(|_| entry.completed.is_none()) {
+                if let Some(outcome) = ending.filter(|_| entry.outcome.is_none()) {
                     entry.completed_at = Some(Instant::now());
                     finished = Some(SubagentFinished {
                         child_sid: agent_id.clone(),
                         subagent_type: entry.subagent_type.clone(),
                         description: entry.description.clone(),
-                        outcome: SubagentOutcome::from_status(word),
+                        outcome,
                         duration_ms: entry.started_at.map(|t| t.elapsed().as_millis() as u64),
                         tool_uses: entry.tool_uses,
                     });
                 }
-                entry.completed = completed;
+                entry.outcome = ending;
             } else if !traced {
                 // The first word about a child can already be its last. A
                 // child first seen finished was never watched running, so it
                 // holds no start moment: its trace row shows no duration
                 // rather than a run of zero length.
-                let ending = completed.as_deref().map(SubagentOutcome::from_status);
                 entries.push(FleetEntry {
                     agent_id: agent_id.clone(),
                     subagent_type: subagent_type.clone(),
@@ -97,7 +99,7 @@ impl App {
                     last_activity,
                     completed_at: ending.map(|_| Instant::now()),
                     started_at: ending.is_none().then(Instant::now),
-                    completed,
+                    outcome: ending,
                 });
                 if let Some(outcome) = ending {
                     finished = Some(SubagentFinished {

@@ -10,6 +10,7 @@ use crate::composition::app;
 use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{connected_app, render_text};
+use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::envelope::RequestId;
 use std::time::Instant;
 
@@ -64,7 +65,7 @@ fn fleet_app(n: usize, granted: u16) -> App {
                 tokens: 10,
                 tool_uses: 0,
                 last_activity: None,
-                completed: None,
+                outcome: None,
                 completed_at: None,
                 started_at: None,
             });
@@ -120,7 +121,7 @@ fn test_hint_follows_drawn_grant() {
                 tokens: 10,
                 tool_uses: 0,
                 last_activity: None,
-                completed: None,
+                outcome: None,
                 completed_at: None,
                 started_at: None,
             });
@@ -148,7 +149,7 @@ fn test_agents_hint_excludes_completed() {
         tokens: 10,
         tool_uses: 0,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Some(Instant::now()),
         started_at: None,
     };

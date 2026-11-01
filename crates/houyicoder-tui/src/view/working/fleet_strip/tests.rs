@@ -2,6 +2,7 @@ use super::*;
 use crate::composition;
 use crate::session::Session;
 use crate::session::capabilities::FleetCapability;
+use crate::view::ERROR_RED;
 use std::time::{Duration, Instant};
 
 fn entry(id: &str, kind: &str, turn: u32, tokens: u64, tool: &str) -> FleetEntry {
@@ -13,7 +14,7 @@ fn entry(id: &str, kind: &str, turn: u32, tokens: u64, tool: &str) -> FleetEntry
         tokens,
         tool_uses: 0,
         last_activity: Some(tool.into()),
-        completed: None,
+        outcome: None,
         completed_at: None,
         started_at: None,
     }
@@ -50,20 +51,21 @@ fn test_want_caps_at_three() {
 /// One row for a multi-child fleet is the collapsed form: a count, not
 /// the first child's detail. Naming one child and omitting the rest is
 /// worse than not naming any, since nothing tells the reader the others
-/// exist.
+/// exist. The count of children that landed says ended rather than finished,
+/// because the collapsed row cannot know that none of them failed.
 #[test]
 fn test_one_row_counts() {
     let mut app = composition::app();
     entries_mut(&mut app.sessions.current).push(entry("a", "explore", 1, 10, "grep"));
     entries_mut(&mut app.sessions.current).push(entry("b", "plan", 1, 10, "read"));
     let mut done = entry("c", "verify", 1, 10, "test");
-    done.completed = Some("completed".into());
+    done.outcome = Some(SubagentOutcome::Finished);
     done.completed_at = Some(Instant::now());
     entries_mut(&mut app.sessions.current).push(done);
     let line = summary_line(&app);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(
-        text.contains("2 running") && text.contains("1 done"),
+        text.contains("2 running") && text.contains("1 ended"),
         "the collapsed row counts instead of naming: {text}"
     );
     assert!(
@@ -157,9 +159,9 @@ fn test_click_route() {
     }
 }
 
-/// A completed row goes terse: it shows the type, a done marker, and the
-/// token total — never the stale live verb. Guards the auto-background
-/// render so a refactor that re-adds the verb to a finished row fails.
+/// A completed row goes terse: it shows the label, the ending, and the
+/// spend — never the stale live verb. Guards the auto-background render so a
+/// refactor that re-adds the verb to a finished row fails.
 #[test]
 fn test_completed_row_terse() {
     let e = FleetEntry {
@@ -170,13 +172,16 @@ fn test_completed_row_terse() {
         tokens: 1200,
         tool_uses: 2,
         last_activity: Some("grep".into()),
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: None,
         started_at: None,
     };
     let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-    assert!(text.contains("done"), "completed shows done: {text}");
+    assert!(
+        text.contains("finished"),
+        "completed shows finished: {text}"
+    );
     assert!(text.contains("1.2k tok"), "completed shows tokens: {text}");
     assert!(
         !text.contains("searching"),
@@ -188,6 +193,52 @@ fn test_completed_row_terse() {
 fn row_text(e: &FleetEntry) -> String {
     let line = build_row(e, false, None, false);
     line.spans.iter().map(|s| s.content.to_string()).collect()
+}
+
+/// The ended row names the ending the child's status reported, in the word
+/// the transcript row uses for the same ending, and its glyph takes the color
+/// that ending is drawn in. Every ended row used to read done in one color,
+/// so the footer told a different story from the transcript row beside it.
+#[test]
+fn test_ended_row_names_ending() {
+    for (outcome, word, glyph, color) in [
+        (SubagentOutcome::Finished, "finished", "✓", Color::DarkGray),
+        (SubagentOutcome::Failed, "failed", "✕", ERROR_RED),
+        (
+            SubagentOutcome::Interrupted,
+            "interrupted",
+            "⊘",
+            Color::Yellow,
+        ),
+        (
+            SubagentOutcome::TurnLimit,
+            "turn limit",
+            "✓",
+            Color::DarkGray,
+        ),
+        (SubagentOutcome::Budget, "budget", "✓", Color::DarkGray),
+        (SubagentOutcome::Unknown, "ended", "·", Color::DarkGray),
+    ] {
+        let mut e = entry("c1", "explore", 3, 1_200, "grep");
+        e.outcome = Some(outcome);
+        let line = build_row(&e, false, None, false);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains(word), "{outcome:?} reads as {word}: {text}");
+        assert!(
+            !text.contains("searching"),
+            "an ended row drops the live verb: {text}"
+        );
+        let glyph_span = line
+            .spans
+            .iter()
+            .find(|s| s.content == format!("{glyph} "))
+            .unwrap_or_else(|| panic!("{outcome:?} draws the {glyph} glyph: {text}"));
+        assert_eq!(
+            glyph_span.style.fg,
+            Some(color),
+            "{outcome:?} takes its ending's color"
+        );
+    }
 }
 
 /// drop_completed drops a finished entry once its grace window elapsed.
@@ -204,7 +255,7 @@ fn test_grace_drops_expired() {
         tokens: 100,
         tool_uses: 1,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
     });
@@ -227,7 +278,7 @@ fn test_grace_keeps_recent() {
         tokens: 50,
         tool_uses: 0,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Some(Instant::now()),
         started_at: None,
     });
@@ -252,7 +303,7 @@ fn test_drop_clamps_selected() {
         tokens: 10,
         tool_uses: 0,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
     });
@@ -273,7 +324,7 @@ fn test_drop_clamps_selected() {
         tokens: 10,
         tool_uses: 0,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
     });
@@ -301,7 +352,7 @@ fn test_grace_pins_viewed_child() {
         tokens: 100,
         tool_uses: 1,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
     });
@@ -313,7 +364,7 @@ fn test_grace_pins_viewed_child() {
         tokens: 10,
         tool_uses: 0,
         last_activity: None,
-        completed: Some("completed".into()),
+        outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
     });
@@ -345,12 +396,12 @@ fn test_tick_elapsed() {
         app.tick_fleet_elapsed(now + Duration::from_secs(1)),
         "1s later re-ticks"
     );
-    entries_mut(&mut app.sessions.current)[0].completed = Some("done".into());
+    entries_mut(&mut app.sessions.current)[0].outcome = Some(SubagentOutcome::Finished);
     assert!(
         !app.tick_fleet_elapsed(now + Duration::from_secs(2)),
         "no running children after completion"
     );
-    entries_mut(&mut app.sessions.current)[0].completed = None;
+    entries_mut(&mut app.sessions.current)[0].outcome = None;
     assert!(
         app.tick_fleet_elapsed(now + Duration::from_millis(100)),
         "reset ticks immediately on next spawn"
@@ -369,14 +420,17 @@ fn test_running_row_shows_elapsed() {
         tokens: 100,
         tool_uses: 0,
         last_activity: Some("grep".into()),
-        completed: None,
+        outcome: None,
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
     };
     let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
     assert!(text.contains("7s"), "running row shows elapsed: {text}");
-    assert!(!text.contains("done"), "running row is not terse: {text}");
+    assert!(
+        !text.contains("finished"),
+        "running row is not terse: {text}"
+    );
 }
 
 /// The child whose ask is on screen says so instead of showing a verb. It is
@@ -392,7 +446,7 @@ fn test_row_shows_waiting_approval() {
         tokens: 100,
         tool_uses: 3,
         last_activity: Some("bash".into()),
-        completed: None,
+        outcome: None,
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
     };
@@ -430,7 +484,7 @@ fn test_row_uses_description() {
         tokens: 100,
         tool_uses: 0,
         last_activity: Some("grep".into()),
-        completed: None,
+        outcome: None,
         completed_at: None,
         started_at: Some(Instant::now()),
     };
@@ -454,7 +508,7 @@ fn test_row_type_fallback() {
         tokens: 100,
         tool_uses: 0,
         last_activity: Some("grep".into()),
-        completed: None,
+        outcome: None,
         completed_at: None,
         started_at: Some(Instant::now()),
     };
@@ -493,13 +547,13 @@ fn test_row_names_both_figures() {
 fn test_finished_row_names_both() {
     let mut e = entry("c1", "explore", 2, 1_500, "grep");
     e.tool_uses = 3;
-    e.completed = Some("completed".into());
+    e.outcome = Some(SubagentOutcome::Finished);
     e.completed_at = Some(Instant::now());
     let text = row_text(&e);
     assert!(text.contains("3 tools"), "the call count is named: {text}");
     assert!(text.contains("1.5k tokens"), "the spend is named: {text}");
     assert!(
-        text.contains("done"),
+        text.contains("finished"),
         "and the row still says it ended: {text}"
     );
 }

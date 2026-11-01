@@ -2,6 +2,7 @@ use super::*;
 use crate::agent_message::FleetEntry;
 use crate::composition;
 use crate::records::TranscriptLine;
+use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::frontend::agents::AgentPrompt;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -74,7 +75,7 @@ fn push_running(app: &mut App, agent_id: &str) {
             tokens: 1400,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -337,7 +338,7 @@ fn test_completed_metrics_render() {
             tokens: 24_500,
             tool_uses: 18,
             last_activity: None,
-            completed: Some("all checks green".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(end),
             started_at: Some(start),
         });
@@ -388,7 +389,7 @@ fn test_spend_words_agree() {
             tokens: 24_500,
             tool_uses: 18,
             last_activity: None,
-            completed: Some("done".into()),
+            outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(Instant::now()),
             started_at: Some(Instant::now() - Duration::from_secs(125)),
         });

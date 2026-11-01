@@ -1,7 +1,9 @@
 use super::*;
 use houyicoder_protocol::frontend::agents::AgentPrompt;
 
-fn fleet_entry(agent_id: &str, completed: Option<&str>) -> FleetEntry {
+use crate::transcript::records::SubagentOutcome;
+
+fn fleet_entry(agent_id: &str, outcome: Option<SubagentOutcome>) -> FleetEntry {
     FleetEntry {
         agent_id: agent_id.into(),
         subagent_type: "explore".into(),
@@ -10,7 +12,7 @@ fn fleet_entry(agent_id: &str, completed: Option<&str>) -> FleetEntry {
         tokens: 10,
         tool_uses: 0,
         last_activity: None,
-        completed: completed.map(str::to_string),
+        outcome,
         completed_at: None,
         started_at: None,
     }
@@ -68,7 +70,10 @@ fn test_three_sections_in_order() {
 /// too would let one delegation answer two Enter presses.
 #[test]
 fn test_completed_child_leaves_running() {
-    let fleet = [fleet_entry("c1", Some("done")), fleet_entry("c2", None)];
+    let fleet = [
+        fleet_entry("c1", Some(SubagentOutcome::Finished)),
+        fleet_entry("c2", None),
+    ];
     let rows = agent_rows(&fleet, &[], None);
     let running: Vec<&str> = rows
         .iter()

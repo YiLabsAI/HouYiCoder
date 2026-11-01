@@ -222,10 +222,10 @@ pub(crate) struct FleetCapability {
 }
 
 impl FleetCapability {
-    /// Whether any child is still running (no completed status). Drives the
+    /// Whether any child is still running (no ending yet). Drives the
     /// elapsed-counter repaint: only a live child has a counter to update.
     pub(crate) fn any_running(&self) -> bool {
-        self.entries.iter().any(|e| e.completed.is_none())
+        self.entries.iter().any(|e| e.outcome.is_none())
     }
 
     /// Drop completed entries whose grace window has elapsed. Running
@@ -257,7 +257,7 @@ impl FleetCapability {
     /// of goodbye that a child finishing in plain sight gets.
     pub(crate) fn restart_grace(&mut self, agent_id: &str) {
         for entry in &mut self.entries {
-            if entry.agent_id == agent_id && entry.completed.is_some() {
+            if entry.agent_id == agent_id && entry.outcome.is_some() {
                 entry.completed_at = Some(Instant::now());
             }
         }

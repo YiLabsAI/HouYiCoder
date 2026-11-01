@@ -31,7 +31,7 @@ fn test_teammate_strip_pins_view() {
     );
     // Enter the teammate view on the just-completed child. The first full
     // render of the view carries the banner + the strip row (the child's
-    // terse done row), so the token marker is present alongside the banner.
+    // terse finished row), so the token marker is present alongside the banner.
     s.send_str("\r");
     assert!(
         s.wait_for_plain("Viewing", RENDER_TIMEOUT),
@@ -66,11 +66,11 @@ fn test_teammate_strip_pins_view() {
 }
 
 /// After a foreground delegation completes, the footer strip renders the
-/// child's done row (the type + a done marker + the token total). Proves
+/// child's finished row (its label, the ending word, and the spend). Proves
 /// the strip surfaces the terminal state, not just the running state.
 #[test]
 #[ignore]
-fn test_strip_done_after_completion() {
+fn test_strip_finished_after_completion() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -86,14 +86,14 @@ fn test_strip_done_after_completion() {
         s.output()
     );
     assert!(
-        s.output_compact().contains("findauth·done"),
-        "strip should show the done row after completion:\n{}",
+        s.output_compact().contains("findauth·finished"),
+        "strip should show the finished row after completion:\n{}",
         s.output()
     );
 }
 
 /// Two foreground delegations in one run leave two footer strip rows, each
-/// carrying its own type + done marker. Proves the strip tracks multiple
+/// carrying its own type + ending word. Proves the strip tracks multiple
 /// children (not last-writer-wins) and each row is typed by its delegation.
 #[test]
 #[ignore]
@@ -116,14 +116,14 @@ fn test_strip_two_children_rows() {
     );
     let pc = s.output_compact();
     assert!(
-        pc.contains("first·done") && pc.contains("second·done"),
+        pc.contains("first·finished") && pc.contains("second·finished"),
         "both child strip rows should render with their own type:\n{}",
         s.output()
     );
 }
 
 /// While a foreground child is in-flight, the footer strip renders the
-/// running row (the type + a live verb), distinct from the done row. Proves
+/// running row (the type + a live verb), distinct from the finished row. Proves
 /// the strip tracks the running state before completion. Uses the stub
 /// delay so the in-flight window is wide enough to catch.
 #[test]
@@ -139,7 +139,7 @@ fn test_strip_running_verb_inflight() {
     s.send_str("find auth");
     s.send_str("\r");
     // While the child is in-flight (2s delay), the strip shows the running
-    // row's hollow circle before the done row replaces it. The type + verb
+    // row's hollow circle before the finished row replaces it. The type + verb
     // text is not a latch: the fold-group head renders it at completion too.
     assert!(
         s.wait_for_compact("◯", RENDER_TIMEOUT * 2),
@@ -147,8 +147,8 @@ fn test_strip_running_verb_inflight() {
         s.output()
     );
     assert!(
-        !s.output_compact().contains("findauth·done"),
-        "strip should not show done before the child completes:\n{}",
+        !s.output_compact().contains("findauth·finished"),
+        "strip should not show the finished row before the child completes:\n{}",
         s.output()
     );
 }
@@ -168,7 +168,7 @@ fn test_strip_shift_enter_teammate() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    assert!(s.wait_for_compact("findauth·done", RENDER_TIMEOUT * 2));
+    assert!(s.wait_for_compact("findauth·finished", RENDER_TIMEOUT * 2));
     s.send_key(&Key::ShiftDown);
     s.send_str("\r");
     assert!(
@@ -181,7 +181,7 @@ fn test_strip_shift_enter_teammate() {
 // ---- batch 4: background delegation ----
 
 /// The running strip shows the live-progress glyph (a hollow circle),
-/// distinct from the done row's check mark. Proves the strip distinguishes
+/// distinct from the finished row's check mark. Proves the strip distinguishes
 /// in-flight from completed at the glyph level.
 #[test]
 #[ignore]
@@ -202,13 +202,13 @@ fn test_strip_running_glyph() {
     );
 }
 
-/// The strip transitions from the running row to the done row as a
+/// The strip transitions from the running row to the finished row as a
 /// foreground child completes: the running verb appears first, then the
-/// done marker replaces it. Proves the strip reflects the live state change
+/// ending word replaces it. Proves the strip reflects the live state change
 /// at completion.
 #[test]
 #[ignore]
-fn test_strip_running_to_done() {
+fn test_strip_running_to_finished() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
         [{"type":"Text","text":"auth in src/auth"}],
@@ -218,15 +218,15 @@ fn test_strip_running_to_done() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    // The running row first, then the done row. The latch is the hollow
+    // The running row first, then the finished row. The latch is the hollow
     // circle, which only the running row draws: the fold-group head renders
     // the same "explore:" text once the child completes, so that string
     // cannot tell the two states apart. The stub delay only has to hold the
     // running row long enough to be seen.
     assert!(s.wait_for_compact("◯", RENDER_TIMEOUT * 2));
     assert!(
-        s.wait_for_compact("findauth·done", RENDER_TIMEOUT * 3),
-        "strip should transition to the done row after completion:\n{}",
+        s.wait_for_compact("findauth·finished", RENDER_TIMEOUT * 3),
+        "strip should transition to the finished row after completion:\n{}",
         s.output()
     );
 }

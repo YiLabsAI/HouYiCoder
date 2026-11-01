@@ -220,9 +220,10 @@ fn test_esc_clears_child_strip() {
         s.output()
     );
     // The child ends interrupted, so its row turns terminal before the grace
-    // window clears it.
+    // window clears it -- and it says interrupted, not the word a child that
+    // finished the task uses.
     assert!(
-        s.wait_for_compact("findauth·done", RENDER_TIMEOUT * 2),
+        s.wait_for_compact("findauth·interrupted", RENDER_TIMEOUT * 2),
         "the stopped child should render a terminal strip row:\n{}",
         s.output()
     );
@@ -231,7 +232,7 @@ fn test_esc_clears_child_strip() {
     s.send_str(" ");
     sleep(Duration::from_millis(300));
     assert!(
-        !s.output_compact().contains("findauth·done"),
+        !s.output_compact().contains("findauth·interrupted"),
         "the stopped child's strip row should clear after the grace window:\n{}",
         s.output()
     );

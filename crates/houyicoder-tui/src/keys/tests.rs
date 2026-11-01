@@ -1473,7 +1473,7 @@ fn fleet_app(n: usize) -> App {
                 tokens: 10,
                 tool_uses: 0,
                 last_activity: None,
-                completed: None,
+                outcome: None,
                 completed_at: None,
                 started_at: None,
             });
@@ -1531,7 +1531,7 @@ fn test_shift_arrow_exits_teammate() {
     );
     assert!(
         app.sessions.current.capabilities.fleet.entries[0]
-            .completed
+            .outcome
             .is_none(),
         "the child keeps running after the view exits"
     );
@@ -1587,7 +1587,7 @@ fn test_teammate_esc_keeps_child() {
             tokens: 10,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -1676,7 +1676,7 @@ fn test_enter_fleet_drills_teammate() {
             tokens: 10,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -1815,7 +1815,7 @@ fn test_down_keeps_history() {
             tokens: 0,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
@@ -1846,7 +1846,7 @@ fn test_shift_down_enters_strip() {
             tokens: 0,
             tool_uses: 0,
             last_activity: None,
-            completed: None,
+            outcome: None,
             completed_at: None,
             started_at: None,
         });
