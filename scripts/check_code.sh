@@ -130,6 +130,7 @@ SCRIPT_TESTS=(
   test_cross_target.py
   test_orphan_modules.py
   test_pre_push_chain.py
+  test_measure_turn_dispatch.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
   run_check "script-tests:$script_test" python3 "scripts/$script_test"

@@ -128,6 +128,11 @@ hooks, so write-time and check-time enforce the same patterns:
   field counts, duplicate-code hotspots) consumed by the ratchet gates.
 - `measure_app_coupling.py` — measures `App` coupling to scope the
   God-struct split; a report-only step, not a pass/fail gate.
+- `measure_turn_dispatch.py` — reads session logs (read-only) and reports
+  how edits and the shell checks after them share or split turns, which
+  checks followed an edit that failed, was missed, or stayed pending, how
+  many the rule withheld, and how many withheld checks were sent again
+  after an approval; a report-only step.
 
 ## Local-only (gitignored)
 
