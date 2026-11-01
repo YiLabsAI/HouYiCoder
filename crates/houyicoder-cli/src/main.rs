@@ -413,7 +413,12 @@ fn run_serve(
     // a previous process that crashed without cleanup.
     remove_file(&socket_path).ok();
     let runtime = Builder::new_multi_thread().enable_all().build()?;
-    let host = Arc::new(SessionHost::new(SessionLeaseStore::new()).with_provider_facts(facts));
+    let background_tasks = bundle.background_tasks.clone();
+    let host = Arc::new(
+        SessionHost::new(SessionLeaseStore::new())
+            .with_provider_facts(facts)
+            .with_background_tasks(background_tasks.clone()),
+    );
     let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut bundle.runner);
     let relay_cancel = CancellationToken::new();
@@ -425,9 +430,11 @@ fn run_serve(
     );
     let gate: Arc<dyn ModeGate> = bundle.gate;
     let session = bundle.session;
+    let runner = Arc::new(bundle.runner);
+    background_tasks.attach(Some(event_sequencer.clone()), &runner);
     host.insert(
         session,
-        Arc::new(bundle.runner),
+        runner,
         event_sequencer,
         gate,
         bundle.append_notify,
@@ -508,6 +515,10 @@ fn run_acp_stdio(
     eprintln!("session_id={}", bundle.session);
     let session = bundle.session;
     let runner = Arc::new(bundle.runner);
+    // The ACP server has no frontend event stream to publish a task's state
+    // into, but a command moved to the background still ends after the call
+    // that started it: the runner is how its ending reaches the model.
+    bundle.background_tasks.attach(None, &runner);
     let adapter = Arc::new(AcpAdapter::new(
         AcpxCapabilities::default(),
         1,

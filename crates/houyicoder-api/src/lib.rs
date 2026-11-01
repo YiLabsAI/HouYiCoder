@@ -9,6 +9,7 @@
 //! to the foundation first, or the trait does not enter ports.
 
 pub mod agent_event;
+pub mod background;
 pub mod cache_policy;
 pub mod capture;
 pub mod cost_model;

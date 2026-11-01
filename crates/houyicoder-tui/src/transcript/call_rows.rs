@@ -5,6 +5,8 @@
 
 use serde_json::Value;
 
+use houyicoder_protocol::frontend::tasks::BackgroundTaskId;
+
 use crate::brief::{MEMORY_LABEL_TOOLS, result_summary, tool_user_facing_name};
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::result_body::{
@@ -37,7 +39,13 @@ pub(super) fn tool_result_line(
 ) -> TranscriptLine {
     let out_str = output.to_string();
     let raw = extract_body(&out_str);
-    let body = if tool_name == "read" {
+    let background_task = output
+        .get("background_task")
+        .and_then(Value::as_u64)
+        .map(BackgroundTaskId);
+    let body = if let Some(task) = background_task {
+        background_row_body(task)
+    } else if tool_name == "read" {
         if output.get("error").is_some() {
             raw
         } else {
@@ -71,9 +79,23 @@ pub(super) fn tool_result_line(
             call_input.unwrap_or(&Value::Null),
         ),
         call_id: id.to_string(),
+        background_task,
         body,
         is_diff: output_has_diff(&out_str),
     }
+}
+
+/// The body a background command's result shows: the row naming the task and
+/// the key that opens the tasks view. The host's note beside the task number
+/// addresses the model, not the reader, so the row says the same thing in the
+/// words the pane uses. The row reports how the command ended once the host
+/// publishes that state; the body here is the running form a session replay
+/// starts from.
+fn background_row_body(task: BackgroundTaskId) -> String {
+    format!(
+        "Running in background (task {} \u{00b7} \u{2193} to manage)",
+        task.label()
+    )
 }
 
 /// The extension of the file a tool call edited, when the call named one.
@@ -133,6 +155,7 @@ pub(super) fn call_out_of_view_row(
         invocation: String::new(),
         outcome: ToolOutcome::from_output_with(output, tool, &Value::Null),
         call_id: call_id.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }

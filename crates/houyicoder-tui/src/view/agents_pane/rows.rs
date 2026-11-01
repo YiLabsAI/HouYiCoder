@@ -7,7 +7,7 @@
 
 use houyicoder_protocol::frontend::agents::AgentEntry;
 
-use crate::agent_message::{DelegationRow, FleetEntry};
+use crate::agent_message::fleet::{DelegationRow, FleetEntry};
 use crate::state::App;
 
 /// How many returned delegations the pane keeps. A session can return more

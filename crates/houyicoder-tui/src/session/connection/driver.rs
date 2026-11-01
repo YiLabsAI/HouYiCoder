@@ -257,15 +257,28 @@ async fn drive_connection(
                                     notification.params.get("call_id").and_then(|v| v.as_str()),
                                     notification.params.get("elapsed_secs").and_then(|v| v.as_u64()),
                                 ) {
-                                    let lines = notification
+                                    let timeout_secs = notification
                                         .params
-                                        .get("lines")
+                                        .get("timeout_secs")
                                         .and_then(|v| v.as_u64());
+                                    let tail = notification
+                                        .params
+                                        .get("tail")
+                                        .and_then(|v| v.as_array())
+                                        .map(|lines| {
+                                            lines
+                                                .iter()
+                                                .filter_map(|line| line.as_str())
+                                                .map(str::to_string)
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
                                     let _send = agent_tx.send(SessionMessage::Event(
                                         ServerEvent::ToolProgress {
                                             call_id: call_id.to_string(),
                                             elapsed_secs: elapsed,
-                                            lines,
+                                            timeout_secs,
+                                            tail,
                                         },
                                     ));
                                 }
@@ -296,6 +309,11 @@ async fn drive_connection(
                                 ));
                             }
                         }
+                    }
+                    FrontendEvent::BackgroundTaskChanged { task } => {
+                        let _send = agent_tx.send(SessionMessage::Event(
+                            ServerEvent::BackgroundTaskChanged { task },
+                        ));
                     }
                     FrontendEvent::QueuedInputCommitted { inputs } => {
                         let _send = agent_tx.send(SessionMessage::Event(
@@ -424,6 +442,12 @@ async fn drive_connection(
                         }
                         ResponsePayload::SkillBody(body) => {
                             Some(ServerResponse::SkillBody { body })
+                        }
+                        ResponsePayload::BackgroundTasks(tasks) => {
+                            Some(ServerResponse::BackgroundTasks { tasks })
+                        }
+                        ResponsePayload::BackgroundTaskDetail(detail) => {
+                            Some(ServerResponse::BackgroundTaskDetail { detail })
                         }
                         ResponsePayload::MemoryList(entries) => {
                             Some(ServerResponse::MemoryList { entries })

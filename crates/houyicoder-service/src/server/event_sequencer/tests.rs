@@ -543,7 +543,8 @@ fn test_tool_event_carries_progress() {
         ToolExecutionEvent::Progress {
             call_id: "call-1".into(),
             elapsed_secs: 3,
-            output_lines: Some(7),
+            timeout_secs: Some(120),
+            tail: vec!["3 of 50".into()],
         },
     );
     let pending = sequencer.sequence_pending_for_test();
@@ -551,6 +552,8 @@ fn test_tool_event_carries_progress() {
         &pending[0].payload,
         FrontendEvent::Acpx { notification }
             if notification.method == AcpxMethod::ToolProgress
+                && notification.params.get("timeout_secs") == Some(&serde_json::json!(120))
+                && notification.params.get("tail") == Some(&serde_json::json!(["3 of 50"]))
     ));
 }
 

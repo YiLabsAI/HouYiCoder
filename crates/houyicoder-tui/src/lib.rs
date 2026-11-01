@@ -44,6 +44,6 @@ pub(crate) use view::{
     agents_pane::state as agents_state, capability::input as permission_input,
     capability::state as permission_pane_state, fleet, hooks_pane::state as hooks_state,
     list_pane_state, memory_pane::state as memory_state, skill_picker::state as skill_picker_state,
-    skills_pane::state as skills_state,
+    skills_pane::state as skills_state, tasks_pane::state as tasks_state,
 };
 pub use workflow::{artifact, evidence, review_queue};

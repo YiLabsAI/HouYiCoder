@@ -230,12 +230,18 @@ impl EventHandler<ToolExecutionEvent> for EventSequencer {
         let ToolExecutionEvent::Progress {
             call_id,
             elapsed_secs,
-            output_lines,
+            timeout_secs,
+            tail,
         } = event;
         self.enqueue_ephemeral(FrontendEvent::Acpx {
             notification: AcpxNotification::new(
                 AcpxMethod::ToolProgress,
-                serde_json::json!({ "call_id": call_id, "elapsed_secs": elapsed_secs, "lines": output_lines }),
+                serde_json::json!({
+                    "call_id": call_id,
+                    "elapsed_secs": elapsed_secs,
+                    "timeout_secs": timeout_secs,
+                    "tail": tail,
+                }),
             ),
         });
     }

@@ -6,6 +6,7 @@ use crate::records::ToolOutcome;
 use crate::records::TranscriptLine;
 use crate::test_harness::render_text;
 use crate::transcript::records::SubagentOutcome;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
@@ -279,6 +280,7 @@ fn test_cursor_after_fold_group() {
         invocation: "ls".into(),
         outcome: ToolOutcome::Success,
         call_id: "t1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     });
@@ -289,6 +291,7 @@ fn test_cursor_after_fold_group() {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "t1".into(),
+        background_task: None,
         body: "ok\nline2\nline3".into(),
         is_diff: false,
     });
@@ -367,7 +370,7 @@ fn test_agent_status_updates_fleet() {
         tokens: 300,
         tool_uses: 5,
         last_activity: Some("edit".into()),
-        completed: Some("completed".into()),
+        completed: Some(CompletionStatus::Completed),
     }));
     assert_eq!(
         app.sessions.current.capabilities.fleet.entries.len(),
@@ -401,7 +404,7 @@ fn test_teammate_view_auto_exit() {
         tokens: 200,
         tool_uses: 1,
         last_activity: None,
-        completed: Some("completed".into()),
+        completed: Some(CompletionStatus::Completed),
     }));
     assert!(app.ui.teammate_view.is_some(), "completed stays for review");
     // A failure: the view auto-exits back to the parent.
@@ -413,7 +416,7 @@ fn test_teammate_view_auto_exit() {
         tokens: 200,
         tool_uses: 1,
         last_activity: None,
-        completed: Some("failed".into()),
+        completed: Some(CompletionStatus::Failed),
     }));
     assert!(
         app.ui.teammate_view.is_none(),
@@ -432,7 +435,7 @@ fn test_teammate_view_auto_exit() {
         tokens: 10,
         tool_uses: 0,
         last_activity: None,
-        completed: Some("failed".into()),
+        completed: Some(CompletionStatus::Failed),
     }));
     assert!(
         app.ui.teammate_view.is_some(),
@@ -447,7 +450,7 @@ fn test_teammate_view_auto_exit() {
         tokens: 900,
         tool_uses: 4,
         last_activity: None,
-        completed: Some("turn_limit".into()),
+        completed: Some(CompletionStatus::TurnLimit),
     }));
     assert!(
         app.ui.teammate_view.is_some(),

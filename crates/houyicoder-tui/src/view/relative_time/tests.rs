@@ -68,7 +68,7 @@ fn test_clock_before_epoch_saturates() {
 #[test]
 fn test_session_span_label() {
     assert_eq!(session_span_label(None), "—");
-    assert_eq!(session_span_label(Some(0)), "0ms");
+    assert_eq!(session_span_label(Some(0)), "<1ms");
     assert_eq!(session_span_label(Some(620)), "620ms");
     assert_eq!(session_span_label(Some(999)), "999ms");
     assert_eq!(session_span_label(Some(1000)), "1s");

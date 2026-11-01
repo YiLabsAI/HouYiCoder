@@ -1,4 +1,5 @@
 use super::ToolRuntime;
+use crate::state::BashProgress;
 
 /// A tick the runtime tracks moves the revision. The slot cache keys on it,
 /// so a revision that stayed put would leave the previous chip text on
@@ -9,15 +10,28 @@ fn test_tick_moves_revision() {
     tools.begin("c1".into());
     let before = tools.revision();
 
-    tools.note_tick("c1".into(), 3, None);
+    tools.note_tick(
+        "c1".into(),
+        BashProgress {
+            elapsed_secs: 3,
+            ..Default::default()
+        },
+    );
     assert_eq!(tools.revision(), before + 1);
     assert_eq!(tools.tick("c1").map(|p| p.elapsed_secs), Some(3));
 
-    tools.note_tick("c1".into(), 4, Some(12));
+    tools.note_tick(
+        "c1".into(),
+        BashProgress {
+            elapsed_secs: 4,
+            tail: vec!["built 2 targets".into()],
+            ..Default::default()
+        },
+    );
     assert_eq!(tools.revision(), before + 2);
     assert_eq!(
-        tools.tick("c1").and_then(|p| p.lines),
-        Some(12),
+        tools.tick("c1").map(|p| p.tail.clone()),
+        Some(vec!["built 2 targets".to_string()]),
         "the later tick replaces the earlier one"
     );
 }
@@ -30,7 +44,13 @@ fn test_untracked_tick_dropped() {
     let mut tools = ToolRuntime::default();
     let before = tools.revision();
 
-    tools.note_tick("gone".into(), 9, None);
+    tools.note_tick(
+        "gone".into(),
+        BashProgress {
+            elapsed_secs: 9,
+            ..Default::default()
+        },
+    );
 
     assert!(tools.tick("gone").is_none());
     assert_eq!(tools.revision(), before, "a dropped tick is not a change");
@@ -43,7 +63,13 @@ fn test_untracked_tick_dropped() {
 fn test_finish_moves_revision() {
     let mut tools = ToolRuntime::default();
     tools.begin("c1".into());
-    tools.note_tick("c1".into(), 3, None);
+    tools.note_tick(
+        "c1".into(),
+        BashProgress {
+            elapsed_secs: 3,
+            ..Default::default()
+        },
+    );
     let ticked = tools.revision();
 
     assert!(tools.finish("c1"), "the call was running");

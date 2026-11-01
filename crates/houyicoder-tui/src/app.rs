@@ -95,6 +95,10 @@ pub fn run_with_runner(
         if app.tick_auto_approve(now) {
             dirty = true;
         }
+        // The /tasks pane asks the host for a fresh list and, below it, a
+        // fresh record for the open detail: the host computes run times when
+        // it answers, so a pane that stopped asking would freeze its clocks.
+        app.tick_tasks(now);
         if app.sessions.current.todos.prune(now) {
             dirty = true;
         }

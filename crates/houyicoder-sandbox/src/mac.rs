@@ -629,9 +629,9 @@ impl SandboxSession for MacSeatbeltSession {
     }
 
     /// Streaming variant: the drain updates the shared line counter as
-    /// newlines arrive, so the host's bash chip can show "(12s · 14 lines)"
-    /// on a long-running command. Same fence + timeout + tree-kill
-    /// invariants as exec_with_config; only the counter differs.
+    /// newlines arrive, and the same bytes feed the caller's receiver. Same
+    /// fence + timeout + tree-kill invariants as exec_with_config; only the
+    /// counter differs.
     fn exec_streaming(
         &self,
         command: &str,

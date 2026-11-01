@@ -1,4 +1,6 @@
-use super::super::*;
+//! Tests for the fleet view models.
+
+use super::*;
 use crate::records::TranscriptLine;
 
 fn subagent(sid: &str, summary: &str, fold: Vec<TranscriptLine>) -> TranscriptLine {

@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use crate::frontend::completion::CompletionStatus;
 use crate::frontend::memory::{MemoryChangeScope, MemoryOperation};
 
 #[test]
@@ -210,4 +211,33 @@ fn test_commit_wire_compat() {
         panic!("queued input commit");
     };
     assert_eq!(inputs[0].text, "next");
+}
+
+/// A status frame written before the ending became a typed value still
+/// decodes, and its known words map onto the typed ending. The description
+/// field is absent there, so the frame must decode without it.
+#[test]
+fn test_old_status_frame_decodes() {
+    let payload = serde_json::json!({
+        "AgentStatus": {
+            "agent_id": "child-1",
+            "subagent_type": "explore",
+            "turn": 2,
+            "tokens": 42,
+            "tool_uses": 3,
+            "last_activity": null,
+            "completed": "turn_limit"
+        }
+    });
+    let decoded: FrontendEvent = serde_json::from_value(payload).expect("old payload decodes");
+    let FrontendEvent::AgentStatus {
+        completed,
+        description,
+        ..
+    } = decoded
+    else {
+        panic!("an agent status frame");
+    };
+    assert_eq!(completed, Some(CompletionStatus::TurnLimit));
+    assert_eq!(description, "", "a frame without the field decodes empty");
 }

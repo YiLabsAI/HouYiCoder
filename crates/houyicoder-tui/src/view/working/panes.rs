@@ -15,7 +15,7 @@ use crate::view::pane::render;
 use crate::view::status::pane::{STATUS_PANE_HEIGHT, draw_content as status_draw_content};
 use crate::view::{
     capability, hooks_pane, memory_pane, model_pane, queue_pane, resume_picker, sandbox_pane,
-    skills_pane, trajectory_pane, worktree_pane,
+    skills_pane, tasks_pane, trajectory_pane, worktree_pane,
 };
 
 use super::transcript;
@@ -176,6 +176,16 @@ pub(super) fn draw_skills_pane(f: &mut Frame, area: Rect, app: &App) {
         app,
         skills_pane::SKILLS_PANE_HEIGHT,
         skills_pane::draw_content,
+    );
+}
+
+pub(super) fn draw_tasks_pane(f: &mut Frame, area: Rect, app: &App) {
+    draw_command_pane(
+        f,
+        area,
+        app,
+        tasks_pane::TASKS_PANE_HEIGHT,
+        tasks_pane::draw_content,
     );
 }
 

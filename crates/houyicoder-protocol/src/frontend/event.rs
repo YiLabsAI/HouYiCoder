@@ -2,9 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::completion::CompletionStatus;
 use super::memory::{MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin};
 use super::queue::QueuedInput;
 use super::session_update::SessionUpdate;
+use super::tasks::BackgroundTaskSnapshot;
 use crate::acpx::AcpxNotification;
 
 /// One event emitted by the daemon to a connected frontend.
@@ -95,7 +97,7 @@ pub enum FrontendEvent {
     /// The service fleet status relay translates bus progress and completed
     /// messages into this wire frame so the frontend renders the footer
     /// without touching the engine bus. completed is None while the child
-    /// runs; Some once terminal ("completed" / "failed" / "killed" / ...).
+    /// runs; Some once terminal, holding the ending the engine reported.
     AgentStatus {
         agent_id: String,
         subagent_type: String,
@@ -109,7 +111,13 @@ pub enum FrontendEvent {
         tokens: u64,
         tool_uses: u32,
         last_activity: Option<String>,
-        completed: Option<String>,
+        completed: Option<CompletionStatus>,
+    },
+    /// One background command's latest snapshot. The frontend replaces the
+    /// row it holds for that task number, so a frame lost in transit costs
+    /// freshness rather than the task itself.
+    BackgroundTaskChanged {
+        task: BackgroundTaskSnapshot,
     },
 }
 

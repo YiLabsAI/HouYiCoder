@@ -4,14 +4,14 @@ use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate}
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent_message::{FleetEntry, ServerResponse, SessionMessage};
+use crate::agent_message::fleet::FleetEntry;
+use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::brief::tool_call_brief;
 use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
 use crate::rows::row_set::RowSet;
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
 use crate::transcript::frame::TranscriptFrame;
-use crate::view::working::transcript::truncate_call_with_paren;
 
 use super::super::tail_rows::build_tail_rows;
 use super::push_line_rows;
@@ -24,6 +24,7 @@ fn bash_call(command: &str) -> TranscriptLine {
         invocation: command.into(),
         outcome: ToolOutcome::Success,
         call_id: "c1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -37,6 +38,7 @@ fn bash_result() -> TranscriptLine {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "c1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -369,31 +371,3 @@ fn test_view_hides_tail() {
 
 mod compaction;
 mod scrollback;
-
-/// Cutting a running call to its column budget keeps the paren that closes
-/// the call's argument list, so the row does not read as an unclosed call.
-#[test]
-fn test_cut_keeps_paren() {
-    let row = "\u{25cf} Bash(cd /work/repo && cargo nextest run -p houyicoder-core)";
-    let cut = truncate_call_with_paren(row, 24);
-    assert!(
-        cut.ends_with(')'),
-        "the closing paren must survive the cut: [{cut}]"
-    );
-    assert!(
-        UnicodeWidthStr::width(cut.as_str()) <= 24,
-        "the cut must stay inside its budget: [{cut}]"
-    );
-}
-
-/// A row that is not a wrapped call, or that already ends before the budget,
-/// is left exactly as it was.
-#[test]
-fn test_cut_leaves_other_rows() {
-    assert_eq!(
-        truncate_call_with_paren("Working\u{2026} 12s", 40),
-        "Working\u{2026} 12s"
-    );
-    assert_eq!(truncate_call_with_paren("Bash(ls)", 40), "Bash(ls)");
-    assert_eq!(truncate_call_with_paren("Bash(ls)", 0), "");
-}

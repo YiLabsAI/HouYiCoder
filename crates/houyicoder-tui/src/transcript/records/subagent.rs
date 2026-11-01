@@ -1,6 +1,8 @@
 //! How a delegation's end reads: the outcome its final status names, and the
 //! one-line trace the parent timeline keeps of it.
 
+use houyicoder_protocol::frontend::completion::CompletionStatus;
+
 use crate::view::relative_time::summary_span_label;
 
 /// How a child agent ended, as its final fleet status reported it. The mark
@@ -25,17 +27,22 @@ pub enum SubagentOutcome {
 }
 
 impl SubagentOutcome {
-    /// The outcome a terminal status word names. The word arrives as a
-    /// string, so a word from a newer host lands here rather than failing
-    /// the status update.
-    pub(crate) fn from_status(status: &str) -> Self {
+    /// The outcome an ending names. An ending this build does not name keeps
+    /// the neutral word rather than borrowing a meaning it cannot verify.
+    pub(crate) fn from_completion(status: CompletionStatus) -> Self {
         match status {
-            "completed" => Self::Finished,
-            "failed" => Self::Failed,
-            "killed" => Self::Interrupted,
-            "turn_limit" => Self::TurnLimit,
-            "budget" => Self::Budget,
-            _ => Self::Unknown,
+            CompletionStatus::Completed => Self::Finished,
+            CompletionStatus::Failed => Self::Failed,
+            CompletionStatus::Killed => Self::Interrupted,
+            CompletionStatus::TurnLimit => Self::TurnLimit,
+            CompletionStatus::BudgetExhausted => Self::Budget,
+            other => {
+                tracing::debug!(
+                    ?other,
+                    "a child reported an ending this build does not name"
+                );
+                Self::Unknown
+            }
         }
     }
 

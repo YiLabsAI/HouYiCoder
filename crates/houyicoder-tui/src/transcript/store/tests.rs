@@ -15,6 +15,7 @@ fn bash_call(cid: &str) -> TranscriptLine {
         invocation: "ls".into(),
         outcome: ToolOutcome::Success,
         call_id: cid.into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -28,6 +29,7 @@ fn bash_result(cid: &str) -> TranscriptLine {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: cid.into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }

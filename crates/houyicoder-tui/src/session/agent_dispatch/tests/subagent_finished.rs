@@ -12,6 +12,7 @@ use crate::transcript::records::SubagentFinished;
 use crate::transcript::records::SubagentOutcome;
 use crate::transcript::records::TranscriptLine;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 use std::sync::{Arc, Mutex};
@@ -26,7 +27,7 @@ fn working_app() -> App {
 }
 
 /// One child status snapshot for the same delegation.
-fn status(completed: Option<&str>, tool_uses: u32) -> SessionMessage {
+fn status(completed: Option<CompletionStatus>, tool_uses: u32) -> SessionMessage {
     SessionMessage::Event(ServerEvent::AgentStatus {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
@@ -35,7 +36,7 @@ fn status(completed: Option<&str>, tool_uses: u32) -> SessionMessage {
         tokens: 4200,
         tool_uses,
         last_activity: None,
-        completed: completed.map(str::to_string),
+        completed,
     })
 }
 
@@ -85,7 +86,7 @@ fn test_finished_status_leaves_trace() {
         !running.contains("Agent \"map the auth path\" finished"),
         "no trace while the child runs:\n{running}"
     );
-    app.handle_agent_message(status(Some("completed"), 3));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 3));
     let done = render_text(&app, 100, 30);
     assert!(
         done.contains("\u{25cf} Agent \"map the auth path\" finished"),
@@ -104,8 +105,8 @@ fn test_finished_status_leaves_trace() {
 fn test_repeat_completion_one_trace() {
     let mut app = working_app();
     app.handle_agent_message(status(None, 2));
-    app.handle_agent_message(status(Some("completed"), 2));
-    app.handle_agent_message(status(Some("completed"), 2));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
     let done = render_text(&app, 100, 30);
     assert_eq!(
         done.matches("\u{25cf} Agent").count(),
@@ -120,7 +121,7 @@ fn test_repeat_completion_one_trace() {
 #[test]
 fn test_never_observed_no_duration() {
     let mut app = working_app();
-    app.handle_agent_message(status(Some("completed"), 1));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 1));
     let done = render_text(&app, 100, 30);
     assert!(
         done.contains("\u{25cf} Agent \"map the auth path\" finished \u{00b7} 1 tool"),
@@ -138,16 +139,20 @@ fn test_never_observed_no_duration() {
 /// which happened -- a wrong color would report an ending nobody observed.
 #[test]
 fn test_trace_mark_matches_ending() {
-    for (word, expected) in [
-        ("completed", Color::Rgb(78, 186, 101)),
-        ("turn_limit", Color::Rgb(78, 186, 101)),
-        ("budget", Color::Rgb(78, 186, 101)),
-        ("failed", Color::Rgb(255, 107, 128)),
-        ("killed", Color::Yellow),
-        ("some_future_word", Color::DarkGray),
+    for (ending, expected) in [
+        (CompletionStatus::Completed, Color::Rgb(78, 186, 101)),
+        (CompletionStatus::TurnLimit, Color::Rgb(78, 186, 101)),
+        (CompletionStatus::BudgetExhausted, Color::Rgb(78, 186, 101)),
+        (CompletionStatus::Failed, Color::Rgb(255, 107, 128)),
+        (CompletionStatus::Killed, Color::Yellow),
+        (
+            CompletionStatus::Unknown("some_future_word".into()),
+            Color::DarkGray,
+        ),
     ] {
+        let word = ending.as_str().to_string();
         let mut app = working_app();
-        app.handle_agent_message(status(Some(word), 1));
+        app.handle_agent_message(status(Some(ending), 1));
         let color = trace_mark_color(&render_buffer(&app, 100, 30));
         assert_eq!(color, expected, "mark for a {word} child");
     }
@@ -161,9 +166,9 @@ fn test_trace_mark_matches_ending() {
 #[test]
 fn test_absent_entry_one_trace() {
     let mut app = working_app();
-    app.handle_agent_message(status(Some("completed"), 2));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
     app.sessions.current.capabilities.fleet.entries.clear();
-    app.handle_agent_message(status(Some("completed"), 2));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
     let done = render_text(&app, 100, 30);
     assert_eq!(
         done.matches("\u{25cf} Agent").count(),
@@ -240,10 +245,14 @@ fn footer_row(out: &str) -> String {
 /// transcript row the reader could see in the same screen.
 #[test]
 fn test_footer_names_ending() {
-    for (word, expected) in [("failed", "failed"), ("killed", "interrupted")] {
+    for (ending, expected) in [
+        (CompletionStatus::Failed, "failed"),
+        (CompletionStatus::Killed, "interrupted"),
+    ] {
+        let word = ending.as_str().to_string();
         let mut app = working_app();
         app.handle_agent_message(status(None, 2));
-        app.handle_agent_message(status(Some(word), 2));
+        app.handle_agent_message(status(Some(ending), 2));
         let out = render_text(&app, 100, 30);
         let footer = footer_row(&out);
         assert!(
@@ -437,7 +446,7 @@ fn test_enter_opens_cursor_child() {
 fn test_trace_survives_rebuild() {
     let mut app = working_app();
     app.handle_agent_message(status(None, 2));
-    app.handle_agent_message(status(Some("completed"), 2));
+    app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
     app.rebuild_transcript();
     let out = render_text(&app, 100, 30);
     assert!(

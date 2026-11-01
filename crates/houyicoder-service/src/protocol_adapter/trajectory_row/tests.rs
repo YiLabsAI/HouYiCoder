@@ -87,6 +87,7 @@ fn test_subagent_kinds_labeled() {
             order: 0,
             topic: String::new(),
             summary: String::new(),
+            capture: None,
         }),
         "notify"
     );

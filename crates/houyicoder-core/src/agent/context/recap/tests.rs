@@ -171,6 +171,7 @@ fn interjections() -> [SessionLogEntry; 2] {
             order: 0,
             topic: "review".into(),
             summary: "the child finished".into(),
+            capture: None,
         }),
     ]
 }

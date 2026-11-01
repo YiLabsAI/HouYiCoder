@@ -28,6 +28,7 @@ mod resume;
 mod skills;
 mod status_name;
 mod submit;
+mod tasks;
 mod workflow;
 
 mod compact;
@@ -78,6 +79,7 @@ impl App {
             | SlashCommand::Hooks
             | SlashCommand::Memory => self.open_pane_command(cmd),
             SlashCommand::Model => self.open_model_pane(),
+            SlashCommand::Tasks => self.open_tasks_pane(),
             SlashCommand::Sandbox => self.open_sandbox_pane(SandboxTab::Sandbox),
             SlashCommand::Permission => self.open_permission_pane(),
             // Bare /rewind opens the recorded writes and leaves the session

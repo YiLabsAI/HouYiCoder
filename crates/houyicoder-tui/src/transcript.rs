@@ -616,6 +616,7 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
                 invocation: tool_invocation(&tc.title, &input),
                 outcome,
                 call_id: call_id.clone(),
+                background_task: None,
                 body: String::new(),
                 is_diff: false,
             });

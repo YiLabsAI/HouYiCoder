@@ -8,7 +8,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::{Terminal, backend::TestBackend};
 
-use crate::agent_message::{FleetEntry, ServerEvent, SessionMessage};
+use crate::agent_message::fleet::FleetEntry;
+use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::app;
 use crate::app::handle_mouse;
 use crate::composition;
@@ -184,6 +185,7 @@ fn test_fold_collapse_expand_toggle() {
             invocation: brief.to_string(),
             outcome: oc,
             call_id: cid.to_string(),
+            background_task: None,
             body: String::new(),
             is_diff: false,
         }
@@ -197,6 +199,7 @@ fn test_fold_collapse_expand_toggle() {
             invocation: String::new(),
             outcome: oc,
             call_id: cid.to_string(),
+            background_task: None,
             body: body.to_string(),
             is_diff: false,
         }
@@ -538,6 +541,7 @@ fn test_fold_expand_one_only() {
             invocation: brief.to_string(),
             outcome: oc,
             call_id: cid.to_string(),
+            background_task: None,
             body: String::new(),
             is_diff: false,
         }
@@ -550,6 +554,7 @@ fn test_fold_expand_one_only() {
             invocation: String::new(),
             outcome: oc,
             call_id: cid.to_string(),
+            background_task: None,
             body: body.to_string(),
             is_diff: false,
         }
@@ -888,6 +893,7 @@ fn test_distinct_keys_callid_reuse() {
             invocation: brief.to_string(),
             outcome: oc,
             call_id: cid.to_string(),
+            background_task: None,
             body: String::new(),
             is_diff: false,
         }
@@ -900,6 +906,7 @@ fn test_distinct_keys_callid_reuse() {
             invocation: String::new(),
             outcome: oc,
             call_id: cid.to_string(),
+            background_task: None,
             body: String::new(),
             is_diff: false,
         }

@@ -35,6 +35,7 @@ pub mod skill_picker;
 pub mod skills_pane;
 pub mod spinner;
 pub mod status;
+pub mod tasks_pane;
 pub mod teammate_view;
 pub mod toast;
 pub mod todo_list;

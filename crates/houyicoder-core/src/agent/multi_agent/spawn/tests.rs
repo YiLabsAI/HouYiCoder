@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::agent::multi_agent::bus_types::ChildRunMode;
 use crate::agent::multi_agent::bus_types::progress_topic;
-use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, ChildStatus, completed_topic};
+use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, completed_topic};
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{
@@ -22,6 +22,7 @@ use crate::agent::{
 };
 use crate::provider::test_support::FakeProvider;
 use houyicoder_async::bus::MessageBus;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::llm::EffortLevel;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
@@ -432,7 +433,7 @@ async fn test_spawn_publishes_completion() {
             summary,
         } => {
             assert_eq!(child.agent_id, child_id);
-            assert_eq!(status, ChildStatus::Completed);
+            assert_eq!(status, CompletionStatus::Completed);
             assert_eq!(summary, "found auth module");
         }
         other => panic!("expected Completed, got {other:?}"),

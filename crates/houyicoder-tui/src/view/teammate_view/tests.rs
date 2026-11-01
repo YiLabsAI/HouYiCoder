@@ -1,8 +1,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::agent_message::FLEET_GRACE;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FLEET_GRACE;
+use crate::agent_message::fleet::FleetEntry;
 use crate::composition::app;
 use crate::records::TeammateView;
 use crate::records::TranscriptLine;

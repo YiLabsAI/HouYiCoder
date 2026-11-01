@@ -49,6 +49,7 @@ pub fn app() -> App {
             verbose: false,
             permission_pane: PermissionPaneState::default(),
             skills_pane: SkillsPaneState::default(),
+            tasks_pane: Default::default(),
             hooks_pane: HooksPaneState::default(),
             memory: MemoryPaneState::default(),
             agents_pane: AgentsPaneState::default(),

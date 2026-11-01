@@ -73,6 +73,40 @@ pub struct RecapUsage {
     pub duration_ms: Option<u64>,
 }
 
+/// Why a notification was injected into a session's context.
+///
+/// The durable record carries the word; code branches on this enum, so a new
+/// reason is declared here rather than spelled again at every reader. A word
+/// written by a build that knows a reason this one does not reads as None, and
+/// the reader keeps the framing it already applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationTopic {
+    /// A background subagent reported the result of a delegated task.
+    ChildCompletion,
+    /// A command that outlived its tool call reached a terminal state.
+    Task,
+}
+
+impl NotificationTopic {
+    /// The word the durable record carries.
+    pub fn as_word(self) -> &'static str {
+        match self {
+            Self::ChildCompletion => "completion",
+            Self::Task => "task",
+        }
+    }
+
+    /// The reason a recorded word names, or None for a word this build does
+    /// not know.
+    pub fn from_word(word: &str) -> Option<Self> {
+        match word {
+            "completion" => Some(Self::ChildCompletion),
+            "task" => Some(Self::Task),
+            _ => None,
+        }
+    }
+}
+
 /// The payload of a SessionLogEntry. Tagged for JSONL. ToolResult carries call_id
 /// linking to the ToolCall it answers — the pair invariant. PermissionDecision
 /// carries the call_id of the tool call the verdict answers, closing the audit
@@ -605,7 +639,9 @@ pub enum SessionEvent {
     /// re-reading the child transcript. turn + order are best-effort anchors
     /// for replay ordering; the event-log order is authoritative (as with
     /// SubagentReturn), so a zero is acceptable when the caller lacks the
-    /// counters.
+    /// counters. topic names why the notification exists, in the vocabulary of
+    /// NotificationTopic; child_session_id names what produced it, which is a
+    /// child session for a subagent and a task number for a background command.
     #[serde(rename = "NotificationInjected")]
     NotificationInjected {
         child_session_id: String,
@@ -614,6 +650,13 @@ pub enum SessionEvent {
         topic: String,
         #[serde(default)]
         summary: String,
+        /// The stored raw output the summary names, when the producer kept
+        /// any above the model's bound. The reclaim pass reads the addresses
+        /// from the durable record, so a block named only by a value that
+        /// never reached the log would be released while the summary still
+        /// points the model at it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capture: Option<serde_json::Value>,
     },
     /// Timing for one model call, recorded by the agent loop for latency
     /// analysis. The round-trip index is 1-based, matching TurnUsage. ttft and

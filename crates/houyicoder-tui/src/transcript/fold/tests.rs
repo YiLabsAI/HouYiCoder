@@ -327,6 +327,7 @@ fn tool_call(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptL
         invocation: brief.to_string(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -340,6 +341,7 @@ fn tool_result(cid: &str, oc: ToolOutcome) -> TranscriptLine {
         invocation: String::new(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -355,6 +357,7 @@ fn tool_result_body(cid: &str, body: &str, oc: ToolOutcome) -> TranscriptLine {
         invocation: String::new(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: body.to_string(),
         is_diff: false,
     }

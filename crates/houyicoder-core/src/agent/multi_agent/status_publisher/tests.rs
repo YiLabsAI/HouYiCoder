@@ -2,6 +2,7 @@
 
 use super::super::bus_types::ChildRunMode;
 use super::*;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 
 fn child(run_mode: ChildRunMode) -> ChildDescriptor {
     ChildDescriptor {
@@ -35,28 +36,28 @@ fn test_publisher_sends_child_status() {
         ));
         assert!(matches!(
             completed.try_recv().expect("completion"),
-            BusMessage::Completed { child, status: ChildStatus::Completed, .. }
+            BusMessage::Completed { child, status: CompletionStatus::Completed, .. }
                 if child.run_mode == run_mode
         ));
     }
 }
 
 #[test]
-fn test_completion_maps_child_status() {
+fn test_completion_maps_run_outcome() {
     assert_eq!(
-        child_status(RunCompletionStatus::HandedOff),
-        ChildStatus::Completed
+        reported_ending(RunCompletionStatus::HandedOff),
+        CompletionStatus::Completed
     );
     assert_eq!(
-        child_status(RunCompletionStatus::Interrupted),
-        ChildStatus::Killed
+        reported_ending(RunCompletionStatus::Interrupted),
+        CompletionStatus::Killed
     );
     assert_eq!(
-        child_status(RunCompletionStatus::VerificationFailed),
-        ChildStatus::Failed
+        reported_ending(RunCompletionStatus::VerificationFailed),
+        CompletionStatus::Failed
     );
     assert_eq!(
-        child_status(RunCompletionStatus::TurnLimitReached),
-        ChildStatus::TurnLimit
+        reported_ending(RunCompletionStatus::TurnLimitReached),
+        CompletionStatus::TurnLimit
     );
 }

@@ -100,6 +100,7 @@ fn searchable_transcript() -> Vec<TranscriptLine> {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "c1".into(),
+        background_task: None,
         body,
         is_diff: false,
     }];

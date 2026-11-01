@@ -81,33 +81,33 @@ fn test_trace_strips_hidden_marks() {
     );
 }
 
-/// Each terminal status word maps to the ending the row names. A word this
+/// Each terminal status maps to the ending the row names. An ending this
 /// build does not know still ended the child, but the row says only that:
 /// reading it as success would claim an ending nobody observed.
 #[test]
 fn test_outcome_names_each_status() {
     assert_eq!(
-        SubagentOutcome::from_status("completed"),
+        SubagentOutcome::from_completion(CompletionStatus::Completed),
         SubagentOutcome::Finished
     );
     assert_eq!(
-        SubagentOutcome::from_status("failed"),
+        SubagentOutcome::from_completion(CompletionStatus::Failed),
         SubagentOutcome::Failed
     );
     assert_eq!(
-        SubagentOutcome::from_status("killed"),
+        SubagentOutcome::from_completion(CompletionStatus::Killed),
         SubagentOutcome::Interrupted
     );
     assert_eq!(
-        SubagentOutcome::from_status("turn_limit"),
+        SubagentOutcome::from_completion(CompletionStatus::TurnLimit),
         SubagentOutcome::TurnLimit
     );
     assert_eq!(
-        SubagentOutcome::from_status("budget"),
+        SubagentOutcome::from_completion(CompletionStatus::BudgetExhausted),
         SubagentOutcome::Budget
     );
     assert_eq!(
-        SubagentOutcome::from_status("some_future_word"),
+        SubagentOutcome::from_completion(CompletionStatus::Unknown("some_future_word".into())),
         SubagentOutcome::Unknown
     );
     assert_eq!(SubagentOutcome::Unknown.label(), "ended");

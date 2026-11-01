@@ -1,12 +1,27 @@
 //! Progress reporting driven by tools during execution.
 
-/// Reports free-text and numeric progress from an executing tool.
-pub trait ToolProgressReporter: Send + Sync {
-    /// Report a free-text status update.
-    fn report(&self, _message: &str) {}
+/// One progress snapshot from an executing tool.
+///
+/// Structured rather than free text because the running row renders every
+/// field it carries: the elapsed seconds, the call's own budget, and the last
+/// output lines, none of which a sentence would let the host read back out.
+/// The fields are additive for reporters: one that renders only some of them
+/// ignores the rest, and the default implementation renders none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolProgressUpdate {
+    /// Whole seconds since the call began.
+    pub elapsed_secs: u64,
+    /// The call's own wall-clock budget in whole seconds, when it declared
+    /// one. This is the command's limit, not the foreground budget.
+    pub timeout_secs: Option<u64>,
+    /// The most recent output lines, oldest first, for the running preview.
+    pub tail: Vec<String>,
+}
 
-    /// Report completed units and an optional total.
-    fn progress(&self, _current: u64, _total: Option<u64>) {}
+/// Reports progress from an executing tool.
+pub trait ToolProgressReporter: Send + Sync {
+    /// Report one progress snapshot.
+    fn update(&self, _update: ToolProgressUpdate) {}
 }
 
 /// A reporter that intentionally ignores tool progress.

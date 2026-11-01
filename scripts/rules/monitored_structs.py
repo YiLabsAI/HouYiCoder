@@ -25,8 +25,8 @@ ACTIVE_OWNERS = {
         "mut_app": 29,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
-        # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session.
-        "fields": 25,
+        # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session. The tasks pane's cursor and open detail join them for the same reason: where the user is looking is view state, while the task records it indexes belong to the session.
+        "fields": 26,
     },
     "crates/houyicoder-tui/src/ui/renderer.rs:Renderer": {
         # The draw pass's reusable caches: the per-line parse cache and the
@@ -81,8 +81,8 @@ ACTIVE_OWNERS = {
         "fields": 4,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:SessionCapabilities": {
-        # The static composition of a session's named capabilities; the connection, run, and transcript sit beside it, not inside it.
-        "fields": 10,
+        # The static composition of a session's named capabilities; the connection, run, and transcript sit beside it, not inside it. The tasks capability joins the static set because background tasks outlive a turn and every frontend view that reports them reads the same snapshot cache.
+        "fields": 11,
     },
     "crates/houyicoder-tui/src/session/capabilities.rs:HooksCapability": {
         # The registered-hook cache the hooks pane renders.

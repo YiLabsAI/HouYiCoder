@@ -1,3 +1,5 @@
+mod background;
+
 mod cancel;
 
 mod output_limit;
@@ -16,9 +18,8 @@ use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{
-    BASH_MAX_OUTPUT_CHARS, BashTool, MAX_TIMEOUT_MS, bound_bash_output, fold_notice, wall_budget_ms,
-};
+use super::output::{BASH_MAX_OUTPUT_CHARS, bound_bash_output, fold_notice};
+use super::{BashTool, MAX_TIMEOUT_MS, wall_budget_ms};
 
 /// A session that never runs anything: the schema question does not need one.
 struct NoExec;

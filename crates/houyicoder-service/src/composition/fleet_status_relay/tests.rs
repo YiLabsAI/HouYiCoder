@@ -65,7 +65,7 @@ async fn test_spawn_translates_completion() {
                 description: String::new(),
                 run_mode: ChildRunMode::Background,
             },
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: "done".into(),
         },
     );
@@ -75,7 +75,7 @@ async fn test_spawn_translates_completion() {
     let frames = sequencer.sequence_pending_for_test();
     assert!(matches!(
         &frames[0].payload,
-        FrontendEvent::AgentStatus { completed: Some(status), .. } if status == "completed"
+        FrontendEvent::AgentStatus { completed: Some(status), .. } if *status == CompletionStatus::Completed
     ));
 }
 

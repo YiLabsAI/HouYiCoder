@@ -2,7 +2,7 @@ use super::approval::handle_approval;
 use super::input::{cycle_pane, handle_input};
 use super::palette::handle_palette;
 use super::*;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::app::handle_key;
 use crate::composition;
 use crate::composition::app;

@@ -168,6 +168,7 @@ fn test_notification_round_trip() {
             order: 1,
             topic: "task.child-1.completed".into(),
             summary: "Subagent explore completed: found auth".into(),
+            capture: Some(serde_json::json!({"block_ref": "blk-1"})),
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -196,6 +197,7 @@ fn test_notification_old_log_deserializes() {
             order: 0,
             topic: "completion".into(),
             summary: "to be stripped".into(),
+            capture: None,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -224,11 +226,13 @@ fn test_notification_old_log_deserializes() {
             child_session_id,
             summary,
             turn,
+            capture,
             ..
         } => {
             assert_eq!(child_session_id, "child-2");
             assert_eq!(turn, 1);
             assert!(summary.is_empty(), "missing summary defaults to empty");
+            assert!(capture.is_none(), "missing capture defaults to none");
         }
         other => panic!("expected NotificationInjected, got {other:?}"),
     }

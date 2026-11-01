@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use houyicoder_api::agent_event::{EventHandler, ToolExecutionEvent};
-use houyicoder_api::tool::progress::ToolProgressReporter;
+use houyicoder_api::tool::progress::{ToolProgressReporter, ToolProgressUpdate};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionId;
 use serde_json::Value;
@@ -60,12 +60,13 @@ impl ToolExecutionReporter {
 }
 
 impl ToolProgressReporter for ToolExecutionReporter {
-    fn progress(&self, current: u64, total: Option<u64>) {
+    fn update(&self, update: ToolProgressUpdate) {
         if let Some(handler) = &self.handler {
             handler.handle(ToolExecutionEvent::Progress {
                 call_id: self.call_id.clone(),
-                elapsed_secs: current,
-                output_lines: total,
+                elapsed_secs: update.elapsed_secs,
+                timeout_secs: update.timeout_secs,
+                tail: update.tail,
             });
         }
     }

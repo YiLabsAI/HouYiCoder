@@ -8,33 +8,35 @@
 
 use std::sync::{Arc, Mutex};
 
-use houyicoder_api::capture::{
-    CallEnd, CaptureStop, CaptureStopReason, CapturedStreams, RawOutputReceiver, ResultCapture,
+use houyicoder_api::background::{
+    BackgroundCommandLauncher, CommandTail, DetachedCommand, TailingReceiver,
 };
+use houyicoder_api::capture::RawOutputReceiver;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::shell::ShellCommand;
-use houyicoder_async::PFut;
+use houyicoder_async::{CancellationToken, PFut};
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use serde_json::{Value, json};
 
+use houyicoder_api::tool::progress::{ToolProgressReporter, ToolProgressUpdate};
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_protocol::capture_record::{
-    BlockMarker, CAPTURE_FAILED_KEY, CAPTURE_KEY, RECORD_KEY, STDERR_BYTES_KEY, STDERR_KEY,
-    STDOUT_BYTES_KEY, STDOUT_KEY, STOP_REASON_KEY,
-};
 use houyicoder_protocol::extension::ToolError;
 
 use super::bash_snapshot;
 use crate::agent::fallback::FallbackToolOutcome;
+
+mod output;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
 use crate::snapshot::is_destructive_command;
+use output::{background_output, complete_run, completion_output};
+use std::future::pending;
 use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
+use tokio::time::sleep_until;
 
 /// After a failed sandboxed command, scan the session's deny log for
 /// authorizable mach-service candidates so the caller can surface or
@@ -83,6 +85,13 @@ fn wall_budget_ms(input: &Value) -> u64 {
 /// the host should wait out.
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
+/// How long a command may hold the session before the host takes it over.
+#[derive(Clone)]
+struct BackgroundPolicy {
+    launcher: Arc<dyn BackgroundCommandLauncher>,
+    budget: Duration,
+}
+
 /// Run a shell command in the sandbox. When wired with undo, destructive
 /// commands snapshot the workspace before executing so their writes can be
 /// reverted.
@@ -91,6 +100,7 @@ pub struct BashTool {
     undo_stack: Option<Arc<Mutex<UndoStack>>>,
     snapshot_store: Option<Arc<SnapshotStore>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
+    background: Option<BackgroundPolicy>,
 }
 
 impl BashTool {
@@ -100,6 +110,7 @@ impl BashTool {
             undo_stack: None,
             snapshot_store: None,
             active_skill: None,
+            background: None,
         }
     }
 
@@ -114,6 +125,7 @@ impl BashTool {
             undo_stack: Some(undo_stack),
             snapshot_store: Some(snapshot_store),
             active_skill: None,
+            background: None,
         }
     }
 
@@ -124,50 +136,26 @@ impl BashTool {
         self
     }
 
-    /// Turn a finished exec into the tool answer: bound the output so a huge
-    /// result cannot overflow the model window, fold the call's own notices
-    /// into stderr, and offer any authorizable service a failed command
-    /// discovered. What the bound cut off is read back from the capture, so
-    /// the answer names the kept stream instead of copying the bytes into the
-    /// workspace.
-    async fn tool_result(
-        &self,
-        result: ExecResult,
-        notice: Option<String>,
-        capture: CaptureOutcome,
-        call_id: &str,
-    ) -> Value {
-        let exit_code = result.exit_code;
-        let success = result.is_success();
-        let (stdout, stderr) = bound_bash_output(
-            result.stdout,
-            result.stderr,
-            capture.stop().map(|stop| stop.reason),
-            &kept_streams(&capture, call_id),
-        );
-        let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
-        let has_active_skill = self
-            .active_skill
+    /// Pass commands that outlive their foreground budget to the host's task
+    /// registry. The call then answers at once and the command's ending
+    /// arrives as a task notification on the next turn. A zero budget keeps
+    /// every command in the foreground.
+    pub fn with_background_commands(
+        mut self,
+        launcher: Arc<dyn BackgroundCommandLauncher>,
+        budget: Duration,
+    ) -> Self {
+        self.background = (!budget.is_zero()).then(|| BackgroundPolicy { launcher, budget });
+        self
+    }
+
+    /// Whether a failed command's deny log should be scanned for services the
+    /// user could approve. Without an active skill nothing can consume the
+    /// answer, so the scan is skipped.
+    fn has_active_skill(&self) -> bool {
+        self.active_skill
             .as_ref()
-            .is_some_and(|cell| cell.lock().expect("active_skill lock").as_ref().is_some());
-        let authorizable = if has_active_skill {
-            discover_authorizable_if_failed(success, &stderr, self.session.clone()).await
-        } else {
-            Vec::new()
-        };
-        let mut output = json!({
-            "stdout": stdout,
-            "stderr": stderr,
-            "exit_code": exit_code,
-            "success": success,
-        });
-        if !authorizable.is_empty() {
-            output["authorizable_services"] = json!(authorizable);
-        }
-        if let Some(reference) = capture.reference() {
-            output[CAPTURE_KEY] = reference;
-        }
-        output
+            .is_some_and(|cell| cell.lock().expect("active_skill lock").as_ref().is_some())
     }
 }
 
@@ -199,10 +187,12 @@ impl Tool for BashTool {
          hard-codes it. \
          Each call has a wall-clock budget of 120 seconds by default. A build \
          or test run that legitimately takes longer sets timeout_ms (up to \
-         600000) on that call; do not start work in the background and poll it \
-         with sleep. Output over 30 KB is cut to its tail: the note above it \
-         names where the rest was kept, and conversation_search reads it back \
-         in windows."
+         600000) on that call. A command still running when the foreground \
+         budget ends is moved to the background automatically; the call \
+         answers with the task number and the ending arrives as a task \
+         notification, so do not poll it with sleep. Output over 30 KB is cut \
+         to its tail: the note above it names where the rest was kept, and \
+         conversation_search reads it back in windows."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -223,148 +213,117 @@ impl Tool for BashTool {
         let session = self.session.clone();
         let undo_stack = self.undo_stack.clone();
         let snapshot_store = self.snapshot_store.clone();
-        // Clone the progress handle so a background ticker can report elapsed
-        // seconds to the host while exec runs. None for non-interactive runs
-        // (the ticker then does nothing). The ticker reports every ~1s; the
-        // host renders (Ns) on the chip after 2s.
+        let background = self.background.clone();
+        // The progress handle feeds the tick loop below; non-interactive runs
+        // carry none and skip the loop entirely.
         let progress = ctx.progress.clone();
         Box::pin(async move {
             let cmd = input
                 .get("command")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::InvalidInput("bash: command (string) required".into()))?;
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidInput("bash: command (string) required".into()))?
+                .to_string();
             // Snapshot a destructive command's writable roots before running
-            // it, so the write can be reverted. The outcome is split by what
-            // it means, not just Ok/Err, so a performance skip (no copy-on-
-            // write + workspace over the slow-copy threshold) does not masquer-
-            // ade as a safety refusal and a real I/O failure does not slip
-            // through as a skip. The gate asked, the user said yes on the
-            // premise that undo exists; a snapshot failure removes that
-            // premise, so a real failure refuses to run. A decline returns a
-            // notice (undo skipped for speed) that is folded into stderr so
-            // it reaches the transcript and the user-facing render rather than
-            // a process stderr the TUI never shows. See bash_snapshot::prepare.
+            // it, so the write can be reverted. A performance skip is a notice
+            // rather than a refusal; a real I/O failure refuses to run,
+            // because the user approved on the premise that undo exists. The
+            // notice is folded into stderr so the transcript shows it.
             let mut notice: Option<String> = None;
             if let (Some(store), Some(stack)) = (&snapshot_store, &undo_stack)
-                && is_destructive_command(cmd)
+                && is_destructive_command(&cmd)
             {
                 notice = bash_snapshot::prepare(store, stack, &*session)?;
             }
-            // Run the command, ticking progress every second so a
-            // long-running command shows it is not stuck. The line counter
-            // (-1 sentinel) is shared with the sandbox exec: a streaming
-            // backend (mac) updates it as stdout newlines arrive, so the chip
-            // renders (Ns · M lines); a non-streaming backend leaves it at
-            // -1, so the tick reports lines=None and the chip shows (Ns)
-            // only. The tick loop is dropped (cancelled) the moment exec
-            // completes — no leak. It starts only when progress is present
-            // (interactive runs): tests and non-interactive runs report
-            // nothing and skip it (no tokio time driver needed). The ticking
-            // branch never completes on its own (infinite loop), so the
-            // unreachable is a guard, not a path.
+            let timeout_ms = wall_budget_ms(&input);
+            // The sandbox's streaming signature takes a shared stdout line
+            // counter. This tool reads its preview from the tail receiver, so
+            // nothing here reads the counter back.
             let lines_counter = Arc::new(AtomicI64::new(-1));
             let exec_config = ExecConfig {
-                wall_timeout_ms: wall_budget_ms(&input),
+                wall_timeout_ms: timeout_ms,
                 ..ExecConfig::default()
             };
-            // Start the raw-output capture before the command runs, so the
-            // bytes reach it as the pipe delivers them rather than through the
-            // bounded result the model receives. When the host supplies no
-            // capture source, the exec runs without one and the bounded result
-            // is all that exists.
+            // Taken before the command starts: the host measures a task from
+            // here, so its duration includes the foreground wait.
+            let started_at = Instant::now();
+            // The capture and the tail ride the same receiver, so previewing a
+            // run costs no bytes from what the host keeps.
             let capture = match (ctx.result_capture.as_ref(), ctx.session_id) {
                 (Some(source), Some(session_id)) => source.begin(session_id, &ctx.call_id, "bash"),
                 _ => None,
             };
-            let receiver: Option<Arc<dyn RawOutputReceiver>> = capture
-                .clone()
-                .map(|capture| capture as Arc<dyn RawOutputReceiver>);
-            let exec = session.exec_streaming_captured(
-                cmd,
-                Arc::clone(&lines_counter),
-                exec_config,
-                receiver,
-            );
-            // Cancel arm: an Esc aborts the run and must not wait out a
-            // long command. Dropping the exec future triggers the sandbox's
-            // RAII kill (process-group killpg on macOS; kill_on_drop on
-            // Linux/Windows kills the direct child). The tool reports an
-            // interrupted outcome so the model log stays lossless.
+            let tail = CommandTail::new();
+            let receiver: Option<Arc<dyn RawOutputReceiver>> =
+                Some(Arc::new(TailingReceiver::new(
+                    tail.clone(),
+                    capture
+                        .clone()
+                        .map(|held| held as Arc<dyn RawOutputReceiver>),
+                )));
+            // Boxed to a 'static future so the host can take it over when the
+            // foreground budget ends; it owns the session and command.
+            let exec_session = Arc::clone(&session);
+            let exec_command = cmd.clone();
+            let exec_lines = Arc::clone(&lines_counter);
+            let mut exec: PFut<'static, Result<ExecResult, SandboxError>> = Box::pin(async move {
+                exec_session
+                    .exec_streaming_captured(&exec_command, exec_lines, exec_config, receiver)
+                    .await
+            });
             let cancel = ctx.cancel.clone();
-            let outcome = if progress.is_some() {
-                tokio::select! {
-                    r = exec => r,
-                    _ = async {
-                        if let Some(t) = cancel.as_ref() {
-                            t.cancelled().await;
-                        }
-                    }, if cancel.is_some() => {
-                        return Ok(FallbackToolOutcome::Interrupted.to_json());
-                    }
-                    _ = async {
-                        let start = Instant::now();
-                        loop {
-                            sleep(Duration::from_secs(1)).await;
-                            if let Some(p) = &progress {
-                                let lines = lines_counter.load(Ordering::Relaxed);
-                                let lines_opt = if lines >= 0 {
-                                    Some(lines as u64)
-                                } else {
-                                    None
-                                };
-                                p.progress(start.elapsed().as_secs(), lines_opt);
-                            }
-                        }
-                    } => unreachable!("bash progress tick loop must not return"),
+            let budget = background.as_ref().map(|policy| policy.budget);
+            let pick = wait_for_run(
+                &mut exec,
+                cancel.as_ref(),
+                budget,
+                progress.as_ref(),
+                &tail,
+                started_at,
+                timeout_ms,
+            )
+            .await;
+            let call_id = ctx.call_id.clone();
+            let completion = match pick {
+                RunPick::Cancelled => return Ok(FallbackToolOutcome::Interrupted.to_json()),
+                // The host takes the run over; the detached future never
+                // inherits the parent's cancel token, so an Esc on the next
+                // turn cannot kill a command the user was told is running.
+                RunPick::Budget => {
+                    let Some(policy) = background.as_ref() else {
+                        return Err(ToolError::Failed(
+                            "bash: foreground budget without a background host".into(),
+                        ));
+                    };
+                    let task = policy.launcher.launch(DetachedCommand {
+                        command: cmd,
+                        started_at,
+                        tail: tail.clone(),
+                        completion: Box::pin(async move {
+                            let outcome = exec.await;
+                            complete_run(outcome, capture, notice, call_id).await
+                        }),
+                    });
+                    return Ok(background_output(task, tail.snapshot(), policy.budget));
                 }
-            } else {
-                tokio::select! {
-                    r = exec => r,
-                    _ = async {
-                        if let Some(t) = cancel.as_ref() {
-                            t.cancelled().await;
-                        }
-                    }, if cancel.is_some() => {
-                        return Ok(FallbackToolOutcome::Interrupted.to_json());
-                    }
-                }
+                RunPick::Done(outcome) => complete_run(outcome, capture, notice, call_id).await,
             };
+            if let Some(error) = completion.error {
+                return Err(ToolError::Failed(error));
+            }
             // A stop at the wall-clock budget answers the call rather than
             // failing it. It carries what the command printed before it was
-            // stopped, because that output is what tells the caller whether
-            // the command was making progress, and a tool error teaches the
-            // model to send the same call again or to poll with sleep in the
-            // background — the loop the budget exists to shorten.
-            // An answered call publishes what it captured, including a
-            // command stopped at its budget: the output before the stop is
-            // exactly what the caller wants to read back. A failed call does
-            // not publish, because no result would name the blocks.
-            let result = match outcome {
-                Ok(result) => result,
-                Err(SandboxError::Timeout {
-                    message,
-                    stdout,
-                    stderr,
-                }) => {
-                    let drops = model_view_loses_bytes(&stdout, &stderr);
-                    let capture = finish_capture(capture, CallEnd::WallBudget, drops).await;
-                    let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
-                    return Ok(timed_out_output(
-                        &message,
-                        stdout,
-                        stderr,
-                        &capture,
-                        &ctx.call_id,
-                    ));
-                }
-                Err(e) => return Err(ToolError::Failed(format!("bash: {e}"))),
+            // stopped: a tool error would teach the model to send the same
+            // call again, the loop the budget exists to shorten.
+            if completion.timed_out {
+                return Ok(completion_output(completion, Vec::new()));
+            }
+            let authorizable = if self.has_active_skill() && !completion.is_success() {
+                discover_authorizable_if_failed(false, &completion.stderr, self.session.clone())
+                    .await
+            } else {
+                Vec::new()
             };
-            let drops = model_view_loses_bytes(&result.stdout, &result.stderr);
-            let end = CallEnd::Exited(result.exit_code);
-            let capture = finish_capture(capture, end, drops).await;
-            Ok(self
-                .tool_result(result, notice, capture, &ctx.call_id)
-                .await)
+            Ok(completion_output(completion, authorizable))
         })
     }
     fn is_destructive(&self) -> bool {
@@ -396,265 +355,76 @@ impl Tool for BashTool {
     }
 }
 
-/// Fold a notice about the call itself into stderr so the user sees it inline
-/// with the command's own output. It is not the command's error, but stderr is
-/// the channel the render path already shows verbatim.
-fn fold_notice(notice: Option<String>, stderr: String) -> String {
-    match notice {
-        Some(n) if stderr.is_empty() => n,
-        Some(n) => format!("{n}\n{stderr}"),
-        None => stderr,
-    }
-}
-
-/// The answer a command stopped at its wall-clock budget becomes. The exit
-/// code is absent rather than zero: nothing exited, and a fabricated code
-/// would read as a measured result. The notice goes above whatever the bound
-/// leaves of stderr, because output that went to the capture leaves the model
-/// looking at an empty stderr and nothing else would say why the call ended.
-fn timed_out_output(
-    message: &str,
-    stdout: String,
-    stderr: String,
-    capture: &CaptureOutcome,
-    call_id: &str,
-) -> Value {
-    let stopped = capture
-        .stop()
-        .map(|stop| stop.reason)
-        .or(Some(CaptureStopReason::WallBudget));
-    let (stdout, stderr) =
-        bound_bash_output(stdout, stderr, stopped, &kept_streams(capture, call_id));
-    let stderr = fold_notice(Some(format!("bash: stopped, {message}")), stderr);
-    let mut output = json!({
-        "stdout": stdout,
-        "stderr": stderr,
-        "success": false,
-        "timed_out": true,
-    });
-    if let Some(reference) = capture.reference() {
-        output[CAPTURE_KEY] = reference;
-    }
-    output
-}
-
-/// What the raw-output capture produced for one call.
-enum CaptureOutcome {
-    /// Nothing was published: the model view already carried every byte, or
-    /// the host supplied no capture source. The bounded result is all that
-    /// exists.
-    NotKept,
-    /// The raw output went to these blocks.
-    Published(CapturedStreams),
-    /// The capture could not publish. The bounded result is unaffected and
-    /// the result says the raw above the bound was not kept. The stop it
-    /// applied before failing still travels: the command was ended either
-    /// way, and the bounded result must not read as a complete one.
-    Failed { stop: Option<CaptureStop> },
-}
-
-impl CaptureOutcome {
-    /// Set when the capture stopped the command before its output ended.
-    fn stop(&self) -> Option<&CaptureStop> {
-        match self {
-            Self::Published(captured) => captured.stop.as_ref(),
-            Self::Failed { stop } => stop.as_ref(),
-            Self::NotKept => None,
-        }
-    }
-
-    /// The line the result carries when the capture stopped the command. The
-    /// command was ended rather than finished, and the bounded result reads as
-    /// a complete one unless something says so.
-    fn notice(&self) -> Option<String> {
-        self.stop().map(|stop| {
-            format!(
-                "bash: the capture budget was reached after {}KB; the command was stopped and the rest of its output was not kept",
-                (stop.stdout_bytes + stop.stderr_bytes) / 1024
-            )
-        })
-    }
-
-    /// The object the tool result carries to name the captured blocks. Each
-    /// stream address sits in a block marker of its own, so the log's reclaim
-    /// pass reaches every stream block from the result that names it.
-    fn reference(&self) -> Option<Value> {
-        match self {
-            Self::NotKept => None,
-            Self::Failed { stop } => {
-                let mut reference = json!({
-                    CAPTURE_FAILED_KEY: "the raw output above the bound was not kept",
-                });
-                if let Some(stop) = stop {
-                    reference[STOP_REASON_KEY] = json!(stop.reason);
-                }
-                Some(reference)
-            }
-            Self::Published(captured) => {
-                let mut reference = json!({
-                    RECORD_KEY: BlockMarker::new(captured.record.0.clone()),
-                    STDOUT_BYTES_KEY: captured.stdout_bytes,
-                    STDERR_BYTES_KEY: captured.stderr_bytes,
-                });
-                if let Some(hash) = &captured.stdout {
-                    reference[STDOUT_KEY] = json!(BlockMarker::new(hash.0.clone()));
-                }
-                if let Some(hash) = &captured.stderr {
-                    reference[STDERR_KEY] = json!(BlockMarker::new(hash.0.clone()));
-                }
-                if let Some(reason) = captured.stop_reason {
-                    reference[STOP_REASON_KEY] = json!(reason);
-                }
-                Some(reference)
-            }
-        }
-    }
-}
-
-/// Publish what the capture holds, but only when the model view lost bytes to
-/// the bound. Below it the model receives the whole output, so a block would
-/// be a second copy of what the result already carries.
+/// Wait for a command to end, to be cancelled, or to reach the foreground
+/// budget, reporting its live tail every second meanwhile.
 ///
-/// A failure to publish is an answer the caller reports, never a silent
-/// success: the model still receives the bounded output, and the operator
-/// reads the cause in the diagnostic log.
-async fn finish_capture(
-    capture: Option<Arc<dyn ResultCapture>>,
-    end: CallEnd,
-    drops: bool,
-) -> CaptureOutcome {
-    if !drops {
-        return CaptureOutcome::NotKept;
-    }
-    let Some(capture) = capture else {
-        return CaptureOutcome::NotKept;
-    };
-    let stop = capture.stop();
-    match capture.finish(end).await {
-        Ok(Some(captured)) => CaptureOutcome::Published(captured),
-        Ok(None) => CaptureOutcome::NotKept,
-        Err(error) => {
-            tracing::warn!(%error, "bash: the raw output capture could not publish");
-            CaptureOutcome::Failed { stop }
+/// The exec future is borrowed, not moved: after the budget branch returns,
+/// the caller still holds it and passes it to the background host. Dropping it
+/// is the cancel path, where the sandbox's RAII kill ends the process group
+/// and the tool reports an interrupted outcome so the model log stays
+/// lossless.
+async fn wait_for_run(
+    exec: &mut PFut<'static, Result<ExecResult, SandboxError>>,
+    cancel: Option<&CancellationToken>,
+    budget: Option<Duration>,
+    progress: Option<&Arc<dyn ToolProgressReporter>>,
+    tail: &CommandTail,
+    started: Instant,
+    timeout_ms: u64,
+) -> RunPick {
+    let deadline = budget.map(|budget| started + budget);
+    loop {
+        tokio::select! {
+            // The command's own result is offered first: a command that
+            // ended at the instant the budget ran out produced an answer,
+            // and moving it to the background would report a finished run
+            // as still going.
+            biased;
+            outcome = &mut *exec => return RunPick::Done(outcome),
+            _ = async {
+                match cancel {
+                    Some(token) => token.cancelled().await,
+                    None => pending().await,
+                }
+            } => return RunPick::Cancelled,
+            // Every timer is built inside its branch: a select branch's
+            // expression is evaluated even when its precondition disables it,
+            // and a timer built outside a runtime panics before the run starts.
+            _ = async {
+                match deadline {
+                    Some(at) => sleep_until(at.into()).await,
+                    None => pending().await,
+                }
+            } => return RunPick::Budget,
+            // One reporting tick, then the loop offers the real outcomes
+            // again. The branch reports and never decides, which is why the
+            // wait has a loop at all: a branch that had to return a pick it
+            // never produces would need a branch that cannot be reached.
+            _ = async {
+                match progress {
+                    Some(reporter) => {
+                        sleep(Duration::from_secs(1)).await;
+                        reporter.update(ToolProgressUpdate {
+                            elapsed_secs: started.elapsed().as_secs(),
+                            timeout_secs: Some(timeout_ms.div_ceil(1000)),
+                            tail: tail.snapshot(),
+                        });
+                    }
+                    None => pending().await,
+                }
+            }, if progress.is_some() => {}
         }
     }
 }
 
-/// Max chars a bash result may enter the model context before it is cut down
-/// to a tail. A runaway command (find on a huge tree, a verbose build) can
-/// emit megabytes; without a bound the next turn overflows the context
-/// window and the provider rejects with HTTP 400, bricking the session.
-///
-/// Bounds at 30K chars (~7.5K tokens, safe for any model window). The kept
-/// copy stays in the capture, so raising the bound later costs model context
-/// but no stored bytes.
-const BASH_MAX_OUTPUT_CHARS: usize = 30_000;
-
-/// Max chars kept in the tail the model sees once the output passes the cap.
-/// Char-based (not line) so a no-newline megabyte blob still yields a bounded
-/// tail; the tail carries the exit/error context the model most needs, and
-/// the note under it names where the rest can be read.
-const BASH_STUB_CHARS: usize = 5_000;
-
-/// Whether the model view loses bytes to the bound. One answer serves both the
-/// bounding itself and the decision to keep the raw output, so the two cannot
-/// disagree about what the model saw.
-fn model_view_loses_bytes(stdout: &str, stderr: &str) -> bool {
-    stdout.len() + stderr.len() > BASH_MAX_OUTPUT_CHARS
-}
-
-/// Bound a bash result before it enters the model context. Under the cap the
-/// output passes through verbatim. Over the cap the model gets the tail plus a
-/// note saying where the rest is read back: when the capture kept a stream the
-/// note names it and points at conversation_search, so the full output is read
-/// in bounded windows instead of copied into the workspace. When no capture
-/// holds the bytes, the model gets a head+tail stub and is told the rest was
-/// not kept, rather than being sent to a workspace file it would have to
-/// re-run a command to read.
-///
-/// When the command was stopped before it finished, neither copy holds more
-/// than it printed before the stop. The note says so: a reader told the full
-/// output was saved goes looking for bytes that were never kept.
-fn bound_bash_output(
-    stdout: String,
-    stderr: String,
-    stopped: Option<CaptureStopReason>,
-    kept: &[String],
-) -> (String, String) {
-    if !model_view_loses_bytes(&stdout, &stderr) {
-        return (stdout, stderr);
-    }
-    let kb = (stdout.len() + stderr.len()) / 1024;
-    if !kept.is_empty() {
-        let tail = tail_chars(&stdout, BASH_STUB_CHARS);
-        let note = kept_note(kept, stopped);
-        return (
-            format!("{tail}\n\nOutput truncated ({kb}KB total). {note}\n"),
-            String::new(),
-        );
-    }
-    // No capture holds the bytes (a legacy session, or the host supplied no
-    // capture source). Keep the result bounded with the stdout tail and say
-    // the rest was not kept, so the model is not pointed at a file it would
-    // need another command to read. Stderr is bounded to the same tail too:
-    // it is usually small, but a command that floods stderr must not blow the
-    // context the way an unbounded stdout would.
-    let stdout_tail = tail_chars(&stdout, BASH_STUB_CHARS);
-    let stderr_tail = tail_chars(&stderr, BASH_STUB_CHARS);
-    let why = match stopped {
-        Some(reason) => format!("the command was stopped, {reason}"),
-        None => format!("{kb}KB total"),
-    };
-    (
-        format!("{stdout_tail}\n\nOutput truncated ({why}); the rest was not kept.\n"),
-        stderr_tail,
-    )
-}
-
-/// The line that points the model at the streams the capture kept, named the
-/// way the recall tool lists them: the call id and the stream. Stderr left the
-/// model view with the truncation and rides in the same note, so a reader who
-/// only sees this line still knows both streams survived.
-fn kept_note(kept: &[String], stopped: Option<CaptureStopReason>) -> String {
-    let names = kept.join(" and ");
-    match stopped {
-        Some(reason) => format!(
-            "the command was stopped, {reason}, so only the prefix it printed before the stop was kept, as {names}; read it with conversation_search (results read)"
-        ),
-        None => format!(
-            "The full output is kept as {names}; read it with conversation_search (results read)"
-        ),
-    }
-}
-
-/// The streams the capture actually published, named the way the recall tool
-/// lists them. Empty when it published nothing, which includes a capture that
-/// failed: nothing is stored then, so the caller keeps another copy of the
-/// bytes instead of pointing at streams that do not exist.
-fn kept_streams(capture: &CaptureOutcome, call_id: &str) -> Vec<String> {
-    match capture {
-        CaptureOutcome::Published(captured) => {
-            let mut names = Vec::new();
-            if captured.stdout.is_some() {
-                names.push(format!("{call_id}:{STDOUT_KEY}"));
-            }
-            if captured.stderr.is_some() {
-                names.push(format!("{call_id}:{STDERR_KEY}"));
-            }
-            names
-        }
-        CaptureOutcome::NotKept | CaptureOutcome::Failed { .. } => Vec::new(),
-    }
-}
-
-/// The last N chars of a string, in original order. Char-based (not line)
-/// so a no-newline megabyte blob still yields a bounded stub.
-fn tail_chars(s: &str, n: usize) -> String {
-    let count = s.chars().count();
-    if count <= n {
-        return s.to_string();
-    }
-    s.chars().skip(count - n).collect()
+/// Which way the wait for a command ended.
+enum RunPick {
+    /// The command produced its own result.
+    Done(Result<ExecResult, SandboxError>),
+    /// The run was cancelled from outside.
+    Cancelled,
+    /// The foreground budget ran out while the command was still going.
+    Budget,
 }
 
 #[cfg(test)]

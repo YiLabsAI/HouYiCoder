@@ -106,6 +106,7 @@ pub(crate) fn assemble_bundle(
         bus,
         provider_facts,
         recap,
+        background_tasks,
     } = assembled;
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the prompt
@@ -145,6 +146,7 @@ pub(crate) fn assemble_bundle(
             bus,
             provider_facts,
             recap,
+            background_tasks,
         },
         None,
         session_log_root(),
@@ -197,6 +199,7 @@ pub(crate) fn start_local_server(
         bus,
         provider_facts,
         recap,
+        background_tasks,
     } = assembled;
     // The server's rename and model writes touch the same descriptor the
     // runner records prompts through, so it takes the runner's own store
@@ -236,6 +239,9 @@ pub(crate) fn start_local_server(
     // host pushes them as initial transcript system lines — no async-sink race.
     let startup_warnings = runner.drain_startup_warnings();
     let runner = Arc::new(runner);
+    // A command the foreground gives up reports through the same sequencer
+    // and runner, so the registry learns both now that the runner is shared.
+    background_tasks.attach(Some(event_sequencer.clone()), &runner);
     // Completion notification injector: when a detached (async) child
     // finishes, enqueue a lower-priority notification into the parent's
     // mid-turn queue so the parent model learns the child finished on its
@@ -260,7 +266,8 @@ pub(crate) fn start_local_server(
         Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer)
             .with_append_notify(append_notify)
             .with_recap(recap)
-            .with_bus(server_bus);
+            .with_bus(server_bus)
+            .with_background_tasks(background_tasks);
     if let Some(s) = sandbox_session {
         server = server.with_session(s);
     }

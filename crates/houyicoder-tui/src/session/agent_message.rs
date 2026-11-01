@@ -12,18 +12,16 @@ use houyicoder_protocol::frontend::run::{
 };
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 use houyicoder_protocol::llm::EffortLevel;
-use std::time::{Duration, Instant};
 
-use crate::records::TranscriptLine;
 use crate::transcript::SequencedFrame;
 use crate::transcript::frame::TranscriptFrame;
-use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::frontend::agents::AgentEntry;
 use houyicoder_protocol::frontend::checkpoint::CheckpointListView;
 use houyicoder_protocol::frontend::checkpoint::CheckpointRestoreView;
 use houyicoder_protocol::frontend::checkpoint::CheckpointTextView;
 use houyicoder_protocol::frontend::checkpoint::SandboxBoundariesView;
 use houyicoder_protocol::frontend::compact::CompactReply;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::debug::DebugLevel;
 use houyicoder_protocol::frontend::debug::DebugState;
@@ -34,6 +32,9 @@ use houyicoder_protocol::frontend::permission::PermissionMode;
 use houyicoder_protocol::frontend::permission::PermissionRule;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tasks::BackgroundTaskDetail;
+use houyicoder_protocol::frontend::tasks::BackgroundTaskId;
+use houyicoder_protocol::frontend::tasks::BackgroundTaskSnapshot;
 use houyicoder_protocol::frontend::tools::ToolEntry;
 use houyicoder_protocol::frontend::trajectory::RedundantCallEntry;
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
@@ -42,117 +43,6 @@ use houyicoder_protocol::frontend::worktree::WorktreeEnterView;
 use houyicoder_protocol::frontend::worktree::WorktreePreviewView;
 use houyicoder_protocol::frontend::worktree::WorktreeRemoveOutcome;
 use std::collections::HashSet;
-
-/// One row in the agent status footer: a spawned child's latest snapshot.
-#[derive(Debug)]
-pub struct FleetEntry {
-    pub agent_id: String,
-    pub subagent_type: String,
-    /// The delegating call's task summary. A type-only row cannot tell two
-    /// children of one type apart, so the strip names the job instead of
-    /// repeating the type the user already chose.
-    pub description: String,
-    pub turn: u32,
-    pub tokens: u64,
-    pub tool_uses: u32,
-    pub last_activity: Option<String>,
-    /// How the child ended, once a terminal status named it. None while the
-    /// child runs. It is carried as the typed outcome rather than the word
-    /// the host sent, so every row that reports the ending switches on one
-    /// parsed value; a row that knew only that an ending existed drew it as
-    /// done, which told a failed child's story wrong.
-    pub outcome: Option<SubagentOutcome>,
-    /// When the child reached a terminal state (the ending landed).
-    /// Drives the footer auto-background: a completed row stays terse for a
-    /// short grace window so the user sees the result landed, then drops
-    /// from the footer so the input box rises back under the transcript. The
-    /// result stays in the transcript fold-group; only the footer strip leaves.
-    pub completed_at: Option<Instant>,
-    /// When the child was first observed by the TUI (the FleetEntry was
-    /// created from an AgentStatus). Always Some in production; None only in
-    /// tests that do not exercise the elapsed counter. Drives the live
-    /// elapsed in the strip: build_row renders started_at.elapsed().
-    pub started_at: Option<Instant>,
-}
-
-/// One returned delegation, for the /agents pane's session list: the child
-/// session id to drill into, what it was, and the summary it came back with.
-#[derive(Debug, Clone)]
-pub struct DelegationRow {
-    pub child_sid: String,
-    pub subagent_type: String,
-    pub summary: String,
-    pub prompt: String,
-    pub tokens: u64,
-    pub tool_uses: u32,
-    pub duration_ms: u64,
-    /// Whether the child transcript is already loaded in the fold. False on
-    /// first open fires the on-demand fetch, same as the inline fold.
-    pub loaded: bool,
-}
-
-/// The /agents pane's list of this session's returned delegations. Rebuilt
-/// from the transcript when the transcript version moves; a returned
-/// delegation is durable history, so the list survives the footer strip's
-/// grace window (the strip is the present tense, this is the record). The
-/// pane's cursor is interaction state and lives on the Ui owner beside its
-/// peers; every rebuild, step, and read keeps it within these rows.
-#[derive(Debug, Default)]
-pub struct PaneAgents {
-    pub rows: Vec<DelegationRow>,
-    version: u64,
-}
-
-impl PaneAgents {
-    /// Rebuild the rows when the transcript version moved; a no-op
-    /// otherwise, so it can be called on every agent message without cost.
-    /// The caller passes the version it read, so the rebuild and the version
-    /// check see one consistent transcript.
-    pub fn refresh(&mut self, transcript: &[TranscriptLine], version: u64) {
-        if version == self.version {
-            return;
-        }
-        self.version = version;
-        self.rows = transcript
-            .iter()
-            .filter_map(|l| match l {
-                TranscriptLine::Subagent {
-                    child_sid,
-                    subagent_type,
-                    summary,
-                    prompt,
-                    folded_transcript,
-                    ..
-                } => {
-                    let tool_uses = folded_transcript
-                        .iter()
-                        .filter(
-                            |l| matches!(l, TranscriptLine::Tool { name, .. } if name != "result"),
-                        )
-                        .count() as u32;
-                    Some(DelegationRow {
-                        child_sid: child_sid.clone(),
-                        subagent_type: subagent_type.clone(),
-                        summary: summary.clone(),
-                        prompt: prompt.clone(),
-                        tokens: 0,
-                        tool_uses,
-                        duration_ms: 0,
-                        loaded: !folded_transcript.is_empty(),
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-    }
-}
-
-/// How long a completed child stays in the footer before dropping. The
-/// grace window lets the user see the result landed (a terse done row),
-/// then the strip leaves so the input box rises back under the transcript.
-/// The result itself stays in the transcript fold-group; only the footer
-/// strip drops.
-pub const FLEET_GRACE: Duration = Duration::from_secs(5);
 
 /// One message shipped from the client-driver task back to the TUI event
 /// loop, classified by protocol direction. The four directions follow the
@@ -214,7 +104,7 @@ pub(crate) struct AgentStatusSnapshot {
     pub tokens: u64,
     pub tool_uses: u32,
     pub last_activity: Option<String>,
-    pub completed: Option<String>,
+    pub completed: Option<CompletionStatus>,
 }
 
 /// Server-originated events: the event direction of the session protocol.
@@ -233,15 +123,20 @@ pub enum ServerEvent {
     /// the token estimate, because a call that writes a large file streams for
     /// many seconds and the row must not read that as a stalled turn.
     ToolInputDelta { text: String },
-    /// A long-running tool (bash) ticks its elapsed seconds so the chip shows
+    /// A long-running tool (bash) ticks its elapsed seconds so the row shows
     /// it is not stuck. Routes to the active run's bash ticker keyed by
-    /// call_id; the chip renders (Ns) after 2s, or (Ns · M lines) when lines
-    /// is Some. Superseded when the tool-result frame lands.
+    /// call_id; the running row prints the elapsed time, the call's own
+    /// timeout when it declared one, and the tail lines under the call.
+    /// Superseded when the tool-result frame lands.
     ToolProgress {
         call_id: String,
         elapsed_secs: u64,
-        lines: Option<u64>,
+        timeout_secs: Option<u64>,
+        tail: Vec<String>,
     },
+    /// The host published the newest state of one background command. The
+    /// snapshot replaces the one held for that task number.
+    BackgroundTaskChanged { task: BackgroundTaskSnapshot },
     /// Identified inputs the runner drained from its mid-turn injection queue.
     /// Each acknowledgement removes only the matching pending item, so delayed
     /// delivery cannot remove a newer input with the same text.
@@ -270,7 +165,7 @@ pub enum ServerEvent {
         tokens: u64,
         tool_uses: u32,
         last_activity: Option<String>,
-        completed: Option<String>,
+        completed: Option<CompletionStatus>,
     },
 }
 
@@ -376,6 +271,11 @@ pub enum ServerResponse {
     Skills { skills: Vec<SkillEntry> },
     /// One skill's body for the detail view, None when it does not resolve.
     SkillBody { body: Option<String> },
+    /// The background commands the session started, as the /tasks pane read
+    /// them. Each entry replaces the one held for its number.
+    BackgroundTasks { tasks: Vec<BackgroundTaskSnapshot> },
+    /// One background command's full record for the open detail.
+    BackgroundTaskDetail { detail: BackgroundTaskDetail },
     /// The /model select reply: what the host actually applied, so the
     /// status bar renders what is being sent rather than what the picker
     /// requested, and the receipt is formatted from the reply. Carries
@@ -504,6 +404,23 @@ pub enum ClientCommand {
     SkillBodyQuery {
         req_id: RequestId,
         name: String,
+    },
+    /// Request the background commands the session started. The pane asks
+    /// once on open and again every second while it stays open, because the
+    /// host computes each task's run time at the moment it answers.
+    BackgroundTasksQuery {
+        req_id: RequestId,
+    },
+    /// Request one background command's full record for the open detail.
+    BackgroundTaskDetailQuery {
+        req_id: RequestId,
+        id: BackgroundTaskId,
+    },
+    /// Stop one background command. The host kills the command's process
+    /// group, so a wrapper's children end with it.
+    KillBackgroundTask {
+        req_id: RequestId,
+        id: BackgroundTaskId,
     },
     /// Request the stored-memory list over the wire (the /memory command). The
     /// reply carries frontmatter-only summaries (no body); a /memory <key>
@@ -722,5 +639,4 @@ pub enum ClientCommand {
     },
 }
 
-#[cfg(test)]
-mod tests;
+pub mod fleet;

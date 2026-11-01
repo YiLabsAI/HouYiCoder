@@ -330,10 +330,11 @@ pub struct Runner {
     /// from its mirror. Single source of truth on the host; the frontend
     /// keeps only a derived copy.
     input_queue: input_queue::InputQueue,
-    /// Lower-priority child-completion notifications. Drained only after
-    /// input_queue is empty, so user input never starves. std Mutex: drain
-    /// is non-blocking, no await under the lock.
-    queued_notifications: Mutex<VecDeque<(String, String)>>,
+    /// Lower-priority background notifications, from a finished subagent or
+    /// a finished command. Drained only after input_queue is empty, so user
+    /// input never starves. std Mutex: drain is non-blocking, no await under
+    /// the lock.
+    queued_notifications: Mutex<VecDeque<input_queue::QueuedNotification>>,
     /// Redundant-call detector — a harness self-evolution observer,
     /// independent of the user hook registry (which early-returns when no
     /// hooks are configured). check_batch runs before run_pre_tool_use_gate
@@ -649,7 +650,8 @@ impl Runner {
         // them only when no user input is pending, so a notification that
         // queued the same instant as a user message never lands first. A
         // pending notification waits for the next idle boundary.
-        let pending_notifications: Vec<(String, String)> = if pending_user.is_empty() {
+        let pending_notifications: Vec<input_queue::QueuedNotification> = if pending_user.is_empty()
+        {
             let mut q = self
                 .queued_notifications
                 .lock()
@@ -668,14 +670,21 @@ impl Runner {
         for msg in inbox_pending {
             self.append_mid_turn_input(session, msg, None).await?;
         }
-        // A child-completion notification is a distinct boundary from a user
-        // interjection: it records which child finished (NotificationInjected,
-        // not MidTurnInput) so the durable log + the assembled input distinguish
-        // "a background subagent reported a result" from "the user sent a
-        // message" -- the model sees a child-completion framing, not a
+        // A background notification is a distinct boundary from a user
+        // interjection: it records what produced it (NotificationInjected,
+        // not MidTurnInput) so the durable log + the assembled input
+        // distinguish "a background result arrived" from "the user sent a
+        // message" -- the model sees the framing its topic calls for, not a
         // continue-the-task note.
-        for (child_id, text) in pending_notifications {
-            self.append_notification(session, child_id, text).await?;
+        for notification in pending_notifications {
+            self.append_notification(
+                session,
+                notification.source_id,
+                notification.topic,
+                notification.text,
+                notification.capture,
+            )
+            .await?;
         }
         // Recall memory for the injected query (the latest user input), so a
         // mid-turn "now help with X" gets X's memories rather than riding the

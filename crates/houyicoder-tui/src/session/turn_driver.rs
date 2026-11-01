@@ -250,6 +250,10 @@ impl App {
         let poll_due = self.sessions.current.capabilities.status.poll_due();
         if !self.agent_busy() && !self.reverse_request_in_flight() && poll_due {
             self.sessions.current.capabilities.status.mark_poll_sent();
+            // A request-id search that finds none is reported once the
+            // connection borrow ends, so the report and the sends cannot
+            // interleave.
+            let mut request_ids_exhausted = false;
             if let Some(s) = self.sessions.current.connection.as_ref() {
                 match s.next_request_id() {
                     Ok(req_id) => {
@@ -264,13 +268,30 @@ impl App {
                                         let _ = s
                                             .enqueue(ClientCommand::PermissionModeQuery { req_id });
                                     }
-                                    Err(_) => self.note_request_id_exhausted(),
+                                    Err(_) => request_ids_exhausted = true,
+                                }
+                            }
+                            // Seed the task list once per session: a row
+                            // restored from the log can then tell a task
+                            // that is still running from one the host
+                            // already ended and released.
+                            if !self.sessions.current.capabilities.tasks.listed() {
+                                match s.next_request_id() {
+                                    Ok(req_id) => {
+                                        let _ = s.enqueue(ClientCommand::BackgroundTasksQuery {
+                                            req_id,
+                                        });
+                                    }
+                                    Err(_) => request_ids_exhausted = true,
                                 }
                             }
                         }
                     }
-                    Err(_) => self.note_request_id_exhausted(),
+                    Err(_) => request_ids_exhausted = true,
                 }
+            }
+            if request_ids_exhausted {
+                self.note_request_id_exhausted();
             }
         }
         applied

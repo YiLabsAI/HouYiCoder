@@ -18,7 +18,7 @@ pub(crate) mod turn_driver;
 
 use std::cell::Cell;
 
-use crate::agent_message::PaneAgents;
+use crate::agent_message::fleet::PaneAgents;
 use crate::pending_prompt::PendingPrompt;
 use crate::run_metrics::RunMetrics;
 use crate::run_state::RunState;

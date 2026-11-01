@@ -100,17 +100,11 @@ impl ToolRuntime {
 
     /// Record a tick for a call that is still running. A tick for a call the
     /// run no longer tracks is dropped rather than stored.
-    pub(crate) fn note_tick(&mut self, call_id: String, elapsed_secs: u64, lines: Option<u64>) {
+    pub(crate) fn note_tick(&mut self, call_id: String, progress: BashProgress) {
         if !self.running.contains(&call_id) {
             return;
         }
-        self.bash.insert(
-            call_id,
-            BashProgress {
-                elapsed_secs,
-                lines,
-            },
-        );
+        self.bash.insert(call_id, progress);
         self.revision = self.revision.wrapping_add(1);
     }
 

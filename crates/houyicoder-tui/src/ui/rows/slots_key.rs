@@ -26,9 +26,10 @@ pub(crate) enum SourceId {
 }
 
 /// The inputs that decide the slot rows: the source and its revisions, the
-/// wrap width, the mode flags that change which lines become rows, and the
-/// bash ticker whose text is baked into a chip. The run id is carried for the
-/// identity's sake; the builder does not read it.
+/// wrap width, the mode flags that change which lines become rows, the bash
+/// ticker whose text is baked into a running row, and the background task
+/// snapshots a background call's row reports its ending from. The run id is
+/// carried for the identity's sake; the builder does not read it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct SlotsKey {
     source: SourceId,
@@ -39,6 +40,7 @@ pub(crate) struct SlotsKey {
     busy: bool,
     run: Option<RequestId>,
     bash: u64,
+    tasks: u64,
 }
 
 impl SlotsKey {
@@ -53,6 +55,7 @@ impl SlotsKey {
             busy: app.agent_busy(),
             run: app.sessions.current.run.request_id(),
             bash: app.run_progress().map_or(0, |p| p.tools.revision()),
+            tasks: app.sessions.current.capabilities.tasks.revision(),
         }
     }
 }

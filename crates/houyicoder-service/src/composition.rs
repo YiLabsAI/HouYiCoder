@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // composition root consumed by other crates; locally unused
 
+pub mod background_tasks;
 pub(crate) mod catalog_resolver;
 pub mod fleet_status_relay;
 pub mod host_lifecycle;
@@ -30,8 +31,10 @@ mod worktree;
 
 mod containment;
 mod paths;
+mod session_host;
 pub(crate) use containment::ContainmentAdapter;
 use containment::build_session_fences;
+pub use session_host::SessionHost;
 
 pub use resume::{
     ResumeError, build_runner_for_fork, build_runner_for_resume_export,
@@ -50,7 +53,7 @@ use houyicoder_api::trust::TrustState;
 use houyicoder_config::recap::RecapConfig;
 use houyicoder_config::recap::load_recap_from;
 use houyicoder_config::{
-    ConfigWarning, ModelSection, ModelSelection, load_model_section_from,
+    ConfigWarning, ModelSection, ModelSelection, RunnerSettings, load_model_section_from,
     resolve_model_selection_from, settings_path,
 };
 use houyicoder_context::ContextBackend;
@@ -76,14 +79,12 @@ use houyicoder_session::SessionStore;
 
 pub use houyicoder_provider::{ProviderFacts, ProviderResolution};
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use crate::lifecycle::SessionLeaseStore;
-use crate::server::EventSequencer;
 use crate::server::recap::RecapSession;
 use crate::server::recap::RecapSettings;
+use background_tasks::BackgroundTasks;
 use built_in_tools::BuiltInToolProvider;
 use hook_compose::SkillRuntime;
 use houyicoder_core::agent::WorktreeController;
@@ -114,8 +115,9 @@ fn degrade_with_notice<T, E: Display>(
 use std::collections::HashSet;
 use std::env::var;
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
+use std::time::Duration;
 
 /// The runner plus the handles the host needs to render host-side state
 /// without dispatching a tool call. Returned by build_runner and assemble;
@@ -135,8 +137,8 @@ pub struct AssembledRunner {
     pub file_transaction: Option<Arc<FileTransaction>>,
     pub append_notify: Arc<Notify>,
     pub worktree_controller: Option<Arc<WorktreeController>>,
-    /// The shared multi-agent bus; threaded to the pairing point so the
-    /// fleet status relay can subscribe + emit agent status wire frames.
+    /// The shared multi-agent bus; threaded to where the server is assembled so
+    /// the fleet status relay can subscribe and emit agent status wire frames.
     pub bus: Option<Arc<AgentBus>>,
     /// What the provider was built from. Carried on the assembled runner rather
     /// than threaded separately: the resolution happens inside this root, and a
@@ -148,6 +150,11 @@ pub struct AssembledRunner {
     /// connection; a session assembled without the feature enabled still
     /// carries it, inert.
     pub recap: Arc<RecapSession>,
+    /// The registry the shell tool passes a command to when it outlives the
+    /// foreground budget. Carried here so the server's assembly can attach the
+    /// event stream and the runner once both exist, and so the server can
+    /// answer the tasks requests from the same instance.
+    pub background_tasks: Arc<BackgroundTasks>,
 }
 
 /// An assembled runner plus the model restored from a resumed session's
@@ -269,6 +276,12 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
     clippy::too_many_arguments,
     reason = "the inputs come from different places and are not one concept"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one ordered assembly sequence; a split would move assembly steps \
+              away from the order they must run in and add a struct named \
+              for this function"
+)]
 pub(crate) fn assemble(
     store: Arc<SessionStore>,
     session: SessionId,
@@ -300,9 +313,19 @@ pub(crate) fn assemble(
         &gate_dyn,
     );
     let skills = SkillRuntime::new(fences.workspace.as_deref(), gate_dyn.clone());
-    let builtin = register_builtin_tools(&mut tools, &fences, &skills, gate_dyn, &store);
-    let (config, runner_settings_warnings) =
-        build_runner_config(model.clone(), fences.workspace.as_deref());
+    let (runner_settings, runner_settings_warnings) =
+        houyicoder_config::load_runner_settings(fences.workspace.as_deref());
+    let background_tasks = Arc::new(BackgroundTasks::new());
+    let builtin = register_builtin_tools(
+        &mut tools,
+        &fences,
+        &skills,
+        gate_dyn,
+        &store,
+        background_tasks.clone(),
+        Duration::from_millis(runner_settings.bash_foreground_budget_ms),
+    );
+    let config = build_runner_config(model.clone(), &runner_settings);
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
     let denied_agents = resolve_denied_agents(rule_store.as_deref());
     let bus = Arc::new(AgentBus::new());
@@ -378,6 +401,7 @@ pub(crate) fn assemble(
         bus: Some(bus),
         provider_facts,
         recap,
+        background_tasks,
     }
 }
 
@@ -495,20 +519,15 @@ fn build_base_tools(
 }
 
 /// Build the RunnerConfig and collect any settings warnings from runner_settings.
-fn build_runner_config(
-    model: String,
-    workspace: Option<&Path>,
-) -> (RunnerConfig, Vec<ConfigWarning>) {
+fn build_runner_config(model: String, settings: &RunnerSettings) -> RunnerConfig {
     let max_output_tokens = model_window::resolve_max_output_tokens(&model);
-    let (runner_settings, warnings) = houyicoder_config::load_runner_settings(workspace);
-    let config = RunnerConfig {
+    RunnerConfig {
         model,
         instructions: String::new(),
-        max_turns: runner_settings.max_turns,
+        max_turns: settings.max_turns,
         max_output_tokens,
         ..RunnerConfig::default()
-    };
-    (config, warnings)
+    }
 }
 
 /// Extract denied sub-agent types from the rule store.
@@ -607,12 +626,15 @@ fn register_builtin_tools(
     skills: &SkillRuntime,
     gate_dyn: Arc<dyn ModeGate>,
     store: &SessionStore,
+    background_tasks: Arc<BackgroundTasks>,
+    foreground_budget: Duration,
 ) -> BuiltInSetup {
     let file_transaction = file_write_journal(store);
     let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), Arc::clone(&gate_dyn))
         .with_activator(Some(Arc::clone(&skills.conditional)))
         .with_active_skill(skills.discovery_skill())
-        .with_transaction(file_transaction.clone());
+        .with_transaction(file_transaction.clone())
+        .with_background_commands(background_tasks, foreground_budget);
     let undo_handles = builtin.undo_handles();
     tool_registration::register_provider_tools(tools, gate_dyn, builtin);
     BuiltInSetup {
@@ -629,119 +651,6 @@ fn register_builtin_tools(
 pub fn resolve_provider(project: Option<&str>) -> ProviderResolution {
     let workspace = resolve_project_workspace(project.map(str::to_string));
     houyicoder_provider::resolve(workspace.as_deref())
-}
-
-/// Runner and event-stream state retained across client connections. The
-/// sequencer preserves reliable history, sequence allocation, and the durable
-/// log cursor while each attachment supplies a new carrier.
-struct LiveRunnerHandle {
-    runner: Arc<Runner>,
-    event_sequencer: EventSequencer,
-    gate: Arc<dyn ModeGate>,
-    append_notify: Arc<Notify>,
-    recap: Arc<RecapSession>,
-}
-
-/// The session-indexed host a reattaching connection re-hydrates from. Holds
-/// the live runners + cursors (so the Arc<Runner> survives a disconnect) and
-/// the SessionLeaseStore (the single source of truth for the parked
-/// PendingTurn + the lease holder + the lifecycle state). serve_session
-/// reads the handle for this session, rebuilds a Server, and drives serve;
-/// when the serve ends on disconnect the host retains everything.
-///
-/// The gate is per-runner (composition), so it lives in the handle, not on
-/// the host — a multi-session host holds one gate per live runner.
-pub struct SessionHost {
-    runners: Mutex<HashMap<SessionId, LiveRunnerHandle>>,
-    store: SessionLeaseStore,
-    /// The facts the process's provider was built from. Process-scoped
-    /// rather than per-session because the provider is resolved once for the
-    /// life of a process; serve_session reads it so a reattached connection
-    /// reports the same facts the live one does.
-    provider_facts: Option<ProviderFacts>,
-}
-
-impl SessionHost {
-    /// In-memory host with no persisted backing. The single-process
-    /// fast path: a new process cannot reload sessions (cross-process
-    /// reconnect is the UDS cut).
-    pub fn new(store: SessionLeaseStore) -> Self {
-        Self {
-            runners: Mutex::new(HashMap::new()),
-            store,
-            provider_facts: None,
-        }
-    }
-
-    /// Attach what the process's provider was built from, so a reattaching
-    /// connection's status reports the real destination.
-    pub fn with_provider_facts(mut self, facts: ProviderFacts) -> Self {
-        self.provider_facts = Some(facts);
-        self
-    }
-
-    /// The facts a reattaching connection should report, or None when the
-    /// host was built without them.
-    pub(crate) fn provider_facts(&self) -> Option<&ProviderFacts> {
-        self.provider_facts.as_ref()
-    }
-
-    /// Register a runner, its session-scoped event sequencer, and its recap
-    /// state.
-    pub fn insert(
-        &self,
-        session: SessionId,
-        runner: Arc<Runner>,
-        event_sequencer: EventSequencer,
-        gate: Arc<dyn ModeGate>,
-        append_notify: Arc<Notify>,
-        recap: Arc<RecapSession>,
-    ) {
-        self.runners.lock().expect("host lock").insert(
-            session,
-            LiveRunnerHandle {
-                runner,
-                event_sequencer,
-                gate,
-                append_notify,
-                recap,
-            },
-        );
-    }
-
-    /// Clone the runner, sequencer, gate, append notification, and recap state
-    /// needed by a reattaching connection. None when the session is not
-    /// registered.
-    pub(crate) fn clone_handle(&self, session: SessionId) -> Option<RunnerHandleClone> {
-        self.runners
-            .lock()
-            .expect("host lock")
-            .get(&session)
-            .map(|h| RunnerHandleClone {
-                runner: h.runner.clone(),
-                event_sequencer: h.event_sequencer.clone(),
-                gate: h.gate.clone(),
-                append_notify: h.append_notify.clone(),
-                recap: h.recap.clone(),
-            })
-    }
-
-    /// Single source of truth for the parked PendingTurn, lease holder, and
-    /// state. pub(crate) so serve_session runs the lease guard.
-    pub(crate) fn store(&self) -> &SessionLeaseStore {
-        &self.store
-    }
-}
-
-/// A cloned snapshot of a session's live handle. pub(crate) so the
-/// serve_session entry point re-hydrates a Server from it without the
-/// host exposing its internal LiveRunnerHandle.
-pub(crate) struct RunnerHandleClone {
-    pub(crate) runner: Arc<Runner>,
-    pub(crate) event_sequencer: EventSequencer,
-    pub(crate) gate: Arc<dyn ModeGate>,
-    pub(crate) append_notify: Arc<Notify>,
-    pub(crate) recap: Arc<RecapSession>,
 }
 
 #[cfg(test)]

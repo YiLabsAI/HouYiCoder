@@ -10,6 +10,7 @@ use crate::state::App;
 use crate::view::context_view::render_as_rows;
 use crate::view::line_wrap::wrap_line;
 use crate::view::todo_list::render_rows;
+use crate::view::working::command_state;
 
 impl App {
     /// The row count a single transcript line renders to. A tool result uses
@@ -54,14 +55,17 @@ impl App {
                 is_diff,
                 outcome,
                 ..
-            } if name == "result" => self.ui.renderer.lines.borrow_mut().tool_row_count(
-                body,
-                call_id,
-                Some(*outcome),
-                self.ui.transcript_view.expanded.results.contains(call_id) || self.ui.verbose,
-                *is_diff,
-                w,
-            ),
+            } if name == "result" => {
+                let ended = command_state::ended_body(self, line);
+                self.ui.renderer.lines.borrow_mut().tool_row_count(
+                    ended.as_deref().unwrap_or(body),
+                    call_id,
+                    Some(*outcome),
+                    self.ui.transcript_view.expanded.results.contains(call_id) || self.ui.verbose,
+                    *is_diff,
+                    w,
+                )
+            }
             // Plain selectable rows: count the exact set the draw path emits.
             // A compaction draws its head row plus one wrapped row per digest
             // line while expanded, so a flat count of the label undershoots by
@@ -81,34 +85,7 @@ impl App {
                 child_sid,
                 folded_transcript,
                 ..
-            } => {
-                let mut n = 1; // head row
-                if self
-                    .ui
-                    .transcript_view
-                    .expanded
-                    .subagents
-                    .contains(child_sid)
-                    || self.ui.verbose
-                {
-                    if folded_transcript.is_empty() {
-                        n += 1; // placeholder row
-                    } else {
-                        // Each child is drawn below the head row, so a child
-                        // that opens a block takes its spacer even when it is
-                        // the first: the draw path sees the head already in the
-                        // rows and charges the blank line.
-                        n += folded_transcript
-                            .iter()
-                            .map(|c| {
-                                let rows = self.line_display_rows(c);
-                                rows + usize::from(rows > 0 && c.opens_block())
-                            })
-                            .sum::<usize>();
-                    }
-                }
-                n
-            }
+            } => self.subagent_display_rows(child_sid, folded_transcript),
             // The trace draws as one row at every width: the name takes the
             // room that is left and the figures give way before the row
             // does. Its text is one line even when the task summary carried
@@ -119,9 +96,12 @@ impl App {
             TranscriptLine::User(text) => {
                 self.ui.renderer.lines.borrow_mut().user_row_count(text, w)
             }
-            TranscriptLine::Tool { name, .. } if name != "result" => line
-                .tool_call_rows(w, full_tool_call)
-                .map_or(1, |rows| rows.len()),
+            TranscriptLine::Tool { name, .. } if name != "result" => {
+                let call_rows = line
+                    .tool_call_rows(w, full_tool_call)
+                    .map_or(1, |rows| rows.len());
+                call_rows + command_state::running_rows(self, line, w).len()
+            }
             TranscriptLine::Recap(_) => line.recap_rows(w).map_or(0, |rows| rows.len()),
             TranscriptLine::System(_) => {
                 let text = if self.ui.verbose {
@@ -146,6 +126,36 @@ impl App {
                 text.split('\n').count()
             }
         }
+    }
+
+    /// The rows one subagent card takes: the head row, plus the child's
+    /// folded transcript when it is open. Each child is drawn below the head,
+    /// so a child that opens a block takes its spacer even when it is the
+    /// first: the draw path already has the head in its rows and charges the
+    /// blank line.
+    fn subagent_display_rows(&self, child_sid: &str, folded: &[TranscriptLine]) -> usize {
+        let mut n = 1;
+        if self
+            .ui
+            .transcript_view
+            .expanded
+            .subagents
+            .contains(child_sid)
+            || self.ui.verbose
+        {
+            if folded.is_empty() {
+                n += 1;
+            } else {
+                n += folded
+                    .iter()
+                    .map(|child| {
+                        let rows = self.line_display_rows(child);
+                        rows + usize::from(rows > 0 && child.opens_block())
+                    })
+                    .sum::<usize>();
+            }
+        }
+        n
     }
 
     /// Live trailing blocks rendered below the durable transcript while a

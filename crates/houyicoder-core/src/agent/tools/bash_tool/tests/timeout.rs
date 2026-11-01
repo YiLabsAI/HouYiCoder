@@ -1,5 +1,6 @@
 //! Tests for a command stopped at its wall-clock budget.
 
+use super::super::output::BASH_MAX_OUTPUT_CHARS;
 use super::super::*;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use std::env::temp_dir;

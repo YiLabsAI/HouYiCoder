@@ -1,6 +1,8 @@
 //! Tests for this module.
 
+use super::super::output::{BASH_MAX_OUTPUT_CHARS, bound_bash_output, tail_chars};
 use super::super::*;
+use houyicoder_api::capture::CaptureStopReason;
 use std::path::Path;
 
 #[test]

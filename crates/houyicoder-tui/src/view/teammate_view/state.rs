@@ -3,7 +3,7 @@
 //! Shift+Up/Down. Esc only interrupts the viewed child's current turn.
 
 use crate::agent_message::ClientCommand;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::session::approval::SubagentTarget;
 use crate::state::App;
 use crate::state::parked_view_states::ParkedViewState;

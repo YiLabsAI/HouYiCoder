@@ -14,7 +14,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::command::render::format_tokens;
 use crate::state::App;
 use crate::transcript::records::SubagentOutcome;

@@ -2,10 +2,13 @@ use super::*;
 
 use houyicoder_protocol::frontend::model::{AppliedModel, SpeedMode};
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tasks::{
+    BackgroundTaskId, BackgroundTaskSnapshot, BackgroundTaskStatus,
+};
 use houyicoder_protocol::llm::{EffortLevel, Usage};
 use ratatui::{Terminal, backend::TestBackend};
 
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::composition::app;
 use crate::state::App;
 use crate::state::Screen;
@@ -157,6 +160,95 @@ fn test_agents_hint_excludes_completed() {
     let hint = agents_hint(&app).unwrap();
     assert!(hint.contains("2 agents"), "completed excluded: {hint}");
     assert!(!hint.contains("3 agent"), "no false live count: {hint}");
+}
+
+/// The status bar carries how many background commands still run and the key
+/// that opens the pane, and drops both once the last one ends: a finished
+/// task keeps its output in the pane but has nothing left to manage.
+#[test]
+fn test_status_bar_shows_tasks() {
+    let mut app = connected_app();
+    let quiet = render_text(&app, 100, 24);
+    assert!(
+        !quiet.contains("background task"),
+        "nothing runs at startup: {quiet}"
+    );
+    let tasks = &mut app.sessions.current.capabilities.tasks;
+    tasks.record(BackgroundTaskSnapshot {
+        id: BackgroundTaskId(1),
+        status: BackgroundTaskStatus::Running,
+        command: "cargo build".into(),
+        elapsed_ms: 4_000,
+        exit_code: None,
+    });
+    tasks.record(BackgroundTaskSnapshot {
+        id: BackgroundTaskId(2),
+        status: BackgroundTaskStatus::Finished,
+        command: "npm test".into(),
+        elapsed_ms: 9_000,
+        exit_code: Some(0),
+    });
+    let out = render_text(&app, 100, 24);
+    assert!(
+        out.contains("1 background task \u{00b7} /tasks"),
+        "the count covers running tasks and names the command: {out}"
+    );
+    let tasks = &mut app.sessions.current.capabilities.tasks;
+    tasks.record(BackgroundTaskSnapshot {
+        id: BackgroundTaskId(1),
+        status: BackgroundTaskStatus::Finished,
+        command: "cargo build".into(),
+        elapsed_ms: 20_000,
+        exit_code: Some(0),
+    });
+    let cleared = render_text(&app, 100, 24);
+    assert!(
+        !cleared.contains("background task"),
+        "the row clears once nothing runs: {cleared}"
+    );
+}
+
+/// At a narrow width the live task count survives while the model id and the
+/// agents hint clip: the footer budget drops identity before the actionable
+/// signal.
+#[test]
+fn test_task_count_survives_narrow() {
+    let mut app = connected_app();
+    app.sessions.current.capabilities.model.catalog.applied.id =
+        "claude-opus-5-5-with-a-long-name".into();
+    app.sessions
+        .current
+        .capabilities
+        .fleet
+        .entries
+        .push(FleetEntry {
+            agent_id: "c0".into(),
+            subagent_type: "explore".into(),
+            description: String::new(),
+            turn: 1,
+            tokens: 10,
+            tool_uses: 0,
+            last_activity: None,
+            outcome: None,
+            completed_at: None,
+            started_at: None,
+        });
+    app.sessions
+        .current
+        .capabilities
+        .tasks
+        .record(BackgroundTaskSnapshot {
+            id: BackgroundTaskId(1),
+            status: BackgroundTaskStatus::Running,
+            command: "cargo build".into(),
+            elapsed_ms: 4_000,
+            exit_code: None,
+        });
+    let out = render_text(&app, 45, 24);
+    assert!(
+        out.contains("1 background task"),
+        "the live count stays at a narrow width: {out}"
+    );
 }
 
 #[test]

@@ -29,7 +29,7 @@ pub(crate) use durable_grant::{FENCED, UNFENCED};
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
 use houyicoder_api::tool::is_shell_tool;
-use houyicoder_context::SessionEvent;
+use houyicoder_context::{NotificationTopic, SessionEvent};
 use houyicoder_core::agent::{
     ApprovalRequest as EngineApprovalRequest, RunError as EngineRunError, StatusSnapshot,
 };
@@ -540,6 +540,15 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
         // A child-completion notification surfaces in the transcript so the
         // user sees what the model was told (the durable kind distinguishes
         // it from a user interjection; the visual chunk is the text summary).
+        // A task notification is written for the model, not the user: its
+        // body is the command's own output framed as untrusted data, and the
+        // transcript already shows the ending through the result row, so it
+        // never becomes a user-authored line.
+        SessionEvent::NotificationInjected { topic, .. }
+            if NotificationTopic::from_word(topic) == Some(NotificationTopic::Task) =>
+        {
+            return None;
+        }
         SessionEvent::NotificationInjected { summary, .. } => {
             SessionUpdate::UserMessageChunk(text_chunk(summary))
         }
@@ -633,6 +642,15 @@ pub fn map_acpx_notification(kind: &SessionEvent) -> Option<AcpxNotification> {
         // open a turn.
         SessionEvent::MidTurnInput { .. } => {
             AcpxNotification::new(ContextMidTurnInput, serde_json::json!({}))
+        }
+        // A task notice is written for the model, not the user: it has no
+        // message chunk, so it carries no delivery mark either. A mark with
+        // no message beside it would bind to the user prompt that opened the
+        // turn and misread that prompt as delivered into the running turn.
+        SessionEvent::NotificationInjected { topic, .. }
+            if NotificationTopic::from_word(topic) == Some(NotificationTopic::Task) =>
+        {
+            return None;
         }
         SessionEvent::NotificationInjected { .. } => {
             AcpxNotification::new(ContextChildCompleted, serde_json::json!({}))

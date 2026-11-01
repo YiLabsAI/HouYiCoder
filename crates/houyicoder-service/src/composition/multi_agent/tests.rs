@@ -11,14 +11,15 @@ use houyicoder_context::{
 };
 use houyicoder_core::agent::multi_agent::bus_types::ChildRunMode;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    BusMessage, ChildStatus, global_completed_topic, permission_request_topic,
-    permission_response_topic, spawned_topic,
+    BusMessage, global_completed_topic, permission_request_topic, permission_response_topic,
+    spawned_topic,
 };
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::llm::{LlmEvent, ModelCapabilities, OutputItem};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
@@ -423,7 +424,7 @@ async fn test_dropped_spawn_reaches_terminal() {
         BusMessage::Completed {
             status, summary, ..
         } => {
-            assert_eq!(status, ChildStatus::Completed);
+            assert_eq!(status, CompletionStatus::Completed);
             assert!(
                 summary.contains("done"),
                 "the terminal carries the child's output: {summary}"
@@ -1091,7 +1092,7 @@ async fn test_background_failure_notifies_parent() {
         .try_recv()
         .expect("the failed child reports its own terminal");
     match msg {
-        BusMessage::Completed { status, .. } => assert_eq!(status, ChildStatus::Failed),
+        BusMessage::Completed { status, .. } => assert_eq!(status, CompletionStatus::Failed),
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(
@@ -1217,7 +1218,7 @@ async fn test_failed_write_reaches_terminal() {
         .try_recv()
         .expect("a child whose run never published a terminal still reaches the bus");
     match msg {
-        BusMessage::Completed { status, .. } => assert_eq!(status, ChildStatus::Failed),
+        BusMessage::Completed { status, .. } => assert_eq!(status, CompletionStatus::Failed),
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(
@@ -1336,7 +1337,7 @@ async fn test_foreground_panic_reaches_terminal() {
         BusMessage::Completed {
             status, summary, ..
         } => {
-            assert_eq!(status, ChildStatus::Failed);
+            assert_eq!(status, CompletionStatus::Failed);
             assert!(
                 summary.contains("provider stream panicked"),
                 "the terminal carries the panic reason, not an empty summary"
@@ -1681,7 +1682,7 @@ async fn test_cancel_before_poll_publishes() {
         matches!(
             message,
             BusMessage::Completed {
-                status: ChildStatus::Killed,
+                status: CompletionStatus::Killed,
                 ..
             }
         ),
@@ -1727,7 +1728,7 @@ async fn test_cancel_mid_call_publishes() {
         matches!(
             message,
             BusMessage::Completed {
-                status: ChildStatus::Killed,
+                status: CompletionStatus::Killed,
                 ..
             }
         ),
@@ -1787,7 +1788,7 @@ async fn test_cancel_mid_ask_publishes() {
         matches!(
             message,
             BusMessage::Completed {
-                status: ChildStatus::Killed,
+                status: CompletionStatus::Killed,
                 ..
             }
         ),
@@ -1865,7 +1866,7 @@ async fn test_cancel_mid_resume_publishes() {
         matches!(
             message,
             BusMessage::Completed {
-                status: ChildStatus::Killed,
+                status: CompletionStatus::Killed,
                 ..
             }
         ),
@@ -1907,7 +1908,7 @@ async fn test_background_kill_publishes() {
         matches!(
             message,
             BusMessage::Completed {
-                status: ChildStatus::Killed,
+                status: CompletionStatus::Killed,
                 ..
             }
         ),

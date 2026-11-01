@@ -102,6 +102,7 @@ fn rendered_working() -> App {
             invocation: "echo hi".into(),
             outcome: ToolOutcome::Success,
             call_id: "c1".into(),
+            background_task: None,
             body: "hi".into(),
             is_diff: false,
         },

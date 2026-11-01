@@ -76,6 +76,7 @@ fn synth_lines(n: usize, seed: u64) -> Vec<TranscriptLine> {
                     ToolOutcome::Success
                 },
                 call_id: format!("call-{i}"),
+                background_task: None,
                 body: format!(
                     "{} {}\n{}",
                     word(&mut lcg, 10),

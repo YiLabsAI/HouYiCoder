@@ -44,6 +44,7 @@ use crate::skills_state::SkillsPaneState;
 use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
 use crate::state::{ParkedViewStates, Stage, TrajectoryPaneState, ViewportMode};
+use crate::tasks_state::TasksPaneState;
 
 mod sandbox;
 mod worktree;
@@ -95,6 +96,12 @@ pub struct Ui {
     /// (body request, body text, scroll position). Kept together so the
     /// pane's view state is one owner, not a scatter of flat fields.
     pub(crate) skills_pane: SkillsPaneState,
+    /// The /tasks pane view state: the list cursor, the open detail, and the
+    /// read schedule that keeps a running task's output current. The task
+    /// records these index belong to the session's tasks capability; the
+    /// cursor and the open detail are where the user is looking, and reset
+    /// with their pane peers on a session switch.
+    pub(crate) tasks_pane: TasksPaneState,
     /// The hooks pane state: the drill-down level (0 = event list, 1 = the
     /// selected event detail) and the selected event index. Pub(crate) so the
     /// key handler and render path step a field directly; the level and the
@@ -198,7 +205,7 @@ impl Ui {
     /// Reset the session-local fields a switch must clear so the new session
     /// renders as if fresh rather than layered over the old one's pane state,
     /// caches, or selection. The navigation overlays, the transcript view, the
-    /// pane states (permission, skills, hooks, memory, model, fleet, sandbox),
+    /// pane states (permission, skills, tasks, hooks, memory, model, fleet, sandbox),
     /// the trajectory and worktree cursors, the agents cursor, the selection,
     /// the notifications, the displayed token count, the last title, the render
     /// caches, and the last frame's measured layout all reset. The
@@ -221,6 +228,7 @@ impl Ui {
         self.fleet = Default::default();
         self.permission_pane = Default::default();
         self.skills_pane = Default::default();
+        self.tasks_pane = Default::default();
         self.hooks_pane = Default::default();
         self.memory = Default::default();
         self.model = Default::default();

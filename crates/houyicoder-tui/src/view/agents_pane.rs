@@ -23,7 +23,7 @@ use ratatui::{
 use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent_message::DelegationRow;
+use crate::agent_message::fleet::DelegationRow;
 use crate::command::render::format_tokens;
 use crate::state::App;
 use crate::view::agents_pane::rows::{AgentRow, pane_rows};

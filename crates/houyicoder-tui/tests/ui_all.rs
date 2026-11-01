@@ -62,6 +62,8 @@ mod ui_skill_ecosystem;
 mod ui_skill_hotreload;
 #[path = "ui_skill_paths.rs"]
 mod ui_skill_paths;
+#[path = "ui_tasks.rs"]
+mod ui_tasks;
 #[path = "ui_thinking.rs"]
 mod ui_thinking;
 #[path = "ui_todo.rs"]

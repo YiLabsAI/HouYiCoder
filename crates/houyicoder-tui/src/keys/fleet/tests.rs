@@ -14,7 +14,7 @@ fn test_selection_clamps_at_bounds() {
 mod focus {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use crate::agent_message::FleetEntry;
+    use crate::agent_message::fleet::FleetEntry;
     use crate::state::App;
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -137,7 +137,7 @@ mod focus {
 mod dispatch {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use crate::agent_message::FleetEntry;
+    use crate::agent_message::fleet::FleetEntry;
     use crate::state::App;
 
     fn key(code: KeyCode) -> KeyEvent {

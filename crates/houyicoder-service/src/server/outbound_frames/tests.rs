@@ -64,6 +64,7 @@ fn test_child_notice_marked() {
         order: 0,
         topic: "done".into(),
         summary: "found it".into(),
+        capture: None,
     }));
     assert_eq!(
         mark_method(&mapped.payloads),

@@ -6,8 +6,11 @@ mod run_completion;
 
 mod memory;
 mod permission_dirs;
+mod permission_settings;
 
 mod sandbox;
+
+mod tasks;
 
 mod worktree;
 
@@ -20,14 +23,16 @@ use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
 
+use crate::agent_message::fleet::FleetEntry;
 use crate::agent_message::{
-    AgentStatusSnapshot, ClientCommand, ConnectionEvent, FleetEntry, ServerEvent, ServerRequest,
+    AgentStatusSnapshot, ClientCommand, ConnectionEvent, ServerEvent, ServerRequest,
     ServerResponse, SessionMessage,
 };
-use crate::command::render::{render_permission_rules_wire, render_trajectory_wire};
+use crate::command::render::render_trajectory_wire;
 use crate::composition::suggestions_for;
 use crate::records::{ContextDrillDown, ContextView, TranscriptLine};
 use crate::state::App;
+use crate::state::BashProgress;
 use crate::state::enums::LiveBlock;
 use crate::terminal_title::sync as sync_terminal_title;
 use crate::transcript::frame::TranscriptFrame;
@@ -162,16 +167,30 @@ impl App {
             ServerEvent::ToolProgress {
                 call_id,
                 elapsed_secs,
-                lines,
+                timeout_secs,
+                tail,
             } => {
-                // A long-running tool ticks elapsed (+ optional stdout line
-                // count when the backend streams). The chip render reads
-                // this ticker + the running set to append (Ns) / (Ns · M lines)
-                // after 2s. Only meaningful while the call is in flight;
-                // finish_tool clears it when the result lands.
+                // A long-running tool ticks elapsed plus the call's budget and
+                // streamed output when the backend provides them. The running
+                // row reads this ticker and prints the elapsed time and the
+                // tail under the call. Only meaningful while the call is in
+                // flight; finish_tool clears it when the result lands.
                 if let Some(p) = self.run_progress_mut() {
-                    p.tools.note_tick(call_id, elapsed_secs, lines);
+                    p.tools.note_tick(
+                        call_id,
+                        BashProgress {
+                            elapsed_secs,
+                            timeout_secs,
+                            tail,
+                        },
+                    );
                 }
+            }
+            ServerEvent::BackgroundTaskChanged { task } => {
+                // The host owns background commands; the frontend keeps the
+                // newest snapshot per task number for the status bar count,
+                // the background call's row, and the tasks pane.
+                self.sessions.current.capabilities.tasks.record(task);
             }
             ServerEvent::QueuedInputCommitted { inputs } => {
                 // A committed mid-turn input makes the original submission no
@@ -282,28 +301,13 @@ impl App {
             ServerResponse::Compact { reply } => {
                 self.apply_compact(reply);
             }
-            ServerResponse::PermissionMode { mode } => {
-                // Silent update: the status bar reflects the new mode on the
-                // next render. No transcript line — mode switching is a
-                // background state change, not a conversation event. The
-                // /mode command pushes its own feedback when invoked.
-                self.sessions.current.capabilities.permission.mode_cache = Some(mode);
-            }
-            ServerResponse::PermissionRules { rules } => {
-                self.sessions.current.capabilities.permission.rules_cache = rules.clone();
-                self.system_line(render_permission_rules_wire(&rules));
-            }
+            ServerResponse::PermissionMode { mode } => self.apply_permission_mode(mode),
+            ServerResponse::PermissionRules { rules } => self.apply_permission_rules(rules),
             ServerResponse::PermissionDirs { dirs } => {
                 self.apply_permission_dirs(dirs);
             }
             ServerResponse::PermissionAskBeforeGit { enabled } => {
-                let permission = &mut self.sessions.current.capabilities.permission;
-                permission.ask_before_git_enabled = enabled;
-                self.system_line(format!(
-                    "permission: ask before git operations: {} (git commit/rebase/reset/tag {} before running)",
-                    if enabled { "on" } else { "off" },
-                    if enabled { "ask" } else { "run without asking" },
-                ));
+                self.apply_ask_before_git(enabled);
             }
             ServerResponse::Tools { tools } => {
                 self.sessions.current.capabilities.tools.entries = tools;
@@ -322,6 +326,12 @@ impl App {
             }
             ServerResponse::SkillBody { body } => {
                 self.ui.skills_pane.apply_detail(request, body);
+            }
+            ServerResponse::BackgroundTasks { tasks } => {
+                self.apply_background_tasks(tasks);
+            }
+            ServerResponse::BackgroundTaskDetail { detail } => {
+                self.apply_task_detail(request, detail);
             }
             ServerResponse::Model { result } => {
                 self.apply_model_result(request, result);
@@ -403,10 +413,12 @@ impl App {
             // The worktree panel shows the host's reason where the action was
             // taken, so the retry stays one key away.
         } else {
-            // An error for the request the skills detail waits on settles it
-            // as unavailable rather than leaving it loading on a reply that
-            // cannot arrive; any other request id leaves the detail alone.
+            // An error for the request the skills detail or the task detail
+            // waits on settles it rather than leaving it reading on a reply
+            // that cannot arrive; any other request id leaves the detail
+            // alone.
             self.ui.skills_pane.fail_detail(request);
+            self.ui.tasks_pane.fail_read(request);
             self.system_line(format!("error: {message}"));
         }
     }

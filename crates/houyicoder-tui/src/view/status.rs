@@ -111,11 +111,16 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let dim = Style::new().fg(Color::DarkGray);
     let mode = app.current_mode();
     let (mode_label, mode_style) = mode_label(mode);
-    let mut left: Vec<Span<'static>> = vec![
-        Span::raw(" "),
-        Span::styled(app.status_bar_model().to_string(), dim),
-        Span::styled(" · ", dim),
-    ];
+    let mut left: Vec<Span<'static>> = vec![Span::raw(" ")];
+    // The live task count leads the line so a narrow terminal clips the model
+    // id and the less urgent hints before it drops the count, matching the
+    // footer budget's rule that an actionable signal outranks identity.
+    if let Some(hint) = tasks_hint(app) {
+        left.push(Span::styled(hint, Style::new().fg(Color::Cyan)));
+        left.push(Span::styled(" · ", dim));
+    }
+    left.push(Span::styled(app.status_bar_model().to_string(), dim));
+    left.push(Span::styled(" · ", dim));
     left.push(Span::styled(mode_label, mode_style));
     if let Some(hint) = shell_hint(app) {
         left.push(Span::styled(" · ", dim));
@@ -208,6 +213,23 @@ fn agents_hint(app: &App) -> Option<String> {
         1 if n > 1 => format!("{label} · /agents to manage"),
         _ => format!("{label} · shift+\u{2191}\u{2193} · enter"),
     })
+}
+
+/// The background-command affordance for the status bar: the count of
+/// commands still running and the command that opens the pane. It counts
+/// running tasks only; a finished task keeps its output in the pane but has
+/// nothing left to manage, so the row clears once nothing runs.
+fn tasks_hint(app: &App) -> Option<String> {
+    let n = app.sessions.current.capabilities.tasks.running_count();
+    if n == 0 {
+        return None;
+    }
+    let label = if n == 1 {
+        "1 background task".to_string()
+    } else {
+        format!("{n} background tasks")
+    };
+    Some(format!("{label} \u{00b7} /tasks"))
 }
 
 /// Color the context gauge by load so a filling window reads at a glance:

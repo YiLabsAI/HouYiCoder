@@ -809,6 +809,7 @@ fn folded_transcript() -> Vec<TranscriptLine> {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "call-1".to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };

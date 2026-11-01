@@ -2,6 +2,8 @@
 //! memory land in the right bucket, not other) and how a diff result
 //! mid-run breaks a group so an edit renders expanded.
 
+use houyicoder_protocol::frontend::tasks::BackgroundTaskId;
+
 use crate::fold::{
     DisplaySlot, ToolStats, accumulate_brief, compute_fold_groups, display_slots, is_foldable,
     render_summary,
@@ -18,6 +20,7 @@ fn tool_call(cid: &str, name: &str, brief: &str, oc: ToolOutcome) -> TranscriptL
         invocation: brief.to_string(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -31,6 +34,7 @@ fn tool_result(cid: &str, oc: ToolOutcome) -> TranscriptLine {
         invocation: String::new(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     }
@@ -58,6 +62,44 @@ fn test_not_run_renders_alone() {
         compute_fold_groups(&stopped, false).is_empty(),
         "a call that never ran is not folded away"
     );
+}
+
+fn background_result(cid: &str) -> TranscriptLine {
+    TranscriptLine::Tool {
+        name: "result".to_string(),
+        tool: "bash".to_string(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: cid.to_string(),
+        background_task: Some(BackgroundTaskId(1)),
+        body: "Running in background (task #1 \u{00b7} \u{2193} to manage)".to_string(),
+        is_diff: false,
+    }
+}
+
+/// A command moved to the background keeps rows of its own: a fold summary
+/// reports the command as finished, and the row naming its task is how the
+/// user reaches output that is still arriving.
+#[test]
+fn test_background_row_renders_alone() {
+    let backgrounded = vec![
+        tool_call("c1", "bash", "sleep 30", ToolOutcome::Success),
+        background_result("c1"),
+    ];
+    assert!(
+        compute_fold_groups(&backgrounded, false).is_empty(),
+        "a background command is not folded away"
+    );
+    let mixed = vec![
+        tool_call("c1", "bash", "printf hi", ToolOutcome::Success),
+        tool_result("c1", ToolOutcome::Success),
+        tool_call("c2", "bash", "sleep 30", ToolOutcome::Success),
+        background_result("c2"),
+    ];
+    let groups = compute_fold_groups(&mixed, false);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].end, 2, "the summary covers the earlier call only");
 }
 
 /// A call whose chip name is the user-facing Update (raw title edit) must
@@ -121,6 +163,7 @@ fn test_update_chip_buckets_edit() {
         invocation: "src/foo.rs".to_string(),
         outcome: ToolOutcome::Success,
         call_id: "c1".to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };
@@ -134,6 +177,7 @@ fn test_update_chip_buckets_edit() {
             invocation: String::new(),
             outcome: ToolOutcome::Success,
             call_id: "c1".to_string(),
+            background_task: None,
             body: String::new(),
             is_diff: false,
         },
@@ -157,6 +201,7 @@ fn test_diff_during_run_breaks() {
         invocation: "foo.rs".to_string(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };
@@ -167,6 +212,7 @@ fn test_diff_during_run_breaks() {
         invocation: String::new(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: "Added 1 line, removed 1 line".to_string(),
         is_diff: true,
     };
@@ -213,6 +259,7 @@ fn test_glob_read_edit_chips() {
         invocation: String::new(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: "Added 4 lines".to_string(),
         is_diff: true,
     };

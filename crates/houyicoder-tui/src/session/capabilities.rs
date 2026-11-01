@@ -9,6 +9,7 @@
 
 pub(crate) mod model;
 
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::time::{Duration, Instant};
@@ -24,9 +25,10 @@ use houyicoder_protocol::frontend::permission::{
 };
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::frontend::status::StatusSnapshot;
+use houyicoder_protocol::frontend::tasks::{BackgroundTaskId, BackgroundTaskSnapshot};
 use houyicoder_protocol::frontend::tools::ToolEntry;
 
-use crate::agent_message::{FLEET_GRACE, FleetEntry};
+use crate::agent_message::fleet::{FLEET_GRACE, FleetEntry};
 use crate::composition::WorktreeEntry;
 use crate::evidence::MemoryEntry;
 use crate::session::capabilities::model::ModelCapability;
@@ -447,6 +449,97 @@ impl MemoryCapability {
     }
 }
 
+/// The tasks capability: the newest snapshot of each background command, as
+/// the host published it. The host owns the commands; this cache answers the
+/// status bar's running count, the ending a background call's row finally
+/// shows, and the tasks pane's list. A frame replaces the snapshot of the
+/// task it names, and the revision moves with every change so the row cache
+/// rebuilds against it.
+#[derive(Debug, Default)]
+pub(crate) struct TasksCapability {
+    /// Newest snapshot per task number, ordered by number.
+    snapshots: BTreeMap<BackgroundTaskId, BackgroundTaskSnapshot>,
+    /// Set once a listing has replaced the cache, so the session knows the
+    /// cache speaks for the host rather than for the frames it happened to
+    /// see. A row restored from the log reads this before saying its task is
+    /// gone: before a listing, a missing task means nothing was observed yet.
+    listed: bool,
+    revision: u64,
+}
+
+impl TasksCapability {
+    /// Record the newest snapshot of one task.
+    ///
+    /// An ending is final: a later frame that still reports the task running
+    /// is older than what the cache holds, so it is dropped rather than
+    /// reverting a row the user already read as finished.
+    pub(crate) fn record(&mut self, task: BackgroundTaskSnapshot) {
+        let reverts_ending = self
+            .snapshots
+            .get(&task.id)
+            .is_some_and(|held| held.status.is_terminal() && !task.status.is_terminal());
+        if reverts_ending {
+            return;
+        }
+        self.snapshots.insert(task.id, task);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Replace the whole cache with a listing the host returned, so a
+    /// reconnecting session drops tasks the host no longer holds.
+    ///
+    /// A listing is a snapshot taken before it was sent, so an ending that
+    /// arrived while the read was in flight is newer than what the listing
+    /// carries for that task. Keeping the held ending rather than the
+    /// listing's older state means a task never falls back from ended to
+    /// running; a task the listing does not hold at all is dropped, because
+    /// the host no longer keeps it.
+    pub(crate) fn replace_all(&mut self, tasks: Vec<BackgroundTaskSnapshot>) {
+        let mut listed: BTreeMap<BackgroundTaskId, BackgroundTaskSnapshot> =
+            tasks.into_iter().map(|task| (task.id, task)).collect();
+        for (id, held) in &self.snapshots {
+            let listed_running = listed
+                .get(id)
+                .is_some_and(|listed| !listed.status.is_terminal());
+            if held.status.is_terminal() && listed_running {
+                listed.insert(*id, held.clone());
+            }
+        }
+        self.snapshots = listed;
+        self.listed = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Whether a listing has been received, so an absent task means the host
+    /// no longer holds it rather than that no frame has arrived yet.
+    pub(crate) fn listed(&self) -> bool {
+        self.listed
+    }
+
+    /// The newest snapshot of one task.
+    pub(crate) fn get(&self, id: BackgroundTaskId) -> Option<&BackgroundTaskSnapshot> {
+        self.snapshots.get(&id)
+    }
+
+    /// Every known task, ordered by number.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &BackgroundTaskSnapshot> {
+        self.snapshots.values()
+    }
+
+    /// How many tasks are still running.
+    pub(crate) fn running_count(&self) -> usize {
+        self.snapshots
+            .values()
+            .filter(|task| !task.status.is_terminal())
+            .count()
+    }
+
+    /// The change count, for the row cache identity.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
 /// The static composition of a session's named capabilities: the
 /// server-reported caches plus the client-local session state each capability
 /// keeps (such as the disabled-skill set). The connection, run, and transcript
@@ -476,4 +569,9 @@ pub(crate) struct SessionCapabilities {
     /// The model capability: the host-reported catalog with the applied
     /// model, and the commit awaiting its reply.
     pub(crate) model: ModelCapability,
+    /// The tasks capability: the newest snapshot of each background command.
+    pub(crate) tasks: TasksCapability,
 }
+
+#[cfg(test)]
+mod tests;

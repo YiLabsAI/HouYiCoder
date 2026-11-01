@@ -63,7 +63,7 @@ async fn test_background_completion_enqueues() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("c1", ChildRunMode::Background),
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: "found auth".into(),
         },
     );
@@ -98,7 +98,7 @@ async fn test_foreground_completion_skips_queue() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("c2", ChildRunMode::Foreground),
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: "done".into(),
         },
     );
@@ -139,7 +139,7 @@ async fn test_duplicate_signal_dedups() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("c3", ChildRunMode::Background),
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: "done".into(),
         },
     );
@@ -173,7 +173,7 @@ async fn test_failed_completion_enqueues() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("c4", ChildRunMode::Background),
-            status: ChildStatus::Failed,
+            status: CompletionStatus::Failed,
             summary: "provider fatal".into(),
         },
     );
@@ -211,7 +211,7 @@ async fn test_multi_child_concurrent_enqueues() {
             global_completed_topic(),
             BusMessage::Completed {
                 child: child(id, ChildRunMode::Background),
-                status: ChildStatus::Completed,
+                status: CompletionStatus::Completed,
                 summary: summary.into(),
             },
         );
@@ -249,7 +249,7 @@ async fn test_empty_summary_still_enqueues() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("c8", ChildRunMode::Background),
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: String::new(),
         },
     );
@@ -292,7 +292,7 @@ async fn test_back_to_back_deliver() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("c9", ChildRunMode::Background),
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: "race".into(),
         },
     );
@@ -324,7 +324,7 @@ async fn test_orphan_completion_notifies() {
         global_completed_topic(),
         BusMessage::Completed {
             child: child("orphan", ChildRunMode::Background),
-            status: ChildStatus::Completed,
+            status: CompletionStatus::Completed,
             summary: "no spawn seen".into(),
         },
     );

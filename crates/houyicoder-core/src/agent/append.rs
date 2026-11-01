@@ -21,7 +21,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::agent::turn::result::run_completion_status;
 use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
-use houyicoder_context::{ContextBackend, EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{
+    ContextBackend, EventId, NotificationTopic, SessionEvent, SessionId, SessionLogEntry,
+};
 use houyicoder_protocol::block_ref::{
     BLOCK_BYTES_KEY, BLOCK_REF_KEY, CONTAINS_KEY, HINT_KEY, PREVIEW_KEY, block_addresses,
 };
@@ -95,28 +97,31 @@ impl Runner {
         ));
     }
 
-    /// Append a child-completion notification: a background subagent finished
-    /// and the parent model must learn of the result at this turn boundary.
-    /// Distinct from append_mid_turn_input (a user interjection) so the
-    /// durable log + the assembly distinguish a child result from a user
-    /// message. The assembly frames it as a background result, not a
-    /// continue-the-task note. turn + order are best-effort (the event-log
-    /// order is authoritative, as with SubagentReturn).
+    /// Append a background notification: a subagent finished or a command
+    /// reached a terminal state, and the model must learn of it at this turn
+    /// boundary. Distinct from append_mid_turn_input (a user interjection) so
+    /// the durable log + the assembly distinguish a background result from a
+    /// user message. The topic decides how the assembly frames it. turn +
+    /// order are best-effort (the event-log order is authoritative, as with
+    /// SubagentReturn).
     pub(crate) async fn append_notification(
         &self,
         session: SessionId,
-        child_session_id: String,
+        source_id: String,
+        topic: NotificationTopic,
         text: String,
+        capture: Option<Value>,
     ) -> Result<(), RunError> {
         self.store
             .append(new_event(
                 session,
                 SessionEvent::NotificationInjected {
-                    child_session_id,
+                    child_session_id: source_id,
                     turn: 0,
                     order: 0,
-                    topic: "completion".to_string(),
+                    topic: topic.as_word().to_string(),
                     summary: text,
+                    capture,
                 },
             ))
             .await?;

@@ -30,7 +30,7 @@ impl App {
         // that form: the footer row, the teammate view's auto-exit, and the
         // transcript trace all answer "how did this child end", so they read
         // one typed value rather than each interpreting the host's word.
-        let ending = completed.as_deref().map(SubagentOutcome::from_status);
+        let ending = completed.map(SubagentOutcome::from_completion);
         // A running child drives the live refetch below.
         let is_running = ending.is_none();
         // Auto-exit the teammate view only when the viewed child is

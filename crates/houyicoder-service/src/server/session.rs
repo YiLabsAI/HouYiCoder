@@ -67,6 +67,9 @@ impl Server {
             // mid-child-approval is a follow-up (the parent serve path covers
             // the common case).
             bus: None,
+            // Attached by serve_session from the host, which is where the
+            // process-scoped registry lives for a detached session.
+            background_tasks: None,
         }
     }
 
@@ -345,6 +348,11 @@ pub(crate) async fn serve_session(
     // environment's view.
     if let Some(facts) = host.provider_facts() {
         server = server.with_provider_facts(facts.clone());
+    }
+    // Same reach for the background registry: the detached session keeps
+    // running the commands it took over, and this connection must list them.
+    if let Some(tasks) = host.background_tasks() {
+        server = server.with_background_tasks(Arc::clone(tasks));
     }
     let result = server.serve(io).await;
     // Release the lease: a clean exit or a disconnect both leave the session

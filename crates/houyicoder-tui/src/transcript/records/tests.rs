@@ -243,6 +243,7 @@ fn test_verbose_render_uses_invocation() {
         invocation: long.clone(), // untruncated
         outcome: ToolOutcome::Success,
         call_id: "c1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };
@@ -264,6 +265,7 @@ fn test_tool_chip_ellipsis() {
         invocation: "ego-browser nodejs with a long argument".into(),
         outcome: ToolOutcome::Success,
         call_id: "c1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };
@@ -287,6 +289,7 @@ fn test_result_body_only_result() {
         invocation: "ls".into(),
         outcome: ToolOutcome::Running,
         call_id: "c1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };
@@ -298,6 +301,7 @@ fn test_result_body_only_result() {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "c1".into(),
+        background_task: None,
         body: "ok".into(),
         is_diff: false,
     };

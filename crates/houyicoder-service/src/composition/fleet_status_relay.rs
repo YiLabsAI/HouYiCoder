@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, ChildStatus, global_completed_topic, global_progress_topic, spawned_topic,
+    AgentBus, BusMessage, global_completed_topic, global_progress_topic, spawned_topic,
 };
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::frontend::event::FrontendEvent;
 
 use crate::server::EventSequencer;
@@ -78,7 +79,7 @@ pub fn spawn(
                         let mut snap = children
                             .remove(&child.agent_id)
                             .map_or_else(Snapshot::default, |(_, snap)| snap);
-                        snap.completed = Some(status_str(&status));
+                        snap.completed = Some(status);
                         snap.last_activity = Some(summary);
                         emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
                     }
@@ -101,18 +102,7 @@ struct Snapshot {
     tokens: u64,
     tool_uses: u32,
     last_activity: Option<String>,
-    completed: Option<String>,
-}
-
-fn status_str(status: &ChildStatus) -> String {
-    match status {
-        ChildStatus::Completed => "completed",
-        ChildStatus::Killed => "killed",
-        ChildStatus::Failed => "failed",
-        ChildStatus::TurnLimit => "turn_limit",
-        ChildStatus::BudgetExhausted => "budget",
-    }
-    .to_string()
+    completed: Option<CompletionStatus>,
 }
 
 fn emit(event_sequencer: &EventSequencer, agent_id: &str, subagent_type: &str, snap: &Snapshot) {

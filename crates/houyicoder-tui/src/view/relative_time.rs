@@ -33,7 +33,9 @@ pub(crate) fn session_span_label(ms: Option<u64>) -> String {
 /// Dividing a span under a second to whole seconds would print work that took
 /// 620ms as no time at all.
 pub(crate) fn summary_span_label(ms: u64) -> String {
-    if ms < 1000 {
+    if ms == 0 {
+        "<1ms".to_string()
+    } else if ms < 1000 {
         format!("{ms}ms")
     } else {
         format_span_secs(ms / 1000)

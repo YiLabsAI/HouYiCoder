@@ -911,15 +911,20 @@ async fn test_drive_translates_events() {
 }
 
 /// Tool progress needs both the call id and the elapsed seconds; a missing
-/// one drops the tick, and the optional line count rides along only when
-/// the engine sent it.
+/// one drops the tick, and the call's limit and tail ride along when the
+/// engine sent them.
 #[tokio::test]
 async fn test_drive_translates_tool_progress() {
     let mut engine = FakeEngine::new();
     engine.event(FrontendEvent::Acpx {
         notification: AcpxNotification::new(
             AcpxMethod::ToolProgress,
-            serde_json::json!({"call_id": "call-7", "elapsed_secs": 4, "lines": 12}),
+            serde_json::json!({
+                "call_id": "call-7",
+                "elapsed_secs": 4,
+                "timeout_secs": 120,
+                "tail": ["4 of 50", "5 of 50"],
+            }),
         ),
     });
     engine.event(FrontendEvent::Acpx {
@@ -939,17 +944,17 @@ async fn test_drive_translates_tool_progress() {
 
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, elapsed_secs, lines: Some(12) })
-                if call_id == "call-7" && *elapsed_secs == 4)
+            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, elapsed_secs, timeout_secs: Some(120), tail })
+                if call_id == "call-7" && *elapsed_secs == 4 && tail.len() == 2)
         ),
         "full progress tick lost its fields: {run:?}"
     );
     assert!(
         run.msgs.iter().any(
-            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, lines: None, .. })
+            |m| matches!(m, SessionMessage::Event(ServerEvent::ToolProgress { call_id, timeout_secs: None, .. })
                 if call_id == "call-8")
         ),
-        "absent line count must surface as None: {run:?}"
+        "a tick without a declared limit must read as None: {run:?}"
     );
     assert!(
         !run.msgs.iter().any(

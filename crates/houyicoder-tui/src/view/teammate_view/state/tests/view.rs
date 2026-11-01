@@ -7,7 +7,7 @@
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::app::handle_mouse;
 use crate::composition::app;
 use crate::keys::handle_ctrl_o;

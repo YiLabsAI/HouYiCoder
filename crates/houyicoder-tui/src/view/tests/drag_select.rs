@@ -257,6 +257,7 @@ fn tool_line(call_id: &str) -> TranscriptLine {
         invocation: "echo hi".into(),
         outcome: ToolOutcome::Success,
         call_id: call_id.into(),
+        background_task: None,
         body: "hi".into(),
         is_diff: false,
     }
@@ -858,6 +859,7 @@ fn app_with_fold_group() -> App {
         invocation: brief.to_string(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     };
@@ -868,6 +870,7 @@ fn app_with_fold_group() -> App {
         invocation: String::new(),
         outcome: oc,
         call_id: cid.to_string(),
+        background_task: None,
         body: body.to_string(),
         is_diff: false,
     };

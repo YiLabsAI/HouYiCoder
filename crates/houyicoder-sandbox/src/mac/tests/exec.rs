@@ -130,10 +130,9 @@ async fn test_glob_for_basename_nonempty() {
     );
 }
 
-/// exec_streaming drains stdout + counts newlines live (the (Ns · M lines)
-/// chip source). Runs a 10-line command via the streaming path + asserts the
-/// counter reaches 10 + the full stdout is collected (same as exec). Pins
-/// the G8b-lines streaming branch in exec_inner.
+/// The streaming path counts newlines as they arrive and still collects the
+/// command's full stdout, so a running command's live line count and its
+/// final answer come from one drain.
 #[tokio::test]
 async fn test_exec_streaming_counts_lines() {
     let s = MacSeatbeltSession::new().unwrap();

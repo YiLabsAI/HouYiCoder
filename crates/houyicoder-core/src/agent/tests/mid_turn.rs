@@ -5,6 +5,7 @@ use super::*;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
+use houyicoder_context::NotificationTopic;
 use houyicoder_context::SessionEvent;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::frontend::QueuedInput;
@@ -446,7 +447,12 @@ impl Tool for EnqueueBothTool {
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
             r.enqueue_input(QueuedInput::new(self.user_msg.clone()));
-            r.enqueue_notification("test-child".into(), self.notification.clone());
+            r.enqueue_notification(
+                "test-child".into(),
+                NotificationTopic::ChildCompletion,
+                self.notification.clone(),
+                None,
+            );
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }
@@ -480,7 +486,12 @@ impl Tool for EnqueueNotificationTool {
         _input: serde_json::Value,
     ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
         if let Some(r) = self.slot.get() {
-            r.enqueue_notification("test-child".into(), self.notification.clone());
+            r.enqueue_notification(
+                "test-child".into(),
+                NotificationTopic::ChildCompletion,
+                self.notification.clone(),
+                None,
+            );
         }
         Box::pin(async move { Ok(serde_json::json!({"queued": true})) })
     }

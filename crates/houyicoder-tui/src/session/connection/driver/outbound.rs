@@ -91,6 +91,15 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
             request(req_id, FrontendRequest::SkillBody { name })
         }
         ClientCommand::SkillsQuery { req_id } => request(req_id, FrontendRequest::Skills),
+        ClientCommand::BackgroundTasksQuery { req_id } => {
+            request(req_id, FrontendRequest::ListBackgroundTasks)
+        }
+        ClientCommand::BackgroundTaskDetailQuery { req_id, id } => {
+            request(req_id, FrontendRequest::BackgroundTaskDetail { id })
+        }
+        ClientCommand::KillBackgroundTask { req_id, id } => {
+            request(req_id, FrontendRequest::KillBackgroundTask { id })
+        }
         ClientCommand::MemoryListQuery { req_id } => request(req_id, FrontendRequest::MemoryList),
         ClientCommand::MemoryShowQuery { req_id, key } => {
             request(req_id, FrontendRequest::MemoryShow { key })

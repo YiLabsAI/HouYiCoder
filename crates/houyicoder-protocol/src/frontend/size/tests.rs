@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::acpx::AcpxMethod;
+use crate::frontend::completion::CompletionStatus;
 use crate::frontend::memory::{
     MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryChangeScope,
     MemoryOperation,
@@ -13,6 +14,25 @@ use crate::frontend::session_update::{
     ToolCallUpdateFields, UsageUpdate,
 };
 use serde_json::{Value, json};
+
+/// The ending word a finished status frame carries is part of its payload, so
+/// a retained window charges for it.
+#[test]
+fn test_status_frame_counts_ending() {
+    let status = |completed| FrontendEvent::AgentStatus {
+        agent_id: "a".into(),
+        subagent_type: "explore".into(),
+        description: String::new(),
+        turn: 1,
+        tokens: 0,
+        tool_uses: 0,
+        last_activity: None,
+        completed,
+    };
+    let running = status(None).estimated_bytes();
+    let finished = status(Some(CompletionStatus::Completed)).estimated_bytes();
+    assert_eq!(finished, running + "completed".len());
+}
 
 /// The metadata a producer attaches, as the field holds it.
 fn meta(entries: &[(&str, &str)]) -> Meta {

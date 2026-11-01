@@ -408,6 +408,7 @@ fn test_subagent_target_ignores_result() {
         invocation: "ls".into(),
         outcome: ToolOutcome::Success,
         call_id: "call-1".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     });
@@ -418,6 +419,7 @@ fn test_subagent_target_ignores_result() {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "call-1".into(),
+        background_task: None,
         body: "a.rs".into(),
         is_diff: false,
     });
@@ -428,6 +430,7 @@ fn test_subagent_target_ignores_result() {
         invocation: "pwd".into(),
         outcome: ToolOutcome::Success,
         call_id: "call-2".into(),
+        background_task: None,
         body: String::new(),
         is_diff: false,
     });
@@ -438,6 +441,7 @@ fn test_subagent_target_ignores_result() {
         invocation: String::new(),
         outcome: ToolOutcome::Success,
         call_id: "call-2".into(),
+        background_task: None,
         body: "repo".into(),
         is_diff: false,
     });

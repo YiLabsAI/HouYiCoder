@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use super::command_state;
 use super::compaction_rows::push_compaction_rows;
 use super::delegation_rows::{Delegation, push_delegation_rows, push_finished_rows};
 use super::notice_rows::push_notice_rows;
@@ -302,52 +303,10 @@ fn rendered_tool_rows(
         .is_some_and(|key| app.ui.transcript_view.expanded.fold_groups.contains(key))
         || app.ui.verbose;
     let mut rows = line.tool_call_rows(width, full_call)?;
-    // Live bash-elapsed suffix: a long-running bash call shows (Ns) on its
-    // chip after 2s so a stalled-looking command is distinguishable from a
-    // stuck one. When the backend streams stdout, lines Some -> (Ns . M lines).
-    let TranscriptLine::Tool { call_id, .. } = line else {
-        return Some(rows);
-    };
-    let Some(prog) = app.run_progress().and_then(|p| p.tools.tick(call_id)) else {
-        return Some(rows);
-    };
-    if prog.elapsed_secs < 2 {
-        return Some(rows);
-    }
-    // A count of one is singular. The chip is read at a glance while the
-    // command runs, so "1 lines" makes the reader stop at the one number the
-    // suffix exists to report.
-    let suffix = match prog.lines {
-        Some(n) => {
-            let noun = if n == 1 { "line" } else { "lines" };
-            format!(" ({}s · {n} {noun})", prog.elapsed_secs)
-        }
-        None => format!(" ({}s)", prog.elapsed_secs),
-    };
-    if let Some(last) = rows.last_mut() {
-        let suffix_width = UnicodeWidthStr::width(suffix.as_str());
-        let keep = (width as usize).saturating_sub(suffix_width);
-        *last = format!(
-            "{}{}",
-            truncate_call_with_paren(last, keep),
-            truncate_width(&suffix, width as usize)
-        );
-    }
+    // A call that outlives a couple of seconds reports under its chip, so a
+    // command that is working reads differently from one that is stuck.
+    rows.extend(command_state::running_rows(app, line, width));
     Some(rows)
-}
-
-/// Truncate a call summary to a column budget while keeping the closing paren
-/// that closes the call's argument list. Cutting the line at the budget would
-/// otherwise leave the row reading as an unclosed call, which looks like a
-/// rendering fault rather than a shortened command.
-fn truncate_call_with_paren(line: &str, keep: usize) -> String {
-    let cut = truncate_width(line, keep);
-    if !line.ends_with(')') || cut.ends_with(')') || keep == 0 {
-        return cut;
-    }
-    let mut out = truncate_width(line, keep - 1);
-    out.push(')');
-    out
 }
 
 /// Emit the rendered rows for one transcript line (the row layer). Shared
@@ -399,7 +358,11 @@ pub(crate) fn push_line_rows(
     if let TranscriptLine::Tool { name, call_id, .. } = line
         && name.as_str() == "result"
     {
-        let (body, is_diff) = line.result_body();
+        let (built, is_diff) = line.result_body();
+        // A background command's row keeps its place and reports how the
+        // task ended once the host publishes that state; the built body is
+        // the running form a replay starts from.
+        let body = command_state::ended_body(app, line).unwrap_or(built);
         let results = &app.ui.transcript_view.expanded.results;
         let expanded = results.contains(call_id.as_str()) || app.ui.verbose;
         let lang = line.diff_lang();

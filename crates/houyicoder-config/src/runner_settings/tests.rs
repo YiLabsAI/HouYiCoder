@@ -64,3 +64,47 @@ fn test_env_parse_garbage() {
     assert_eq!(parse_env_max_turns("abc", &mut w), None);
     assert_eq!(w.len(), 1);
 }
+
+/// The foreground budget is read from the same file, and a missing key keeps
+/// the default rather than warning.
+#[test]
+fn test_budget_key_read() {
+    let p = temp_settings(r#"{"bash_foreground_budget_ms": 2500}"#);
+    let (s, w) = load_runner_settings_from(&p, None);
+    remove_file(&p).ok();
+    assert_eq!(s.bash_foreground_budget_ms, 2500);
+    assert!(w.is_empty(), "a known value is not a warning");
+}
+
+/// Zero is the way to turn the background move off, so it is a value rather
+/// than a malformed one.
+#[test]
+fn test_budget_zero_disables() {
+    let p = temp_settings(r#"{"bash_foreground_budget_ms": 0}"#);
+    let (s, w) = load_runner_settings_from(&p, None);
+    remove_file(&p).ok();
+    assert_eq!(s.bash_foreground_budget_ms, 0);
+    assert!(
+        w.is_empty(),
+        "zero disables the background move, it is not an error"
+    );
+}
+
+#[test]
+fn test_budget_bad_type_warns() {
+    // The parser is asked directly: the loader also reads the process env,
+    // and a budget set there would decide the answer instead of the file.
+    let mut w = Vec::new();
+    let settings = serde_json::json!({"bash_foreground_budget_ms": "fast"});
+    assert_eq!(parse_bash_budget(&settings, &mut w), None);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].reason.contains("ignored"), "{}", w[0].reason);
+}
+
+#[test]
+fn test_budget_env_parsed() {
+    assert_eq!(parse_env_bash_budget("900", &mut Vec::new()), Some(900));
+    let mut w = Vec::new();
+    assert_eq!(parse_env_bash_budget("soon", &mut w), None);
+    assert_eq!(w.len(), 1);
+}

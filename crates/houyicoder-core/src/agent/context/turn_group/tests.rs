@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::agent::context::Tokenizer;
 use crate::agent::context::retention::BudgetedRetentionPolicy;
 use crate::agent::context::retention::RetentionDecision;
-use houyicoder_context::{EventId, RecapSource, SessionId};
+use houyicoder_context::{EventId, NotificationTopic, RecapSource, SessionId};
 use houyicoder_protocol::tool::user_shell_call_id;
 
 fn evt(kind: SessionEvent) -> SessionLogEntry {
@@ -385,6 +385,64 @@ fn test_recall_between_calls() {
     }
 }
 
+/// A task notification carries output a command printed, so it reaches the
+/// model under framing that names it as data; a child's ending keeps the
+/// note telling the model what a subagent result is.
+#[test]
+fn test_task_notice_framed() {
+    let text = "<task-notification id=\"task-1\" status=\"finished\">\ncommand: make check\n</task-notification>";
+    let task = user_text_of(&SessionEvent::NotificationInjected {
+        child_session_id: "task-1".into(),
+        turn: 0,
+        order: 0,
+        topic: NotificationTopic::Task.as_word().to_string(),
+        summary: text.into(),
+        capture: None,
+    });
+    let task = task.expect("a task notification is delivered");
+    assert!(
+        task.contains("not instructions"),
+        "command output is framed as data: {task}"
+    );
+    assert!(
+        task.contains(text),
+        "the block itself is not rewritten: {task}"
+    );
+    let child = user_text_of(&SessionEvent::NotificationInjected {
+        child_session_id: "child".into(),
+        turn: 0,
+        order: 0,
+        topic: NotificationTopic::ChildCompletion.as_word().to_string(),
+        summary: "child finished".into(),
+        capture: None,
+    });
+    let child = child.expect("a child completion is delivered");
+    assert!(
+        child.contains("background subagent completed"),
+        "a child completion keeps its framing: {child}"
+    );
+}
+
+/// A reason this build does not name still reaches the model, under framing
+/// that claims nothing about what produced it.
+#[test]
+fn test_unknown_topic_neutral() {
+    let text = user_text_of(&SessionEvent::NotificationInjected {
+        child_session_id: "x".into(),
+        turn: 0,
+        order: 0,
+        topic: "from-a-newer-host".into(),
+        summary: "payload".into(),
+        capture: None,
+    });
+    let text = text.expect("an unknown reason is still delivered");
+    assert!(text.contains("payload"), "{text}");
+    assert!(
+        !text.contains("subagent completed"),
+        "an unknown reason is not described as a subagent: {text}"
+    );
+}
+
 /// A child-completion notice is held like any other user-role text: it is not
 /// the model's to read before the call it interrupted is answered.
 #[test]
@@ -399,6 +457,7 @@ fn test_notice_waits_for_tools() {
             order: 0,
             topic: "done".into(),
             summary: "child finished".into(),
+            capture: None,
         }),
         evt(SessionEvent::tool_result("c1", serde_json::json!({"a": 1}))),
     ];

@@ -5,6 +5,7 @@ use super::slots_key::SlotsKey;
 use crate::records::TeammateView;
 use crate::row_id::RowId;
 use crate::selection::TAG_PLAIN;
+use crate::state::BashProgress;
 use crate::test_harness::working_app;
 
 /// A row whose metadata names the row, so a window that gives a row its
@@ -229,7 +230,13 @@ fn test_key_tracks_a_tick() {
 
     let progress = app.run_progress_mut().expect("active run");
     progress.tools.begin("c1".into());
-    progress.tools.note_tick("c1".into(), 3, None);
+    progress.tools.note_tick(
+        "c1".into(),
+        BashProgress {
+            elapsed_secs: 3,
+            ..Default::default()
+        },
+    );
 
     assert_ne!(
         SlotsKey::for_frame(&app, 80),
@@ -255,8 +262,20 @@ fn test_width_and_tick_apart() {
         let progress = ticked.run_progress_mut().expect("active run");
         progress.tools.begin("call-1".into());
         progress.tools.begin("call-2".into());
-        progress.tools.note_tick("call-1".into(), 0, None);
-        progress.tools.note_tick("call-2".into(), 0, None);
+        progress.tools.note_tick(
+            "call-1".into(),
+            BashProgress {
+                elapsed_secs: 0,
+                ..Default::default()
+            },
+        );
+        progress.tools.note_tick(
+            "call-2".into(),
+            BashProgress {
+                elapsed_secs: 0,
+                ..Default::default()
+            },
+        );
     }
     let at_80_ticked = SlotsKey::for_frame(&ticked, 80);
 

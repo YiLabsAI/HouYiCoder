@@ -35,6 +35,8 @@ use crate::frontend::run::RunResult;
 use crate::frontend::session_update::SessionUpdate;
 use crate::frontend::skills::SkillEntry;
 use crate::frontend::status::StatusSnapshot;
+use crate::frontend::tasks::BackgroundTaskDetail;
+use crate::frontend::tasks::BackgroundTaskSnapshot;
 use crate::frontend::tools::ToolEntry;
 use crate::frontend::trajectory::TrajectoryResponse;
 use crate::frontend::trust::TrustAccept;
@@ -283,6 +285,11 @@ pub enum ResponsePayload {
     SandboxRestored(CheckpointRestoreView),
     /// Both sides of one recorded write, as text, for its detail to compare.
     SandboxTexts(CheckpointTextView),
+    /// Every background command the host knows about, oldest first, in the
+    /// order the host assigned their numbers.
+    BackgroundTasks(Vec<BackgroundTaskSnapshot>),
+    /// One background command's full record, for its detail view.
+    BackgroundTaskDetail(BackgroundTaskDetail),
     /// The request itself was invalid for the current state or capability.
     Error(ProtocolError),
 }

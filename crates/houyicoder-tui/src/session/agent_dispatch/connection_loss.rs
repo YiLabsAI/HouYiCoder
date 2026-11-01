@@ -42,6 +42,7 @@ impl App {
         let run_not_sent = run_req.is_some_and(|r| not_sent.contains(&r));
         self.clear_memory_pending();
         self.ui.skills_pane.clear_pending();
+        self.ui.tasks_pane.clear_pending();
         // A request whose transport is gone can never be answered, and both
         // confirmation pages ignore every key while one is out. Settling them
         // is what returns the keys: without it the page has no button, no key,

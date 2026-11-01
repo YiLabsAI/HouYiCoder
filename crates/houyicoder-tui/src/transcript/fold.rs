@@ -276,6 +276,16 @@ pub(crate) fn fold_groups_in(
             }
             continue;
         }
+        // A command the host moved to a background task keeps its own rows:
+        // the summary reports a command as finished, and the row naming the
+        // task is how the user reaches output that is still arriving.
+        if hands_over_to_task(lines, i, call_id) {
+            i += 1;
+            if is_result_for(lines, i, call_id) {
+                i += 1;
+            }
+            continue;
+        }
         // Non-foldable tools render individual so their content stays visible.
         if !is_foldable(name) {
             i += 1;
@@ -304,6 +314,9 @@ pub(crate) fn fold_groups_in(
         // non-foldable or error call breaks the run.
         while let Some((cid, nm, st)) = tool_call_at(lines, i) {
             if outcome_renders_alone(tool_call_outcome(lines, i)) {
+                break;
+            }
+            if hands_over_to_task(lines, i, cid) {
                 break;
             }
             if !is_foldable(nm) {
@@ -450,6 +463,21 @@ fn tool_call_outcome(transcript: &[TranscriptLine], i: usize) -> Option<ToolOutc
         TranscriptLine::Tool { outcome, .. } => Some(*outcome),
         _ => None,
     }
+}
+
+/// Whether the call at transcript index i passed its command to a background
+/// task. The task number lives on the result, next to the call, and its
+/// presence means the command outlived the turn that started it.
+fn hands_over_to_task(lines: &[TranscriptLine], i: usize, call_id: &str) -> bool {
+    matches!(
+        lines.get(i + 1),
+        Some(TranscriptLine::Tool {
+            name,
+            call_id: cid,
+            background_task: Some(_),
+            ..
+        }) if name == "result" && cid == call_id
+    )
 }
 
 /// Whether a call must render on its own rather than fold into a summary: a

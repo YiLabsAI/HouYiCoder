@@ -23,6 +23,7 @@ use houyicoder_core::agent::multi_agent::bus_types::permission_request_topic;
 use tokio::sync::Notify;
 
 use crate::composition::SessionHost;
+use crate::composition::background_tasks::BackgroundTasks;
 use crate::protocol_adapter::{map_run_error, map_run_result};
 use houyicoder_provider::ProviderFacts;
 
@@ -178,6 +179,11 @@ pub struct Server {
     /// connections; None on a server assembled without the feature, which
     /// never starts a request.
     recap: Option<Arc<RecapSession>>,
+    /// The session's background command registry, so the tasks list, the
+    /// detail view, and the kill request read the same instance the shell
+    /// tool passes runs to. None on a server built without one, which reports
+    /// an empty list.
+    background_tasks: Option<Arc<BackgroundTasks>>,
     /// This connection's registration with the recap state. Dropping it
     /// detaches the client, so a closed connection cannot keep a summary
     /// waiting for nobody.
@@ -228,7 +234,15 @@ impl Server {
             bus: None,
             recap: None,
             recap_client: None,
+            background_tasks: None,
         }
+    }
+
+    /// Attach the session's background command registry, so the tasks
+    /// requests answer from the instance the shell tool passes runs to.
+    pub fn with_background_tasks(mut self, tasks: Arc<BackgroundTasks>) -> Self {
+        self.background_tasks = Some(tasks);
+        self
     }
 
     /// Attach the session's recap state. The composition root passes the one

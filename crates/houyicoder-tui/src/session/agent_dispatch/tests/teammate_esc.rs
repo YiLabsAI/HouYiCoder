@@ -1,7 +1,7 @@
 //! Teammate interruption, optimistic echo, and steering behavior.
 
 use super::*;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::composition::app;
 use crate::records::TeammateView;
 use crate::records::TranscriptLine;

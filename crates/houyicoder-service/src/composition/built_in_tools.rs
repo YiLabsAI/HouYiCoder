@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use super::paths::snapshot_store_root;
+use houyicoder_api::background::BackgroundCommandLauncher;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::{Tool, ToolProvider};
 use houyicoder_core::agent::ConditionalSkillActivator;
@@ -17,6 +18,7 @@ use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_permission::{GuardedTool, ModeGate};
 use std::sync::Mutex;
+use std::time::Duration;
 
 /// The built-in tool set: AskUserQuestion always, plus the sandboxed
 /// filesystem + search + network tools (wrapped through the permission
@@ -32,6 +34,9 @@ pub(super) struct BuiltInToolProvider {
     activator: Option<Arc<dyn ConditionalSkillActivator>>,
     active_skill: Option<Arc<Mutex<Option<String>>>>,
     transaction: Option<Arc<FileTransaction>>,
+    /// The host that takes a shell command over once it outlives the
+    /// foreground budget, and how long it may hold the foreground first.
+    background: Option<(Arc<dyn BackgroundCommandLauncher>, Duration)>,
 }
 
 impl BuiltInToolProvider {
@@ -67,7 +72,20 @@ impl BuiltInToolProvider {
             activator: None,
             active_skill: None,
             transaction: None,
+            background: None,
         }
+    }
+
+    /// Connect the host that finishes a shell command the foreground gives up,
+    /// and the budget the foreground keeps before passing it over. A zero
+    /// budget disables the background move, so every command finishes in place.
+    pub(super) fn with_background_commands(
+        mut self,
+        launcher: Arc<dyn BackgroundCommandLauncher>,
+        foreground_budget: Duration,
+    ) -> Self {
+        self.background = Some((launcher, foreground_budget));
+        self
     }
 
     /// Wire the write journal into the file-touch tools, so every file they
@@ -118,8 +136,12 @@ impl ToolProvider for BuiltInToolProvider {
                 }
                 _ => BashTool::new(session.clone()),
             };
+            let mut bash = bash.with_active_skill(self.active_skill.clone());
+            if let Some((launcher, budget)) = &self.background {
+                bash = bash.with_background_commands(Arc::clone(launcher), *budget);
+            }
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(bash.with_active_skill(self.active_skill.clone())),
+                Arc::new(bash),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(

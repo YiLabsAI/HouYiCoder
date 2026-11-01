@@ -323,6 +323,51 @@ fn test_every_kind_maps() {
     }
 }
 
+/// A task notification is written for the model, not the user: neither the
+/// session/update stream nor the acpx mark carries it, so the command's output
+/// never reads as a line the user authored, and no delivery mark binds to the
+/// prompt that opened the turn. A child-completion notice still surfaces and is
+/// marked, so a delegated agent's ending stays visible.
+#[test]
+fn test_task_notice_not_rendered() {
+    let task = SessionEvent::NotificationInjected {
+        child_session_id: "task-1".into(),
+        turn: 1,
+        order: 0,
+        topic: "task".into(),
+        summary: "<task-notification id=\"task-1\" status=\"finished\">".into(),
+        capture: None,
+    };
+    assert!(
+        map_session_update(&task).is_none(),
+        "a task notice never becomes a user message chunk"
+    );
+    assert!(
+        map_acpx_notification(&task).is_none(),
+        "a task notice carries no delivery mark"
+    );
+
+    let child = SessionEvent::NotificationInjected {
+        child_session_id: "child-1".into(),
+        turn: 1,
+        order: 0,
+        topic: "completion".into(),
+        summary: "the child finished".into(),
+        capture: None,
+    };
+    let update = map_session_update(&child).expect("a child completion surfaces");
+    assert!(
+        matches!(update, SessionUpdate::UserMessageChunk(_)),
+        "a child completion reads as a message chunk"
+    );
+    let mark = map_acpx_notification(&child).expect("a child completion is marked");
+    assert_eq!(
+        mark.method,
+        AcpxMethod::ContextChildCompleted,
+        "a child completion carries its delivery mark"
+    );
+}
+
 #[test]
 fn test_tool_result_maps_update() {
     let kind = SessionEvent::tool_result("toolu_1", Value::String("ok".into()));

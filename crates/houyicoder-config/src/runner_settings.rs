@@ -29,6 +29,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// outcome the terminal reports instead of hanging.
 const DEFAULT_MAX_TURNS: u32 = 1000;
 
+/// How long a shell command may hold the foreground before the host takes it
+/// over. Long enough that an ordinary build finishes in place, short enough
+/// that a slow one gives the prompt back; the command keeps running either
+/// way.
+const DEFAULT_BASH_FOREGROUND_BUDGET_MS: u64 = 15_000;
+
 /// Runner-level settings resolved from the merged settings file and env.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerSettings {
@@ -36,12 +42,17 @@ pub struct RunnerSettings {
     /// env, then this default. 0 is illegal (it would stop every runner on
     /// its first model call) so it falls back.
     pub max_turns: u32,
+    /// How long a bash call may hold the foreground, in milliseconds. The
+    /// settings file wins, then the env, then the default. 0 disables the
+    /// background move, so every command finishes in the foreground.
+    pub bash_foreground_budget_ms: u64,
 }
 
 impl Default for RunnerSettings {
     fn default() -> Self {
         Self {
             max_turns: DEFAULT_MAX_TURNS,
+            bash_foreground_budget_ms: DEFAULT_BASH_FOREGROUND_BUDGET_MS,
         }
     }
 }
@@ -74,12 +85,60 @@ pub fn load_runner_settings_from(
             .ok()
             .and_then(|raw| parse_env_max_turns(&raw, &mut warnings))
     });
+    let budget = parse_bash_budget(&settings, &mut warnings).or_else(|| {
+        var(crate::ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS)
+            .ok()
+            .and_then(|raw| parse_env_bash_budget(&raw, &mut warnings))
+    });
     (
         RunnerSettings {
             max_turns: value.unwrap_or(DEFAULT_MAX_TURNS),
+            bash_foreground_budget_ms: budget.unwrap_or(DEFAULT_BASH_FOREGROUND_BUDGET_MS),
         },
         warnings,
     )
+}
+
+/// The foreground budget accepts zero: it is the way to turn the background move off,
+/// and a caller that wants every command to finish in place asks for it.
+fn parse_bash_budget(value: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<u64> {
+    match value.get("bash_foreground_budget_ms") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => n.as_u64().or_else(|| {
+            warnings.push(ConfigWarning {
+                field: "bash_foreground_budget_ms".into(),
+                reason: format!(
+                    "expected a non-negative integer, got {n} — ignored, so the env var or the default ({DEFAULT_BASH_FOREGROUND_BUDGET_MS}) applies"
+                ),
+            });
+            None
+        }),
+        Some(other) => {
+            warnings.push(ConfigWarning {
+                field: "bash_foreground_budget_ms".into(),
+                reason: format!(
+                    "expected a number, got {} — ignored, so the env var or the default ({DEFAULT_BASH_FOREGROUND_BUDGET_MS}) applies",
+                    crate::json_type_name(other)
+                ),
+            });
+            None
+        }
+    }
+}
+
+fn parse_env_bash_budget(raw: &str, warnings: &mut Vec<ConfigWarning>) -> Option<u64> {
+    match raw.parse() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warnings.push(ConfigWarning {
+                field: crate::ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS.into(),
+                reason: format!(
+                    "expected a non-negative integer, got {raw:?} — using the default ({DEFAULT_BASH_FOREGROUND_BUDGET_MS})"
+                ),
+            });
+            None
+        }
+    }
 }
 
 fn parse_max_turns(value: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<u32> {

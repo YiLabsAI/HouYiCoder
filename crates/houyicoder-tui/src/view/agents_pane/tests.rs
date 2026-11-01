@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::composition;
 use crate::records::TranscriptLine;
 use crate::transcript::records::SubagentOutcome;

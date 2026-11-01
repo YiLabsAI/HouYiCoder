@@ -2,9 +2,10 @@
 //!
 //! The transport (MessageBus trait + InProcBus) is generic and lives in
 //! the async foundation crate; this module defines the agent-domain T
-//! that plugs into it: BusMessage, ChildStatus, and the topic naming scheme.
+//! that plugs into it: BusMessage and the topic naming scheme.
 
 use houyicoder_async::bus::InProcBus;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::frontend::permission::AskReason;
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +73,7 @@ pub enum BusMessage {
     /// Terminal state with a self-contained child descriptor.
     Completed {
         child: ChildDescriptor,
-        status: ChildStatus,
+        status: CompletionStatus,
         summary: String,
     },
     /// A message delivered to a child's inbox (parent -> child).
@@ -104,19 +105,6 @@ pub enum BusMessage {
         updated_input: Option<serde_json::Value>,
         scope: String,
     },
-}
-
-/// The terminal status of a child agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ChildStatus {
-    Completed,
-    Killed,
-    Failed,
-    /// The child hit its max-turns cap (TurnLimit): it did partial work then
-    /// stopped at the turn limit. Distinct from Deadline (a wall-clock
-    /// timeout, a future terminal) and from Killed (an external cancel).
-    TurnLimit,
-    BudgetExhausted,
 }
 
 /// The agent bus type alias: InProcBus instantiated with the domain

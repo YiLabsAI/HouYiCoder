@@ -3,7 +3,7 @@
 use houyicoder_protocol::envelope::{RequestEnvelope, RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::model::EffectiveFrom;
-use houyicoder_protocol::frontend::{FrontendRequest, SessionId};
+use houyicoder_protocol::frontend::{BackgroundTaskId, FrontendRequest, SessionId};
 
 use super::driving::OnClose;
 use super::model_apply::ModelSelection;
@@ -203,6 +203,13 @@ impl Server {
                     .await
             }
             FrontendRequest::Trajectory => self.dispatch_trajectory(io, req_id).await,
+            FrontendRequest::ListBackgroundTasks => self.dispatch_background_list(io, req_id).await,
+            FrontendRequest::BackgroundTaskDetail { id } => {
+                self.dispatch_background_detail(io, req_id, id).await
+            }
+            FrontendRequest::KillBackgroundTask { id } => {
+                self.dispatch_background_kill(io, req_id, id).await
+            }
             FrontendRequest::Context => self.handle_context(io, req_id).await,
             FrontendRequest::Compact => self.handle_compact(io, req_id).await,
             FrontendRequest::MemoryList
@@ -225,6 +232,62 @@ impl Server {
             }
             _ => self.send_response(io, req_id, ResponsePayload::Ack).await,
         }
+    }
+
+    /// Answer the list a tasks pane opens with. A host assembled without a
+    /// registry answers an empty list rather than an error, because no command
+    /// can be running on it.
+    async fn dispatch_background_list(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+    ) -> Result<(), ProtocolError> {
+        let payload = match self.background_tasks.as_ref() {
+            Some(tasks) => ResponsePayload::BackgroundTasks(tasks.list()),
+            None => ResponsePayload::BackgroundTasks(Vec::new()),
+        };
+        self.send_response(io, req_id, payload).await
+    }
+
+    /// Answer one task's record for the detail view. A number the host does
+    /// not hold is an error, because the caller reads a task it believes is
+    /// running here.
+    async fn dispatch_background_detail(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        id: BackgroundTaskId,
+    ) -> Result<(), ProtocolError> {
+        let payload = self
+            .background_tasks
+            .as_ref()
+            .and_then(|tasks| tasks.detail(id))
+            .map_or_else(|| unknown_task(id), ResponsePayload::BackgroundTaskDetail);
+        self.send_response(io, req_id, payload).await
+    }
+
+    /// Stop a running task. The host kills the command's process group, so the
+    /// processes it started end with it. A number the host does not hold and a
+    /// task that already ended are different refusals: the first names a task
+    /// the host never had, and the second one it has nothing left to stop.
+    async fn dispatch_background_kill(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        id: BackgroundTaskId,
+    ) -> Result<(), ProtocolError> {
+        let payload = match self.background_tasks.as_ref() {
+            Some(tasks) if tasks.kill(id) => ResponsePayload::Ack,
+            Some(tasks) if tasks.detail(id).is_some() => {
+                ResponsePayload::Error(ProtocolError::new(
+                    ErrorCategory::InvalidRequest,
+                    format!("background task {} is not running", id.label()),
+                    false,
+                ))
+            }
+            _ => unknown_task(id),
+        };
+        self.send_response(io, req_id, payload).await
     }
 
     /// Route a memory or recap request, grouped the way the permission
@@ -529,7 +592,7 @@ impl Server {
                         .await,
                 );
             }
-            payload if reads_state_during_run(&payload) => {
+            payload if does_not_wait_for_turn(&payload) => {
                 if let Err(e) = self.dispatch_query(io, req_id, payload).await {
                     drop(
                         self.send_response(io, req_id, ResponsePayload::Error(e))
@@ -555,9 +618,19 @@ impl Server {
     }
 }
 
-/// Whether a request only reads state, or writes state a running turn does not
-/// read, so answering it mid-run cannot race the turn.
-fn reads_state_during_run(payload: &FrontendRequest) -> bool {
+/// The refusal a task request gets when the host holds no such command.
+fn unknown_task(id: BackgroundTaskId) -> ResponsePayload {
+    ResponsePayload::Error(ProtocolError::new(
+        ErrorCategory::InvalidRequest,
+        format!("no background task {}", id.label()),
+        false,
+    ))
+}
+
+/// Whether a request can be answered while a turn runs: it only reads
+/// state, or it writes state the running turn does not read, so handling it
+/// now cannot race the turn.
+fn does_not_wait_for_turn(payload: &FrontendRequest) -> bool {
     matches!(
         payload,
         FrontendRequest::Status
@@ -578,6 +651,12 @@ fn reads_state_during_run(payload: &FrontendRequest) -> bool {
             | FrontendRequest::MemoryToggleState
             | FrontendRequest::ModelInfo
             | FrontendRequest::ChildTranscript { .. }
+            // A kill stops a command that runs beside the turn rather than
+            // touching the turn, so it is answerable while the turn runs;
+            // that is exactly when a user reaches for it.
+            | FrontendRequest::ListBackgroundTasks
+            | FrontendRequest::BackgroundTaskDetail { .. }
+            | FrontendRequest::KillBackgroundTask { .. }
             | FrontendRequest::RenameSession { .. }
             | FrontendRequest::PermissionMode
             | FrontendRequest::PermissionRules

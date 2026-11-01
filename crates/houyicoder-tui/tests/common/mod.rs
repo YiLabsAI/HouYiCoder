@@ -1034,6 +1034,22 @@ pub fn pty_session_in_repo(repo: PathBuf, script_json: &str) -> PtySession {
     pty_session_inner(PtySession::launch_in_repo_with_script(repo, script_json))
 }
 
+/// Like pty_session_scripted, but the child starts with extra environment, for
+/// a journey that drives a value the binary reads once when it builds the
+/// state the journey observes.
+pub fn pty_session_scripted_env(script_json: &str, env: &[(String, String)]) -> PtySession {
+    let sessions_dir = fresh_temp_dir("sessions");
+    pty_session_inner(PtySession::launch_with_sessions_dir_env(
+        Some(script_json.to_string()),
+        None,
+        None,
+        Some(make_temp_repo("scripted-env")),
+        &[],
+        sessions_dir,
+        env,
+    ))
+}
+
 /// Like pty_session_in_repo, but with a custom HOME so the test can
 /// populate .claude/skills/ (ecosystem path) before launch.
 pub fn pty_session_with_home(repo: PathBuf, home: PathBuf, script_json: &str) -> PtySession {

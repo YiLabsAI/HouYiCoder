@@ -3,7 +3,7 @@
 //! rendered row, so the row the keys reach is the row the pane highlights,
 //! and the detail answers the same scroll keys as the /skills detail.
 use super::*;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::records::TranscriptLine;
 use crate::test_harness::render_text;
 use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};

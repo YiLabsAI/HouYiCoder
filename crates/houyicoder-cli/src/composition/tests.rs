@@ -26,6 +26,7 @@ use houyicoder_protocol::envelope::{
     ClientResponsePayload, RequestId, ResponsePayload, ServerFrame, ServerRequestPayload,
 };
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
@@ -111,7 +112,7 @@ fn test_bus_tasks_joined() {
 async fn read_probe_status(
     client: &mut Client,
     probe_id: &str,
-    want: impl Fn(u32, u64, Option<&str>, Option<&str>) -> bool,
+    want: impl Fn(u32, u64, Option<&CompletionStatus>, Option<&str>) -> bool,
 ) {
     loop {
         let frame = timeout(Duration::from_secs(5), client.next_frame())
@@ -141,12 +142,7 @@ async fn read_probe_status(
                 } = &env.payload
                 {
                     assert_eq!(agent_id, probe_id, "the probe is the only fleet child");
-                    if want(
-                        *turn,
-                        *tokens,
-                        completed.as_deref(),
-                        last_activity.as_deref(),
-                    ) {
+                    if want(*turn, *tokens, completed.as_ref(), last_activity.as_deref()) {
                         return;
                     }
                 }
@@ -243,7 +239,8 @@ fn test_bus_events_consumed() {
             summary: "probe-summary".into(),
         });
         read_probe_status(&mut client, "bus-probe", |_, _, completed, activity| {
-            completed == Some("failed") && activity == Some("probe-summary")
+            completed.is_some_and(|c| *c == CompletionStatus::Failed)
+                && activity == Some("probe-summary")
         })
         .await;
         // The same completion also reaches the parent's queue through the drain.

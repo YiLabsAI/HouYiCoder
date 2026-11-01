@@ -189,6 +189,21 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         }
         return;
     }
+    // The /tasks detail owns Esc, the scroll keys, and the kill key, on the
+    // same grammar as the /skills detail. The list stays behind it, so Esc
+    // returns to the list rather than leaving the pane.
+    if app.ui.navigation.pane == Pane::Tasks && app.ui.tasks_pane.detail().is_some() {
+        match k.code {
+            KeyCode::Esc => app.ui.tasks_pane.close_detail(),
+            KeyCode::Up => app.ui.tasks_pane.scroll_detail(-1),
+            KeyCode::Down => app.ui.tasks_pane.scroll_detail(1),
+            KeyCode::PageUp => app.ui.tasks_pane.scroll_detail(-10),
+            KeyCode::PageDown => app.ui.tasks_pane.scroll_detail(10),
+            KeyCode::Char('k') => app.kill_selected_task(),
+            _ => {}
+        }
+        return;
+    }
     if app.ui.navigation.pane == Pane::Trajectory && trajectory::handle(app, k) {
         return;
     }
@@ -372,6 +387,16 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Enter if app.ui.navigation.pane == Pane::Skills => {
             app.open_skill_detail();
         }
+        // The /tasks list. Esc leaves the pane, Up/Down select, Enter opens
+        // the selected task's detail, and k stops it.
+        KeyCode::Esc if app.ui.navigation.pane == Pane::Tasks => {
+            app.close_tasks_pane();
+            app.ui.navigation.pane = Pane::Transcript;
+        }
+        KeyCode::Up if app.ui.navigation.pane == Pane::Tasks => app.move_tasks_cursor(-1),
+        KeyCode::Down if app.ui.navigation.pane == Pane::Tasks => app.move_tasks_cursor(1),
+        KeyCode::Enter if app.ui.navigation.pane == Pane::Tasks => app.open_task_detail(),
+        KeyCode::Char('k') if app.ui.navigation.pane == Pane::Tasks => app.kill_selected_task(),
         // /agents pane: same close-to-transcript as the other slash panes.
         // Without this arm the key fell through to the recall/abort arms --
         // while agents ran, Esc interrupted the parent run.
@@ -527,6 +552,24 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             // direction, and it also takes the history key. The strip is
             // entered with Shift+Up/Down, which is the pair that exists for
             // exactly this.
+            // An empty input on its last line has no history to walk down to,
+            // so Down opens the background-command pane there instead. A
+            // session that started none keeps Down as a no-op rather than
+            // opening an empty pane.
+            if !editing
+                && app.ui.input.editor.is_empty()
+                && app
+                    .sessions
+                    .current
+                    .capabilities
+                    .tasks
+                    .iter()
+                    .next()
+                    .is_some()
+            {
+                app.open_tasks_pane();
+                return;
+            }
             if !editing {
                 app.ui.input.history.down(&mut app.ui.input.editor);
             }

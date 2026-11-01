@@ -26,6 +26,7 @@ use crate::view::{
     artifact, capability, input_bar, palette, queue_overlay, skill_picker, status, toast,
 };
 
+pub(crate) mod command_state;
 mod compaction_rows;
 mod delegation_rows;
 pub(crate) mod fleet_strip;
@@ -411,6 +412,7 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
         Pane::Resume => panes::draw_resume_pane(f, area, app),
         Pane::Hooks => panes::draw_hooks_pane(f, area, app),
         Pane::Skills => panes::draw_skills_pane(f, area, app),
+        Pane::Tasks => panes::draw_tasks_pane(f, area, app),
         Pane::Model => panes::draw_model_pane(f, area, app),
         Pane::Agents => panes::draw_agents_pane(f, area, app),
         Pane::Queue => panes::draw_queue_pane(f, area, app),
@@ -493,6 +495,12 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // above, the discovered-skill list below.
     if matches!(app.ui.navigation.pane, Pane::Skills) {
         panes::draw_skills_pane(f, area, app);
+        return;
+    }
+    // The /tasks pane renders inline through the same template: transcript
+    // tail above, the background-command list or the open detail below.
+    if matches!(app.ui.navigation.pane, Pane::Tasks) {
+        panes::draw_tasks_pane(f, area, app);
         return;
     }
     // The /model pane renders inline (the Pane primitive): transcript tail

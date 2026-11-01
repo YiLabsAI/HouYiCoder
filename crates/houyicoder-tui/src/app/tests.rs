@@ -1,7 +1,7 @@
 //! The app module's own tests. A child of app, so use super::* reaches the
 //! private items the inline test module reached before.
 use super::*;
-use crate::agent_message::FleetEntry;
+use crate::agent_message::fleet::FleetEntry;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::app::handle_key;
 use crate::composition::app;

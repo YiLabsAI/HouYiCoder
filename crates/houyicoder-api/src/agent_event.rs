@@ -62,8 +62,12 @@ pub enum ToolExecutionEvent {
         call_id: String,
         /// Whole seconds elapsed since execution began.
         elapsed_secs: u64,
-        /// Running output line count when available.
-        output_lines: Option<u64>,
+        /// The call's own wall-clock budget in whole seconds, when it declared
+        /// one, so the row can show the limit next to the elapsed time.
+        timeout_secs: Option<u64>,
+        /// The most recent output lines, oldest first, for the running row's
+        /// preview. Bounded by the tool; empty when it keeps no preview.
+        tail: Vec<String>,
     },
 }
 

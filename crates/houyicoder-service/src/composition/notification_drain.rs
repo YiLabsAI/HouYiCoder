@@ -10,25 +10,15 @@ use std::sync::{Arc, Weak};
 
 use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
+use houyicoder_context::NotificationTopic;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, ChildRunMode, ChildStatus, global_completed_topic,
+    AgentBus, BusMessage, ChildRunMode, global_completed_topic,
 };
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use tokio::runtime::Handle;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
-
-/// Lowercase label for a child's terminal status, mirrored from the fleet
-/// projector so the footer strip and the notification text agree.
-fn status_str(status: &ChildStatus) -> &'static str {
-    match status {
-        ChildStatus::Completed => "completed",
-        ChildStatus::Killed => "killed",
-        ChildStatus::Failed => "failed",
-        ChildStatus::TurnLimit => "turn_limit",
-        ChildStatus::BudgetExhausted => "budget",
-    }
-}
 
 /// Format the notification text the parent reads as a mid-turn interjection:
 /// subagent type + terminal status + the child's own summary, so the model
@@ -36,13 +26,13 @@ fn status_str(status: &ChildStatus) -> &'static str {
 fn notification_text(
     subagent_type: &str,
     child_id: &str,
-    status: &ChildStatus,
+    status: &CompletionStatus,
     summary: &str,
 ) -> String {
     format!(
         "Subagent {subagent_type} ({short}) {status}: {summary}",
         short = &child_id[..child_id.len().min(8)],
-        status = status_str(status),
+        status = status.as_str(),
     )
 }
 
@@ -75,7 +65,12 @@ pub fn spawn(
                                 &status,
                                 &summary,
                             );
-                            runner.enqueue_notification(child.agent_id, text);
+                            runner.enqueue_notification(
+                                child.agent_id,
+                                NotificationTopic::ChildCompletion,
+                                text,
+                                None,
+                            );
                         }
                     }
                     Ok(_) => {}

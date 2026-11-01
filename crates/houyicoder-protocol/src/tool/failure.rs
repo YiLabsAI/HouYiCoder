@@ -50,6 +50,16 @@ pub fn tool_result_failed(output: &Value, tool_name: &str, call_input: &Value) -
     true
 }
 
+/// Whether a bash command's exit status reports success, including the exits
+/// that are the command's own verdict rather than a failure.
+///
+/// A background task reads its ending through this, and a tool result reads
+/// the same rule, so one finished command cannot count as a success on one
+/// path and a failure on the other.
+pub fn bash_exit_succeeded(command: &str, exit_code: i64) -> bool {
+    exit_code == 0 || exit_is_semantic_success(command, exit_code)
+}
+
 /// Whether a durable tool result says its call never ran.
 ///
 /// The runner answers a call it did not execute — the turn ended while the

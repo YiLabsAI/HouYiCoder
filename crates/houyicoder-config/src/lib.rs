@@ -105,6 +105,11 @@ pub const ENV_HOUYICODER_HOOKS: &str = "HOUYICODER_HOOKS";
 /// can exercise the ceiling without a multi-hundred-turn run. 0 is rejected.
 pub const ENV_HOUYICODER_MAX_TURNS: &str = "HOUYICODER_MAX_TURNS";
 
+/// Env var for how long a shell command may hold the foreground before the
+/// host moves it to the background. The settings file key wins; 0 disables
+/// the background move so every command finishes in the foreground.
+pub const ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS: &str = "HOUYICODER_BASH_FOREGROUND_BUDGET_MS";
+
 /// Env var that overrides the config-home directory (where settings.json
 /// lives). Defaults to a dot-directory under $HOME; a user or CI can point
 /// it at a custom config root.

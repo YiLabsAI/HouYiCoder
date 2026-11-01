@@ -3,9 +3,24 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use houyicoder_context::NotificationTopic;
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
+use serde_json::Value;
 
 use crate::agent::{RunError, RunOutcome, RunResult, Runner};
+
+/// One notification waiting for a turn boundary: what produced it, why it
+/// exists, and the text the model reads. The reason travels with the text so
+/// the assembly frames each notification for what it is.
+pub(crate) struct QueuedNotification {
+    pub(crate) source_id: String,
+    pub(crate) topic: NotificationTopic,
+    pub(crate) text: String,
+    /// The stored raw output the text names, when the producer kept any. The
+    /// durable record carries it, and the reclaim pass reads the address from
+    /// there; a block no record names is released.
+    pub(crate) capture: Option<Value>,
+}
 
 /// Mid-turn user inputs awaiting durable commitment.
 pub(crate) struct InputQueue {
@@ -31,14 +46,26 @@ impl Runner {
             .push_back(input);
     }
 
-    /// Enqueue a child-completion notification. Drained only after the
-    /// user queue is empty, so user input never starves. The child id is
-    /// carried so the durable event records which child finished.
-    pub fn enqueue_notification(&self, child_session_id: String, text: String) {
+    /// Enqueue a background result — a finished subagent or a finished
+    /// command — for the next turn boundary. Drained only after the user queue
+    /// is empty, so user input never starves. The source id is carried so the
+    /// durable event records what produced it.
+    pub fn enqueue_notification(
+        &self,
+        source_id: String,
+        topic: NotificationTopic,
+        text: String,
+        capture: Option<Value>,
+    ) {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
-            .push_back((child_session_id, text));
+            .push_back(QueuedNotification {
+                source_id,
+                topic,
+                text,
+                capture,
+            });
     }
 
     /// Remove one queued message by stable identity. No-op when that
@@ -127,7 +154,29 @@ impl Runner {
             .lock()
             .expect("queued_notifications lock")
             .iter()
-            .map(|(_, text)| text.clone())
+            .map(|notification| notification.text.clone())
+            .collect()
+    }
+
+    /// Test-only snapshot of the topics of queued notifications, in FIFO
+    /// order, so a test can tell a task ending from a child completion.
+    pub fn queued_notification_topics_snapshot(&self) -> Vec<NotificationTopic> {
+        self.queued_notifications
+            .lock()
+            .expect("queued_notifications lock")
+            .iter()
+            .map(|notification| notification.topic)
+            .collect()
+    }
+
+    /// Test-only snapshot of the stored output addresses queued beside those
+    /// texts, in the same order.
+    pub fn queued_notification_captures_snapshot(&self) -> Vec<Option<Value>> {
+        self.queued_notifications
+            .lock()
+            .expect("queued_notifications lock")
+            .iter()
+            .map(|notification| notification.capture.clone())
             .collect()
     }
 }

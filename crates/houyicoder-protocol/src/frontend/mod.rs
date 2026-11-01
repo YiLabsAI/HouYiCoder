@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod agents;
 pub mod checkpoint;
 pub mod compact;
+pub mod completion;
 pub mod context;
 pub mod debug;
 pub mod event;
@@ -24,6 +25,7 @@ pub mod session_update;
 mod size;
 pub mod skills;
 pub mod status;
+pub mod tasks;
 pub mod tools;
 pub mod trajectory;
 pub mod trust;
@@ -39,6 +41,7 @@ pub use checkpoint::{
     UnreadableView,
 };
 pub use compact::CompactReply;
+pub use completion::CompletionStatus;
 pub use context::{
     CategoryBreakdown, ContextBreakdown, ContextFileEntry, ContextSkillEntry, GridCell, build_grid,
     stub_breakdown,
@@ -64,6 +67,9 @@ pub use run::{
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::fmt::Formatter;
+pub use tasks::{
+    BackgroundTaskDetail, BackgroundTaskId, BackgroundTaskSnapshot, BackgroundTaskStatus,
+};
 pub use trajectory::TrajectoryEntry;
 pub use trust::{TrustAccept, TrustPrompt, TrustRisk};
 pub use verdict::Verdict;
@@ -120,6 +126,11 @@ pub enum SlashCommand {
     Graph,
     Diff,
     Agents,
+    /// /tasks: the commands that outlived their tool call. The pane lists
+    /// every task with its state, run time, and command, opens one's live
+    /// output, and stops a running one. The same pane opens when Down is
+    /// pressed on an empty input.
+    Tasks,
     Memory,
     Model,
     Sandbox,
@@ -261,6 +272,11 @@ const COMMANDS: &[CommandDescriptor] = &[
         help: "View running subagents, history, and agent types",
     },
     CommandDescriptor {
+        variant: SlashCommand::Tasks,
+        name: "/tasks",
+        help: "View and manage background commands",
+    },
+    CommandDescriptor {
         variant: SlashCommand::Memory,
         name: "/memory",
         help: "Browse and manage session and project memories",
@@ -349,10 +365,10 @@ const COMMANDS: &[CommandDescriptor] = &[
 
 /// Build the ALL array from the command table at compile time so ALL and
 /// COMMANDS cannot drift apart. Const-eval reads the table by index.
-const fn all_variants() -> [SlashCommand; 33] {
-    let mut out = [SlashCommand::Login; 33];
+const fn all_variants() -> [SlashCommand; 34] {
+    let mut out = [SlashCommand::Login; 34];
     let mut i = 0;
-    while i < 33 {
+    while i < 34 {
         out[i] = COMMANDS[i].variant;
         i += 1;
     }
@@ -362,7 +378,7 @@ const fn all_variants() -> [SlashCommand; 33] {
 impl SlashCommand {
     /// All commands in palette order. Derived from the COMMANDS table at
     /// compile time, so the array and the table stay in sync.
-    pub const ALL: [SlashCommand; 33] = all_variants();
+    pub const ALL: [SlashCommand; 34] = all_variants();
 
     /// Parse a /foo input line. None if not a recognized command. Linear
     /// search over the COMMANDS table by name.
@@ -708,6 +724,20 @@ pub enum FrontendRequest {
     DirectShellRun {
         session_id: SessionId,
         command: String,
+    },
+    /// Every background command the host knows about, so the tasks pane
+    /// renders from one answer instead of assembling state from events.
+    ListBackgroundTasks,
+    /// One background command's full record, read on demand by the detail
+    /// view while the command runs.
+    BackgroundTaskDetail {
+        id: BackgroundTaskId,
+    },
+    /// Stop one running background command. The reply acknowledges a kill that
+    /// took effect and refuses one that names no running task; the resulting
+    /// state arrives as a task event.
+    KillBackgroundTask {
+        id: BackgroundTaskId,
     },
 }
 

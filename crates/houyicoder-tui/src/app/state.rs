@@ -28,7 +28,7 @@ pub use self::enums::{
     CyclicTab, LiveBlock, MemoryScopeTab, Pane, PermissionInput, PermissionTab, Screen, Stage,
     StatusTab, TrustChoice, ViewportMode, pane_for_stage,
 };
-use crate::agent_message::PaneAgents;
+use crate::agent_message::fleet::PaneAgents;
 pub(crate) use crate::state::cursors::EventCursor;
 pub(crate) use crate::state::parked_view_states::ParkedViewStates;
 pub use crate::state::trajectory::{
@@ -37,14 +37,15 @@ pub use crate::state::trajectory::{
 use crate::view::agents_pane::rows::{AgentRow, pane_rows};
 use std::fmt::Debug;
 
-/// Live progress for one long-running tool call (bash): elapsed seconds +
-/// the running stdout line count (None when the backend does not stream
-/// stdout, so the chip shows "(Ns)" not "(Ns · M lines)"). Updated per
-/// ToolProgress tick; cleared when the result lands.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Live progress for one long-running tool call (bash): elapsed seconds, the
+/// call's own timeout when it declared one, and the most recent output lines
+/// for the preview under the row. Updated per ToolProgress tick; cleared when
+/// the result lands.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BashProgress {
     pub elapsed_secs: u64,
-    pub lines: Option<u64>,
+    pub timeout_secs: Option<u64>,
+    pub tail: Vec<String>,
 }
 
 #[derive(Default, Debug)]

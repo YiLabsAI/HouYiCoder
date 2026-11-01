@@ -276,6 +276,12 @@ pub enum Pane {
     Model,
     /// The /tools pane: registered tool list.
     Tools,
+    /// The /tasks pane: the background commands that outlived their tool
+    /// call. The list shows each task's number, state, run time, and
+    /// command; Enter opens one's live output, k stops a running one, and
+    /// Esc returns to the list before it closes. Down on an empty input
+    /// opens the same pane.
+    Tasks,
     /// The queue pane: queued user inputs submitted while a run was in
     /// flight. Up / Down navigate, Enter recalls the selected item, Esc
     /// closes. A collapsed +N more strip click opens this pane rather than
@@ -364,6 +370,7 @@ impl Pane {
             Self::Skills => "skills",
             Self::Model => "model",
             Self::Tools => "tools",
+            Self::Tasks => "tasks",
             Self::Queue => "queue",
         }
     }
