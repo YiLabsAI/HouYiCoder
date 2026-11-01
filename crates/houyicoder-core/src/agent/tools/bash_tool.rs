@@ -30,7 +30,7 @@ use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
 use crate::snapshot::is_destructive_command;
 use output::{background_output, complete_run, completion_output};
-use std::future::pending;
+use std::future::{Future, pending};
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 use std::time::Instant;
@@ -373,6 +373,35 @@ async fn wait_for_run(
     timeout_ms: u64,
 ) -> RunPick {
     let deadline = budget.map(|budget| started + budget);
+    // The timer is built when this future is first polled, inside the select
+    // branch that waits on it: a branch expression is evaluated even when its
+    // precondition disables it, and a timer built outside a runtime panics
+    // before the run starts.
+    let deadline = async move {
+        match deadline {
+            Some(at) => sleep_until(at.into()).await,
+            None => pending().await,
+        }
+    };
+    wait_for_outcome(exec, cancel, deadline, progress, tail, started, timeout_ms).await
+}
+
+/// The wait policy: how the three ways a foreground run can end rank against
+/// each other. The deadline is a future so the ranking between an answer and
+/// an elapsed budget can be observed without waiting on a real clock.
+async fn wait_for_outcome<D>(
+    exec: &mut PFut<'static, Result<ExecResult, SandboxError>>,
+    cancel: Option<&CancellationToken>,
+    deadline: D,
+    progress: Option<&Arc<dyn ToolProgressReporter>>,
+    tail: &CommandTail,
+    started: Instant,
+    timeout_ms: u64,
+) -> RunPick
+where
+    D: Future<Output = ()>,
+{
+    tokio::pin!(deadline);
     loop {
         tokio::select! {
             // The command's own result is offered first: a command that
@@ -387,15 +416,7 @@ async fn wait_for_run(
                     None => pending().await,
                 }
             } => return RunPick::Cancelled,
-            // Every timer is built inside its branch: a select branch's
-            // expression is evaluated even when its precondition disables it,
-            // and a timer built outside a runtime panics before the run starts.
-            _ = async {
-                match deadline {
-                    Some(at) => sleep_until(at.into()).await,
-                    None => pending().await,
-                }
-            } => return RunPick::Budget,
+            _ = &mut deadline => return RunPick::Budget,
             // One reporting tick, then the loop offers the real outcomes
             // again. The branch reports and never decides, which is why the
             // wait has a loop at all: a branch that had to return a pick it

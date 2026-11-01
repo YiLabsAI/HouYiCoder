@@ -33,6 +33,7 @@ mod subagent_finished;
 mod subagent_fold;
 #[path = "tests/subagent_render.rs"]
 mod subagent_render;
+mod tasks;
 #[path = "tests/teammate_esc.rs"]
 mod teammate_esc;
 #[path = "tests/teammate_view.rs"]

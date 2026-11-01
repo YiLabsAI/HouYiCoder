@@ -2,6 +2,8 @@ mod background;
 
 mod cancel;
 
+mod deadline;
+
 mod output_limit;
 
 mod capture;

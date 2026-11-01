@@ -1,5 +1,6 @@
 //! Tests for this module.
 
+use super::test_support::wait_until;
 use super::*;
 use houyicoder_api::background::BackgroundCommandLauncher;
 use houyicoder_core::agent::ToolRegistry;
@@ -68,18 +69,6 @@ fn bare_runner() -> Arc<Runner> {
             ..RunnerConfig::default()
         },
     ))
-}
-
-/// Wait for a condition a started run is expected to reach, yielding between
-/// checks instead of sleeping.
-async fn wait_until(mut reached: impl FnMut() -> bool) {
-    for _ in 0..500 {
-        if reached() {
-            return;
-        }
-        yield_now().await;
-    }
-    panic!("condition was not reached");
 }
 
 /// Two commands moved to the background get consecutive numbers, and both
@@ -359,6 +348,29 @@ async fn test_runner_alone_reports_ending() {
     assert!(text.contains("id=\"task-1\""), "names the task: {text}");
     assert!(
         text.contains("status=\"finished\""),
+        "names the ending: {text}"
+    );
+}
+
+/// A session with no frontend still reports a task the user stopped: the
+/// cancel resolves the run's ending, and the runner is the only reader such
+/// a session has, so stopping work is never silent for it.
+#[tokio::test]
+async fn test_runner_alone_reports_kill() {
+    let tasks = BackgroundTasks::new();
+    let runner = bare_runner();
+    tasks.attach(None, &runner);
+    let id = tasks.launch(detached(
+        "cargo build",
+        CommandTail::new(),
+        never_finishes(),
+    ));
+    assert!(tasks.kill(id), "the task is running when stopped");
+    wait_until(|| !runner.queued_notifications_snapshot().is_empty()).await;
+    let text = &runner.queued_notifications_snapshot()[0];
+    assert!(text.contains("id=\"task-1\""), "names the task: {text}");
+    assert!(
+        text.contains("status=\"killed\""),
         "names the ending: {text}"
     );
 }

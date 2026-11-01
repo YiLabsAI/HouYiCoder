@@ -55,12 +55,12 @@ impl SandboxSession for SlowExec {
 
 /// A launcher that keeps every background run so the test can finish it.
 #[derive(Default)]
-struct RecordingLauncher {
+pub(super) struct RecordingLauncher {
     launched: Mutex<Vec<DetachedCommand>>,
 }
 
 impl RecordingLauncher {
-    fn take(&self) -> Vec<DetachedCommand> {
+    pub(super) fn take(&self) -> Vec<DetachedCommand> {
         take(&mut *self.launched.lock().expect("launcher lock"))
     }
 }

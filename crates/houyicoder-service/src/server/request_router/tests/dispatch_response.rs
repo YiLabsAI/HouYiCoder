@@ -253,7 +253,10 @@ async fn recv_frame(rx: &mut mpsc::Receiver<String>) -> ServerFrame {
 /// Drive one connection: send every request in order, then collect the
 /// replies. Order is preserved, so a multi-request drive reads as a sequence
 /// of state changes against the same server.
-async fn dispatch_responses(server: Server, reqs: Vec<FrontendRequest>) -> Vec<ResponsePayload> {
+pub(super) async fn dispatch_responses(
+    server: Server,
+    reqs: Vec<FrontendRequest>,
+) -> Vec<ResponsePayload> {
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
