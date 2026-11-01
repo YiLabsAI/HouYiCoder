@@ -9,7 +9,7 @@ use houyicoder_protocol::block_ref::BLOCK_BYTES_KEY;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::block_ref::HINT_KEY;
 use houyicoder_protocol::block_ref::PREVIEW_KEY;
-use houyicoder_protocol::tool::{simple_command_word, strip_ansi};
+use houyicoder_protocol::tool::{simple_command_word, strip_ansi, tool_result_not_run};
 
 /// Build the Write tool result body: the "Wrote N lines to {path}" chip
 /// followed by the full written content. The content is pulled from the
@@ -59,6 +59,14 @@ fn raw_body(output: &str) -> String {
             s.push_str(diff);
         }
         return s;
+    }
+    if tool_result_not_run(&v)
+        && let Some(m) = v.get("error").and_then(Value::as_str)
+    {
+        // A call the host answered without running it: the message says why,
+        // and an error prefix would state a verdict on an execution that
+        // never happened. The chip already reports that it did not run.
+        return m.to_string();
     }
     if let Some(err) = v.get("error") {
         if let Some(m) = err.as_str() {

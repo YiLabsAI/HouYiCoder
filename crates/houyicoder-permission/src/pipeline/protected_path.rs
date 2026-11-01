@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use houyicoder_api::sandbox::{Containment, FenceAxis, names_credential_path};
+use houyicoder_api::tool::{is_shell_tool, writes_files};
 
 use crate::compound::{reads_only_protected, writes_fence_denied_path};
 use crate::decision::{AskReason, AskSource, Decision};
@@ -27,14 +28,7 @@ use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
 use crate::safety::{fence_covers_all_hits, marker_hit, safety_check};
-use crate::side_effect::is_shell_tool;
 use std::fs::canonicalize;
-
-/// Tools whose input names a single file the host process writes directly.
-/// These bypass the kernel fence, so the resolved-path pass is what protects
-/// them. Shell tools are absent on purpose: their content is a command line,
-/// not a path, and the fence already judges what they touch.
-const HOST_WRITE_TOOLS: &[&str] = &["write", "edit", "multiedit", "patch", "str_replace"];
 
 /// Protected paths: the version-control directory, the agent's own config
 /// directory, and shell rc files. Always asks; never silently allowed; never
@@ -83,8 +77,9 @@ impl ProtectedPathValidator {
     /// string is lossy, which costs nothing here -- a byte sequence that is
     /// not valid text cannot spell a marker either.
     fn resolved_path(&self, req: &ToolRequest<'_>) -> Option<String> {
-        let tool = req.tool_name.to_ascii_lowercase();
-        if !HOST_WRITE_TOOLS.contains(&tool.as_str()) {
+        // A shell command names a command line, not one path, so it is not a
+        // host write here; the fence judges what it touches.
+        if !writes_files(req.tool_name) {
             return None;
         }
         let supplied = input_content(req.tool_name, req.input);

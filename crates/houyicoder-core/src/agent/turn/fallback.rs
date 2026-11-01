@@ -1,12 +1,19 @@
 //! Fallback tool-result outcomes: the results the runner produces for itself
-//! when a call does not run (registry miss, user reject, run interrupt). They
-//! are not tool execution errors. Each carries the bare model-visible JSON the
-//! model sees, with no tool-error prefix (a real execution error carries one).
-//! Kept in the engine core: these are dispatch / control concerns, not wire
-//! types, so they do not enter ports or protocol.
+//! when a call does not run (registry miss, user reject, run interrupt, check
+//! withheld behind an edit that did not complete). They are not tool execution
+//! errors. Each carries the bare model-visible JSON the model sees, with no
+//! tool-error prefix (a real execution error carries one). Kept in the engine
+//! core: they describe what dispatch decided, not a protocol message, so no
+//! port or protocol type holds them.
 
 use houyicoder_protocol::extension::ToolError;
 use serde_json::Value;
+
+/// Why a shell check did not run: the file edit it followed had not completed
+/// when the check was due, so running it would have read source that was not
+/// written yet. The edit may be settled as a failure or still await a
+/// decision; the model resends the check once it lands.
+pub(crate) const SKIPPED_AFTER_EDIT: &str = "skipped: the file edit before it had not completed";
 
 /// The model-visible JSON for a real tool execution error. The Display prefix
 /// is part of the payload the model sees, so the e.to_string() value is the
@@ -16,8 +23,9 @@ pub(crate) fn tool_error_json(e: &ToolError) -> Value {
 }
 
 /// A tool-result outcome the runner produces for a call that did not run.
-/// Registry misses, user rejections, and run interruptions surface here so
-/// the model sees a lossless tool_result for every call it emitted.
+/// Registry misses, user rejections, run interruptions, and checks withheld
+/// after an edit did not complete are recorded this way, so the model sees a
+/// lossless tool_result for every call it emitted.
 pub(crate) enum FallbackToolOutcome {
     /// A tool call whose name is not in the registry. on_resume distinguishes
     /// the resume-path miss (the tool was removed between run and resume) from
@@ -27,6 +35,8 @@ pub(crate) enum FallbackToolOutcome {
     Rejected,
     /// The run was interrupted with a tool call pending a result.
     Interrupted,
+    /// A shell check whose preceding file edit did not complete.
+    SkippedAfterEdit,
 }
 
 impl FallbackToolOutcome {
@@ -46,6 +56,7 @@ impl FallbackToolOutcome {
             } => format!("unknown tool: {name}"),
             Self::Rejected => "rejected by user".to_string(),
             Self::Interrupted => "interrupted by user".to_string(),
+            Self::SkippedAfterEdit => SKIPPED_AFTER_EDIT.to_string(),
         };
         serde_json::json!({ "error": error, "not_run": true })
     }

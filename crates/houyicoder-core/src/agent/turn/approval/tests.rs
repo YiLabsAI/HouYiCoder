@@ -1,7 +1,9 @@
 //! Tests for this module.
 
 use super::*;
+use crate::agent::append::new_event;
 use crate::agent::tests::runner_with;
+use crate::agent::turn::fallback::SKIPPED_AFTER_EDIT;
 use crate::agent::{ApprovalDecision, RunOutcome, ToolRegistry};
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::skill::{SkillFamily, SkillProvenance, SkillSource};
@@ -15,6 +17,7 @@ use std::env;
 use std::fs;
 use std::process;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 fn user_subject(skill: &str) -> GrantSubject {
     SkillSource::new(SkillFamily::Houyi, SkillProvenance::UserHome).grant_subject(skill)
@@ -201,4 +204,451 @@ async fn test_resume_runs_translation() {
         vec![&json!({"command": "run >nul"})],
         "the transcript keeps the model's own call"
     );
+}
+
+/// An edit that fails when it runs, counting its attempts.
+struct FailingEdit {
+    ran: Arc<Mutex<u32>>,
+}
+
+impl FailingEdit {
+    fn attempts(&self) -> u32 {
+        *self.ran.lock().expect("ran lock")
+    }
+}
+
+impl Tool for FailingEdit {
+    fn name(&self) -> &str {
+        "edit"
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        *self.ran.lock().expect("ran lock") += 1;
+        Box::pin(async { Err(ToolError::InvalidInput("old_string not found".into())) })
+    }
+}
+
+/// An edit that reports success without touching the disk.
+struct SucceedingEdit;
+
+impl Tool for SucceedingEdit {
+    fn name(&self) -> &str {
+        "edit"
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(json!({"success": true})) })
+    }
+}
+
+/// A shell that records the commands it runs.
+struct RecordingShell {
+    commands: Arc<Mutex<Vec<String>>>,
+}
+
+impl RecordingShell {
+    fn ran(&self) -> Vec<String> {
+        self.commands.lock().expect("commands lock").clone()
+    }
+}
+
+impl Tool for RecordingShell {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        ""
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"command": {"type": "string"}}})
+    }
+    fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        let command = input
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        self.commands.lock().expect("commands lock").push(command);
+        Box::pin(async { Ok(json!({"success": true})) })
+    }
+}
+
+/// A batch parked before an edit ran: the calls are in the log with no
+/// answers, the way a crash or an older build leaves them.
+fn parked_batch() -> (Runner, SessionId, Arc<FailingEdit>, Arc<RecordingShell>) {
+    let edit = Arc::new(FailingEdit {
+        ran: Arc::new(Mutex::new(0)),
+    });
+    let shell = Arc::new(RecordingShell {
+        commands: Arc::new(Mutex::new(Vec::new())),
+    });
+    let mut tools = ToolRegistry::new();
+    tools.register(edit.clone());
+    tools.register(shell.clone());
+    let runner = runner_with(Arc::new(FakeProvider::text("done")), tools);
+    (runner, SessionId::new(), edit, shell)
+}
+
+async fn seed_parked(runner: &Runner, session: SessionId) {
+    runner
+        .append_tool_call(session, "call_edit", "edit", json!({}))
+        .await
+        .expect("seed the edit");
+    runner
+        .append_tool_call(
+            session,
+            "call_bash",
+            "bash",
+            json!({"command": "cargo test"}),
+        )
+        .await
+        .expect("seed the check");
+}
+
+async fn logged_skip(runner: &Runner, session: SessionId) -> bool {
+    runner
+        .store()
+        .replay(session)
+        .await
+        .expect("replay")
+        .iter()
+        .any(|entry| {
+            matches!(&entry.event, SessionEvent::ToolResult { call_id, output, .. }
+            if call_id == "call_bash"
+                && output["error"] == SKIPPED_AFTER_EDIT
+                && output["not_run"] == true)
+        })
+}
+
+/// Both calls of a parked batch are approved together. The edit fails while
+/// running, so the check is answered as skipped instead of running against
+/// source the edit never wrote.
+#[tokio::test]
+async fn test_approved_check_skipped() {
+    let (runner, session, edit, shell) = parked_batch();
+    seed_parked(&runner, session).await;
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[
+                ApprovalDecision::approve("call_edit"),
+                ApprovalDecision::approve("call_bash"),
+            ],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "both calls are answered");
+    assert_eq!(edit.attempts(), 1, "the edit was attempted");
+    assert!(shell.ran().is_empty(), "the check did not run");
+    assert!(logged_skip(&runner, session).await, "the check is answered");
+}
+
+/// Only the edit is decided. The check it follows can never run, so it is
+/// answered now instead of being offered on a later card.
+#[tokio::test]
+async fn test_undecided_check_skipped() {
+    let (runner, session, edit, shell) = parked_batch();
+    seed_parked(&runner, session).await;
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[ApprovalDecision::approve("call_edit")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "no card is left for the check");
+    assert_eq!(edit.attempts(), 1, "the edit was attempted");
+    assert!(shell.ran().is_empty(), "the check did not run");
+    assert!(logged_skip(&runner, session).await, "the check is answered");
+}
+
+/// Both calls of a parked batch are approved and the edit succeeds, so the
+/// check runs in the same resume: the two calls the model sent in one response
+/// are released without another model step.
+#[tokio::test]
+async fn test_approved_edit_releases_check() {
+    let shell = Arc::new(RecordingShell {
+        commands: Arc::new(Mutex::new(Vec::new())),
+    });
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(SucceedingEdit));
+    tools.register(shell.clone());
+    let runner = runner_with(Arc::new(FakeProvider::text("done")), tools);
+    let session = SessionId::new();
+    seed_parked(&runner, session).await;
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[
+                ApprovalDecision::approve("call_edit"),
+                ApprovalDecision::approve("call_bash"),
+            ],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "both calls are answered");
+    assert_eq!(
+        shell.ran(),
+        vec!["cargo test".to_string()],
+        "the approved check runs on its own edit's success"
+    );
+}
+
+/// Only the check is decided. It must not run while the edit it follows is
+/// still undecided: that edit may yet write the source the check reads.
+#[tokio::test]
+async fn test_approved_check_waits() {
+    let (runner, session, edit, shell) = parked_batch();
+    seed_parked(&runner, session).await;
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[ApprovalDecision::approve("call_bash")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert_eq!(edit.attempts(), 0, "the undecided edit did not run");
+    assert!(
+        shell.ran().is_empty(),
+        "an approved check waits for its edit"
+    );
+    assert_eq!(remaining.len(), 2, "both calls await a later verdict");
+    assert!(
+        !logged_skip(&runner, session).await,
+        "nothing is answered before the edit is settled"
+    );
+}
+
+/// The log already records that the edit before the check failed, as a
+/// process that stopped mid-response leaves it. The resume settles the check
+/// from that record and does not run the edit again.
+#[tokio::test]
+async fn test_recorded_failure_skips_check() {
+    let (runner, session, edit, shell) = parked_batch();
+    runner
+        .append_tool_call(session, "call_edit", "edit", json!({}))
+        .await
+        .expect("seed the edit");
+    runner
+        .append_tool_result(
+            session,
+            "call_edit".into(),
+            "edit",
+            json!({"error": "old_string not found"}),
+            0,
+        )
+        .await
+        .expect("seed the edit's failure");
+    runner
+        .append_tool_call(
+            session,
+            "call_bash",
+            "bash",
+            json!({"command": "cargo test"}),
+        )
+        .await
+        .expect("seed the check");
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[ApprovalDecision::approve("call_bash")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "the check is answered");
+    assert_eq!(edit.attempts(), 0, "the settled edit is not run again");
+    assert!(shell.ran().is_empty(), "the check did not run");
+    assert!(logged_skip(&runner, session).await, "the check is answered");
+}
+
+/// An edit the run was interrupted under wrote nothing either. On the resume
+/// the model does not know that, so a check the human approves would run
+/// against source the edit never changed; the log says otherwise, and the
+/// check is answered as skipped.
+#[tokio::test]
+async fn test_interrupted_edit_skips_check() {
+    let (runner, session, edit, shell) = parked_batch();
+    for event in [
+        SessionEvent::ToolCall {
+            call_id: "call_edit".into(),
+            tool: "edit".into(),
+            input: json!({}),
+        },
+        SessionEvent::ToolResult {
+            call_id: "call_edit".into(),
+            output: json!({"error": "interrupted by user", "not_run": true}),
+            duration_ms: 0,
+        },
+        SessionEvent::ToolCall {
+            call_id: "call_bash".into(),
+            tool: "bash".into(),
+            input: json!({"command": "cargo test"}),
+        },
+    ] {
+        runner
+            .store()
+            .append(new_event(session, event))
+            .await
+            .expect("seed the log");
+    }
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[ApprovalDecision::approve("call_bash")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "the check is answered");
+    assert_eq!(edit.attempts(), 0, "the interrupted edit is not run again");
+    assert!(shell.ran().is_empty(), "the check did not run");
+    assert!(logged_skip(&runner, session).await, "the check is answered");
+}
+
+/// A declined edit wrote nothing, so the check behind it is answered as
+/// skipped rather than offered on a later card.
+#[tokio::test]
+async fn test_rejected_edit_skips_check() {
+    let (runner, session, edit, shell) = parked_batch();
+    seed_parked(&runner, session).await;
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[
+                ApprovalDecision::reject("call_edit"),
+                ApprovalDecision::approve("call_bash"),
+            ],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "both calls are answered");
+    assert_eq!(edit.attempts(), 0, "the declined edit did not run");
+    assert!(shell.ran().is_empty(), "the check did not run");
+    assert!(logged_skip(&runner, session).await, "the check is answered");
+}
+
+/// The check rule is settled per response. An edit that failed in an earlier
+/// response wrote a source the model has since seen; a check the model sends
+/// in a later response is testing that state, so it runs. Reading the earlier
+/// failure as an anchor would answer a command the model meant to run.
+#[tokio::test]
+async fn test_later_check_still_runs() {
+    let (runner, session, _edit, shell) = parked_batch();
+    for event in [
+        SessionEvent::AssistantMessage {
+            text: String::new(),
+            thinking: None,
+        },
+        SessionEvent::ToolCall {
+            call_id: "call_edit".into(),
+            tool: "edit".into(),
+            input: json!({}),
+        },
+        SessionEvent::ToolResult {
+            call_id: "call_edit".into(),
+            output: json!({"error": "old_string not found"}),
+            duration_ms: 0,
+        },
+        SessionEvent::AssistantMessage {
+            text: String::new(),
+            thinking: None,
+        },
+        SessionEvent::ToolCall {
+            call_id: "call_bash".into(),
+            tool: "bash".into(),
+            input: json!({"command": "cargo test"}),
+        },
+    ] {
+        runner
+            .store()
+            .append(new_event(session, event))
+            .await
+            .expect("seed the log");
+    }
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[ApprovalDecision::approve("call_bash")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "the check is answered");
+    assert_eq!(
+        shell.ran(),
+        vec!["cargo test".to_string()],
+        "a later response's check does not depend on an earlier response's edit"
+    );
+    assert!(
+        !logged_skip(&runner, session).await,
+        "the check is not answered as skipped"
+    );
+}
+
+/// The host no longer registers the edit the batch parked. None of it ran, so
+/// the check behind it is answered as skipped instead of running.
+#[tokio::test]
+async fn test_unknown_edit_skips_check() {
+    let (runner, session, _edit, shell) = parked_batch();
+    runner
+        .append_tool_call(session, "call_edit", "multiedit", json!({}))
+        .await
+        .expect("seed the edit");
+    runner
+        .append_tool_call(
+            session,
+            "call_bash",
+            "bash",
+            json!({"command": "cargo test"}),
+        )
+        .await
+        .expect("seed the check");
+
+    let remaining = runner
+        .apply_decisions(
+            session,
+            &[
+                ApprovalDecision::approve("call_edit"),
+                ApprovalDecision::approve("call_bash"),
+            ],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("decisions");
+
+    assert!(remaining.is_empty(), "both calls are answered");
+    assert!(shell.ran().is_empty(), "the check did not run");
+    assert!(logged_skip(&runner, session).await, "the check is answered");
 }

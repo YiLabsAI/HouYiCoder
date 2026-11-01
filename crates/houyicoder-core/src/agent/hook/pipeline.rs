@@ -37,6 +37,9 @@ use super::{
 use crate::agent::fallback::{FallbackToolOutcome, tool_error_json};
 use crate::agent::resolve::ToolCallPlan;
 use crate::agent::tools::SessionResultCapture;
+use crate::agent::turn::withhold::{
+    CheckAction, CheckPlan, EditOutcome, ran_and_failed, skipped_after_edit,
+};
 use crate::agent::{RunError, Runner};
 use crate::observability::tool_failure_reason;
 use std::time::Instant;
@@ -180,6 +183,10 @@ impl Runner {
     ) -> Result<Vec<(String, Value)>, RunError> {
         let mut results: Vec<(String, Value)> = Vec::with_capacity(plans.len());
         let mut i = 0;
+        // A failed edit leaves every check after it pointing at source that was
+        // never written, so they are answered as skipped instead of run. A
+        // failed read anchors nothing: it does not invalidate later work.
+        let mut checks = CheckPlan::default();
         while i < plans.len() {
             if plans[i].concurrency_safe {
                 // Parallel batch: the maximal run of safe calls from i. Each
@@ -271,9 +278,33 @@ impl Runner {
             } else {
                 // Serial: a non-safe call runs alone.
                 let plan = &plans[i];
+                if checks.action(plan.tool.name()) == CheckAction::Skip {
+                    let output = skipped_after_edit();
+                    self.append_tool_result(
+                        session,
+                        plan.id.clone(),
+                        plan.tool.name(),
+                        output.clone(),
+                        0,
+                    )
+                    .await?;
+                    results.push((plan.id.clone(), output));
+                    i += 1;
+                    continue;
+                }
                 let o = self
                     .execute_call(session, &plan.id, &plan.tool, plan.input.clone(), token)
                     .await?;
+                // A call that never ran (the run was cancelled under it) is
+                // not a failed edit: its callers are already aborting, and
+                // their later checks deserve the interrupted answer, not a
+                // statement that the edit failed.
+                let outcome = if ran_and_failed(&o) {
+                    EditOutcome::Missed
+                } else {
+                    EditOutcome::Completed
+                };
+                checks.observe(plan.tool.name(), outcome);
                 results.push((plan.id.clone(), o));
                 i += 1;
             }

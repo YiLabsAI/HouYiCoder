@@ -154,6 +154,26 @@ impl ToolCtx {
     }
 }
 
+/// Whether a tool name runs a shell command. The family shares one command
+/// field and one set of command checks, so a judgement about one member holds
+/// for the others.
+pub fn is_shell_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "bash" | "sh" | "exec" | "shell"
+    )
+}
+
+/// Whether a tool name writes files. Every member leaves a file different from
+/// the text read before it, which is what makes a command sent after one
+/// depend on it.
+pub fn writes_files(tool_name: &str) -> bool {
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "write" | "edit" | "multiedit" | "patch" | "str_replace"
+    )
+}
+
 /// A capability the model can invoke. Fail-closed defaults: a tool is
 /// sequential, mutating, destructive, and approval-free unless it says
 /// otherwise. Object-safe (PFut) so the registry holds Arc<dyn Tool> and a

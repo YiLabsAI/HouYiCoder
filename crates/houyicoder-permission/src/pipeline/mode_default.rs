@@ -7,6 +7,7 @@
 //! every earlier stage, so the mode adds no question of its own.
 
 use houyicoder_api::sandbox::names_credential_path;
+use houyicoder_api::tool::is_shell_tool;
 
 use crate::compound::is_readonly_compound;
 use crate::decision::{AllowReason, Decision};
@@ -14,7 +15,6 @@ use crate::egress::http_origin;
 use crate::gate::mode_default;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
-use crate::side_effect::is_shell_tool;
 
 /// The fallback verdict. Always returns a concrete Allow / Ask, so the ladder
 /// never falls off the end. Reads the mode from the shared context.

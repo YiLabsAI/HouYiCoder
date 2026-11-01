@@ -181,11 +181,15 @@ impl Tool for BashTool {
          Returns stdout/stderr/exit_code; a call stopped at its budget returns \
          timed_out and what the command printed before the stop. \
          Use this for builds, tests, git; a source rewrite from here is refused. \
+         Send an edit and the command that checks it in one response, edit \
+         first: the check runs as soon as the edit completes. A check after an \
+         edit that has not completed is skipped. \
          When issuing multiple commands: if they are independent, make \
-         multiple Bash calls in a single message so they run in parallel \
-         (example: run git status and git diff as two calls in one message, \
-         not one compound call). If the commands depend on each other, use a \
-         single call with && to chain them. Use ; only when running \
+         multiple Bash calls in a single message: they run one after another, \
+         with no model round trip between them (example: run git status and \
+         git diff as two calls in one message, not one compound call). If the \
+         commands depend on each other, use a single call with && to chain \
+         them. Use ; only when running \
          sequentially without caring if earlier commands fail. Pipe output \
          with | to pass it between commands (find . -name '*.rs' | xargs \
          wc -l | sort -n). Do not use newlines to separate commands. \

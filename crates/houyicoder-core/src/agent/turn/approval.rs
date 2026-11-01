@@ -7,12 +7,34 @@ use houyicoder_api::skill::GrantSubject;
 use houyicoder_api::skill::grant::SkillGrantStore;
 use houyicoder_context::{SessionEvent, SessionId};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::fallback::FallbackToolOutcome;
 use crate::agent::turn::resolve::resolved_input;
+use crate::agent::turn::withhold::{self, CheckAction, CheckPlan, EditOutcome};
 use crate::agent::{ApprovalDecision, ApprovalRequest, RunError, Runner};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+/// One call of a model response whose release is being settled: a call that
+/// still awaits a verdict, or an earlier call of the same response with what
+/// the log already records about it.
+struct BatchCall {
+    request: Option<ApprovalRequest>,
+    tool: String,
+    outcome: EditOutcome,
+}
+
+/// What releasing parked calls left behind, folded into the session tallies
+/// once every response is settled.
+#[derive(Default)]
+struct BatchSettlement {
+    results: Vec<(String, Value)>,
+    call_names: HashMap<String, String>,
+    /// Set once a stop lands while an approved call is running; every call
+    /// after it is recorded interrupted instead of released.
+    stopped: bool,
+}
 
 impl Runner {
     /// Apply decisions to pending tool calls and return requests that still
@@ -28,14 +50,45 @@ impl Runner {
         token: &CancellationToken,
     ) -> Result<Vec<ApprovalRequest>, RunError> {
         let mut remaining = Vec::new();
-        // Every released call's outcome, folded into the session tallies at
-        // the end so a call that ran here counts like one the loop dispatched.
-        let mut results: Vec<(String, serde_json::Value)> = Vec::new();
-        let mut call_names: HashMap<String, String> = HashMap::new();
-        let mut stopped = false;
-        for req in self.pending_approvals(session).await? {
-            call_names.insert(req.call_id.clone(), req.tool_name.clone());
-            if stopped {
+        let mut settled = BatchSettlement::default();
+        for batch in self.pending_state(session).await? {
+            let still_pending = self
+                .settle_batch(session, batch, decisions, token, &mut settled)
+                .await?;
+            remaining.extend(still_pending);
+        }
+        // Folded once, after every response is settled, so a call released
+        // here counts like one the live turn dispatched.
+        self.fold_tool_outcomes(&settled.results, &settled.call_names);
+        Ok(remaining)
+    }
+
+    /// Settle one response's parked calls against the decisions, returning
+    /// the requests that still await one.
+    async fn settle_batch(
+        &self,
+        session: SessionId,
+        batch: Vec<BatchCall>,
+        decisions: &[ApprovalDecision],
+        token: &CancellationToken,
+        settled: &mut BatchSettlement,
+    ) -> Result<Vec<ApprovalRequest>, RunError> {
+        let mut remaining = Vec::new();
+        // The same check rule the live turn applies, seeded from the log: the
+        // response that parked these calls may already record that an edit
+        // before them wrote nothing. Reaching this path means an earlier
+        // process stopped before answering every call of the response, or a
+        // session written by an older build left a call unanswered.
+        let mut checks = CheckPlan::default();
+        for call in batch {
+            let Some(req) = call.request else {
+                checks.observe(&call.tool, call.outcome);
+                continue;
+            };
+            settled
+                .call_names
+                .insert(req.call_id.clone(), req.tool_name.clone());
+            if settled.stopped {
                 // The stop landed while an approved call was running: the
                 // calls behind it do not start. Each is recorded interrupted
                 // so the session stays lossless and a later resume cannot run
@@ -43,12 +96,34 @@ impl Runner {
                 let output = self
                     .record_interrupted(session, &req.call_id, &req.tool_name, &req.input)
                     .await?;
-                results.push((req.call_id, output));
+                settled.results.push((req.call_id, output));
                 continue;
+            }
+            match checks.action(&req.tool_name) {
+                CheckAction::Skip => {
+                    // The edit it follows wrote nothing, so the check is
+                    // answered now rather than offered on a card.
+                    let output = self
+                        .answer_skipped(session, &req.call_id, &req.tool_name)
+                        .await?;
+                    settled.results.push((req.call_id, output));
+                    continue;
+                }
+                CheckAction::Wait => {
+                    // The edit it follows is still undecided: keep the check
+                    // for the resume that decides that edit.
+                    remaining.push(req);
+                    continue;
+                }
+                CheckAction::Run => {}
             }
             let Some(decision) = decisions.iter().find(|d| d.call_id == req.call_id) else {
                 // No decision for this call: leave it pending so a later
-                // resume can decide it. Re-surface it to the caller.
+                // resume can decide it, and return it to the caller so the
+                // card is offered again. An edit left undecided may still
+                // write, so the checks after it wait on this verdict rather
+                // than running now.
+                checks.observe(&req.tool_name, EditOutcome::Pending);
                 remaining.push(req);
                 continue;
             };
@@ -77,9 +152,11 @@ impl Runner {
                     let output = self
                         .execute_approved_call(session, req.call_id.as_str(), &tool, input, token)
                         .await?;
-                    results.push((req.call_id.clone(), output));
-                    stopped = token.is_cancelled();
+                    checks.observe(&req.tool_name, withhold::recorded_outcome(&output));
+                    settled.results.push((req.call_id.clone(), output));
+                    settled.stopped = token.is_cancelled();
                 } else {
+                    checks.observe(&req.tool_name, EditOutcome::Missed);
                     let output = FallbackToolOutcome::UnknownTool {
                         name: req.tool_name.clone(),
                         on_resume: true,
@@ -93,9 +170,12 @@ impl Runner {
                         0,
                     )
                     .await?;
-                    results.push((req.call_id, output));
+                    settled.results.push((req.call_id, output));
                 }
             } else {
+                // A declined edit did not run either, so its checks stay
+                // withdrawn.
+                checks.observe(&req.tool_name, EditOutcome::Missed);
                 let output = FallbackToolOutcome::Rejected.to_json();
                 self.append_tool_result(
                     session,
@@ -105,11 +185,26 @@ impl Runner {
                     0,
                 )
                 .await?;
-                results.push((req.call_id, output));
+                settled.results.push((req.call_id, output));
             }
         }
-        self.fold_tool_outcomes(&results, &call_names);
         Ok(remaining)
+    }
+
+    /// Answer a shell call the batch must not run, because an edit it follows
+    /// did not complete. The answer is recorded under the call's own id and
+    /// tool name, and it is durable, so the call is not left unanswered and no
+    /// later resume can offer it again.
+    async fn answer_skipped(
+        &self,
+        session: SessionId,
+        call_id: &str,
+        tool_name: &str,
+    ) -> Result<Value, RunError> {
+        let output = withhold::skipped_after_edit();
+        self.append_tool_result(session, call_id.to_string(), tool_name, output.clone(), 0)
+            .await?;
+        Ok(output)
     }
 
     /// Write discovered mach services to the grant store so the next skill
@@ -135,9 +230,10 @@ impl Runner {
         Ok(())
     }
 
-    /// The approval requests pending for a session: ToolCall events whose
-    /// call_id has no matching ToolResult yet. Used by resume() to know which
-    /// calls to execute. (scans the replay; a real impl indexes this.)
+    /// The calls a session still owes a verdict on: ToolCall events whose call_id
+    /// has no matching ToolResult yet. The abort reconciliation answers each of
+    /// them, so an aborted run leaves no orphan call. (scans the replay; a real
+    /// impl indexes this.)
     ///
     /// Precondition: call_id is unique across the session (minted at the
     /// provider boundary by unique_id_gen in openai_compat.rs). The answered
@@ -148,49 +244,86 @@ impl Runner {
         &self,
         session: SessionId,
     ) -> Result<Vec<ApprovalRequest>, RunError> {
+        Ok(self
+            .pending_state(session)
+            .await?
+            .into_iter()
+            .flatten()
+            .filter_map(|call| call.request)
+            .collect())
+    }
+
+    /// Replay the session once and return every model response that still has
+    /// an unanswered call, each with what the log records about the rest of
+    /// that response's calls.
+    ///
+    /// A response's calls are the ToolCalls between its AssistantMessage and
+    /// the next one. The batches stay separate because the check rule is
+    /// settled per response: an edit in an earlier response says nothing
+    /// about the source a later response's check reads.
+    async fn pending_state(&self, session: SessionId) -> Result<Vec<Vec<BatchCall>>, RunError> {
         let events = self.store.replay(session).await?;
-        let mut answered = HashSet::new();
+        let mut answered: HashMap<String, EditOutcome> = HashMap::new();
         for e in &events {
-            if let SessionEvent::ToolResult { call_id, .. } = &e.event {
-                answered.insert(call_id.clone());
-            }
-        }
-        let mut pending = Vec::new();
-        for e in &events {
-            if let SessionEvent::ToolCall {
-                call_id,
-                tool,
-                input,
+            if let SessionEvent::ToolResult {
+                call_id, output, ..
             } = &e.event
-                && !answered.contains(call_id)
             {
-                // A recovered call is resolved to the text the host runs, the
-                // same way it is resolved before a call is judged, so the
-                // approval on resume offers the command that will execute.
-                let input = resolved_input(self.tools.get(tool), input);
-                pending.push(ApprovalRequest::new(
-                    call_id.clone(),
-                    tool.clone(),
-                    input,
-                    // Recovered from the log: the gate's verdict for this call
-                    // happened in an earlier process, and the record does not
-                    // store it, so the card offers a generic prompt rather
-                    // than a verdict taken now against a call it no longer
-                    // judges.
-                    None,
-                ));
+                answered.insert(call_id.clone(), withhold::recorded_outcome(output));
             }
         }
-        Ok(pending)
+        let mut batches: Vec<Vec<BatchCall>> = Vec::new();
+        for e in &events {
+            match &e.event {
+                SessionEvent::AssistantMessage { .. } => batches.push(Vec::new()),
+                SessionEvent::ToolCall {
+                    call_id,
+                    tool,
+                    input,
+                } => {
+                    let recorded = answered.get(call_id).copied();
+                    let request = match recorded {
+                        // A recovered call is resolved to the text the host
+                        // runs, the same way it is resolved before a call is
+                        // judged, so the approval on resume offers the command
+                        // that will execute.
+                        None => Some(ApprovalRequest::new(
+                            call_id.clone(),
+                            tool.clone(),
+                            resolved_input(self.tools.get(tool), input),
+                            // The gate's verdict happened in an earlier
+                            // process and the record does not store it, so the
+                            // card offers a generic prompt rather than a
+                            // verdict taken now against a call it no longer
+                            // judges.
+                            None,
+                        )),
+                        Some(_) => None,
+                    };
+                    let outcome = recorded.unwrap_or(EditOutcome::Pending);
+                    let call = BatchCall {
+                        request,
+                        tool: tool.clone(),
+                        outcome,
+                    };
+                    match batches.last_mut() {
+                        Some(batch) => batch.push(call),
+                        None => batches.push(vec![call]),
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(batches
+            .into_iter()
+            .filter(|batch| batch.iter().any(|call| call.request.is_some()))
+            .collect())
     }
 }
 
 /// Merge discovered services into the grant store and return a JSON
 /// result the model sees. Pure of runner state — takes the store by ref.
-fn apply_entitlement(
-    input: &serde_json::Value,
-    store: Option<&SkillGrantStore>,
-) -> serde_json::Value {
+fn apply_entitlement(input: &Value, store: Option<&SkillGrantStore>) -> Value {
     let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
     if skill.is_empty() {
         return serde_json::json!({ "error": "no skill named", "granted": [] });

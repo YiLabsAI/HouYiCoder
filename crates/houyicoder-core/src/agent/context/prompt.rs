@@ -349,8 +349,8 @@ fn tone_section() -> String {
 }
 
 /// The efficiency section: nudges the model to minimize tool calls, prefer
-/// compound commands, converge on an answer, and batch independent calls in
-/// parallel. Byte-stable by construction (no volatile inputs).
+/// compound commands, converge on an answer, and send independent calls in one
+/// response. Byte-stable by construction (no volatile inputs).
 fn efficiency_section() -> String {
     "# Efficiency\n\
      Go straight to the point. Try the simplest approach first without going \
@@ -359,19 +359,23 @@ fn efficiency_section() -> String {
      synthesize and produce the final answer. Avoid repeated tool calls that \
      do not add new information; switch to answering when further calls would \
      only re-confirm what you already know.\n\
-     You can call multiple tools in a single response. If you intend to call \
-     multiple tools and there are no dependencies between them, make all of \
-     the independent tool calls in parallel. Maximize use of parallel tool \
-     calls where possible to increase efficiency. However, if some tool calls \
-     depend on previous calls to inform dependent values, do not call those \
-     in parallel — call them sequentially. For instance, if one operation \
-     must complete before another starts, run them sequentially."
+     You can call multiple tools in a single response. Make independent \
+     calls in one response so they can run together. A call that must wait \
+     for another to finish still belongs in the same response when its \
+     arguments do not depend on that call's output: calls that change files \
+     run in the order you send them, so send an edit before the command that \
+     checks it, and the check runs as soon as that edit completes. A check \
+     sent after an edit that has not completed is answered as skipped \
+     instead of running against files the edit never changed; that includes \
+     an edit still waiting for the user's approval, so send the check again \
+     once the edit is approved. Apart from that resend, only a call whose \
+     arguments need a previous call's output belongs in a later response."
         .to_string()
 }
 
 /// The using-tools section: prefer dedicated tools over Bash so the user can
-/// review the work, plus the compound-command guidance (parallel Bash calls
-/// vs && chaining vs ;). Byte-stable (no volatile inputs).
+/// review the work, plus the compound-command guidance (several Bash calls in
+/// one response vs && chaining vs ;). Byte-stable (no volatile inputs).
 fn using_tools_section() -> String {
     "# Using your tools\n\
      Do not use Bash to run commands when a relevant dedicated tool is \
@@ -384,14 +388,15 @@ fn using_tools_section() -> String {
      - To search file contents use Grep instead of grep or rg.\n\
      Never rewrite a source file from a shell command: a python one-liner, a \
      sed in-place edit, or a scripted write skips the checks, the undo ledger, \
-     and the diff, so it is refused. Use Bash for builds and tests; send an edit \
-     and its check in one turn.\n\
-     For compound shell commands: if the commands are independent and can run \
-     in parallel, make multiple Bash calls in a single message (example: to \
-     run git status and git diff, send one message with two Bash calls in \
-     parallel). If the commands depend on each other, use a single Bash call \
-     with && to chain them. Use ; only when running sequentially without \
-     caring if earlier commands fail. Do not use newlines to separate commands."
+     and the diff, so it is refused. Use Bash for builds and tests; send the edit \
+     first and the command that checks it after it in one turn.\n\
+     For compound shell commands: if the commands are independent, make \
+     multiple Bash calls in a single message (example: to run git status and \
+     git diff, send one message with two Bash calls). They run one after \
+     another, with no model round trip between them. If the commands depend \
+     on each other, use a single Bash call with && to chain them. Use ; only \
+     when running sequentially without caring if earlier commands fail. Do \
+     not use newlines to separate commands."
         .to_string()
 }
 

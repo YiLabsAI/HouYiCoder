@@ -281,13 +281,46 @@ fn test_doing_tasks_guides_behavior() {
     assert!(p.text.contains("Do not add features"), "{}", p.text);
 }
 
+/// The efficiency section tells the model that an edit and the command that
+/// checks it belong in one response, edit first, and that a check after an
+/// edit that has not completed is answered as skipped. Without the second
+/// half the model reads the skip as a failure of its own command and retries
+/// it; without the approval clause it believes a parked edit already released
+/// its check, and never sends it.
 #[test]
-fn test_using_tools_guides_parallel() {
+fn test_efficiency_guides_same_turn() {
+    let dir = scratch_dir("efficiency");
+    fs::write(dir.join("AGENTS.md"), "x").expect("write");
+    let p = SystemPrompt::build(&dir);
+    assert!(p.text.contains("# Efficiency"), "{}", p.text);
+    assert!(
+        p.text.contains(
+            "send an edit before the command that checks it, and the check runs as soon as"
+        ),
+        "{}",
+        p.text
+    );
+    assert!(
+        p.text
+            .contains("A check sent after an edit that has not completed is answered as skipped"),
+        "{}",
+        p.text
+    );
+    assert!(
+        p.text
+            .contains("send the check again once the edit is approved"),
+        "an edit awaiting approval answers its check as skipped: {}",
+        p.text
+    );
+}
+
+#[test]
+fn test_using_tools_guides_batching() {
     // The using-tools section must name each dedicated tool preference
     // (Read over cat, Grep over grep, Glob over find, Edit over sed,
-    // Write over echo) and the compound-command guidance (parallel for
-    // independent, && for dependent, no newlines). Guards the port
-    // against silent drift back to a vague nudge.
+    // Write over echo) and the batching guidance (one response for
+    // independent commands, && for dependent, no newlines, edit before its
+    // check). Guards the port against silent drift back to a vague nudge.
     let dir = scratch_dir("tools");
     fs::write(dir.join("AGENTS.md"), "x").expect("write");
     let p = SystemPrompt::build(&dir);
@@ -301,7 +334,14 @@ fn test_using_tools_guides_parallel() {
     assert!(p.text.contains("Glob instead of find"), "{}", p.text);
     assert!(p.text.contains("Edit instead of sed"), "{}", p.text);
     assert!(
-        p.text.contains("independent tool calls in parallel"),
+        p.text
+            .contains("if the commands are independent, make multiple Bash calls"),
+        "{}",
+        p.text
+    );
+    assert!(
+        p.text
+            .contains("send the edit first and the command that checks it after it"),
         "{}",
         p.text
     );

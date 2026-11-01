@@ -26,6 +26,7 @@ fn test_outcomes_mark_not_run() {
         },
         FallbackToolOutcome::Rejected,
         FallbackToolOutcome::Interrupted,
+        FallbackToolOutcome::SkippedAfterEdit,
     ];
     for outcome in cases {
         let value = outcome.to_json();
@@ -35,7 +36,10 @@ fn test_outcomes_mark_not_run() {
             !reason.starts_with("tool error:"),
             "{value} carries no error prefix"
         );
-        assert!(tool_result_not_run(&value), "{value} marks the call unrun");
+        assert!(
+            tool_result_not_run(&value),
+            "{value} marks the call as not run"
+        );
         assert!(
             !tool_result_failed(&value, "", &Value::Null),
             "{value} is not a failure"

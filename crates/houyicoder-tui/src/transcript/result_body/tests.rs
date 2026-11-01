@@ -39,6 +39,40 @@ fn test_extract_body_grep_content() {
     assert_eq!(extract_body(&out), "a.rs:1:match\na.rs:3:match");
 }
 
+/// A call the host answered without running it renders its cause as plain
+/// text: the chip already reports that it did not run, and an error prefix
+/// would state a verdict on an execution that never happened.
+#[test]
+fn test_extract_body_skipped_check() {
+    let out = serde_json::json!({
+        "error": "skipped: the file edit before it had not completed",
+        "not_run": true,
+    })
+    .to_string();
+
+    assert_eq!(
+        extract_body(&out),
+        "skipped: the file edit before it had not completed"
+    );
+}
+
+/// The plain-text rule holds for every answer the runner writes for a call it
+/// did not run, not only the check withheld behind an edit: a call naming an
+/// unknown tool, a declined one, and an interrupted one all read the same
+/// way.
+#[test]
+fn test_not_run_reports_cause() {
+    for cause in [
+        "unknown tool: glob_v2",
+        "rejected by user",
+        "interrupted by user",
+    ] {
+        let out = serde_json::json!({"error": cause, "not_run": true}).to_string();
+
+        assert_eq!(extract_body(&out), cause);
+    }
+}
+
 /// Empty filenames falls through (no spurious empty body short-circuit);
 /// the caller surfaces the summary chip alone.
 #[test]

@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::compound::{is_readonly_compound, split_compound};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::rule::{Effect, input_content};
-use crate::side_effect::is_shell_tool;
+use houyicoder_api::tool::is_shell_tool;
 
 /// The version-control directory. Any path inside it decides the repository's
 /// state, so every occurrence escalates.
