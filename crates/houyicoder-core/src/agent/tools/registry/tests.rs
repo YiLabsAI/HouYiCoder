@@ -78,3 +78,15 @@ fn test_fail_closed_defaults() {
     assert!(!t.is_destructive());
     assert!(!t.requires_approval());
 }
+
+/// A caller adding tools from a second source asks the registry before
+/// registering, so the name already in use stays with its first owner. The
+/// query answers only that question; it does not look the tool up.
+#[test]
+fn test_contains_reports_registered() {
+    let mut reg = ToolRegistry::new();
+    assert!(!reg.contains("echo"));
+    reg.register(Arc::new(StubTool::new("echo")));
+    assert!(reg.contains("echo"));
+    assert!(!reg.contains("missing"));
+}

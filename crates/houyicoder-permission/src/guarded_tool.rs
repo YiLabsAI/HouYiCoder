@@ -28,12 +28,12 @@ use crate::decision::{Decision, Outcome};
 use crate::gate::ModeGate;
 use crate::mode::ToolRequest;
 
-pub struct GuardedTool<T: Tool> {
+pub struct GuardedTool<T: Tool + ?Sized> {
     inner: Arc<T>,
     gate: Arc<dyn ModeGate>,
 }
 
-impl<T: Tool> GuardedTool<T> {
+impl<T: Tool + ?Sized> GuardedTool<T> {
     pub fn new(inner: Arc<T>, gate: Arc<dyn ModeGate>) -> Self {
         Self { inner, gate }
     }
@@ -49,7 +49,7 @@ impl<T: Tool> GuardedTool<T> {
     }
 }
 
-impl<T: Tool> Tool for GuardedTool<T> {
+impl<T: Tool + ?Sized> Tool for GuardedTool<T> {
     fn name(&self) -> &str {
         self.inner.name()
     }

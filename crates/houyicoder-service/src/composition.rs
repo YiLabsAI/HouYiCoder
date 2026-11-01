@@ -25,6 +25,7 @@ mod session_descriptor;
 mod skill;
 pub use skill::SkillRegistryImpl;
 mod startup_warnings;
+mod tool_registration;
 mod worktree;
 
 mod containment;
@@ -85,10 +86,6 @@ use crate::server::recap::RecapSession;
 use crate::server::recap::RecapSettings;
 use built_in_tools::BuiltInToolProvider;
 use hook_compose::SkillRuntime;
-use houyicoder_api::launcher::StdProcessLauncher;
-use houyicoder_api::mcp::McpClient;
-use houyicoder_api::mcp::McpToolProvider;
-use houyicoder_api::tool::ToolProvider;
 use houyicoder_core::agent::WorktreeController;
 use houyicoder_core::agent::build_hook_fire;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
@@ -612,40 +609,15 @@ fn register_builtin_tools(
     store: &SessionStore,
 ) -> BuiltInSetup {
     let file_transaction = file_write_journal(store);
-    let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), gate_dyn)
+    let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), Arc::clone(&gate_dyn))
         .with_activator(Some(Arc::clone(&skills.conditional)))
         .with_active_skill(skills.discovery_skill())
         .with_transaction(file_transaction.clone());
     let undo_handles = builtin.undo_handles();
-    register_provider_tools(tools, builtin);
+    tool_registration::register_provider_tools(tools, gate_dyn, builtin);
     BuiltInSetup {
         file_transaction,
         undo_handles,
-    }
-}
-
-/// Register the built-in tool provider and any configured MCP tool servers.
-fn register_provider_tools(tools: &mut ToolRegistry, builtin: BuiltInToolProvider) {
-    let mut providers: Vec<Box<dyn ToolProvider>> = vec![Box::new(builtin)];
-    let launcher = StdProcessLauncher::new();
-    for cfg in houyicoder_config::resolve_mcp_servers() {
-        match McpClient::spawn(&cfg.program, &cfg.args, &launcher) {
-            Ok((client, entries)) => {
-                providers.push(Box::new(McpToolProvider::new(client, entries)));
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "external tool server {:?} failed to start: {e}; \
-                     skipping (built-in tools still load)",
-                    cfg.program
-                );
-            }
-        }
-    }
-    for provider in &providers {
-        for tool in provider.tools() {
-            tools.register(tool);
-        }
     }
 }
 

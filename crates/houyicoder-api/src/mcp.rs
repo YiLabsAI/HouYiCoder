@@ -6,7 +6,9 @@
 //! version isolation goal intact (no heavyweight SDK dependency that
 //! could pin a shifting spec version or drag a runtime). The wire envelope is
 //! pure and unit-tested with in-memory cursors; a real-server end-to-end test
-//! is deferred until a stub binary is worth the build cost.
+//! is deferred until a stub binary is worth the build cost. The composition
+//! root wraps each adapter in the permission gate at registration, so a remote
+//! call is judged by the same gate a built-in tool faces before it runs.
 //!
 //! v1 simplifications, by design:
 //! - block-on-init: the composition root spawns the server and runs
@@ -406,8 +408,8 @@ impl Tool for McpTool {
 
     // Fail-closed defaults inherited from the trait: a remote tool is assumed
     // mutating, destructive, and non-concurrent unless a future cut learns
-    // otherwise from server hints. Approval is left to the host gate that
-    // wraps the adapter (the same GuardedTool path the built-in tools take).
+    // otherwise from server hints. The wrapper reports these values to the
+    // gate with every call it judges.
 }
 
 /// A ToolProvider that contributes one server's tools to the registry. Built

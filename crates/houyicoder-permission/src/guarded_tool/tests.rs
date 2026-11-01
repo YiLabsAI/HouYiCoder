@@ -2,9 +2,14 @@ use super::*;
 use crate::gate::DefaultModeGate;
 use crate::mode::PermissionMode;
 use crate::rule::{Effect, Rule};
+use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
 use houyicoder_protocol::extension::ToolError;
 use pollster::block_on;
 use serde_json::{Map, json};
+use std::env::temp_dir;
+use std::fs::{create_dir_all, remove_dir_all};
+use std::path::{Path, PathBuf};
+use std::process::id;
 use std::sync::Mutex;
 
 /// A destructive tool that records whether execute ran. Tracks the shape
@@ -431,4 +436,108 @@ fn test_wrapper_forwards_translation() {
             .is_none(),
         "a command with nothing to translate reports none"
     );
+}
+
+/// An external tool arrives as a trait object, so the wrapper must accept one
+/// and keep carrying the adapter's per-input verdict. A remote adapter learns
+/// which of its own inputs needs a human; the wrapper forwards that verdict
+/// when the gate itself allows the call, so the card still reaches the human.
+#[test]
+fn test_remote_tool_keeps_approval() {
+    struct ExternalTool;
+    impl Tool for ExternalTool {
+        fn name(&self) -> &str {
+            "external_action"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn input_schema(&self) -> Value {
+            Value::Object(Map::new())
+        }
+        fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+        fn requires_approval_for(&self, input: &Value) -> bool {
+            input.get("action").and_then(Value::as_str) == Some("remove")
+        }
+    }
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
+    let tool = GuardedTool::new(Arc::new(ExternalTool) as Arc<dyn Tool>, gate);
+    let remove = json!({"action": "remove"});
+    assert!(
+        tool.requires_approval_for(&remove),
+        "the adapter's per-input verdict must survive the wrapper"
+    );
+    let keep = json!({"action": "keep"});
+    assert!(
+        !tool.requires_approval_for(&keep),
+        "an input the adapter allows must not reach the human"
+    );
+}
+
+/// A fence over one workspace root, standing in for the session's containment
+/// so the boundary stage has a root to judge an external target against.
+struct BoundsFence(PathBuf);
+
+impl Containment for BoundsFence {
+    fn coverage(&self) -> Coverage {
+        Coverage::Fenced {
+            writable_roots: vec![self.0.clone()],
+        }
+    }
+
+    fn would_block(&self, _effect: SideEffect) -> Option<String> {
+        None
+    }
+
+    fn boundary_root(&self) -> Option<Arc<Path>> {
+        Some(Arc::from(self.0.clone().into_boxed_path()))
+    }
+}
+
+/// An external adapter's write tool named like a built-in writer must be
+/// judged by the boundary stage rather than run on the adapter defaults: a
+/// target outside the workspace produces the card that names the directory
+/// the approval grants, exactly as the built-in writer's call would.
+#[test]
+fn test_external_write_asks() {
+    struct ExternalWrite;
+    impl Tool for ExternalWrite {
+        fn name(&self) -> &str {
+            "patch"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn input_schema(&self) -> Value {
+            Value::Object(Map::new())
+        }
+        fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+    }
+    let base = temp_dir().join(format!("guard-dyn-{}", id()));
+    let root = base.join("root");
+    let outside = base.join("outside");
+    create_dir_all(&root).expect("mkdir root");
+    create_dir_all(&outside).expect("mkdir outside");
+    let fence = BoundsFence(dunce::canonicalize(&root).expect("root resolves"));
+    let gate: Arc<dyn ModeGate> =
+        Arc::new(DefaultModeGate::new_without_builtins().with_containment(Arc::new(fence)));
+    let tool = GuardedTool::new(Arc::new(ExternalWrite) as Arc<dyn Tool>, gate);
+    let input = json!({"path": outside.join("file.txt").to_string_lossy()});
+    let reason = tool
+        .approval_reason(&input)
+        .expect("an outside target must reach the human");
+    assert_eq!(reason.validator, "path-bounds");
+    let parent = dunce::canonicalize(&outside).expect("outside resolves");
+    assert!(
+        reason
+            .detail
+            .contains(&parent.to_string_lossy().to_string()),
+        "the card names the directory the approval grants: {}",
+        reason.detail
+    );
+    remove_dir_all(&base).ok();
 }

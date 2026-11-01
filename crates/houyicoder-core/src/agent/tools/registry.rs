@@ -36,11 +36,17 @@ impl ToolRegistry {
         }
     }
 
-    /// Register a tool. Last registration wins on name collision (MCP shadow
-    /// defense is a later concern; keeps it simple).
+    /// Register a tool. Last registration wins on name collision; a caller
+    /// adding tools from a second source checks contains first and keeps the
+    /// tool that already claimed the name.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
         self.tools.insert(name, tool);
+    }
+
+    /// Whether a tool with this name is already registered.
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
     }
 
     /// The tool declarations sent to the model in a CompletionRequest.
