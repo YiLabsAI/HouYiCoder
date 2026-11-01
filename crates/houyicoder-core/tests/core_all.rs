@@ -25,6 +25,8 @@ mod model_call_timing;
 mod observability_loop;
 #[path = "recall_quality.rs"]
 mod recall_quality;
+#[path = "resume_parked_session.rs"]
+mod resume_parked_session;
 #[path = "runner_assembly.rs"]
 mod runner_assembly;
 #[path = "tools_with_sandbox.rs"]

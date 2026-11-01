@@ -1,12 +1,15 @@
 //! Tests for this module.
 
 use super::*;
-use crate::agent::fallback::SKIPPED_AFTER_EDIT;
+use crate::agent::fallback::{
+    FallbackToolOutcome, RefusalBy, RefusalVerdict, SKIPPED_AFTER_EDIT, refused_json,
+};
 use crate::agent::turn::resolve::ToolCallPlan;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::tool::tool_result_not_run;
+use serde_json::json;
 use std::sync::Arc;
 
 /// A tool that carries a fixed name, so a plan can stand for edit, read, or
@@ -165,4 +168,37 @@ fn test_any_missed_edit_withholds() {
 
         assert_eq!(withheld.skip, ids(&["b1"]), "{missed}");
     }
+}
+
+/// A recorded result tells the resume path whether the edit it answers wrote
+/// anything. Every shape the host writes for a call it answered without
+/// running counts as missed, a plain failure counts as missed, and a value the
+/// tool returned counts as completed. The marker-only case stands for a
+/// record written by a host that gives no error text, which the marker alone
+/// must settle.
+#[test]
+fn test_recorded_outcome_classifies() {
+    let missed = [
+        skipped_after_edit(),
+        FallbackToolOutcome::Interrupted.to_json(),
+        FallbackToolOutcome::UnknownTool {
+            name: "edit".into(),
+            on_resume: true,
+        }
+        .to_json(),
+        refused_json(
+            "rejected by user".into(),
+            RefusalBy::User,
+            RefusalVerdict::Reject,
+        ),
+        json!({"error": "the edit failed"}),
+        json!({"not_run": true}),
+    ];
+    for output in missed {
+        assert_eq!(recorded_outcome(&output), EditOutcome::Missed, "{output}");
+    }
+    assert_eq!(
+        recorded_outcome(&json!({"success": true})),
+        EditOutcome::Completed
+    );
 }
