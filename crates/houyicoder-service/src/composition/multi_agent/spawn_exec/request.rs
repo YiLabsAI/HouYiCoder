@@ -12,23 +12,30 @@ pub(super) fn map_registry_err(error: AgentError) -> SpawnFailure {
     }
 }
 
+/// How the child runs, as the caller decided before any side effect: what
+/// started it, how deep it sits, where it runs, the token that ends it, and
+/// whether the turn waits on it.
+///
+/// These five travel together because a caller that gets one of them from
+/// somewhere other than the request is a caller that has lost track of which
+/// delegation it is starting.
+pub(super) struct ChildRunSpec {
+    pub(super) trigger: TriggerSource,
+    pub(super) depth: u32,
+    pub(super) isolation: IsolationMode,
+    pub(super) cancel: CancellationToken,
+    pub(super) mode: ChildRunMode,
+}
+
 /// Build the child's spawn request from the resolved definition: the child
-/// prompt, the narrowed tools, and the parent's shared components. One
+/// prompt, the restricted tool set, and the parent's shared components. One
 /// builder for both run modes so the foreground and background paths cannot
 /// drift apart on what a child carries.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the spawn request has this many independent parts; bundling them would duplicate SpawnRequest"
-)]
 pub(super) fn child_spawn_request(
     this: &MultiAgentRuntime,
     parent_sid: SessionId,
     args: &SpawnArgs,
-    trigger: TriggerSource,
-    depth: u32,
-    isolation: IsolationMode,
-    child_cancel: CancellationToken,
-    run_mode: ChildRunMode,
+    spec: ChildRunSpec,
     def: &AgentDefinition,
 ) -> SpawnRequest {
     let base_prompt = match &def.system_prompt {
@@ -58,12 +65,12 @@ pub(super) fn child_spawn_request(
         subagent_type: args.subagent_type.clone(),
         prompt: args.prompt.clone(),
         prompt_summary: args.prompt_summary.clone(),
-        trigger,
-        depth,
-        isolation,
+        trigger: spec.trigger,
+        depth: spec.depth,
+        isolation: spec.isolation,
         worktree_controller: this.worktree_controller.clone(),
-        run_mode,
-        child_cancel,
+        run_mode: spec.mode,
+        child_cancel: spec.cancel,
         bus: this.bus.clone(),
         descriptor_store: this.descriptor_store.clone(),
         skill_registry: this.skill_registry.clone(),

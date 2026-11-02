@@ -49,15 +49,17 @@ use tokio::time::timeout;
 
 mod children;
 mod drive;
-use children::{ChildEntry, DriverEntry, DriverRegistry, DriverSlot, Reservation};
+use children::{
+    AdmissionLease, ChildAdmission, ChildCredential, ChildCredentialren, ChildEntry, ChildWatch,
+};
 mod spawn_exec;
 mod strip;
 pub(crate) use strip::extract_last_assistant;
 
-/// Per-driver budget the shutdown join gives a child's finalize tail before
+/// Per-child budget the shutdown join gives a child's finalize tail before
 /// aborting it. Generous for real cleanup work (worktree removal, boundary
 /// writes) so a healthy tail finishes inside it; the abort backstop keeps a
-/// wedged driver from holding the lock forever. Under test the budget
+/// wedged task from holding the lock forever. Under test the budget
 /// shrinks so the backstop path is exercisable in milliseconds.
 #[cfg(not(test))]
 const CHILD_JOIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -112,17 +114,17 @@ pub struct MultiAgentRuntime {
     gate: Arc<ConcurrencyGate>,
     /// Live child runners keyed by child session id, so a per-turn abort
     /// (the viewed-child Esc path) can reach the child's turn-cancel token
-    /// without holding the Arc (the async driver moves the Arc into its
-    /// task; a Weak upgrades only while the child is still running). Stale
-    /// entries (child completed + dropped) are pruned on a failed upgrade.
+    /// without holding the Arc (the child's task moves the Arc into itself;
+    /// a Weak upgrades only while the child is still running). Stale entries
+    /// (child completed + dropped) are pruned on a failed upgrade.
     children: Arc<Mutex<HashMap<String, ChildEntry>>>,
-    /// The detached driver tasks (background and foreground), plus the
-    /// closing gate. The gate and the registry share one lock so a shutdown
-    /// that closes the gate and drains the drivers is atomic against a spawn
-    /// registering a driver: registration either lands before the drain (the
-    /// driver is joined) or is refused (the caller joins it inline), never
-    /// silently after.
-    child_drivers: Arc<Mutex<DriverRegistry>>,
+    /// The children still running, plus the gate that refuses new ones once a
+    /// shutdown starts. The gate and the registry share one lock, so closing
+    /// the gate and setting the running children aside is atomic against a
+    /// child being admitted: the admission either lands before the close (the
+    /// child is waited for) or is refused (the caller waits on it inline),
+    /// never silently after.
+    running: Arc<Mutex<ChildCredentialren>>,
     /// Descriptor store for stamping SpawnedBy provenance on child sessions.
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
     /// Skill registry + activator + hooks inherited by every child, so a
@@ -136,9 +138,9 @@ pub struct MultiAgentRuntime {
 /// One live child: its runner (Weak, so a finished child drops the entry's
 /// reach) and its lifecycle cancel token. The token is level-triggered and
 /// exists from the spawn boundary, before the run's first poll mints the
-/// turn token — so a shutdown stop issued while the driver has not started
-/// the run still reaches the child instead of firing at a runner with no
-/// token to cancel.
+/// turn token — so a shutdown stop issued while the child's task has not
+/// started the run still reaches the child instead of firing at a runner with
+/// no token to cancel.
 impl MultiAgentRuntime {
     pub fn new(deps: MultiAgentDeps) -> Self {
         Self {
@@ -157,7 +159,7 @@ impl MultiAgentRuntime {
                 ConcurrencyGate::DEFAULT_QUEUE_CAP,
             )),
             children: Arc::new(Mutex::new(HashMap::new())),
-            child_drivers: Arc::new(Mutex::new(DriverRegistry::default())),
+            running: Arc::new(Mutex::new(ChildCredentialren::default())),
             descriptor_store: deps.descriptor_store,
             skill_registry: deps.skill_registry,
             conditional: deps.conditional,
@@ -167,7 +169,7 @@ impl MultiAgentRuntime {
 
     /// Register a live child runner so a later per-turn abort can reach it.
     /// The entry's runner Weak drops to nothing when the child's Arc is
-    /// released (the driver task ends); cancel_child_turn prunes the entry
+    /// released (the child's task ends); cancel_child_turn prunes the entry
     /// it queries. To keep a long-lived parent's registry from accumulating
     /// stale entries for completed children that were never Esc'd, sweep
     /// dead entries on each register (amortized: one sweep per spawn, not
@@ -178,7 +180,7 @@ impl MultiAgentRuntime {
         runner: &Arc<Runner>,
         cancel: CancellationToken,
         backgrounded: Option<Arc<AtomicBool>>,
-        promote: Option<Arc<Notify>>,
+        handover: Option<Arc<Notify>>,
     ) {
         if let Ok(mut g) = self.children.lock() {
             g.retain(|_, entry| entry.runner.upgrade().is_some());
@@ -188,28 +190,26 @@ impl MultiAgentRuntime {
                     runner: Arc::downgrade(runner),
                     cancel,
                     backgrounded,
-                    promote,
+                    handover,
                 },
             );
         }
     }
 
-    /// Reserve a driver's admission credential before its first side effect.
-    /// None once shutdown has closed the gate: the spawn is refused instead
-    /// of creating a child the join would miss. A poisoned lock fails the
-    /// reserve, which the caller reads as a refusal before any child exists.
-    fn reserve_driver(&self, close: CancellationToken) -> Option<Reservation> {
-        self.child_drivers
-            .lock()
-            .ok()
-            .and_then(|mut g| g.reserve(close))
+    /// Admit a child before its first side effect.
+    ///
+    /// None once shutdown has closed the gate: the spawn is refused instead of
+    /// creating a child the join would miss. A poisoned lock fails the
+    /// admission, which the caller reads as a refusal before any child exists.
+    fn admit_child(&self, close: CancellationToken) -> Option<ChildAdmission> {
+        self.running.lock().ok().and_then(|mut g| g.admit(close))
     }
 
     /// Whether shutdown has closed the gate. A cheap read the foreground path
     /// takes before queueing for a concurrency slot; a poisoned lock reads as
-    /// true (fail closed), and the later reserve still refuses atomically.
+    /// true (fail closed), and the later admission still refuses atomically.
     fn is_shutting_down(&self) -> bool {
-        self.child_drivers.lock().map(|g| g.closing).unwrap_or(true)
+        self.running.lock().map(|g| g.closing).unwrap_or(true)
     }
 
     /// Replace the concurrency gate. Production uses the default gate from
@@ -274,7 +274,7 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
             children: Arc::clone(&self.children),
-            child_drivers: Arc::clone(&self.child_drivers),
+            running: Arc::clone(&self.running),
             descriptor_store: self.descriptor_store.clone(),
             skill_registry: self.skill_registry.clone(),
             conditional: self.conditional.clone(),
@@ -333,9 +333,9 @@ impl SpawnHandle for MultiAgentRuntime {
     /// Kill a background child: cancel its lifecycle token (abort, terminal)
     /// via the live runner handle, distinct from cancel_child_turn (per-turn,
     /// non-terminal). A stale Weak (the child completed and dropped) is pruned.
-    /// The detached driver's finalize_child records the SubagentReturn
-    /// boundary (status interrupted) + the concurrency permit releases when
-    /// the driver task ends.
+    /// The detached child's finalize_child records the SubagentReturn
+    /// boundary (status interrupted), and the concurrency permit releases when
+    /// the task ends.
     fn kill_child(&self, child_id: &str) -> bool {
         let mut registry = match self.children.lock() {
             Ok(g) => g,
@@ -358,7 +358,7 @@ impl SpawnHandle for MultiAgentRuntime {
 
     /// Hand a running foreground child to the background: flip the mode its
     /// ending is published with and release the spawn call waiting on it. The
-    /// child keeps its runner, slot, and driver, so nothing is restarted. A
+    /// child keeps its runner, slot, and task, so nothing is restarted. A
     /// child already in the background reports false.
     fn background_child(&self, child_id: &str) -> bool {
         let registry = match self.children.lock() {
@@ -368,7 +368,7 @@ impl SpawnHandle for MultiAgentRuntime {
         let Some(entry) = registry.get(child_id) else {
             return false;
         };
-        let (Some(flag), Some(promote)) = (&entry.backgrounded, &entry.promote) else {
+        let (Some(flag), Some(handover)) = (&entry.backgrounded, &entry.handover) else {
             return false;
         };
         // Already in the background: nothing is waiting and the ending
@@ -376,7 +376,7 @@ impl SpawnHandle for MultiAgentRuntime {
         if flag.swap(true, Ordering::AcqRel) {
             return false;
         }
-        promote.notify_one();
+        handover.notify_one();
         true
     }
 
@@ -397,51 +397,51 @@ impl SpawnHandle for MultiAgentRuntime {
 
     fn join_children(&self) -> PFut<'_, ()> {
         let children = Arc::clone(&self.children);
-        let drivers = Arc::clone(&self.child_drivers);
+        let running = Arc::clone(&self.running);
         let worktree_controller = self.worktree_controller.clone();
         Box::pin(async move {
-            // Cancel the children's lifecycle tokens and the drivers' close
-            // tokens, then close the gate and drain, all under the two locks.
-            // The guards must not live across the awaits below: a mutex guard
-            // is not Send, so the inner scope drops both before the first
-            // yield. The lock order (drivers then children) and the absence of
-            // an await under either lock keep a registration racing the
-            // shutdown seeing either a cancelled token or a closed gate, never
-            // neither. A poisoned lock still holds a consistent map (the
+            // End the children's lifecycle tokens and the running children's
+            // close tokens, then close the gate and set them aside, all under
+            // the two locks. The guards must not live across the awaits below:
+            // a mutex guard is not Send, so the inner scope drops both before
+            // the first yield. The lock order (running then children) and the
+            // absence of an await under either lock keep an admission racing
+            // the shutdown seeing either a cancelled token or a closed gate,
+            // never neither. A poisoned lock still holds a consistent map (the
             // entries are independently owned, and the writes under it are
             // single infallible map operations), so it is recovered and fully
             // enumerated rather than read as an empty close.
             let live: Vec<Arc<Runner>> = {
-                let mut gate = drivers.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut gate = running.lock().unwrap_or_else(PoisonError::into_inner);
                 let kids = children.lock().unwrap_or_else(PoisonError::into_inner);
                 for entry in kids.values() {
                     entry.cancel.cancel();
                 }
-                for slot in gate.drivers.values() {
-                    slot.close.cancel();
+                for child in gate.children.values() {
+                    child.close.cancel();
                 }
-                gate.close_and_drain_into();
+                gate.close_and_drain();
                 kids.values().filter_map(|e| e.runner.upgrade()).collect()
             };
             for runner in &live {
                 runner.abort();
             }
-            // Take the drained drivers. The gate was closed above inside the
-            // lock; the drain ran with it, so these are exactly the drivers
-            // registered before the close.
-            let pending = drivers
+            // Take the children set aside above. The gate closed inside the
+            // lock, so these are exactly the children admitted before the
+            // close.
+            let pending = running
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .take_drained();
-            for (_, slot) in pending {
-                join_driver(slot, CHILD_JOIN_TIMEOUT).await;
+            for (_, child) in pending {
+                join_child(child, CHILD_JOIN_TIMEOUT).await;
             }
             // A child force-aborted before its finalize cleanup tail dropped
-            // its driver future and skipped cleanup_child, so its per-child
-            // worktree is only reachable through the controller's reclaim map.
-            // All drivers are joined by this point (no child still running);
-            // reclaim every tree left behind so a clean tree is removed before
-            // the parent lease releases, rather than leaking its dir + branch.
+            // its task and skipped cleanup_child, so its per-child worktree is
+            // only reachable through the controller's reclaim map. Every child
+            // is joined by this point, so reclaim every tree left behind: a
+            // clean tree is removed before the parent lease releases, rather
+            // than leaking its dir and branch.
             if let Some(ctrl) = &worktree_controller {
                 ctrl.reclaim_abandoned().await;
             }
@@ -477,7 +477,7 @@ impl SpawnHandle for MultiAgentRuntime {
             bus: self.bus.clone(),
             gate: Arc::clone(&self.gate),
             children: Arc::clone(&self.children),
-            child_drivers: Arc::clone(&self.child_drivers),
+            running: Arc::clone(&self.running),
             descriptor_store: self.descriptor_store.clone(),
             skill_registry: self.skill_registry.clone(),
             conditional: self.conditional.clone(),
@@ -498,38 +498,39 @@ impl SpawnHandle for MultiAgentRuntime {
     }
 }
 
-/// Join one drained driver with a bounded budget. The budget is per driver,
-/// generous for a real finalize tail, with an abort backstop so a wedged
-/// driver cannot hold the shutdown lock forever. Background keeps the full
-/// result match so a normal end, a panic, an abort, and a timeout stay four
-/// distinct outcomes and the panic is announced; foreground confirms its done
-/// signal closed rather than treating the abort as the stop; an un-attached
-/// slot waits on done alone (its driver ends when its task ends).
-async fn join_driver(slot: DriverSlot, budget: Duration) {
-    match slot.entry {
-        Some(DriverEntry::Background(mut handle)) => {
-            let stopped = match timeout(budget, &mut handle).await {
+/// Wait out one child the shutdown set aside, under a bounded budget.
+///
+/// The budget is per child, generous for a real finalize tail, with an abort
+/// backstop so a wedged task cannot hold the shutdown lock forever. A detached
+/// child keeps the full result match, so a normal end, a panic, an abort, and a
+/// timeout stay four distinct outcomes and the panic is announced. An awaited
+/// child confirms its completion signal closed rather than treating the abort
+/// as the stop. A child whose task was never watched waits on that signal alone.
+async fn join_child(child: ChildCredential, budget: Duration) {
+    match child.watch {
+        Some(ChildWatch::Detached(mut task)) => {
+            let stopped = match timeout(budget, &mut task).await {
                 Ok(outcome) => outcome,
                 Err(_) => {
-                    handle.abort();
-                    handle.await
+                    task.abort();
+                    task.await
                 }
             };
             if let Err(err) = stopped
                 && err.is_panic()
             {
-                tracing::warn!("child driver panicked during shutdown: {err}");
+                tracing::warn!("a child task panicked during shutdown: {err}");
             }
         }
-        Some(DriverEntry::Foreground { abort }) => {
-            let mut done = slot.done;
-            if timeout(budget, &mut done).await.is_err() {
+        Some(ChildWatch::Awaited { abort }) => {
+            let mut finished = child.finished;
+            if timeout(budget, &mut finished).await.is_err() {
                 abort.abort();
-                let _ = done.await;
+                let _ = finished.await;
             }
         }
         None => {
-            let _ = slot.done.await;
+            let _ = child.finished.await;
         }
     }
 }

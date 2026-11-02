@@ -125,6 +125,18 @@ fn test_kill_child_notif_shape() {
     assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
 }
 
+/// The hand-over notification carries the method and childSid the server
+/// routes to background_child. A typo in either would leave the reader's
+/// request silently doing nothing, and the turn it meant to free would stay
+/// blocked.
+#[test]
+fn test_background_child_notif_shape() {
+    let n = background_child_notification("c1");
+    assert_eq!(n.method, "session/background_child");
+    let p = n.params.expect("params present");
+    assert_eq!(p.get("childSid").and_then(|v| v.as_str()), Some("c1"));
+}
+
 /// The focus report carries the method and the boolean field the server
 /// reads. A report under another name, or with the flag under another key,
 /// leaves the host treating this terminal as never having reported, which
@@ -234,6 +246,24 @@ async fn test_drive_kill_child_forwards() {
             .iter()
             .any(|f| f.contains("session/kill_child") && f.contains("c1")),
         "the KillChild command forwarded a session/kill_child notification: {run:?}"
+    );
+}
+
+/// A BackgroundChild command drains through the driver as a
+/// session/background_child notification on the wire. Pins the driver dispatch
+/// mapping, which the pure shape test cannot reach.
+#[tokio::test]
+async fn test_drive_background_child_forwards() {
+    let run = FakeEngine::new()
+        .drive(vec![ClientCommand::BackgroundChild {
+            child_sid: "c1".into(),
+        }])
+        .await;
+    assert!(
+        run.sent
+            .iter()
+            .any(|f| f.contains("session/background_child") && f.contains("c1")),
+        "the BackgroundChild command forwarded a hand-over notification: {run:?}"
     );
 }
 

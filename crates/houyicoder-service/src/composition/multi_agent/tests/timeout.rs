@@ -4,7 +4,7 @@ use super::*;
 
 /// A child that outlives its ceiling is stopped and reported as such.
 ///
-/// The run used to end by dropping the driver, which dismantled the child
+/// The run used to end by dropping the task, which dismantled the child
 /// without running the tail that publishes its terminal, closes its inbox, and
 /// releases the fence slot, and the parent got an error naming nothing the
 /// child had done. The ceiling now stops the child the way a shutdown does and

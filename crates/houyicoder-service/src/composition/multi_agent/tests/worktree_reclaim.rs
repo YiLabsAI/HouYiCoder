@@ -149,8 +149,8 @@ async fn test_join_reclaims_abandoned_worktree() {
         .spawn(&ctx, args)
         .await
         .expect("background spawn launches");
-    // The child's worktree exists before the driver reaches the Start hook it
-    // is now wedged on, and the driver's finalize tail (which would clean it)
+    // The child's worktree exists before the task reaches the Start hook it
+    // is now wedged on, and the task's finalize tail (which would clean it)
     // never runs once the join aborts it.
     let worktrees_dir = repo.join(".houyicoder").join("worktrees");
     assert_eq!(

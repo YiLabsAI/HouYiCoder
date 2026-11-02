@@ -2,12 +2,12 @@
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::FutureExt;
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_api::hook_fire::HookFire;
-use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::{SessionId, SessionLogEntry};
@@ -20,7 +20,6 @@ use houyicoder_core::agent::multi_agent::registry::{IsolationMode, ResolveCtx};
 use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
-use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
 use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
@@ -31,7 +30,7 @@ use super::announce_spawn;
 use super::drive::drive_child_to_terminal;
 use super::fire_subagent_start;
 use super::stamp_spawned_by;
-use super::{DriverEntry, DriverRegistry, MultiAgentRuntime};
+use super::{ChildCredentialren, ChildWatch, MultiAgentRuntime};
 use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::SpawnError;
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
@@ -42,20 +41,17 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use std::panic::resume_unwind;
 
 mod ceiling;
-mod promote;
+mod execution;
+mod handover;
 mod request;
-use ceiling::{CeilingEnding, TIMED_OUT_STATUS, await_ceilinged};
-use request::{child_spawn_request, map_registry_err, map_spawn_err};
+use ceiling::await_ceilinged;
+use execution::ChildExecution;
+use handover::ParentCancelLink;
+use request::{ChildRunSpec, child_spawn_request, map_registry_err, map_spawn_err};
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "bundles the child handle + parent deps shared by sync + async finalization"
-)]
 pub(super) async fn finalize_child(
+    runtime: &MultiAgentRuntime,
     handle: super::ChildHandle,
-    store: Arc<dyn SessionLog>,
-    bus: Option<Arc<AgentBus>>,
-    worktree_controller: Option<Arc<WorktreeController>>,
     parent_sid: SessionId,
     child_sid: SessionId,
     child: ChildDescriptor,
@@ -65,6 +61,12 @@ pub(super) async fn finalize_child(
     let child_str = child.agent_id.clone();
     let subagent_type = child.agent_type.clone();
     let cancel_token = handle.cancel.clone();
+    // The shared pieces, read once from the runtime the child runs on: the run
+    // may publish while this function waits, and the tail has to report
+    // against the same bus and store the run was started with.
+    let bus = runtime.bus.clone();
+    let store = Arc::clone(&runtime.store);
+    let worktree_controller = runtime.worktree_controller.clone();
     // Subscribed before the run, so a terminal the run publishes is seen here:
     // the child's own terminal keeps the last word, and the failure arms below
     // only report one the run was kept from publishing.
@@ -100,7 +102,13 @@ pub(super) async fn finalize_child(
         }
         Ok(Err(e)) => {
             let summary = failure_summary(&format!("run failed: {e}"), &child_tail);
-            report_failed_terminal(bus.as_ref(), &child, &summary, run_published);
+            report_failed_terminal(
+                bus.as_ref(),
+                &child,
+                &handle.backgrounded,
+                &summary,
+                run_published,
+            );
             ("failed".to_string(), summary, None)
         }
         Err(payload) => {
@@ -110,7 +118,13 @@ pub(super) async fn finalize_child(
             );
             let reason = panic_message(payload.as_ref());
             tracing::error!("child {child_str} run panicked: {reason}");
-            report_failed_terminal(bus.as_ref(), &child, &summary, run_published);
+            report_failed_terminal(
+                bus.as_ref(),
+                &child,
+                &handle.backgrounded,
+                &summary,
+                run_published,
+            );
             ("failed".to_string(), summary, Some(payload))
         }
     };
@@ -147,7 +161,7 @@ pub(super) async fn finalize_child(
     }
     if let Some(payload) = payload {
         // The child is finalized; the panic continues outward from here, so a
-        // caller awaiting the driver still sees it as the panic it is rather
+        // caller awaiting the task still sees it as the panic it is rather
         // than as an ordinary refusal.
         resume_unwind(payload);
     }
@@ -210,6 +224,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 fn report_failed_terminal(
     bus: Option<&Arc<AgentBus>>,
     child: &ChildDescriptor,
+    backgrounded: &Arc<AtomicBool>,
     summary: &str,
     run_published: bool,
 ) {
@@ -219,19 +234,30 @@ fn report_failed_terminal(
     let Some(bus) = bus else {
         return;
     };
-    let publisher = ChildStatusPublisher::new(Arc::clone(bus), child.clone());
+    // A child the reader handed to the background while it ran reports its
+    // ending as a background ending. The parent stopped waiting at that moment,
+    // so this notification is the only way it learns the child died; reporting
+    // a foreground ending would drop that news, because only a background
+    // ending notifies. The flag is read here, at the moment of reporting,
+    // because the hand-over can land any time between the start and this arm.
+    let mut child = child.clone();
+    if backgrounded.load(Ordering::Acquire) {
+        child.run_mode = ChildRunMode::Background;
+    }
+    let publisher = ChildStatusPublisher::new(Arc::clone(bus), child);
     publisher.handle(RunLifecycleEvent::Completed {
         status: RunCompletionStatus::Failed,
         summary: summary.to_string(),
     });
 }
 
-/// Spawn a background child and return after it starts. Capacity remains held
-/// until the detached driver finishes cleanup and publishes completion. The
-/// driver owns construction, announcement, the Start hook, and cleanup; the
-/// caller only admits the credential, starts the driver, attaches it, and
-/// awaits the child id back, so a caller dropped at any await leaves the child
-/// registered with its driver still driving it to a terminal.
+/// Start a background child and return once it exists.
+///
+/// Capacity stays held until the child's run is over. The task owns
+/// construction, announcement, the Start hook, and cleanup; the caller only
+/// admits the child, starts the task, watches it, and waits for the child id.
+/// A caller dropped at any await therefore leaves the child admitted, with its
+/// task still running it to a terminal.
 pub(super) async fn run_background_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -248,209 +274,89 @@ pub(super) async fn run_background_spawn(
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
     };
-    // Background spawns reject saturation without blocking the parent turn.
+    // A background child is refused outright at the cap: the turn is not
+    // waiting on it, so there is nobody to queue behind.
     let permit = match this.gate.try_acquire() {
         AcquireResult::Acquired(p) => p,
         AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
-    // The close token is created here and admitted before any side effect: the
-    // reserve below is the first registry write, and the child (the first real
-    // side effect) only exists inside the driver after it. A shutdown landing
-    // on any statement below already holds this child's credential.
+    // The child's token is created here and admitted before any side effect:
+    // admitting is the first write, and the child itself only exists inside the
+    // task after it. A shutdown landing on any statement below already holds
+    // this child's credential.
     let close = CancellationToken::new();
-    let Some(reservation) = this.reserve_driver(close) else {
+    let Some(admission) = this.admit_child(close) else {
         return Err(SpawnFailure::ShuttingDown);
     };
-    let req = child_spawn_request(
+    let request = child_spawn_request(
         &this,
         parent_sid,
         &args,
-        trigger,
-        depth,
-        isolation,
-        reservation.close.clone(),
-        ChildRunMode::Background,
+        ChildRunSpec {
+            trigger,
+            depth,
+            isolation,
+            cancel: admission.close.clone(),
+            mode: ChildRunMode::Background,
+        },
         &def,
     );
-    // The driver owns construction; the ready channel carries the child id
-    // back once it exists. The permit, the completion Sender, and the
-    // registry removal key ride the driver, so a cancelled caller drops none
-    // of them.
-    let (ready_tx, ready) = channel::<Result<String, SpawnError>>();
-    let drivers = Arc::clone(&this.child_drivers);
-    let gate = Arc::clone(&this.child_drivers);
-    let driver = background_driver(
-        this,
-        permit,
-        req,
-        hook_fire,
-        parent_sid,
-        reservation.done_tx,
-        drivers,
-        reservation.key,
-        ready_tx,
-    );
-    // Attach under the reserved key before awaiting ready, so the shutdown
-    // join holds the abort backstop across the construction window. Refused
-    // means the gate closed after the reserve: the join drained the slot
-    // (still unattached), so this driver sits outside it — await it inline so
-    // its terminal and cleanups land before this call returns, then still read
-    // ready for the honest refusal.
-    if let Err(DriverEntry::Background(refused)) = attach_driver(
-        gate.clone(),
-        reservation.key,
-        DriverEntry::Background(driver),
-    ) && let Err(err) = refused.await
+    // The started channel carries the child id back once it exists. The permit,
+    // the completion sender, and the admission slot ride the task, so a
+    // cancelled caller drops none of them.
+    let (started, child_id) = channel::<Result<String, SpawnError>>();
+    let running = Arc::clone(&this.running);
+    let task = ChildExecution {
+        running: Arc::clone(&running),
+        runtime: this,
+        request,
+        hooks: hook_fire,
+        parent: parent_sid,
+        completion: admission.finished,
+        admission: admission.slot,
+    }
+    .detach(permit, started);
+    // Watch under the admitted slot before waiting for the child id, so the
+    // shutdown join holds the abort backstop across the construction window.
+    // Refused means the slot is gone, either because the shutdown set it aside
+    // or because the task ended before this call could watch it. Either way
+    // this task sits outside the join, so it is waited on inline here, and the
+    // child id is still read for the honest refusal.
+    if let Err(ChildWatch::Detached(refused)) =
+        attach_watch(running.clone(), admission.slot, ChildWatch::Detached(task))
+        && let Err(err) = refused.await
         && err.is_panic()
     {
-        tracing::warn!("background child driver panicked at gate refusal: {err}");
+        tracing::warn!("a background child task panicked at the gate refusal: {err}");
     }
-    // Three ready outcomes: the child id, a construction refusal (surface it
-    // as the failure it is), or nothing — the driver ended before reporting.
-    // The gate disambiguates the nothing case: a closed gate means the shutdown
-    // abort ended the driver, an open gate means it died abnormally during
-    // construction (a panic). Reporting a shutdown for the latter would tell
-    // the model the host is going away when it is not; report the honest
-    // failed start and keep the diagnosis loud.
-    match ready.await {
+    // Three outcomes: the child id, a construction refusal, or nothing at all.
+    // The gate separates the last two: closed means the shutdown ended the
+    // task, open means it died during construction. Calling the second a
+    // shutdown would tell the model the host is going away when it is not.
+    match child_id.await {
         Ok(Ok(child_str)) => Ok(SpawnOutcome::background_started(child_str)),
         Ok(Err(spawn_err)) => Err(map_spawn_err(spawn_err)),
         Err(_recv) => {
-            if gate.lock().map(|g| g.closing).unwrap_or(true) {
-                tracing::warn!("background child driver aborted before reporting its child");
+            if running.lock().map(|g| g.closing).unwrap_or(true) {
+                tracing::warn!("a background child task ended before reporting its child");
                 return Err(SpawnFailure::ShuttingDown);
             }
-            tracing::error!("background child driver ended before constructing its child");
+            tracing::error!("a background child task ended before constructing its child");
             Err(SpawnFailure::ConstructionFailed)
         }
     }
 }
 
-/// The one attach path for both run modes: insert under the reserved key
-/// unless the gate closed. Err hands the entry back so the caller joins the
-/// driver itself instead of leaving it outside the shutdown join.
-fn attach_driver(
-    drivers: Arc<Mutex<DriverRegistry>>,
-    key: u64,
-    entry: DriverEntry,
-) -> Result<(), DriverEntry> {
-    let Ok(mut g) = drivers.lock() else {
-        return Err(entry);
-    };
-    g.attach(key, entry)
-}
-
-/// The detached background driver: construct the child, stamp its provenance,
-/// register it, announce it, fire the Start hook, drive it to its finalize
-/// tail, then remove the registry entry. The permit, the completion Sender,
-/// and the registry key ride the driver so a cancelled caller drops none of
-/// them; the child id returns through the ready channel the moment
-/// construction succeeds.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "carries the parent deps + the registry identity + the ready the driver owns"
-)]
-fn background_driver(
-    this: MultiAgentRuntime,
-    permit: OwnedSemaphorePermit,
-    req: SpawnRequest,
-    hook_fire: Option<Arc<dyn HookFire>>,
-    parent_sid: SessionId,
-    done_tx: Sender<()>,
-    drivers: Arc<Mutex<DriverRegistry>>,
-    driver_key: u64,
-    ready_tx: Sender<Result<String, SpawnError>>,
-) -> JoinHandle<()> {
-    let subagent_type = req.subagent_type.clone();
-    let task = req.prompt.clone();
-    // The delegating call's task summary, read before the request moves into
-    // the task so the fleet row is labelled from the first status.
-    let description = req.prompt_summary.clone();
-    tokio::spawn(async move {
-        // The completion signal fires when this driver ends, however it ends:
-        // the guard rides the whole task, so the shutdown join's wait on it
-        // observes the finalize tail too. The permit releases at the same
-        // point, so the slot frees when the child completes. The result
-        // reaches the parent via the bus completed publish; the return is
-        // dropped (cleanup, Stop, Return boundary ran in finalize_child).
-        let _done = done_tx;
-        let _permit = permit;
-        // spawn_child is the first side effect; a refusal here is reported
-        // through the ready channel so the caller surfaces the honest reason
-        // rather than a fabricated child.
-        let handle = match spawn_child(req).await {
-            Ok(h) => h,
-            Err(e) => {
-                drop(ready_tx.send(Err(e)));
-                return;
-            }
-        };
-        let child_sid = handle.session;
-        let child_str = child_sid.to_string();
-        // The child's provenance lands at the boundary, before its run: the
-        // delegation record it opens with is its first durable append, so
-        // nothing that counts or lists the user's sessions can read a running
-        // child as one of theirs.
-        stamp_spawned_by(
-            &this.descriptor_store,
-            child_sid,
-            parent_sid,
-            &subagent_type,
-            &child_str,
-        );
-        // The delegating call's task summary travels on the descriptor so the
-        // fleet row names the job from the first status. Without it the row
-        // shows the type alone until the child finishes a turn, which is the
-        // one moment a reader wants to know what it is working on.
-        let child = ChildDescriptor::new(
-            child_str.clone(),
-            subagent_type.clone(),
-            ChildRunMode::Background,
-        )
-        .with_description(description.clone());
-        // Register the live runner for a per-turn abort (the viewed-child Esc
-        // path). The lifecycle token is registered alongside so a shutdown
-        // stop reaches a child whose run has not started.
-        this.register_child(
-            &child_str,
-            &handle.runner,
-            handle.cancel.clone(),
-            Some(Arc::clone(&handle.backgrounded)),
-            None,
-        );
-        announce_spawn(this.bus.as_ref(), child.clone());
-        // Construction succeeded; report the child id before the slower Start
-        // hook and run so the caller returns promptly after the child is real.
-        drop(ready_tx.send(Ok(child_str.clone())));
-        // The Start hook dispatch can wait on a command hook. It runs in the
-        // driver, not in the caller, because a caller dropped at that wait
-        // (Esc mid-turn) would leave the child announced and registered with
-        // nothing driving it to a terminal.
-        fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
-        let _outcome = finalize_child(
-            handle,
-            this.store.clone(),
-            this.bus.clone(),
-            this.worktree_controller.clone(),
-            parent_sid,
-            child_sid,
-            child,
-            hook_fire,
-            task,
-        )
-        .await;
-        // The child is finalized; drop its driver entry so a later shutdown
-        // join waits only for children still running.
-        if let Ok(mut g) = drivers.lock() {
-            g.remove(driver_key);
-        }
-    })
-}
+/// Start a foreground child and return its ending.
+///
+/// The turn waits on the child, so this is the one shape whose caller can still
+/// act on the result. Two things can cut the wait short: the turn being
+/// stopped, and the reader handing the child to the background.
 pub(super) async fn run_foreground_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
     depth: u32,
-    cancel: Option<houyicoder_async::CancellationToken>,
+    cancel: Option<CancellationToken>,
     hook_fire: Option<Arc<dyn HookFire>>,
     trigger: TriggerSource,
     args: SpawnArgs,
@@ -459,9 +365,8 @@ pub(super) async fn run_foreground_spawn(
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
         .map_err(map_registry_err)?;
-    // Fast reject before queueing for a slot: a shutdown in progress refuses
-    // the spawn outright. The reserve after the slot wait is the atomic
-    // re-check that also creates the admission credential.
+    // Refuse a shutdown outright before queueing for a slot. Admitting after
+    // the wait is the atomic re-check that also creates the credential.
     if this.is_shutting_down() {
         return Err(SpawnFailure::ShuttingDown);
     }
@@ -469,185 +374,94 @@ pub(super) async fn run_foreground_spawn(
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
     };
-    // Concurrency cap: a resolved (valid type, known isolation) spawn
-    // acquires a running slot before any side effect. Saturation rejects with
-    // backpressure so the model re-queues next turn; a queued spawn waits here
-    // for a slot rather than refusing the user's request. The driver below
+    // A resolved child takes a running slot before any side effect. Saturation
+    // rejects with backpressure so the model re-queues next turn; a queued
+    // spawn waits here rather than refusing the user's request. The task
     // carries the slot, so it releases when the child ends rather than when
-    // this call returns — a stop releases the slot when the child finishes
-    // winding down.
+    // this call returns.
     let slot = match this.gate.acquire().await {
         AcquireResult::Acquired(p) => p,
         AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
-    // The close token links to the parent token: a parent abort reaches the
-    // child. Creating it here and passing the same clone to both the reserve
-    // and the spawn request keeps the shutdown credential and the child handle
-    // on one token.
-    let close = cancel.clone().unwrap_or_default();
-    // The slot wait can queue for a while; a shutdown that closed the gate
-    // while this call waited must still refuse, or the child would be created
-    // after the drain with no join covering it. The reserve is the first
-    // side-effect-bearing write and the single admission point: it creates the
-    // close + done credential before any child exists, and None means the gate
-    // closed while this call waited.
-    let Some(reservation) = this.reserve_driver(close) else {
+    // The child gets a lifecycle token of its own, not the turn's. One token
+    // held by both cancels in both directions: a child that reached its own
+    // ceiling would stop the turn that started it, and a turn the user stops
+    // would reach a child the reader has already handed to the background. The
+    // turn's stop still reaches the child while the turn waits on it, one way,
+    // through ParentCancelLink.
+    let close = CancellationToken::new();
+    // The slot wait can queue for a while, and a shutdown that closed the gate
+    // meanwhile must still refuse: admitting is the first side-effect-bearing
+    // write and the single admission point, so None means the gate closed while
+    // this call waited.
+    let Some(admission) = this.admit_child(close) else {
         return Err(SpawnFailure::ShuttingDown);
     };
-    let req = child_spawn_request(
+    // The turn's stop reaches the child only while the turn waits on it; the
+    // link lets go the moment the reader takes the child over.
+    let link = ParentCancelLink::new(cancel, admission.close.clone());
+    let request = child_spawn_request(
         &this,
         parent_sid,
         &args,
-        trigger,
-        depth,
-        isolation,
-        reservation.close.clone(),
-        ChildRunMode::Foreground,
+        ChildRunSpec {
+            trigger,
+            depth,
+            isolation,
+            cancel: admission.close.clone(),
+            mode: ChildRunMode::Foreground,
+        },
         &def,
     );
-    let task = req.prompt.clone();
-    let drivers = Arc::clone(&this.child_drivers);
-    // The reader can hand this child to the background while the turn waits,
-    // so the call races the child's outcome against that signal. The ready
-    // channel carries the child id back as soon as the child exists, because
-    // the promotion has to name a child the registry already holds.
-    let promote = Arc::new(Notify::new());
-    let (ready_tx, ready_rx) = channel::<String>();
-    let mut driver = foreground_driver(
-        this,
-        req,
-        slot,
-        hook_fire,
-        parent_sid,
-        reservation.done_tx,
-        task,
-        Arc::clone(&promote),
-        ready_tx,
-    );
-    // Attach the driver's abort entry under the reserved key through the one
-    // shared attach path; the completion signal is already on the slot from
-    // the reserve. Refused means the gate closed while the child ran: the
-    // shutdown join has already drained, so this driver is the spawn call's
-    // own to await (the driver.await below), which it does on every path
-    // anyway.
-    let entry = DriverEntry::Foreground {
-        abort: driver.abort_handle(),
+    let running = Arc::clone(&this.running);
+    // The reader can take this child over while the turn waits, so the call
+    // races the child's ending against that signal. The started channel carries
+    // the child id back as soon as the child exists, because the hand-over has
+    // to name a child the registry already holds.
+    let handover = Arc::new(Notify::new());
+    let (started, child_id) = channel::<String>();
+    let mut task = ChildExecution {
+        running: Arc::clone(&running),
+        runtime: this,
+        request,
+        hooks: hook_fire,
+        parent: parent_sid,
+        completion: admission.finished,
+        admission: admission.slot,
+    }
+    .supervise(slot, Arc::clone(&handover), started);
+    // Watch the task under the admitted slot through the one shared path; the
+    // completion signal is already on the slot from the admission. Refused
+    // means the slot is gone, either because the shutdown set it aside or
+    // because the task ended before this call could watch it, so this task is
+    // the call's own to wait on, which it does below on every path anyway.
+    let watch = ChildWatch::Awaited {
+        abort: task.abort_handle(),
     };
-    if let Err(refused) = attach_driver(drivers, reservation.key, entry) {
+    if let Err(refused) = attach_watch(running, admission.slot, watch) {
         drop(refused);
     }
-    // Wait for the child to exist before racing: a promotion has to name a
+    // Wait for the child to exist before racing: a hand-over has to name a
     // child the registry already holds, and a construction failure is the
-    // driver's own result, not something this call can report sooner.
-    match ready_rx.await.ok() {
+    // task's own result, not something this call can report sooner.
+    match child_id.await.ok() {
         Some(child_str) => {
-            promote::await_child_or_promotion(&mut driver, &promote, child_str).await
+            handover::await_child_or_handover(&mut task, &handover, link, child_str).await
         }
-        None => promote::await_driver(driver).await,
+        None => handover::await_child_end(task, link).await,
     }
 }
 
-/// The foreground child's driver task: the child runs on it, but the spawn
-/// call awaits the handle, so the driver is registered for the shutdown join
-/// through its completion signal rather than the handle itself. The driver
-/// owns the running slot and the child's bookkeeping, so a stop reaches the
-/// child as an interrupt it can finish from rather than as a dropped future;
-/// a child parked in work that never reads its cancel token holds the slot
-/// and the row until that work returns.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the spawn call's own parts plus the two handles it must hand the driver"
-)]
-fn foreground_driver(
-    this: MultiAgentRuntime,
-    req: SpawnRequest,
-    slot: OwnedSemaphorePermit,
-    hook_fire: Option<Arc<dyn HookFire>>,
-    parent_sid: SessionId,
-    done_tx: Sender<()>,
-    task: String,
-    promote: Arc<Notify>,
-    ready_tx: Sender<String>,
-) -> JoinHandle<Result<SpawnOutcome, SpawnFailure>> {
-    let subagent_type = req.subagent_type.clone();
-    // The delegating call's task summary, read before the request moves into
-    // the task so the fleet row is labelled from the first status.
-    let description = req.prompt_summary.clone();
-    // Read before the request moves into the task; the ceiling belongs to the
-    // caller's request, not to the child.
-    let timeout_secs = req.timeout_secs;
-    tokio::spawn(async move {
-        // The completion signal fires when this driver ends, however it ends:
-        // the guard rides the whole task, so the shutdown join's wait on it
-        // observes the finalize tail too.
-        let _done = done_tx;
-        let _slot = slot;
-        let handle = spawn_child(req).await.map_err(map_spawn_err)?;
-        let child_sid = handle.session;
-        let child_str = child_sid.to_string();
-        // The child's provenance lands at the boundary, before its run: the
-        // delegation record it opens with is its first durable append, so
-        // nothing that counts or lists the user's sessions can read a running
-        // child as one of theirs.
-        stamp_spawned_by(
-            &this.descriptor_store,
-            child_sid,
-            parent_sid,
-            &subagent_type,
-            &child_str,
-        );
-        let child = ChildDescriptor::new(
-            child_str.clone(),
-            subagent_type.clone(),
-            ChildRunMode::Foreground,
-        )
-        .with_description(description.clone());
-        // Register the live runner for a per-turn abort (moot for sync — the
-        // parent blocks on the tool call + cannot be viewing the child mid-run
-        // — but the registry is shared so the async path's contract holds
-        // uniformly). The lifecycle token is registered alongside so a
-        // shutdown stop reaches a child whose run has not started.
-        this.register_child(
-            &child_str,
-            &handle.runner,
-            handle.cancel.clone(),
-            Some(Arc::clone(&handle.backgrounded)),
-            Some(Arc::clone(&promote)),
-        );
-        announce_spawn(this.bus.as_ref(), child.clone());
-        // The child is real and registered, so the caller can stop waiting on
-        // the outcome and race the promotion signal instead. A dropped
-        // receiver means the caller already returned; the child keeps running
-        // either way, which is the point of the promotion.
-        drop(ready_tx.send(child_str.clone()));
-        // SubagentStart fires at the durable spawn boundary (child session
-        // exists, SubagentSpawn recorded, run not started); pairs with the
-        // later SubagentStop across the SubagentSpawn-to-Return span.
-        fire_subagent_start(hook_fire.as_ref(), parent_sid, &child_str, &subagent_type).await;
-        let ceiling_cancel = handle.cancel.clone();
-        let drive = finalize_child(
-            handle,
-            this.store.clone(),
-            this.bus.clone(),
-            this.worktree_controller.clone(),
-            parent_sid,
-            child_sid,
-            child,
-            hook_fire,
-            task,
-        );
-        let (status, summary, usage) =
-            match await_ceilinged(drive, timeout_secs, ceiling_cancel).await {
-                CeilingEnding::Finished(done) => done,
-                CeilingEnding::Cut { secs, done } => {
-                    let (_, summary, usage) = done;
-                    (
-                        TIMED_OUT_STATUS.to_string(),
-                        format!("[timed out after {secs}s, resumable via {child_str}]\n{summary}"),
-                        usage,
-                    )
-                }
-            };
-        Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
-    })
+/// The one watch path for both shapes: record how the shutdown join observes an
+/// admitted child. Err hands the watch back so the caller waits on the task
+/// itself instead of leaving it outside the join.
+fn attach_watch(
+    running: Arc<Mutex<ChildCredentialren>>,
+    slot: u64,
+    watch: ChildWatch,
+) -> Result<(), ChildWatch> {
+    let Ok(mut g) = running.lock() else {
+        return Err(watch);
+    };
+    g.watch(slot, watch)
 }

@@ -227,10 +227,10 @@ pub trait SpawnHandle: Send + Sync {
     /// spawned it stops waiting.
     ///
     /// The child keeps running and its ending reaches the parent as a
-    /// notification, exactly as if it had been spawned in the background. The
-    /// default returns false (no multi-agent runtime wired, or nothing to
+    /// notification, exactly as if it had been started in the background. The
+    /// default returns false (no multi-agent runtime attached, or nothing to
     /// promote); a runtime with a child registry overrides it. Returns true
-    /// when a live foreground child was promoted.
+    /// when a live foreground child was handed over.
     fn background_child(&self, _child_id: &str) -> bool {
         false
     }

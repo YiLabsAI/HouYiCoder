@@ -128,6 +128,46 @@ fn test_bare_k_kills() {
     );
 }
 
+/// A bare b on a selected running child hands it to the background, which is
+/// the gesture that frees a turn the user is waiting on. The positive control
+/// for the test below: the wire does carry the request from this path.
+#[test]
+fn test_bare_b_backgrounds() {
+    let (mut app, events) = child_app();
+    handle_key(&mut app, key(KeyCode::Char('b')));
+    let params = wait_for_notification(&events, "session/background_child");
+    assert_eq!(
+        params.get("childSid").and_then(|v| v.as_str()),
+        Some("child-0"),
+        "the selected child is the one named"
+    );
+}
+
+/// Ctrl+B belongs to the draft, not to the hand-over gesture. The hand-over
+/// reads a bare b and runs only while the draft is empty, which is exactly
+/// when a user presses Ctrl+B while typing; without the modifier guard the
+/// chord would hand over a child nobody selected.
+#[test]
+fn test_ctrl_b_spares() {
+    let (mut app, events) = child_app();
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+    );
+    let window = std::time::Duration::from_millis(300);
+    let deadline = std::time::Instant::now() + window;
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match events.recv_timeout(remaining) {
+            Ok(TransportEvent::Frame(frame)) => assert!(
+                !frame.contains("background_child"),
+                "Ctrl+B edits the draft, it does not hand a child over: {frame}"
+            ),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+}
+
 /// Ctrl+K belongs to the draft, not to the kill-child gesture. The kill
 /// gesture reads a bare k and runs only while the draft is empty, which is
 /// exactly when a user presses Ctrl+K to throw the draft away; without the

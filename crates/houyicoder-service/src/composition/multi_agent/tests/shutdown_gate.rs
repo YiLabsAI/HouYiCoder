@@ -1,5 +1,5 @@
 //! Shutdown-versus-spawn races: the completion gate must hold every child
-//! the parent created, including ones whose driver has not registered yet,
+//! the parent created, including ones whose task has not registered yet,
 //! and a stop must reach a child before its first poll.
 
 use std::sync::Arc;
@@ -69,7 +69,7 @@ impl ModelProvider for GateProvider {
     }
 }
 
-/// A spawn that has returned but whose driver has not registered yet must not
+/// A spawn that has returned but whose task has not registered yet must not
 /// slip past a shutdown that starts immediately after: the current join
 /// drains only what the map holds at call time, so a child between
 /// background_started and register has no entry to join, and its
@@ -94,7 +94,7 @@ async fn test_shutdown_races_spawn_registration() {
         .expect("background spawn launches");
 
     // Shutdown immediately: no yield, no wait for the child to enter its
-    // model call. The driver task has been spawned but its registry entry
+    // model call. The task has been spawned but its registry entry
     // may not exist yet, and the stop request has not reached the child.
     runtime.join_children().await;
 
@@ -108,7 +108,7 @@ async fn test_shutdown_races_spawn_registration() {
     );
 }
 
-/// A stop issued before the child's driver first polls must still bring the
+/// A stop issued before the child's task first polls must still bring the
 /// child to a terminal: the run token is minted on first poll, so a stop that
 /// only aborts a live runner finds no token to cancel and the child parks
 /// forever. The join resolves only after every observed child reached its
@@ -131,7 +131,7 @@ async fn test_shutdown_stops_unstarted_child() {
         .await
         .expect("background spawn launches");
 
-    // Stop before yielding to the driver: the child has not entered its run.
+    // Stop before yielding to the task: the child has not entered its run.
     runtime.join_children().await;
 
     let events = store.trajectory_tail(parent_sid);
@@ -186,7 +186,7 @@ async fn test_shutdown_waits_finalize() {
 
 /// A backend that parks the first append a child makes (the delegation write
 /// that opens its sidechain log) until released, signalling when that write
-/// is reached. It lets a shutdown or caller cancel land while the driver sits
+/// is reached. It lets a shutdown or caller cancel land while the task sits
 /// inside construction, before any child is registered, so those two
 /// admission windows are exercised end to end.
 struct BlockingChildWrite {
@@ -280,7 +280,7 @@ impl ModelProvider for ParkedProvider {
 }
 
 /// A backend whose append panics, so the child's construction — its opening
-/// delegation write inside spawn_child — unwinds before the driver reports
+/// delegation write inside spawn_child — unwinds before the task reports
 /// ready. The resulting refusal must be a failed start, not a false "host is
 /// shutting down": a construction panic in a healthy host is not a shutdown.
 struct PanickingBackend {
@@ -331,7 +331,7 @@ impl ContextBackend for PanickingBackend {
 /// bring it to a terminal: the close credential was admitted before the first
 /// side effect, so the join cancels it and the born child (whose cancel token
 /// is that same credential) reaches its return boundary even though the
-/// driver had not registered it when the shutdown fired.
+/// task had not registered it when the shutdown fired.
 #[tokio::test]
 async fn test_shutdown_covers_construction() {
     let entered = Arc::new(Notify::new());
@@ -347,7 +347,7 @@ async fn test_shutdown_covers_construction() {
     let mut args = SpawnArgs::new("explore", "task", "task");
     args.run_in_background = true;
 
-    // The driver parks inside the delegation write, and the caller is held on
+    // The task parks inside the delegation write, and the caller is held on
     // ready, so the spawn runs on its own task and the join on this one.
     let spawn_task = {
         let runtime = Arc::clone(&runtime);
@@ -370,11 +370,7 @@ async fn test_shutdown_covers_construction() {
     };
     let gate_closed = async {
         loop {
-            let closed = runtime
-                .child_drivers
-                .lock()
-                .map(|g| g.closing)
-                .unwrap_or(false);
+            let closed = runtime.running.lock().map(|g| g.closing).unwrap_or(false);
             if closed {
                 break;
             }
@@ -385,10 +381,10 @@ async fn test_shutdown_covers_construction() {
         .await
         .expect("the join closed the gate before construction freed");
     // Construction is still parked on the write, so the join is waiting on the
-    // driver rather than finishing on the cancel alone.
+    // task rather than finishing on the cancel alone.
     assert!(
         !join_task.is_finished(),
-        "the join stays parked on the constructing driver, not finished on cancel alone"
+        "the join stays parked on the constructing task, not finished on cancel alone"
     );
     release.notify_waiters();
 
@@ -405,7 +401,7 @@ async fn test_shutdown_covers_construction() {
 }
 
 /// Cancelling the spawn caller while it waits for its child does not take the
-/// child's construction with it: the driver owns construction and the
+/// child's construction with it: the task owns construction and the
 /// completion signal, so the child still runs to its return boundary once the
 /// write frees. A caller-held construction would vanish on the abort and
 /// never record a return.
@@ -433,7 +429,7 @@ async fn test_caller_cancel_spares_child() {
     };
     entered.notified().await;
 
-    // Cancel the caller at its ready wait, then free the write. The driver is
+    // Cancel the caller at its ready wait, then free the write. The task is
     // untouched, so it constructs, runs, and finalizes the child on its own.
     spawn_task.abort();
     release.notify_waiters();

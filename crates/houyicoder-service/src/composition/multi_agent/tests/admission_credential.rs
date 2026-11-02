@@ -1,4 +1,4 @@
-//! Admission-credential unit tests: the slot model and the bounded driver
+//! Admission-credential unit tests: the slot model and the bounded wait
 //! join, driven directly against the private registry so the shutdown
 //! contract is pinned without a full runtime.
 
@@ -10,11 +10,11 @@ use tokio::sync::Notify;
 use tokio::sync::oneshot::channel;
 use tokio::sync::oneshot::error::TryRecvError;
 
-use super::super::{DriverEntry, DriverRegistry, DriverSlot, join_driver};
+use super::super::{ChildCredential, ChildCredentialren, ChildWatch, join_child};
 use std::future::pending;
 use tokio::time::timeout;
 
-/// The foreground join confirms the driver's end signal closed, not merely
+/// The foreground join confirms the task's end signal closed, not merely
 /// that it issued the abort: a done Sender the abort cannot reach keeps the
 /// join parked even after the timeout backstop fires, and only releasing it
 /// lets the join return. The old shape resolved on abort alone; the guard's
@@ -25,7 +25,7 @@ use tokio::time::timeout;
 async fn test_join_foreground_confirms_end() {
     let (done_tx, done) = channel::<()>();
     let aborted = Arc::new(Notify::new());
-    // A task borrowed only so the Foreground entry has an AbortHandle to fire.
+    // A task borrowed only so the awaited entry has an AbortHandle to fire.
     // Its body is pending, so the abort backstop is the only way it ends; the
     // guard signals the instant the task is dropped, which is the moment the
     // backstop ran.
@@ -43,12 +43,12 @@ async fn test_join_foreground_confirms_end() {
         })
         .abort_handle()
     };
-    let slot = DriverSlot {
+    let slot = ChildCredential {
         close: CancellationToken::new(),
-        done,
-        entry: Some(DriverEntry::Foreground { abort }),
+        finished: done,
+        watch: Some(ChildWatch::Awaited { abort }),
     };
-    let join = tokio::spawn(join_driver(slot, Duration::from_millis(10)));
+    let join = tokio::spawn(join_child(slot, Duration::from_millis(10)));
     // Wait until the backstop fired, not merely until the join task was
     // spawned: on the current-thread runtime a freshly spawned task has not run
     // yet, so is_finished alone would be trivially false.
@@ -66,44 +66,44 @@ async fn test_join_foreground_confirms_end() {
 
 /// Reserve creates the admitted slot's credential before any child exists: a
 /// shutdown landing between admission and attach still cancels the close and
-/// still carries the slot into the drained set, and a later reserve is refused
+/// still carries the slot into the drained set, and a later admission is refused
 /// without discarding an unconsumed drain.
 #[tokio::test]
-async fn test_reserve_enters_drain() {
-    let mut registry = DriverRegistry::default();
-    let reservation = registry
-        .reserve(CancellationToken::new())
-        .expect("an open gate reserves");
+async fn test_admission_enters_drain() {
+    let mut registry = ChildCredentialren::default();
+    let admission = registry
+        .admit(CancellationToken::new())
+        .expect("an open gate admits");
     let slot = registry
-        .drivers
-        .get_mut(&reservation.key)
+        .children
+        .get_mut(&admission.slot)
         .expect("slot present");
     assert!(
-        slot.entry.is_none(),
-        "reserve registers the credential before any driver attaches"
+        slot.watch.is_none(),
+        "admitting registers the credential before any task attaches"
     );
     assert!(
-        matches!(slot.done.try_recv(), Err(TryRecvError::Empty)),
-        "the done receiver is live from reserve, before the driver takes its sender"
+        matches!(slot.finished.try_recv(), Err(TryRecvError::Empty)),
+        "the completion receiver is live from the admission, before the task takes its sender"
     );
     // The close entrance the join uses: cancel every admitted close under the
     // lock, then close the gate and drain.
-    for s in registry.drivers.values() {
+    for s in registry.children.values() {
         s.close.cancel();
     }
     assert!(
         registry
-            .drivers
-            .get(&reservation.key)
+            .children
+            .get(&admission.slot)
             .unwrap()
             .close
             .is_cancelled(),
-        "the admitted credential's close reaches the reserved child"
+        "the admitted credential's close reaches the admitted child"
     );
-    registry.close_and_drain_into();
+    registry.close_and_drain();
     // A repeated close before the drain is consumed must not discard the
     // first: the single-close consumer stays the boundary.
-    registry.close_and_drain_into();
+    registry.close_and_drain();
     let mut drained = registry.take_drained();
     assert_eq!(
         drained.len(),
@@ -112,12 +112,12 @@ async fn test_reserve_enters_drain() {
     );
     assert!(drained[0].1.close.is_cancelled());
     assert!(
-        matches!(drained[0].1.done.try_recv(), Err(TryRecvError::Empty)),
-        "the unattached slot's done still waits for its never-built driver"
+        matches!(drained[0].1.finished.try_recv(), Err(TryRecvError::Empty)),
+        "the unwatched slot's completion still waits for its never-built task"
     );
-    // Once closed, a new reserve is refused.
+    // Once closed, a new admission is refused.
     assert!(
-        registry.reserve(CancellationToken::new()).is_none(),
-        "a closed gate reserves nothing"
+        registry.admit(CancellationToken::new()).is_none(),
+        "a closed gate admits nothing"
     );
 }

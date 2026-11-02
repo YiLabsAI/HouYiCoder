@@ -2,7 +2,7 @@ use super::*;
 
 /// Real-binary background delegation: the parent delegates a background
 /// child (run_in_background), the tool returns a launched result
-/// immediately, the parent continues, the detached driver runs the child
+/// immediately, the parent continues, the detached task runs the child
 /// to completion, the notification injector enqueues, and the parent's
 /// next run drains the notification at its first turn boundary. The
 /// script is all "ok" past turn 1 so the shared provider race (parent vs
@@ -45,10 +45,10 @@ fn test_background_delegation_completes() {
         "parent should continue past a background delegation:\n{}",
         s.output()
     );
-    // Give the detached driver time to run the child to completion + the
+    // Give the detached task time to run the child to completion + the
     // injector time to enqueue the notification. Each user message starts a
     // run whose first turn boundary drains the notification queue, so send a
-    // few + poll each — the notification lands whenever the detached driver
+    // few + poll each — the notification lands whenever the detached task
     // finishes (timing-sensitive under parallel PTY load, hence the loop).
     let mut drained = false;
     for _ in 0..5 {

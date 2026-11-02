@@ -22,8 +22,9 @@ mod driver;
 
 #[cfg(test)]
 pub(crate) use driver::{
-    cancel_child_turn_notification, drive_client, focus_notification, inject_child_notification,
-    inject_notification, kill_all_notification, kill_child_notification, queue_remove_notification,
+    background_child_notification, cancel_child_turn_notification, drive_client,
+    focus_notification, inject_child_notification, inject_notification, kill_all_notification,
+    kill_child_notification, queue_remove_notification,
 };
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;

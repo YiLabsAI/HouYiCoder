@@ -1,6 +1,6 @@
-//! Child-driver-completion tests: join_children stops every live child, joins
-//! each detached background driver to its finalize tail, and survives a child
-//! driver that panics.
+//! Child-task-completion tests: join_children stops every live child, joins
+//! each detached background task to its finalize tail, and survives a child
+//! task that panics.
 
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ impl ModelProvider for HangProvider {
 
 /// A background child parked in a never-returning model call still completes
 /// before shutdown resolves: join_children aborts the child, joins its
-/// detached driver, and the driver's finalize tail writes the SubagentReturn
+/// detached task, and the task's finalize tail writes the SubagentReturn
 /// boundary into the parent log. A stop request alone would return while the
 /// child's completion tail had still not run.
 #[tokio::test]
@@ -68,7 +68,7 @@ async fn test_join_children_awaits_completion() {
         .expect("background spawn launches");
     // Wait for the child to actually enter the model call: aborting before
     // then would fire before the run has minted its cancel token and could
-    // not interrupt it, so the driver would stay parked forever.
+    // not interrupt it, so the task would stay parked forever.
     entered.notified().await;
     runtime.join_children().await;
     let events = store.trajectory_tail(parent_sid);
@@ -76,13 +76,13 @@ async fn test_join_children_awaits_completion() {
         events
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
-        "join_children awaited the child driver to its completion tail"
+        "join_children awaited the child task to its completion tail"
     );
 }
 
 /// A provider that panics on its stream entry, so a child run against it
 /// unwinds. finalize_child catches the panic, runs its tail, then re-raises,
-/// so the detached driver itself panics — the branch shutdown must survive.
+/// so the detached task itself panics — the branch shutdown must survive.
 struct PanickingProvider {
     entered: Arc<Notify>,
 }
@@ -106,7 +106,7 @@ impl ModelProvider for PanickingProvider {
 }
 
 /// A child whose run panics still finalizes (its return is recorded) before
-/// the join resolves, and the join survives the panicked driver: it warns and
+/// the join resolves, and the join survives the panicked task: it warns and
 /// returns instead of re-raising the panic into the host teardown.
 #[tokio::test]
 async fn test_join_children_survives_panic() {
@@ -136,7 +136,7 @@ async fn test_join_children_survives_panic() {
 }
 
 /// A Stop hook that never returns cannot wedge the shutdown: the join's
-/// budget expires, the driver is aborted, and no return boundary is written
+/// budget expires, the task is aborted, and no return boundary is written
 /// for the aborted child.
 #[tokio::test]
 async fn test_shutdown_aborts_slow_hook() {
@@ -186,7 +186,7 @@ async fn test_shutdown_aborts_slow_hook() {
         !events
             .iter()
             .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
-        "an aborted slow-hook driver fabricates no return boundary"
+        "an aborted slow-hook task fabricates no return boundary"
     );
     drop(spawn_call.await);
     // The stop hook park is still held by nothing: releasing it (or dropping

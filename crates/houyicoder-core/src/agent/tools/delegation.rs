@@ -109,9 +109,9 @@ impl Tool for DelegationTool {
                     "type": "string",
                     "description": "The type of specialized agent to use; defaults to general-purpose"
                 },
-                // The wire struct has always carried this field; the schema
-                // now exposes it because the fleet strip can stop a running
-                // child and the parent is told about the ending either way.
+                // A background child is offered only because the fleet strip
+                // can stop one: the model must never start work the user has
+                // no way to end.
                 "run_in_background": {
                     "type": "boolean",
                     "description": "Run this agent in the background. The call returns at once with the child session id, and the child's ending reaches you as a notification on a later turn."

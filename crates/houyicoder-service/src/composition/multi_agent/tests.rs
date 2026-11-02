@@ -160,7 +160,7 @@ async fn test_provenance_precedes_child_run() {
     drop(call);
 }
 
-/// The background path lands the same boundary: the driver writes the child's
+/// The background path lands the same boundary: the task writes the child's
 /// provenance before its run, so a running child already reads as a sub-agent.
 /// The write also precedes the caller's ready signal, so the caller learns the
 /// child id only after the provenance is durable and never waits on the run.
@@ -341,7 +341,7 @@ async fn test_background_spawn_records_return() {
         !outcome.child_session_id.is_empty(),
         "background spawn returns a child session id"
     );
-    // The detached driver runs the child to completion and records the
+    // The detached task runs the child to completion and records the
     // SubagentReturn boundary in the parent log. Yield to let the
     // background task run, then poll until the boundary lands.
     let mut found = false;
@@ -358,7 +358,7 @@ async fn test_background_spawn_records_return() {
     }
     assert!(
         found,
-        "detached driver recorded SubagentReturn in the parent log"
+        "detached task recorded SubagentReturn in the parent log"
     );
 }
 
@@ -383,7 +383,7 @@ impl HookFire for BlockingStartHook {
 /// A background spawn whose caller is dropped while the Start hook waits
 /// still reaches a terminal. The child is announced and registered before
 /// the caller returns, so nothing may depend on the caller staying alive:
-/// dropping the spawn call used to take the driver with it, leaving the
+/// dropping the spawn call used to take the task with it, leaving the
 /// fleet row on running and the parent log without a return boundary.
 #[tokio::test]
 async fn test_dropped_spawn_reaches_terminal() {
@@ -408,7 +408,7 @@ async fn test_dropped_spawn_reaches_terminal() {
     assert!(entered.is_ok(), "the spawn dispatches SubagentStart");
     call.abort();
     // The abort lands wherever the call happens to be — awaiting the hook if
-    // the call owns the driver, already returned if the driver does. Nothing
+    // the call owns the task, already returned if the task does. Nothing
     // below depends on which, so the join result is dropped either way.
     drop(call.await);
     hook.release.notify_one();
@@ -540,7 +540,7 @@ async fn test_spawn_system_records_trigger() {
 }
 
 /// A first-party background spawn reports its start and records the system
-/// trigger when the detached driver runs.
+/// trigger when the detached task runs.
 #[tokio::test]
 async fn test_background_spawn_records_trigger() {
     let (runtime, store, parent_sid) = runtime_with_text_child("ok");
@@ -568,7 +568,7 @@ async fn test_background_spawn_records_trigger() {
     }
     assert!(
         found,
-        "detached driver recorded the first-party spawn boundary"
+        "detached task recorded the first-party spawn boundary"
     );
     let snap = store.trajectory_tail(parent_sid);
     let spawn = snap
@@ -730,7 +730,7 @@ async fn test_spawn_fires_start_stop() {
     );
 }
 
-/// End-to-end background spawn → detached driver → bus Completed → notification
+/// End-to-end background spawn → detached task → bus Completed → notification
 /// injector → parent queue. The detached child + its notification land
 /// independent of the parent's run lifecycle (async cancel unlinked;
 /// notification arrives even though the parent is not running a turn).
@@ -1645,7 +1645,7 @@ impl Tool for GuardedTool {
     }
 }
 
-/// A stop that lands before the driver has polled the run must still reach
+/// A stop that lands before the task has polled the run must still reach
 /// the child: the run installs its cancel token at the top of run(), so
 /// polling the run before the cancel branch is what makes that token exist
 /// when the stop arrives. The child then interrupts instead of running on to
@@ -1667,7 +1667,7 @@ async fn test_cancel_before_poll_publishes() {
         runtime.spawn(&ctx, SpawnArgs::new("explore", "find auth", "find auth")),
     )
     .await
-    .expect("a stop before the driver's first poll still ends the child")
+    .expect("a stop before the task's first poll still ends the child")
     .expect("the spawn reports a terminal outcome");
     assert_eq!(
         outcome.status.as_deref(),
@@ -1803,13 +1803,13 @@ async fn test_cancel_mid_ask_publishes() {
     );
 }
 
-/// Killing a background child leaves its driver to run the child down to a
+/// Killing a background child leaves its task to run the child down to a
 /// terminal state, so the fleet gets the kill even though the caller that
 /// started the child is long gone. The foreground path takes the same shape:
-/// the driver owns the child's bookkeeping and outlives the caller.
+/// the task owns the child's bookkeeping and outlives the caller.
 /// A cancel landing while a resumed child is inside its model call must end
 /// it too: the approval decision put the run back on a fresh cancel token,
-/// and the driver's cancel branch has to abort that resumed run, not just the
+/// and the task's cancel branch has to abort that resumed run, not just the
 /// one it started. Without it the child keeps working after the parent
 /// stopped, and the fleet row never clears.
 #[tokio::test]
@@ -1944,8 +1944,8 @@ fn test_terminal_handoff() {
 }
 
 mod admission_credential;
+mod handover;
 mod join_children;
-mod promote;
 mod shutdown_gate;
 mod subtree_usage;
 mod timeout;

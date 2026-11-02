@@ -2,6 +2,9 @@
 
 use super::*;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
+use houyicoder_api::tool::ToolCtx;
+use houyicoder_async::PFut;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;
@@ -11,7 +14,7 @@ use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 fn server_no_runtime() -> Server {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -80,6 +83,81 @@ async fn test_kill_child_no_sid() {
     let server = server_no_runtime();
     server.handle_session_notification(&AcpNotification::new(
         "session/kill_child",
+        serde_json::json!({}),
+    ));
+}
+
+/// A spawn port that records the children handed over to it, so the routing
+/// assertion is about the call reaching the runtime rather than about the
+/// handler merely not panicking.
+struct RecordingSpawn {
+    handed_over: Mutex<Vec<String>>,
+}
+
+impl SpawnHandle for RecordingSpawn {
+    fn spawn(
+        &self,
+        _ctx: &ToolCtx,
+        _args: SpawnArgs,
+    ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
+        Box::pin(async { Err(SpawnFailure::CapabilityDenied) })
+    }
+
+    fn background_child(&self, child_id: &str) -> bool {
+        self.handed_over
+            .lock()
+            .expect("the record locks")
+            .push(child_id.to_string());
+        true
+    }
+}
+
+/// session/background_child reaches the runtime's hand-over, named by the id
+/// the reader selected. A handler that dropped the request would leave the
+/// turn blocked with nothing on the wire to explain why.
+#[tokio::test]
+async fn test_background_child_routes() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("x"));
+    let spawn = Arc::new(RecordingSpawn {
+        handed_over: Mutex::new(Vec::new()),
+    });
+    let runner = Runner::new(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    )
+    .with_spawn_handle(spawn.clone());
+    let server = Server::new(
+        Arc::new(runner),
+        SessionId::new(),
+        Arc::new(DefaultModeGate::new()),
+    );
+
+    server.handle_session_notification(&AcpNotification::new(
+        "session/background_child",
+        serde_json::json!({ "childSid": "c1" }),
+    ));
+
+    assert_eq!(
+        spawn
+            .handed_over
+            .lock()
+            .expect("the record locks")
+            .as_slice(),
+        ["c1".to_string()],
+        "the handler hands over exactly the child the reader named"
+    );
+}
+
+/// A session/background_child with no childSid is a silent no-op: it must not
+/// hand over a child it cannot name.
+#[tokio::test]
+async fn test_background_child_no_sid() {
+    let server = server_no_runtime();
+    server.handle_session_notification(&AcpNotification::new(
+        "session/background_child",
         serde_json::json!({}),
     ));
 }

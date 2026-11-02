@@ -1,131 +1,157 @@
-//! The live child registry and the driver slots the shutdown join drains.
+//! The children a parent is running: who can be steered, and which runs the
+//! shutdown has to wait for.
 //!
-//! A child's identity, its lifecycle token, and the mode its ending is
-//! published with live together here, next to the driver slot that proves the
-//! child is still being driven. Keeping them in one module is what makes the
-//! shutdown join able to reason about them as a single unit.
+//! A child outlives the call that started it, so the parent keeps two records
+//! of it: an entry it can reach by id to steer or stop the child mid-run, and
+//! an admission slot the shutdown join waits on until the child's run is over.
 
 use super::*;
 
+/// A running child the parent can reach by id: the runner to steer or stop,
+/// the token that ends it, and the two channels that let the reader take it
+/// over or learn how it ended.
 pub(super) struct ChildEntry {
     pub(super) runner: Weak<Runner>,
     pub(super) cancel: CancellationToken,
     /// The mode this child's ending is published with; a foreground child
     /// carries a flag the runtime can flip to hand it to the background.
     pub(super) backgrounded: Option<Arc<AtomicBool>>,
-    /// Raised when the reader promotes a running child.
-    pub(super) promote: Option<Arc<Notify>>,
+    /// Raised when the reader takes a running child over.
+    pub(super) handover: Option<Arc<Notify>>,
 }
 
-/// How the shutdown join observes one driver. A background driver's handle
-/// is owned solely by the registry. A foreground driver's handle stays with
-/// the caller (it awaits the child's outcome), so the registry holds only
-/// the abort handle; the completion signal lives on the slot, shared by both
-/// modes.
-pub(super) enum DriverEntry {
-    Background(JoinHandle<()>),
-    Foreground { abort: AbortHandle },
+/// How the shutdown join observes one child.
+///
+/// A child started in the background has no caller left to await it, so the
+/// join owns its task handle. A child started in the foreground still has a
+/// caller awaiting it, so the join holds an abort handle and waits on the
+/// completion signal instead.
+pub(super) enum ChildWatch {
+    Detached(JoinHandle<()>),
+    Awaited { abort: AbortHandle },
 }
 
-/// One admitted driver's shutdown credential: the child's lifecycle cancel
-/// token (the exact token stored on the child handle) plus the completion
-/// signal the join waits on. The entry only exists once attached; before
-/// that the close and done pair already covers the child, so a shutdown
-/// landing between admission and attach still cancels it and waits for its
-/// driver to end.
-pub(super) struct DriverSlot {
+/// One admitted child's shutdown credential: the lifecycle token that ends it
+/// (the exact token carried by the child handle) and the completion signal the
+/// join waits on. The watch arrives later, once the task exists; before that
+/// the token and the signal already cover the child, so a shutdown landing in
+/// between still ends it and still waits for it.
+pub(super) struct ChildCredential {
     pub(super) close: CancellationToken,
-    pub(super) done: Receiver<()>,
-    pub(super) entry: Option<DriverEntry>,
+    pub(super) finished: Receiver<()>,
+    pub(super) watch: Option<ChildWatch>,
 }
 
-/// What reserve hands back to the caller: the reserved key, the close token
-/// to pass to spawn as the child's cancel, and the completion Sender to move
-/// into the driver task. done_tx spends only the caller's consecutive
-/// synchronous statements before entering the driver, so a cancelled caller
-/// never drops it.
-pub(super) struct Reservation {
-    pub(super) key: u64,
+/// What admitting a child hands back: the slot the registry filed it under,
+/// the token to pass to the spawn as the child's cancel, and the completion
+/// sender to move into the task.
+pub(super) struct ChildAdmission {
+    pub(super) slot: u64,
     pub(super) close: CancellationToken,
-    pub(super) done_tx: Sender<()>,
+    pub(super) finished: Sender<()>,
 }
 
-/// The driver registry with its closing gate. Keys are reserved before the
-/// driver task is built (the task needs its key to remove itself) and
-/// attached after; both steps refuse once the gate is closed.
+/// The children currently running, with the gate that refuses new ones once a
+/// shutdown starts. A child is admitted before its first side effect and
+/// watched once its task exists; both steps refuse after the gate closes.
 #[derive(Default)]
-pub(super) struct DriverRegistry {
+pub(super) struct ChildCredentialren {
     pub(super) closing: bool,
-    pub(super) next_key: u64,
-    pub(super) drivers: HashMap<u64, DriverSlot>,
-    /// The drivers the close step drained, waiting for the join to take.
-    pub(super) draining: Vec<(u64, DriverSlot)>,
+    pub(super) next_slot: u64,
+    pub(super) children: HashMap<u64, ChildCredential>,
+    /// The children the close step set aside, waiting for the join to take.
+    pub(super) drained: Vec<(u64, ChildCredential)>,
 }
 
-impl DriverRegistry {
-    /// Reserve a driver's admission credential before its first side effect.
-    /// Creates the completion channel so close and done are both live from
-    /// this moment, before the child exists. None once the gate is closed: a
+impl ChildCredentialren {
+    /// Admit a child before its first side effect.
+    ///
+    /// The completion channel is created here, so the token and the signal are
+    /// both live before the child exists. None once the gate is closed: a
     /// shutdown in progress refuses new children at the door.
-    pub(super) fn reserve(&mut self, close: CancellationToken) -> Option<Reservation> {
+    pub(super) fn admit(&mut self, close: CancellationToken) -> Option<ChildAdmission> {
         if self.closing {
             return None;
         }
-        let key = self.next_key;
-        self.next_key += 1;
-        let (done_tx, done) = channel::<()>();
-        self.drivers.insert(
-            key,
-            DriverSlot {
+        let slot = self.next_slot;
+        self.next_slot += 1;
+        let (finished, receiver) = channel::<()>();
+        self.children.insert(
+            slot,
+            ChildCredential {
                 close: close.clone(),
-                done,
-                entry: None,
+                finished: receiver,
+                watch: None,
             },
         );
-        Some(Reservation {
-            key,
+        Some(ChildAdmission {
+            slot,
             close,
-            done_tx,
+            finished,
         })
     }
 
-    /// Attach a spawned driver under its reserved key. Err hands the entry
-    /// back once the slot is gone (a shutdown drained it): the caller must
-    /// then join the driver itself. The slot's presence is the whole answer,
-    /// so this no longer reads closing separately.
-    pub(super) fn attach(&mut self, key: u64, entry: DriverEntry) -> Result<(), DriverEntry> {
-        match self.drivers.get_mut(&key) {
-            Some(slot) => {
-                slot.entry = Some(entry);
+    /// Record how the shutdown join observes an admitted child. Err hands the
+    /// watch back once the slot is gone, which means a shutdown set it aside:
+    /// the caller must then wait on the task itself.
+    pub(super) fn watch(&mut self, slot: u64, watch: ChildWatch) -> Result<(), ChildWatch> {
+        match self.children.get_mut(&slot) {
+            Some(child) => {
+                child.watch = Some(watch);
                 Ok(())
             }
-            None => Err(entry),
+            None => Err(watch),
         }
     }
 
-    /// The driver finished; drop its entry so a later join waits only for
-    /// still-running drivers.
-    pub(super) fn remove(&mut self, key: u64) {
-        self.drivers.remove(&key);
+    /// The child's run is over; drop its slot so a later join waits only for
+    /// children still running.
+    pub(super) fn release(&mut self, slot: u64) {
+        self.children.remove(&slot);
     }
 
-    /// Close the gate and drain the registered drivers into the taken state,
-    /// where they wait for take_drained. The caller holds this lock across
-    /// the children cancel pass, which is what makes a registration racing
-    /// the shutdown see either a cancelled token or a closed gate — never
-    /// neither. The drain fills only when empty, so a repeated close cannot
-    /// discard a prior drain the join has not taken yet; the single-close
-    /// consumer stays the boundary.
-    pub(super) fn close_and_drain_into(&mut self) {
+    /// Close the gate and set the running children aside for the join. The
+    /// caller holds this lock across the cancel pass, which is what makes a
+    /// child admitted against a shutdown see either a cancelled token or a
+    /// closed gate, never neither. Setting aside happens only while the drained
+    /// list is empty, so a repeated close cannot discard children the join has
+    /// not taken yet.
+    pub(super) fn close_and_drain(&mut self) {
         self.closing = true;
-        if self.draining.is_empty() {
-            self.draining = take(&mut self.drivers).into_iter().collect();
+        if self.drained.is_empty() {
+            self.drained = take(&mut self.children).into_iter().collect();
         }
     }
 
-    /// Take the drivers the close step drained. Empty when the gate never
-    /// closed (an empty registry at shutdown) or after a prior take.
-    pub(super) fn take_drained(&mut self) -> Vec<(u64, DriverSlot)> {
-        take(&mut self.draining).into_iter().collect()
+    /// Take the children the close step set aside. Empty when the gate never
+    /// closed, or after a prior take.
+    pub(super) fn take_drained(&mut self) -> Vec<(u64, ChildCredential)> {
+        take(&mut self.drained).into_iter().collect()
+    }
+}
+
+/// Releases a child's slot when its task ends, however the task ends.
+///
+/// A task ends by reaching the child's terminal, by refusing to construct one,
+/// or by being aborted. Each must release the slot, because the slot is what a
+/// later shutdown join waits on: one left behind makes the join wait out a
+/// child that is no longer there, and a long-lived session collects one per
+/// delegation.
+pub(super) struct AdmissionLease {
+    running: Arc<Mutex<ChildCredentialren>>,
+    slot: u64,
+}
+
+impl AdmissionLease {
+    pub(super) fn new(running: Arc<Mutex<ChildCredentialren>>, slot: u64) -> Self {
+        Self { running, slot }
+    }
+}
+
+impl Drop for AdmissionLease {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.running.lock() {
+            g.release(self.slot);
+        }
     }
 }
