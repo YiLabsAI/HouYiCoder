@@ -552,7 +552,7 @@ pub trait SessionLog: Send + Sync {
     /// Required rather than defaulted: an implementation that answered None
     /// would leave every reader attaching to a long session handed the whole
     /// history, which is the cost this figure exists to bound.
-    fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError>;
+    fn replay_starts_at(&self, session: SessionId) -> Result<Option<usize>, ContextError>;
 
     /// Read one bounded page of the session's durable history from an absolute
     /// position, so a reader can walk a history larger than memory.

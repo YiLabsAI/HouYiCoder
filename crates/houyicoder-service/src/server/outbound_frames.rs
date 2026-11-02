@@ -101,11 +101,11 @@ impl Server {
         let sequencer = self.event_sequencer.clone();
         // A client that names a cursor is answered for that cursor; one that
         // names none is a fresh reader, and it is handed what the session holds.
-        let fresh_base = match self.replay_after {
+        let replay_start = match self.replay_after {
             Some(_) => None,
-            None => Self::attach_base(runner.store().as_ref(), session),
+            None => Self::replay_start_for_attach(runner.store().as_ref(), session),
         };
-        let mut plan = sequencer.begin_replay(self.replay_after, fresh_base);
+        let mut plan = sequencer.begin_replay(self.replay_after, replay_start);
         loop {
             let loader = runner.clone();
             let (frames, complete) = sequencer.next_replay_batch(&mut plan, move |from| {
@@ -125,11 +125,11 @@ impl Server {
     /// record the session holds in memory. None -- a session with no durable
     /// record, or a log the store could not read -- leaves the walk at the head
     /// of the history, the only start left that the walk resolves on its own.
-    fn attach_base(store: &dyn SessionLog, session: SessionId) -> Option<usize> {
-        match store.resident_base(session) {
-            Ok(base) => base,
+    fn replay_start_for_attach(store: &dyn SessionLog, session: SessionId) -> Option<usize> {
+        match store.replay_starts_at(session) {
+            Ok(start) => start,
             Err(e) => {
-                tracing::warn!("resident base for session {session} unreadable: {e}");
+                tracing::warn!("replay start for session {session} unreadable: {e}");
                 None
             }
         }

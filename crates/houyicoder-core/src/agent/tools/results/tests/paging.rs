@@ -53,8 +53,8 @@ impl SessionLog for GappedLog {
         self.inner.trajectory_tail(session)
     }
 
-    fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
-        self.inner.resident_base(session)
+    fn replay_starts_at(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
+        self.inner.replay_starts_at(session)
     }
 
     fn trajectory_page(

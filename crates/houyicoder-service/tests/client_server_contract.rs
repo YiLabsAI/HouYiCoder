@@ -196,7 +196,7 @@ async fn test_attach_sends_newest_rows() {
         store.append(row(session, text)).await.expect("append");
     }
     assert_eq!(
-        store.resident_base(session).expect("the window answers"),
+        store.replay_starts_at(session).expect("the window answers"),
         Some(1),
         "the oldest row left the resident window before the client attached"
     );

@@ -100,7 +100,7 @@ impl SessionLog for InMemoryLog {
     }
     /// This double keeps every record in memory, so the oldest one it holds is
     /// the session's first.
-    fn resident_base(&self, _session: SessionId) -> Result<Option<usize>, ContextError> {
+    fn replay_starts_at(&self, _session: SessionId) -> Result<Option<usize>, ContextError> {
         Ok((!self.events.lock().unwrap().is_empty()).then_some(0))
     }
     /// This double keeps a session's records in memory and logs no streamed

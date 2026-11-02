@@ -206,34 +206,34 @@ async fn test_window_trim_keeps_totals() {
     remove_dir_all(&root).ok();
 }
 
-/// The base a reader attaches at: a session with no record names none, a
+/// The start a reader's replay gets: a session with no record names none, a
 /// trimmed window names the oldest row it still holds, and a store that has
 /// not read the session reaches the same ordinal by folding its log.
 #[tokio::test]
-async fn test_resident_base_tracks_window() {
+async fn test_replay_start_tracks_window() {
     let root = temp_root();
     let store = bounded_store(&root);
     let session = SessionId::new();
     assert_eq!(
-        store.resident_base(session).expect("the base reads"),
+        store.replay_starts_at(session).expect("the start reads"),
         None,
-        "a session holding no record names no base"
+        "a session holding no record names no start"
     );
 
     let rows = (BUDGET_BYTES / TEXT_BYTES) + 4;
     for _ in 0..rows {
         append_event(&store, session, SessionEvent::UserInput { text: body() }).await;
     }
-    let base = store
-        .resident_base(session)
-        .expect("the base reads")
+    let start = store
+        .replay_starts_at(session)
+        .expect("the start reads")
         .expect("the window holds a row");
-    assert!(base > 0, "the window trimmed past its own rows: {base}");
+    assert!(start > 0, "the window trimmed past its own rows: {start}");
 
     let unread = bounded_store(&root);
     assert_eq!(
-        unread.resident_base(session).expect("the base reads"),
-        Some(base),
+        unread.replay_starts_at(session).expect("the start reads"),
+        Some(start),
         "folding the log lands on the ordinal the live window reached"
     );
     remove_dir_all(&root).ok();

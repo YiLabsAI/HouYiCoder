@@ -442,15 +442,16 @@ impl EventSequencer {
     /// it and would drop them before anything read them.
     ///
     /// A client with no cursor has seen nothing, and its walk starts at
-    /// fresh_base: the ordinal of the oldest durable record the session holds
-    /// in memory. The records below that ordinal stay reachable to the client
-    /// through its own read of the log, so handing them over here would send it
-    /// rows it releases as they arrive. None starts the walk at the head of the
-    /// history, which is where a start nothing can name has to begin.
+    /// replay_start: the ordinal of the oldest durable record the session
+    /// holds in memory. The records below that ordinal stay reachable to the
+    /// client through its own read of the log, so handing them over here would
+    /// send it rows it releases as they arrive. None starts the walk at the
+    /// head of the history, which is where a start nothing can name has to
+    /// begin.
     pub(crate) fn begin_replay(
         &self,
         last: Option<EventSeq>,
-        fresh_base: Option<usize>,
+        replay_start: Option<usize>,
     ) -> ReplayPlan {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
         if state.window.covers(last) {
@@ -467,7 +468,7 @@ impl EventSequencer {
                 .values()
                 .map(|frame| frame.payload.clone()),
         );
-        state.trajectory_position = match (last, fresh_base) {
+        state.trajectory_position = match (last, replay_start) {
             (None, Some(index)) => TrajectoryPosition {
                 index,
                 byte_offset: None,
