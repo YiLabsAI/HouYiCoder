@@ -403,6 +403,18 @@ async fn test_wall_timeout_kills_spin() {
     );
 }
 
+/// The command lines that contain the marker, one per line. The search reads
+/// the live process table, and a process killed but not yet reaped is absent
+/// from it, so this reports survivors rather than corpses.
+fn processes_matching(marker: &str) -> String {
+    let pgrep = Command::new("pgrep")
+        .arg("-lf")
+        .arg(marker)
+        .output()
+        .expect("pgrep");
+    String::from_utf8_lossy(&pgrep.stdout).into_owned()
+}
+
 // Live: the BLOCKER fix — drop/cancel path must killpg the tree, not just
 // the direct child. Spawn 2 background sleeps + a long wait, then ABORT
 // the exec future (simulating Ctrl-C / cancel) BEFORE the wall-timeout. The TreeKillGuard Drop must killpg the grandchildren. Without the guard this re-introduces the orphan-process problem on the cancel path.
@@ -416,27 +428,31 @@ async fn test_cancel_aborts_process_tree() {
         wall_timeout_ms: 10000,
         ..ExecConfig::default()
     };
-    // The sleep carries a duration no other process would use, so the search
-    // below matches this test's children and not a leftover from another run or
-    // another session on the same host.
-    let marker = format!("sleep 100.{}", id());
-    let cmd = format!("{marker} & {marker} & wait");
+    // The grandchildren are named through shell variables, so the string the
+    // search below looks for appears only in their own command lines. Writing
+    // it literally would also put it in the shell's arguments, and the search
+    // would then report the shell itself: the cancel would look reaped as soon
+    // as the direct child died, and an orphaned grandchild would go unseen.
+    let secs = format!("100.{}", id());
+    let marker = format!("sleep {secs}");
+    let cmd = format!("m=sleep; d={secs}; $m $d & $m $d & wait");
     let task = tokio::spawn(async move { s.exec_with_config(&cmd, cfg).await });
-    // Poll for the grandchildren to appear (10ms ticks up to 2s) — event driven, not a fixed sleep. The spawn + fork takes ~10-50ms; a fixed 1s sleep wasted 950ms every run.
-    let mut started = false;
+    // Wait for both grandchildren to exist before cancelling. An abort that
+    // lands before the fork leaves nothing to orphan, so a test that cancels
+    // early passes without ever exercising the path it names. 10ms ticks up to
+    // 2s: the spawn + fork takes ~10-50ms.
+    let mut started = 0;
     for _ in 0..200 {
         sleep(Duration::from_millis(10)).await;
-        let pgrep = Command::new("pgrep")
-            .arg("-lf")
-            .arg(&marker)
-            .output()
-            .expect("pgrep");
-        if !String::from_utf8_lossy(&pgrep.stdout).is_empty() {
-            started = true;
+        started = processes_matching(&marker).lines().count();
+        if started >= 2 {
             break;
         }
     }
-    assert!(started, "grandchildren never started — spawn failed");
+    assert!(
+        started >= 2,
+        "the two grandchildren never started, so the cancel path was not exercised"
+    );
     // cancel the exec future (Ctrl-C analog) — TreeKillGuard must Drop
     // + killpg the whole tree so no grandchildren survive.
     task.abort();
@@ -446,12 +462,7 @@ async fn test_cancel_aborts_process_tree() {
     let mut reaped = false;
     for _ in 0..50 {
         sleep(Duration::from_millis(100)).await;
-        let pgrep = Command::new("pgrep")
-            .arg("-lf")
-            .arg(&marker)
-            .output()
-            .expect("pgrep");
-        leftover = String::from_utf8_lossy(&pgrep.stdout).into_owned();
+        leftover = processes_matching(&marker);
         if leftover.is_empty() {
             reaped = true;
             break;
@@ -463,7 +474,7 @@ async fn test_cancel_aborts_process_tree() {
     );
 }
 
-// Live: the orphan-process fix. 3 background sleep grandchildren inside the fence; wall=1s trips; the grandchildren must NOT survive (killpg reaps the whole tree). Verifies the orphan class is closed.
+// Live: the orphan-process fix. 3 background sleep grandchildren inside the fence; wall=200ms trips; the grandchildren must NOT survive (killpg reaps the whole tree). Verifies the orphan class is closed.
 #[tokio::test]
 #[ignore]
 async fn test_timeout_kills_orphan_tree() {
@@ -472,8 +483,13 @@ async fn test_timeout_kills_orphan_tree() {
         wall_timeout_ms: 200,
         ..ExecConfig::default()
     };
-    let cmd = "sleep 1000 & sleep 1000 & sleep 1000 & wait";
-    let r = s.exec_with_config(cmd, cfg).await;
+    // Named through shell variables for the same reason the cancel test does:
+    // a literal would also sit in the shell's own arguments, and an unrelated
+    // process running that command would be counted as a survivor.
+    let secs = format!("100.{}", id());
+    let marker = format!("sleep {secs}");
+    let cmd = format!("m=sleep; d={secs}; $m $d & $m $d & $m $d & wait");
+    let r = s.exec_with_config(&cmd, cfg).await;
     assert!(matches!(r, Err(SandboxError::Timeout { .. })));
     // Poll for the grandchildren to be reaped (10ms ticks up to 2s) — event
     // driven, not a fixed 500ms sleep.
@@ -481,12 +497,7 @@ async fn test_timeout_kills_orphan_tree() {
     let mut leftover = String::new();
     for _ in 0..200 {
         sleep(Duration::from_millis(10)).await;
-        let pgrep = Command::new("pgrep")
-            .arg("-lf")
-            .arg("sleep 1000")
-            .output()
-            .expect("pgrep");
-        leftover = String::from_utf8_lossy(&pgrep.stdout).into_owned();
+        leftover = processes_matching(&marker);
         if leftover.is_empty() {
             reaped = true;
             break;
