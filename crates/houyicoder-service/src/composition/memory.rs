@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::path::home_directory;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime};
 use houyicoder_memory::MarkdownMemoryProvider;
 use houyicoder_memory::SemanticReranker;
-use std::env::var;
 
 /// Build a three-scope provider and repair its derived index. The home
 /// override exists so tests inject an isolated root instead of reading the
@@ -19,7 +19,7 @@ pub(super) fn memory_provider_for(
 ) -> MarkdownMemoryProvider {
     let home: PathBuf = home_override
         .map(Path::to_path_buf)
-        .or_else(|| var("HOME").ok().map(PathBuf::from))
+        .or_else(home_directory)
         .unwrap_or_else(|| ws.to_path_buf());
     let slug = worktree::git_canonical_slug(ws);
     let user_root = home.join(".houyicoder").join("memory");

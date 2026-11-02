@@ -357,21 +357,36 @@ fn parse_mcp_servers(raw: Option<&str>) -> Result<Vec<McpServerConfig>, String> 
 
 // ---- memory toggles (cross-session, file-backed) -------------------------
 
-/// The config-home directory under the user HOME. Falls back to the OS
-/// temp dir when HOME is unset (tests / headless CI) so load/save never
+/// The config-home directory under the user home. Falls back to the OS
+/// temp dir when no home is set (tests / headless CI) so load/save never
 /// panic — a missing home just means the settings file lives in a temp
 /// root and the defaults apply on the next load if it cannot be written.
-/// HOUYICODER_CONFIG_HOME overrides the HOME-derived root (tests isolate
+/// HOUYICODER_CONFIG_HOME overrides the home-derived root (tests isolate
 /// the config dir from the developer's real home without env races on
 /// HOME itself).
 pub fn config_home() -> PathBuf {
     if let Ok(dir) = var(ENV_HOUYICODER_CONFIG_HOME) {
         return PathBuf::from(dir);
     }
-    let base = var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| temp_dir());
-    base.join(".houyicoder")
+    user_home().unwrap_or_else(temp_dir).join(".houyicoder")
+}
+
+/// The user home this crate resolves its own paths against.
+///
+/// This crate sits below the port layer, so it cannot call the path helper
+/// there; the platform order is repeated here rather than widened into a new
+/// dependency edge. Windows sets the profile path and leaves HOME to a shell,
+/// so reading HOME first would send a native Windows session's settings to the
+/// temp directory. An empty value counts as unset on both platforms.
+fn user_home() -> Option<PathBuf> {
+    let home = var("HOME").ok().map(PathBuf::from);
+    let profile = var("USERPROFILE").ok().map(PathBuf::from);
+    let ordered = if cfg!(windows) {
+        profile.or(home)
+    } else {
+        home
+    };
+    ordered.filter(|path| !path.as_os_str().is_empty())
 }
 
 /// The settings file path inside the config-home directory.

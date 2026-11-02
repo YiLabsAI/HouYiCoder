@@ -4,14 +4,14 @@
 //! deny-list filters all three.
 
 use std::collections::HashMap;
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+use crate::path::home_directory;
 
 use super::{GrantScope, GrantSubject, SkillSource};
 use io::Error;
@@ -90,12 +90,12 @@ pub struct SkillGrantStore {
     path: PathBuf,
 }
 
-fn grant_path(home: Option<OsString>, user_profile: Option<OsString>) -> io::Result<PathBuf> {
-    let home = [home, user_profile]
-        .into_iter()
-        .flatten()
-        .map(PathBuf::from)
-        .find(|path| path.is_absolute())
+fn grant_path(home: Option<PathBuf>) -> io::Result<PathBuf> {
+    // An authority file must never land inside the model-writable workspace,
+    // so a home the platform reports as a relative path is refused rather than
+    // resolved against the current directory.
+    let home = home
+        .filter(|path| path.is_absolute())
         .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "absolute user home unavailable"))?;
     Ok(home.join(".houyicoder").join("skill-grants.json"))
 }
@@ -122,9 +122,9 @@ impl SkillGrantStore {
     }
 
     /// Resolve the default grant path from the user's home directory.
-    /// Returns an error when neither supported variable is an absolute path.
+    /// Returns an error when the platform reports no absolute home.
     pub fn path() -> io::Result<PathBuf> {
-        grant_path(env::var_os("HOME"), env::var_os("USERPROFILE"))
+        grant_path(home_directory())
     }
 
     fn grant_key(subject: &GrantSubject) -> String {

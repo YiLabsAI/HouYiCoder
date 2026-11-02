@@ -7,12 +7,12 @@
 //! the session id into the substitution context.
 
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use houyicoder_api::path::home_directory;
 use houyicoder_api::skill::{
     HookSourceKind, ProjectIdentity, RemoteIdentity, SkillDescriptor, SkillError,
     SkillFamily as ApiSkillFamily, SkillHookSpec, SkillProvenance as ApiSkillProvenance,
@@ -208,7 +208,7 @@ pub struct SkillRegistryImpl {
 impl SkillRegistryImpl {
     /// Discover project and user-home skills using the process environment.
     pub fn discover(cwd: Option<&Path>) -> Self {
-        let home = env::var_os("HOME").map(PathBuf::from);
+        let home = home_directory();
         Self::discover_with_home(cwd, home.as_deref())
     }
 

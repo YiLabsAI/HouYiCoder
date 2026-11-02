@@ -51,7 +51,12 @@ impl ListPaneState {
 /// root -> ~/wt/, system temp dirs -> <tmp>/. Then if still too long,
 /// left-truncate with the ellipsis.
 pub fn truncate_path(path: &str, max: usize) -> String {
-    let home = var("HOME").unwrap_or_default();
+    // This crate may not depend on the port layer, so the platform order is
+    // read here: Windows sets the profile path and leaves HOME to a shell. The
+    // value only decides whether a leading home prefix renders as a tilde.
+    let home = var("HOME")
+        .or_else(|_| var("USERPROFILE"))
+        .unwrap_or_default();
     truncate_path_with_home(path, max, &home)
 }
 

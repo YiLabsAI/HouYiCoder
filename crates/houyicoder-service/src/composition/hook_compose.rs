@@ -4,6 +4,7 @@
 use super::*;
 
 use houyicoder_api::launcher::{ProcessLauncher, StdProcessLauncher};
+use houyicoder_api::path::home_directory;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::skill::grant::SkillGrantStore;
@@ -531,17 +532,25 @@ pub(super) fn build_skill_registry_and_activator(
     workspace: Option<&Path>,
     home: Option<&Path>,
 ) -> (Arc<SkillRegistryImpl>, Arc<dyn ConditionalSkillActivator>) {
-    // A None home means the assembly reads the environment, so the plain
-    // discover path applies: passing None to discover_with_home would skip
-    // the user-level roots entirely and drop every skill installed under
-    // the machine home from a production session.
-    let registry = Arc::new(match home {
-        Some(home) => SkillRegistryImpl::discover_with_home(workspace, Some(home)),
-        None => SkillRegistryImpl::discover(workspace),
-    });
+    let registry = Arc::new(SkillRegistryImpl::discover_with_home(
+        workspace,
+        discovery_home(home, home_directory()).as_deref(),
+    ));
     let activator =
         build_conditional_activator(Arc::clone(&registry) as Arc<dyn SkillRegistry>, workspace);
     (registry, activator)
+}
+
+/// The home a registry discovers user-level skills under.
+///
+/// The assembly's override wins when it was handed one. Without an override the
+/// environment's home applies, because a production session must see the skills
+/// the user installed under their own home. None therefore means "resolve it",
+/// never "skip the user-level roots": the two meanings live one function apart
+/// in the discovery API, and reading None as a skip is what made every skill
+/// under the machine home disappear from a production session.
+fn discovery_home(home: Option<&Path>, env_home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(Path::to_path_buf).or(env_home)
 }
 
 /// Build the user grant store at the home the assembly was handed, or at
@@ -595,9 +604,7 @@ pub(super) fn build_skill_reloader(
     workspace: Option<PathBuf>,
     home: Option<&Path>,
 ) -> Option<Arc<dyn SkillReloadGuard>> {
-    let home = home
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(PathBuf::from));
+    let home = home.map(PathBuf::from).or_else(home_directory);
     SkillReloader::start(
         Arc::clone(registry),
         Arc::clone(conditional),

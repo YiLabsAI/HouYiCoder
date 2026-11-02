@@ -14,6 +14,7 @@
 
 #![cfg(unix)]
 
+use houyicoder_api::path::home_directory;
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -33,7 +34,7 @@ use std::process::id;
 pub fn sessions_dir() -> PathBuf {
     let base = var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .or_else(|| var_os("HOME").map(PathBuf::from))
+        .or_else(home_directory)
         .unwrap_or_else(temp_dir);
     let dir = base.join("houyicoder").join("sessions");
     create_dir_all(&dir).ok();

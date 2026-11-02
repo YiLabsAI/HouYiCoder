@@ -20,7 +20,7 @@ use houyicoder_permission::DefaultModeGate;
 use houyicoder_permission::{Effect, Scope};
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all, write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::Arc;
 
@@ -751,5 +751,33 @@ fn test_inherited_hook_rewrite() {
         again.args[1],
         format!("python3 {expanded}"),
         "an argument already naming the active tree survives a second pass"
+    );
+}
+
+/// A registry with no override discovers under the environment's home.
+///
+/// The discovery API reads None as "skip the user-level roots", which is right
+/// for a closed test and wrong for a production session: reading the assembly's
+/// None the same way dropped every skill installed under the machine home. This
+/// pins the resolution here, where make check sees it on every platform, rather
+/// than leaving it to a terminal-level case on one platform.
+#[test]
+fn test_discovery_home_resolves_env() {
+    let env_home = PathBuf::from("/home/ada");
+    assert_eq!(
+        discovery_home(None, Some(env_home.clone())),
+        Some(env_home),
+        "no override must resolve to the environment home, never to a skip"
+    );
+    let override_home = PathBuf::from("/tmp/isolated-home");
+    assert_eq!(
+        discovery_home(Some(&override_home), Some(PathBuf::from("/home/ada"))),
+        Some(override_home),
+        "an override wins over the environment"
+    );
+    assert_eq!(
+        discovery_home(None, None),
+        None,
+        "no home anywhere leaves the user-level roots unreadable, not invented"
     );
 }

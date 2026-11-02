@@ -4,6 +4,7 @@ use crate::skill::ProjectIdentity;
 use crate::skill::SkillFamily;
 use crate::skill::SkillProvenance;
 use crate::skill::SkillSource;
+use std::env;
 use std::sync::atomic::AtomicU32;
 
 /// A unique temp directory + skill-grants.json path for one test.
@@ -61,17 +62,19 @@ fn test_grant_unknown_empty() {
 }
 
 #[test]
-fn test_grant_path_requires_home() {
-    assert!(grant_path(None, None).is_err());
-    assert!(grant_path(Some(OsString::new()), None).is_err());
-    assert!(grant_path(Some(OsString::from("relative")), None).is_err());
+fn test_grant_path_refuses_rel() {
+    assert!(grant_path(None).is_err(), "no home is a refusal");
+    assert!(
+        grant_path(Some(PathBuf::new())).is_err(),
+        "an empty home is a refusal"
+    );
+    assert!(
+        grant_path(Some(PathBuf::from("relative"))).is_err(),
+        "a relative home would put the authority file in the workspace"
+    );
     let home = env::temp_dir().join("grant-home");
     assert_eq!(
-        grant_path(
-            Some(OsString::from("relative")),
-            Some(home.clone().into_os_string())
-        )
-        .expect("absolute fallback"),
+        grant_path(Some(home.clone())).expect("absolute home accepted"),
         home.join(".houyicoder").join("skill-grants.json")
     );
 }

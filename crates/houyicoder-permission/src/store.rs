@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use crate::rule::Rule;
 use houyicoder_api::path::{expand_home, home_directory};
 use std::env::current_dir;
-use std::env::var_os;
 use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -490,13 +489,11 @@ impl RuleStore for FileRuleStore {
 }
 
 /// Resolve the user home directory. Falls back to the project-local dot
-/// directory when HOME is unset (a sandboxed environment) so the user scope
-/// still has a writable path; the project scope is the authoritative one in
-/// that case anyway.
+/// directory when the platform reports no home (a sandboxed environment) so the
+/// user scope still has a writable path; the project scope is the authoritative
+/// one in that case anyway.
 fn home_dir() -> PathBuf {
-    var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    home_directory().unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Whether two spellings name the same granted directory. Windows compares

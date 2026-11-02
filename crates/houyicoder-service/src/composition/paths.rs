@@ -7,6 +7,7 @@
 //! a std canonicalize form would never prefix-match the grants, and git for
 //! Windows is widely reported to reject it as well.
 
+use houyicoder_api::path::home_directory;
 use std::env::current_dir;
 use std::env::var;
 #[cfg(unix)]
@@ -121,12 +122,7 @@ pub fn snapshot_store_root_with_home(workspace: &Path, home: Option<&Path>) -> P
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
         })
-        .or_else(|| {
-            var("HOME")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .map(|home| PathBuf::from(home).join(".houyicoder"))
-        })
+        .or_else(|| home_directory().map(|home| home.join(".houyicoder")))
         .map(|cfg| cfg.join("snapshots"))
         .filter(|dir| same_filesystem(workspace, dir));
     match home_store {
@@ -209,10 +205,10 @@ pub fn session_log_root() -> PathBuf {
     {
         return PathBuf::from(p);
     }
-    let home = var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::new());
-    home.join(".houyicoder").join("sessions")
+    home_directory()
+        .unwrap_or_default()
+        .join(".houyicoder")
+        .join("sessions")
 }
 
 #[cfg(test)]
