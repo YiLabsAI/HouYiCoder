@@ -255,6 +255,37 @@ fn test_stamp_read_refuses_file() {
         matches!(error, WorktreeError::State { .. }),
         "expected State, got {error:?}"
     );
+    // A file that resolves on its own is refused on the same terms: the stamp
+    // answers for a directory, and a path that is not one has no numbers.
+    let direct = TargetStamp::read(&file).expect_err("a file is not a directory");
+    assert!(
+        matches!(direct, WorktreeError::State { .. }),
+        "expected State, got {direct:?}"
+    );
+    drop(remove_dir_all(&repo));
+}
+
+/// A path whose parent names a file is one no read could resolve, whatever
+/// error kind the platform reports for it: the check reads the parent, so it
+/// answers the same on every platform rather than following the platform's
+/// own mapping of an unresolvable path.
+#[cfg(windows)]
+#[test]
+fn test_parent_names_file() {
+    let repo = temp_repo("parent-file");
+    let file = repo.join("plain.txt");
+    write(&file, "keep").expect("write file");
+    let dir = repo.join("subdir");
+    create_dir_all(&dir).expect("directory");
+
+    assert!(
+        parent_names_file(&file.join("child")),
+        "a path under a file is unresolvable"
+    );
+    assert!(
+        !parent_names_file(&dir.join("child")),
+        "a path under a directory resolves"
+    );
     drop(remove_dir_all(&repo));
 }
 

@@ -16,6 +16,8 @@ use super::super::identify::TargetStamp;
 use super::super::identify::WorktreeRole;
 use super::super::identify::WorktreeTarget;
 use super::super::identify::listed_in_git;
+#[cfg(windows)]
+use super::super::identify::parent_names_file;
 use super::super::identify::resolve_identity;
 use super::super::preview::MergeState;
 use super::super::preview::merge_state;
@@ -439,6 +441,21 @@ fn finish_pending(
     let resolved = match dunce::canonicalize(&expected) {
         Ok(path) => path,
         Err(error) if error.kind() == ErrorKind::NotFound => {
+            // Windows-only: a platform that reports a path under a file as
+            // not-found would read a leftover whose parent is a file as a
+            // directory that already went away and delete the branch for it.
+            // Refusing keeps the record and the branch. Unix reports
+            // not-a-directory directly, so the check never fires there and
+            // the general error arm refuses instead.
+            #[cfg(windows)]
+            if parent_names_file(&expected) {
+                return Err(WorktreeError::CleanupPending {
+                    path: expected,
+                    reason: "its parent is not a directory".to_string(),
+                });
+            }
+            #[cfg(not(windows))]
+            drop(error);
             return delete_branch(repo_root, record, force, expected);
         }
         Err(error) => {

@@ -388,14 +388,39 @@ pub(super) struct TargetStamp {
 
 impl TargetStamp {
     /// The numbers the file system gives a directory, or None when there is no
-    /// directory at the path to take them from.
+    /// directory at the path to take them from. A path the file system cannot
+    /// resolve for any other reason — on Windows a path that descends from a
+    /// file reports not-found, not not-a-directory — is refused rather than
+    /// read as a directory that is already gone.
     pub(super) fn read(path: &Path) -> Result<Option<Self>, WorktreeError> {
         match symlink_metadata(path) {
             Ok(meta) => {
+                if !meta.is_dir() {
+                    return Err(WorktreeError::State {
+                        path: path.to_path_buf(),
+                        reason: "the path is not a directory".to_string(),
+                    });
+                }
                 let (device, inode) = stamp_of(&meta);
                 Ok(Some(Self { device, inode }))
             }
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                // Windows-only: a platform that reports a path under a file as
+                // not-found needs the parent read to tell it apart from a
+                // directory that went away. Unix reports not-a-directory
+                // directly, so the branch below never fires there and the
+                // general error arm refuses the path instead.
+                #[cfg(windows)]
+                if parent_names_file(path) {
+                    return Err(WorktreeError::State {
+                        path: path.to_path_buf(),
+                        reason: "the path descends from a file".to_string(),
+                    });
+                }
+                #[cfg(not(windows))]
+                drop(error);
+                Ok(None)
+            }
             Err(error) => Err(WorktreeError::State {
                 path: path.to_path_buf(),
                 reason: format!("read the directory: {error}"),
@@ -414,6 +439,16 @@ impl TargetStamp {
             _ => Err("it was replaced or removed after it was checked".to_string()),
         }
     }
+}
+
+/// Whether the directory one step up names a file, which makes the path below
+/// it one no read could ever resolve. Windows reports such a path as
+/// not-found, so a caller that distinguishes "gone" from "unreadable" by the
+/// error kind alone reads a path under a file as a directory that went away.
+#[cfg(windows)]
+pub(super) fn parent_names_file(path: &Path) -> bool {
+    path.parent()
+        .is_some_and(|parent| symlink_metadata(parent).is_ok_and(|meta| !meta.is_dir()))
 }
 
 /// The numbers that name a directory on its file system. Zero on a platform

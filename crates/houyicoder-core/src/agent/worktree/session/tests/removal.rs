@@ -289,10 +289,12 @@ fn test_remove_leaves_sibling() {
     assert!(kept.worktree_path.exists(), "the sibling still exists");
     let listed = run_git(&repo, &["worktree", "list", "--porcelain"]).expect("list worktrees");
     let sibling = dunce::canonicalize(&kept.worktree_path).expect("resolve the sibling");
-    assert!(
-        listed.contains(&sibling.to_string_lossy().into_owned()),
-        "the sibling is still registered"
-    );
+    // Git prints worktree paths with forward slashes while a canonicalized
+    // path carries the platform separator, so both sides are compared after
+    // one separator normalization (a no-op on Unix).
+    let listed = listed.replace('\\', "/");
+    let sibling = sibling.to_string_lossy().replace('\\', "/");
+    assert!(listed.contains(&sibling), "the sibling is still registered");
     drop(fs::remove_dir_all(&repo));
 }
 
