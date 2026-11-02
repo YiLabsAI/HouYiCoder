@@ -148,6 +148,9 @@ pub fn build_runner_for_resume_export(
         append_notify,
         resolved,
         descriptor_store.clone(),
+        // The resume entries read user-level state from the environment,
+        // like the interactive entry they sit beside.
+        None,
     );
     // Opening a session through resume is its own entry: the user is coming
     // back, so a summary of what they left is owed whether or not they look
@@ -315,6 +318,9 @@ pub fn build_runner_for_resume_sid(
         append_notify,
         resolved,
         descriptor_store.clone(),
+        // The resume entries read user-level state from the environment,
+        // like the interactive entry they sit beside.
+        None,
     );
     // Same entry as the export path: the session is being reopened after an
     // absence, which is what a resume recap describes.
@@ -422,6 +428,9 @@ pub fn build_runner_for_fork(
         append_notify,
         resolved,
         descriptor_store.clone(),
+        // The resume entries read user-level state from the environment,
+        // like the interactive entry they sit beside.
+        None,
     );
     Ok(ResumedRunner {
         assembled,

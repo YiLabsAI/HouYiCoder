@@ -179,6 +179,9 @@ fn test_release_joins_children_first() {
         let mut options = BuildRunnerOptions::default();
         options.backend = Some(backend);
         options.provider = Some(ProviderResolution::stub());
+        // The assembly reads user-level state from the root it is handed,
+        // not the developer's machine home.
+        options.home = Some(root.clone());
         let bundle = build_runner(options);
         let sid_str = bundle.session.to_string();
         let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
@@ -355,6 +358,9 @@ fn test_release_waits_worktree_cleanup() {
             warnings: Vec::new(),
             facts: ProviderFacts::default(),
         });
+        // The assembly reads user-level state from the root it is handed,
+        // not the developer's machine home.
+        options.home = Some(root.clone());
         let bundle = build_runner(options);
         let sid_str = bundle.session.to_string();
         let lock = SessionLock::acquire(&sid_str, &root).expect("first acquire");
@@ -539,6 +545,10 @@ fn start_host_for_test(
     let settings_path = root.join("settings.json");
     let mut options = BuildRunnerOptions::default();
     options.provider = Some(ProviderResolution::stub());
+    // The assembly reads user-level state from the root it is handed, not
+    // the developer's machine home, whose snapshot and session trees the
+    // skill watcher would rescan on every poll.
+    options.home = Some(root.to_path_buf());
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");

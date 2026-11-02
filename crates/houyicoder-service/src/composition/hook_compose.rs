@@ -406,12 +406,22 @@ pub(super) struct SkillRuntime {
     pub(super) hook_registry: Arc<HookRegistry>,
     pub(super) hook_reloader: Arc<ConfigHookReloader>,
     pub(super) registrar: Arc<SkillHookRegistrar>,
+    /// The home user-level state is read from, or None when the assembly
+    /// reads the environment.
+    pub(super) home: Option<PathBuf>,
 }
 
 impl SkillRuntime {
     /// Discover skills, load grants, and build the session hook registry.
-    pub(super) fn new(workspace: Option<&Path>, gate: Arc<dyn ModeGate>) -> Self {
-        let (registry, conditional) = build_skill_registry_and_activator(workspace);
+    /// The home names where user-level state is read from: None keeps the
+    /// environment read, and a caller driving the assembly inside a test
+    /// passes its own directory so the machine's real home never enters.
+    pub(super) fn new(
+        workspace: Option<&Path>,
+        home: Option<&Path>,
+        gate: Arc<dyn ModeGate>,
+    ) -> Self {
+        let (registry, conditional) = build_skill_registry_and_activator(workspace, home);
         let active_skill = Arc::new(Mutex::new(None));
         let grants = build_skill_grants();
         let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
@@ -431,6 +441,7 @@ impl SkillRuntime {
             hook_registry,
             hook_reloader,
             registrar,
+            home: home.map(Path::to_path_buf),
         }
     }
 
@@ -506,6 +517,7 @@ impl SkillRuntime {
             &self.conditional,
             &self.registrar,
             workspace,
+            self.home.as_deref(),
         ));
         runner
     }
@@ -517,8 +529,9 @@ impl SkillRuntime {
 /// callers that need the engine-facing port coerce to Arc<dyn SkillRegistry>.
 pub(super) fn build_skill_registry_and_activator(
     workspace: Option<&Path>,
+    home: Option<&Path>,
 ) -> (Arc<SkillRegistryImpl>, Arc<dyn ConditionalSkillActivator>) {
-    let registry = Arc::new(SkillRegistryImpl::discover(workspace));
+    let registry = Arc::new(SkillRegistryImpl::discover_with_home(workspace, home));
     let activator =
         build_conditional_activator(Arc::clone(&registry) as Arc<dyn SkillRegistry>, workspace);
     (registry, activator)
@@ -566,8 +579,11 @@ pub(super) fn build_skill_reloader(
     conditional: &Arc<dyn ConditionalSkillActivator>,
     registrar: &Arc<SkillHookRegistrar>,
     workspace: Option<PathBuf>,
+    home: Option<&Path>,
 ) -> Option<Arc<dyn SkillReloadGuard>> {
-    let home = env::var_os("HOME").map(PathBuf::from);
+    let home = home
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(PathBuf::from));
     SkillReloader::start(
         Arc::clone(registry),
         Arc::clone(conditional),

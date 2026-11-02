@@ -3,9 +3,10 @@
 //! tools through the permission gate. Split from the composition root so the
 //! root file stays under the size gate.
 
+use std::path::Path;
 use std::sync::Arc;
 
-use super::paths::snapshot_store_root;
+use super::paths::snapshot_store_root_with_home;
 use houyicoder_api::background::BackgroundCommandLauncher;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::{Tool, ToolProvider};
@@ -40,11 +41,15 @@ pub(super) struct BuiltInToolProvider {
 }
 
 impl BuiltInToolProvider {
-    pub(super) fn new(session: Option<Arc<dyn SandboxSession>>, gate: Arc<dyn ModeGate>) -> Self {
+    pub(super) fn new(
+        session: Option<Arc<dyn SandboxSession>>,
+        gate: Arc<dyn ModeGate>,
+        home: Option<&Path>,
+    ) -> Self {
         let (undo_stack, snapshot_store) = match &session {
             Some(s) => {
                 let workspace = s.workspace_root();
-                let store_root = snapshot_store_root(&workspace);
+                let store_root = snapshot_store_root_with_home(&workspace, home);
                 let store = super::degrade_with_notice(
                     SnapshotStore::new_at(&workspace, store_root),
                     "snapshot store init failed",

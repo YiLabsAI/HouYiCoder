@@ -106,10 +106,21 @@ pub fn workspace_cwd(project: Option<String>) -> String {
 /// volume store would silently turn every snapshot into a full copy, which is
 /// slower and larger than the alternative it was meant to improve.
 pub fn snapshot_store_root(workspace: &Path) -> PathBuf {
-    let home_store = var(houyicoder_config::ENV_HOUYICODER_CONFIG_HOME)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
+    snapshot_store_root_with_home(workspace, None)
+}
+
+/// The same resolution with the home a test handed the assembly: its root
+/// lands inside that directory instead of the environment's, so a test
+/// process never sees (or relinks against) the machine's real snapshots.
+pub fn snapshot_store_root_with_home(workspace: &Path, home: Option<&Path>) -> PathBuf {
+    let home_store = home
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            var(houyicoder_config::ENV_HOUYICODER_CONFIG_HOME)
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
         .or_else(|| {
             var("HOME")
                 .ok()

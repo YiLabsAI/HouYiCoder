@@ -65,6 +65,11 @@ fn start_host(
     let settings_path = root.join("settings.json");
     let mut options = BuildRunnerOptions::default();
     options.provider = Some(ProviderResolution::stub());
+    // The assembly reads user-level state (skills, config, memory roots)
+    // from the home it is handed: the temp root, never the developer's
+    // machine home, whose snapshot and session trees the skill watcher
+    // would rescan on every poll.
+    options.home = Some(root.to_path_buf());
     let bundle = build_runner(options);
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");

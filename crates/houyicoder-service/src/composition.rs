@@ -182,6 +182,11 @@ pub struct BuildRunnerOptions {
     pub provider: Option<ProviderResolution>,
     /// Skip the operating system kernel sandbox fence (the --no-sandbox CLI flag).
     pub no_sandbox: bool,
+    /// The home the assembly reads user-level state from: skills, config,
+    /// sessions, and memory roots. None keeps today's environment read; a
+    /// caller driving the assembly inside a test process passes its own
+    /// directory so the assembly never reads the machine's real home.
+    pub home: Option<PathBuf>,
 }
 
 impl BuildRunnerOptions {
@@ -203,6 +208,7 @@ impl BuildRunnerOptions {
             descriptor_store: Some(Arc::new(FileDescriptorStore::new(root))),
             provider: None,
             no_sandbox: false,
+            home: None,
         }
     }
 }
@@ -261,6 +267,7 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
         append_notify,
         resolved,
         descriptor_store,
+        options.home,
     )
 }
 
@@ -291,6 +298,7 @@ pub(crate) fn assemble(
     append_notify: Arc<Notify>,
     resolved: ProviderResolution,
     descriptor_store: Arc<dyn SessionDescriptorStore>,
+    home: Option<PathBuf>,
 ) -> AssembledRunner {
     let model = model_selection.model;
     let ProviderResolution {
@@ -312,7 +320,11 @@ pub(crate) fn assemble(
         &mut tools,
         &gate_dyn,
     );
-    let skills = SkillRuntime::new(fences.workspace.as_deref(), gate_dyn.clone());
+    let skills = SkillRuntime::new(
+        fences.workspace.as_deref(),
+        home.as_deref(),
+        gate_dyn.clone(),
+    );
     let (runner_settings, runner_settings_warnings) =
         houyicoder_config::load_runner_settings(fences.workspace.as_deref());
     let background_tasks = Arc::new(BackgroundTasks::new());
@@ -369,7 +381,7 @@ pub(crate) fn assemble(
     }
     let (runner, toggle_warnings) = install_workspace_memory(
         runner,
-        fences.workspace,
+        fences.workspace.map(|ws| (ws, home)),
         session,
         provider_for_extractor,
         model,
@@ -561,9 +573,12 @@ fn finish_startup_warnings(
 }
 
 /// Wire workspace-scoped memory, undo handles, and the real cwd handle onto the runner.
+/// The workspace pair carries where the session's state is read from: the
+/// directory the session works in, and the home user-level state resolves
+/// against (None reads the environment, like the interactive entry).
 fn install_workspace_memory(
     runner: Runner,
-    workspace: Option<PathBuf>,
+    workspace: Option<(PathBuf, Option<PathBuf>)>,
     session: SessionId,
     provider_for_extractor: Arc<dyn ModelProvider>,
     model_for_extractor: String,
@@ -571,9 +586,9 @@ fn install_workspace_memory(
     worktree_controller: Option<&Arc<WorktreeController>>,
 ) -> (Runner, Vec<ConfigWarning>) {
     match workspace {
-        Some(ws) => {
+        Some((ws, home)) => {
             let memory_provider: Arc<dyn MemoryProvider> =
-                Arc::new(memory::memory_provider_for(&ws, None));
+                Arc::new(memory::memory_provider_for(&ws, home.as_deref()));
             let session_log_root = runner.store().session_log_root();
             let (runtime, warnings) = memory::build_memory_runtime(
                 runner.store(),
@@ -630,11 +645,18 @@ fn register_builtin_tools(
     foreground_budget: Duration,
 ) -> BuiltInSetup {
     let file_transaction = file_write_journal(store);
-    let builtin = BuiltInToolProvider::new(fences.sandbox_session.clone(), Arc::clone(&gate_dyn))
-        .with_activator(Some(Arc::clone(&skills.conditional)))
-        .with_active_skill(skills.discovery_skill())
-        .with_transaction(file_transaction.clone())
-        .with_background_commands(background_tasks, foreground_budget);
+    // The home comes from the skill runtime the assembly resolved it into:
+    // the snapshot store roots itself beside the other user-level state, so
+    // the two can never disagree about whose home either read.
+    let builtin = BuiltInToolProvider::new(
+        fences.sandbox_session.clone(),
+        Arc::clone(&gate_dyn),
+        skills.home.as_deref(),
+    )
+    .with_activator(Some(Arc::clone(&skills.conditional)))
+    .with_active_skill(skills.discovery_skill())
+    .with_transaction(file_transaction.clone())
+    .with_background_commands(background_tasks, foreground_budget);
     let undo_handles = builtin.undo_handles();
     tool_registration::register_provider_tools(tools, gate_dyn, builtin);
     BuiltInSetup {

@@ -334,6 +334,9 @@ fn test_pair_completes_handshake() {
     let root = temp_root();
     let mut options = BuildRunnerOptions::default();
     options.provider = Some(ProviderResolution::stub());
+    // The assembly reads user-level state from the root it is handed, not
+    // the developer's machine home.
+    options.home = Some(root.clone());
     let bundle = build_runner(options);
     let (runner_arc, mut client, _startup_warnings, host) =
         start_local_server(bundle, Some(root.join("settings.json")), root.clone());
