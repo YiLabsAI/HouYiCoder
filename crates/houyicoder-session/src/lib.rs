@@ -399,9 +399,25 @@ impl SessionStore {
     /// records the epoch it read holds. Zero records leaves the session with no
     /// log state, so a later read folds again rather than answering from a
     /// window that describes nothing.
+    ///
+    /// A backend that serves byte windows is folded one window at a time. One
+    /// with no byte log is read whole instead: its replay is the only record
+    /// source, so a paged read over it answers from the state that read holds
+    /// -- the same branch the resume path takes. Without it, every walk over
+    /// an in-memory session saw a fold of bytes the backend never had and
+    /// answered an empty history.
     fn fold_session(&self, session: SessionId) -> Result<usize, ContextError> {
-        let history =
-            log_windows::fold_epoch(self.backend.as_ref(), session, self.states.restore_budget())?;
+        let history = if self.backend.supports_log_windows() {
+            log_windows::fold_epoch(self.backend.as_ref(), session, self.states.restore_budget())?
+        } else {
+            let replayed = self.backend.read_log(session)?;
+            let boundary = epoch_start(&replayed);
+            // Dropped in place: an event carries tool payloads and message
+            // text, so slicing to a new vector would copy the whole suffix.
+            let mut replayed = replayed;
+            replayed.drain(..boundary);
+            RestoredHistory::from_events(replayed)
+        };
         let rows = history.rows();
         self.states.commit_restore(session, history);
         Ok(rows)
@@ -411,7 +427,7 @@ impl SessionStore {
     /// with its log folded in first when this process has not read the session.
     /// None when the process holds no window for the session and its fold found
     /// no record.
-    pub fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
+    pub fn replay_starts_at(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
         if let Some(base) = self.states.window_start(session) {
             return Ok(Some(base));
         }
@@ -689,8 +705,8 @@ impl SessionLog for SessionStore {
     ) -> Result<TrajectoryPage, ContextError> {
         Self::trajectory_page(self, session, from, limit)
     }
-    fn resident_base(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
-        Self::resident_base(self, session)
+    fn replay_starts_at(&self, session: SessionId) -> Result<Option<usize>, ContextError> {
+        Self::replay_starts_at(self, session)
     }
     fn last_trajectory_id(&self, session: SessionId) -> Option<EventId> {
         Self::last_trajectory_id(self, session)
