@@ -413,9 +413,9 @@ pub(super) struct SkillRuntime {
 
 impl SkillRuntime {
     /// Discover skills, load grants, and build the session hook registry.
-    /// The home names where user-level state is read from: None keeps the
-    /// environment read, and a caller driving the assembly inside a test
-    /// passes its own directory so the machine's real home never enters.
+    /// The home names where skill discovery, its reload watch, and the
+    /// grant file resolve: None keeps the environment read, and a caller
+    /// driving the assembly inside a test passes its own directory.
     pub(super) fn new(
         workspace: Option<&Path>,
         home: Option<&Path>,
@@ -423,7 +423,7 @@ impl SkillRuntime {
     ) -> Self {
         let (registry, conditional) = build_skill_registry_and_activator(workspace, home);
         let active_skill = Arc::new(Mutex::new(None));
-        let grants = build_skill_grants();
+        let grants = build_skill_grants(home);
         let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
         let (hook_registry, hook_reloader) =
             build_session_registry_with_reloader(gate, Arc::clone(&launcher), workspace);
@@ -531,21 +531,35 @@ pub(super) fn build_skill_registry_and_activator(
     workspace: Option<&Path>,
     home: Option<&Path>,
 ) -> (Arc<SkillRegistryImpl>, Arc<dyn ConditionalSkillActivator>) {
-    let registry = Arc::new(SkillRegistryImpl::discover_with_home(workspace, home));
+    // A None home means the assembly reads the environment, so the plain
+    // discover path applies: passing None to discover_with_home would skip
+    // the user-level roots entirely and drop every skill installed under
+    // the machine home from a production session.
+    let registry = Arc::new(match home {
+        Some(home) => SkillRegistryImpl::discover_with_home(workspace, Some(home)),
+        None => SkillRegistryImpl::discover(workspace),
+    });
     let activator =
         build_conditional_activator(Arc::clone(&registry) as Arc<dyn SkillRegistry>, workspace);
     (registry, activator)
 }
 
-/// Build the user grant store. Missing home state disables persistence
-/// rather than placing an authority file in the workspace.
-pub(super) fn build_skill_grants() -> Option<Arc<SkillGrantStore>> {
-    match SkillGrantStore::new() {
-        Ok(store) => Some(Arc::new(store)),
-        Err(e) => {
-            tracing::warn!("skill grant store unavailable: {e}");
-            None
+/// Build the user grant store at the home the assembly was handed, or at
+/// the environment's when none was. Missing home state disables
+/// persistence rather than placing an authority file in the workspace.
+pub(super) fn build_skill_grants(home: Option<&Path>) -> Option<Arc<SkillGrantStore>> {
+    match home {
+        Some(home) => {
+            let path = home.join(".houyicoder").join("skill-grants.json");
+            Some(Arc::new(SkillGrantStore::with_path(path)))
         }
+        None => match SkillGrantStore::new() {
+            Ok(store) => Some(Arc::new(store)),
+            Err(e) => {
+                tracing::warn!("skill grant store unavailable: {e}");
+                None
+            }
+        },
     }
 }
 

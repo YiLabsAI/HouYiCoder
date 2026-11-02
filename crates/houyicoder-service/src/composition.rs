@@ -182,10 +182,12 @@ pub struct BuildRunnerOptions {
     pub provider: Option<ProviderResolution>,
     /// Skip the operating system kernel sandbox fence (the --no-sandbox CLI flag).
     pub no_sandbox: bool,
-    /// The home the assembly reads user-level state from: skills, config,
-    /// sessions, and memory roots. None keeps today's environment read; a
-    /// caller driving the assembly inside a test process passes its own
-    /// directory so the assembly never reads the machine's real home.
+    /// The home user-level state resolves against: the memory roots, skill
+    /// discovery and its reload watch, the skill grant file, and the
+    /// snapshot store. None keeps the environment read; a caller driving the
+    /// assembly inside a test process passes its own directory so those
+    /// readers never touch the machine's real home. Settings and the
+    /// session log root are not routed through this home.
     pub home: Option<PathBuf>,
 }
 
