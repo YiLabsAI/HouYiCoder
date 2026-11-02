@@ -223,6 +223,18 @@ pub trait SpawnHandle: Send + Sync {
         false
     }
 
+    /// Hand a running foreground child to the background so the turn that
+    /// spawned it stops waiting.
+    ///
+    /// The child keeps running and its ending reaches the parent as a
+    /// notification, exactly as if it had been spawned in the background. The
+    /// default returns false (no multi-agent runtime wired, or nothing to
+    /// promote); a runtime with a child registry overrides it. Returns true
+    /// when a live foreground child was promoted.
+    fn background_child(&self, _child_id: &str) -> bool {
+        false
+    }
+
     /// Kill every live background child at once: cancel each lifecycle
     /// token so the drive loops return Interrupted (terminal). The fleet
     /// strip drops each as its completion publishes. The default returns 0

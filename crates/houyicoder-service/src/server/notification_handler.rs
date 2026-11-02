@@ -69,12 +69,7 @@ impl Server {
                 }
             }
             "session/inject_child" => {
-                let Some(child_sid) = notif
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("childSid"))
-                    .and_then(|v| v.as_str())
-                else {
+                let Some(child_sid) = child_sid(notif) else {
                     return;
                 };
                 let text = notif
@@ -92,26 +87,22 @@ impl Server {
                 }
             }
             "session/cancel_child_turn" => {
-                let Some(child_sid) = notif
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("childSid"))
-                    .and_then(|v| v.as_str())
-                else {
+                let Some(child_sid) = child_sid(notif) else {
                     return;
                 };
                 self.runner.cancel_child(child_sid);
             }
             "session/kill_child" => {
-                let Some(child_sid) = notif
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("childSid"))
-                    .and_then(|v| v.as_str())
-                else {
+                let Some(child_sid) = child_sid(notif) else {
                     return;
                 };
                 self.runner.kill_child(child_sid);
+            }
+            "session/background_child" => {
+                let Some(child_sid) = child_sid(notif) else {
+                    return;
+                };
+                self.runner.background_child(child_sid);
             }
             "session/kill_all" => {
                 self.runner.kill_all_children();
@@ -123,3 +114,14 @@ impl Server {
 
 #[cfg(test)]
 mod tests;
+
+/// The child a session notification names. Every child-scoped notification
+/// carries its target under the same parameter, so one reader serves them all;
+/// an absent or non-text target is a no-op rather than a wrong child.
+fn child_sid(notif: &AcpNotification) -> Option<&str> {
+    notif
+        .params
+        .as_ref()
+        .and_then(|p| p.get("childSid"))
+        .and_then(|v| v.as_str())
+}

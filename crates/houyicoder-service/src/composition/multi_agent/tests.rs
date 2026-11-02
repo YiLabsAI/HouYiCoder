@@ -1459,7 +1459,7 @@ fn test_cancel_child_turn_registry() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    runtime.register_child("c1", &runner, CancellationToken::new());
+    runtime.register_child("c1", &runner, CancellationToken::new(), None, None);
     assert!(
         runtime.cancel_child_turn("c1"),
         "a registered live child upgrades and returns true"
@@ -1485,7 +1485,7 @@ fn test_kill_child_registry() {
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    runtime.register_child("c1", &runner, CancellationToken::new());
+    runtime.register_child("c1", &runner, CancellationToken::new(), None, None);
     assert!(
         runtime.kill_child("c1"),
         "a registered live child upgrades + abort fires → true"
@@ -1513,8 +1513,8 @@ fn test_kill_all_children_registry() {
         RunnerConfig::default(),
     ));
     let r2 = Arc::new(r1.clone());
-    runtime.register_child("c1", &r1, CancellationToken::new());
-    runtime.register_child("c2", &r2, CancellationToken::new());
+    runtime.register_child("c1", &r1, CancellationToken::new(), None, None);
+    runtime.register_child("c2", &r2, CancellationToken::new(), None, None);
     let killed = runtime.kill_all_children();
     assert_eq!(killed, 2, "two live children aborted + counted");
     // A second sweep re-aborts already-cancelled tokens (idempotent) while
@@ -1945,6 +1945,7 @@ fn test_terminal_handoff() {
 
 mod admission_credential;
 mod join_children;
+mod promote;
 mod shutdown_gate;
 mod subtree_usage;
 mod timeout;

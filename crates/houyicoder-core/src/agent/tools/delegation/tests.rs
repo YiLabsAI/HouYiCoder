@@ -27,14 +27,34 @@ fn test_schema_has_fields() {
     assert!(props.contains_key("prompt"));
     assert!(props.contains_key("subagent_type"));
     assert!(props.contains_key("isolation"));
-    // Background execution remains hidden until the TUI can stop a child.
+    // The fleet strip can stop a running child, so a background delegation is
+    // now a capability the model may choose instead of a hidden wire field.
     assert!(
-        !props.contains_key("run_in_background"),
-        "run_in_background must stay out of the schema until kill UX lands"
+        props.contains_key("run_in_background"),
+        "run_in_background must be offered once the child can be stopped"
     );
     let required = schema.get("required").unwrap().as_array().unwrap();
     assert!(required.iter().any(|v| v == "description"));
     assert!(required.iter().any(|v| v == "prompt"));
+    assert!(
+        !required.iter().any(|v| v == "run_in_background"),
+        "omitting the flag keeps the foreground default"
+    );
+}
+
+/// The description has to say when each mode applies and what the model owes
+/// a background child, or the model will pick foreground by habit and keep
+/// blocking its own turn.
+#[test]
+fn test_description_names_both_modes() {
+    let t = make_tool();
+    let d = t.description();
+    assert!(d.contains("Foreground or background"));
+    assert!(d.contains("run_in_background"));
+    assert!(
+        d.contains("do not poll"),
+        "a background child must not be polled: {d}"
+    );
 }
 
 #[test]

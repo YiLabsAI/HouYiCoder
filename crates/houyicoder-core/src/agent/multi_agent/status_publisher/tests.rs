@@ -61,3 +61,43 @@ fn test_completion_maps_run_outcome() {
         CompletionStatus::TurnLimit
     );
 }
+
+/// A foreground child handed to the background while it runs must still
+/// notify the parent. The mode is read when the ending is published, not when
+/// the publisher was built, so the promotion reaches the notification.
+#[test]
+fn test_promoted_child_notifies() {
+    let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let publisher = ChildStatusPublisher::new(Arc::clone(&bus), child(ChildRunMode::Foreground));
+    // The reader promotes it mid-flight, exactly as the runtime does.
+    publisher.backgrounded().store(true, Ordering::Release);
+    publisher.handle(RunLifecycleEvent::Completed {
+        status: RunCompletionStatus::Completed,
+        summary: "done".into(),
+    });
+    assert!(
+        matches!(
+            completed.try_recv().expect("completion"),
+            BusMessage::Completed { child, .. } if child.run_mode == ChildRunMode::Background
+        ),
+        "a promoted child's ending must read as a background ending"
+    );
+}
+
+/// Without a promotion the ending stays a foreground ending, so the parent is
+/// not notified twice for a child it already collected.
+#[test]
+fn test_unpromoted_child_stays_foreground() {
+    let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let publisher = ChildStatusPublisher::new(Arc::clone(&bus), child(ChildRunMode::Foreground));
+    publisher.handle(RunLifecycleEvent::Completed {
+        status: RunCompletionStatus::Completed,
+        summary: "done".into(),
+    });
+    assert!(matches!(
+        completed.try_recv().expect("completion"),
+        BusMessage::Completed { child, .. } if child.run_mode == ChildRunMode::Foreground
+    ));
+}

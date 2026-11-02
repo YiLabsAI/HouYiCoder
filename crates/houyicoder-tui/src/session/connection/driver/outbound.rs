@@ -11,9 +11,9 @@ use crate::agent_message::ClientCommand;
 
 use super::Outbound;
 use super::{
-    cancel_child_turn_notification, cancel_notification, focus_notification,
-    inject_child_notification, inject_notification, kill_all_notification, kill_child_notification,
-    queue_remove_notification,
+    background_child_notification, cancel_child_turn_notification, cancel_notification,
+    focus_notification, inject_child_notification, inject_notification, kill_all_notification,
+    kill_child_notification, queue_remove_notification,
 };
 
 fn request(req_id: RequestId, payload: FrontendRequest) -> Outbound {
@@ -209,6 +209,9 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
         }
         // The child's lifecycle ends; its completion drops the strip row.
         ClientCommand::KillChild { child_sid } => notice_frame(kill_child_notification(&child_sid)),
+        ClientCommand::BackgroundChild { child_sid } => {
+            notice_frame(background_child_notification(&child_sid))
+        }
         ClientCommand::KillAllChildren => notice_frame(kill_all_notification()),
         ClientCommand::ReportFocus { focused } => notice_frame(focus_notification(focused)),
         // Only the exact identified queue item leaves the queue.

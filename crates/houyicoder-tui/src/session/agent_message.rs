@@ -610,6 +610,13 @@ pub enum ClientCommand {
     KillChild {
         child_sid: String,
     },
+    /// Hand a running foreground child to the background so the turn that
+    /// spawned it stops waiting and the composer is free again. The child
+    /// keeps running; its ending arrives as a notification. Fire-and-forget;
+    /// a no-op when the child is not a live foreground child.
+    BackgroundChild {
+        child_sid: String,
+    },
     /// Remove one identified queued message. A delayed removal is a no-op when
     /// that exact item was already drained, even if equal text was re-enqueued.
     QueueRemove {

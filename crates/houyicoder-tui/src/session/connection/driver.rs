@@ -589,5 +589,14 @@ pub(crate) fn kill_child_notification(child_sid: &str) -> AcpNotification {
     )
 }
 
+/// Ask the host to hand a running foreground child to the background. The
+/// child keeps running; the request only ends the turn's wait for it.
+pub(crate) fn background_child_notification(child_sid: &str) -> AcpNotification {
+    AcpNotification::new(
+        "session/background_child",
+        serde_json::json!({ "childSid": child_sid }),
+    )
+}
+
 #[cfg(test)]
 mod tests;

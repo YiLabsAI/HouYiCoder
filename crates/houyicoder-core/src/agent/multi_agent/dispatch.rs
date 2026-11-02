@@ -67,6 +67,16 @@ impl Runner {
         }
     }
 
+    /// Hand a running foreground child to the background (the fleet strip
+    /// promote path). Returns false when no runtime is attached or the child
+    /// is not a live foreground child.
+    pub fn background_child(&self, child_id: &str) -> bool {
+        match self.spawn_handle.as_ref() {
+            Some(h) => h.background_child(child_id),
+            None => false,
+        }
+    }
+
     /// Kill every live background child at once (the fleet kill-all path).
     /// Returns the count killed; 0 when no runtime is attached.
     pub fn kill_all_children(&self) -> usize {

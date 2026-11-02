@@ -7,6 +7,7 @@ use houyicoder_api::skill::SkillRegistry;
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{SessionDescriptorStore, SessionEvent, SessionId};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::agent::append::new_event;
 use crate::agent::runner_config::RunnerConfig;
@@ -134,6 +135,13 @@ pub struct ChildHandle {
     pub runner: Arc<Runner>,
     pub cancel: CancellationToken,
     pub worktree: Option<ChildWorktree>,
+    /// Whether this child's ending reaches the parent as a notification.
+    ///
+    /// A foreground child can be handed to the background while it runs, so
+    /// the runtime flips this instead of rebuilding the child's status
+    /// publisher. A spawn with no bus carries an unused flag: nothing
+    /// publishes an ending there to read it.
+    pub backgrounded: Arc<AtomicBool>,
 }
 
 /// Why a spawn was rejected. Budget and capability failures are policy,
@@ -253,9 +261,18 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     if let Some(hooks) = req.hooks.clone() {
         runner = runner.with_hooks(hooks);
     }
+    let mut backgrounded = Arc::new(AtomicBool::new(matches!(
+        child.run_mode,
+        ChildRunMode::Background
+    )));
     if let Some(bus) = bus {
         let mut events = AgentEventHandlers::default();
-        events.set_run_lifecycle(Arc::new(ChildStatusPublisher::new(bus.clone(), child)));
+        let publisher = ChildStatusPublisher::new(bus.clone(), child);
+        // The publisher owns the mode its ending is published with, so the
+        // handle carries the publisher's own flag rather than a second copy
+        // that could disagree with it.
+        backgrounded = publisher.backgrounded();
+        events.set_run_lifecycle(Arc::new(publisher));
         runner.set_event_handlers(events);
         // Register a point-to-point inbox so the parent can steer this
         // child mid-task: the drive loop drains the receiver at each turn
@@ -309,6 +326,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         runner,
         cancel,
         worktree,
+        backgrounded,
     })
 }
 

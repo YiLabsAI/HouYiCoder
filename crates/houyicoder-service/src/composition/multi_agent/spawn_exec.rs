@@ -22,6 +22,7 @@ use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_protocol::llm::Usage;
+use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
@@ -41,7 +42,10 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use std::panic::resume_unwind;
 
 mod ceiling;
+mod promote;
+mod request;
 use ceiling::{CeilingEnding, TIMED_OUT_STATUS, await_ceilinged};
+use request::{child_spawn_request, map_registry_err, map_spawn_err};
 
 #[expect(
     clippy::too_many_arguments,
@@ -407,7 +411,13 @@ fn background_driver(
         // Register the live runner for a per-turn abort (the viewed-child Esc
         // path). The lifecycle token is registered alongside so a shutdown
         // stop reaches a child whose run has not started.
-        this.register_child(&child_str, &handle.runner, handle.cancel.clone());
+        this.register_child(
+            &child_str,
+            &handle.runner,
+            handle.cancel.clone(),
+            Some(Arc::clone(&handle.backgrounded)),
+            None,
+        );
         announce_spawn(this.bus.as_ref(), child.clone());
         // Construction succeeded; report the child id before the slower Start
         // hook and run so the caller returns promptly after the child is real.
@@ -497,7 +507,13 @@ pub(super) async fn run_foreground_spawn(
     );
     let task = req.prompt.clone();
     let drivers = Arc::clone(&this.child_drivers);
-    let driver = foreground_driver(
+    // The reader can hand this child to the background while the turn waits,
+    // so the call races the child's outcome against that signal. The ready
+    // channel carries the child id back as soon as the child exists, because
+    // the promotion has to name a child the registry already holds.
+    let promote = Arc::new(Notify::new());
+    let (ready_tx, ready_rx) = channel::<String>();
+    let mut driver = foreground_driver(
         this,
         req,
         slot,
@@ -505,6 +521,8 @@ pub(super) async fn run_foreground_spawn(
         parent_sid,
         reservation.done_tx,
         task,
+        Arc::clone(&promote),
+        ready_tx,
     );
     // Attach the driver's abort entry under the reserved key through the one
     // shared attach path; the completion signal is already on the slot from
@@ -518,11 +536,14 @@ pub(super) async fn run_foreground_spawn(
     if let Err(refused) = attach_driver(drivers, reservation.key, entry) {
         drop(refused);
     }
-    match driver.await {
-        Ok(outcome) => outcome,
-        // A panic inside the driver would otherwise reach the model as an
-        // ordinary refusal, so surface it as the panic it is.
-        Err(join) => resume_unwind(join.into_panic()),
+    // Wait for the child to exist before racing: a promotion has to name a
+    // child the registry already holds, and a construction failure is the
+    // driver's own result, not something this call can report sooner.
+    match ready_rx.await.ok() {
+        Some(child_str) => {
+            promote::await_child_or_promotion(&mut driver, &promote, child_str).await
+        }
+        None => promote::await_driver(driver).await,
     }
 }
 
@@ -533,6 +554,10 @@ pub(super) async fn run_foreground_spawn(
 /// child as an interrupt it can finish from rather than as a dropped future;
 /// a child parked in work that never reads its cancel token holds the slot
 /// and the row until that work returns.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the spawn call's own parts plus the two handles it must hand the driver"
+)]
 fn foreground_driver(
     this: MultiAgentRuntime,
     req: SpawnRequest,
@@ -541,6 +566,8 @@ fn foreground_driver(
     parent_sid: SessionId,
     done_tx: Sender<()>,
     task: String,
+    promote: Arc<Notify>,
+    ready_tx: Sender<String>,
 ) -> JoinHandle<Result<SpawnOutcome, SpawnFailure>> {
     let subagent_type = req.subagent_type.clone();
     // The delegating call's task summary, read before the request moves into
@@ -580,8 +607,19 @@ fn foreground_driver(
         // — but the registry is shared so the async path's contract holds
         // uniformly). The lifecycle token is registered alongside so a
         // shutdown stop reaches a child whose run has not started.
-        this.register_child(&child_str, &handle.runner, handle.cancel.clone());
+        this.register_child(
+            &child_str,
+            &handle.runner,
+            handle.cancel.clone(),
+            Some(Arc::clone(&handle.backgrounded)),
+            Some(Arc::clone(&promote)),
+        );
         announce_spawn(this.bus.as_ref(), child.clone());
+        // The child is real and registered, so the caller can stop waiting on
+        // the outcome and race the promotion signal instead. A dropped
+        // receiver means the caller already returned; the child keeps running
+        // either way, which is the point of the promotion.
+        drop(ready_tx.send(child_str.clone()));
         // SubagentStart fires at the durable spawn boundary (child session
         // exists, SubagentSpawn recorded, run not started); pairs with the
         // later SubagentStop across the SubagentSpawn-to-Return span.
@@ -612,86 +650,4 @@ fn foreground_driver(
             };
         Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
     })
-}
-
-fn map_registry_err(error: AgentError) -> SpawnFailure {
-    match error {
-        AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
-        AgentError::PermissionDenied { .. } => SpawnFailure::CapabilityDenied,
-    }
-}
-
-/// Build the child's spawn request from the resolved definition: the child
-/// prompt, the narrowed tools, and the parent's shared components. One
-/// builder for both run modes so the foreground and background paths cannot
-/// drift apart on what a child carries.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the spawn request has this many independent parts; bundling them would duplicate SpawnRequest"
-)]
-fn child_spawn_request(
-    this: &MultiAgentRuntime,
-    parent_sid: SessionId,
-    args: &SpawnArgs,
-    trigger: TriggerSource,
-    depth: u32,
-    isolation: IsolationMode,
-    child_cancel: CancellationToken,
-    run_mode: ChildRunMode,
-    def: &AgentDefinition,
-) -> SpawnRequest {
-    let base_prompt = match &def.system_prompt {
-        PromptSource::Owned(p) => p.clone(),
-        PromptSource::InheritParent => this.config.instructions.clone(),
-    };
-    let child_config = RunnerConfig {
-        instructions: child_system_prompt(
-            &base_prompt,
-            &this.cwd,
-            &this.config.model,
-            def.omit_project_context,
-        ),
-        // The definition's own ceiling wins, so a read-only child cannot spend
-        // the parent's whole budget on one question. A definition that names
-        // none inherits the parent's, which keeps a hand-written agent from
-        // silently getting a zero-turn run.
-        max_turns: def.max_turns.unwrap_or(this.config.max_turns),
-        ..this.config.clone()
-    };
-    SpawnRequest {
-        parent_sid,
-        parent_store: this.store.clone(),
-        provider: this.provider.clone(),
-        tools: this.tools.narrow(&def.disallowed_tools),
-        config: child_config,
-        subagent_type: args.subagent_type.clone(),
-        prompt: args.prompt.clone(),
-        prompt_summary: args.prompt_summary.clone(),
-        trigger,
-        depth,
-        isolation,
-        worktree_controller: this.worktree_controller.clone(),
-        run_mode,
-        child_cancel,
-        bus: this.bus.clone(),
-        descriptor_store: this.descriptor_store.clone(),
-        skill_registry: this.skill_registry.clone(),
-        conditional: this.conditional.clone(),
-        hooks: this.hooks.clone(),
-        resume: args
-            .resume
-            .as_deref()
-            .and_then(SessionId::from_display_string),
-        timeout_secs: args.timeout_secs,
-    }
-}
-
-fn map_spawn_err(e: SpawnError) -> SpawnFailure {
-    match e {
-        SpawnError::BudgetExceeded => SpawnFailure::BudgetExceeded,
-        SpawnError::CapabilityDenied => SpawnFailure::CapabilityDenied,
-        SpawnError::SpawnRecursive => SpawnFailure::Recursive,
-        SpawnError::BoundaryWriteFailed => SpawnFailure::BoundaryWriteFailed,
-        SpawnError::WorktreeFenceNarrowFail => SpawnFailure::FenceFail,
-    }
 }

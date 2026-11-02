@@ -591,6 +591,38 @@ impl App {
 }
 
 /// Dispatch a key to the right handler based on screen and overlays.
+impl App {
+    /// Stop every running child, behind a two-press confirmation: the first
+    /// press raises the notice, the second within its window sends the kill.
+    /// Killing a whole fan-out is not undoable, so the chord is never a single
+    /// keystroke.
+    fn confirm_kill_all_children(&mut self, running: usize) {
+        let pending = self
+            .ui
+            .notifications
+            .current()
+            .is_some_and(|n| n.key == "kill-agents-confirm");
+        if pending {
+            self.ui.notifications.remove("kill-agents-confirm");
+            if let Err(e) = self.enqueue(ClientCommand::KillAllChildren) {
+                self.system_line(App::enqueue_failure_line("kill", e));
+            }
+            return;
+        }
+        self.ui.notifications.add(Notification::immediate(
+            "kill-agents-confirm",
+            NotifKind::Text {
+                text: format!(
+                    "Press K again to stop {running} background agent{}",
+                    if running == 1 { "" } else { "s" }
+                ),
+                color: None,
+            },
+            Duration::from_millis(2000),
+        ));
+    }
+}
+
 pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     if app.pending_trust().is_some() {
         keys::handle_trust(app, k);
@@ -655,29 +687,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
         let entries = &app.sessions.current.capabilities.fleet.entries;
         let running = entries.iter().filter(|e| e.outcome.is_none()).count();
         if k.code == KeyCode::Char('K') && running > 0 {
-            let pending = app
-                .ui
-                .notifications
-                .current()
-                .is_some_and(|n| n.key == "kill-agents-confirm");
-            if pending {
-                app.ui.notifications.remove("kill-agents-confirm");
-                if let Err(e) = app.enqueue(ClientCommand::KillAllChildren) {
-                    app.system_line(App::enqueue_failure_line("kill", e));
-                }
-            } else {
-                app.ui.notifications.add(Notification::immediate(
-                    "kill-agents-confirm",
-                    NotifKind::Text {
-                        text: format!(
-                            "Press K again to stop {running} background agent{}",
-                            if running == 1 { "" } else { "s" }
-                        ),
-                        color: None,
-                    },
-                    Duration::from_millis(2000),
-                ));
-            }
+            app.confirm_kill_all_children(running);
             return;
         }
         if k.code == KeyCode::Char('k')
@@ -693,6 +703,18 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
             return;
         }
         // No valid running selection: fall through so 'k' types.
+        if k.code == KeyCode::Char('b')
+            && running > 0
+            && let Some(i) = app.ui.fleet.selected()
+            && let Some(e) = entries.get(i).filter(|e| e.outcome.is_none())
+        {
+            if let Err(e) = app.enqueue(ClientCommand::BackgroundChild {
+                child_sid: e.agent_id.clone(),
+            }) {
+                app.system_line(App::enqueue_failure_line("background", e));
+            }
+            return;
+        }
     }
     match app.ui.navigation.screen {
         Screen::Login => keys::handle_login(app, k),

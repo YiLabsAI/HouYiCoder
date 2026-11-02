@@ -80,9 +80,11 @@ After launching you know nothing about what the child found. Never fabricate or 
 - When the task needs context only you hold and cannot be conveyed in a prompt.
 - To break a large task into pieces you should instead do in one turn.
 
-Input: {description: short 3-5 word label, prompt: the task, subagent_type?: agent type (defaults to general-purpose), isolation?: \"none\" | \"worktree\" (default none)}.
+## Foreground or background
+By default the child runs in the foreground: this call returns the child's answer inside the current turn, so use it when your next step needs what the child finds.
+Set run_in_background to true when the work is independent of what you do next. The call then returns at once with the child session id, this turn continues without the child, and the child's ending reaches you as a notification on a later turn. Once a child is in the background, do not poll it, sleep on it, or read its transcript to check progress — keep working or answer the user, and you will be told when it ends.
 
-Subagents run in the foreground, so the parent waits for the child result. Background delegation remains hidden until the TUI can stop a running child.";
+Input: {description: short 3-5 word label, prompt: the task, subagent_type?: agent type (defaults to general-purpose), isolation?: \"none\" | \"worktree\" (default none), run_in_background?: boolean (default false), resume?: child session id to continue, timeout_secs?: wall-clock ceiling}.";
 
 impl Tool for DelegationTool {
     fn name(&self) -> &str {
@@ -107,11 +109,13 @@ impl Tool for DelegationTool {
                     "type": "string",
                     "description": "The type of specialized agent to use; defaults to general-purpose"
                 },
-                // run_in_background is intentionally absent from the schema:
-                // a background child cannot be stopped from the TUI yet, so
-                // exposing it would let an unkillable agent run. The wire
-                // struct still carries the field (defaults false) for when
-                // the kill UX lands.
+                // The wire struct has always carried this field; the schema
+                // now exposes it because the fleet strip can stop a running
+                // child and the parent is told about the ending either way.
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Run this agent in the background. The call returns at once with the child session id, and the child's ending reaches you as a notification on a later turn."
+                },
                 "isolation": {
                     "type": "string",
                     "enum": ["none", "worktree"],
