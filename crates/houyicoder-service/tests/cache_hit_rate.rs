@@ -78,6 +78,7 @@
 use std::collections::VecDeque;
 use std::env::{temp_dir, var};
 use std::fs::{create_dir_all, remove_dir_all, write};
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -287,10 +288,18 @@ fn session_calls(runner: &Runner, session: SessionId) -> Vec<Call> {
         .collect()
 }
 
-/// The options every runner in this measurement is built from.
+/// The options every runner in this measurement is built from. The home sits
+/// beside the measurement workspace, both inside the test's temp root, so
+/// memory roots, skill discovery, and the snapshot store resolve there.
 fn base_options(project: &str) -> BuildRunnerOptions {
+    let workspace = Path::new(project);
+    let name = workspace
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut options = BuildRunnerOptions::default();
     options.project = Some(project.to_string());
+    options.home = Some(workspace.with_file_name(format!("{name}-home")));
     options
 }
 
@@ -1202,7 +1211,10 @@ fn open_agentic(
         endpoint: Arc::clone(&resolved.provider),
         scripts: Mutex::new(scripts.into()),
     });
-    let mut options = BuildRunnerOptions::disk_at(root, Some(project.to_string()), None);
+    let mut options = BuildRunnerOptions::disk_at(root.clone(), Some(project.to_string()), None);
+    // The home lives inside the session root the caller already owns, so
+    // memory roots, skill discovery, and the snapshot store resolve there.
+    options.home = Some(root.join("home"));
     options.provider = Some(ProviderResolution {
         provider: Arc::clone(&provider) as Arc<dyn ModelProvider>,
         facts: resolved.facts,

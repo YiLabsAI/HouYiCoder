@@ -34,6 +34,7 @@ fn test_snapshot_reports_carried_endpoint() {
     create_dir_all(&root).expect("mkdir root");
     let options = BuildRunnerOptions {
         project: Some(root.to_string_lossy().into_owned()),
+        home: Some(root.clone()),
         provider: Some(ProviderResolution::stub()),
         ..Default::default()
     };

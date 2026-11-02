@@ -444,6 +444,7 @@ fn test_rename_preserves_prompt() {
     let descriptors: Arc<RecordingDescriptorStore> = Arc::new(RecordingDescriptorStore::new());
     let mut options = BuildRunnerOptions::default();
     options.descriptor_store = Some(Arc::clone(&descriptors) as Arc<dyn SessionDescriptorStore>);
+    options.home = Some(root.clone());
     options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
     bundle.runner.set_auto_memory(false);

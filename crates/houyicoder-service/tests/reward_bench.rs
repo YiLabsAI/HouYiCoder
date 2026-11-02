@@ -14,6 +14,8 @@ use std::fs::remove_dir_all;
 use std::fs::write;
 use std::path::Path;
 use std::process::id;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 struct QueryMetrics {
@@ -59,14 +61,14 @@ fn dream_count(runner: &Runner) -> usize {
 
 /// A real cargo package whose add returns subtraction, so every test
 /// file fails. query 1 re-runs each test binary to check for flakiness
-/// (blind retries), producing retry_after_error >= 2 to clear the
-/// reward-dream gate.
+/// (blind retries), producing retry_after_error >= 2, the signal that
+/// lets the dream pass run.
 fn write_fail_project(repo: &Path) {
     create_dir_all(repo.join("src")).expect("mkdir src");
     create_dir_all(repo.join("tests")).expect("mkdir tests");
     write(
         repo.join("Cargo.toml"),
-        "[package]\nname = \"smoke_proj\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        "[package]\nname = \"failing_proj\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
     )
     .expect("manifest");
     write(
@@ -74,34 +76,40 @@ fn write_fail_project(repo: &Path) {
         "pub fn add(a: i32, b: i32) -> i32 { a - b }\n",
     )
     .expect("lib");
-    let test_body = "use smoke_proj::add;\n#[test] fn checks() { assert_eq!(add(2, 3), 5); }\n";
+    let test_body = "use failing_proj::add;\n#[test] fn checks() { assert_eq!(add(2, 3), 5); }\n";
     write(repo.join("tests").join("a.rs"), test_body).expect("a");
     write(repo.join("tests").join("b.rs"), test_body).expect("b");
     write(repo.join("tests").join("c.rs"), test_body).expect("c");
 }
 
 async fn run_pair() -> (QueryMetrics, bool, QueryMetrics) {
-    let root = temp_dir().join(format!("houyi-verify-{}", id()));
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let root = temp_dir().join(format!("houyi-verify-{}-{n}", id()));
     let _prev = remove_dir_all(&root);
     // The memory slug is derived from the repo dir name (git_canonical_slug
-    // falls back to the canonical dir name for a non-git dir). A PID-unique
-    // name makes the slug test-specific: a real project named "repo" is not
-    // nuked, and a prior run's dream lessons do not leak (different PID).
-    let repo_name = format!("smoke-{}", id());
+    // falls back to the canonical dir name for a non-git dir). The name says
+    // what the directory holds — a project whose tests fail — and the pid
+    // keeps each run's auto-memory entries separate from the last.
+    let repo_name = format!("failing-project-{}", id());
     let repo = root.join(&repo_name);
     write_fail_project(&repo);
     let mut options = BuildRunnerOptions::default();
     options.project = Some(repo.to_string_lossy().into_owned());
+    // The auto-memory root resolves under this home, so the dream lessons and
+    // the memory index stay inside the test's temp root.
+    options.home = Some(root.join("home"));
     let bundle = build_runner(options);
     let runner = bundle.runner;
     let session1 = bundle.session;
     let baseline_dream = dream_count(&runner);
     let fail_metrics = run_query(&runner, session1, PROMPT_FAIL).await;
-    // query 1 FinalOutput fires reward-dream (retry_after_error>=2 clears
-    // the gate on the first query since last_scan=0). Wait for a dream-origin
-    // lesson to land — origin distinguishes dream from extractor writes.
-    // Await the dream's JoinHandle directly (event-driven, no sleep poll).
-    // Skip when reward is off (the dream will not fire).
+    // query 1's FinalOutput starts the dream — the background pass that
+    // distills lessons from the run (retry_after_error>=2 clears its gate on
+    // the first query since last_scan=0). Wait for a dream-origin lesson to
+    // land; the origin distinguishes those writes from the extractor's.
+    // Await the pass's JoinHandle directly (event-driven, no sleep poll).
+    // Skip when reward is off, since the dream will not run.
     if var("HOUYICODER_REWARD_OFF").is_err() {
         runner.join_dreams(Duration::from_secs(90)).await;
     }
@@ -119,17 +127,8 @@ async fn run_pair() -> (QueryMetrics, bool, QueryMetrics) {
     if let Some(idx) = runner.format_memory_index() {
         eprintln!("memory index after recall query:\n{}", idx);
     }
-    // Clean up the memory dir the runner wrote under HOME. The slug is the
-    // repo dir name, so this targets only this run's memory — not a real
-    // project's.
-    if let Ok(home) = var("HOME") {
-        let mem = Path::new(&home)
-            .join(".houyicoder")
-            .join("projects")
-            .join(&repo_name)
-            .join("memory");
-        let _mem = remove_dir_all(&mem);
-    }
+    // The injected home sits inside the temp root, so this removes the
+    // lessons and the memory index this run produced and nothing else.
     let _cleanup = remove_dir_all(&root);
     (fail_metrics, dream_wrote, recall_metrics)
 }

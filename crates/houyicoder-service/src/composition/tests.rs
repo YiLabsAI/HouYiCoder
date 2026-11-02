@@ -157,6 +157,7 @@ fn test_external_approval() {
     create_dir_all(&external_path).expect("mkdir external path");
     let bundle = super::build_runner(BuildRunnerOptions {
         project: Some(repo.to_string_lossy().into_owned()),
+        home: Some(root.clone()),
         ..Default::default()
     });
     let gate = bundle.gate;
@@ -190,6 +191,7 @@ fn test_build_runner_wires_summarizer() {
     create_dir_all(&root).expect("mkdir root");
     let bundle = super::build_runner(BuildRunnerOptions {
         project: Some(root.to_string_lossy().into_owned()),
+        home: Some(root.clone()),
         ..Default::default()
     });
     assert!(
@@ -309,13 +311,16 @@ fn test_host_carries_provider_facts() {
 /// so commands execute without the operating system kernel fence.
 #[test]
 fn test_build_runner_no_sandbox() {
+    let home = temp_dir().join(format!("houyi-no-sandbox-home-{}-{}", id(), line!()));
     let options = BuildRunnerOptions {
         no_sandbox: true,
+        home: Some(home.clone()),
         ..Default::default()
     };
     let _assembled = super::build_runner(options);
     assert!(houyicoder_sandbox::is_unfenced());
     houyicoder_sandbox::set_unfenced(false);
+    drop(remove_dir_all(&home));
 }
 
 /// The recap runs only on a model the catalog declares and whose dialect can

@@ -66,6 +66,8 @@ use std::env::current_dir;
 use std::env::temp_dir;
 use std::env::var;
 use std::error::Error;
+#[cfg(test)]
+use std::fs::create_dir_all;
 use std::path::PathBuf;
 #[cfg(test)]
 use std::process;
@@ -224,6 +226,7 @@ pub type ResumeBuilderRef = dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartu
 pub fn build_app_for_test(project: Option<String>) -> App {
     let mut options = BuildRunnerOptions::default();
     options.project = project;
+    options.home = Some(local_test_home());
     let bundle = build_runner(options);
     let wire_session = SessionId(bundle.session.to_string());
     let (tx, rx) = mpsc::channel::<SessionMessage>();
@@ -335,6 +338,18 @@ fn local_test_settings_path() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     temp_dir().join(format!("houyi-settings-{}-{}.json", process::id(), n))
+}
+
+/// A unique temp home for one in-process test assembly, so the runner reads
+/// and writes its user-level state (memory roots, skills, snapshots) there
+/// instead of under the developer's home.
+#[cfg(test)]
+fn local_test_home() -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = temp_dir().join(format!("houyi-home-{}-{n}", process::id()));
+    drop(create_dir_all(&dir));
+    dir
 }
 
 fn spec_context() -> SpecContext {

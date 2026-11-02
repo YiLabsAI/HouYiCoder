@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::agent_message::ConnectionEvent;
+use crate::composition::local_test_home;
 use crate::fold::DisplaySlot;
 use crate::fold::display_slots;
 use crate::input::queue::InputItem;
@@ -50,7 +51,11 @@ fn enqueue_resume_target(app: &mut App, target: &str) {
 }
 
 fn test_bundle() -> (RunnerBundle, FrontendStartup) {
-    let bundle = build_runner(BuildRunnerOptions::default());
+    let mut options = BuildRunnerOptions::default();
+    // Memory roots, skill discovery, and the snapshot store resolve under
+    // this temp home instead of the developer's home.
+    options.home = Some(local_test_home());
+    let bundle = build_runner(options);
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;
@@ -92,7 +97,9 @@ fn test_app() -> App {
 /// Like test_bundle but returns the server task's JoinHandle so a test can
 /// assert the serve loop exited after the session is torn down.
 fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), JoinHandle<()>) {
-    let bundle = build_runner(BuildRunnerOptions::default());
+    let mut options = BuildRunnerOptions::default();
+    options.home = Some(local_test_home());
+    let bundle = build_runner(options);
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;

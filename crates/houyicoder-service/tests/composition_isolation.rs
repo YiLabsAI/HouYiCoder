@@ -18,6 +18,8 @@ use std::fs::remove_dir_all;
 use std::fs::write;
 use std::path::PathBuf;
 use std::process::id;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 /// The default-build gate asserts on THIS build's sid dir rather than the
 /// root's global entry count. A count-based assert is a global probe: a
@@ -29,7 +31,10 @@ use std::process::id;
 #[test]
 fn test_default_build_off_disk() {
     let root = session_log_root();
-    let bundle = build_runner(BuildRunnerOptions::default());
+    let home = temp_dir().join(format!("houyi-off-disk-home-{}-{}", id(), line!()));
+    let mut options = BuildRunnerOptions::default();
+    options.home = Some(home.clone());
+    let bundle = build_runner(options);
     // The descriptor write happens synchronously inside build_runner; dropping
     // the bundle flushes nothing further.
     let sid = bundle.session.to_string();
@@ -39,6 +44,7 @@ fn test_default_build_off_disk() {
         "default build_runner wrote {sid} into the real sessions root {}",
         root.display()
     );
+    drop(remove_dir_all(&home));
 }
 
 /// The mirror direction: the disk opt-in must actually persist. Builds a
@@ -52,7 +58,9 @@ async fn test_disk_options_write_durable() {
     let root = temp_dir().join(format!("houyi-disk-isolation-{}-{}", id(), line!()));
     drop(remove_dir_all(&root));
     create_dir_all(&root).expect("mkdir root");
-    let bundle = build_runner(BuildRunnerOptions::disk_at(root.clone(), None, None));
+    let mut options = BuildRunnerOptions::disk_at(root.clone(), None, None);
+    options.home = Some(root.join("home"));
+    let bundle = build_runner(options);
     let sid_dir = root.join(bundle.session.to_string());
     // Lazy materialization: a build that has not run a turn leaves no dir,
     // no descriptor. The 45k empty-session pollution was the descriptor written
@@ -103,9 +111,11 @@ async fn test_disk_options_write_durable() {
 /// read the real home.
 #[test]
 fn test_memory_skips_scan_root() {
+    let home = temp_dir().join(format!("houyi-scan-home-{}-{}", id(), line!()));
     let project = temp_project_dir();
     let mut options = BuildRunnerOptions::default();
     options.project = Some(project.to_string_lossy().into_owned());
+    options.home = Some(home.clone());
     let bundle = build_runner(options);
     assert!(
         bundle.runner.dream_session_log_root().is_none(),
@@ -113,6 +123,41 @@ fn test_memory_skips_scan_root() {
         bundle.runner.dream_session_log_root(),
     );
     drop(bundle);
+    drop(remove_dir_all(&home));
+    drop(remove_dir_all(&project));
+}
+
+/// The assembly must read user memory from the home it was handed, never the
+/// environment's. Seeds one topic under the injected home and asserts the
+/// assembled runner lists it: with the home threading removed the provider
+/// resolves the environment home, the seeded key is absent, and this fails.
+#[test]
+fn test_memory_reads_injected_home() {
+    let home = temp_dir().join(format!("houyi-iso-home-{}-{}", id(), line!()));
+    let project = temp_project_dir();
+    let memory_root = home.join(".houyicoder").join("memory");
+    create_dir_all(&memory_root).expect("mkdir memory root");
+    write(
+        memory_root.join("isolated-key.md"),
+        "---\nname: isolated-key\ndescription: seeded under the injected home\n---\nbody\n",
+    )
+    .expect("seed memory");
+    let mut options = BuildRunnerOptions::default();
+    options.project = Some(project.to_string_lossy().into_owned());
+    options.home = Some(home.clone());
+    let bundle = build_runner(options);
+    let keys: Vec<String> = bundle
+        .runner
+        .memory_list()
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect();
+    assert!(
+        keys.iter().any(|key| key == "isolated-key"),
+        "the assembly must read memory under the injected home (got {keys:?})"
+    );
+    drop(bundle);
+    drop(remove_dir_all(&home));
     drop(remove_dir_all(&project));
 }
 
@@ -127,17 +172,21 @@ fn test_disk_derives_scan_root() {
     drop(remove_dir_all(&sessions));
     create_dir_all(&sessions).expect("mkdir sessions root");
     let project = temp_project_dir();
-    let bundle = build_runner(BuildRunnerOptions::disk_at(
+    let home = temp_dir().join(format!("houyi-derive-home-{}-{}", id(), line!()));
+    let mut options = BuildRunnerOptions::disk_at(
         sessions.clone(),
         Some(project.to_string_lossy().into_owned()),
         None,
-    ));
+    );
+    options.home = Some(home.clone());
+    let bundle = build_runner(options);
     assert_eq!(
         bundle.runner.dream_session_log_root(),
         Some(sessions.as_path()),
         "disk build must derive its scan root from its own backend, not a hardcoded root"
     );
     drop(bundle);
+    drop(remove_dir_all(&home));
     drop(remove_dir_all(&sessions));
     drop(remove_dir_all(&project));
 }
@@ -147,7 +196,9 @@ fn test_disk_derives_scan_root() {
 /// the seam the scan-root gates read, so the project must resolve for the
 /// gate to exercise the production path.
 fn temp_project_dir() -> PathBuf {
-    let d = temp_dir().join(format!("houyi-scan-proj-{}-{}", id(), line!()));
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let d = temp_dir().join(format!("houyi-scan-proj-{}-{n}", id()));
     create_dir_all(&d).expect("mkdir project");
     write(d.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("manifest");
     d

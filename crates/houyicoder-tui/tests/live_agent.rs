@@ -5,7 +5,11 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use std::fs::create_dir_all;
+use std::process::id;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -86,7 +90,13 @@ fn drain(app: &mut App, timeout_ms: u64) -> bool {
 /// live_bash_tool_roundtrip spine needs that HITL pause; the chat-reply test
 /// stays Auto (no tool call, no approval).
 fn live_app_with_tools(manual: bool) -> App {
-    let bundle = build_runner(BuildRunnerOptions::default());
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let home = temp_dir().join(format!("houyi-live-home-{}-{n}", id()));
+    create_dir_all(&home).expect("temp home");
+    let mut options = BuildRunnerOptions::default();
+    options.home = Some(home);
+    let bundle = build_runner(options);
     let runner = bundle.runner;
     let session = bundle.session;
     let gate = bundle.gate;

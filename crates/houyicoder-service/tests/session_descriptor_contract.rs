@@ -22,6 +22,7 @@ async fn test_run_records_prompt() {
     drop(remove_dir_all(&root));
     create_dir_all(&root).expect("mkdir root");
     let mut options = BuildRunnerOptions::disk_at(root.clone(), None, None);
+    options.home = Some(root.join("home"));
     options.provider = Some(ProviderResolution::stub());
     let bundle = build_runner(options);
     bundle.runner.set_auto_memory(false);
