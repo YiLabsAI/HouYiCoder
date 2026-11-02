@@ -10,7 +10,7 @@ use tokio::sync::Notify;
 use tokio::sync::oneshot::channel;
 use tokio::sync::oneshot::error::TryRecvError;
 
-use super::super::{ChildCredential, ChildCredentialren, ChildWatch, join_child};
+use super::super::{ChildCredential, ChildWatch, RunningChildren, join_child};
 use std::future::pending;
 use tokio::time::timeout;
 
@@ -70,7 +70,7 @@ async fn test_join_foreground_confirms_end() {
 /// without discarding an unconsumed drain.
 #[tokio::test]
 async fn test_admission_enters_drain() {
-    let mut registry = ChildCredentialren::default();
+    let mut registry = RunningChildren::default();
     let admission = registry
         .admit(CancellationToken::new())
         .expect("an open gate admits");

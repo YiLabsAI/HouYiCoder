@@ -21,7 +21,7 @@ pub(super) struct ChildExecution {
     pub(super) hooks: Option<Arc<dyn HookFire>>,
     pub(super) parent: SessionId,
     pub(super) completion: Sender<()>,
-    pub(super) running: Arc<Mutex<ChildCredentialren>>,
+    pub(super) running: Arc<Mutex<RunningChildren>>,
     pub(super) admission: u64,
 }
 

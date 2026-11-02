@@ -55,7 +55,7 @@ pub(super) struct ChildAdmission {
 /// shutdown starts. A child is admitted before its first side effect and
 /// watched once its task exists; both steps refuse after the gate closes.
 #[derive(Default)]
-pub(super) struct ChildCredentialren {
+pub(super) struct RunningChildren {
     pub(super) closing: bool,
     pub(super) next_slot: u64,
     pub(super) children: HashMap<u64, ChildCredential>,
@@ -63,7 +63,7 @@ pub(super) struct ChildCredentialren {
     pub(super) drained: Vec<(u64, ChildCredential)>,
 }
 
-impl ChildCredentialren {
+impl RunningChildren {
     /// Admit a child before its first side effect.
     ///
     /// The completion channel is created here, so the token and the signal are
@@ -138,12 +138,12 @@ impl ChildCredentialren {
 /// child that is no longer there, and a long-lived session collects one per
 /// delegation.
 pub(super) struct AdmissionLease {
-    running: Arc<Mutex<ChildCredentialren>>,
+    running: Arc<Mutex<RunningChildren>>,
     slot: u64,
 }
 
 impl AdmissionLease {
-    pub(super) fn new(running: Arc<Mutex<ChildCredentialren>>, slot: u64) -> Self {
+    pub(super) fn new(running: Arc<Mutex<RunningChildren>>, slot: u64) -> Self {
         Self { running, slot }
     }
 }

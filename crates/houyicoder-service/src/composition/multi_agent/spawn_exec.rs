@@ -30,7 +30,7 @@ use super::announce_spawn;
 use super::drive::drive_child_to_terminal;
 use super::fire_subagent_start;
 use super::stamp_spawned_by;
-use super::{ChildCredentialren, ChildWatch, MultiAgentRuntime};
+use super::{ChildWatch, MultiAgentRuntime, RunningChildren};
 use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::SpawnError;
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
@@ -456,7 +456,7 @@ pub(super) async fn run_foreground_spawn(
 /// admitted child. Err hands the watch back so the caller waits on the task
 /// itself instead of leaving it outside the join.
 fn attach_watch(
-    running: Arc<Mutex<ChildCredentialren>>,
+    running: Arc<Mutex<RunningChildren>>,
     slot: u64,
     watch: ChildWatch,
 ) -> Result<(), ChildWatch> {

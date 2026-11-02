@@ -50,7 +50,7 @@ use tokio::time::timeout;
 mod children;
 mod drive;
 use children::{
-    AdmissionLease, ChildAdmission, ChildCredential, ChildCredentialren, ChildEntry, ChildWatch,
+    AdmissionLease, ChildAdmission, ChildCredential, ChildEntry, ChildWatch, RunningChildren,
 };
 mod spawn_exec;
 mod strip;
@@ -124,7 +124,7 @@ pub struct MultiAgentRuntime {
     /// child being admitted: the admission either lands before the close (the
     /// child is waited for) or is refused (the caller waits on it inline),
     /// never silently after.
-    running: Arc<Mutex<ChildCredentialren>>,
+    running: Arc<Mutex<RunningChildren>>,
     /// Descriptor store for stamping SpawnedBy provenance on child sessions.
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
     /// Skill registry + activator + hooks inherited by every child, so a
@@ -159,7 +159,7 @@ impl MultiAgentRuntime {
                 ConcurrencyGate::DEFAULT_QUEUE_CAP,
             )),
             children: Arc::new(Mutex::new(HashMap::new())),
-            running: Arc::new(Mutex::new(ChildCredentialren::default())),
+            running: Arc::new(Mutex::new(RunningChildren::default())),
             descriptor_store: deps.descriptor_store,
             skill_registry: deps.skill_registry,
             conditional: deps.conditional,
