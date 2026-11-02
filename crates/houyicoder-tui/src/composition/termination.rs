@@ -13,7 +13,6 @@
 //! and the terminal's own reset is the only recovery.
 
 use std::sync::Arc;
-#[cfg(unix)]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,7 +26,6 @@ use signal_hook::flag;
 /// leave a handler that nobody reads and that keeps its flag alive for the
 /// life of the process. A session switch runs the loop again, and it must
 /// share the flag the first registration set.
-#[cfg(unix)]
 static REQUESTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 /// A flag raised when a termination signal arrives. The loop reads it once
@@ -81,13 +79,15 @@ pub(crate) fn watch_termination() -> std::io::Result<TerminationWatch> {
 }
 
 /// A platform with no signal to watch keeps the same shape, so the run loop
-/// needs no branch. A Windows console close event is delivered through the
+/// needs no branch. No handler is installed, so the flag is never raised by
+/// the platform; every watch still reads the one shared flag rather than a
+/// fresh one, because a session switch runs the loop again and the watches
+/// must not disagree. A Windows console close event is delivered through the
 /// console API, which this layer does not own.
 #[cfg(not(unix))]
 pub(crate) fn watch_termination() -> std::io::Result<TerminationWatch> {
-    Ok(TerminationWatch {
-        requested: Arc::new(AtomicBool::new(false)),
-    })
+    let shared = Arc::clone(REQUESTED.get_or_init(|| Arc::new(AtomicBool::new(false))));
+    Ok(TerminationWatch { requested: shared })
 }
 
 #[cfg(test)]
