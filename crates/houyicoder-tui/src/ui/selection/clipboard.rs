@@ -178,7 +178,7 @@ fn copy_native(text: &str) {
 /// Run a native clipboard binary, feeding text via stdin. Ok on a clean
 /// (exit-0) run so the Linux probe can pick a winner.
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-fn run_native(bin: &str, args: &[&str], text: &str) -> Result<()> {
+pub(super) fn run_native(bin: &str, args: &[&str], text: &str) -> Result<()> {
     let mut child = Command::new(bin).args(args).stdin(Stdio::piped()).spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(text.as_bytes())?;

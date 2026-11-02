@@ -6,7 +6,7 @@ use std::env::var_os;
 use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
-use super::run_native;
+use super::clipboard::run_native;
 
 /// Cached Linux clipboard tool. The probe runs on the first copy with the
 /// actual text (xclip and xsel would hang on an empty probe stdin), then the
