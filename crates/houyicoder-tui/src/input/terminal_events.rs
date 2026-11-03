@@ -16,6 +16,12 @@ use std::thread::Builder;
 use std::time::Duration;
 
 use crossterm::event::{self, Event};
+#[cfg(unix)]
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+#[cfg(unix)]
+use std::io::stdin;
+#[cfg(unix)]
+use std::os::fd::AsFd;
 
 /// How long the reader waits before looking at the channel again.
 ///
@@ -39,6 +45,43 @@ pub(crate) enum Input {
     /// keeps its cadence either way; a session with no reader is unusable for
     /// typing but can still be quit, which is the safe direction.
     Idle,
+    /// The terminal itself is gone: its other end closed.
+    ///
+    /// This is reported rather than left to a signal, because the kernel sends
+    /// one only when the session owns the terminal. A session started under a
+    /// pipe or a supervisor that never sent the hangup would otherwise keep
+    /// running with nothing to draw on.
+    Gone,
+}
+
+/// Whether the terminal this process reads has hung up.
+///
+/// A closed terminal leaves its descriptor readable with nothing to read, which
+/// the event reader answers by reading again. Asking the descriptor directly is
+/// the only check that does not depend on a signal arriving.
+#[cfg(unix)]
+fn terminal_hung_up() -> bool {
+    let input = stdin();
+    let mut fds = [PollFd::new(
+        input.as_fd(),
+        PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR,
+    )];
+    if poll(&mut fds, PollTimeout::ZERO).is_err() {
+        return false;
+    }
+    // Only a hangup ends the session. A closed descriptor is not one: the
+    // event source falls back to the controlling terminal in that case, so
+    // ending here would kill a session that still has somewhere to read.
+    fds[0]
+        .revents()
+        .is_some_and(|flags| flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR))
+}
+
+/// A platform whose console does not report a hangup through a descriptor keeps
+/// the same shape; its close event arrives through the console API instead.
+#[cfg(not(unix))]
+fn terminal_hung_up() -> bool {
+    false
 }
 
 /// The channel a reader thread feeds and the run loop drains.
@@ -58,6 +101,11 @@ impl EventReader {
         // the loop it feeds is the part the tests drive.
         READER.get_or_init(|| {
             start(|| {
+                // A terminal that already hung up must not be read: the event
+                // source answers that state by reading again, forever.
+                if terminal_hung_up() {
+                    return None;
+                }
                 event::poll(READ_WAIT).ok().filter(|ready| *ready)?;
                 event::read().ok()
             })
@@ -75,12 +123,28 @@ impl EventReader {
 
     /// Wait up to the deadline for the next event.
     pub(crate) fn next(&self, deadline: Duration) -> Input {
+        self.next_with(deadline, terminal_hung_up)
+    }
+
+    /// The wait, with the hangup check supplied, so the two answers a deadline
+    /// can give are driven without a terminal.
+    fn next_with(&self, deadline: Duration, hung_up: fn() -> bool) -> Input {
         let Ok(events) = self.events.lock() else {
             return Input::Idle;
         };
         match events.recv_timeout(deadline) {
             Ok(event) => Input::Event(event),
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => Input::Idle,
+            // The deadline is where the loop gets control back, so it is also
+            // where a terminal that went away is noticed. Checking here rather
+            // than in the reader is deliberate: a reader stuck inside the
+            // event source never reaches its own check.
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                if hung_up() {
+                    Input::Gone
+                } else {
+                    Input::Idle
+                }
+            }
         }
     }
 }

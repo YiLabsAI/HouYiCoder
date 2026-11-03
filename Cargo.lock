@@ -1379,6 +1379,7 @@ dependencies = [
  "houyicoder-async",
  "houyicoder-context",
  "houyicoder-protocol",
+ "nix 0.31.3",
  "serde_json",
  "sha2 0.11.0",
  "tokio",

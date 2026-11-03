@@ -19,7 +19,7 @@ fn test_reader_honors_deadline() {
     let (_events, incoming) = channel::<Event>();
     let reader = EventReader::over(incoming);
     let started = Instant::now();
-    let input = reader.next(Duration::from_millis(50));
+    let input = reader.next_with(Duration::from_millis(50), || false);
     assert!(
         matches!(input, Input::Idle),
         "a quiet channel reports no input"
@@ -40,7 +40,7 @@ fn test_reader_forwards_event() {
     let (events, incoming) = channel::<Event>();
     let reader = EventReader::over(incoming);
     events.send(press('a')).expect("the reader is listening");
-    let input = reader.next(Duration::from_millis(50));
+    let input = reader.next_with(Duration::from_millis(50), || false);
     assert!(
         matches!(&input, Input::Event(Event::Key(key)) if key.code == KeyCode::Char('a')),
         "the event reaches the loop unchanged"
@@ -54,7 +54,7 @@ fn test_dead_reader_idles() {
     let (events, incoming) = channel::<Event>();
     drop(events);
     let reader = EventReader::over(incoming);
-    let input = reader.next(Duration::from_millis(50));
+    let input = reader.next_with(Duration::from_millis(50), || false);
     assert!(
         matches!(input, Input::Idle),
         "a closed channel reports no input instead of blocking"
@@ -109,7 +109,10 @@ fn test_forward_stops_when_closed() {
 fn test_start_wires_a_reader() {
     let reader = start(|| None);
     assert!(
-        matches!(reader.next(Duration::from_millis(50)), Input::Idle),
+        matches!(
+            reader.next_with(Duration::from_millis(50), || false),
+            Input::Idle
+        ),
         "a source that yields nothing leaves the loop idling, not blocked"
     );
 }
@@ -140,8 +143,50 @@ fn test_poisoned_reader_idles() {
 #[test]
 fn test_shared_reader_starts() {
     let reader = EventReader::shared();
+    // A test process has no terminal of its own, so either answer is right
+    // here; what matters is that the call returns instead of blocking.
     assert!(
-        matches!(reader.next(Duration::from_millis(10)), Input::Idle),
-        "a quiet terminal leaves the loop idling"
+        matches!(
+            reader.next(Duration::from_millis(10)),
+            Input::Idle | Input::Gone
+        ),
+        "the shared reader answers its deadline"
+    );
+}
+
+/// A deadline that finds the terminal gone reports it, so the loop ends.
+///
+/// The check is a parameter here because the answer only comes from a real
+/// descriptor: what the loop does with the answer is the part worth pinning.
+#[test]
+fn test_deadline_reports_gone() {
+    let (_events, incoming) = channel::<Event>();
+    let reader = EventReader::over(incoming);
+    assert!(
+        matches!(
+            reader.next_with(Duration::from_millis(10), || true),
+            Input::Gone
+        ),
+        "a hung-up terminal is reported, not mistaken for quiet"
+    );
+    assert!(
+        matches!(
+            reader.next_with(Duration::from_millis(10), || false),
+            Input::Idle
+        ),
+        "a quiet terminal stays quiet"
+    );
+}
+
+/// The hangup probe answers on a descriptor that is not a terminal.
+///
+/// A test process has no terminal of its own, so the answer here is "no
+/// hangup". What this pins is that the probe returns instead of blocking or
+/// failing: a probe that panicked would end a session that is still fine.
+#[test]
+fn test_hangup_probe_answers() {
+    assert!(
+        !terminal_hung_up(),
+        "a descriptor with no hangup is not reported as one"
     );
 }

@@ -132,10 +132,12 @@ pub fn run_with_runner(
         // The wait runs on the reader thread, so a terminal that closed under
         // us cannot hold this loop inside the event reader: the deadline always
         // returns control here, where the exit decision is made.
-        if let Input::Event(event) = EventReader::shared().next(Duration::from_millis(100))
-            && handle_event(&mut app, event)?
-        {
-            dirty = true;
+        match EventReader::shared().next(Duration::from_millis(100)) {
+            Input::Event(event) => dirty |= handle_event(&mut app, event)?,
+            // Nothing left to draw on or type: leaving restores what the
+            // guard took before the descriptor closed.
+            Input::Gone => app.ui.quit = true,
+            Input::Idle => {}
         }
         if edge_scroll_if_at_edge(&mut app) {
             dirty = true;
