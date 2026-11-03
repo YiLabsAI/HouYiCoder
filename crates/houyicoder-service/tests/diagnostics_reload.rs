@@ -12,12 +12,14 @@
 //! worse position than having no log at all: absent evidence that reads as
 //! evidence of absence.
 //!
-//! One test, one binary, because install sets the process-wide default
-//! subscriber and a second install in the same process is refused by design.
+//! One test, one binary. install sets the process-wide default subscriber,
+//! and a second install in the same process is refused by design. A shared
+//! binary is also unsafe for the level assertion below: a test driving its
+//! own engine turn writes to this same sink, so its event can reach the file
+//! after the switch and read as a failure of the switch.
 
 use std::sync::Arc;
 
-use crate::common;
 use houyicoder_core::agent::Runner;
 use houyicoder_service::diagnostics;
 use std::env::temp_dir;
@@ -25,6 +27,8 @@ use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::process::id;
 use tracing_subscriber::filter::LevelFilter;
+
+mod common;
 
 /// A level raised through the handle takes effect in the engine layer
 /// without a restart, and a level of off suppresses the same call site.

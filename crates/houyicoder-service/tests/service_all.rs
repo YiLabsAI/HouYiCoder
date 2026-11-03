@@ -1,7 +1,8 @@
 //! Consolidated service contract tests. Each module is the original test
 //! file included verbatim via path attributes; aggregating into one binary
 //! cuts nextest discovery spawn count without dropping any test. ACP
-//! feature-gated tests and the live reward_bench stay separate binaries.
+//! feature-gated tests, the process-global diagnostic sink test, and the
+//! live reward_bench stay separate binaries.
 
 mod common;
 
@@ -17,8 +18,6 @@ mod composition_isolation;
 mod concurrent_mode_switch;
 #[path = "delegation_prompt_displacement.rs"]
 mod delegation_prompt_displacement;
-#[path = "diagnostics_reload.rs"]
-mod diagnostics_reload;
 #[path = "event_delivery.rs"]
 mod event_delivery;
 #[path = "hook_real_spawn.rs"]

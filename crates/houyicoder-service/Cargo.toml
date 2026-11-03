@@ -21,6 +21,10 @@ path = "tests/cache_hit_rate.rs"
 name = "worktree_contract"
 path = "tests/worktree_contract.rs"
 
+[[test]]
+name = "diagnostics_reload"
+path = "tests/diagnostics_reload.rs"
+
 [lib]
 path = "src/lib.rs"
 
