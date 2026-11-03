@@ -81,6 +81,12 @@ def main() -> int:
     if _lint("feat(x): do the thing\n\nThe body uses an em-dash — here.\n") != 0:
         failures.append("em-dash in body was blocked (false positive)")
 
+    # Backticks, file names, and banned vocabulary are blocked.
+    if _lint("fix(tui): update the footer\n\nCalls `foo` in bar.rs.\n") == 0:
+        failures.append("backticks / file name in body should block, did not")
+    if _lint("fix(tui): wire the footer pill seam\n") == 0:
+        failures.append("banned jargon (wire/pill/seam) should block, did not")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)

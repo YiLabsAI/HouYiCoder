@@ -607,10 +607,13 @@ updated, rust-toolchain.toml MSRV current.
     the answer to "which module is this".
   - Subject <= 72 chars, imperative mood (add not added)
   - Body (optional): wrap at 72, explain why not what
-- Commit messages are written for external readers, in English: imperative
-  subject under 72 chars with a conventional prefix and a scope; an optional
-  body of one or two sentences explaining why (the diff already says what);
-  factual and neutral in tone; no internal process references.
+- Commit messages are written for external readers, in English. The full
+  guide with a reference example is `scripts/rules/commit_guide.txt`; the
+  commit gate prints it every time it blocks a commit, so the rules arrive
+  when the message is written rather than hundreds of turns earlier.
+  Mechanical checks (prefix, scope, length, codes, backticks, file names,
+  banned jargon) run in `scripts/commit_msg_lint.py`; judgment (does the
+  message explain the problem and the new behavior) belongs to deep-review.
 - Linear history: git pull --rebase; squash local WIP before push.
 - Enforced by scripts/commit_msg_check.sh (structural: prefix + scope +
   length) plus an optional local style lint the script reads if a gitignored

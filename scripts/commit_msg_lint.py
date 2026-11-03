@@ -58,6 +58,22 @@ _PHASE_WORDS = re.compile(
     r"\b(?:Phase|Sprint|Gate|Milestone|Stage)\s+\d+\b", re.IGNORECASE
 )
 
+# Prose hygiene for external git-log readers:
+# 1. No backticks and no source file names (foo.rs, bar.py, baz.md): a
+#    commit message explains behavior and why it changed; the diff header
+#    already lists every touched path.
+# 2. Banned internal jargon from the review vocabulary.
+# Grammar (tense, word order) is not checked here: a regex cannot judge it,
+# and the guide printed at commit time carries that rule instead.
+_FILE_NAME = re.compile(
+    r"\b[A-Za-z0-9_.-]+\.(?:rs|py|sh|toml|json|md|yml|yaml)\b"
+)
+_BANNED_VOCAB = re.compile(
+    r"\b(?:wired|wiring|seam|seams|pill|pills|retire|retired|retirement"
+    r"|mint|minted|minting|in-flight|plumb|plumbed|plumbing|pairs_with)\b",
+    re.IGNORECASE,
+)
+
 
 # Scissors line: git commit -v appends a diff below a separator line.
 # The real line is "# ------------------------ >8 ------------------------"
@@ -152,6 +168,34 @@ def main() -> int:
                 f"ERROR: commit message contains '{m.group(0)}' ({where}). "
                 f"Describe this design; do not measure it against another "
                 f"implementation or name other products.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # 4. No backticks, file names, or banned vocabulary in subject or body.
+    for lineno, line in lines:
+        where = "subject" if lineno == 1 else f"body line {lineno}"
+        if "`" in line:
+            print(
+                f"ERROR: commit message contains backticks ({where}). "
+                f"Write plain English prose without code markup.",
+                file=sys.stderr,
+            )
+            return 1
+        m_file = _FILE_NAME.search(line)
+        if m_file:
+            print(
+                f"ERROR: commit message names file '{m_file.group(0)}' "
+                f"({where}). Describe the domain concept, not the file path.",
+                file=sys.stderr,
+            )
+            return 1
+        m_vocab = _BANNED_VOCAB.search(line)
+        if m_vocab:
+            print(
+                f"ERROR: commit message contains banned jargon "
+                f"'{m_vocab.group(0)}' ({where}). Use plain open-source "
+                f"vocabulary (boundary, interface, connect, release, active).",
                 file=sys.stderr,
             )
             return 1

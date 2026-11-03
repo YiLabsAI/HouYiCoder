@@ -13,6 +13,18 @@ msg_file="$1"
 repo=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 first_line=$(head -1 "$msg_file")
 
+# Every block prints the guide, whichever check refused the message, so the
+# rules arrive at the moment the message is rewritten.
+print_guide_on_block() {
+    local rc=$?
+    if [ "$rc" -ne 0 ] && [ -f "$repo/scripts/rules/commit_guide.txt" ]; then
+        echo >&2
+        cat "$repo/scripts/rules/commit_guide.txt" >&2
+    fi
+    exit "$rc"
+}
+trap print_guide_on_block EXIT
+
 # Must match: type(scope): subject. The scope is mandatory on every commit:
 # a subject that names no module tells a reader scanning the log nothing
 # about where the change landed. A change no single module owns takes a

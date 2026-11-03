@@ -1,0 +1,24 @@
+Commit message guide (read this now, before writing the message)
+
+Subject:  type(scope): <imperative verb> <what changed, in domain terms>
+          under 72 chars; the scope is the module the change lands in.
+Body:     wrap at 72. Paragraph 1: the problem and why it happened.
+          Paragraph 2: how the mechanism behaves now.
+
+Write for a reader of the public log who has not seen the diff:
+  - name behavior and domain concepts, not files, functions, or fields;
+  - no backticks, no task or sprint ids, no internal jargon
+    (wire, seam, pill, retire, mint, in-flight, plumb);
+  - say what the system does, not what the author did ("stop", not "fixed").
+
+Reference:
+
+  fix(service,cli): end background commands with the session
+
+  The registry that holds a session's detached commands is shared by the
+  host, the server, and the runner, so the last handle dropping is not a
+  moment any of them can rely on. A session that ended while another
+  holder lived left its commands running.
+
+  The host lifecycle now holds the registry and ends it when the session's
+  release begins, before it joins the tasks those commands report through.
