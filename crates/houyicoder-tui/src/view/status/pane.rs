@@ -16,7 +16,7 @@ use ratatui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::command::render::{field, render_status};
+use crate::command::render::render_status;
 use crate::state::{App, enums::StatusTab};
 use crate::view::navigation::{key_hint, tab_header_at};
 use crate::view::status::config_rows::{CONFIG_ROWS, row_changes, row_label, row_value};
@@ -84,15 +84,20 @@ fn footer_keys(app: &App) -> Vec<(&'static str, &'static str)> {
 /// editing the session name on the Status tab, the name row is spliced into
 /// an editable line with an inverted caret (the rest of the body is static).
 fn draw_tab_body(f: &mut Frame, tab: StatusTab, area: Rect, app: &App) {
-    let body: String = match tab {
+    let mut lines: Vec<Line<'static>> = match tab {
         StatusTab::Status => {
             let snap = app.snapshot_or_stub();
             render_status(&snap, &app.sessions.current.identity.session_id)
+                .lines()
+                .map(|l| Line::from(l.to_string()))
+                .collect()
         }
         StatusTab::Config => render_config(app),
-        StatusTab::Usage => render_usage(app),
+        StatusTab::Usage => render_usage(app)
+            .lines()
+            .map(|l| Line::from(l.to_string()))
+            .collect(),
     };
-    let mut lines: Vec<Line<'static>> = body.lines().map(|l| Line::from(l.to_string())).collect();
     // Splice the name row on the Status tab: an inline hint when browsing
     // (e to rename), an editable line with a caret when editing. The name
     // line is the one whose label starts with "Session name"; finding it
@@ -164,29 +169,31 @@ fn name_edit_line(field: &InputField) -> Line<'static> {
 /// The Config tab: runtime configuration knobs -- model, permission mode,
 /// sandbox, breaker, + the settings-file memory toggles. Reads live app
 /// state + the snapshot's toggle fields so the tab is a focused config view.
-/// Display-only: the user flips a toggle by editing the settings file (the
-/// settings file is the source of truth, edited externally, not inline).
-fn render_config(app: &App) -> String {
+///
+/// The footer names the one key that acts, so a row does not repeat it. A row
+/// that takes no press prints its value dim: that is how the pane says "shown,
+/// not changed" without a sentence on every line.
+fn render_config(app: &App) -> Vec<Line<'static>> {
     let cursor = app.ui.navigation.status_pane.config_cursor;
-    let mut s = String::new();
-    for (i, row) in CONFIG_ROWS.iter().enumerate() {
-        // The marker follows the shared list grammar every other pane uses,
-        // so a reader who has moved a cursor elsewhere already knows what it
-        // means here.
-        let marker = if cursor == Some(i) { "❯ " } else { "  " };
-        // The hint names the one key that acts. Only rows that act carry it:
-        // a hint on a row that ignores the key is a promise the pane breaks.
-        let hint = if row_changes(*row) {
-            "   (Enter to change)"
-        } else {
-            ""
-        };
-        s.push_str(&field(
-            &format!("{marker}{}", row_label(*row)),
-            &format!("{}{hint}", row_value(app, *row)),
-        ));
-    }
-    s.trim_end().to_string()
+    CONFIG_ROWS
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            // The marker follows the shared list grammar every other pane
+            // uses, so a reader who has moved a cursor elsewhere already
+            // knows what it means here.
+            let marker = if cursor == Some(i) { "❯ " } else { "  " };
+            let label = format!("{marker}{}:", row_label(*row));
+            let value_style = match row_changes(*row) {
+                true => Style::new(),
+                false => Style::new().fg(Color::DarkGray),
+            };
+            Line::from(vec![
+                Span::raw(format!("{label:<22}")),
+                Span::styled(row_value(app, *row), value_style),
+            ])
+        })
+        .collect()
 }
 
 use super::usage::render_usage;

@@ -17,6 +17,21 @@ fn test_header_renders_all_tabs() {
     assert!(rendered.contains("Usage"), "Usage tab: {rendered}");
 }
 
+/// The Config tab as the reader sees it: one line per row, joined so the
+/// assertions can read the text the pane prints.
+fn config_text(app: &App) -> String {
+    render_config(app)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The Config tab lists the knobs, capitalized, with no breaker row while the
 /// breaker is closed.
 #[test]
@@ -24,7 +39,7 @@ fn test_config_tab_has_knobs() {
     let mut app = working_app();
     app.sessions.current.capabilities.model.catalog.applied.id = "qwen3.8-max".into();
     app.sessions.current.sandbox = "mac-seatbelt".into();
-    let s = render_config(&app);
+    let s = config_text(&app);
     assert!(s.contains("qwen3.8-max"), "model: {s}");
     assert!(s.contains("mac-seatbelt"), "sandbox: {s}");
     assert!(s.contains("Permission mode:"), "permission mode: {s}");
@@ -46,7 +61,7 @@ fn test_config_tab_reflects_state() {
     snap.auto_memory = false;
     snap.auto_dream = true;
     app.sessions.current.capabilities.status.status_cache = Some(snap);
-    let s = render_config(&app);
+    let s = config_text(&app);
     let memory_line = s
         .lines()
         .find(|l| l.trim_start().starts_with("Auto-memory"))
@@ -74,7 +89,7 @@ fn test_config_tab_shows_effort() {
         .catalog
         .applied
         .effort = Some(EffortLevel::High);
-    let s = render_config(&app);
+    let s = config_text(&app);
     assert!(s.contains("Reasoning effort:"), "effort row: {s}");
     assert!(s.contains("high"), "high level: {s}");
     // The row stays when nothing is applied, and says so.
@@ -85,7 +100,7 @@ fn test_config_tab_shows_effort() {
         .catalog
         .applied
         .effort = None;
-    let s = render_config(&app);
+    let s = config_text(&app);
     assert!(
         s.contains("Reasoning effort:") && s.contains("(default)"),
         "the row states that no effort is sent: {s}"
@@ -222,22 +237,31 @@ fn test_config_tab_shows_cursor() {
     );
 }
 
-/// A row that shows state the session does not own prints no change hint, so
-/// the pane never promises an edit it cannot make.
+/// The key that acts is named once, in the footer. A row that takes no press
+/// prints its value dim rather than repeating the key, so the pane says
+/// "shown, not changed" without a sentence on every line.
 #[test]
-fn test_read_only_no_hint() {
+fn test_read_only_row_dims() {
     let mut app = working_app();
+    let rows = render_config(&app);
+    assert_eq!(
+        rows[0].spans[1].style.fg,
+        Some(Color::DarkGray),
+        "a row that takes no press prints its value dim"
+    );
+    assert_eq!(
+        rows[1].spans[1].style.fg, None,
+        "a row that acts prints its value at full contrast"
+    );
+
     app.ui.navigation.pane = Pane::Status;
     app.ui.navigation.status_pane.tab = StatusTab::Config;
     app.ui.navigation.status_pane.config_cursor = Some(0);
     let out = render_text(&app, 100, 30);
-    let model = out
-        .lines()
-        .find(|l| l.contains("Model"))
-        .unwrap_or_else(|| panic!("no model row:\n{out}"));
-    assert!(
-        !model.contains("Enter to change"),
-        "the model row takes no press: {model}"
+    assert_eq!(
+        out.matches("Enter to change").count(),
+        1,
+        "the footer is the only place the key is named:\n{out}"
     );
 }
 
