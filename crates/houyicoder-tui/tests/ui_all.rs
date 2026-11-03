@@ -64,6 +64,8 @@ mod ui_skill_hotreload;
 mod ui_skill_paths;
 #[path = "ui_tasks.rs"]
 mod ui_tasks;
+#[path = "ui_terminal_hangup.rs"]
+mod ui_terminal_hangup;
 #[path = "ui_thinking.rs"]
 mod ui_thinking;
 #[path = "ui_todo.rs"]

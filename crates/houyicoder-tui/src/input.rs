@@ -17,6 +17,7 @@ pub mod paste;
 
 pub mod queue;
 pub(crate) mod shell_history;
+pub(crate) mod terminal_events;
 
 use std::mem::take;
 use std::path::PathBuf;

@@ -5,9 +5,7 @@ pub mod state;
 
 use crossterm::{
     cursor::{Hide, MoveTo},
-    event::{
-        self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-    },
+    event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     execute,
 };
 use ratatui::{Frame, Terminal, backend::CrosstermBackend, layout::Rect};
@@ -20,6 +18,7 @@ use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::agent_message::ClientCommand;
 use crate::composition::{FrontendStartup, RunnerBundle, build_app};
+use crate::input::terminal_events::{EventReader, Input};
 use crate::keys;
 use crate::notifications::{NotifKind, Notification, copy_toast};
 use crate::selection::get_clipboard_path;
@@ -130,7 +129,12 @@ pub fn run_with_runner(
             }
             dirty = false;
         }
-        if event::poll(Duration::from_millis(100))? && handle_event(&mut app, event::read()?)? {
+        // The wait runs on the reader thread, so a terminal that closed under
+        // us cannot hold this loop inside the event reader: the deadline always
+        // returns control here, where the exit decision is made.
+        if let Input::Event(event) = EventReader::shared().next(Duration::from_millis(100))
+            && handle_event(&mut app, event)?
+        {
             dirty = true;
         }
         if edge_scroll_if_at_edge(&mut app) {
