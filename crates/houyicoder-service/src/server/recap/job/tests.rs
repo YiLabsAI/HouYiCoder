@@ -16,6 +16,7 @@ use houyicoder_protocol::llm::ProviderError;
 use houyicoder_protocol::llm::UsageProvenance;
 use houyicoder_session::SessionStore;
 
+use crate::server::recap::AWAY_AFTER;
 use crate::server::recap::RecapSettings;
 
 /// A provider that answers with one canned text and counts how often it was
@@ -127,6 +128,7 @@ fn settings() -> RecapSettings {
     RecapSettings {
         enabled: true,
         model: Some("small".into()),
+        ..Default::default()
     }
 }
 

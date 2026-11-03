@@ -1,9 +1,19 @@
+use std::time::Duration;
+use std::time::Instant;
+
+use houyicoder_protocol::envelope::ClientFrame;
+use houyicoder_protocol::envelope::RequestId;
+use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::memory::ToggleState;
 use houyicoder_protocol::llm::EffortLevel;
 
 use super::*;
 use crate::input::InputField;
+use crate::session::agent_message::{ServerResponse, SessionMessage};
 use crate::state::Pane;
-use crate::test_harness::{connected_app_with_events, render_text, working_app};
+use crate::test_harness::{
+    TransportEvent, connected_app_with_events, render_text, wait_for_request, working_app,
+};
 use crate::view::status::config_rows::ConfigRow;
 
 /// The sub-tab header renders Status / Config / Usage, with the active one
@@ -247,10 +257,15 @@ fn test_read_only_row_dims() {
     assert_eq!(
         rows[0].spans[1].style.fg,
         Some(Color::DarkGray),
-        "a row that takes no press prints its value dim"
+        "the model row takes no press and prints dim"
     );
     assert_eq!(
-        rows[1].spans[1].style.fg, None,
+        rows[1].spans[1].style.fg,
+        Some(Color::DarkGray),
+        "the effort follows the model pick, so this row prints dim too"
+    );
+    assert_eq!(
+        rows[2].spans[1].style.fg, None,
         "a row that acts prints its value at full contrast"
     );
 
@@ -316,10 +331,10 @@ fn test_timer_row_changes() {
     assert!(!row.contains("7s"), "and stops showing the old one: {row}");
 }
 
-/// The recap switch flips against the snapshot, and the window row steps to
-/// the next value in its ring. Both rows ask the host to write, so the echo
-/// is what the reader sees; the assertion is on that echo rather than on
-/// local state the host would overwrite.
+/// The Config tab is a list of settings, and the two recap rows are the pair
+/// the host persists. Enter sends the pair; the row redraws from the reply,
+/// not from a transcript echo, so the reader never sees the log claim a change
+/// before the pane shows it.
 #[test]
 fn test_recap_rows_act() {
     let (mut app, events) = connected_app_with_events();
@@ -340,6 +355,32 @@ fn test_recap_rows_act() {
     app.ui.navigation.status_pane.config_cursor = Some(switch);
     app.activate_config_row();
 
+    let sent = wait_for_request(&events, |req| {
+        matches!(req, FrontendRequest::RecapConfigSet { .. })
+    });
+    let FrontendRequest::RecapConfigSet { enabled, idle_secs } = sent.payload else {
+        unreachable!("the finder matched the recap request")
+    };
+    assert!(enabled, "the switch flips against the snapshot");
+    assert_eq!(idle_secs, 300, "the window travels with the switch");
+
+    app.handle_agent_message(SessionMessage::Response {
+        request: sent.req_id,
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: true,
+                auto_dream: true,
+                recap: true,
+                recap_idle_secs: 300,
+            },
+        },
+    });
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("Recap:") && out.contains("on"),
+        "the row shows the switch the host confirmed: {out}"
+    );
+
     let idle = CONFIG_ROWS
         .iter()
         .position(|r| *r == ConfigRow::RecapIdle)
@@ -347,16 +388,126 @@ fn test_recap_rows_act() {
     app.ui.navigation.status_pane.config_cursor = Some(idle);
     app.activate_config_row();
 
+    let sent = wait_for_request(&events, |req| {
+        matches!(req, FrontendRequest::RecapConfigSet { .. })
+    });
+    let FrontendRequest::RecapConfigSet { idle_secs, .. } = sent.payload else {
+        unreachable!("the finder matched the recap request")
+    };
+    assert_eq!(idle_secs, 600, "the window steps 5m to 10m");
+
+    app.handle_agent_message(SessionMessage::Response {
+        request: sent.req_id,
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: true,
+                auto_dream: true,
+                recap: true,
+                recap_idle_secs: 600,
+            },
+        },
+    });
     let out = render_text(&app, 100, 30);
     assert!(
-        out.contains("recap: on"),
-        "the switch flip is reported: {out}"
+        out.contains("Recap idle trigger:") && out.contains("10m"),
+        "the window row redraws from the reply: {out}"
     );
     assert!(
-        out.contains("idle after 10m"),
-        "the window steps 5m to 10m: {out}"
+        out.contains("recap: on · idle after 10m"),
+        "the confirmed reply writes the transcript receipt in the same frame: {out}"
     );
     drop(events);
+}
+
+/// A second press before the first reply lands is dropped. It would read the
+/// snapshot the pending reply has not updated, send the same value again, and
+/// a double press meant as on-then-off would land on with two receipts.
+#[test]
+fn test_recap_repeat_press_dropped() {
+    let (mut app, events) = connected_app_with_events();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Config;
+    app.sync_config_cursor();
+    let switch = CONFIG_ROWS
+        .iter()
+        .position(|r| *r == ConfigRow::Recap)
+        .expect("the recap switch is a row");
+    app.ui.navigation.status_pane.config_cursor = Some(switch);
+    app.activate_config_row();
+    app.activate_config_row();
+
+    let first = wait_for_request(&events, |req| {
+        matches!(req, FrontendRequest::RecapConfigSet { .. })
+    });
+    let deadline = Instant::now() + Duration::from_millis(200);
+    let mut extra = 0;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        let Ok(TransportEvent::Frame(frame)) = events.recv_timeout(remaining) else {
+            break;
+        };
+        if let Ok(ClientFrame::Request(env)) = serde_json::from_str::<ClientFrame>(&frame)
+            && matches!(env.payload, FrontendRequest::RecapConfigSet { .. })
+        {
+            extra += 1;
+        }
+    }
+    assert_eq!(extra, 0, "the repeat press sent nothing");
+
+    app.handle_agent_message(SessionMessage::Response {
+        request: first.req_id,
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: true,
+                auto_dream: true,
+                recap: true,
+                recap_idle_secs: 300,
+            },
+        },
+    });
+    app.activate_config_row();
+    let next = wait_for_request(&events, |req| {
+        matches!(req, FrontendRequest::RecapConfigSet { .. })
+    });
+    let FrontendRequest::RecapConfigSet { enabled, .. } = next.payload else {
+        unreachable!("the finder matched the recap request")
+    };
+    assert!(
+        !enabled,
+        "after the reply a press flips the confirmed value"
+    );
+}
+
+/// A reply carrying a window the tab did not ask for still redraws the row:
+/// the host is the authority, and the tab never pins a value it only hoped
+/// for.
+#[test]
+fn test_recap_row_follows_host() {
+    let mut app = working_app();
+    app.ui.navigation.pane = Pane::Status;
+    app.ui.navigation.status_pane.tab = StatusTab::Config;
+    app.sync_config_cursor();
+    {
+        let mut snap = app.snapshot_or_stub();
+        snap.recap_enabled = false;
+        snap.recap_idle_secs = 300;
+        app.sessions.current.capabilities.status.status_cache = Some(snap);
+    }
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(99),
+        response: ServerResponse::MemoryToggleState {
+            state: ToggleState {
+                auto_memory: true,
+                auto_dream: true,
+                recap: true,
+                recap_idle_secs: 900,
+            },
+        },
+    });
+    let out = render_text(&app, 100, 30);
+    assert!(
+        out.contains("15m"),
+        "the host's window is what the row shows: {out}"
+    );
 }
 
 /// A tab used without a connection says so instead of silently doing nothing:

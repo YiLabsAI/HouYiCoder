@@ -19,6 +19,7 @@ mod built_in_tools;
 mod hook_compose;
 mod memory;
 pub mod multi_agent;
+mod recap;
 mod reloader;
 mod resume;
 mod retention_notice;
@@ -28,6 +29,9 @@ pub use skill::SkillRegistryImpl;
 mod startup_warnings;
 mod tool_registration;
 mod worktree;
+
+use recap::build_recap;
+pub(crate) use recap::recap_settings;
 
 mod containment;
 mod paths;
@@ -50,10 +54,8 @@ use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
-use houyicoder_config::recap::RecapConfig;
-use houyicoder_config::recap::load_recap_from;
 use houyicoder_config::{
-    ConfigWarning, ModelSection, ModelSelection, RunnerSettings, load_model_section_from,
+    ConfigWarning, ModelSelection, RunnerSettings, load_model_section_from,
     resolve_model_selection_from, settings_path,
 };
 use houyicoder_context::ContextBackend;
@@ -83,7 +85,6 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use crate::server::recap::RecapSession;
-use crate::server::recap::RecapSettings;
 use background_tasks::BackgroundTasks;
 use built_in_tools::BuiltInToolProvider;
 use hook_compose::SkillRuntime;
@@ -355,7 +356,8 @@ pub(crate) fn assemble(
         Some(Arc::clone(&descriptor_store)),
     ));
     let (section, effort_warnings) = load_model_section_from(&settings_path());
-    let (recap, recap_warnings) = build_recap(session, &section, &store, &provider_for_extractor);
+    let (recap, recap_warnings) =
+        build_recap(session, &section, &store, &provider_for_extractor, &model);
     let store_log_root = store.session_log_root();
     let catalog_resolver = SettingsCatalogResolver::from_section(section.clone());
     let runner = Runner::new(store, provider, tools, config)
@@ -416,76 +418,6 @@ pub(crate) fn assemble(
         provider_facts,
         recap,
         background_tasks,
-    }
-}
-
-/// Build the session's recap state from the settings file. The recap reads
-/// and writes the session's own log through the same provider the session runs
-/// on, so neither is a second source for the traffic it describes.
-fn build_recap(
-    session: SessionId,
-    section: &ModelSection,
-    store: &Arc<SessionStore>,
-    provider: &Arc<dyn ModelProvider>,
-) -> (Arc<RecapSession>, Vec<ConfigWarning>) {
-    let (config, mut warnings) = load_recap_from(&settings_path());
-    let (settings, model_warnings) = recap_settings(config, section);
-    warnings.extend(model_warnings);
-    let log: Arc<dyn SessionLog> = store.clone();
-    let recap = Arc::new(RecapSession::new(
-        session,
-        settings,
-        Arc::clone(provider),
-        log,
-    ));
-    (recap, warnings)
-}
-
-/// Decide whether the configured recap may run, and say why when it may not.
-///
-/// The named model must be a catalog entry, and its dialect must run without
-/// thinking: the request carries no tools and no reasoning, so a model that
-/// cannot turn thinking off would spend on something this feature did not
-/// authorize. Either failure leaves the recap off with a startup warning
-/// rather than falling back to the session's own model.
-fn recap_settings(
-    config: RecapConfig,
-    section: &ModelSection,
-) -> (RecapSettings, Vec<ConfigWarning>) {
-    let settings = RecapSettings {
-        enabled: config.enabled,
-        model: config.model,
-    };
-    if !settings.enabled {
-        return (settings, Vec::new());
-    }
-    let Some(model) = settings.model.as_deref() else {
-        // The loader already warned that an enabled section names no model.
-        return (settings, Vec::new());
-    };
-    let reason = if !section.catalog.iter().any(|entry| entry.id == model) {
-        Some(format!(
-            "{model} is not in the model catalog — the recap stays off"
-        ))
-    } else if !model_window::effort_dialect(model).can_disable_thinking() {
-        Some(format!(
-            "{model} cannot run without thinking — the recap stays off"
-        ))
-    } else {
-        None
-    };
-    match reason {
-        Some(reason) => (
-            RecapSettings {
-                enabled: false,
-                ..settings
-            },
-            vec![ConfigWarning {
-                field: "recap.model".into(),
-                reason,
-            }],
-        ),
-        None => (settings, Vec::new()),
     }
 }
 

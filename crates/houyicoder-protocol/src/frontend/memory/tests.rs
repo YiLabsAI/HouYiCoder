@@ -122,10 +122,23 @@ fn test_toggle_state_round_trips() {
         recap: false,
         auto_memory: true,
         auto_dream: false,
+        recap_idle_secs: 600,
     };
     let json = serde_json::to_string(&state).expect("serialize");
     assert!(json.contains("\"autoMemory\":true"), "{json}");
     assert!(json.contains("\"autoDream\":false"), "{json}");
+    assert!(json.contains("\"recapIdleSecs\":600"), "{json}");
     let back: ToggleState = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, state);
+}
+
+/// A host that predates the recap window sends no field for it. The decode
+/// must still succeed and read the window as unknown rather than failing the
+/// whole toggle reply.
+#[test]
+fn test_toggle_state_absent_window() {
+    let state: ToggleState =
+        serde_json::from_str(r#"{"autoMemory":true,"autoDream":true}"#).expect("decode");
+    assert_eq!(state.recap_idle_secs, 0);
+    assert!(!state.recap);
 }

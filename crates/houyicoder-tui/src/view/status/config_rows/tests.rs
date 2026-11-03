@@ -21,13 +21,17 @@ fn test_labels_are_capitalized() {
     }
 }
 
-/// The rows that show state the session does not own take no press, so they
-/// print no hint. A hint on such a row promises a change the pane cannot make.
+/// The rows that only report state take no press, so they print no hint. A
+/// hint on such a row promises a change the pane cannot make.
 #[test]
 fn test_read_only_rows_inert() {
     assert!(
         !row_changes(ConfigRow::Model),
         "the model picker is its own surface"
+    );
+    assert!(
+        !row_changes(ConfigRow::ReasoningEffort),
+        "the effort follows the model pick, made in the model pane"
     );
     assert!(!row_changes(ConfigRow::Sandbox), "the sandbox is fixed");
     for row in [
@@ -35,6 +39,8 @@ fn test_read_only_rows_inert() {
         ConfigRow::AutoApproveTimer,
         ConfigRow::AutoMemory,
         ConfigRow::AutoDream,
+        ConfigRow::Recap,
+        ConfigRow::RecapIdle,
     ] {
         assert!(row_changes(row), "{row:?} acts on Enter");
     }

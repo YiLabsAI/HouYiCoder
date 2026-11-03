@@ -11,7 +11,6 @@ use crate::lifecycle::SessionLeaseStore;
 use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, Server};
 use houyicoder_api::provider::ModelProvider;
-use houyicoder_config::ModelEntry;
 use houyicoder_context::{NameSource, SessionDescriptor, SessionProvenance};
 use houyicoder_permission::{Decision, ModeGate, ToolRequest};
 use houyicoder_protocol::frontend::FrontendEvent;
@@ -321,71 +320,4 @@ fn test_build_runner_no_sandbox() {
     assert!(houyicoder_sandbox::is_unfenced());
     houyicoder_sandbox::set_unfenced(false);
     drop(remove_dir_all(&home));
-}
-
-/// The recap runs only on a model the catalog declares and whose dialect can
-/// turn thinking off. Each refusal leaves the feature off and says why at
-/// startup, rather than sending a request that spends on a model the user did
-/// not name or a request that thinks when this feature promised none.
-#[test]
-fn test_recap_needs_usable_model() {
-    let section = ModelSection {
-        catalog: vec![
-            ModelEntry {
-                id: "small-1".into(),
-                ..Default::default()
-            },
-            ModelEntry {
-                id: "gpt-5".into(),
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
-    };
-    let enabled = |model: Option<&str>| RecapConfig {
-        enabled: true,
-        model: model.map(str::to_string),
-        idle_trigger_secs: houyicoder_config::recap::DEFAULT_RECAP_IDLE_SECS,
-    };
-
-    let (settings, warnings) = recap_settings(enabled(Some("small-1")), &section);
-    assert!(
-        settings.usable(),
-        "a declared model that can skip thinking runs"
-    );
-    assert!(warnings.is_empty());
-
-    let (settings, warnings) = recap_settings(enabled(Some("gpt-5")), &section);
-    assert!(
-        !settings.usable(),
-        "a reasoning-level model keeps the recap off"
-    );
-    assert_eq!(warnings.len(), 1, "the refusal is stated, not silent");
-    assert_eq!(warnings[0].field, "recap.model");
-
-    let (settings, warnings) = recap_settings(enabled(Some("small-9")), &section);
-    assert!(
-        !settings.usable(),
-        "an undeclared model keeps the recap off"
-    );
-    assert_eq!(warnings.len(), 1, "the refusal is stated, not silent");
-
-    let (settings, warnings) = recap_settings(enabled(None), &section);
-    assert!(!settings.usable(), "no named model means no recap");
-    assert!(
-        warnings.is_empty(),
-        "the loader already warned about the missing model"
-    );
-
-    let off = RecapConfig {
-        enabled: false,
-        model: Some("gpt-5".into()),
-        idle_trigger_secs: houyicoder_config::recap::DEFAULT_RECAP_IDLE_SECS,
-    };
-    let (settings, warnings) = recap_settings(off, &section);
-    assert!(!settings.usable());
-    assert!(
-        warnings.is_empty(),
-        "a disabled section has nothing to refuse"
-    );
 }

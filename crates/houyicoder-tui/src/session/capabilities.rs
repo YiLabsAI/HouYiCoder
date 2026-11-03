@@ -272,6 +272,7 @@ impl FleetCapability {
 #[derive(Debug)]
 pub(crate) enum MemoryAction {
     Toggle { which: MemoryToggleWhich },
+    Recap,
     Forget { key: String },
 }
 
@@ -301,6 +302,7 @@ impl Default for MemoryCapability {
                 auto_memory: true,
                 auto_dream: true,
                 recap: false,
+                recap_idle_secs: 300,
             },
             seen_changes: HashSet::new(),
             actions: HashMap::new(),
@@ -362,6 +364,33 @@ impl MemoryCapability {
         }
         self.actions.insert(req_id, MemoryAction::Toggle { which });
         true
+    }
+
+    /// Record an in-flight recap config mutation so its confirmed reply writes
+    /// the transcript receipt in the same frame that updates the Config row.
+    /// Returns false when one is already pending: the next press reads the
+    /// snapshot the pending reply has not updated yet, so it would send the
+    /// same value again and a double press meant as on-then-off would land on.
+    pub(crate) fn begin_recap(&mut self, req_id: RequestId) -> bool {
+        if self
+            .actions
+            .values()
+            .any(|action| matches!(action, MemoryAction::Recap))
+        {
+            return false;
+        }
+        self.actions.insert(req_id, MemoryAction::Recap);
+        true
+    }
+
+    /// Claim an in-flight recap config mutation.
+    pub(crate) fn take_recap(&mut self, req_id: RequestId) -> bool {
+        if matches!(self.actions.get(&req_id), Some(MemoryAction::Recap)) {
+            self.actions.remove(&req_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// Record an in-flight forget; the matching list reply writes the
@@ -428,7 +457,7 @@ impl MemoryCapability {
             .values()
             .filter_map(|action| match action {
                 MemoryAction::Forget { key } => Some(key.clone()),
-                MemoryAction::Toggle { .. } => None,
+                MemoryAction::Toggle { .. } | MemoryAction::Recap => None,
             })
             .collect();
         keys.sort();

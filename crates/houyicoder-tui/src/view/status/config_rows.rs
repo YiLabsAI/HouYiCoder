@@ -58,10 +58,16 @@ pub(crate) const TIMER_STEPS: [u64; 6] = [7, 15, 30, 0, 3, 5];
 /// same ordering the timer row uses.
 pub(crate) const RECAP_IDLE_STEPS: [u64; 4] = [180, 300, 600, 900];
 
-/// Whether a row acts on Enter. A row that shows state the session does not
-/// own (the model, the sandbox) takes no press, so it prints no hint.
+/// Whether a row acts on Enter. A row that only reports state the session does
+/// not let this list change takes no press, so its value prints dim instead of
+/// advertising a key that would do nothing. The model picker and the sandbox
+/// are their own surfaces, and the effort follows the model pick, which is
+/// made in the model pane.
 pub(crate) fn row_changes(row: ConfigRow) -> bool {
-    !matches!(row, ConfigRow::Model | ConfigRow::Sandbox)
+    !matches!(
+        row,
+        ConfigRow::Model | ConfigRow::ReasoningEffort | ConfigRow::Sandbox
+    )
 }
 
 /// The label a row prints, capitalized at the first word so the column reads

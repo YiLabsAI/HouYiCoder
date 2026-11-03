@@ -125,6 +125,15 @@ change discovered only by dogfooding is a missing regression test.
      scrolls, Enter opens, Esc returns one level, and Esc closes only at the
      root. Tab switching follows one policy across panes; exceptions require an
      explicit product reason and visible hint.
+  5. **Committed setting changes write one transcript receipt on the frame the
+     pane updates.** Pure navigation, background status polls, and uncommitted
+     drafts stay out of the transcript; a setting change that alters session
+     behavior or persists to `settings.json` records a receipt line once the
+     host confirms it, in the same handler that updates the pane's cached
+     state, so the pane row and the transcript never move on different frames.
+     The permission mode is the one exception: Shift+Tab cycles it often
+     enough that a receipt per press would flood the transcript, and the
+     status bar shows it at all times.
 
 ## Repository Layout
 

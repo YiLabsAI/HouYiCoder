@@ -5,6 +5,7 @@
 //! reply about work the user has since replaced is dropped instead of shown.
 //! Every refusal and failure leaves a diagnostic and no transcript row.
 
+use std::time::Duration;
 use std::time::Instant;
 
 use houyicoder_api::provider::ModelProvider;
@@ -27,7 +28,6 @@ use houyicoder_protocol::llm::Usage;
 use tokio::time::timeout;
 
 use crate::server::now_millis;
-use crate::server::recap::AWAY_AFTER;
 use crate::server::recap::Entry;
 use crate::server::recap::OUTPUT_BYTES;
 use crate::server::recap::OUTPUT_TOKENS;
@@ -134,13 +134,15 @@ fn new_entry(session: SessionId, event: SessionEvent) -> SessionLogEntry {
 
 /// Whether the log's last activity is old enough for the resume entry. The
 /// entry summarizes a session the user is coming back to, so a session that
-/// was worked in moments ago has nothing to recap.
-fn idle_before_resume(events: &[SessionLogEntry], now_ms: u64) -> bool {
+/// was worked in moments ago has nothing to recap. The window is the
+/// configured one, not a fixed default: a user who lengthened it meant the
+/// resume entry to wait that long too.
+fn idle_before_resume(events: &[SessionLogEntry], now_ms: u64, away_after: Duration) -> bool {
     let Some(last) = events.iter().rev().find(|entry| !is_recap(&entry.event)) else {
         return false;
     };
     let idle_ms = now_ms.saturating_sub(last.ts);
-    idle_ms >= u64::try_from(AWAY_AFTER.as_millis()).unwrap_or(u64::MAX)
+    idle_ms >= u64::try_from(away_after.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Build the request one recap sends. It carries no tools and no thinking:
@@ -300,7 +302,7 @@ pub async fn run(recap: &RecapSession, entry: Entry, cancel: CancellationToken) 
     if attempted(&events, key) {
         return Outcome::Duplicate;
     }
-    if entry == Entry::Resume && !idle_before_resume(&events, now_millis()) {
+    if entry == Entry::Resume && !idle_before_resume(&events, now_millis(), recap.away_after()) {
         return Outcome::NoWindow;
     }
 

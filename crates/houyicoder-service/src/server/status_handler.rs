@@ -1,7 +1,5 @@
 //! Status snapshot assembly and session rename.
 
-use houyicoder_config::recap::load_recap_from;
-use houyicoder_config::settings_path;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::SessionId;
@@ -165,12 +163,19 @@ impl Server {
         snapshot.base_url = facts.base_url;
         snapshot.auth_token_source = facts.key_origin;
         snapshot.setting_sources = setting_sources_label();
-        let (toggles, _settings_warnings) = houyicoder_config::load_toggles();
-        snapshot.auto_memory = toggles.auto_memory;
-        snapshot.auto_dream = toggles.auto_dream;
-        // The switch and its window travel together: the Config tab shows
-        // both, and a window without the switch names a trigger that never fires.
-        let (recap, _recap_warnings) = load_recap_from(&settings_path());
+        // The four settings-file switches read from the live session, not the
+        // file: status is polled every second, and a value the user just
+        // changed must be the one this reply carries. Reading the file here
+        // would also open it twice per second and report a stale window for
+        // the second between the write and the next poll.
+        let gates = self.runner.memory_gate_state();
+        snapshot.auto_memory = gates.auto_memory;
+        snapshot.auto_dream = gates.auto_dream;
+        let recap = self
+            .recap
+            .as_ref()
+            .map(|recap| recap.settings())
+            .unwrap_or_default();
         snapshot.recap_enabled = recap.enabled;
         snapshot.recap_idle_secs = recap.idle_trigger_secs;
         snapshot.by_model = build_model_usage_view(self.runner.by_model_usage());

@@ -4,6 +4,7 @@ use houyicoder_config::recap::save_recap_to;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+use houyicoder_protocol::frontend::memory::ToggleState;
 
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
@@ -67,18 +68,40 @@ impl Server {
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let state = self.runner.memory_gate_state();
-        let toggle = map_toggle_state(state.auto_memory, state.auto_dream);
+        let toggle = self.toggle_state();
         self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
             .await
     }
 
-    /// Write the recap switch and its idle window, then reply with the
-    /// settings snapshot the Config tab renders from.
+    /// The toggle snapshot the memory and recap surfaces reply with: the live
+    /// gates for the two memory switches, and the live recap state for its
+    /// switch and window. Read from the running session rather than the
+    /// settings file, so a change made moments ago is what the reader sees.
+    pub(super) fn toggle_state(&self) -> ToggleState {
+        let gates = self.runner.memory_gate_state();
+        let settings = self
+            .recap
+            .as_ref()
+            .map(|recap| recap.settings())
+            .unwrap_or_default();
+        map_toggle_state(
+            gates.auto_memory,
+            gates.auto_dream,
+            settings.enabled,
+            settings.idle_trigger_secs,
+        )
+    }
+
+    /// Write the recap switch and its idle window, apply them to the running
+    /// session, then reply with the settings snapshot the Config tab renders
+    /// from.
     ///
     /// The host owns the settings file, so this is the only place the pair is
     /// written: a TUI-local write would be overwritten by the next host save
-    /// and would diverge from what the recap trigger actually reads.
+    /// and would diverge from what the recap trigger actually reads. The
+    /// running session is reconfigured from the file the write just produced,
+    /// so the switch and the window apply without a restart. A section that
+    /// cannot run is reported to the user here rather than only at startup.
     pub(super) async fn handle_recap_config(
         &mut self,
         io: &mut FrameCarrier,
@@ -99,9 +122,10 @@ impl Server {
                 )
                 .await;
         }
-        let current = self.runner.memory_gate_state();
-        let mut toggle = map_toggle_state(current.auto_memory, current.auto_dream);
-        toggle.recap = enabled;
+        for warning in self.refresh_recap().await {
+            self.notify_user(format!("{}: {}", warning.field, warning.reason));
+        }
+        let toggle = self.toggle_state();
         self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
             .await
     }
@@ -140,7 +164,7 @@ impl Server {
             MemoryToggleWhich::Auto => self.runner.set_auto_memory(auto_memory),
             MemoryToggleWhich::Dream => self.runner.set_auto_dream(auto_dream),
         }
-        let toggle = map_toggle_state(auto_memory, auto_dream);
+        let toggle = self.toggle_state();
         self.send_response(io, req_id, ResponsePayload::ToggleState(toggle))
             .await
     }

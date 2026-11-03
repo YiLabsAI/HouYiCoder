@@ -191,10 +191,12 @@ pub enum MemoryToggleWhich {
     Dream,
 }
 
-/// Snapshot of both memory toggles (auto-memory + auto-dream) returned on a
-/// read or a flip so the /memory pane renders on/off rows without importing
-/// the config crate. Both fields default to true; a flip round-trips the new
-/// state back so the pane updates immediately.
+/// Snapshot of the memory toggles, the recap switch, and the recap idle
+/// window, returned on a read or a flip so the /memory pane and the /status
+/// Config tab render from one round-trip without importing the config crate.
+/// The two memory switches default to true; the recap pair defaults to off and
+/// the shipped window, so a payload from a host that predates them reads as a
+/// session that never enabled a recap.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToggleState {
@@ -204,6 +206,11 @@ pub struct ToggleState {
     /// reads as off rather than failing to parse.
     #[serde(default)]
     pub recap: bool,
+    /// How long the session must sit idle before a recap is written. Zero is
+    /// the value a host that predates the field sends, so the reader treats it
+    /// as the shipped window rather than an instant trigger.
+    #[serde(default)]
+    pub recap_idle_secs: u64,
 }
 
 #[cfg(test)]

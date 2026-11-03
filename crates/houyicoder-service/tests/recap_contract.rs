@@ -192,6 +192,7 @@ async fn hosted(reply: Result<&str, ProviderError>) -> Hosted {
         RecapSettings {
             enabled: true,
             model: Some("small".into()),
+            ..Default::default()
         },
         recap_provider,
         Arc::clone(&log),

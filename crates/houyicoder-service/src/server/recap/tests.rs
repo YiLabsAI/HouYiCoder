@@ -33,6 +33,7 @@ fn enabled() -> RecapSettings {
     RecapSettings {
         enabled: true,
         model: Some("small".into()),
+        ..Default::default()
     }
 }
 
@@ -133,6 +134,7 @@ fn test_disabled_stays_inert() {
     let recap = session(RecapSettings {
         enabled: false,
         model: Some("small".into()),
+        ..Default::default()
     });
     recap.attach(1);
     recap.report_focus(1, false, Instant::now());
@@ -186,4 +188,131 @@ fn test_second_client_stays_away() {
         recap.next_due(Instant::now()).is_none(),
         "one attached client still looking keeps the session attended"
     );
+}
+
+/// A session assembled with the feature off still tracks its clients, so a
+/// switch turned on later arms the clock from the focus they already
+/// reported instead of waiting for a new report.
+#[test]
+fn test_reconfigure_arms_away() {
+    let recap = session(RecapSettings::default());
+    let now = Instant::now();
+    recap.attach(1);
+    recap.report_focus(1, false, now);
+    assert_eq!(recap.next_due(now), None, "the switch is off");
+
+    recap.reconfigure(
+        RecapSettings {
+            enabled: true,
+            model: Some("small".into()),
+            idle_trigger_secs: 180,
+        },
+        now,
+    );
+    let deadline = recap.next_due(now).expect("the switch arms the clock");
+    assert_eq!(deadline, now + Duration::from_secs(180));
+    let job = recap
+        .take_due(now + Duration::from_secs(180))
+        .expect("the away entry fires on the configured window");
+    assert_eq!(job.entry, Entry::Away);
+}
+
+/// Turning the switch off stops the clock and cancels a request already on
+/// its way, so a change made in the Config tab takes effect at once.
+#[test]
+fn test_reconfigure_cancels_job() {
+    let recap = session(enabled());
+    let now = Instant::now();
+    recap.attach(1);
+    recap.report_focus(1, false, now);
+    let job = recap.take_due(now + AWAY_AFTER).expect("away fires");
+
+    recap.reconfigure(RecapSettings::default(), now);
+    assert!(job.cancel.is_cancelled(), "the switch stops the request");
+    assert_eq!(recap.next_due(now), None);
+}
+
+/// A window change mid-absence shifts the deadline against when the user
+/// actually left: shortening from 5m to 3m after 4m of absence fires at once,
+/// and lengthening to 10m after 4m waits only the remaining 6m.
+#[test]
+fn test_window_change_restarts() {
+    let recap = session(enabled());
+    let start = Instant::now();
+    recap.attach(1);
+    recap.report_focus(1, false, start);
+    assert_eq!(recap.next_due(start), Some(start + AWAY_AFTER));
+
+    let four_min = start + Duration::from_secs(240);
+    recap.reconfigure(
+        RecapSettings {
+            enabled: true,
+            model: Some("small".into()),
+            idle_trigger_secs: 600,
+        },
+        four_min,
+    );
+    assert_eq!(
+        recap.next_due(four_min),
+        Some(start + Duration::from_secs(600)),
+        "lengthening to 10m after 4m leaves 6m remaining from the original start"
+    );
+    assert!(
+        recap.take_due(start + AWAY_AFTER).is_none(),
+        "the old 5m deadline no longer fires"
+    );
+
+    recap.reconfigure(
+        RecapSettings {
+            enabled: true,
+            model: Some("small".into()),
+            idle_trigger_secs: 180,
+        },
+        four_min,
+    );
+    assert_eq!(
+        recap.next_due(four_min),
+        Some(start + Duration::from_secs(180)),
+        "shortening to 3m after 4m is already past due"
+    );
+    let job = recap
+        .take_due(four_min)
+        .expect("4m elapsed exceeds the 3m window, so the away entry fires immediately");
+    assert_eq!(job.entry, Entry::Away);
+    recap.finish(Entry::Away);
+
+    recap.reconfigure(
+        RecapSettings {
+            enabled: true,
+            model: Some("small".into()),
+            idle_trigger_secs: 300,
+        },
+        four_min,
+    );
+    assert_eq!(
+        recap.next_due(four_min),
+        None,
+        "an absence already summarized does not re-arm until focus returns or a turn runs"
+    );
+}
+
+/// A window the loader refused is never a zero-length wait.
+#[test]
+fn test_window_never_zero() {
+    let settings = RecapSettings {
+        enabled: true,
+        model: Some("small".into()),
+        idle_trigger_secs: 0,
+    };
+    assert_eq!(settings.away_after(), Duration::from_secs(1));
+}
+
+/// The live settings are readable, so the status snapshot reports what the
+/// trigger uses rather than what the file said at startup.
+#[test]
+fn test_settings_read_live() {
+    let recap = session(enabled());
+    assert!(recap.settings().usable());
+    recap.reconfigure(RecapSettings::default(), Instant::now());
+    assert!(!recap.settings().usable());
 }

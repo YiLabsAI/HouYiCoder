@@ -1234,6 +1234,7 @@ async fn test_drive_translates_memory_responses() {
         auto_memory: true,
         auto_dream: false,
         recap: false,
+        recap_idle_secs: 300,
     }));
     engine.close();
     let run = engine.drive(Vec::new()).await;

@@ -138,16 +138,18 @@ fn test_load_ignores_empty_model() {
 }
 
 #[test]
-fn test_enabled_without_model_warns() {
+fn test_enabled_without_model_loads() {
     let path = temp_settings(r#"{"recap": {"enabled": true}}"#);
     let (cfg, warnings) = load_recap_from(&path);
     assert!(cfg.enabled);
     assert_eq!(
         cfg.model, None,
-        "no catalog fact stands in for a model the user did not name"
+        "an omitted model stays None so the host can resolve a fallback"
     );
-    assert_eq!(warnings.len(), 1, "the inert feature is reported once");
-    assert_eq!(warnings[0].field, "recap.model");
+    assert!(
+        warnings.is_empty(),
+        "enabling recap without an explicit model is valid: {warnings:?}"
+    );
     fs::remove_file(&path).ok();
 }
 

@@ -32,16 +32,22 @@ pub(crate) fn map_memory_entry(entry: Option<MemoryEntry>) -> Option<MemoryDetai
     })
 }
 
-/// Map the toggle pair to the wire snapshot.
+/// Map the toggle pair and the recap state to the wire snapshot.
 ///
-/// The recap switch rides along because the Config tab renders it from the
-/// same snapshot; it is read from the settings file at the call site, so this
-/// function stays a pure mapping.
-pub(crate) fn map_toggle_state(auto_memory: bool, auto_dream: bool) -> ToggleState {
+/// The recap switch and its window ride along because the Config tab renders
+/// them from the same snapshot; both come from the live state at the call
+/// site, so this function stays a pure mapping.
+pub(crate) fn map_toggle_state(
+    auto_memory: bool,
+    auto_dream: bool,
+    recap: bool,
+    recap_idle_secs: u64,
+) -> ToggleState {
     ToggleState {
         auto_memory,
         auto_dream,
-        recap: false,
+        recap,
+        recap_idle_secs,
     }
 }
 

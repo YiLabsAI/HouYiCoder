@@ -6,6 +6,12 @@
 //! the session was already summarized. A terminal reports only its own focus.
 //! Losing the last focused client cancels an away recap; opening an idle
 //! session through the resume path does not, since gaining focus is that open.
+//!
+//! Every attached client is tracked even while the feature is off, so a switch
+//! turned on from the Config tab applies to the session already running: the
+//! focus it last reported is the focus the new deadline is derived from. The
+//! same live state carries the idle window, so a change to it restarts the
+//! clock instead of waiting for a restart.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,13 +25,14 @@ use std::time::Duration;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::CancellationToken;
+use houyicoder_config::recap::DEFAULT_RECAP_IDLE_SECS;
 use houyicoder_context::RecapSource;
 use houyicoder_context::SessionId;
 use tokio::time::Instant;
 
-/// How long every attached client must have been unfocused before an away
-/// recap is generated.
-pub const AWAY_AFTER: Duration = Duration::from_secs(5 * 60);
+/// The default idle window, as a duration. A settings file that names no
+/// window, and a session assembled before one is read, both use it.
+pub const AWAY_AFTER: Duration = Duration::from_secs(DEFAULT_RECAP_IDLE_SECS);
 
 /// The wall-clock ceiling of one recap request.
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
@@ -43,16 +50,37 @@ pub const OUTPUT_BYTES: usize = 2 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecapSettings {
     pub enabled: bool,
-    /// The catalog entry the request names. None skips the recap: the main
-    /// model is never a fallback, because that is the expensive path this
-    /// feature exists to avoid.
+    /// The catalog entry the request names. None keeps the recap inert: the
+    /// composition root resolves a fallback before this point, so a None here
+    /// means no usable model was found rather than an unset preference.
     pub model: Option<String>,
+    /// How long every attached client must have been unfocused before an away
+    /// recap is generated. Read from the settings file and carried here so a
+    /// change applies to the running session.
+    pub idle_trigger_secs: u64,
+}
+
+impl Default for RecapSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: None,
+            idle_trigger_secs: DEFAULT_RECAP_IDLE_SECS,
+        }
+    }
 }
 
 impl RecapSettings {
     /// Whether a recap may run at all for this session.
     pub fn usable(&self) -> bool {
         self.enabled && self.model.is_some()
+    }
+
+    /// The window a session must sit idle before the away entry fires. A
+    /// window the loader refused is already replaced with the default, so
+    /// this never names a zero-length wait.
+    pub fn away_after(&self) -> Duration {
+        Duration::from_secs(self.idle_trigger_secs.max(1))
     }
 }
 
@@ -98,7 +126,14 @@ struct Running {
 }
 
 struct State {
+    settings: RecapSettings,
     clients: HashMap<u64, Focus>,
+    /// When the current unbroken stretch of all-unfocused idle time began.
+    /// Recorded even while the feature is off, and cleared once an away or
+    /// resume recap is taken for that stretch, so a window change mid-absence
+    /// measures from when the user actually left rather than starting over.
+    unfocused_since: Option<Instant>,
+    away_taken: bool,
     away_deadline: Option<Instant>,
     /// Turns in progress. A count rather than a flag: two connections can run
     /// a turn each, and the first to finish must not restart the away clock
@@ -109,9 +144,12 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(settings: RecapSettings) -> Self {
         Self {
+            settings,
             clients: HashMap::new(),
+            unfocused_since: None,
+            away_taken: false,
             away_deadline: None,
             running_turns: 0,
             resume_pending: false,
@@ -138,18 +176,35 @@ impl State {
         }
     }
 
-    /// Re-derive the away deadline from the current focus and turn state.
+    /// Re-derive the away deadline from the current focus and turn state. The
+    /// deadline is anchored to when the session became unfocused and idle, so
+    /// shortening or lengthening the window mid-absence shifts the deadline
+    /// against that anchor rather than resetting elapsed idle time to zero.
     fn settle(&mut self, now: Instant) {
         if !self.all_unfocused() {
+            self.unfocused_since = None;
+            self.away_taken = false;
             self.away_deadline = None;
             self.cancel(Entry::Away);
             return;
         }
         if self.running_turns > 0 {
+            self.unfocused_since = None;
+            self.away_taken = false;
             self.away_deadline = None;
             return;
         }
-        self.away_deadline.get_or_insert(now + AWAY_AFTER);
+        let since = *self.unfocused_since.get_or_insert(now);
+        if !self.settings.usable() {
+            self.away_deadline = None;
+            self.cancel(Entry::Away);
+            return;
+        }
+        if self.away_taken {
+            self.away_deadline = None;
+            return;
+        }
+        self.away_deadline = Some(since + self.settings.away_after());
     }
 }
 
@@ -165,7 +220,6 @@ impl State {
 /// waiting the window out.
 pub struct RecapSession {
     session: SessionId,
-    settings: RecapSettings,
     provider: Arc<dyn ModelProvider>,
     log: Arc<dyn SessionLog>,
     state: Mutex<State>,
@@ -183,10 +237,9 @@ impl RecapSession {
     ) -> Self {
         Self {
             session,
-            settings,
             provider,
             log,
-            state: Mutex::new(State::new()),
+            state: Mutex::new(State::new(settings)),
         }
     }
 
@@ -199,17 +252,49 @@ impl RecapSession {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Register an attached client. It starts out with unknown focus, so it
-    /// keeps the away timer off until it reports. False when the feature is
-    /// off or unconfigured, in which case nothing was registered.
-    pub fn attach(&self, client: u64) -> bool {
-        if !self.settings.usable() {
-            return false;
+    /// The settings the live state runs on. Read by the status snapshot so the
+    /// Config tab reports what the trigger actually uses, not what the file
+    /// said at startup.
+    pub fn settings(&self) -> RecapSettings {
+        self.lock().settings.clone()
+    }
+
+    /// The idle window the live state runs on, read by the resume entry so a
+    /// window change applies to it as well.
+    pub(crate) fn away_after(&self) -> Duration {
+        self.lock().settings.away_after()
+    }
+
+    /// Replace the switch, window, and model the session's recap runs on.
+    ///
+    /// Called when the settings file changes and when the session's model
+    /// moves, so the live state never lags the user's choice. Every attached
+    /// client keeps its last reported focus and idle start time, so a switch
+    /// turned on or a window adjusted while the user is away shifts the
+    /// deadline from when the absence began rather than resetting the clock.
+    pub fn reconfigure(&self, settings: RecapSettings, now: Instant) {
+        let mut state = self.lock();
+        state.settings = settings;
+        if !state.settings.usable() {
+            state.away_deadline = None;
+            state.resume_pending = false;
+            state.cancel(Entry::Away);
+            state.cancel(Entry::Resume);
+            return;
         }
+        state.settle(now);
+    }
+
+    /// Register an attached client. It starts out with unknown focus, so it
+    /// keeps the away timer off until it reports. Registration happens even
+    /// while the feature is off, so a switch turned on later applies to the
+    /// connection already attached.
+    pub fn attach(&self, client: u64) {
         let mut state = self.lock();
         state.clients.insert(client, Focus::Unknown);
+        state.unfocused_since = None;
+        state.away_taken = false;
         state.away_deadline = None;
-        true
     }
 
     /// Drop an attached client. The last one leaving cancels whatever is in
@@ -218,6 +303,8 @@ impl RecapSession {
         let mut state = self.lock();
         state.clients.remove(&client);
         if state.clients.is_empty() {
+            state.unfocused_since = None;
+            state.away_taken = false;
             state.away_deadline = None;
             state.resume_pending = false;
             if let Some(running) = state.running.take() {
@@ -228,11 +315,9 @@ impl RecapSession {
         state.settle(now);
     }
 
-    /// Record one client's focus report.
+    /// Record one client's focus report. Recorded whatever the switch says:
+    /// a switch turned on later derives its deadline from this fact.
     pub fn report_focus(&self, client: u64, focused: bool, now: Instant) {
-        if !self.settings.usable() {
-            return;
-        }
         let mut state = self.lock();
         if !state.clients.contains_key(&client) {
             return;
@@ -251,6 +336,8 @@ impl RecapSession {
     pub fn turn_started(&self) {
         let mut state = self.lock();
         state.running_turns = state.running_turns.saturating_add(1);
+        state.unfocused_since = None;
+        state.away_taken = false;
         state.away_deadline = None;
         state.resume_pending = false;
         state.cancel(Entry::Away);
@@ -268,11 +355,8 @@ impl RecapSession {
     /// The session was opened through the resume path and nothing summarized
     /// it yet. It runs even while a client is focused.
     pub fn resume_entry(&self) {
-        if !self.settings.usable() {
-            return;
-        }
         let mut state = self.lock();
-        if state.running_turns > 0 {
+        if !state.settings.usable() || state.running_turns > 0 {
             return;
         }
         state.resume_pending = true;
@@ -282,7 +366,7 @@ impl RecapSession {
     /// armed.
     pub fn next_due(&self, now: Instant) -> Option<Instant> {
         let state = self.lock();
-        if state.running.is_some() {
+        if state.running.is_some() || !state.settings.usable() {
             return None;
         }
         if state.resume_pending {
@@ -294,7 +378,7 @@ impl RecapSession {
     /// Take the entry that is due, if any, and mark it running.
     pub fn take_due(&self, now: Instant) -> Option<RecapJob> {
         let mut state = self.lock();
-        if state.running.is_some() || !self.settings.usable() {
+        if state.running.is_some() || !state.settings.usable() {
             return None;
         }
         if state.resume_pending {
@@ -302,11 +386,13 @@ impl RecapSession {
             // The resume entry summarizes the current point, so an away
             // deadline armed for that same point would only queue a duplicate
             // behind it. New work re-arms the clock when its turn ends.
+            state.away_taken = true;
             state.away_deadline = None;
             return Some(Self::begin(&mut state, Entry::Resume));
         }
         match state.away_deadline {
             Some(deadline) if now >= deadline => {
+                state.away_taken = true;
                 state.away_deadline = None;
                 Some(Self::begin(&mut state, Entry::Away))
             }
@@ -370,10 +456,11 @@ impl RecapSession {
     /// The model id a request may name, present only when the feature is
     /// usable.
     pub(crate) fn model(&self) -> Option<String> {
-        if !self.settings.usable() {
+        let state = self.lock();
+        if !state.settings.usable() {
             return None;
         }
-        self.settings.model.clone()
+        state.settings.model.clone()
     }
 }
 
@@ -394,10 +481,7 @@ impl RecapSession {
             Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
         Self::new(
             session,
-            RecapSettings {
-                enabled: false,
-                model: None,
-            },
+            RecapSettings::default(),
             Arc::new(FakeProvider::text("unused")),
             log,
         )
@@ -438,12 +522,14 @@ pub struct RecapAttachment {
 }
 
 impl RecapAttachment {
-    /// Attach a client to the session's recap state. None when the feature is
-    /// off for this session, so no client is registered and nothing is spent.
-    pub fn attach(recap: Arc<RecapSession>) -> Option<Self> {
+    /// Attach a client to the session's recap state. Every connection is
+    /// registered, even while the switch is off, so a switch turned on from
+    /// the Config tab applies to the connection already attached.
+    pub fn attach(recap: Arc<RecapSession>) -> Self {
         static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
         let client = NEXT_CLIENT.fetch_add(1, Ordering::Relaxed);
-        recap.attach(client).then_some(Self { recap, client })
+        recap.attach(client);
+        Self { recap, client }
     }
 
     /// Record this client's focus. The host owns the timer; a terminal only
@@ -460,6 +546,7 @@ impl Drop for RecapAttachment {
 }
 
 pub(crate) mod job;
+pub(crate) mod live;
 
 #[cfg(test)]
 mod tests;

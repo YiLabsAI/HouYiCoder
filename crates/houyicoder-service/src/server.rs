@@ -366,7 +366,7 @@ impl Server {
         // Register this connection with the session's recap state. The
         // attachment lives as long as the serve loop, so a disconnect detaches
         // its client and the last one leaving stops the away timer.
-        self.recap_client = self.recap.clone().and_then(RecapAttachment::attach);
+        self.recap_client = self.recap.clone().map(RecapAttachment::attach);
         // Ask the client to trust the project workspace before any run
         // proceeds. One-time, workspace-level (not per-call): a project not
         // yet acknowledged in user-level settings prompts once, persists the

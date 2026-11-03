@@ -59,24 +59,62 @@ impl App {
     /// Apply a toggle-pair reply. A flip and a pane-open read answer with the
     /// same shape; only the req_id a pending toggle was registered under
     /// writes the outcome line.
+    ///
+    /// The reply also refreshes the cached status snapshot, which is where the
+    /// Config tab reads the two memory switches and the recap pair. Without
+    /// that write the row would wait for the next periodic status poll, so a
+    /// press would appear to take effect in the transcript before the pane
+    /// showed it.
     pub(crate) fn apply_memory_toggles(&mut self, req_id: RequestId, state: ToggleState) {
-        let toggled = self
-            .sessions
-            .current
-            .capabilities
-            .memory
-            .take_toggle(req_id);
-        let outcome = toggled.map(|which| {
+        let memory = &mut self.sessions.current.capabilities.memory;
+        let outcome = if let Some(which) = memory.take_toggle(req_id) {
             let on = match which {
                 MemoryToggleWhich::Auto => state.auto_memory,
                 MemoryToggleWhich::Dream => state.auto_dream,
             };
-            format!("{} {}", toggle_label(which), if on { "on" } else { "off" })
-        });
-        self.sessions.current.capabilities.memory.set_toggles(state);
+            Some(format!(
+                "{} {}",
+                toggle_label(which),
+                if on { "on" } else { "off" }
+            ))
+        } else if memory.take_recap(req_id) {
+            let switch = if state.recap { "on" } else { "off" };
+            Some(format!(
+                "recap: {switch} · idle after {}m",
+                state.recap_idle_secs / 60
+            ))
+        } else {
+            None
+        };
+        self.sessions
+            .current
+            .capabilities
+            .memory
+            .set_toggles(state.clone());
+        self.record_setting_toggles(&state);
         if let Some(line) = outcome {
             self.system_line(line);
         }
+    }
+
+    /// Fold the settings-file switches a reply carries into the cached status
+    /// snapshot, so the Config tab and the status bar read the value the host
+    /// just wrote. A reply that lands before the first status poll seeds the
+    /// cache from the same stub the pane already renders, so the next press
+    /// reads the confirmed value rather than the stub's default.
+    fn record_setting_toggles(&mut self, state: &ToggleState) {
+        let stub = self.snapshot_or_stub();
+        let snapshot = self
+            .sessions
+            .current
+            .capabilities
+            .status
+            .status_cache
+            .get_or_insert(stub);
+        snapshot.auto_memory = state.auto_memory;
+        snapshot.auto_dream = state.auto_dream;
+        snapshot.recap_enabled = state.recap;
+        snapshot.recap_idle_secs = state.recap_idle_secs;
     }
 
     /// Render a memory-change broadcast and refresh the open pane. The change
@@ -146,6 +184,9 @@ impl App {
         match action {
             MemoryAction::Toggle { which } => {
                 format!("couldn't toggle {} — {message}", toggle_label(which))
+            }
+            MemoryAction::Recap => {
+                format!("couldn't update recap — {message}")
             }
             MemoryAction::Forget { key } => {
                 format!("couldn't forget {key} — {message}")

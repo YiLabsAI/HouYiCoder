@@ -6,6 +6,7 @@ use super::super::*;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::memory::MemoryProvider;
+use houyicoder_api::session::SessionLog;
 use houyicoder_config::recap::load_recap_from;
 use houyicoder_context::SessionId;
 use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySummary};
@@ -22,6 +23,9 @@ use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+
+use crate::server::recap::RecapSession;
+use crate::server::recap::RecapSettings;
 use std::env::temp_dir;
 use std::fs::remove_dir_all;
 use std::fs::remove_file;
@@ -107,7 +111,16 @@ async fn memory_dispatch(
     let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
     let io = FrameCarrier::new(server_tx, server_rx);
-    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let recap_log: Arc<dyn SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let recap = Arc::new(RecapSession::new(
+        session,
+        RecapSettings::default(),
+        Arc::new(FakeProvider::text("unused")),
+        recap_log,
+    ));
+    let mut server =
+        Server::new(runner, session, Arc::new(DefaultModeGate::new())).with_recap(recap);
     if let Some(path) = settings {
         server = server.with_settings_path(path);
     }
@@ -271,12 +284,66 @@ async fn test_recap_config_persists() {
     match &payloads[0] {
         ResponsePayload::ToggleState(state) => {
             assert!(state.recap, "the reply carries the new switch");
+            assert_eq!(state.recap_idle_secs, 600, "and the window it wrote");
         }
         other => panic!("expected ToggleState, got {other:?}"),
     }
     let (loaded, _w) = load_recap_from(&settings);
     assert!(loaded.enabled, "the switch is persisted");
     assert_eq!(loaded.idle_trigger_secs, 600, "so is the window");
+    drop(remove_dir_all(&dir));
+}
+
+/// A switch turned on while the session runs applies to the live state: the
+/// trigger the connection already attached to reads the new switch and window
+/// without a restart, and the reply reports the same pair.
+#[tokio::test]
+async fn test_recap_config_applies_live() {
+    let dir = temp_dir().join(format!("recap-live-{}", id()));
+    let settings = dir.join("settings.json");
+    let runner = stub_runner_with_memory();
+    let session = SessionId::new();
+    let log: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let recap = Arc::new(RecapSession::new(
+        session,
+        RecapSettings::default(),
+        Arc::new(FakeProvider::text("unused")),
+        log,
+    ));
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (mut client_tx, server_rx) = mpsc::channel::<String>(256);
+    let io = FrameCarrier::new(server_tx, server_rx);
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()))
+        .with_recap(Arc::clone(&recap))
+        .with_settings_path(settings);
+    let handle = tokio::spawn(async move { server.serve(io).await });
+    send_line(&mut client_tx, &Hello::local());
+    drop(client_rx.next().await);
+    let req = ClientFrame::Request(RequestEnvelope::new(
+        RequestId(1),
+        FrontendRequest::RecapConfigSet {
+            enabled: true,
+            idle_secs: 180,
+        },
+    ));
+    send_line(&mut client_tx, &req);
+    match recv_frame(&mut client_rx).await {
+        ServerFrame::Response(response) => match response.payload {
+            ResponsePayload::ToggleState(state) => {
+                assert!(state.recap, "the reply carries the new switch");
+                assert_eq!(state.recap_idle_secs, 180);
+            }
+            other => panic!("expected ToggleState, got {other:?}"),
+        },
+        other => panic!("expected response, got {other:?}"),
+    }
+    let live = recap.settings();
+    assert!(
+        live.usable(),
+        "the running session carries the switch the request wrote"
+    );
+    assert_eq!(live.idle_trigger_secs, 180);
+    handle.abort();
     drop(remove_dir_all(&dir));
 }
 

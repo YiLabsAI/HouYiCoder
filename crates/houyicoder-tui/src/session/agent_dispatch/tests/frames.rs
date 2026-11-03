@@ -328,6 +328,7 @@ fn test_toggle_state_applies_view() {
                 auto_memory: false,
                 auto_dream: true,
                 recap: false,
+                recap_idle_secs: 300,
             },
         },
     });
@@ -361,6 +362,7 @@ fn test_toggle_state_applies_view() {
                 auto_memory: false,
                 auto_dream: true,
                 recap: false,
+                recap_idle_secs: 300,
             },
         },
     });

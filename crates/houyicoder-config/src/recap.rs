@@ -1,10 +1,10 @@
-//! Recap settings (recap.enabled, recap.model), read from settings.json.
+//! Recap settings (recap.enabled, recap.model, recap.idle_trigger_secs), read
+//! from settings.json.
 //!
 //! A recap spends a model request while the user is away, so the section is
-//! off unless the file switches it on. The model must be named: a catalog
-//! entry able to run in Fast mode says how the user wants that model to
-//! respond, not what it costs, so it is not a recap model, and the session's
-//! main model is never a fallback either.
+//! off unless the file switches it on. When no model is named in the recap
+//! section, the composition root falls back to the session's active model or
+//! the first catalog model whose dialect can run without thinking.
 
 use std::fs::read_to_string;
 use std::path::Path;
@@ -21,8 +21,8 @@ pub struct RecapConfig {
     /// Whether the host may generate a recap. False keeps every trigger
     /// path inert, which is the default for a file that never names it.
     pub enabled: bool,
-    /// The model id the recap request names. None leaves the recap off: no
-    /// catalog fact stands in for a model the user did not choose.
+    /// The model id the recap request names. None lets the composition root
+    /// resolve a fallback model from the active session or catalog.
     pub model: Option<String>,
     /// How long the session must be idle before a recap is considered, in
     /// seconds. A file that names none takes the default.
@@ -85,17 +85,6 @@ pub fn load_recap_from(path: &Path) -> (RecapConfig, Vec<ConfigWarning>) {
     let enabled = extract_enabled(section, &mut warnings);
     let model = extract_model(section, &mut warnings);
     let idle_trigger_secs = extract_idle_secs(section, &mut warnings);
-    if enabled && model.is_none() && !warnings.iter().any(|w| w.field == "recap.model") {
-        // Enabling the feature and naming no model leaves it inert. Say so
-        // once at startup: the user asked for recaps and would otherwise
-        // wait for a summary that never comes. A malformed value already
-        // warned about this field, so it is not reported twice.
-        warnings.push(ConfigWarning {
-            field: "recap.model".into(),
-            reason: "the recap is enabled but names no model — it stays off until one is set"
-                .into(),
-        });
-    }
     (
         RecapConfig {
             enabled,

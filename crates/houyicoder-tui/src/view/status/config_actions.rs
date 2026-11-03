@@ -70,7 +70,8 @@ impl App {
     /// effect: the next approval in this session waits the new number of
     /// seconds. A value that is not one of the steps (an environment override
     /// naming an odd delay) moves to the first step rather than searching for
-    /// a neighbour it does not have.
+    /// a neighbour it does not have. The row redraws from this field, so the
+    /// press needs no transcript line: the pane is where the value lives.
     fn step_auto_approve_timer(&mut self) {
         let capability = &mut self.sessions.current.capabilities.permission;
         let current = capability.auto_approve_delay_secs;
@@ -92,7 +93,8 @@ impl App {
     ///
     /// The host owns the settings file, so the tab asks rather than writing:
     /// a local write would be overwritten by the next host save and would
-    /// diverge from the file the recap actually reads.
+    /// diverge from the file the recap actually reads. The reply updates both
+    /// the Config row and the transcript receipt on the same frame.
     fn set_recap_config(&mut self) {
         let enabled = !self.snapshot_or_stub().recap_enabled;
         let idle = self.snapshot_or_stub().recap_idle_secs;
@@ -114,7 +116,10 @@ impl App {
         self.send_recap_config(enabled, next);
     }
 
-    /// Ask the host to write both recap fields and echo the outcome.
+    /// Ask the host to write both recap fields. The request id is registered
+    /// as an in-flight mutation, so the confirmed reply updates the cached
+    /// snapshot and writes the transcript receipt in the same frame rather
+    /// than printing an optimistic line before the host has written the file.
     fn send_recap_config(&mut self, enabled: bool, idle_secs: u64) {
         let Some(s) = self.sessions.current.connection.as_ref() else {
             self.system_line("recap: not connected");
@@ -124,15 +129,22 @@ impl App {
             self.system_line("recap: request ids exhausted");
             return;
         };
+        if !self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .begin_recap(req_id)
+        {
+            return;
+        }
         if let Err(e) = self.enqueue(ClientCommand::RecapConfigSet {
             req_id,
             enabled,
             idle_secs,
         }) {
+            self.sessions.current.capabilities.memory.take_recap(req_id);
             self.system_line(App::enqueue_failure_line("recap", e));
-            return;
         }
-        let state = if enabled { "on" } else { "off" };
-        self.system_line(format!("recap: {state} · idle after {}m", idle_secs / 60));
     }
 }

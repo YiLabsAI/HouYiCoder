@@ -102,6 +102,12 @@ impl Server {
         let persistence = self
             .persist_pick(&selection.for_effort(effective_effort), &resolved, speed)
             .await;
+        // A recap that resolves its model from the session follows this pick,
+        // so the next summary runs on the model the session now sends.
+        let recap_warnings = self.refresh_recap().await;
+        for warning in &recap_warnings {
+            self.notify_user(format!("{}: {}", warning.field, warning.reason));
+        }
         ModelApplyResult {
             selected,
             applied: AppliedModel {
