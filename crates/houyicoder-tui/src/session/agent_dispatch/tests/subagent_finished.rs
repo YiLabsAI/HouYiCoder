@@ -145,6 +145,7 @@ fn test_trace_mark_matches_ending() {
         (CompletionStatus::BudgetExhausted, Color::Rgb(78, 186, 101)),
         (CompletionStatus::Failed, Color::Rgb(255, 107, 128)),
         (CompletionStatus::Killed, Color::Yellow),
+        (CompletionStatus::TimedOut, Color::Yellow),
         (
             CompletionStatus::Unknown("some_future_word".into()),
             Color::DarkGray,

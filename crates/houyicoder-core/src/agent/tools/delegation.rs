@@ -273,6 +273,11 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
              report what it produced and re-delegate with a longer ceiling \
              or a narrower task"
         ),
+        SpawnFailure::InvalidResumeTarget { reason } => format!(
+            "agent: spawn rejected: cannot resume that session: {reason}; \
+             resume needs the child session id of a delegation this session \
+             started, and a child still running cannot be continued"
+        ),
     }
 }
 

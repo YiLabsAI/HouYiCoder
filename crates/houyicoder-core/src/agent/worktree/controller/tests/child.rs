@@ -16,7 +16,9 @@ use tokio::time::timeout;
 use crate::agent::ToolRegistry;
 use crate::agent::multi_agent::bus_types::ChildRunMode;
 use crate::agent::multi_agent::registry::IsolationMode;
-use crate::agent::multi_agent::spawn::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
+use crate::agent::multi_agent::spawn::{
+    RunnerInheritance, SpawnError, SpawnRequest, TriggerSource, spawn_child,
+};
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::worktree::preview::preview_remove_worktree;
 use crate::agent::worktree::record::{WorktreeLease, worktree_leased};
@@ -160,6 +162,8 @@ async fn test_spawn_child_worktree_isolation() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        inherited: RunnerInheritance::default(),
+        partial_transcript: None,
         resume: None,
         timeout_secs: None,
     };
@@ -213,6 +217,8 @@ async fn test_spawn_child_fence_fail() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        inherited: RunnerInheritance::default(),
+        partial_transcript: None,
         resume: None,
         timeout_secs: None,
     };

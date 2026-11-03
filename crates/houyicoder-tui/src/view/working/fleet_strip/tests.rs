@@ -210,6 +210,7 @@ fn test_ended_row_names_ending() {
             "⊘",
             Color::Yellow,
         ),
+        (SubagentOutcome::TimedOut, "timed out", "◷", Color::Yellow),
         (
             SubagentOutcome::TurnLimit,
             "turn limit",

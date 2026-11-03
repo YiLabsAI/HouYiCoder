@@ -31,7 +31,7 @@ use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::multi_agent::registry::delegatable_agents;
-use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, TriggerSource};
+use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, RunnerInheritance, TriggerSource};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{ConditionalSkillActivator, HookRegistry};
@@ -50,11 +50,12 @@ use tokio::time::timeout;
 mod children;
 mod drive;
 use children::{
-    AdmissionLease, ChildAdmission, ChildCredential, ChildEntry, ChildWatch, RunningChildren,
+    AdmissionLease, ChildAdmission, ChildCredential, ChildEntry, ChildReservation, ChildWatch,
+    RunningChildren,
 };
 mod spawn_exec;
 mod strip;
-pub(crate) use strip::extract_last_assistant;
+pub(crate) use strip::last_assistant_text;
 
 /// Per-child budget the shutdown join gives a child's finalize tail before
 /// aborting it. Generous for real cleanup work (worktree removal, boundary
@@ -98,6 +99,7 @@ pub struct MultiAgentDeps {
     pub hooks: Option<Arc<HookRegistry>>,
 }
 
+#[derive(Clone)]
 pub struct MultiAgentRuntime {
     registry: Arc<dyn AgentRegistry>,
     store: Arc<dyn SessionLog>,
@@ -133,6 +135,11 @@ pub struct MultiAgentRuntime {
     skill_registry: Option<Arc<dyn SkillRegistry>>,
     conditional: Option<Arc<dyn ConditionalSkillActivator>>,
     hooks: Option<Arc<HookRegistry>>,
+    /// The parent's compaction components, installed on every child runner.
+    inherited: RunnerInheritance,
+    /// The child sessions a spawn is continuing right now, claimed before
+    /// construction so two resumes cannot drive one session at once.
+    reserved: Arc<Mutex<HashSet<String>>>,
 }
 
 /// One live child: its runner (Weak, so a finished child drops the entry's
@@ -164,7 +171,47 @@ impl MultiAgentRuntime {
             skill_registry: deps.skill_registry,
             conditional: deps.conditional,
             hooks: deps.hooks,
+            inherited: RunnerInheritance::default(),
+            reserved: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Install the parent's compaction components on every child this runtime
+    /// spawns. The composition root calls this once, before the runtime is
+    /// shared, because the components are fixed for the session.
+    pub(super) fn with_inheritance(mut self, inherited: RunnerInheritance) -> Self {
+        self.inherited = inherited;
+        self
+    }
+
+    /// Claim a session id a spawn is about to continue.
+    ///
+    /// None while the id is running or already claimed: a resume that cannot
+    /// claim its target must not write into a session another run owns. The
+    /// claim is released by the guard, so the caller must keep it until the
+    /// child's task ends.
+    pub(super) fn reserve_child(&self, child_id: &str) -> Option<ChildReservation> {
+        let running = self
+            .children
+            .lock()
+            .map(|mut registry| {
+                registry.retain(|_, entry| entry.runner.upgrade().is_some());
+                registry.contains_key(child_id)
+            })
+            .unwrap_or(true);
+        if running {
+            return None;
+        }
+        let Ok(mut reserved) = self.reserved.lock() else {
+            return None;
+        };
+        if !reserved.insert(child_id.to_string()) {
+            return None;
+        }
+        Some(ChildReservation::new(
+            child_id.to_string(),
+            Arc::clone(&self.reserved),
+        ))
     }
 
     /// Register a live child runner so a later per-turn abort can reach it.
@@ -240,9 +287,13 @@ pub(super) fn install_agent_types(
     runner.set_agent_types(delegatable_agents(registry, denied));
 }
 
-/// Build the child-spawn port attached to the parent runner.
-pub(super) fn build_runtime(deps: MultiAgentDeps) -> Arc<dyn SpawnHandle> {
-    Arc::new(MultiAgentRuntime::new(deps))
+/// Build the child-spawn port attached to the parent runner, carrying the
+/// parent's compaction components into every child.
+pub(super) fn build_runtime(
+    deps: MultiAgentDeps,
+    inherited: RunnerInheritance,
+) -> Arc<dyn SpawnHandle> {
+    Arc::new(MultiAgentRuntime::new(deps).with_inheritance(inherited))
 }
 
 impl SpawnHandle for MultiAgentRuntime {
@@ -263,23 +314,7 @@ impl SpawnHandle for MultiAgentRuntime {
         let depth = ctx.agent_identity.as_ref().map(|i| i.depth).unwrap_or(0);
         let cancel = ctx.cancel.clone();
         let hook_fire = ctx.hook_fire.clone();
-        let this = MultiAgentRuntime {
-            registry: Arc::clone(&self.registry),
-            store: Arc::clone(&self.store),
-            provider: Arc::clone(&self.provider),
-            tools: self.tools.clone(),
-            config: self.config.clone(),
-            worktree_controller: self.worktree_controller.clone(),
-            cwd: self.cwd.clone(),
-            bus: self.bus.clone(),
-            gate: Arc::clone(&self.gate),
-            children: Arc::clone(&self.children),
-            running: Arc::clone(&self.running),
-            descriptor_store: self.descriptor_store.clone(),
-            skill_registry: self.skill_registry.clone(),
-            conditional: self.conditional.clone(),
-            hooks: self.hooks.clone(),
-        };
+        let this = self.clone();
         let trigger = TriggerSource::ModelTool {
             tool_call_id: ctx.call_id.clone(),
         };
@@ -466,23 +501,7 @@ impl SpawnHandle for MultiAgentRuntime {
         hook: &str,
         args: SpawnArgs,
     ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
-        let this = MultiAgentRuntime {
-            registry: Arc::clone(&self.registry),
-            store: Arc::clone(&self.store),
-            provider: Arc::clone(&self.provider),
-            tools: self.tools.clone(),
-            config: self.config.clone(),
-            worktree_controller: self.worktree_controller.clone(),
-            cwd: self.cwd.clone(),
-            bus: self.bus.clone(),
-            gate: Arc::clone(&self.gate),
-            children: Arc::clone(&self.children),
-            running: Arc::clone(&self.running),
-            descriptor_store: self.descriptor_store.clone(),
-            skill_registry: self.skill_registry.clone(),
-            conditional: self.conditional.clone(),
-            hooks: self.hooks.clone(),
-        };
+        let this = self.clone();
         let trigger = TriggerSource::System {
             hook: hook.to_string(),
         };
@@ -604,7 +623,7 @@ async fn fire_subagent_stop(
 /// its first durable append, which materializes the descriptor on a store that
 /// materializes one, so the update normally edits a file already there.
 /// Best-effort: a stamp failure logs and continues (the child still ran).
-pub(super) fn stamp_spawned_by(
+pub(super) fn record_provenance(
     descriptor_store: &Option<Arc<dyn SessionDescriptorStore>>,
     child_sid: SessionId,
     parent_sid: SessionId,
@@ -659,20 +678,20 @@ fn terminal_summary(
     match r.outcome {
         RunOutcome::FinalOutput(t) => ("completed".to_string(), t),
         RunOutcome::MaxTurnsReached { .. } | RunOutcome::BudgetExceeded { .. } => {
-            ("max_turns".to_string(), partial_of(child_tail))
+            ("max_turns".to_string(), partial_summary(child_tail))
         }
         RunOutcome::Interrupted(_) | RunOutcome::Interruption(_) => {
-            ("interrupted".to_string(), partial_of(child_tail))
+            ("interrupted".to_string(), partial_summary(child_tail))
         }
-        RunOutcome::VerifyFailed(_) => ("verify_failed".to_string(), partial_of(child_tail)),
-        RunOutcome::Handoff(_) => ("handoff".to_string(), partial_of(child_tail)),
+        RunOutcome::VerifyFailed(_) => ("verify_failed".to_string(), partial_summary(child_tail)),
+        RunOutcome::Handoff(_) => ("handoff".to_string(), partial_summary(child_tail)),
     }
 }
 
 /// The last non-empty assistant text the child's newest rows hold: the partial
 /// result a non-final terminal leaves behind.
-fn partial_of(child_tail: &[houyicoder_context::SessionLogEntry]) -> String {
-    extract_last_assistant(child_tail).unwrap_or_default()
+fn partial_summary(child_tail: &[houyicoder_context::SessionLogEntry]) -> String {
+    last_assistant_text(child_tail).unwrap_or_default()
 }
 
 #[cfg(test)]

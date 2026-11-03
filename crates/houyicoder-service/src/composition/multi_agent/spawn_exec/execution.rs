@@ -7,7 +7,6 @@
 //! slot, and the completion signal until the child is finished.
 
 use super::super::{AdmissionLease, ChildHandle};
-use super::ceiling::{CeilingEnding, TIMED_OUT_STATUS};
 use super::*;
 
 /// Everything one child's run is built from.
@@ -23,6 +22,9 @@ pub(super) struct ChildExecution {
     pub(super) completion: Sender<()>,
     pub(super) running: Arc<Mutex<RunningChildren>>,
     pub(super) admission: u64,
+    /// The claim on a resumed session id, held for the life of the task so the
+    /// id cannot be driven twice.
+    pub(super) reservation: Option<ChildReservation>,
 }
 
 impl ChildExecution {
@@ -46,6 +48,7 @@ impl ChildExecution {
             completion,
             running,
             admission,
+            reservation,
         } = self;
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
@@ -58,6 +61,10 @@ impl ChildExecution {
             // point, so the slot frees when the child completes.
             let _completion = completion;
             let _permit = permit;
+            // The resumed session stays claimed until this task ends, however
+            // it ends: a second spawn of the same session is refused for as
+            // long as the first is still driving it.
+            let _reservation = reservation;
             // The admission leaves with the task, so a refused construction
             // releases its slot instead of leaving one a later join waits on.
             let _lease = AdmissionLease::new(running, admission);
@@ -73,7 +80,13 @@ impl ChildExecution {
             };
             let child_sid = handle.session;
             let child_str = child_sid.to_string();
-            stamp(&runtime, parent, child_sid, &child_str, &subagent_type);
+            record_provenance(
+                &runtime.descriptor_store,
+                child_sid,
+                parent,
+                &subagent_type,
+                &child_str,
+            );
             let child = ChildDescriptor::new(
                 child_str.clone(),
                 subagent_type.clone(),
@@ -98,8 +111,9 @@ impl ChildExecution {
             // deadline behind it. Only a caller that waits can be told which of
             // the two ended the child.
             let ceiling = handle.cancel.clone();
+            let cut_reason = Arc::clone(&handle.cut_reason);
             let run = finalize_child(&runtime, handle, parent, child_sid, child, hooks, task);
-            let _ending = await_ceilinged(run, timeout_secs, ceiling).await;
+            run_with_deadline(run, timeout_secs, ceiling, cut_reason).await;
         })
     }
 
@@ -123,6 +137,7 @@ impl ChildExecution {
             completion,
             running,
             admission,
+            reservation,
         } = self;
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
@@ -134,13 +149,24 @@ impl ChildExecution {
             // observes the finalize tail too.
             let _completion = completion;
             let _slot = slot;
+            // The resumed session stays claimed until this task ends, however
+            // it ends: a second spawn of the same session is refused for as
+            // long as the first is still driving it. The claim also survives a
+            // hand-over, because the child keeps running either way.
+            let _reservation = reservation;
             // The admission leaves with the task, so a refused construction
             // releases its slot instead of leaving one a later join waits on.
             let _lease = AdmissionLease::new(running, admission);
             let handle = spawn_child(request).await.map_err(map_spawn_err)?;
             let child_sid = handle.session;
             let child_str = child_sid.to_string();
-            stamp(&runtime, parent, child_sid, &child_str, &subagent_type);
+            record_provenance(
+                &runtime.descriptor_store,
+                child_sid,
+                parent,
+                &subagent_type,
+                &child_str,
+            );
             let child = ChildDescriptor::new(
                 child_str.clone(),
                 subagent_type.clone(),
@@ -167,41 +193,16 @@ impl ChildExecution {
             // to the return boundary.
             fire_subagent_start(hooks.as_ref(), parent, &child_str, &subagent_type).await;
             let ceiling = handle.cancel.clone();
+            let cut_reason = Arc::clone(&handle.cut_reason);
             let run = finalize_child(&runtime, handle, parent, child_sid, child, hooks, task);
-            let (status, summary, usage) = match await_ceilinged(run, timeout_secs, ceiling).await {
-                CeilingEnding::Finished(done) => done,
-                CeilingEnding::Cut { secs, done } => {
-                    let (_, summary, usage) = done;
-                    (
-                        TIMED_OUT_STATUS.to_string(),
-                        format!("[timed out after {secs}s, resumable via {child_str}]\n{summary}"),
-                        usage,
-                    )
-                }
-            };
+            // The ending is read from the drive rather than rewritten here: the
+            // child's own terminal publish already reported the cut, and the
+            // caller must be told the same ending the bus carried.
+            let (status, summary, usage) =
+                run_with_deadline(run, timeout_secs, ceiling, cut_reason).await;
             Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
         })
     }
-}
-
-/// Write the child's provenance at the delegation boundary, before its run: the
-/// delegation record it opens with is its first durable append, so nothing that
-/// counts or lists the user's sessions can read a running child as one of
-/// theirs.
-fn stamp(
-    runtime: &MultiAgentRuntime,
-    parent: SessionId,
-    child_sid: SessionId,
-    child_str: &str,
-    subagent_type: &str,
-) {
-    stamp_spawned_by(
-        &runtime.descriptor_store,
-        child_sid,
-        parent,
-        subagent_type,
-        child_str,
-    );
 }
 
 /// Register the child's runner for a per-turn abort, record the channel that

@@ -1,15 +1,17 @@
 //! Child spawn boundaries, cancellation, status, and inbox behavior.
 
-use super::{SpawnError, SpawnRequest, TriggerSource, spawn_child};
+use super::{RunnerInheritance, SpawnError, SpawnRequest, TriggerSource, spawn_child};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::skill::{SkillDescriptor, SkillError, SkillRegistry};
 use houyicoder_async::CancellationToken;
+use houyicoder_async::PFut;
 use houyicoder_context::{
-    PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionEvent, SessionId,
-    SessionProvenance,
+    EventId, PromptCoverage, SessionDescriptor, SessionDescriptorStore, SessionEvent, SessionId,
+    SessionLogEntry, SessionProvenance,
 };
 use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_session::SessionStore;
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::agent::multi_agent::bus_types::ChildRunMode;
@@ -18,7 +20,8 @@ use crate::agent::multi_agent::bus_types::{AgentBus, BusMessage, completed_topic
 use crate::agent::multi_agent::registry::IsolationMode;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::{
-    Hook, HookContext, HookError, HookEvent, HookRegistry, HookSource, HookVerdict, ToolRegistry,
+    Hook, HookContext, HookError, HookEvent, HookRegistry, HookSource, HookVerdict, SummarizeError,
+    Summarizer, ToolRegistry,
 };
 use crate::provider::test_support::FakeProvider;
 use houyicoder_async::bus::MessageBus;
@@ -59,6 +62,8 @@ fn req_at_depth(
         skill_registry: None,
         conditional: None,
         hooks: None,
+        inherited: RunnerInheritance::default(),
+        partial_transcript: None,
     }
 }
 
@@ -607,8 +612,18 @@ async fn test_child_inherits_hooks() {
 async fn test_resume_keeps_child_session() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
-    let mut req = req_at_depth(SessionId::new(), store.clone(), provider, 0);
-    let existing = SessionId::new();
+    let parent = SessionId::new();
+    let first = spawn_child(req_at_depth(
+        parent,
+        store.clone(),
+        Arc::clone(&provider),
+        0,
+    ))
+    .await
+    .expect("spawn");
+    let existing = first.session;
+    drop(first);
+    let mut req = req_at_depth(parent, store.clone(), provider, 0);
     req.resume = Some(existing);
 
     let handle = spawn_child(req).await.expect("spawn");
@@ -617,13 +632,107 @@ async fn test_resume_keeps_child_session() {
         handle.session, existing,
         "the resumed child keeps the session it was asked to continue"
     );
+    let delegations = store
+        .trajectory_tail(existing)
+        .iter()
+        .filter(|entry| matches!(entry.event, SessionEvent::ChildDelegated { .. }))
+        .count();
+    assert_eq!(
+        delegations, 1,
+        "a resumed child keeps the delegation record its log already holds"
+    );
 }
 
-/// A spawn with no resume mints a child session that is not the one the
+/// A resume target that does not exist, or that exists but was started by a
+/// different parent, is refused instead of silently becoming a fresh child:
+/// continuing the parent's own session or another conversation would write a
+/// delegated turn into a log nobody delegated.
+#[tokio::test]
+async fn test_resume_rejects_invalid_target() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let parent = SessionId::new();
+    let mut missing = req_at_depth(parent, store.clone(), Arc::clone(&provider), 0);
+    missing.resume = Some(SessionId::new());
+    let error = spawn_child(missing)
+        .await
+        .err()
+        .expect("an unknown id is refused");
+    assert!(
+        matches!(error, SpawnError::InvalidResumeTarget { .. }),
+        "the refusal names the resume target: {error:?}"
+    );
+
+    let other = spawn_child(req_at_depth(
+        SessionId::new(),
+        store.clone(),
+        Arc::clone(&provider),
+        0,
+    ))
+    .await
+    .expect("another parent's child spawns");
+    let other_session = other.session;
+    drop(other);
+    let mut foreign = req_at_depth(parent, store.clone(), provider, 0);
+    foreign.resume = Some(other_session);
+    let error = spawn_child(foreign)
+        .await
+        .err()
+        .expect("a foreign child is refused");
+    assert!(
+        matches!(error, SpawnError::InvalidResumeTarget { .. }),
+        "the refusal names the resume target: {error:?}"
+    );
+}
+
+/// A resume target that is a real conversation but not a delegation of this
+/// parent is refused: the parent's own session and another top-level session
+/// both exist and have turns, but neither was delegated by this parent, so
+/// continuing either would write a delegated turn into a conversation nobody
+/// delegated. No spawn boundary is written into the target's own log.
+#[tokio::test]
+async fn test_resume_rejects_non_delegation() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let parent = SessionId::new();
+    seed_turns(store.as_ref(), parent).await;
+    let mut own = req_at_depth(parent, store.clone(), Arc::clone(&provider), 0);
+    own.resume = Some(parent);
+    let error = spawn_child(own)
+        .await
+        .err()
+        .expect("the parent's own session is not a delegation");
+    assert!(
+        matches!(error, SpawnError::InvalidResumeTarget { .. }),
+        "the refusal names the resume target: {error:?}"
+    );
+    assert!(
+        store
+            .trajectory_tail(parent)
+            .iter()
+            .all(|e| !matches!(e.event, SessionEvent::SubagentSpawn { .. })),
+        "no spawn boundary is written into the parent's own session"
+    );
+
+    let top = SessionId::new();
+    seed_turns(store.as_ref(), top).await;
+    let mut foreign = req_at_depth(parent, store.clone(), provider, 0);
+    foreign.resume = Some(top);
+    let error = spawn_child(foreign)
+        .await
+        .err()
+        .expect("a top-level session is not a delegation");
+    assert!(
+        matches!(error, SpawnError::InvalidResumeTarget { .. }),
+        "the refusal names the resume target: {error:?}"
+    );
+}
+
+/// A spawn with no resume creates a child session that is not the one the
 /// parent runs in and not a session the caller named, so the field is opt-in
 /// and a plain delegation starts clean.
 #[tokio::test]
-async fn test_plain_spawn_mints_session() {
+async fn test_plain_spawn_creates_session() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let parent = SessionId::new();
@@ -632,4 +741,80 @@ async fn test_plain_spawn_mints_session() {
     let handle = spawn_child(req).await.expect("spawn");
 
     assert_ne!(handle.session, parent, "the child is its own session");
+}
+
+/// A summarizer that answers with one fixed text, standing in for the
+/// provider-backed one the composition root installs.
+struct FixedText(&'static str);
+
+impl Summarizer for FixedText {
+    fn summarize<'a>(
+        &'a self,
+        _events: &'a [SessionLogEntry],
+        _custom_instructions: Option<&'a str>,
+    ) -> PFut<'a, Result<String, SummarizeError>> {
+        let text = self.0.to_string();
+        Box::pin(async move { Ok(text) })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Append a few turns to a session so its log has something to fold.
+async fn seed_turns(store: &SessionStore, session: SessionId) {
+    for i in 0..6 {
+        store
+            .append(SessionLogEntry {
+                id: EventId::new(),
+                session,
+                ts: i,
+                prev_hash: None,
+                event: if i == 0 {
+                    SessionEvent::UserInput {
+                        text: "do the work".into(),
+                    }
+                } else {
+                    SessionEvent::AssistantMessage {
+                        text: format!("step {i}"),
+                        thinking: None,
+                    }
+                },
+            })
+            .await
+            .expect("seed turn");
+    }
+}
+
+/// A child compresses its own log with the summarizer its parent was built
+/// with, not the engine's heuristic default: a delegation that outgrows its
+/// window keeps the quality of summary a top-level turn would get.
+#[tokio::test]
+async fn test_child_compacts_with_llm() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let mut req = req_at_depth(SessionId::new(), store.clone(), provider, 0);
+    req.inherited = RunnerInheritance {
+        summarizer: Some(Arc::new(FixedText("the child's own summary"))),
+        ..RunnerInheritance::default()
+    };
+
+    let handle = spawn_child(req).await.expect("spawn");
+    seed_turns(store.as_ref(), handle.session).await;
+
+    let outcome = handle
+        .runner
+        .compact(handle.session)
+        .await
+        .expect("the child compacts its own log");
+    let manifest = store
+        .read_checkpoint(outcome.manifest_id)
+        .await
+        .expect("checkpoint written");
+    let summary = manifest.summary.expect("summary present");
+    assert!(
+        summary.contains("the child's own summary"),
+        "the child folded its log with the inherited summarizer: {summary}"
+    );
 }

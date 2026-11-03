@@ -27,7 +27,7 @@ fn test_partial_answer_drops_tag() {
     let events = vec![assistant_row(
         "I checked the parser and it needs one more case.\n</|DSML|parameter></|DSML|invoke>",
     )];
-    let got = extract_last_assistant(&events).expect("a partial answer");
+    let got = last_assistant_text(&events).expect("a partial answer");
     assert_eq!(
         got, "I checked the parser and it needs one more case.",
         "the half-written marker is not part of the answer"
@@ -41,7 +41,7 @@ fn test_complete_tag_survives() {
     let text = "the row reads <|DSML|invoke|> as a marker";
     let events = vec![assistant_row(text)];
     assert_eq!(
-        extract_last_assistant(&events).as_deref(),
+        last_assistant_text(&events).as_deref(),
         Some(text),
         "a closed marker is content"
     );
@@ -53,5 +53,5 @@ fn test_complete_tag_survives() {
 fn test_plain_answer_unchanged() {
     let text = "all checks pass";
     let events = vec![assistant_row(text)];
-    assert_eq!(extract_last_assistant(&events).as_deref(), Some(text));
+    assert_eq!(last_assistant_text(&events).as_deref(), Some(text));
 }

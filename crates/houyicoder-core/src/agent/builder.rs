@@ -369,8 +369,9 @@ impl Runner {
     }
 
     /// Override the default heuristic summarizer with an LLM-backed one. The
-    /// composition root installs the production implementation.
-    pub fn with_summarizer(mut self, summarizer: Box<dyn Summarizer>) -> Self {
+    /// composition root installs the production implementation and hands the
+    /// same instance to every child, so all runners compress alike.
+    pub fn with_summarizer(mut self, summarizer: Arc<dyn Summarizer>) -> Self {
         self.summarizer = summarizer;
         self
     }

@@ -1,8 +1,8 @@
 //! How a child agent ended, stated once for the readers that report it.
 //!
 //! A child's finish notification, the fleet relay's final snapshot, and the
-//! frontend's own ending words were three tables of the same five strings,
-//! kept in step manually. This is the one table for those three.
+//! frontend's own ending words were three tables of the same strings, kept in
+//! step manually. This is the one table for those three.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -25,6 +25,10 @@ pub enum CompletionStatus {
     Killed,
     /// The work stopped at its limit on how many turns it could run.
     TurnLimit,
+    /// The work was stopped by the wall-clock ceiling its caller gave it.
+    /// Distinct from Killed: the child was making progress and the caller
+    /// ended it, so what it produced is worth continuing from.
+    TimedOut,
     /// The work stopped when its token budget ran out. The engine no longer
     /// reaches this ending on its own, but a released host reported it, and
     /// a word a peer sent must still decode to the ending it named rather
@@ -44,6 +48,7 @@ impl CompletionStatus {
             Self::Failed => "failed",
             Self::Killed => "killed",
             Self::TurnLimit => "turn_limit",
+            Self::TimedOut => "timed_out",
             Self::BudgetExhausted => "budget",
             Self::Unknown(word) => word,
         }
@@ -57,6 +62,7 @@ impl CompletionStatus {
             "failed" => Self::Failed,
             "killed" => Self::Killed,
             "turn_limit" => Self::TurnLimit,
+            "timed_out" => Self::TimedOut,
             "budget" => Self::BudgetExhausted,
             other => Self::Unknown(other.to_string()),
         }

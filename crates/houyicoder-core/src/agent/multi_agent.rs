@@ -18,5 +18,9 @@ pub mod spawn;
 pub mod status_publisher;
 pub mod usage;
 
-pub use spawn::{ChildHandle, SpawnError, SpawnRequest, record_subagent_return, spawn_child};
+pub use spawn::{
+    ChildHandle, CutReason, PartialTranscript, RunnerInheritance, SpawnError, SpawnRequest,
+    record_subagent_return, spawn_child,
+};
+pub use status_publisher::{ChildStatusPublisher, recorded_cut, timed_out_summary};
 pub use usage::{SubagentUsage, aggregate_subagent_usage};

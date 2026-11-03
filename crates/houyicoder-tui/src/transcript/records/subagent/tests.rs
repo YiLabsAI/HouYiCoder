@@ -99,6 +99,10 @@ fn test_outcome_names_each_status() {
         SubagentOutcome::Interrupted
     );
     assert_eq!(
+        SubagentOutcome::from_completion(CompletionStatus::TimedOut),
+        SubagentOutcome::TimedOut
+    );
+    assert_eq!(
         SubagentOutcome::from_completion(CompletionStatus::TurnLimit),
         SubagentOutcome::TurnLimit
     );
@@ -111,6 +115,7 @@ fn test_outcome_names_each_status() {
         SubagentOutcome::Unknown
     );
     assert_eq!(SubagentOutcome::Unknown.label(), "ended");
+    assert_eq!(SubagentOutcome::TimedOut.label(), "timed out");
     assert_eq!(SubagentOutcome::TurnLimit.label(), "finished (turn limit)");
     assert_eq!(SubagentOutcome::Budget.label(), "finished (budget)");
 }

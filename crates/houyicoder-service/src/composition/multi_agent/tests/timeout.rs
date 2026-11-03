@@ -50,6 +50,57 @@ async fn test_ceiling_stops_child() {
     );
 }
 
+/// A delegation cut by its ceiling reports what the child had produced, and
+/// the same ending reaches the bus: the parent reads one of the two and the
+/// user reads the other, so an interrupt on one side would make the two
+/// accounts of one run disagree.
+#[tokio::test]
+async fn test_timeout_keeps_partial() {
+    // The first model call answers with text and a call to a tool that is not
+    // registered, so the child has output on record and asks for one more
+    // call; that call never returns.
+    let (provider, _stalled) = StallAfterFirstProvider::new(vec![vec![
+        OutputItem::Text {
+            text: "half an answer".into(),
+        },
+        OutputItem::ToolCall {
+            id: "tc1".into(),
+            name: "ghost".into(),
+            input: serde_json::json!({}),
+        },
+    ]]);
+    let bus = Arc::new(AgentBus::new());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let (runtime, _store, parent_sid) =
+        runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.timeout_secs = Some(1);
+
+    let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
+
+    let summary = outcome.summary.unwrap_or_default();
+    assert!(
+        summary.contains("half an answer"),
+        "the report keeps what the child had produced: {summary}"
+    );
+    assert!(
+        summary.contains(&outcome.child_session_id),
+        "and names the session to continue: {summary}"
+    );
+    let message = completed.try_recv().expect("the ending reached the bus");
+    assert!(
+        matches!(
+            message,
+            BusMessage::Completed {
+                status: CompletionStatus::TimedOut,
+                ..
+            }
+        ),
+        "the bus reports the same ending as the caller: {message:?}"
+    );
+}
+
 /// A child that finishes within its ceiling reports its own ending, so the
 /// timeout path does not relabel work that completed.
 #[tokio::test]

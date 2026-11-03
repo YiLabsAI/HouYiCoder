@@ -21,8 +21,14 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
 /// Format the notification text the parent reads as a mid-turn interjection:
-/// subagent type + terminal status + the child's own summary, so the model
-/// can act on the result without re-reading the child transcript.
+/// subagent type + terminal status + the child's own summary, so the model can
+/// act on the result without re-reading the child transcript, then the full
+/// child session id on a line of its own.
+///
+/// The type line keeps the abbreviated id, which is what a reader scanning a
+/// notification needs. The line below carries the whole one, because continuing
+/// the child means passing its id back exactly, and a shortened id is not
+/// something the model can reconstruct.
 fn notification_text(
     subagent_type: &str,
     child_id: &str,
@@ -30,7 +36,7 @@ fn notification_text(
     summary: &str,
 ) -> String {
     format!(
-        "Subagent {subagent_type} ({short}) {status}: {summary}",
+        "Subagent {subagent_type} ({short}) {status}: {summary}\nresumable via {child_id}",
         short = &child_id[..child_id.len().min(8)],
         status = status.as_str(),
     )

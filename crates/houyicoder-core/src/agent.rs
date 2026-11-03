@@ -210,9 +210,9 @@ pub struct Runner {
     /// Snapshot store size cap in bytes; prune_snapshots enforces it.
     snapshot_size_cap_bytes: u64,
     /// The summarizer for the Compress stage. Defaults to HeuristicSummarizer
-    /// (no LLM dependency, used in tests). The composition root overrides with
-    /// LlmSummarizer for production so compress produces real summaries.
-    summarizer: Box<dyn manifest::Summarizer>,
+    /// (no LLM dependency, used in tests); production shares the composition
+    /// root's LlmSummarizer, which a delegated child compresses its log with too.
+    summarizer: Arc<dyn manifest::Summarizer>,
     /// The cohesive owner of memory state and operations: provider handle,
     /// feature gates, background processes (extractor + dream), and all
     /// memory query/mutation operations. Constructed by the composition root

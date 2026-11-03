@@ -234,14 +234,16 @@ fn build_row<'a>(
 /// The glyph a strip row leads with for an ending: a tick for a child that
 /// reached the end of its own work, whether it finished the task or stopped
 /// on a limit it was given, a cross for one that stopped on an error, a
-/// barred circle for one stopped from outside, and a plain dot for an ending
-/// this build cannot name. The tick is not drawn for an unnamed ending,
-/// because a tick claims the work completed and nobody observed that.
+/// barred circle for one stopped from outside, a quarter circle for one
+/// stopped by its caller's clock, and a plain dot for an ending this build
+/// cannot name. The tick is not drawn for an unnamed ending, because a tick
+/// claims the work completed and nobody observed that.
 fn ending_glyph(outcome: SubagentOutcome) -> &'static str {
     match outcome {
         SubagentOutcome::Finished | SubagentOutcome::TurnLimit | SubagentOutcome::Budget => "✓ ",
         SubagentOutcome::Failed => "✕ ",
         SubagentOutcome::Interrupted => "⊘ ",
+        SubagentOutcome::TimedOut => "◷ ",
         SubagentOutcome::Unknown => "· ",
     }
 }
@@ -257,7 +259,7 @@ fn ending_glyph(outcome: SubagentOutcome) -> &'static str {
 pub(crate) fn ending_style(outcome: SubagentOutcome) -> Style {
     let color = match outcome {
         SubagentOutcome::Failed => ERROR_RED,
-        SubagentOutcome::Interrupted => Color::Yellow,
+        SubagentOutcome::Interrupted | SubagentOutcome::TimedOut => Color::Yellow,
         _ => Color::DarkGray,
     };
     Style::default().fg(color)

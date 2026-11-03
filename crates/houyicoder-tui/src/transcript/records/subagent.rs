@@ -16,6 +16,10 @@ pub enum SubagentOutcome {
     Failed,
     /// The child was stopped from outside before it finished.
     Interrupted,
+    /// The child was stopped by the wall-clock ceiling its caller gave it.
+    /// Distinct from an interrupt: the child was making progress and what it
+    /// produced is worth continuing from.
+    TimedOut,
     /// The child stopped at the limit on how many turns it could run.
     TurnLimit,
     /// The child stopped when its token budget ran out.
@@ -34,6 +38,7 @@ impl SubagentOutcome {
             CompletionStatus::Completed => Self::Finished,
             CompletionStatus::Failed => Self::Failed,
             CompletionStatus::Killed => Self::Interrupted,
+            CompletionStatus::TimedOut => Self::TimedOut,
             CompletionStatus::TurnLimit => Self::TurnLimit,
             CompletionStatus::BudgetExhausted => Self::Budget,
             other => {
@@ -52,6 +57,7 @@ impl SubagentOutcome {
             Self::Finished => "finished",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",
+            Self::TimedOut => "timed out",
             Self::TurnLimit => "finished (turn limit)",
             Self::Budget => "finished (budget)",
             Self::Unknown => "ended",

@@ -165,7 +165,7 @@ fn build_runner(
             ..RunnerConfig::default()
         },
     );
-    runner = runner.with_summarizer(Box::new(CapturingSummarizer(summarizer)));
+    runner = runner.with_summarizer(Arc::new(CapturingSummarizer(summarizer)));
     if let Some(reg) = hooks {
         runner = runner.with_hooks(Arc::new(reg));
     }

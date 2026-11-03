@@ -140,7 +140,7 @@ fn finished_mark_style(outcome: SubagentOutcome) -> Style {
             SUCCESS_GREEN
         }
         SubagentOutcome::Failed => ERROR_RED,
-        SubagentOutcome::Interrupted => Color::Yellow,
+        SubagentOutcome::Interrupted | SubagentOutcome::TimedOut => Color::Yellow,
         SubagentOutcome::Unknown => Color::DarkGray,
     };
     Style::default().fg(color)

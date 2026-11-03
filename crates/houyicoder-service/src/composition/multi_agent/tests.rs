@@ -1946,6 +1946,7 @@ fn test_terminal_handoff() {
 mod admission_credential;
 mod handover;
 mod join_children;
+mod resume;
 mod shutdown_gate;
 mod subtree_usage;
 mod timeout;

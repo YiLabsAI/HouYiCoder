@@ -370,7 +370,7 @@ fn backbone_runner(store: Arc<SessionStore>, summarizer_text: &str) -> Runner {
             ..RunnerConfig::default()
         },
     )
-    .with_summarizer(Box::new(FixedSummarizer::new(summarizer_text)))
+    .with_summarizer(Arc::new(FixedSummarizer::new(summarizer_text)))
 }
 
 /// v1 is add-only: after a compaction the committed summary carries BOTH the

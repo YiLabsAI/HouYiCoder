@@ -168,6 +168,13 @@ pub enum SpawnFailure {
     TimedOut {
         secs: u64,
     },
+    /// The session named for continuation cannot be resumed: it does not
+    /// exist, it is not a delegation of this parent, or it is still running.
+    /// A resume writes into an existing session, so an unproven target is
+    /// refused before the spawn has any side effect.
+    InvalidResumeTarget {
+        reason: String,
+    },
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner

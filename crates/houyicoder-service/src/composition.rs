@@ -64,11 +64,12 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::auto_dream::{DEFAULT_DREAM_MAX_TURNS, DreamRunner};
 use houyicoder_core::agent::extractor::{ExtractionLogs, MemoryExtractor};
 use houyicoder_core::agent::model_window;
+use houyicoder_core::agent::multi_agent::RunnerInheritance;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
-    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, Runner, SessionResultCatalog,
-    TodoWriteTool, ToolRegistry, parse_event,
+    HookRegistry, HookSource, HotPathReducer, LlmSummarizer, ModelCatalogResolver, Runner,
+    SessionResultCatalog, Summarizer, TodoWriteTool, ToolOutputReducer, ToolRegistry, parse_event,
 };
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
@@ -344,30 +345,47 @@ pub(crate) fn assemble(
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
     let denied_agents = resolve_denied_agents(rule_store.as_deref());
     let bus = Arc::new(AgentBus::new());
-    let spawn_handle = multi_agent::build_runtime(skills.multi_agent_deps(
-        agent_registry.clone(),
-        store.clone(),
-        Arc::clone(&provider),
-        tools.clone(),
-        config.clone(),
-        worktree_controller.clone(),
-        fences.workspace.clone(),
-        Some(Arc::clone(&bus)),
-        Some(Arc::clone(&descriptor_store)),
-    ));
+    // The compaction components are built before the spawn port, because a
+    // delegated child compresses its own log and must reach the same ones the
+    // parent runs with: its own heuristic summary would be a different, worse
+    // answer than the parent's for the same policy. Both sides hold the same
+    // Arcs rather than two equal instances.
     let (section, effort_warnings) = load_model_section_from(&settings_path());
+    let summarizer: Arc<dyn Summarizer> = Arc::new(LlmSummarizer::new(
+        Arc::clone(&provider_for_extractor),
+        model.clone(),
+    ));
+    let reducer: Arc<dyn ToolOutputReducer> = Arc::new(HotPathReducer);
+    let catalog_resolver: Arc<dyn ModelCatalogResolver> =
+        Arc::new(SettingsCatalogResolver::from_section(section.clone()));
+    let inherited = RunnerInheritance {
+        summarizer: Some(Arc::clone(&summarizer)),
+        reducer: Some(Arc::clone(&reducer)),
+        result_catalog: Some(Arc::clone(&stored_results.catalog)),
+        catalog_resolver: Some(Arc::clone(&catalog_resolver)),
+    };
+    let spawn_handle = multi_agent::build_runtime(
+        skills.multi_agent_deps(
+            agent_registry.clone(),
+            store.clone(),
+            Arc::clone(&provider),
+            tools.clone(),
+            config.clone(),
+            worktree_controller.clone(),
+            fences.workspace.clone(),
+            Some(Arc::clone(&bus)),
+            Some(Arc::clone(&descriptor_store)),
+        ),
+        inherited,
+    );
     let (recap, recap_warnings) =
         build_recap(session, &section, &store, &provider_for_extractor, &model);
     let store_log_root = store.session_log_root();
-    let catalog_resolver = SettingsCatalogResolver::from_section(section.clone());
     let runner = Runner::new(store, provider, tools, config)
         .with_recall_meter(recall_meter)
         .with_breaker(fences.breaker)
-        .with_summarizer(Box::new(LlmSummarizer::new(
-            Arc::clone(&provider_for_extractor),
-            model.clone(),
-        )))
-        .with_catalog_resolver(Arc::new(catalog_resolver))
+        .with_summarizer(Arc::clone(&summarizer))
+        .with_catalog_resolver(Arc::clone(&catalog_resolver))
         .with_model_choice(model_selection.choice)
         .with_speed_mode(section.speed_mode.unwrap_or(SpeedMode::Standard))
         .with_denied_agents(Arc::clone(&denied_agents))
@@ -375,7 +393,7 @@ pub(crate) fn assemble(
         .with_sandbox_session(fences.sandbox_session.clone())
         .with_worktree_controller(worktree_controller.clone())
         .with_descriptor_store(Arc::clone(&descriptor_store))
-        .with_reducer(Arc::new(HotPathReducer));
+        .with_reducer(Arc::clone(&reducer));
     let runner = stored_results.prepare(runner, session);
     let mut runner = skills.attach_to_runner(runner, fences.workspace.clone());
     runner.set_workspace_probe(Arc::new(GitWorkspaceProbe::new(runner.cwd_handle())));

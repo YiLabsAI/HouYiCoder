@@ -96,7 +96,7 @@ fn test_stamp_keeps_existing_record() {
         .write_descriptor(child, &existing)
         .expect("seed the child's record");
     let store: Option<Arc<dyn SessionDescriptorStore>> = Some(descriptors.clone());
-    stamp_spawned_by(&store, child, parent, "explore", "task-1");
+    record_provenance(&store, child, parent, "explore", "task-1");
     assert_eq!(
         descriptors.read_descriptor(child),
         Some(existing),

@@ -159,10 +159,10 @@ async fn test_ceiling_spares_the_turn() {
     );
 }
 
-/// A child started in the background obeys the ceiling its caller asked for.
-///
-/// The ceiling bounds the work, not the wait: a delegation the model started
-/// in the background has the same deadline as one it waits on.
+/// A child started in the background obeys the ceiling its caller asked for,
+/// and the fleet is told the ceiling ended it rather than a plain interrupt:
+/// the caller is gone, so this status is the only account of the ending the
+/// parent and the user get.
 #[tokio::test]
 async fn test_detached_child_respects_ceiling() {
     let bus = Arc::new(AgentBus::new());
@@ -198,11 +198,11 @@ async fn test_detached_child_respects_ceiling() {
         matches!(
             message,
             BusMessage::Completed {
-                status: CompletionStatus::Killed,
+                status: CompletionStatus::TimedOut,
                 ..
             }
         ),
-        "the ceiling reaches the fleet as a stop: {message:?}"
+        "the ceiling reaches the fleet as a timeout, not a kill: {message:?}"
     );
 }
 

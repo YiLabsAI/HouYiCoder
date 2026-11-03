@@ -5,7 +5,7 @@ use houyicoder_context::{SessionEvent, SessionLogEntry};
 /// Walk the child's rows backwards for the last assistant message carrying
 /// text; the partial result a non-final terminal leaves behind. None when no
 /// assistant message (or none with text) was emitted.
-pub(crate) fn extract_last_assistant(events: &[SessionLogEntry]) -> Option<String> {
+pub(crate) fn last_assistant_text(events: &[SessionLogEntry]) -> Option<String> {
     for ev in events.iter().rev() {
         if let SessionEvent::AssistantMessage { ref text, .. } = ev.event
             && !text.is_empty()

@@ -86,7 +86,7 @@ impl Runner {
             snapshot_store: None,
             snapshot_ttl_secs: DEFAULT_SNAPSHOT_TTL_SECS,
             snapshot_size_cap_bytes: DEFAULT_SNAPSHOT_SIZE_CAP_BYTES,
-            summarizer: Box::new(manifest::HeuristicSummarizer),
+            summarizer: Arc::new(manifest::HeuristicSummarizer),
             memory,
             prompt_recorder: None,
             skill_registry: None,

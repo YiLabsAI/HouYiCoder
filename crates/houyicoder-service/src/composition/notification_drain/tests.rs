@@ -390,3 +390,20 @@ async fn test_drain_releases_runner() {
     );
     cancel.cancel();
 }
+
+/// The notification names the child twice: a shortened id on the type line,
+/// where a reader only has to tell one child from another, and the whole id
+/// below, because continuing the child means passing that id back exactly.
+#[test]
+fn test_notification_names_full_child() {
+    let id = "01a2b3c4d5e6f708192a3b4c5d";
+    let text = notification_text("explore", id, &CompletionStatus::Completed, "found auth");
+    assert!(
+        text.contains("(01a2b3c4)"),
+        "the type line keeps the short form: {text}"
+    );
+    assert!(
+        text.contains(&format!("resumable via {id}")),
+        "the full id is there to continue the child: {text}"
+    );
+}

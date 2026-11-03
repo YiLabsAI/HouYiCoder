@@ -130,6 +130,32 @@ impl RunningChildren {
     }
 }
 
+/// A claim on a child session id a spawn is about to continue.
+///
+/// The registry holds a child only once its runner exists, so two resumes of
+/// one session can both pass the liveness check before either registers. The
+/// claim closes that window: the second resume is refused instead of driving
+/// the same session twice. It drops when the task ends, however it ends, so a
+/// refused or panicked construction releases the id rather than stranding it.
+pub(in crate::composition) struct ChildReservation {
+    id: String,
+    reserved: Arc<Mutex<HashSet<String>>>,
+}
+
+impl ChildReservation {
+    pub(super) fn new(id: String, reserved: Arc<Mutex<HashSet<String>>>) -> Self {
+        Self { id, reserved }
+    }
+}
+
+impl Drop for ChildReservation {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.reserved.lock() {
+            g.remove(&self.id);
+        }
+    }
+}
+
 /// Releases a child's slot when its task ends, however the task ends.
 ///
 /// A task ends by reaching the child's terminal, by refusing to construct one,

@@ -19,7 +19,10 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
 use houyicoder_core::agent::multi_agent::registry::{IsolationMode, ResolveCtx};
 use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
-use houyicoder_core::agent::multi_agent::{SpawnRequest, spawn_child};
+use houyicoder_core::agent::multi_agent::{
+    CutReason, SpawnRequest, recorded_cut, spawn_child, timed_out_summary,
+};
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::llm::Usage;
 use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
@@ -29,8 +32,8 @@ use tokio::task::JoinHandle;
 use super::announce_spawn;
 use super::drive::drive_child_to_terminal;
 use super::fire_subagent_start;
-use super::stamp_spawned_by;
-use super::{ChildWatch, MultiAgentRuntime, RunningChildren};
+use super::record_provenance;
+use super::{ChildReservation, ChildWatch, MultiAgentRuntime, RunningChildren};
 use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::SpawnError;
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
@@ -44,10 +47,41 @@ mod ceiling;
 mod execution;
 mod handover;
 mod request;
-use ceiling::await_ceilinged;
+use ceiling::run_with_deadline;
 use execution::ChildExecution;
 use handover::ParentCancelLink;
-use request::{ChildRunSpec, child_spawn_request, map_registry_err, map_spawn_err};
+use request::{ChildRunSpec, build_spawn_request, map_registry_err, map_spawn_err};
+
+/// Reconcile the return ending with a cut the ceiling recorded.
+///
+/// The child's own terminal publish already named the cut on the bus, so the
+/// return boundary must say the same: the parent reads one of the two and the
+/// user reads the other. A run that panicked while the ceiling was stopping it
+/// is still the ceiling's ending, because the bus already committed to timed
+/// out; the panic is noted in the summary rather than replacing the cause that
+/// provoked it.
+fn reconcile_cut_ending(
+    cut: Option<CutReason>,
+    panicked: bool,
+    child_str: &str,
+    child_tail: &[SessionLogEntry],
+    status: String,
+    summary: String,
+) -> (String, String) {
+    match cut {
+        Some(reason @ CutReason::TimedOut { .. }) => {
+            let partial = super::last_assistant_text(child_tail).unwrap_or_default();
+            let base = timed_out_summary(&reason, child_str, &partial);
+            let summary = if panicked {
+                format!("{base} (the run panicked while stopping)")
+            } else {
+                base
+            };
+            (CompletionStatus::TimedOut.as_str().to_string(), summary)
+        }
+        _ => (status, summary),
+    }
+}
 
 pub(super) async fn finalize_child(
     runtime: &MultiAgentRuntime,
@@ -128,6 +162,15 @@ pub(super) async fn finalize_child(
             ("failed".to_string(), summary, Some(payload))
         }
     };
+    let panicked = payload.is_some();
+    let (status, summary) = reconcile_cut_ending(
+        recorded_cut(&handle.cut_reason),
+        panicked,
+        &child_str,
+        &child_tail,
+        status,
+        summary,
+    );
     // The usage the parent records is read from durable state, not from the
     // run's own result, so a failed, cancelled, or background child reports
     // what it really spent instead of zeroes. See child_subtree_usage.
@@ -142,7 +185,7 @@ pub(super) async fn finalize_child(
         &child_str,
         &subagent_type,
         &status,
-        super::extract_last_assistant(&child_tail),
+        super::last_assistant_text(&child_tail),
     )
     .await;
     if super::record_subagent_return(
@@ -196,7 +239,7 @@ pub(super) fn child_subtree_usage(runner: &Runner, child: SessionId) -> Usage {
 /// The summary a failed child reports: the reason, plus whatever partial
 /// output its transcript holds, so an interrupted run is not silently empty.
 fn failure_summary(reason: &str, child_tail: &[SessionLogEntry]) -> String {
-    match super::extract_last_assistant(child_tail) {
+    match super::last_assistant_text(child_tail) {
         Some(p) => format!("{reason}\n\nPartial output:\n{p}"),
         None => reason.to_string(),
     }
@@ -274,21 +317,12 @@ pub(super) async fn run_background_spawn(
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
     };
-    // A background child is refused outright at the cap: the turn is not
-    // waiting on it, so there is nobody to queue behind.
-    let permit = match this.gate.try_acquire() {
-        AcquireResult::Acquired(p) => p,
-        AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
-    };
-    // The child's token is created here and admitted before any side effect:
-    // admitting is the first write, and the child itself only exists inside the
-    // task after it. A shutdown landing on any statement below already holds
-    // this child's credential.
+    // The child's lifecycle token is created before the request, so the request
+    // carries the exact token the admission later files as this child's. It
+    // exists before any side effect, so a shutdown landing on a statement below
+    // already holds this child's credential once it is admitted.
     let close = CancellationToken::new();
-    let Some(admission) = this.admit_child(close) else {
-        return Err(SpawnFailure::ShuttingDown);
-    };
-    let request = child_spawn_request(
+    let request = build_spawn_request(
         &this,
         parent_sid,
         &args,
@@ -296,11 +330,23 @@ pub(super) async fn run_background_spawn(
             trigger,
             depth,
             isolation,
-            cancel: admission.close.clone(),
+            cancel: close.clone(),
             mode: ChildRunMode::Background,
         },
         &def,
-    );
+    )?;
+    // The resume target is claimed before anything can write to it, so a
+    // second spawn of the same session is refused rather than racing this one.
+    let reservation = claim_resume(&this, request.resume)?;
+    // A background child is refused outright at the cap: the turn is not
+    // waiting on it, so there is nobody to queue behind.
+    let permit = match this.gate.try_acquire() {
+        AcquireResult::Acquired(p) => p,
+        AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
+    };
+    let Some(admission) = this.admit_child(close) else {
+        return Err(SpawnFailure::ShuttingDown);
+    };
     // The started channel carries the child id back once it exists. The permit,
     // the completion sender, and the admission slot ride the task, so a
     // cancelled caller drops none of them.
@@ -314,6 +360,7 @@ pub(super) async fn run_background_spawn(
         parent: parent_sid,
         completion: admission.finished,
         admission: admission.slot,
+        reservation,
     }
     .detach(permit, started);
     // Watch under the admitted slot before waiting for the child id, so the
@@ -374,6 +421,29 @@ pub(super) async fn run_foreground_spawn(
         "worktree" => IsolationMode::Worktree,
         _ => IsolationMode::None,
     };
+    // The child gets a lifecycle token of its own, not the turn's. One token
+    // held by both cancels in both directions: a child that reached its own
+    // ceiling would stop the turn that started it, and a turn the user stops
+    // would reach a child the reader has already handed to the background. The
+    // turn's stop still reaches the child while the turn waits on it, one way,
+    // through ParentCancelLink.
+    let close = CancellationToken::new();
+    let request = build_spawn_request(
+        &this,
+        parent_sid,
+        &args,
+        ChildRunSpec {
+            trigger,
+            depth,
+            isolation,
+            cancel: close.clone(),
+            mode: ChildRunMode::Foreground,
+        },
+        &def,
+    )?;
+    // The claim is held across the slot wait: a second resume of the same
+    // session is refused while this one queues, not only once it starts.
+    let reservation = claim_resume(&this, request.resume)?;
     // A resolved child takes a running slot before any side effect. Saturation
     // rejects with backpressure so the model re-queues next turn; a queued
     // spawn waits here rather than refusing the user's request. The task
@@ -383,13 +453,6 @@ pub(super) async fn run_foreground_spawn(
         AcquireResult::Acquired(p) => p,
         AcquireResult::Rejected => return Err(SpawnFailure::ConcurrencySaturated),
     };
-    // The child gets a lifecycle token of its own, not the turn's. One token
-    // held by both cancels in both directions: a child that reached its own
-    // ceiling would stop the turn that started it, and a turn the user stops
-    // would reach a child the reader has already handed to the background. The
-    // turn's stop still reaches the child while the turn waits on it, one way,
-    // through ParentCancelLink.
-    let close = CancellationToken::new();
     // The slot wait can queue for a while, and a shutdown that closed the gate
     // meanwhile must still refuse: admitting is the first side-effect-bearing
     // write and the single admission point, so None means the gate closed while
@@ -400,19 +463,6 @@ pub(super) async fn run_foreground_spawn(
     // The turn's stop reaches the child only while the turn waits on it; the
     // link lets go the moment the reader takes the child over.
     let link = ParentCancelLink::new(cancel, admission.close.clone());
-    let request = child_spawn_request(
-        &this,
-        parent_sid,
-        &args,
-        ChildRunSpec {
-            trigger,
-            depth,
-            isolation,
-            cancel: admission.close.clone(),
-            mode: ChildRunMode::Foreground,
-        },
-        &def,
-    );
     let running = Arc::clone(&this.running);
     // The reader can take this child over while the turn waits, so the call
     // races the child's ending against that signal. The started channel carries
@@ -428,6 +478,7 @@ pub(super) async fn run_foreground_spawn(
         parent: parent_sid,
         completion: admission.finished,
         admission: admission.slot,
+        reservation,
     }
     .supervise(slot, Arc::clone(&handover), started);
     // Watch the task under the admitted slot through the one shared path; the
@@ -445,11 +496,26 @@ pub(super) async fn run_foreground_spawn(
     // child the registry already holds, and a construction failure is the
     // task's own result, not something this call can report sooner.
     match child_id.await.ok() {
-        Some(child_str) => {
-            handover::await_child_or_handover(&mut task, &handover, link, child_str).await
-        }
-        None => handover::await_child_end(task, link).await,
+        Some(child_str) => handover::wait_or_handover(&mut task, &handover, link, child_str).await,
+        None => handover::wait_for_child(task, link).await,
     }
+}
+
+/// Claim the child session a resume is about to continue, so two spawns
+/// cannot drive it at once. A fresh spawn mints its own id and claims nothing.
+fn claim_resume(
+    runtime: &MultiAgentRuntime,
+    resume: Option<SessionId>,
+) -> Result<Option<ChildReservation>, SpawnFailure> {
+    let Some(session) = resume else {
+        return Ok(None);
+    };
+    runtime
+        .reserve_child(&session.to_string())
+        .map(Some)
+        .ok_or_else(|| SpawnFailure::InvalidResumeTarget {
+            reason: "the target session is already running".to_string(),
+        })
 }
 
 /// The one watch path for both shapes: record how the shutdown join observes an

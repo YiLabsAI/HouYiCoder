@@ -34,10 +34,10 @@ impl App {
         // A running child drives the live refetch below.
         let is_running = ending.is_none();
         // Auto-exit the teammate view only when the viewed child is
-        // gone or broken (interrupted or failed). A turn-limit, budget, or
-        // normal completion leaves partial output worth reading, so
-        // the view stays — the user exits with Shift+Up/Down (Esc
-        // only interrupts the viewed child's current turn).
+        // gone or broken (interrupted or failed). A turn-limit, budget,
+        // timed-out, or normal completion leaves partial output worth
+        // reading, so the view stays — the user exits with Shift+Up/Down
+        // (Esc only interrupts the viewed child's current turn).
         if self
             .ui
             .teammate_view

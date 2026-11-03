@@ -83,7 +83,7 @@ impl Drop for ParentCancelLink {
 /// for. Once handed over, the task keeps running on its own and the child's
 /// ending reaches the parent as a notification, which is what the flag the
 /// runtime flipped is for.
-pub(super) async fn await_child_or_handover(
+pub(super) async fn wait_or_handover(
     run: &mut JoinHandle<Result<SpawnOutcome, SpawnFailure>>,
     handover: &Notify,
     link: ParentCancelLink,
@@ -107,7 +107,7 @@ pub(super) async fn await_child_or_handover(
 }
 
 /// Wait for a child run that never reported a child, reporting its own result.
-pub(super) async fn await_child_end(
+pub(super) async fn wait_for_child(
     run: JoinHandle<Result<SpawnOutcome, SpawnFailure>>,
     link: ParentCancelLink,
 ) -> Result<SpawnOutcome, SpawnFailure> {

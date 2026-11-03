@@ -3,7 +3,10 @@
 //! One builder for both run modes so the foreground and background paths cannot
 //! drift apart on what a child carries.
 
+use super::super::last_assistant_text;
 use super::*;
+use houyicoder_api::session::SessionLog;
+use houyicoder_core::agent::multi_agent::PartialTranscript;
 
 pub(super) fn map_registry_err(error: AgentError) -> SpawnFailure {
     match error {
@@ -27,17 +30,33 @@ pub(super) struct ChildRunSpec {
     pub(super) mode: ChildRunMode,
 }
 
+/// Reads a child's last assistant text from the session log, so an ending cut
+/// short reports what the child had produced rather than the stop reason.
+struct ChildTranscript {
+    store: Arc<dyn SessionLog>,
+}
+
+impl PartialTranscript for ChildTranscript {
+    fn last_text(&self, session: SessionId) -> Option<String> {
+        last_assistant_text(&self.store.trajectory_tail(session))
+    }
+}
+
 /// Build the child's spawn request from the resolved definition: the child
 /// prompt, the restricted tool set, and the parent's shared components. One
 /// builder for both run modes so the foreground and background paths cannot
 /// drift apart on what a child carries.
-pub(super) fn child_spawn_request(
+///
+/// A resume id the caller cannot parse is refused here, before the spawn has
+/// any side effect: silently starting a fresh child would report success for a
+/// continuation that never happened.
+pub(super) fn build_spawn_request(
     this: &MultiAgentRuntime,
     parent_sid: SessionId,
     args: &SpawnArgs,
     spec: ChildRunSpec,
     def: &AgentDefinition,
-) -> SpawnRequest {
+) -> Result<SpawnRequest, SpawnFailure> {
     let base_prompt = match &def.system_prompt {
         PromptSource::Owned(p) => p.clone(),
         PromptSource::InheritParent => this.config.instructions.clone(),
@@ -56,7 +75,15 @@ pub(super) fn child_spawn_request(
         max_turns: def.max_turns.unwrap_or(this.config.max_turns),
         ..this.config.clone()
     };
-    SpawnRequest {
+    let resume = match args.resume.as_deref() {
+        Some(raw) => Some(SessionId::from_display_string(raw).ok_or_else(|| {
+            SpawnFailure::InvalidResumeTarget {
+                reason: "the id is not a session id".to_string(),
+            }
+        })?),
+        None => None,
+    };
+    Ok(SpawnRequest {
         parent_sid,
         parent_store: this.store.clone(),
         provider: this.provider.clone(),
@@ -76,12 +103,13 @@ pub(super) fn child_spawn_request(
         skill_registry: this.skill_registry.clone(),
         conditional: this.conditional.clone(),
         hooks: this.hooks.clone(),
-        resume: args
-            .resume
-            .as_deref()
-            .and_then(SessionId::from_display_string),
+        inherited: this.inherited.clone(),
+        partial_transcript: Some(Arc::new(ChildTranscript {
+            store: Arc::clone(&this.store),
+        })),
+        resume,
         timeout_secs: args.timeout_secs,
-    }
+    })
 }
 
 pub(super) fn map_spawn_err(e: SpawnError) -> SpawnFailure {
@@ -91,5 +119,6 @@ pub(super) fn map_spawn_err(e: SpawnError) -> SpawnFailure {
         SpawnError::SpawnRecursive => SpawnFailure::Recursive,
         SpawnError::BoundaryWriteFailed => SpawnFailure::BoundaryWriteFailed,
         SpawnError::WorktreeFenceNarrowFail => SpawnFailure::FenceFail,
+        SpawnError::InvalidResumeTarget { reason } => SpawnFailure::InvalidResumeTarget { reason },
     }
 }
