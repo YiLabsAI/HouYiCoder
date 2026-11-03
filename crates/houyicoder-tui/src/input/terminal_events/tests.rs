@@ -49,17 +49,62 @@ fn test_reader_forwards_event() {
     );
 }
 
+/// A poll that reports unready or interrupted retries rather than ending.
+///
+/// Ending here would drop the reader thread, leaving the session with no
+/// keyboard and a channel that spins on immediate disconnects.
+#[test]
+fn test_read_retries_when_unready() {
+    let mut attempts = 0;
+    let event = read_event_with(
+        || false,
+        || {
+            attempts += 1;
+            match attempts {
+                1 => Ok(false),
+                2 => Err(io::Error::from(ErrorKind::Interrupted)),
+                _ => Ok(true),
+            }
+        },
+        || Ok(press('x')),
+    );
+    assert!(
+        matches!(event, Some(Event::Key(key)) if key.code == KeyCode::Char('x')),
+        "the reader retried quiet timeouts and returned the event"
+    );
+    assert_eq!(attempts, 3, "retried until ready");
+
+    let mut polled = false;
+    let hung = read_event_with(
+        || true,
+        || {
+            polled = true;
+            Ok(true)
+        },
+        || Ok(press('x')),
+    );
+    assert!(hung.is_none(), "hung up returns None");
+    assert!(!polled, "did not poll after hangup");
+
+    let err = read_event_with(
+        || false,
+        || Err(io::Error::from(ErrorKind::Other)),
+        || Ok(press('x')),
+    );
+    assert!(err.is_none(), "other error returns None");
+}
+
 /// A reader whose thread is gone reports no input rather than blocking, so a
 /// session can still be quit when its input source died.
 #[test]
-fn test_dead_reader_idles() {
+fn test_dead_reader_ends() {
     let (events, incoming) = channel::<Event>();
     drop(events);
     let reader = EventReader::over(incoming);
     let input = reader.next_with(Duration::from_millis(50), || false);
     assert!(
-        matches!(input, Input::Idle),
-        "a closed channel reports no input instead of blocking"
+        matches!(input, Input::Gone),
+        "a reader that is gone ends the session instead of reporting quiet"
     );
 }
 
@@ -106,16 +151,18 @@ fn test_forward_stops_when_closed() {
 }
 
 /// Starting a reader wires a channel to the loop and runs the source on its
-/// own thread, which is what keeps a closed terminal away from the loop.
+/// own thread, which is what keeps a closed terminal away from the loop. A
+/// source that ends closes the channel, and the loop reads that as the end of
+/// the session rather than as quiet.
 #[test]
 fn test_start_wires_a_reader() {
     let reader = start(|| None);
     assert!(
         matches!(
             reader.next_with(Duration::from_millis(50), || false),
-            Input::Idle
+            Input::Gone
         ),
-        "a source that yields nothing leaves the loop idling, not blocked"
+        "a source that ended ends the session, not blocks it"
     );
 }
 

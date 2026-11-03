@@ -10,6 +10,15 @@
 //! waits on a channel with a deadline, so it always gets control back to answer
 //! the one question it owns: is this session still supposed to be running.
 
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::stdin;
+use std::io::{self, ErrorKind};
+#[cfg(unix)]
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Mutex, OnceLock};
 use std::thread::Builder;
@@ -18,14 +27,6 @@ use std::time::Duration;
 use crossterm::event::{self, Event};
 #[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-#[cfg(unix)]
-use std::fs::File;
-#[cfg(unix)]
-use std::io::IsTerminal;
-#[cfg(unix)]
-use std::io::stdin;
-#[cfg(unix)]
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 /// How long the reader waits before looking at the channel again.
 ///
@@ -140,17 +141,7 @@ impl EventReader {
         // The source is the terminal itself: a bounded wait, then the event the
         // readiness promised. Only a real terminal can answer it, which is why
         // the loop it feeds is the part the tests drive.
-        READER.get_or_init(|| {
-            start(|| {
-                // A terminal that already hung up must not be read: the event
-                // source answers that state by reading again, forever.
-                if terminal_hung_up() {
-                    return None;
-                }
-                event::poll(READ_WAIT).ok().filter(|ready| *ready)?;
-                event::read().ok()
-            })
-        })
+        READER.get_or_init(|| start(read_event))
     }
 
     /// A reader over a channel the caller owns, for tests that drive the
@@ -179,13 +170,44 @@ impl EventReader {
             // where a terminal that went away is noticed. Checking here rather
             // than in the reader is deliberate: a reader stuck inside the
             // event source never reaches its own check.
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-                if hung_up() {
-                    Input::Gone
-                } else {
-                    Input::Idle
-                }
-            }
+            Err(RecvTimeoutError::Timeout) => match hung_up() {
+                true => Input::Gone,
+                false => Input::Idle,
+            },
+            // The reader is gone, so no event will ever arrive. Waiting on a
+            // closed channel returns at once, so reporting idle here would spin
+            // the loop at a full core with no way to type into it. This is the
+            // end of the session, and the loop must leave through its teardown.
+            Err(RecvTimeoutError::Disconnected) => Input::Gone,
+        }
+    }
+}
+
+/// Read one terminal event, retrying quiet timeouts and signal interruptions.
+fn read_event() -> Option<Event> {
+    read_event_with(terminal_hung_up, || event::poll(READ_WAIT), event::read)
+}
+
+/// The event read loop, with the readiness poll and reader supplied for tests.
+fn read_event_with(
+    hung_up: impl Fn() -> bool,
+    mut poll: impl FnMut() -> io::Result<bool>,
+    mut read: impl FnMut() -> io::Result<Event>,
+) -> Option<Event> {
+    loop {
+        // A terminal that already hung up must not be read: the event source
+        // answers that state by reading again, forever.
+        if hung_up() {
+            return None;
+        }
+        match poll() {
+            Ok(true) => return read().ok(),
+            // A deadline that expired and a wait a signal interrupted both
+            // mean no event yet. Returning here would end the reader, and a
+            // session whose reader is gone can never be typed into again.
+            Ok(false) => continue,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return None,
         }
     }
 }
