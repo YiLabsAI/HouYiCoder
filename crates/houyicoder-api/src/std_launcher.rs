@@ -265,6 +265,7 @@ fn spawn_async(req: SpawnRequest, fence: Option<FenceConfig>) -> Result<Launcher
                     Ok(Ok(s)) => s,
                     Ok(Err(e)) => return Err(SpawnError::Io(e.to_string())),
                     Err(_) => {
+                        #[cfg(unix)]
                         group.kill();
                         return Err(SpawnError::Io("wall timeout exceeded".into()));
                     }

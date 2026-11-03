@@ -4,9 +4,11 @@ use super::*;
 use crate::launcher::{SpawnPolicy, SpawnRequest};
 use std::env::temp_dir;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::process::{Command, id};
 use std::time::Duration;
 use std::time::Instant;
+#[cfg(unix)]
 use tokio::time::sleep;
 
 #[tokio::test]
