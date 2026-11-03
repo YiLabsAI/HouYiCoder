@@ -138,8 +138,11 @@ fn spawn_capture(
     #[cfg(unix)]
     cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| SpawnError::Io(e.to_string()))?;
+    // Armed only while the wait can still be abandoned. A command that exits on
+    // its own has finished; killing its group then would also kill work it left
+    // running on purpose.
     #[cfg(unix)]
-    let _group = ProcessGroup(child.id() as i32);
+    let mut group = ProcessGroup::armed(child.id() as i32);
     // A handle is present exactly when its stream was piped, so taking them
     // here preserves the contract that stdout/stderr come back Some only for
     // a piped stream.
@@ -149,8 +152,11 @@ fn spawn_capture(
         Some(limit) => match wait_until(&mut child, limit) {
             Some(status) => status,
             None => {
-                // Kill and reap, then let the drain threads finish on the
-                // closed pipes so neither is left detached.
+                // The deadline abandons the command, so the group dies with it.
+                // The child is then reaped and the drain threads finish on the
+                // closed pipes.
+                #[cfg(unix)]
+                group.kill();
                 drop(child.kill());
                 drop(child.wait());
                 drop(out_drain.map(|h| h.join()));
@@ -163,6 +169,8 @@ fn spawn_capture(
         },
         None => child.wait().map_err(|e| SpawnError::Io(e.to_string()))?,
     };
+    #[cfg(unix)]
+    group.disarm();
     let exit_code = status.code();
     let stdout = out_drain.map(|h| joined_text(h.join()));
     let stderr = err_drain.map(|h| joined_text(h.join()));
@@ -243,25 +251,31 @@ fn spawn_async(req: SpawnRequest, fence: Option<FenceConfig>) -> Result<Launcher
     let pid = child.id();
     let wall = fence.map(|f| Duration::from_millis(f.wall_timeout_ms));
     #[cfg(unix)]
-    let group = ProcessGroup(pid.unwrap_or(0) as i32);
+    let group = ProcessGroup::armed(pid.unwrap_or(0) as i32);
     Ok(LauncherChild::new(
         pid,
         Box::pin(async move {
             // Dropping this future is how a caller cancels the spawn; the
-            // group goes with it, not only the child.
+            // group goes with it, not only the child. A finished wait disarms
+            // it, so work the command left running survives.
             #[cfg(unix)]
-            let _group = group;
+            let mut group = group;
             let status = match wall {
                 Some(timeout) => match tokio::time::timeout(timeout, child.wait()).await {
                     Ok(Ok(s)) => s,
                     Ok(Err(e)) => return Err(SpawnError::Io(e.to_string())),
-                    Err(_) => return Err(SpawnError::Io("wall timeout exceeded".into())),
+                    Err(_) => {
+                        group.kill();
+                        return Err(SpawnError::Io("wall timeout exceeded".into()));
+                    }
                 },
                 None => child
                     .wait()
                     .await
                     .map_err(|e| SpawnError::Io(e.to_string()))?,
             };
+            #[cfg(unix)]
+            group.disarm();
             Ok(LauncherExit {
                 exit_code: status.code(),
                 stdout: None,
@@ -347,6 +361,10 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
                 .ok_or_else(|| SpawnError::Io("child already taken".into()))?
                 .wait()
                 .map_err(|e| SpawnError::Io(e.to_string()))?;
+            // The caller waited for the exit, so a later drop must not kill the
+            // group. A drop that never waited still does.
+            #[cfg(unix)]
+            killer.disarm_group();
             Ok(LauncherExit {
                 exit_code: status.code(),
                 stdout: None,
@@ -369,26 +387,56 @@ struct KillOnDrop {
     group: i32,
 }
 
-/// Kills a command's whole process group when it is dropped.
+/// A command's process group, killed only when the command is abandoned.
 ///
 /// Only a group kill reaches what a wrapper forked. A direct-child kill leaves
 /// that work running under init, where nothing the session owns can stop it.
+/// A command that exits on its own is not abandoned: work it left running was
+/// left on purpose, and killing the group after a successful wait would end it.
 #[cfg(unix)]
-struct ProcessGroup(i32);
+struct ProcessGroup {
+    pgid: i32,
+    armed: bool,
+}
+
+#[cfg(unix)]
+impl ProcessGroup {
+    fn armed(pgid: i32) -> Self {
+        Self { pgid, armed: true }
+    }
+
+    /// The command finished. Whatever it left in its group stays.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    fn kill(&mut self) {
+        if self.armed && self.pgid > 0 {
+            let _ = kill(Pid::from_raw(-self.pgid), Signal::SIGKILL);
+        }
+        self.armed = false;
+    }
+}
 
 #[cfg(unix)]
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
-        if self.0 > 0 {
-            let _ = kill(Pid::from_raw(-self.0), Signal::SIGKILL);
-        }
+        self.kill();
+    }
+}
+
+impl KillOnDrop {
+    /// The caller waited for the exit, so a later drop must not kill the group.
+    #[cfg(unix)]
+    fn disarm_group(&mut self) {
+        self.group = 0;
     }
 }
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
         #[cfg(unix)]
-        drop(ProcessGroup(self.group));
+        drop(ProcessGroup::armed(self.group));
         if let Some(mut child) = self.child.take() {
             // Best-effort kill plus reap so the process does not linger. The
             // results are intentionally ignored: a child that already exited

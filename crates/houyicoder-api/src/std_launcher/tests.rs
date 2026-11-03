@@ -4,8 +4,10 @@ use super::*;
 use crate::launcher::{SpawnPolicy, SpawnRequest};
 use std::env::temp_dir;
 use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, id};
 use std::time::Duration;
 use std::time::Instant;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_sync_output_captures_stdout() {
@@ -166,9 +168,8 @@ async fn test_capture_spawn_no_pipes() {
 
 /// A spawn with no piped output runs on the async path and still ends.
 ///
-/// That path owns the child through a future rather than a drain, so its
-/// teardown — including the process group the launcher gives every command —
-/// has to fire when the future is dropped or awaited.
+/// That path owns the child through a future rather than a drain, so dropping
+/// the future is how a caller abandons the command.
 #[tokio::test]
 async fn test_async_spawn_ends() {
     let launcher = StdProcessLauncher::new();
@@ -176,4 +177,115 @@ async fn test_async_spawn_ends() {
     let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
     let exit = child.wait().await.expect("the spawn reports its exit");
     assert_eq!(exit.exit_code, Some(0));
+}
+
+/// Whether a process whose command line carries the marker is still in the
+/// table. The marker is a shell variable, so it exists only in the grandchild's
+/// command line and not in the shell that started it.
+#[cfg(unix)]
+fn marker_alive(marker: &str) -> bool {
+    !marker_rows(marker).is_empty()
+}
+
+/// The process id and group of every live process carrying the marker.
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test process table inspection, not an engine spawn"
+)]
+fn marker_rows(marker: &str) -> Vec<(i32, i32)> {
+    let listed = Command::new("ps")
+        .args(["-ax", "-o", "pid=,pgid=,command="])
+        .output()
+        .expect("list processes");
+    String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .filter(|line| line.contains(marker) && line.contains("sleep"))
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let pid = parts.next()?.parse().ok()?;
+            let pgid = parts.next()?.parse().ok()?;
+            Some((pid, pgid))
+        })
+        .collect()
+}
+
+/// Dropping a spawn before it is awaited kills the work a wrapper forked, not
+/// only the wrapper. A kill of the direct child alone would leave that work
+/// running under init.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_drop_kills_forked_grandchild() {
+    let marker = format!("houyi-drop-{}", id());
+    let launcher = StdProcessLauncher::new();
+    let req = SpawnRequest::new("sh").with_args(["-c", &format!("m={marker}; sleep 60")]);
+    let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
+    let started = Instant::now();
+    while !marker_alive(&marker) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the grandchild never appeared"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+    drop(child);
+    let started = Instant::now();
+    while marker_alive(&marker) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "dropping the spawn left the forked work running"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A command that exits on its own may leave work running. Killing its group
+/// after a successful wait would end that work, so a spawn that was awaited
+/// must not. The leftover starts its own group: a shell reaps a background job
+/// that stays in its group when it exits, so only a group kill from this
+/// launcher can explain the leftover dying.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_awaited_spawn_spares_group() {
+    let marker = format!("houyi-kept-{}", id());
+    let launcher = StdProcessLauncher::new();
+    // A shell reaps a background job that stays in its group, so that death
+    // would not tell a shell reap apart from a group kill. The leftover starts
+    // its own group; only a group kill from this launcher can then explain it
+    // dying.
+    let req = SpawnRequest::new("sh").with_args([
+        "-c",
+        &format!(
+            "perl -e 'setpgrp(0,0); open STDIN, \"</dev/null\"; open STDOUT, \">/dev/null\"; open STDERR, \">&STDOUT\"; $0 = \"sleep 60 {marker}\"; sleep 60' & echo started"
+        ),
+    ]);
+    let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
+    let command_group = child.id.expect("the wrapper has a pid") as i32;
+    let started = Instant::now();
+    let left = loop {
+        let rows = marker_rows(&marker);
+        if rows.iter().any(|(_, pgid)| *pgid != command_group) {
+            break true;
+        }
+        if started.elapsed() > Duration::from_secs(5) {
+            break false;
+        }
+        sleep(Duration::from_millis(20)).await;
+    };
+    assert!(left, "the leftover never left the command group");
+    let exit = child.wait().await.expect("the wrapper exits");
+    assert_eq!(exit.exit_code, Some(0));
+    sleep(Duration::from_millis(200)).await;
+    let alive = marker_alive(&marker);
+    if alive {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test cleanup of a process this test started"
+        )]
+        drop(Command::new("pkill").args(["-f", &marker]).status());
+    }
+    assert!(
+        alive,
+        "a finished spawn must not kill work that left its group"
+    );
 }
