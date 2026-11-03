@@ -1,11 +1,14 @@
 //! Owner for a local host's session-scoped background tasks.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use houyicoder_async::CancellationToken;
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::timeout;
+
+use super::background_tasks::BackgroundTasks;
 
 /// The production budget a stuck task gets before the reaper aborts it.
 #[cfg(not(test))]
@@ -83,6 +86,13 @@ impl ShutdownReport {
 pub struct HostLifecycle {
     cancel: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
+    /// The session's background commands, ended with the host.
+    ///
+    /// The registry is held by the server and the runner as well, so the last
+    /// handle dropping is not a moment this owner can rely on. A session that
+    /// ends while one of them still lives would leave its commands running
+    /// with nobody left to read them.
+    background: Option<Arc<BackgroundTasks>>,
 }
 
 impl HostLifecycle {
@@ -90,7 +100,14 @@ impl HostLifecycle {
         Self {
             cancel: CancellationToken::new(),
             tasks: Vec::new(),
+            background: None,
         }
+    }
+
+    /// Hand this host the session's background commands so ending the host
+    /// ends them.
+    pub fn track_background_tasks(&mut self, tasks: Arc<BackgroundTasks>) {
+        self.background = Some(tasks);
     }
 
     pub fn cancel_token(&self) -> CancellationToken {
@@ -113,6 +130,12 @@ impl HostLifecycle {
     /// stopped.
     pub fn begin_shutdown(self) -> impl Future<Output = ShutdownReport> + Send {
         self.cancel.cancel();
+        // Before the join below: a command still running would keep a child's
+        // turn open behind it, and the join would then wait on work the session
+        // no longer wants.
+        if let Some(background) = &self.background {
+            background.shutdown();
+        }
         let tasks = self.tasks;
         async move {
             let mut outcomes = Vec::with_capacity(tasks.len());

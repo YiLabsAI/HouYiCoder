@@ -445,6 +445,7 @@ fn run_serve(
         if let Err(e) = uds::listen_uds(host, session, &socket_path).await {
             eprintln!("uds listener exited: {e}");
         }
+        background_tasks.shutdown();
         relay_cancel.cancel();
         if let Some(handle) = relay_handle {
             drop(handle.await);
@@ -492,9 +493,7 @@ fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> 
 /// drives the ACP server over stdin + stdout. The session id is assigned up
 /// front and printed to stderr so a stock client prompts against it — the
 /// server is single-session-bound at construction, so the id the client sees
-/// from session/new must match the one the runner drives. Binding the runner
-/// to the id session/new assigns (instead of assigning it here) is a later
-/// cut; this first cut keeps the simpler pre-assign path the example set.
+/// from session/new must match the one the runner drives.
 fn run_acp_stdio(
     project: Option<String>,
     model_override: Option<String>,
@@ -556,10 +555,12 @@ fn run_acp_stdio(
     // blocking I/O + child reaping. serve returns when the client closes
     // stdin; the buffered outbound frames drain to stdout after.
     let runtime = Builder::new_multi_thread().enable_all().build()?;
+    let background_tasks = Arc::clone(&bundle.background_tasks);
     runtime.block_on(async move {
         fire_after_bundle(session);
         let server = AcpServer::new(adapter, runner, session);
         drop(server.serve(&mut io).await);
+        background_tasks.shutdown();
         // serve borrows io by reference, so io (which holds the outbound
         // sender) outlives serve. Drop it so the drain below terminates.
         drop(io);

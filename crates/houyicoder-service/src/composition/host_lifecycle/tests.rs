@@ -1,10 +1,13 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_api::background::{BackgroundCommandLauncher, CommandTail, DetachedCommand};
 use std::future::pending;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use tokio::sync::oneshot::channel;
+use tokio::time::sleep;
 
 /// A task that exits when its token cancels, used to stand in for the
 /// drain and relay without pulling their engine collaborators in.
@@ -131,4 +134,36 @@ async fn test_begin_shutdown_records_panic() {
         matches!(report.outcomes()[0], TaskOutcome::Panicked(_)),
         "panic recorded, not swallowed"
     );
+}
+
+/// Ending a host ends the session's background commands.
+///
+/// The registry is held by the server and the runner as well, so a destructor
+/// is not a moment this owner can rely on. The host is what a session teardown
+/// actually drives, so the commands have to end here.
+#[tokio::test]
+async fn test_shutdown_ends_background_commands() {
+    let mut host = HostLifecycle::new();
+    let tasks = Arc::new(BackgroundTasks::new());
+    host.track_background_tasks(Arc::clone(&tasks));
+    let id = tasks.launch(DetachedCommand {
+        command: "cargo test".into(),
+        started_at: Instant::now(),
+        tail: CommandTail::new(),
+        completion: Box::pin(pending()),
+    });
+    let report = host.begin_shutdown().await;
+    assert_eq!(report.panic_count(), 0, "no task panicked");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !tasks
+        .detail(id)
+        .is_some_and(|detail| detail.status.is_terminal())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the host did not end the command it was holding"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
 }

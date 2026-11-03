@@ -242,6 +242,9 @@ pub(crate) fn start_local_server(
     // A command the foreground gives up reports through the same sequencer
     // and runner, so the registry learns both now that the runner is shared.
     background_tasks.attach(Some(event_sequencer.clone()), &runner);
+    // The registry outlives this call through the server and the runner, so the
+    // host is what ends it when the session does.
+    host.track_background_tasks(Arc::clone(&background_tasks));
     // Completion notification injector: when a detached (async) child
     // finishes, enqueue a lower-priority notification into the parent's
     // mid-turn queue so the parent model learns the child finished on its
