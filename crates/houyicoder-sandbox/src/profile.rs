@@ -326,7 +326,7 @@ pub fn allow_set(tag: &str) -> String {
     format!(
         "(allow process-exec)\n\
          (allow process-fork)\n\
-         (allow process-info* (target same-sandbox))\n\
+         (allow process-info*)\n\
          (allow signal (target same-sandbox))\n\
          (allow mach-priv-task-port (target same-sandbox))\n\
          (allow user-preference-read)\n\

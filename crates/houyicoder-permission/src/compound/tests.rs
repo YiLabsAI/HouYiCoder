@@ -758,3 +758,16 @@ fn test_unfenced_control_child_asks() {
         assert!(!writes_fence_denied_path(cmd), "not fence-denied: {cmd}");
     }
 }
+
+/// Process listing with ps or pgrep reads system state and needs no approval.
+#[test]
+fn test_process_inspection_is_readonly() {
+    for cmd in ["ps", "ps aux", "ps -ef", "pgrep houyi", "pgrep -f sleep"] {
+        let segs = split_compound(cmd);
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        assert!(
+            is_readonly_compound(&refs),
+            "read-only process query: {cmd}"
+        );
+    }
+}
