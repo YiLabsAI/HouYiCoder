@@ -181,3 +181,40 @@ impl Drop for AdmissionLease {
         }
     }
 }
+
+/// Wait out one child the shutdown set aside, under a bounded budget.
+///
+/// The budget is per child, generous for a real finalize tail, with an abort
+/// backstop so a wedged task cannot hold the shutdown lock forever. A detached
+/// child keeps the full result match, so a normal end, a panic, an abort, and a
+/// timeout stay four distinct outcomes and the panic is announced. An awaited
+/// child confirms its completion signal closed rather than treating the abort
+/// as the stop. A child whose task was never watched waits on that signal alone.
+pub(super) async fn join_child(child: ChildCredential, budget: Duration) {
+    match child.watch {
+        Some(ChildWatch::Detached(mut task)) => {
+            let stopped = match timeout(budget, &mut task).await {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    task.abort();
+                    task.await
+                }
+            };
+            if let Err(err) = stopped
+                && err.is_panic()
+            {
+                tracing::warn!("a child task panicked during shutdown: {err}");
+            }
+        }
+        Some(ChildWatch::Awaited { abort }) => {
+            let mut finished = child.finished;
+            if timeout(budget, &mut finished).await.is_err() {
+                abort.abort();
+                let _ = finished.await;
+            }
+        }
+        None => {
+            let _ = child.finished.await;
+        }
+    }
+}

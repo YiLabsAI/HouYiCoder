@@ -165,6 +165,12 @@ impl Runner {
         // interrupted result must land adjacent to its tool_use or the
         // provider rejects with a role-order 400.
         self.reconcile_tool_results(session).await?;
+        // Reconcile delegation boundaries a host restart left open before the
+        // turn reads the parent log, so the model does not see a spawn with no
+        // return and the fleet list holds no dangling child.
+        if let Some(handle) = self.spawn_handle() {
+            handle.reconcile_orphans(session).await;
+        }
         // Resolve @skill: before appending so the raw text is the UserInput
         // and the body lands as a durable SkillBody (survives compaction).
         let skill_meta = self.resolve_skill_slash(session, &user_input).await;

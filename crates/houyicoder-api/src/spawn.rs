@@ -287,6 +287,18 @@ pub trait SpawnHandle: Send + Sync {
     ) -> PFut<'_, Result<SpawnOutcome, SpawnFailure>> {
         Box::pin(async { Err(SpawnFailure::Recursive) })
     }
+
+    /// Reconcile delegation boundaries left open by a host restart: for every
+    /// spawn record in the parent log whose return has not landed and whose
+    /// child is not still running, write the missing return so the parent
+    /// context and the fleet list hold no dangling delegation. Runs at the
+    /// entry of a parent turn, before the user input is appended, so the
+    /// reconciled state is what the model reads. The default is a no-op (no
+    /// multi-agent runtime wired); a runtime with a child registry overrides
+    /// it.
+    fn reconcile_orphans(&self, _parent_sid: SessionId) -> PFut<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 #[cfg(test)]

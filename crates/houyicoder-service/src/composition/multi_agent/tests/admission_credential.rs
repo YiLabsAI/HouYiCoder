@@ -10,7 +10,8 @@ use tokio::sync::Notify;
 use tokio::sync::oneshot::channel;
 use tokio::sync::oneshot::error::TryRecvError;
 
-use super::super::{ChildCredential, ChildWatch, RunningChildren, join_child};
+use super::super::children::ChildCredential;
+use super::super::{ChildWatch, RunningChildren, join_child};
 use std::future::pending;
 use tokio::time::timeout;
 
