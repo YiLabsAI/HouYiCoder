@@ -2,6 +2,8 @@
 
 use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+#[cfg(unix)]
+use std::os::fd::AsFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Instant;
 
@@ -188,5 +190,24 @@ fn test_hangup_probe_answers() {
     assert!(
         !terminal_hung_up(),
         "a descriptor with no hangup is not reported as one"
+    );
+}
+
+/// A descriptor that is open and quiet is not a hangup.
+///
+/// This drives the probe over a descriptor the test owns, so the answer a
+/// closed terminal gives is decided by the same code the session uses rather
+/// than by the test process's own terminal.
+#[cfg(unix)]
+#[test]
+fn test_probe_reports_live_descriptor() {
+    let quiet = std::fs::File::open("/dev/null").expect("open a quiet descriptor");
+    assert!(
+        !probe(Some(quiet.as_fd())),
+        "a quiet descriptor must not end the session"
+    );
+    assert!(
+        !probe(None),
+        "no descriptor to watch is not a hangup either"
     );
 }

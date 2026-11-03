@@ -485,13 +485,21 @@ async fn test_finished_list_pruned() {
 ///
 /// The registry is shared by the host, the server, and the runner, so a
 /// session that ends while another holder still lives must still end its
-/// commands. This pins the call that does it.
-#[test]
-fn test_shutdown_is_explicit() {
+/// commands. This pins the call that does it against a task that is running.
+#[tokio::test]
+async fn test_shutdown_ends_running_task() {
     let tasks = BackgroundTasks::new();
+    let id = tasks.launch(detached(
+        "cargo test",
+        CommandTail::new(),
+        Box::pin(pending()),
+    ));
     tasks.shutdown();
-    assert!(
-        !tasks.kill(BackgroundTaskId(0)),
-        "a shutdown registry has nothing left to stop"
-    );
+    // The helper panics on a deadline, which is the assertion here.
+    wait_until(|| {
+        tasks
+            .detail(id)
+            .is_some_and(|detail| detail.status.is_terminal())
+    })
+    .await;
 }

@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 /// A session that prints one line and then keeps working until the test says
@@ -188,31 +189,40 @@ async fn test_background_move_ignores_cancel() {
 async fn test_child_command_stays_foreground() {
     let (session, release) = slow_session();
     let launcher = Arc::new(RecordingLauncher::default());
-    let tool = BashTool::new(session).with_background_commands(
+    let tool = Arc::new(BashTool::new(session).with_background_commands(
         Arc::clone(&launcher) as Arc<dyn BackgroundCommandLauncher>,
         Duration::from_millis(10),
+    ));
+
+    // The command is still running when the budget expires, which is the only
+    // state in which the hand-over could happen at all.
+    let running = {
+        let tool = Arc::clone(&tool);
+        tokio::spawn(async move {
+            tool.execute(
+                ToolCtx::new("c1").with_agent_identity(AgentIdentity {
+                    subagent_type: Some("explore".into()),
+                    depth: 1,
+                    parent_session_id: Some("parent".into()),
+                }),
+                serde_json::json!({"command": "cargo build"}),
+            )
+            .await
+        })
+    };
+    sleep(Duration::from_millis(50)).await;
+    assert!(
+        launcher.take().is_empty(),
+        "a child's command must not be handed to the session while it runs"
     );
-    // The command finishes at once, so only the budget could have moved it.
+
     release.notify_one();
-
-    let out = tool
-        .execute(
-            ToolCtx::new("c1").with_agent_identity(AgentIdentity {
-                subagent_type: Some("explore".into()),
-                depth: 1,
-                parent_session_id: Some("parent".into()),
-            }),
-            serde_json::json!({"command": "cargo build"}),
-        )
+    let out = running
         .await
+        .expect("the call finishes")
         .expect("the call answers");
-
     assert!(
         out.get("background_task").is_none(),
         "a child's command must not be handed to the session: {out}"
-    );
-    assert!(
-        launcher.take().is_empty(),
-        "the launcher must never see a child's command"
     );
 }

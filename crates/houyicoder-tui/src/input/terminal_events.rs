@@ -19,9 +19,13 @@ use crossterm::event::{self, Event};
 #[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 #[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::io::IsTerminal;
+#[cfg(unix)]
 use std::io::stdin;
 #[cfg(unix)]
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 /// How long the reader waits before looking at the channel again.
 ///
@@ -54,27 +58,64 @@ pub(crate) enum Input {
     Gone,
 }
 
-/// Whether the terminal this process reads has hung up.
+/// The terminal descriptor the event reader actually reads.
+///
+/// The reader takes standard input when that is a terminal and the controlling
+/// terminal otherwise, so a process fed by a pipe still reads a terminal. The
+/// hangup check has to watch the same descriptor: a pipe whose writer exited is
+/// end-of-file, not a dead terminal, and a terminal that hung up behind a pipe
+/// would otherwise go unnoticed.
+#[cfg(unix)]
+fn terminal_hung_up() -> bool {
+    probe(watched_terminal())
+}
+
+/// The terminal the event reader reads, or None when the process has none.
+///
+/// The reader takes standard input when that is a terminal and the controlling
+/// terminal otherwise, so a process fed by a pipe still reads a terminal. A
+/// pipe whose writer exited is end-of-file, not a dead terminal, which is why
+/// standard input is only watched when it is the descriptor in use.
+#[cfg(unix)]
+fn watched_terminal() -> Option<BorrowedFd<'static>> {
+    static WATCHED: OnceLock<Option<OwnedFd>> = OnceLock::new();
+    if stdin().is_terminal() {
+        return None;
+    }
+    WATCHED
+        .get_or_init(|| {
+            File::options()
+                .read(true)
+                .write(true)
+                .open("/dev/tty")
+                .ok()
+                .map(OwnedFd::from)
+        })
+        .as_ref()
+        .map(|tty| tty.as_fd())
+}
+
+/// Whether the watched terminal reported a hangup.
 ///
 /// A closed terminal leaves its descriptor readable with nothing to read, which
 /// the event reader answers by reading again. Asking the descriptor directly is
 /// the only check that does not depend on a signal arriving.
 #[cfg(unix)]
-fn terminal_hung_up() -> bool {
+fn probe(tty: Option<BorrowedFd<'_>>) -> bool {
     let input = stdin();
+    let fd = match &tty {
+        Some(tty) => tty.as_fd(),
+        None if input.is_terminal() => input.as_fd(),
+        None => return false,
+    };
     let mut fds = [PollFd::new(
-        input.as_fd(),
+        fd,
         PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR,
     )];
-    if poll(&mut fds, PollTimeout::ZERO).is_err() {
-        return false;
-    }
-    // Only a hangup ends the session. A closed descriptor is not one: the
-    // event source falls back to the controlling terminal in that case, so
-    // ending here would kill a session that still has somewhere to read.
-    fds[0]
-        .revents()
-        .is_some_and(|flags| flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR))
+    poll(&mut fds, PollTimeout::ZERO).is_ok()
+        && fds[0]
+            .revents()
+            .is_some_and(|flags| flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR))
 }
 
 /// A platform whose console does not report a hangup through a descriptor keeps
