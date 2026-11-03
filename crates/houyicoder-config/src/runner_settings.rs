@@ -35,6 +35,11 @@ const DEFAULT_MAX_TURNS: u32 = 1000;
 /// way.
 const DEFAULT_BASH_FOREGROUND_BUDGET_MS: u64 = 15_000;
 
+/// A foreground delegation blocks the parent's turn by default. A caller that
+/// wants a long delegation to release the turn sets this; zero keeps the
+/// blocking behavior every existing session has.
+const DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS: u64 = 0;
+
 /// Runner-level settings resolved from the merged settings file and env.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerSettings {
@@ -46,6 +51,10 @@ pub struct RunnerSettings {
     /// settings file wins, then the env, then the default. 0 disables the
     /// background move, so every command finishes in the foreground.
     pub bash_foreground_budget_ms: u64,
+    /// How long a foreground delegation may hold the parent's turn, in
+    /// milliseconds. The settings file wins, then the env, then the default.
+    /// 0 keeps every delegation blocking, which is the default.
+    pub delegation_foreground_budget_ms: u64,
 }
 
 impl Default for RunnerSettings {
@@ -53,6 +62,7 @@ impl Default for RunnerSettings {
         Self {
             max_turns: DEFAULT_MAX_TURNS,
             bash_foreground_budget_ms: DEFAULT_BASH_FOREGROUND_BUDGET_MS,
+            delegation_foreground_budget_ms: DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS,
         }
     }
 }
@@ -90,10 +100,17 @@ pub fn load_runner_settings_from(
             .ok()
             .and_then(|raw| parse_env_bash_budget(&raw, &mut warnings))
     });
+    let delegation_budget = parse_delegation_budget(&settings, &mut warnings).or_else(|| {
+        var(crate::ENV_HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS)
+            .ok()
+            .and_then(|raw| parse_env_delegation_budget(&raw, &mut warnings))
+    });
     (
         RunnerSettings {
             max_turns: value.unwrap_or(DEFAULT_MAX_TURNS),
             bash_foreground_budget_ms: budget.unwrap_or(DEFAULT_BASH_FOREGROUND_BUDGET_MS),
+            delegation_foreground_budget_ms: delegation_budget
+                .unwrap_or(DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS),
         },
         warnings,
     )
@@ -134,6 +151,48 @@ fn parse_env_bash_budget(raw: &str, warnings: &mut Vec<ConfigWarning>) -> Option
                 field: crate::ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS.into(),
                 reason: format!(
                     "expected a non-negative integer, got {raw:?} — using the default ({DEFAULT_BASH_FOREGROUND_BUDGET_MS})"
+                ),
+            });
+            None
+        }
+    }
+}
+
+/// The delegation budget accepts zero: it keeps every foreground delegation
+/// blocking the turn, which is the behavior without the setting.
+fn parse_delegation_budget(value: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<u64> {
+    match value.get("delegation_foreground_budget_ms") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => n.as_u64().or_else(|| {
+            warnings.push(ConfigWarning {
+                field: "delegation_foreground_budget_ms".into(),
+                reason: format!(
+                    "expected a non-negative integer, got {n} — ignored, so the env var or the default ({DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS}) applies"
+                ),
+            });
+            None
+        }),
+        Some(other) => {
+            warnings.push(ConfigWarning {
+                field: "delegation_foreground_budget_ms".into(),
+                reason: format!(
+                    "expected a number, got {} — ignored, so the env var or the default ({DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS}) applies",
+                    crate::json_type_name(other)
+                ),
+            });
+            None
+        }
+    }
+}
+
+fn parse_env_delegation_budget(raw: &str, warnings: &mut Vec<ConfigWarning>) -> Option<u64> {
+    match raw.parse() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warnings.push(ConfigWarning {
+                field: crate::ENV_HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS.into(),
+                reason: format!(
+                    "expected a non-negative integer, got {raw:?} — using the default ({DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS})"
                 ),
             });
             None

@@ -1,6 +1,9 @@
 //! Handing a running foreground child over to the background.
 
+use super::auto_background::GatedProvider;
 use super::*;
+use houyicoder_api::spawn::BackgroundLaunch;
+use houyicoder_core::agent::multi_agent::ending::EndingClaim;
 
 /// Handing over a running foreground child flips the mode its ending is
 /// published with and releases the waiting spawn call. A second hand-over is a
@@ -9,20 +12,25 @@ use super::*;
 /// not.
 #[test]
 fn test_handover_is_idempotent() {
-    let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
+    let bus = Arc::new(AgentBus::new());
+    let (runtime, _store, _parent_sid) = runtime_with(
+        Arc::new(FakeProvider::text("ok")),
+        Some(bus),
+        ToolRegistry::new(),
+    );
     let runner = Arc::new(Runner::new(
         runtime.store.clone(),
         Arc::new(FakeProvider::text("ok")),
         ToolRegistry::new(),
         RunnerConfig::default(),
     ));
-    let flag = Arc::new(AtomicBool::new(false));
+    let ending = Arc::new(EndingClaim::new(ChildRunMode::Foreground));
     let handover = Arc::new(Notify::new());
     runtime.register_child(
         "c1",
         &runner,
         CancellationToken::new(),
-        Some(Arc::clone(&flag)),
+        Some(Arc::clone(&ending)),
         Some(Arc::clone(&handover)),
     );
     assert!(
@@ -30,7 +38,7 @@ fn test_handover_is_idempotent() {
         "a live foreground child hands over"
     );
     assert!(
-        flag.load(Ordering::Acquire),
+        ending.notifies_parent(),
         "the ending now notifies the parent"
     );
     assert!(
@@ -48,6 +56,37 @@ fn test_handover_is_idempotent() {
     assert!(
         !runtime.background_child("c2"),
         "no channel means no hand-over"
+    );
+}
+
+/// A runtime with no bus cannot deliver the notification a hand-over
+/// promises, so it refuses rather than freeing a turn whose answer nobody
+/// carries.
+#[test]
+fn test_handover_without_channel_refused() {
+    let (runtime, _store, _parent_sid) = runtime_with_text_child("ok");
+    let runner = Arc::new(Runner::new(
+        runtime.store.clone(),
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    ));
+    let ending = Arc::new(EndingClaim::new(ChildRunMode::Foreground));
+    let handover = Arc::new(Notify::new());
+    runtime.register_child(
+        "c1",
+        &runner,
+        CancellationToken::new(),
+        Some(Arc::clone(&ending)),
+        Some(Arc::clone(&handover)),
+    );
+    assert!(
+        !runtime.background_child("c1"),
+        "a turn with no notification channel keeps waiting"
+    );
+    assert!(
+        !ending.notifies_parent(),
+        "the ending still belongs to the caller that waits on it"
     );
 }
 
@@ -88,6 +127,11 @@ async fn test_handover_frees_the_turn() {
     assert!(
         launch.status.is_none(),
         "the turn is released with a launch, not with an ending"
+    );
+    assert_eq!(
+        launch.background,
+        Some(BackgroundLaunch::HandedOver),
+        "the launch names the reader's hand-over, not a background request"
     );
     assert_eq!(
         launch.child_session_id, child.agent_id,
@@ -415,5 +459,63 @@ async fn test_handover_failure_notifies() {
             } if child.run_mode == ChildRunMode::Background
         ),
         "a handed-over child that fails reports a background failure: {message:?}"
+    );
+}
+
+/// A hand-over taken the instant the child is announced keeps the child alive
+/// even when the waiting turn is dropped before it learns the child's id.
+///
+/// The child binds its ending claim before announcing itself, so the wait's
+/// drop reads the hand-over rather than stopping a child the reader just
+/// freed. Binding any later leaves a window where the reader has been told
+/// the turn is free and the drop still kills the child.
+#[tokio::test]
+async fn test_early_handover_spares_child() {
+    let bus = Arc::new(AgentBus::new());
+    let (provider, entered, mut cut) = GatedProvider::new();
+    let gate = provider.gate();
+    let (runtime, _store, parent_sid) =
+        runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut announced = bus.subscribe(spawned_topic());
+    let mut completed = bus.subscribe(global_completed_topic());
+    let mut call = runtime.spawn(&ctx, SpawnArgs::new("explore", "find auth", "find auth"));
+    let child = tokio::select! {
+        message = announced.recv() => match message {
+            Ok(BusMessage::Spawned { child }) => child,
+            other => panic!("the boundary must announce the child: {other:?}"),
+        },
+        result = &mut call => panic!("the call returned before the boundary: {result:?}"),
+    };
+    assert!(
+        runtime.background_child(&child.agent_id),
+        "the reader can take the child over the moment it is announced"
+    );
+    // The turn is dropped while it may still be waiting for the child's id:
+    // this is the drop the claim has to spare.
+    drop(call);
+    timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the dropped wait leaves the child running")
+        .expect("the child's model call started");
+    assert!(
+        timeout(Duration::from_millis(200), &mut cut).await.is_err(),
+        "the dropped wait must not stop a child it handed over"
+    );
+    gate.notify_one();
+    let message = timeout(Duration::from_secs(5), completed.recv())
+        .await
+        .expect("the freed child publishes its ending")
+        .expect("the bus stays open");
+    assert!(
+        matches!(
+            &message,
+            BusMessage::Completed {
+                child,
+                status: CompletionStatus::Completed,
+                ..
+            } if child.run_mode == ChildRunMode::Background
+        ),
+        "the child finishes on its own and reports a background ending: {message:?}"
     );
 }

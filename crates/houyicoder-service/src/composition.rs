@@ -377,6 +377,7 @@ pub(crate) fn assemble(
             Some(Arc::clone(&descriptor_store)),
         ),
         inherited,
+        runner_settings.delegation_foreground_budget_ms,
     );
     let (recap, recap_warnings) =
         build_recap(session, &section, &store, &provider_for_extractor, &model);

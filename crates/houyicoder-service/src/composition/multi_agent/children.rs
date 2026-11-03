@@ -13,9 +13,9 @@ use super::*;
 pub(super) struct ChildEntry {
     pub(super) runner: Weak<Runner>,
     pub(super) cancel: CancellationToken,
-    /// The mode this child's ending is published with; a foreground child
-    /// carries a flag the runtime can flip to hand it to the background.
-    pub(super) backgrounded: Option<Arc<AtomicBool>>,
+    /// The ending claim this child's publisher shares; a foreground child
+    /// carries an unclaimed ending the runtime can hand to the background.
+    pub(super) ending: Option<Arc<EndingClaim>>,
     /// Raised when the reader takes a running child over.
     pub(super) handover: Option<Arc<Notify>>,
 }

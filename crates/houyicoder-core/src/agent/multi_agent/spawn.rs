@@ -7,7 +7,6 @@ use houyicoder_api::session::{SessionLog, TrajectoryPosition};
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{SessionDescriptorStore, SessionEvent, SessionId, SessionProvenance};
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::agent::append::new_event;
@@ -22,6 +21,7 @@ use super::bus_types::AgentBus;
 use super::bus_types::BusMessage;
 use super::bus_types::{ChildDescriptor, ChildRunMode};
 use super::child_prompt::resolve_child_effort;
+use super::ending::EndingClaim;
 use super::registry::IsolationMode;
 use super::status_publisher::ChildStatusPublisher;
 use houyicoder_api::spawn::AgentIdentity;
@@ -191,13 +191,12 @@ pub struct ChildHandle {
     pub runner: Arc<Runner>,
     pub cancel: CancellationToken,
     pub worktree: Option<ChildWorktree>,
-    /// Whether this child's ending reaches the parent as a notification.
+    /// Who receives this child's ending, shared with its status publisher.
     ///
     /// A foreground child can be handed to the background while it runs, so
-    /// the runtime flips this instead of rebuilding the child's status
-    /// publisher. A spawn with no bus carries an unused flag: nothing
-    /// publishes an ending there to read it.
-    pub backgrounded: Arc<AtomicBool>,
+    /// the runtime claims the ending instead of rebuilding the publisher. A
+    /// spawn with no bus carries an unclaimed ending that nothing reads.
+    pub ending: Arc<EndingClaim>,
     /// The reason an outside stop ended this child, when one did. Shared with
     /// the status publisher, so the ending the run publishes and the return
     /// record the parent keeps name the same cause.
@@ -313,10 +312,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         runner = runner.with_hooks(hooks);
     }
     runner = inherit_compaction(runner, &req.inherited);
-    let mut backgrounded = Arc::new(AtomicBool::new(matches!(
-        child.run_mode,
-        ChildRunMode::Background
-    )));
+    let mut ending = Arc::new(EndingClaim::new(child.run_mode));
     // Written by whoever stops the child and read by the ending it publishes.
     // It exists on every handle, so a spawn with no bus pays one allocation
     // and the foreground path reports a cut to its caller the same way.
@@ -326,9 +322,9 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         let publisher = ChildStatusPublisher::new(bus.clone(), child)
             .with_cut_report(Arc::clone(&cut_reason), req.partial_transcript.clone());
         // The publisher owns the mode its ending is published with, so the
-        // handle carries the publisher's own flag rather than a second copy
+        // handle carries the publisher's own claim rather than a second copy
         // that could disagree with it.
-        backgrounded = publisher.backgrounded();
+        ending = publisher.ending();
         events.set_run_lifecycle(Arc::new(publisher));
         runner.set_event_handlers(events);
         // Register a point-to-point inbox so the parent can steer this
@@ -387,7 +383,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         runner,
         cancel,
         worktree,
-        backgrounded,
+        ending,
         cut_reason,
     })
 }

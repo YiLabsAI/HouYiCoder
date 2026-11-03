@@ -12,6 +12,7 @@ pub mod capability;
 pub mod child_prompt;
 pub mod concurrency_gate;
 pub mod dispatch;
+pub mod ending;
 pub mod loader;
 pub mod registry;
 pub mod spawn;

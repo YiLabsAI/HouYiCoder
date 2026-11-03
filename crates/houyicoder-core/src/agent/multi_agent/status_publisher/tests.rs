@@ -71,7 +71,7 @@ fn test_handed_over_child_notifies() {
     let mut completed = bus.subscribe(global_completed_topic());
     let publisher = ChildStatusPublisher::new(Arc::clone(&bus), child(ChildRunMode::Foreground));
     // The reader hands it over mid-flight, exactly as the runtime does.
-    publisher.backgrounded().store(true, Ordering::Release);
+    assert!(publisher.ending().claim_notification());
     publisher.handle(RunLifecycleEvent::Completed {
         status: RunCompletionStatus::Completed,
         summary: "done".into(),

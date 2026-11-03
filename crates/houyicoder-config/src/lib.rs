@@ -110,6 +110,12 @@ pub const ENV_HOUYICODER_MAX_TURNS: &str = "HOUYICODER_MAX_TURNS";
 /// the background move so every command finishes in the foreground.
 pub const ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS: &str = "HOUYICODER_BASH_FOREGROUND_BUDGET_MS";
 
+/// Env var for how long a foreground delegation may hold the parent's turn
+/// before the host sends the child to the background. The settings file key
+/// wins; 0 keeps every delegation blocking, which is the default.
+pub const ENV_HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS: &str =
+    "HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS";
+
 /// Env var that overrides the config-home directory (where settings.json
 /// lives). Defaults to a dot-directory under $HOME; a user or CI can point
 /// it at a custom config root.

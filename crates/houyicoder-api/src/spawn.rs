@@ -86,8 +86,28 @@ impl SpawnArgs {
     }
 }
 
+/// How a child came to run in the background.
+///
+/// Every variant leaves the caller without a terminal result, but they differ
+/// in what the model must do next: the caller that asked for the background
+/// already knows, while a delegation the host sent to the background has to be
+/// told not to guess, and a reader's hand-over needs no instruction at all.
+/// The entry names which happened instead of leaving a reader to infer it from
+/// optional fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundLaunch {
+    /// The caller asked for a background child up front.
+    Requested,
+    /// The reader handed a running foreground child to the background.
+    HandedOver,
+    /// A foreground delegation outlived its wait budget and was sent to the
+    /// background; its ending arrives later as a notification.
+    OutlivedWait,
+}
+
 /// The child reference returned by a spawn. Foreground outcomes include the
-/// terminal result; background outcomes carry only the child identity.
+/// terminal result; background outcomes carry the child identity and which
+/// background launch happened.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SpawnOutcome {
@@ -96,13 +116,19 @@ pub struct SpawnOutcome {
     /// None when the child runs in the background.
     pub status: Option<String>,
     /// The child's final answer text (or last assistant text on a non-final
-    /// terminal). None for a background child.
+    /// terminal). For a background outcome this is None when the caller or the
+    /// reader started the child, and the instruction the model must read when
+    /// the child outlived its wait budget.
     pub summary: Option<String>,
     /// A pointer back to the child transcript (the child session id) for
-    /// follow-up reads. None for a background child.
+    /// follow-up reads. None when the child was started in the background
+    /// without a wait to leave behind.
     pub result_ref: Option<String>,
     /// The child's cumulative token usage. None for a background child.
     pub usage: Option<Usage>,
+    /// How the child ended up in the background, when it did. None for a
+    /// foreground outcome that carries a terminal result.
+    pub background: Option<BackgroundLaunch>,
 }
 
 impl SpawnOutcome {
@@ -120,10 +146,12 @@ impl SpawnOutcome {
             status: Some(status.into()),
             summary: Some(summary.into()),
             usage: Some(usage),
+            background: None,
         }
     }
 
-    /// Build an outcome after a background child starts.
+    /// Build an outcome after a background child starts because its caller
+    /// asked for the background up front.
     pub fn background_started(child_session_id: impl Into<String>) -> Self {
         Self {
             child_session_id: child_session_id.into(),
@@ -131,6 +159,22 @@ impl SpawnOutcome {
             summary: None,
             result_ref: None,
             usage: None,
+            background: Some(BackgroundLaunch::Requested),
+        }
+    }
+
+    /// Build an outcome after the reader handed a running foreground child to
+    /// the background. The child keeps running; its ending arrives later as a
+    /// notification, and the model needs no instruction because the reader
+    /// acted, not the delegation.
+    pub fn background_handed_over(child_session_id: impl Into<String>) -> Self {
+        Self {
+            child_session_id: child_session_id.into(),
+            status: None,
+            summary: None,
+            result_ref: None,
+            usage: None,
+            background: Some(BackgroundLaunch::HandedOver),
         }
     }
 
@@ -138,12 +182,11 @@ impl SpawnOutcome {
     /// budget and was sent to the background. The child keeps running; its
     /// ending arrives later as a notification. The summary carries the
     /// instruction the model reads so it does not guess work that has not
-    /// finished, which is how the caller tells this apart from a direct
-    /// background launch (no summary).
-    pub fn background_after_wait(child_session_id: impl Into<String>, held_secs: u64) -> Self {
+    /// finished.
+    pub fn background_after_wait(child_session_id: impl Into<String>, wait_secs: u64) -> Self {
         let child = child_session_id.into();
         let summary = format!(
-            "Subagent {child} exceeded the {held_secs}s foreground wait and is now running in the \
+            "Subagent {child} exceeded the {wait_secs}s foreground wait and is now running in the \
              background (agentId: {child}). Do NOT fabricate or guess its findings; proceed with \
              independent work or inform the user, and you will receive a completion notification \
              when it finishes."
@@ -154,6 +197,7 @@ impl SpawnOutcome {
             summary: Some(summary),
             result_ref: Some(child),
             usage: None,
+            background: Some(BackgroundLaunch::OutlivedWait),
         }
     }
 }
@@ -213,12 +257,15 @@ pub trait SpawnHandle: Send + Sync {
     /// depth is parent + 1 for the recursion guard).
     ///
     /// Timing is part of the contract: with run_in_background false, spawn
-    /// awaits the child's terminal state before returning -- the caller then
-    /// reads the child log by session id for status, summary, result ref,
-    /// and usage. With it true, spawn returns once the child is started;
-    /// completion reaches the parent later as a pending notification on the
-    /// next parent turn. Either way the outcome carries only the child
-    /// session id; the engine keeps the runner and cancel token.
+    /// waits for the child's terminal state -- the caller then reads the
+    /// child log by session id for status, summary, result ref, and usage.
+    /// A foreground spawn may stop waiting before the child ends, either
+    /// because the reader handed the child over or because the delegation
+    /// outlived the wait budget; the outcome then names the child and which
+    /// background launch happened, and the ending reaches the parent later as
+    /// a pending notification on the next parent turn. With it true, spawn
+    /// returns once the child is started, the same way. The engine keeps the
+    /// runner and the child's cancel token in every case.
     fn spawn(&self, ctx: &ToolCtx, args: SpawnArgs)
     -> PFut<'_, Result<SpawnOutcome, SpawnFailure>>;
 
@@ -259,8 +306,10 @@ pub trait SpawnHandle: Send + Sync {
     /// The child keeps running and its ending reaches the parent as a
     /// notification, exactly as if it had been started in the background. The
     /// default returns false (no multi-agent runtime attached, or nothing to
-    /// promote); a runtime with a child registry overrides it. Returns true
-    /// when a live foreground child was handed over.
+    /// promote); a runtime with a child registry overrides it, refusing when
+    /// no notification channel is wired, because the hand-over's promise is
+    /// that an ending still arrives. Returns true when a live foreground
+    /// child was handed over.
     fn background_child(&self, _child_id: &str) -> bool {
         false
     }

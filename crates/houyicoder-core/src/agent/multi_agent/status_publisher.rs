@@ -1,6 +1,5 @@
 //! Publishes child lifecycle status on targeted and global bus topics.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
@@ -12,6 +11,7 @@ use super::bus_types::{
     AgentBus, BusMessage, ChildDescriptor, ChildRunMode, completed_topic, global_completed_topic,
     global_progress_topic, progress_topic,
 };
+use super::ending::EndingClaim;
 use super::spawn::CutReason;
 use super::spawn::PartialTranscript;
 
@@ -19,14 +19,10 @@ use super::spawn::PartialTranscript;
 pub struct ChildStatusPublisher {
     bus: Arc<AgentBus>,
     child: ChildDescriptor,
-    /// Whether this child's ending must reach the parent as a notification.
-    ///
-    /// A spawn decides the mode, but a foreground child can be handed to the
-    /// background while it runs. The mode therefore lives behind a shared flag
-    /// the runtime can flip, and the ending reads it at publish time rather
-    /// than at construction: a child promoted mid-flight still tells the
-    /// parent it finished, and one that was never promoted stays silent.
-    backgrounded: Arc<AtomicBool>,
+    /// Who receives this child's ending. The publisher claims it for the
+    /// waiting caller at publish time; a hand-over claims it for the parent's
+    /// notification stream instead, whichever lands first.
+    ending: Arc<EndingClaim>,
     /// The reason an outside stop ended this child, when one did.
     ///
     /// The ending is published from inside the child's run, after the stop was
@@ -42,14 +38,11 @@ pub struct ChildStatusPublisher {
 impl ChildStatusPublisher {
     /// Bind a publisher to one child descriptor.
     pub fn new(bus: Arc<AgentBus>, child: ChildDescriptor) -> Self {
-        let backgrounded = Arc::new(AtomicBool::new(matches!(
-            child.run_mode,
-            ChildRunMode::Background
-        )));
+        let ending = Arc::new(EndingClaim::new(child.run_mode));
         Self {
             bus,
             child,
-            backgrounded,
+            ending,
             cut_reason: None,
             partial: None,
         }
@@ -69,9 +62,16 @@ impl ChildStatusPublisher {
         self
     }
 
-    /// The flag the runtime flips to hand this child to the background.
-    pub fn backgrounded(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.backgrounded)
+    /// The claim the runtime shares with the wait on this child.
+    pub fn ending(&self) -> Arc<EndingClaim> {
+        Arc::clone(&self.ending)
+    }
+
+    /// Publish through a claim another reporter already holds, so both read
+    /// and set the same decision.
+    pub fn with_ending(mut self, ending: Arc<EndingClaim>) -> Self {
+        self.ending = ending;
+        self
     }
 
     /// The cut this child was stopped by, when one was recorded.
@@ -118,10 +118,11 @@ impl EventHandler<RunLifecycleEvent> for ChildStatusPublisher {
             }
             RunLifecycleEvent::Completed { status, summary } => {
                 // The ending carries the mode the child has now, not the one it
-                // started in: a foreground child the reader handed to the
-                // background must still notify the parent.
+                // started in: a child the reader handed to the background must
+                // still notify the parent, and one whose wait gave up must not
+                // report a foreground ending that would be dropped.
                 let mut child = self.child.clone();
-                if self.backgrounded.load(Ordering::Acquire) {
+                if !self.ending.claim_caller() {
                     child.run_mode = ChildRunMode::Background;
                 }
                 let cut = self.recorded_cut();

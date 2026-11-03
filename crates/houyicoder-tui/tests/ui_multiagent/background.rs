@@ -188,3 +188,47 @@ fn test_background_notice_arrives_once() {
     }
     assert!(drained, "notification should drain:\n{}", s.output());
 }
+
+/// A foreground delegation that outlives the configured wait budget releases
+/// the parent's turn while the child is still streaming. The parent's next
+/// assistant text renders before the child's own text finishes, so a user can
+/// keep working instead of waiting out a long child.
+#[test]
+#[ignore]
+fn test_budget_frees_turn() {
+    // The child's text streams in four-character chunks with a delay each, so
+    // it stays in flight well past the budget. The parent's shorter text lands
+    // inside the child's streaming window, and the sentinel at the child's tail
+    // has not arrived yet when the parent text renders. The screen is read
+    // rather than the byte stream: the child's redraws interleave with the
+    // parent's line in the stream, which a contiguous match cannot survive.
+    let script = r#"[
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"long task","description":"long task"}}],
+        [{"type":"Text","text":"child still working child still working child still working child still working child still working child still working child still working child still working child still working child still working child still working child still working childstillhere"}],
+        [{"type":"Text","text":"parent carried on"}]
+    ]"#;
+    let env = [
+        (
+            "HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS".to_string(),
+            "300".to_string(),
+        ),
+        (
+            "HOUYICODER_TEST_STUB_DELAY_MS".to_string(),
+            "100".to_string(),
+        ),
+    ];
+    let mut s = pty_session_scripted_env(script, &env);
+    assert!(s.wait_for("let's build", RENDER_TIMEOUT));
+    s.send_str("delegate the long task");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_screen("parent carried on", RENDER_TIMEOUT * 2),
+        "the parent's next turn renders after the budget releases it:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.screen().contents().contains("childstillhere"),
+        "the parent was released while the child was still streaming:\n{}",
+        s.output()
+    );
+}

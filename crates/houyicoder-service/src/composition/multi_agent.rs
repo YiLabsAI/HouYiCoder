@@ -6,7 +6,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use houyicoder_api::hook_fire::HookFire;
@@ -26,6 +25,7 @@ use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
 use houyicoder_core::agent::multi_agent::bus_types::spawned_topic;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor};
 use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
+use houyicoder_core::agent::multi_agent::ending::EndingClaim;
 use houyicoder_core::agent::multi_agent::record_subagent_return;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
@@ -232,7 +232,7 @@ impl MultiAgentRuntime {
         child_id: &str,
         runner: &Arc<Runner>,
         cancel: CancellationToken,
-        backgrounded: Option<Arc<AtomicBool>>,
+        ending: Option<Arc<EndingClaim>>,
         handover: Option<Arc<Notify>>,
     ) {
         if let Ok(mut g) = self.children.lock() {
@@ -242,7 +242,7 @@ impl MultiAgentRuntime {
                 ChildEntry {
                     runner: Arc::downgrade(runner),
                     cancel,
-                    backgrounded,
+                    ending,
                     handover,
                 },
             );
@@ -305,8 +305,13 @@ pub(super) fn install_agent_types(
 pub(super) fn build_runtime(
     deps: MultiAgentDeps,
     inherited: RunnerInheritance,
+    delegation_wait_ms: u64,
 ) -> Arc<dyn SpawnHandle> {
-    Arc::new(MultiAgentRuntime::new(deps).with_inheritance(inherited))
+    Arc::new(
+        MultiAgentRuntime::new(deps)
+            .with_inheritance(inherited)
+            .with_delegation_wait_ms(delegation_wait_ms),
+    )
 }
 
 impl SpawnHandle for MultiAgentRuntime {
@@ -409,6 +414,13 @@ impl SpawnHandle for MultiAgentRuntime {
     /// child keeps its runner, slot, and task, so nothing is restarted. A
     /// child already in the background reports false.
     fn background_child(&self, child_id: &str) -> bool {
+        // The hand-over promises the child's ending will arrive as a
+        // notification, and the bus is what carries one. Without a bus the
+        // caller would stop waiting on an answer nobody delivers, so a turn
+        // that cannot notify refuses the hand-over.
+        if self.bus.is_none() {
+            return false;
+        }
         let registry = match self.children.lock() {
             Ok(g) => g,
             Err(_) => return false,
@@ -416,12 +428,12 @@ impl SpawnHandle for MultiAgentRuntime {
         let Some(entry) = registry.get(child_id) else {
             return false;
         };
-        let (Some(flag), Some(handover)) = (&entry.backgrounded, &entry.handover) else {
+        let (Some(ending), Some(handover)) = (&entry.ending, &entry.handover) else {
             return false;
         };
-        // Already in the background: nothing is waiting and the ending
-        // already notifies.
-        if flag.swap(true, Ordering::AcqRel) {
+        // Already in the background, or the ending already finished with the
+        // caller: nothing is waiting on this child any more.
+        if !ending.claim_notification() {
             return false;
         }
         handover.notify_one();

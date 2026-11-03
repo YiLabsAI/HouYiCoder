@@ -2,7 +2,6 @@
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::FutureExt;
@@ -16,6 +15,7 @@ use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, ChildDescriptor, ChildRunMode, completed_topic,
 };
 use houyicoder_core::agent::multi_agent::concurrency_gate::AcquireResult;
+use houyicoder_core::agent::multi_agent::ending::EndingClaim;
 use houyicoder_core::agent::multi_agent::registry::{IsolationMode, ResolveCtx};
 use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
@@ -46,7 +46,7 @@ use std::time::Duration;
 
 mod ceiling;
 mod execution;
-mod handover;
+pub(super) mod handover;
 mod request;
 use ceiling::run_with_deadline;
 use execution::ChildExecution;
@@ -140,7 +140,7 @@ pub(super) async fn finalize_child(
             report_failed_terminal(
                 bus.as_ref(),
                 &child,
-                &handle.backgrounded,
+                &handle.ending,
                 &summary,
                 run_published,
             );
@@ -156,7 +156,7 @@ pub(super) async fn finalize_child(
             report_failed_terminal(
                 bus.as_ref(),
                 &child,
-                &handle.backgrounded,
+                &handle.ending,
                 &summary,
                 run_published,
             );
@@ -268,7 +268,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 fn report_failed_terminal(
     bus: Option<&Arc<AgentBus>>,
     child: &ChildDescriptor,
-    backgrounded: &Arc<AtomicBool>,
+    ending: &Arc<EndingClaim>,
     summary: &str,
     run_published: bool,
 ) {
@@ -278,17 +278,16 @@ fn report_failed_terminal(
     let Some(bus) = bus else {
         return;
     };
-    // A child the reader handed to the background while it ran reports its
-    // ending as a background ending. The parent stopped waiting at that moment,
-    // so this notification is the only way it learns the child died; reporting
-    // a foreground ending would drop that news, because only a background
-    // ending notifies. The flag is read here, at the moment of reporting,
-    // because the hand-over can land any time between the start and this arm.
+    // The ending is claimed here exactly as a run that publishes its own term
+    // claims it: losing to a hand-over means the parent stopped waiting, so this
+    // notification is the only way it learns the child died. Claiming for the
+    // caller makes the wait return this failure itself.
     let mut child = child.clone();
-    if backgrounded.load(Ordering::Acquire) {
+    if !ending.claim_caller() {
         child.run_mode = ChildRunMode::Background;
     }
-    let publisher = ChildStatusPublisher::new(Arc::clone(bus), child);
+    let publisher =
+        ChildStatusPublisher::new(Arc::clone(bus), child).with_ending(Arc::clone(ending));
     publisher.handle(RunLifecycleEvent::Completed {
         status: RunCompletionStatus::Failed,
         summary: summary.to_string(),
@@ -362,6 +361,7 @@ pub(super) async fn run_background_spawn(
         completion: admission.finished,
         admission: admission.slot,
         reservation,
+        ending_binding: None,
     }
     .detach(permit, started);
     // Watch under the admitted slot before waiting for the child id, so the
@@ -398,8 +398,9 @@ pub(super) async fn run_background_spawn(
 /// Start a foreground child and return its ending.
 ///
 /// The turn waits on the child, so this is the one shape whose caller can still
-/// act on the result. Two things can cut the wait short: the turn being
-/// stopped, and the reader handing the child to the background.
+/// act on the result. Three things can cut the wait short: the turn being
+/// stopped, the reader handing the child to the background, and the wait
+/// budget elapsing.
 pub(super) async fn run_foreground_spawn(
     this: MultiAgentRuntime,
     parent_sid: SessionId,
@@ -462,26 +463,27 @@ pub(super) async fn run_foreground_spawn(
         return Err(SpawnFailure::ShuttingDown);
     };
     // The turn's stop reaches the child only while the turn waits on it; the
-    // link lets go the moment the reader takes the child over.
+    // link lets go the moment the reader takes the child over. It exists
+    // before the child reports an id, because a turn stopped while the child
+    // starts must still stop the child. The child's task binds the ending
+    // claim through this link before announcing itself, which is the moment a
+    // reader can first hand the child over.
     let link = ParentCancelLink::new(cancel, admission.close.clone());
     let running = Arc::clone(&this.running);
-    // The wait budget and the live-child registry are read before the runtime
-    // moves into the task: the budget decides when a slow foreground child is
-    // sent to the background, and the registry holds the in-background flag the
-    // publisher reads, which the timer flips so the ending reaches the parent
-    // as a notification rather than a turn result.
+    // The wait budget is read before the runtime moves into the task: it
+    // decides when a slow foreground child is sent to the background.
     let wait_budget = if this.delegation_wait_ms > 0 {
         Some(Duration::from_millis(this.delegation_wait_ms))
     } else {
         None
     };
-    let children = Arc::clone(&this.children);
     // The reader can take this child over while the turn waits, so the call
     // races the child's ending against that signal. The started channel carries
-    // the child id back as soon as the child exists, because the hand-over has
-    // to name a child the registry already holds.
+    // the child id and the ending claim back as soon as the child exists,
+    // because the hand-over has to name a child the registry already holds and
+    // the timer has to decide the same claim the publisher reads.
     let handover = Arc::new(Notify::new());
-    let (started, child_id) = channel::<String>();
+    let (started, child_id) = channel::<(String, Arc<EndingClaim>)>();
     let mut task = ChildExecution {
         running: Arc::clone(&running),
         runtime: this,
@@ -491,6 +493,7 @@ pub(super) async fn run_foreground_spawn(
         completion: admission.finished,
         admission: admission.slot,
         reservation,
+        ending_binding: Some(link.ending()),
     }
     .supervise(slot, Arc::clone(&handover), started);
     // Watch the task under the admitted slot through the one shared path; the
@@ -508,27 +511,17 @@ pub(super) async fn run_foreground_spawn(
     // child the registry already holds, and a construction failure is the
     // task's own result, not something this call can report sooner.
     match child_id.await.ok() {
-        Some(child_str) => {
-            // The in-background flag the publisher reads is the one the
-            // registry holds for this child, shared with the status publisher
-            // so flipping it here makes the ending arrive as a notification.
-            let in_background = children
-                .lock()
-                .ok()
-                .and_then(|g| {
-                    g.get(&child_str)
-                        .and_then(|entry| entry.backgrounded.clone())
-                })
-                .unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
-            handover::wait_or_handover(
-                &mut task,
-                &handover,
-                link,
-                in_background,
-                wait_budget,
-                child_str,
-            )
-            .await
+        Some((child_str, ending)) => {
+            // The ending claim is the one the child's status publisher reads,
+            // handed over with the id so deciding it here makes the ending
+            // arrive as a notification regardless of what the registry holds
+            // by the time the caller starts racing the hand-over. The link
+            // was bound to the same claim by the child's task before it
+            // announced the child, so a stop arriving between that announce
+            // and this point already reads the hand-over rather than
+            // cancelling the child the reader just freed.
+            handover::wait_or_handover(&mut task, &handover, link, ending, wait_budget, child_str)
+                .await
         }
         None => handover::wait_for_child(task, link).await,
     }

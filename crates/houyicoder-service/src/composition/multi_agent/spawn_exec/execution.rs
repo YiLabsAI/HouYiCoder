@@ -7,6 +7,7 @@
 //! slot, and the completion signal until the child is finished.
 
 use super::super::{AdmissionLease, ChildHandle};
+use super::handover::EndingBinding;
 use super::*;
 
 /// Everything one child's run is built from.
@@ -25,6 +26,11 @@ pub(super) struct ChildExecution {
     /// The claim on a resumed session id, held for the life of the task so the
     /// id cannot be driven twice.
     pub(super) reservation: Option<ChildReservation>,
+    /// The slot a supervised child fills in before announcing itself, so a
+    /// stop of the turn after a hand-over reads the claim rather than
+    /// cancelling the child the reader just freed. A detached child has no
+    /// waiting turn to release, so it has no slot.
+    pub(super) ending_binding: Option<EndingBinding>,
 }
 
 impl ChildExecution {
@@ -49,6 +55,7 @@ impl ChildExecution {
             running,
             admission,
             reservation,
+            ending_binding: _,
         } = self;
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
@@ -127,7 +134,7 @@ impl ChildExecution {
         self,
         slot: OwnedSemaphorePermit,
         handover: Arc<Notify>,
-        started: Sender<String>,
+        started: Sender<(String, Arc<EndingClaim>)>,
     ) -> JoinHandle<Result<SpawnOutcome, SpawnFailure>> {
         let ChildExecution {
             runtime,
@@ -138,6 +145,7 @@ impl ChildExecution {
             running,
             admission,
             reservation,
+            ending_binding,
         } = self;
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
@@ -173,6 +181,13 @@ impl ChildExecution {
                 ChildRunMode::Foreground,
             )
             .with_description(description);
+            // The claim is bound before the child is announced: the reader can
+            // hand it over from that moment, and a turn stopped after the
+            // hand-over must read the claim here rather than cancel the child
+            // the reader just freed.
+            if let Some(binding) = ending_binding {
+                binding.bind(Arc::clone(&handle.ending));
+            }
             // The hand-over channel is registered beside the live runner, so the
             // reader can take this child over while the caller waits on it.
             announce(
@@ -183,10 +198,14 @@ impl ChildExecution {
                 Some(&handover),
             );
             // The child is real and registered, so the caller can stop waiting
-            // on the ending and race the hand-over instead. A dropped receiver
-            // means the caller already returned; the child keeps running either
-            // way, which is the point of the hand-over.
-            drop(started.send(child_str.clone()));
+            // on the ending and race the hand-over instead. The claim travels
+            // with the id because it is the same Arc the publisher reads: a
+            // second lookup through the registry could miss an entry the
+            // caller is racing, and a missed lookup must never default to a
+            // claim that the child is already in the background. A dropped
+            // receiver means the caller already returned; the child keeps
+            // running either way, which is the point of the hand-over.
+            drop(started.send((child_str.clone(), Arc::clone(&handle.ending))));
             // SubagentStart fires at the durable spawn boundary: the child
             // session exists, the spawn is recorded, and the run has not
             // started. It pairs with the later SubagentStop across the span up
@@ -221,7 +240,7 @@ fn announce(
         child_str,
         &handle.runner,
         handle.cancel.clone(),
-        Some(Arc::clone(&handle.backgrounded)),
+        Some(Arc::clone(&handle.ending)),
         handover.map(Arc::clone),
     );
     announce_spawn(runtime.bus.as_ref(), child);

@@ -205,6 +205,69 @@ fn test_background_result_reports_start() {
     );
 }
 
+/// A delegation the wait budget sent to the background keeps the instruction
+/// the spawn built: the model reads what it must do now, not the direct-launch
+/// message that says nothing about work already running.
+#[test]
+fn test_outlived_wait_keeps_summary() {
+    let out = build_tool_result(SpawnOutcome::background_after_wait("c1", 5), None);
+    let content = out["content"].as_str().unwrap_or("");
+    assert!(
+        content.contains("exceeded the 5s foreground wait"),
+        "the instruction the spawn built reaches the model: {content}"
+    );
+    assert!(
+        !content.contains("Launched in the background"),
+        "an outlived wait is not reported as a direct launch: {content}"
+    );
+}
+
+/// A reader's hand-over reaches the model as a background launch: the caller
+/// did not ask for the background and has no terminal result to read.
+#[test]
+fn test_handover_reports_launch() {
+    let out = build_tool_result(SpawnOutcome::background_handed_over("c1"), None);
+    let content = out["content"].as_str().unwrap_or("");
+    assert!(
+        content.contains("Launched in the background"),
+        "a hand-over says the result arrives later: {content}"
+    );
+    assert!(
+        !content.contains("returned no output"),
+        "a hand-over is not a foreground empty result: {content}"
+    );
+}
+
+/// A direct background launch replaces whatever summary the outcome carries:
+/// the launch dispatch keys on how the child left the foreground, not on
+/// whether a summary happens to be present.
+#[test]
+fn test_direct_launch_replaces_summary() {
+    let mut outcome = SpawnOutcome::background_started("c1");
+    outcome.summary = Some("stale".into());
+    let out = build_tool_result(outcome, None);
+    let content = out["content"].as_str().unwrap_or("");
+    assert!(
+        content.contains("Launched in the background"),
+        "the launch text reaches the model: {content}"
+    );
+    assert!(
+        !content.contains("stale"),
+        "a background outcome does not forward a stale summary: {content}"
+    );
+}
+
+/// A background child has spent nothing this host can measure. The field is
+/// omitted so a reader cannot sum an unknown as a measured zero.
+#[test]
+fn test_background_omits_usage() {
+    let out = build_tool_result(SpawnOutcome::background_started("c1"), None);
+    assert!(
+        out.get("usage").is_none(),
+        "unknown usage must not render as zero: {out}"
+    );
+}
+
 #[test]
 fn test_tool_result_carries_color() {
     let out = build_tool_result(

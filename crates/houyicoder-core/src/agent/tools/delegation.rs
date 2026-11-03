@@ -22,6 +22,7 @@ use crate::agent::multi_agent::registry::built_in_all;
 use crate::agent::multi_agent::registry::{AgentError, AgentRegistry, ResolveCtx};
 #[cfg(test)]
 use houyicoder_api::spawn::AgentIdentity;
+use houyicoder_api::spawn::BackgroundLaunch;
 use houyicoder_api::spawn::SpawnArgs;
 #[cfg(test)]
 use houyicoder_api::spawn::SpawnHandle;
@@ -281,38 +282,42 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
     }
 }
 
-/// Build the tool_result JSON from a spawn outcome. A sync outcome carries
-/// the child's summary text, session id (the result ref for follow-up),
-/// terminal status, and usage; an empty summary gets a placeholder so the
-/// parent does not read "nothing" as "done", and a summary past the 100k
+/// Build the tool_result JSON from a spawn outcome. A foreground outcome
+/// carries the child's summary text, session id (the result ref for
+/// follow-up), terminal status, and usage; an empty summary gets a placeholder
+/// so the parent does not read "nothing" as "done", and a summary past the 100k
 /// char cap is tail-truncated with a note that the child log holds the full
-/// output. A background outcome (no terminal status) surfaces a "launched in
-/// the background" message instead — the result arrives later as a
-/// turn-boundary notification, not as this tool_result.
+/// output. A background outcome carries no usage or terminal status: its
+/// content says the result arrives later as a turn-boundary notification.
 fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
-    let usage = outcome.usage.unwrap_or_default();
-    // A background outcome carries no terminal status or summary — the parent
-    // does not block on the child. Surface that distinctly so the model does
-    // not read "returned no output" (a foreground empty-result symptom) and
-    // instead knows the result arrives later as a turn-boundary notification.
-    let background_started = outcome.status.is_none();
+    let usage = outcome.usage;
+    let background = outcome.background;
     let status = outcome.status.clone().unwrap_or_default();
     let child = outcome.child_session_id.clone();
     let result_ref = outcome.result_ref.unwrap_or_default();
     let mut content = outcome.summary.unwrap_or_default();
-    if background_started {
-        // A background outcome with a summary is a foreground delegation the
-        // wait budget sent to the background: the summary is the instruction
-        // the model reads so it does not guess work that has not finished.
-        // One without a summary is a direct background launch: the result
-        // arrives later as a turn-boundary notification.
-        if content.is_empty() {
+    match background {
+        // A direct background launch or a reader hand-over has no summary of its
+        // own. Say the result arrives later so the model does not read an empty
+        // result as done.
+        Some(BackgroundLaunch::Requested | BackgroundLaunch::HandedOver) => {
             content = "Launched in the background; the result arrives as a \
                        notification on your next turn."
                 .into();
         }
-    } else if content.is_empty() {
-        content = "(Subagent returned no output.)".into();
+        // A foreground delegation the wait budget sent to the background: the
+        // summary carries the instruction the model must read, so keep it. An
+        // empty one still gets a launch sentence rather than empty content.
+        Some(BackgroundLaunch::OutlivedWait) if content.is_empty() => {
+            content = "Running in the background; the result arrives as a \
+                       notification on your next turn."
+                .into();
+        }
+        Some(BackgroundLaunch::OutlivedWait) => {}
+        None if content.is_empty() => {
+            content = "(Subagent returned no output.)".into();
+        }
+        None => {}
     }
     const MAX_CHARS: usize = 100_000;
     let truncated = content.chars().count() > MAX_CHARS;
@@ -335,7 +340,7 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
         Some(c) => Value::String(c.to_string()),
         None => Value::Null,
     };
-    json!({
+    let mut result = json!({
         "status": status,
         "content": content,
         "agentId": child,
@@ -345,14 +350,19 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
         // retrieval tool can wire it without a wire change.
         "result_ref": result_ref,
         "color": color,
-        "usage": {
+    });
+    // A background child has no measured usage yet. Omitting the field keeps
+    // unknown distinct from a measured zero for a reader that later sums it.
+    if let Some(usage) = usage {
+        result["usage"] = json!({
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "cache_read_input_tokens": usage.cache_read_input_tokens,
             "cache_write_input_tokens": usage.cache_write_input_tokens,
             "reasoning_tokens": usage.reasoning_tokens,
-        },
-    })
+        });
+    }
+    result
 }
 
 #[cfg(test)]
