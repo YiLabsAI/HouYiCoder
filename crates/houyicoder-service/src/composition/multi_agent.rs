@@ -138,6 +138,10 @@ pub struct MultiAgentRuntime {
     hooks: Option<Arc<HookRegistry>>,
     /// The parent's compaction components, installed on every child runner.
     inherited: RunnerInheritance,
+    /// The foreground delegation wait budget, in milliseconds. Zero leaves a
+    /// foreground child blocking; a non-zero value sends it to the background
+    /// once it elapses.
+    delegation_wait_ms: u64,
     /// The child sessions a spawn is continuing right now, claimed before
     /// construction so two resumes cannot drive one session at once.
     reserved: Arc<Mutex<HashSet<String>>>,
@@ -173,6 +177,7 @@ impl MultiAgentRuntime {
             conditional: deps.conditional,
             hooks: deps.hooks,
             inherited: RunnerInheritance::default(),
+            delegation_wait_ms: 0,
             reserved: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -265,6 +270,13 @@ impl MultiAgentRuntime {
     /// spinning up many real children.
     pub(super) fn with_gate(mut self, gate: Arc<ConcurrencyGate>) -> Self {
         self.gate = gate;
+        self
+    }
+
+    /// Override the foreground delegation wait budget. Tests drive a small
+    /// budget to exercise the auto-background path in milliseconds.
+    pub(super) fn with_delegation_wait_ms(mut self, ms: u64) -> Self {
+        self.delegation_wait_ms = ms;
         self
     }
 }

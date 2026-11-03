@@ -133,6 +133,29 @@ impl SpawnOutcome {
             usage: None,
         }
     }
+
+    /// Build an outcome after a foreground child held the turn past its wait
+    /// budget and was sent to the background. The child keeps running; its
+    /// ending arrives later as a notification. The summary carries the
+    /// instruction the model reads so it does not guess work that has not
+    /// finished, which is how the caller tells this apart from a direct
+    /// background launch (no summary).
+    pub fn background_after_wait(child_session_id: impl Into<String>, held_secs: u64) -> Self {
+        let child = child_session_id.into();
+        let summary = format!(
+            "Subagent {child} exceeded the {held_secs}s foreground wait and is now running in the \
+             background (agentId: {child}). Do NOT fabricate or guess its findings; proceed with \
+             independent work or inform the user, and you will receive a completion notification \
+             when it finishes."
+        );
+        Self {
+            child_session_id: child.clone(),
+            status: None,
+            summary: Some(summary),
+            result_ref: Some(child),
+            usage: None,
+        }
+    }
 }
 
 /// Why a spawn was rejected, mirroring the engine's SpawnError but neutral

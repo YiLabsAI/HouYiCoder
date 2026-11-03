@@ -42,6 +42,7 @@ use houyicoder_core::agent::multi_agent::registry::AgentError;
 use houyicoder_core::agent::multi_agent::registry::PromptSource;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use std::panic::resume_unwind;
+use std::time::Duration;
 
 mod ceiling;
 mod execution;
@@ -464,6 +465,17 @@ pub(super) async fn run_foreground_spawn(
     // link lets go the moment the reader takes the child over.
     let link = ParentCancelLink::new(cancel, admission.close.clone());
     let running = Arc::clone(&this.running);
+    // The wait budget and the live-child registry are read before the runtime
+    // moves into the task: the budget decides when a slow foreground child is
+    // sent to the background, and the registry holds the in-background flag the
+    // publisher reads, which the timer flips so the ending reaches the parent
+    // as a notification rather than a turn result.
+    let wait_budget = if this.delegation_wait_ms > 0 {
+        Some(Duration::from_millis(this.delegation_wait_ms))
+    } else {
+        None
+    };
+    let children = Arc::clone(&this.children);
     // The reader can take this child over while the turn waits, so the call
     // races the child's ending against that signal. The started channel carries
     // the child id back as soon as the child exists, because the hand-over has
@@ -496,7 +508,28 @@ pub(super) async fn run_foreground_spawn(
     // child the registry already holds, and a construction failure is the
     // task's own result, not something this call can report sooner.
     match child_id.await.ok() {
-        Some(child_str) => handover::wait_or_handover(&mut task, &handover, link, child_str).await,
+        Some(child_str) => {
+            // The in-background flag the publisher reads is the one the
+            // registry holds for this child, shared with the status publisher
+            // so flipping it here makes the ending arrive as a notification.
+            let in_background = children
+                .lock()
+                .ok()
+                .and_then(|g| {
+                    g.get(&child_str)
+                        .and_then(|entry| entry.backgrounded.clone())
+                })
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
+            handover::wait_or_handover(
+                &mut task,
+                &handover,
+                link,
+                in_background,
+                wait_budget,
+                child_str,
+            )
+            .await
+        }
         None => handover::wait_for_child(task, link).await,
     }
 }

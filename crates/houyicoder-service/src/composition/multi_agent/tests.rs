@@ -1944,6 +1944,7 @@ fn test_terminal_handoff() {
 }
 
 mod admission_credential;
+mod auto_background;
 mod handover;
 mod join_children;
 mod orphan;

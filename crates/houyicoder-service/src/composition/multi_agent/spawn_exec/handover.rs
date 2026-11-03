@@ -12,8 +12,12 @@ use houyicoder_async::CancellationToken;
 
 use super::SpawnFailure;
 use std::panic::resume_unwind;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 /// Carries the turn's stop to the child's own lifecycle token, one way.
 ///
@@ -74,34 +78,64 @@ impl Drop for ParentCancelLink {
     }
 }
 
-/// Wait for the child's outcome, or return the launch as soon as the reader
-/// hands the child to the background.
+/// Wait for the child's outcome, return the launch when the reader hands the
+/// child to the background, or send the child to the background once its
+/// foreground wait budget elapses.
 ///
-/// The child's own outcome is checked first: a hand-over that lands in the same
-/// instant the child finishes must not report a launch for work that is already
-/// done, because the parent would then never see the answer it already paid
-/// for. Once handed over, the task keeps running on its own and the child's
-/// ending reaches the parent as a notification, which is what the flag the
-/// runtime flipped is for.
+/// The child's own outcome is checked first: a hand-over or a budget expiry
+/// that lands in the same instant the child finishes must not report a launch
+/// for work that is already done, because the parent would then never see the
+/// answer it already paid for. The reader's hand-over and the budget timer
+/// both flip the same shared backgrounded flag, so whichever lands first wins
+/// and the other is a no-op. Once in the background, the task keeps running on
+/// its own token and the child's ending reaches the parent as a notification.
 pub(super) async fn wait_or_handover(
     run: &mut JoinHandle<Result<SpawnOutcome, SpawnFailure>>,
     handover: &Notify,
     link: ParentCancelLink,
+    in_background: Arc<AtomicBool>,
+    wait_budget: Option<Duration>,
     child_str: String,
 ) -> Result<SpawnOutcome, SpawnFailure> {
+    let Some(budget) = wait_budget else {
+        return tokio::select! {
+            biased;
+            outcome = &mut *run => match outcome {
+                Ok(result) => result,
+                // A panic inside the task would otherwise reach the model as an
+                // ordinary refusal, so report it as the panic it is.
+                Err(join) => resume_unwind(join.into_panic()),
+            },
+            _ = handover.notified() => {
+                // The reader took the child over, so it now runs on its own
+                // token and the turn's later stop leaves it alone.
+                link.release();
+                Ok(SpawnOutcome::background_started(child_str))
+            }
+        };
+    };
+    let held_secs = budget.as_secs();
     tokio::select! {
         biased;
         outcome = &mut *run => match outcome {
             Ok(result) => result,
-            // A panic inside the task would otherwise reach the model as an
-            // ordinary refusal, so report it as the panic it is.
             Err(join) => resume_unwind(join.into_panic()),
         },
         _ = handover.notified() => {
-            // The reader took the child over, so it now runs on its own token
-            // and the turn's later stop leaves it alone.
             link.release();
             Ok(SpawnOutcome::background_started(child_str))
+        }
+        _ = sleep(budget) => {
+            // Flip the flag the child's publisher reads: only the first flip
+            // wins, so a reader hand-over that landed first leaves this a
+            // no-op and the hand-over branch already returned. The link
+            // releases so the turn's later stop does not cancel the child.
+            if in_background.swap(true, Ordering::AcqRel) {
+                Ok(SpawnOutcome::background_started(child_str))
+            } else {
+                link.release();
+                Ok(SpawnOutcome::background_after_wait(child_str, held_secs))
+            }
         }
     }
 }

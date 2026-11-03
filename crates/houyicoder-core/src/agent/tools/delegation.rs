@@ -301,9 +301,16 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
     let result_ref = outcome.result_ref.unwrap_or_default();
     let mut content = outcome.summary.unwrap_or_default();
     if background_started {
-        content = "Launched in the background; the result arrives as a \
-                   notification on your next turn."
-            .into();
+        // A background outcome with a summary is a foreground delegation the
+        // wait budget sent to the background: the summary is the instruction
+        // the model reads so it does not guess work that has not finished.
+        // One without a summary is a direct background launch: the result
+        // arrives later as a turn-boundary notification.
+        if content.is_empty() {
+            content = "Launched in the background; the result arrives as a \
+                       notification on your next turn."
+                .into();
+        }
     } else if content.is_empty() {
         content = "(Subagent returned no output.)".into();
     }
