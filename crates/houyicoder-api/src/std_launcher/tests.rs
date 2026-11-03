@@ -184,32 +184,95 @@ async fn test_async_spawn_ends() {
 /// Whether a process whose command line carries the marker is still in the
 /// table. The marker is a shell variable, so it exists only in the grandchild's
 /// command line and not in the shell that started it.
+///
+/// This answers false only for a table it could read and found empty. A read
+/// that fails here is a fault rather than a disappearance: the caller has
+/// already established that the table is readable, so folding a failure into
+/// "gone" would let the wait-for-disappearance loop finish while the process
+/// it was told to watch is still running.
 #[cfg(unix)]
 fn marker_alive(marker: &str) -> bool {
-    !marker_rows(marker).is_empty()
+    let rows = marker_rows(marker).expect("the process table was readable when this test started");
+    !rows.is_empty()
 }
 
-/// The process id and group of every live process carrying the marker.
+/// The process id and group of every live process carrying the marker, or
+/// None when the process table cannot be read at all.
+///
+/// Reading the table is itself a permission: a process already fenced by
+/// something outside this product cannot list other processes, so ps answers
+/// EPERM rather than an empty list. An empty answer and an unreadable table
+/// mean opposite things to the two tests that observe a spawned process,
+/// which is why the failure is reported instead of being folded into the
+/// row list.
 #[cfg(unix)]
 #[expect(
     clippy::disallowed_methods,
     reason = "test process table inspection, not an engine spawn"
 )]
-fn marker_rows(marker: &str) -> Vec<(i32, i32)> {
+fn marker_rows(marker: &str) -> Option<Vec<(i32, i32)>> {
     let listed = Command::new("ps")
         .args(["-ax", "-o", "pid=,pgid=,command="])
         .output()
-        .expect("list processes");
-    String::from_utf8_lossy(&listed.stdout)
-        .lines()
-        .filter(|line| line.contains(marker) && line.contains("sleep"))
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let pid = parts.next()?.parse().ok()?;
-            let pgid = parts.next()?.parse().ok()?;
-            Some((pid, pgid))
-        })
-        .collect()
+        .ok()?;
+    rows_from_listing(
+        marker,
+        listed.status.success(),
+        &String::from_utf8_lossy(&listed.stdout),
+    )
+}
+
+/// The rows a process-table listing holds for the marker, given the exit
+/// status and the listing text. Separated from the spawn so the unreadable
+/// answer can be exercised without a machine that refuses to list processes.
+#[cfg(unix)]
+fn rows_from_listing(marker: &str, succeeded: bool, listing: &str) -> Option<Vec<(i32, i32)>> {
+    if !succeeded {
+        return None;
+    }
+    Some(
+        listing
+            .lines()
+            .filter(|line| line.contains(marker) && line.contains("sleep"))
+            .filter_map(|line| {
+                let mut parts = line.split_whitespace();
+                let pid = parts.next()?.parse().ok()?;
+                let pgid = parts.next()?.parse().ok()?;
+                Some((pid, pgid))
+            })
+            .collect(),
+    )
+}
+
+/// Whether this process can read the process table, which every observation
+/// below needs. A session that already runs inside a fence cannot, and the
+/// two tests then have nothing to measure rather than a failure to report.
+#[cfg(unix)]
+fn can_read_process_table() -> bool {
+    marker_rows("houyi-nonexistent-marker").is_some()
+}
+
+/// A listing that failed to run is unreadable rather than empty. The two are
+/// opposite answers, and folding the failure into an empty table would report
+/// every watched process as gone.
+#[cfg(unix)]
+#[test]
+fn test_listing_failure_unreadable() {
+    assert_eq!(
+        rows_from_listing("m", false, "some output the shell still printed"),
+        None,
+        "a refused listing is not an empty table"
+    );
+    assert_eq!(
+        rows_from_listing("m", true, "  10  10 sleep 60 m\n"),
+        Some(vec![(10, 10)]),
+        "a readable listing yields its rows"
+    );
+    assert_eq!(
+        rows_from_listing("other", true, "  10  10 sleep 60 m\n"),
+        Some(Vec::new()),
+        "a readable listing with no matching row is an empty result, not None"
+    );
 }
 
 /// Dropping a spawn before it is awaited kills the work a wrapper forked, not
@@ -218,6 +281,13 @@ fn marker_rows(marker: &str) -> Vec<(i32, i32)> {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_drop_kills_forked_grandchild() {
+    if !can_read_process_table() {
+        eprintln!(
+            "skipping: this process cannot read the process table, so a \
+             leftover cannot be told from a process that was never seen"
+        );
+        return;
+    }
     let marker = format!("houyi-drop-{}", id());
     let launcher = StdProcessLauncher::new();
     let req = SpawnRequest::new("sh").with_args(["-c", &format!("m={marker}; sleep 60")]);
@@ -249,6 +319,13 @@ async fn test_drop_kills_forked_grandchild() {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_awaited_spawn_spares_group() {
+    if !can_read_process_table() {
+        eprintln!(
+            "skipping: this process cannot read the process table, so a \
+             leftover cannot be told from a process it never saw"
+        );
+        return;
+    }
     let marker = format!("houyi-kept-{}", id());
     let launcher = StdProcessLauncher::new();
     // A shell reaps a background job that stays in its group, so that death
@@ -265,7 +342,8 @@ async fn test_awaited_spawn_spares_group() {
     let command_group = child.id.expect("the wrapper has a pid") as i32;
     let started = Instant::now();
     let left = loop {
-        let rows = marker_rows(&marker);
+        let rows =
+            marker_rows(&marker).expect("the process table was readable when this test started");
         if rows.iter().any(|(_, pgid)| *pgid != command_group) {
             break true;
         }
