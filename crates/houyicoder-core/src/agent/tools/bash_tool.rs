@@ -271,7 +271,21 @@ impl Tool for BashTool {
                     .await
             });
             let cancel = ctx.cancel.clone();
-            let budget = background.as_ref().map(|policy| policy.budget);
+            // A child agent is itself the unit of delegation: the parent can
+            // hand it to the background, stop it, or end it on a ceiling, and
+            // every one of those must reach the command it is running. Handing
+            // the command to the session's task registry would put it beyond
+            // all three, leaving a run nobody can stop once the child is gone.
+            // Depth zero is the root session, which has an identity of its own
+            // with nothing above it; only a child is somebody else's unit.
+            let in_child = ctx
+                .agent_identity
+                .as_ref()
+                .is_some_and(|identity| identity.depth > 0);
+            let budget = match in_child {
+                true => None,
+                false => background.as_ref().map(|policy| policy.budget),
+            };
             let pick = wait_for_run(
                 &mut exec,
                 cancel.as_ref(),

@@ -195,6 +195,16 @@ impl BackgroundTasks {
             })
     }
 
+    /// End every running command now.
+    ///
+    /// The session's teardown calls this rather than waiting for the last
+    /// handle to drop: the registry is shared by the host, the server, and the
+    /// runner, so a session that ends while one of them still holds a handle
+    /// would leave its commands running with nobody left to read them.
+    pub fn shutdown(&self) {
+        self.inner.shutdown.cancel();
+    }
+
     /// Stop one running command. Returns false when the number names no task
     /// or the task already ended, so a caller can tell a kill that took effect
     /// from one that found nothing to stop.

@@ -3,6 +3,7 @@
 use super::super::*;
 use houyicoder_api::background::BackgroundCommandLauncher;
 use houyicoder_api::capture::CapturedStream;
+use houyicoder_api::spawn::AgentIdentity;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_protocol::frontend::BackgroundTaskId;
 use std::env::temp_dir;
@@ -174,5 +175,44 @@ async fn test_background_move_ignores_cancel() {
     assert!(
         completion.is_success(),
         "an Esc on the next turn must not end a background command"
+    );
+}
+
+/// A child agent's command stays with the child.
+///
+/// The child is what the parent can hand over, stop, or end on a ceiling, and
+/// each of those must reach the command it is running. A command detached into
+/// the session's task registry would be beyond all three, so a child's call
+/// keeps its command in the foreground even when the host offers a budget.
+#[tokio::test]
+async fn test_child_command_stays_foreground() {
+    let (session, release) = slow_session();
+    let launcher = Arc::new(RecordingLauncher::default());
+    let tool = BashTool::new(session).with_background_commands(
+        Arc::clone(&launcher) as Arc<dyn BackgroundCommandLauncher>,
+        Duration::from_millis(10),
+    );
+    // The command finishes at once, so only the budget could have moved it.
+    release.notify_one();
+
+    let out = tool
+        .execute(
+            ToolCtx::new("c1").with_agent_identity(AgentIdentity {
+                subagent_type: Some("explore".into()),
+                depth: 1,
+                parent_session_id: Some("parent".into()),
+            }),
+            serde_json::json!({"command": "cargo build"}),
+        )
+        .await
+        .expect("the call answers");
+
+    assert!(
+        out.get("background_task").is_none(),
+        "a child's command must not be handed to the session: {out}"
+    );
+    assert!(
+        launcher.take().is_empty(),
+        "the launcher must never see a child's command"
     );
 }

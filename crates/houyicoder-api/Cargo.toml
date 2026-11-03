@@ -23,3 +23,8 @@ sha2 = "0.11"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
+
+# The launcher starts each command in its own process group so a wrapper it
+# started cannot outlive it. Already in the workspace graph.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["signal", "process"] }

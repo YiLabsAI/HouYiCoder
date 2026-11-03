@@ -480,3 +480,18 @@ async fn test_finished_list_pruned() {
         Some(BackgroundTaskId(total as u64))
     );
 }
+
+/// A shutdown is explicit, not a side effect of the last handle dropping.
+///
+/// The registry is shared by the host, the server, and the runner, so a
+/// session that ends while another holder still lives must still end its
+/// commands. This pins the call that does it.
+#[test]
+fn test_shutdown_is_explicit() {
+    let tasks = BackgroundTasks::new();
+    tasks.shutdown();
+    assert!(
+        !tasks.kill(BackgroundTaskId(0)),
+        "a shutdown registry has nothing left to stop"
+    );
+}

@@ -163,3 +163,17 @@ async fn test_capture_spawn_no_pipes() {
     assert!(child.take_pipes().is_none());
     drop(child.wait().await);
 }
+
+/// A spawn with no piped output runs on the async path and still ends.
+///
+/// That path owns the child through a future rather than a drain, so its
+/// teardown — including the process group the launcher gives every command —
+/// has to fire when the future is dropped or awaited.
+#[tokio::test]
+async fn test_async_spawn_ends() {
+    let launcher = StdProcessLauncher::new();
+    let req = SpawnRequest::new("true");
+    let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
+    let exit = child.wait().await.expect("the spawn reports its exit");
+    assert_eq!(exit.exit_code, Some(0));
+}

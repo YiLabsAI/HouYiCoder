@@ -17,6 +17,12 @@
 //! piped, the async path spawns a live tokio child with kill-on-drop so the
 //! caller can await or cancel it.
 
+#[cfg(unix)]
+use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::unistd::Pid;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -126,7 +132,14 @@ fn spawn_capture(
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));
     cmd.stderr(stdio_for(req.stdio.stderr));
+    // A wrapper is not the command: a shell script or a package runner forks
+    // the real work, so killing only the direct child leaves that work behind.
+    // Its own group is what makes one kill reach all of it.
+    #[cfg(unix)]
+    cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| SpawnError::Io(e.to_string()))?;
+    #[cfg(unix)]
+    let _group = ProcessGroup(child.id() as i32);
     // A handle is present exactly when its stream was piped, so taking them
     // here preserves the contract that stdout/stderr come back Some only for
     // a piped stream.
@@ -221,12 +234,23 @@ fn spawn_async(req: SpawnRequest, fence: Option<FenceConfig>) -> Result<Launcher
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));
     cmd.stderr(stdio_for(req.stdio.stderr));
+    // A wrapper is not the command: a shell script or a package runner forks
+    // the real work, so killing only the direct child leaves that work behind.
+    // Its own group is what makes one kill reach all of it.
+    #[cfg(unix)]
+    cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| SpawnError::Io(e.to_string()))?;
     let pid = child.id();
     let wall = fence.map(|f| Duration::from_millis(f.wall_timeout_ms));
+    #[cfg(unix)]
+    let group = ProcessGroup(pid.unwrap_or(0) as i32);
     Ok(LauncherChild::new(
         pid,
         Box::pin(async move {
+            // Dropping this future is how a caller cancels the spawn; the
+            // group goes with it, not only the child.
+            #[cfg(unix)]
+            let _group = group;
             let status = match wall {
                 Some(timeout) => match tokio::time::timeout(timeout, child.wait()).await {
                     Ok(Ok(s)) => s,
@@ -265,8 +289,15 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));
     cmd.stderr(stdio_for(req.stdio.stderr));
+    // A wrapper is not the command: a shell script or a package runner forks
+    // the real work, so killing only the direct child leaves that work behind.
+    // Its own group is what makes one kill reach all of it.
+    #[cfg(unix)]
+    cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| SpawnError::Io(e.to_string()))?;
     let pid = child.id();
+    #[cfg(unix)]
+    let pgid = pid as i32;
     // Take the pipes out of the child before moving the child into the
     // on-drop killer; the pipes are handed to the caller, the killer guards
     // the process lifetime.
@@ -294,7 +325,11 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
     } else {
         None
     };
-    let mut killer = KillOnDrop(Some(child));
+    let mut killer = KillOnDrop {
+        child: Some(child),
+        #[cfg(unix)]
+        group: pgid,
+    };
     Ok(LauncherChild::with_pipes(
         Some(pid),
         StdioPipes {
@@ -307,7 +342,7 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
         // awaiting, the killer still terminates and reaps the process.
         Box::pin(async move {
             let status = killer
-                .0
+                .child
                 .take()
                 .ok_or_else(|| SpawnError::Io("child already taken".into()))?
                 .wait()
@@ -326,11 +361,35 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
 /// is wrong for an interactive long-lived subprocess the caller loses interest
 /// in. The kill is best-effort: a child that already exited is waited
 /// silently.
-struct KillOnDrop(Option<Child>);
+struct KillOnDrop {
+    child: Option<Child>,
+    /// The process group the child leads, killed with it so a wrapper cannot
+    /// leave the work it forked behind.
+    #[cfg(unix)]
+    group: i32,
+}
+
+/// Kills a command's whole process group when it is dropped.
+///
+/// Only a group kill reaches what a wrapper forked. A direct-child kill leaves
+/// that work running under init, where nothing the session owns can stop it.
+#[cfg(unix)]
+struct ProcessGroup(i32);
+
+#[cfg(unix)]
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        if self.0 > 0 {
+            let _ = kill(Pid::from_raw(-self.0), Signal::SIGKILL);
+        }
+    }
+}
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
+        #[cfg(unix)]
+        drop(ProcessGroup(self.group));
+        if let Some(mut child) = self.child.take() {
             // Best-effort kill plus reap so the process does not linger. The
             // results are intentionally ignored: a child that already exited
             // errors here, and there is nothing to recover at drop time.
