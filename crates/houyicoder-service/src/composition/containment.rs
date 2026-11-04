@@ -14,6 +14,7 @@ use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SandboxSes
 use houyicoder_permission::{DefaultModeGate, RuleStore};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
 use houyicoder_sandbox::PlatformSession;
+use houyicoder_skill::discover::user_skill_roots;
 
 /// The fences and the permission gate one session runs under.
 pub(super) struct SessionFences {
@@ -80,6 +81,9 @@ pub(super) fn build_session_fences(
     }
     if let (Some(session), Some(ws)) = (&sandbox_session, workspace.as_deref()) {
         attach_git_common_dir(session.as_ref(), ws);
+    }
+    if let Some(session) = &sandbox_session {
+        attach_user_skill_roots(session.as_ref());
     }
     if let Some(ref session) = sandbox_session {
         gate_builder = gate_builder.with_containment(Arc::new(ContainmentAdapter(session.clone())));
@@ -266,3 +270,27 @@ pub(crate) fn attach_git_common_dir(session: &dyn SandboxSession, workspace: &Pa
 
 #[cfg(test)]
 mod tests;
+
+/// Grant the user's own skill trees read-only.
+///
+/// A skill discovered from the user's tree is loaded by reading it, and the
+/// read tool goes through the same fence as any other file. Without this the
+/// fence refuses the path and the agent is told a skill it was offered cannot
+/// be read. Only trees that exist are granted, so a machine that never had one
+/// pays nothing.
+fn attach_user_skill_roots(session: &dyn SandboxSession) {
+    let Some(home) = houyicoder_config::user_home_dir() else {
+        return;
+    };
+    attach_user_skill_roots_in(session, &home);
+}
+
+/// The same grant for a named home, so the caller that resolves the real home
+/// and the test that proves the grant stay separate.
+fn attach_user_skill_roots_in(session: &dyn SandboxSession, home: &Path) {
+    for root in user_skill_roots(home) {
+        if root.is_dir() {
+            drop(session.add_reading_dir(&root.to_string_lossy()));
+        }
+    }
+}

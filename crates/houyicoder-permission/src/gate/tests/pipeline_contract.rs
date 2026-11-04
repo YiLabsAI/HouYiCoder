@@ -419,6 +419,86 @@ fn test_outside_asks_inside_defers() {
     remove_dir_all(&outside).ok();
 }
 
+/// A read of an outside file asks for its directory read-only instead of
+/// letting the tool hit the fence and report a traversal. Reading a skill the
+/// product itself discovered was the case that surfaced this: the fence
+/// refused a path the agent had been told to read, with no way to approve it.
+#[test]
+fn test_outside_read_asks_readonly() {
+    let root = temp_dir().join(format!("gate-read-root-{}", id()));
+    create_dir_all(&root).expect("mkdir root");
+    let outside = temp_dir().join(format!("gate-read-out-{}", id()));
+    create_dir_all(&outside).expect("mkdir outside");
+    let file = outside.join("SKILL.md");
+    write(&file, b"# skill").expect("write outside file");
+    let croot = dunce::canonicalize(&root).unwrap();
+    let cfile = dunce::canonicalize(&file).unwrap();
+    let cparent = dunce::canonicalize(&outside).unwrap();
+
+    struct BoundsFence {
+        root: PathBuf,
+    }
+    impl Containment for BoundsFence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![self.root.clone()],
+            }
+        }
+        fn would_block(&self, _e: SideEffect) -> Option<String> {
+            None
+        }
+        fn boundary_root(&self) -> Option<Arc<Path>> {
+            Some(Arc::from(self.root.clone().into_boxed_path()))
+        }
+    }
+    let g = DefaultModeGate::new_without_builtins().with_containment(Arc::new(BoundsFence {
+        root: croot.clone(),
+    }));
+
+    let v = serde_json::json!({"path": cfile.to_string_lossy()});
+    let req = ToolRequest {
+        tool_name: "read",
+        input: Some(&v),
+        is_destructive: false,
+        is_read_only: true,
+        native_requires_approval: false,
+    };
+    let decision = g.decide(&req);
+    let Decision::Ask(reason) = decision else {
+        panic!("an outside read must ask, got {decision:?}");
+    };
+    assert_eq!(reason.validator, "path-bounds");
+    assert!(
+        reason.detail.contains("read-only directory")
+            && reason
+                .detail
+                .contains(&cparent.to_string_lossy().to_string()),
+        "the ask names the parent read-only: {}",
+        reason.detail
+    );
+
+    // A read inside the workspace defers: the pipeline decides, not this
+    // check, so an ordinary read is not turned into an approval card.
+    let inside = root.join("a.md");
+    write(&inside, b"x").ok();
+    let v = serde_json::json!({"path": inside.to_string_lossy()});
+    let req = ToolRequest {
+        tool_name: "read",
+        input: Some(&v),
+        is_destructive: false,
+        is_read_only: true,
+        native_requires_approval: false,
+    };
+    let d = g.decide(&req);
+    assert!(
+        !matches!(d.outcome(), Outcome::Ask),
+        "an in-workspace read does not ask: {d:?}"
+    );
+
+    remove_dir_all(&root).ok();
+    remove_dir_all(&outside).ok();
+}
+
 /// A write targeting a file that does not exist yet outside the workspace
 /// still asks: the shared normalizer resolves the missing target through
 /// its nearest existing ancestor, so the pre-check and the fence agree on

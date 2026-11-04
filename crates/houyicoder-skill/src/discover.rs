@@ -34,6 +34,17 @@ pub(crate) const CONFIG_DIR_FAMILIES: &[&str] = &[".houyicoder", ".claude", ".ag
 /// watcher treats it as a deep watch when it exists.
 pub(crate) const MANAGED_DIR: &str = "/etc/houyicoder/skills";
 
+/// The skills root of every config family under one home.
+///
+/// Discovery walks these, and a sandbox that wants a discovered skill to be
+/// readable grants them read-only, so the list has one definition.
+pub fn user_skill_roots(home: &Path) -> Vec<PathBuf> {
+    CONFIG_DIR_FAMILIES
+        .iter()
+        .map(|family| home.join(family).join("skills"))
+        .collect()
+}
+
 /// Entry point: discover all skills from the filesystem.
 ///
 /// Scans managed, user (when a home directory is given), and project

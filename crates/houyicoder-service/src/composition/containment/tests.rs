@@ -426,3 +426,42 @@ fn test_refused_grant_keeps_starting() {
     );
     fs::remove_dir_all(&root).ok();
 }
+
+/// A skill discovered under the user's home is read through the same fence as
+/// any other file, so the trees holding them are granted read-only at start.
+/// Only trees that exist are granted: naming a missing directory would make
+/// the fence refuse an install the machine never had.
+#[test]
+fn test_user_skill_roots_granted() {
+    let root = temp_root("houyi-skills");
+    let home = root.join("home");
+    let claude = home.join(".claude").join("skills");
+    fs::create_dir_all(&claude).expect("mkdir claude skills");
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let session: Arc<dyn SandboxSession> =
+        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
+    assert!(
+        session.reading_dirs().is_empty(),
+        "fence starts empty before the grant"
+    );
+
+    attach_user_skill_roots_in(session.as_ref(), &home);
+
+    let canonical = dunce::canonicalize(&claude).expect("canonicalize skills");
+    assert!(
+        session
+            .reading_dirs()
+            .iter()
+            .any(|dir| Path::new(dir) == canonical),
+        "the existing skill tree is readable: {:?}",
+        session.reading_dirs()
+    );
+    assert_eq!(
+        session.reading_dirs().len(),
+        1,
+        "the families with no tree are not named: {:?}",
+        session.reading_dirs()
+    );
+    fs::remove_dir_all(&root).ok();
+}

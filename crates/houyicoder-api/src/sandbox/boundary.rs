@@ -84,7 +84,15 @@ pub fn boundary_grants_for(
         let target = resolved.as_deref().unwrap_or(&candidate);
         let directory = match access {
             BoundaryAccess::ReadWrite => target.parent().unwrap_or(target),
-            BoundaryAccess::ReadOnly if target.is_file() => target.parent().unwrap_or(target),
+            // A read target is a file whether or not it exists yet, so the
+            // grant is the directory that holds it. Falling through for a
+            // missing target would name the file as a directory and the
+            // install would refuse it.
+            BoundaryAccess::ReadOnly
+                if tool_name.eq_ignore_ascii_case("read") || target.is_file() =>
+            {
+                target.parent().unwrap_or(target)
+            }
             BoundaryAccess::ReadOnly => target,
         }
         .to_path_buf();
@@ -112,7 +120,7 @@ pub fn path_args_for_boundary(tool_name: &str, input: Option<&Value>) -> Vec<Str
         return Vec::new();
     };
     match tool_name.to_ascii_lowercase().as_str() {
-        tool if boundary_path_uses_parent(tool) || tool == "grep" => value
+        tool if boundary_path_uses_parent(tool) || tool == "grep" || tool == "read" => value
             .get("path")
             .and_then(Value::as_str)
             .map(|path| vec![path.to_string()])

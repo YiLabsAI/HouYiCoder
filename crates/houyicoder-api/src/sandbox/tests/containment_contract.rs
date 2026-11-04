@@ -169,9 +169,10 @@ fn test_file_tools_expose_path() {
             "{tool} must expose its path to the approval boundary"
         );
     }
-    assert!(
-        path_args_for_boundary("read", Some(&input)).is_empty(),
-        "a read approval must not widen a directory's write fence"
+    assert_eq!(
+        path_args_for_boundary("read", Some(&input)),
+        vec!["/outside/settings.json"],
+        "a read exposes its path so an outside target can be granted"
     );
 }
 
@@ -211,10 +212,16 @@ fn test_write_tools_grant_parent() {
             "{tool} authorizes the parent directory"
         );
     }
-    assert!(
-        boundary_grants_for("read", Some(&input), &root, &[], &[]).is_empty(),
+    // A read approval grants the directory read-only. It must never widen
+    // the write fence, so the access is asserted, not only the directory.
+    let read = boundary_grants_for("read", Some(&input), &root, &[], &[]);
+    assert_eq!(read.len(), 1, "a read declares one target");
+    assert_eq!(
+        read[0].access,
+        BoundaryAccess::ReadOnly,
         "a read approval must not widen a directory's write fence"
     );
+    assert_eq!(read[0].directory, parent, "a read authorizes its parent");
     fs::remove_dir_all(base).ok();
 }
 

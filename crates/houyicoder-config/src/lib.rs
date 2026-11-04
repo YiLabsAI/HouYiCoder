@@ -371,6 +371,12 @@ pub fn config_home() -> PathBuf {
     user_home().unwrap_or_else(temp_dir).join(".houyicoder")
 }
 
+/// The user home this crate resolves its own paths against, for callers that
+/// need to name a tree under it.
+pub fn user_home_dir() -> Option<PathBuf> {
+    user_home()
+}
+
 /// The user home this crate resolves its own paths against.
 ///
 /// This crate sits below the port layer, so it cannot call the path helper
