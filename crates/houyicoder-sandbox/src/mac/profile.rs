@@ -5,6 +5,7 @@ use std::env::var;
 use std::path::{Path, PathBuf};
 
 use houyicoder_api::sandbox::normalize_tool_path;
+use houyicoder_api::sandbox::remap_stale_session_tmpdir;
 use houyicoder_context::SandboxError;
 
 use crate::{ProfileSpec, render};
@@ -96,6 +97,10 @@ impl MacSeatbeltSession {
         } else {
             workspace.join(path)
         };
+        // A path through a temporary directory an earlier process left behind
+        // is re-rooted onto this session's own, so a resumed session keeps
+        // writing where it can.
+        let base = remap_stale_session_tmpdir(&base, &self.tmpdir).unwrap_or(base);
         let canonical = normalize_tool_path(&base).unwrap_or(base);
         if canonical.starts_with(&workspace) || canonical.starts_with(&self.tmpdir) {
             return Ok(canonical);

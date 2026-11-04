@@ -1,6 +1,7 @@
 use super::super::{
     BoundaryAccess, Containment, Coverage, FenceAxis, FenceCapability, SideEffect,
     WorktreeFenceGuard, boundary_grants_for, normalize_tool_path, path_args_for_boundary,
+    remap_stale_session_tmpdir,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -257,5 +258,36 @@ fn test_fence_guard_restore_drop() {
         count.load(Ordering::SeqCst),
         2,
         "drop without restore runs the closure"
+    );
+}
+
+/// A resumed session still holds the temporary directory an earlier process
+/// exported. That directory is gone, and the path is re-rooted onto the one
+/// this session owns so a write lands somewhere it can.
+#[test]
+fn test_stale_session_tmpdir_remaps() {
+    let base = env::temp_dir();
+    let current = base.join("hy-tmp-999-1");
+    let stale = base.join("hy-tmp-73162-1");
+
+    assert_eq!(
+        remap_stale_session_tmpdir(&stale.join("note.txt"), &current),
+        Some(current.join("note.txt")),
+        "a stale sibling re-roots onto the current directory"
+    );
+    assert_eq!(
+        remap_stale_session_tmpdir(&stale.join("deep/nested.txt"), &current),
+        Some(current.join("deep/nested.txt")),
+        "the rest of the path is kept"
+    );
+    assert_eq!(
+        remap_stale_session_tmpdir(&current.join("note.txt"), &current),
+        None,
+        "a path already under the current directory is left alone"
+    );
+    assert_eq!(
+        remap_stale_session_tmpdir(&base.join("elsewhere/note.txt"), &current),
+        None,
+        "an unrelated path is not re-rooted"
     );
 }

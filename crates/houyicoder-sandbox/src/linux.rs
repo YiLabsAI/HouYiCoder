@@ -14,7 +14,7 @@ use crate::timeout::message;
 use houyicoder_api::capture::RawOutputReceiver;
 use houyicoder_api::sandbox::{
     Containment, Coverage, FenceCapability, FenceStatus, NetworkPolicy, SandboxSession, SideEffect,
-    normalize_tool_path,
+    normalize_tool_path, remap_stale_session_tmpdir,
 };
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
@@ -183,6 +183,7 @@ impl LinuxLandlockSession {
         } else {
             self.workspace.join(path)
         };
+        let base = remap_stale_session_tmpdir(&base, &self.tmpdir).unwrap_or(base);
         let canonical = normalize_tool_path(&base).unwrap_or(base);
         if canonical.starts_with(&self.workspace) || canonical.starts_with(&self.tmpdir) {
             return Ok(canonical);

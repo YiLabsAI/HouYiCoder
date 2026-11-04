@@ -34,6 +34,51 @@ pub fn normalize_tool_path(base: &Path) -> Option<PathBuf> {
     Some(canonical)
 }
 
+/// Rewrite a path that names a temporary directory left behind by an earlier
+/// process onto the one this session owns.
+///
+/// A resumed session still holds the temporary directory an earlier process
+/// exported: the model read it once and keeps using it. That directory is
+/// removed when its owner exits, so the path names nothing. Its name is
+/// recognisable, and the current session keeps its own directory under the
+/// same parent, so the rest of the path can be re-rooted there.
+pub fn remap_stale_session_tmpdir(path: &Path, current: &Path) -> Option<PathBuf> {
+    if current.as_os_str().is_empty() || path.starts_with(current) {
+        return None;
+    }
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        prefix.push(component);
+        let Some(name) = prefix.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !is_session_temp_name(name) || prefix.is_dir() {
+            continue;
+        }
+        if prefix.parent() != current.parent() {
+            continue;
+        }
+        let rest = path.strip_prefix(&prefix).ok()?;
+        return Some(current.join(rest));
+    }
+    None
+}
+
+/// Whether a directory name is the shape a session gives its temporary
+/// directory: a fixed prefix, the owner's pid, and a short sequence.
+fn is_session_temp_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("hy-tmp-") else {
+        return false;
+    };
+    let Some((pid, seq)) = rest.split_once('-') else {
+        return false;
+    };
+    !pid.is_empty()
+        && pid.chars().all(|c| c.is_ascii_digit())
+        && !seq.is_empty()
+        && seq.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Access granted for a path-bearing tool call outside the current fence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundaryAccess {
@@ -74,6 +119,15 @@ pub fn boundary_grants_for(
     let mut grants = Vec::new();
     for supplied in path_args_for_boundary(tool_name, input) {
         let candidate = root.join(supplied);
+        // A path through a temporary directory an earlier process left behind
+        // is re-rooted onto the one this session owns, so it reads as in bounds
+        // rather than as an escape that needs a capability.
+        if additional
+            .iter()
+            .any(|dir| remap_stale_session_tmpdir(&candidate, dir).is_some())
+        {
+            continue;
+        }
         let resolved = normalize_tool_path(&candidate);
         if resolved
             .as_deref()

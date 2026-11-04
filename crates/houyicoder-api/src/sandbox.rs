@@ -334,7 +334,7 @@ pub trait Containment: Send + Sync {
 mod boundary;
 pub use boundary::{
     BoundaryAccess, BoundaryGrant, boundary_grants_for, boundary_path_uses_parent,
-    is_within_bounds, normalize_tool_path, path_args_for_boundary,
+    is_within_bounds, normalize_tool_path, path_args_for_boundary, remap_stale_session_tmpdir,
 };
 mod credentials;
 pub use credentials::{CREDENTIAL_DIRS, CREDENTIAL_FILES, names_credential_path};
