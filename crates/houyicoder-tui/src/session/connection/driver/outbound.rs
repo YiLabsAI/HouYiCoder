@@ -53,6 +53,17 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
                 disabled_skills,
             },
         ),
+        ClientCommand::NotificationDrain {
+            req_id,
+            session_id,
+            disabled_skills,
+        } => request(
+            req_id,
+            FrontendRequest::NotificationDrain {
+                session_id,
+                disabled_skills,
+            },
+        ),
         ClientCommand::DirectShellRun {
             req_id,
             session_id,

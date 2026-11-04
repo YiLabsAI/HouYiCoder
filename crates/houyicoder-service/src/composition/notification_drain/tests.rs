@@ -47,6 +47,7 @@ async fn test_background_completion_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -85,6 +86,7 @@ async fn test_foreground_completion_skips_queue() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -120,6 +122,7 @@ async fn test_duplicate_signal_dedups() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -160,6 +163,7 @@ async fn test_failed_completion_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -195,6 +199,7 @@ async fn test_multi_child_concurrent_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -236,6 +241,7 @@ async fn test_empty_summary_still_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -280,6 +286,7 @@ async fn test_back_to_back_deliver() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -317,6 +324,7 @@ async fn test_orphan_completion_notifies() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -355,6 +363,7 @@ async fn test_cancel_ends_drain() {
     let handle = spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         cancel.clone(),
     )
@@ -381,6 +390,7 @@ async fn test_drain_releases_runner() {
     let _handle = spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
+        EventSequencer::new(),
         Handle::current(),
         cancel.clone(),
     );
@@ -390,6 +400,43 @@ async fn test_drain_releases_runner() {
         "the drain holds only a weak handle so the runner is released"
     );
     cancel.cancel();
+}
+
+/// Each enqueued notification also reports the queue depth to the frontend,
+/// so an idle client learns the session holds something to wake for. Two
+/// completions produce two reports, each naming the depth after its own
+/// enqueue.
+#[tokio::test]
+async fn test_enqueue_reports_pending_count() {
+    let bus = Arc::new(AgentBus::new());
+    let runner = bare_runner();
+    let sequencer = EventSequencer::new();
+    spawn(
+        Some(bus.clone()),
+        Arc::downgrade(&runner),
+        sequencer.clone(),
+        Handle::current(),
+        CancellationToken::new(),
+    );
+    for (id, summary) in [("d1", "found a"), ("d2", "found b")] {
+        bus.publish(
+            global_completed_topic(),
+            BusMessage::Completed {
+                child: child(id, ChildRunMode::Background),
+                status: CompletionStatus::Completed,
+                summary: summary.into(),
+            },
+        );
+        yield_now().await;
+    }
+    yield_now().await;
+    let snap = runner.queued_notifications_snapshot();
+    assert_eq!(snap.len(), 2, "both completions enqueued");
+    assert_eq!(
+        runner.queued_notification_count(),
+        2,
+        "the count matches the queue depth"
+    );
 }
 
 /// The notification names the child twice: a shortened id on the type line,

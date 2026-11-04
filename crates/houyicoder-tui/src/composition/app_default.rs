@@ -65,6 +65,7 @@ pub fn app() -> App {
             clipboard: Arc::new(SystemClipboard),
             terminal_focused: true,
             quit: false,
+            notification_wake: Default::default(),
             renderer: Renderer::default(),
             frame: PreparedFrame::default(),
         },

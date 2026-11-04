@@ -1,6 +1,7 @@
 //! Foreground child execution and permission routing.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
@@ -10,6 +11,12 @@ use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, permission_request_topic, permission_response_topic,
 };
 use houyicoder_core::agent::{ApprovalDecision, ApprovalRequest, RunError, RunOutcome, RunResult};
+use tokio::time::sleep;
+
+/// How long a child waits for a human verdict before fail-closed deny. A
+/// background child whose parent is gone must not hold a concurrency slot
+/// forever on an answer that will not come.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Drive a foreground child to a terminal state, routing mid-run permission asks
 /// through the bus to the parent's approval flow. Mirrors the parent server's
@@ -92,13 +99,10 @@ pub(super) async fn drive_child_to_terminal(
     }
 }
 
-/// Route a batch of approval requests through the bus: for each, subscribe to
-/// the per-request response topic (before publish, so no broadcast lag can
-/// drop the decision), emit a PermissionRequest, and await the matching
-/// PermissionResponse. Cancelable: None when the ask is cancelled or the
-/// response topic fails (closed, or a frame that is not a response), so the
-/// caller aborts the run and resumes it to a terminal status instead of
-/// hanging on a decision the parent will not send.
+/// Route a batch of approval requests through the bus: subscribe before
+/// publish so no broadcast lag drops the decision, then await the response.
+/// Cancel returns None (abort). A timeout produces a deny decision so the
+/// child resumes rejected rather than hanging.
 pub(super) async fn route_approvals_via_bus(
     bus: &Arc<AgentBus>,
     child_id: &str,
@@ -124,6 +128,14 @@ pub(super) async fn route_approvals_via_bus(
         let resp = tokio::select! {
             biased;
             _ = cancel.cancelled() => return None,
+            _ = sleep(APPROVAL_TIMEOUT) => {
+                decisions.push(ApprovalDecision {
+                    call_id,
+                    approved: false,
+                    updated_input: None,
+                });
+                continue;
+            }
             r = rx.recv() => r,
         };
         let Ok(resp) = resp else {
@@ -136,9 +148,6 @@ pub(super) async fn route_approvals_via_bus(
             ..
         } = resp
         else {
-            // A non-response on the per-request topic is a protocol error;
-            // fail closed (child interrupted) rather than resuming with a
-            // missing decision.
             return None;
         };
         decisions.push(ApprovalDecision {

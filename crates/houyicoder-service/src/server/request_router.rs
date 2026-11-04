@@ -66,6 +66,13 @@ impl Server {
                 self.dispatch_message_send(io, req_id, session_id, content, disabled_skills)
                     .await
             }
+            FrontendRequest::NotificationDrain {
+                session_id,
+                disabled_skills,
+            } => {
+                self.dispatch_notification_drain(io, req_id, session_id, disabled_skills)
+                    .await
+            }
             FrontendRequest::RunCancel { session_id, .. } => {
                 self.dispatch_run_cancel(io, req_id, session_id).await
             }

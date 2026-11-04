@@ -587,6 +587,13 @@ pub enum FrontendRequest {
         session_id: SessionId,
         reason: String,
     },
+    /// Run one turn that consumes queued completion notifications. The client
+    /// sends this only when idle. No user input is written.
+    NotificationDrain {
+        session_id: SessionId,
+        #[serde(default)]
+        disabled_skills: HashSet<String>,
+    },
     ToolList,
     Hooks,
     Skills,

@@ -185,13 +185,6 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
         snapshot,
         session_catalog,
     } = bundle;
-    // The live session: spawns the driver task on the shared runtime and
-    // hands App the command channel + the message receiver + the request-id
-    // counter. The driver takes ownership of the client; the App holds only
-    // the session handle. The driver accumulates the wire frame stream; it
-    // holds no runner handle — run, resume, and streaming all cross the wire
-    // to the server task that owns the runner, and the transcript rides the
-    // accumulated frames — not a store replay.
     let driver_agent_tx = agent_tx.clone();
     let live_session =
         SessionConnection::spawn(client, driver_agent_tx, agent_rx, &shared_runtime());
@@ -200,8 +193,6 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     } else {
         "mac-seatbelt".to_string()
     };
-    // The launch model stands in for the applied model until the host
-    // snapshot lands, so the status bar names what the session runs.
     app.sessions.current.capabilities.model.catalog.applied.id = model;
     app.sessions.current.identity.session_id = session_id;
     app.sessions.current.connection = Some(live_session);
@@ -298,27 +289,20 @@ pub fn start_local_server_tracked(
     let (s2c_tx, s2c_rx) = channel(16);
     let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut runner);
-    // Fleet status relay: translate bus child status into AgentStatus wire
-    // frames so the TUI footer renders without touching the engine bus.
     fleet_status_relay::spawn(
         bus,
         event_sequencer.clone(),
         shared_runtime().handle().clone(),
         CancellationToken::new(),
     );
-    // Drain startup warnings synchronously before the runner is shared so the
-    // host can push them as initial transcript system lines — no async-sink
-    // race with later command output or test assertions.
     let startup_warnings = runner.drain_startup_warnings();
     let runner = Arc::new(runner);
     let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
     let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
     let server =
         Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer);
-    // Test isolation: the server's settings path defaults to the real config
-    // file, so a model pick persisted the test's id into the developer's real
-    // settings on every check run. Redirect to a unique temp path under
-    // cfg(test); the production binary keeps the real path.
+    // Redirect settings to a temp path so a test persist does not touch the
+    // developer's real config.
     #[cfg(test)]
     let server = server.with_settings_path(local_test_settings_path());
     let server = server.with_append_notify(append_notify);

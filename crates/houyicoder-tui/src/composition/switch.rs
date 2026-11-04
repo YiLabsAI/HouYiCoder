@@ -6,9 +6,13 @@
 
 use super::*;
 
+use crate::agent_message::ClientCommand;
 use crate::input::queue::resume_command_target;
 use std::env::var;
 use std::mem::take;
+use std::time::Instant;
+
+use crate::ui::switch_state::{MAX_AUTO_WAKE_TURNS, WAKE_DEBOUNCE};
 
 impl App {
     /// Try to consume a queued /resume Command at the head and swap the
@@ -72,29 +76,81 @@ impl App {
         }
     }
 
-    /// The event loop's idle drain: continuous-state polling + consumptive
-    /// idempotency. !agent_busy holds every frame; no flood because drain/take
-    /// CONSUMES the item, so the next frame has nothing to do. A queued item
-    /// auto-sends when the prior run ended FinalOutput (a clean end) OR when a
-    /// session swap just landed in this idle step -- the swap itself is a
-    /// clean transition (it runs at idle after a clean end or a user pick), so
-    /// a carried pending item drains in the new session without forging
-    /// last_run_final. An interrupt/error does NOT auto-send: the queued item
-    /// stays parked for the user to recall to the input box, edit, and re-send.
+    /// The event loop's idle drain. Drains a queued message when the prior
+    /// run ended clean or a swap just landed; parks it on interrupt or error.
+    /// Wakes the session for pending completion notifications on a debounce.
     pub fn idle_drain(&mut self, resume_builder: Option<&ResumeBuilderRef>, dirty: &mut bool) {
         if !self.agent_busy() && !self.shell_run_active() && !self.reverse_request_in_flight() {
             let switched = self.try_switch_session(resume_builder, dirty);
-            // A no-builder try_switch_session sets quit and leaves the /resume
-            // queued for the external caller; draining it here would remove +
-            // re-dispatch the command, so the guard keeps the target on the
-            // queue for the loop-exit drain.
             if !self.ui.quit
                 && (self.sessions.current.last_run_final || switched)
                 && self.drain_pending_head()
             {
                 *dirty = true;
             }
+            if !self.ui.quit
+                && (self.sessions.current.last_run_final || switched)
+                && self.wake_notification_turn()
+            {
+                *dirty = true;
+            }
         }
+    }
+
+    fn wake_notification_turn(&mut self) -> bool {
+        let count = self.sessions.current.notifications_pending;
+        if count == 0 {
+            self.ui.notification_wake.pending_at_window = None;
+            self.ui.notification_wake.window_started = None;
+            return false;
+        }
+        let now = Instant::now();
+        let window_open = {
+            let wake = &self.ui.notification_wake;
+            match (wake.pending_at_window, wake.window_started) {
+                (Some(seen), Some(started)) if seen == count => {
+                    now.duration_since(started) >= WAKE_DEBOUNCE
+                }
+                _ => {
+                    self.ui.notification_wake.pending_at_window = Some(count);
+                    self.ui.notification_wake.window_started = Some(now);
+                    return false;
+                }
+            }
+        };
+        if !window_open {
+            return false;
+        }
+        if self.ui.notification_wake.auto_wake_turns >= MAX_AUTO_WAKE_TURNS {
+            return false;
+        }
+        let Some(s) = self.sessions.current.connection.as_ref() else {
+            return false;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.ui.notification_wake.pending_at_window = None;
+            self.ui.notification_wake.window_started = None;
+            return false;
+        };
+        let session_id = self.sessions.current.identity.session_id.clone();
+        let disabled_skills = self.sessions.current.capabilities.skills.disabled.clone();
+        if let Err(e) = self.enqueue(ClientCommand::NotificationDrain {
+            req_id,
+            session_id,
+            disabled_skills,
+        }) {
+            self.system_line(Self::enqueue_failure_line("wake", e));
+            self.ui.notification_wake.pending_at_window = None;
+            self.ui.notification_wake.window_started = None;
+            return false;
+        }
+        let wake = &mut self.ui.notification_wake;
+        wake.auto_wake_turns = wake.auto_wake_turns.saturating_add(1);
+        wake.pending_at_window = None;
+        wake.window_started = None;
+        self.sessions.current.notifications_pending = 0;
+        self.sessions.current.run.start(req_id, Instant::now());
+        true
     }
 
     pub fn switch_session(&mut self, bundle: RunnerBundle) {

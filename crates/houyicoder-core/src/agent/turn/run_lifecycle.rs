@@ -145,37 +145,21 @@ impl Runner {
     /// loop: RunAgain → prepare + complete + append + resolve; FinalOutput →
     /// return; Handoff → return; Interruption → return (caller resumes).
     pub async fn run(&self, session: SessionId, user_input: String) -> Result<RunResult, RunError> {
-        // Held for the whole call, so a shell command submitted meanwhile is
-        // refused instead of taking the cancel slot out from under this run.
         let Some(_drive) = self.begin_drive() else {
             return Err(RunError::Busy);
         };
         self.prune_snapshots();
         self.reset_run_state();
-        // A new user turn starts with a fresh max_turns budget and no carried
-        // work: the cap bounds one turn's tool loop, and every exit of this
-        // turn settles against state that began here, so a turn abandoned on
-        // an approval cannot leak its measured time into the next record.
         self.reset_user_turn();
         self.reapply_skill_entitlements();
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         let pending_facts = fact::extract_save_facts(&user_input);
-        // Reconcile delegation boundaries a host restart left open before the
-        // turn reads the parent log, so the model does not see a spawn with no
-        // return and the fleet list holds no dangling child. It runs ahead of
-        // the generic orphan-call pass below, which answers every unanswered
-        // call; the scan answers its own delegation call with the result that
-        // names the child, and the pass then finds it settled.
         if let Some(handle) = self.spawn_handle() {
             handle.reconcile_orphans(session).await;
         }
-        // Reconcile orphan ToolCall before appending user input: the
-        // interrupted result must land adjacent to its tool_use or the
-        // provider rejects with a role-order 400.
+        // Before the user input lands: an orphan result adjacent to its call.
         self.reconcile_tool_results(session).await?;
-        // Resolve @skill: before appending so the raw text is the UserInput
-        // and the body lands as a durable SkillBody (survives compaction).
         let skill_meta = self.resolve_skill_slash(session, &user_input).await;
         self.append_user_input(session, user_input).await?;
         match skill_meta {
@@ -210,16 +194,10 @@ impl Runner {
                     turns: 0,
                     usage: Usage::default(),
                 });
-                // The refusal ends the turn even though no leg ran. Without
-                // the completion record the frontend folds this turn into
-                // the next one; no leg means no measured duration.
                 self.settle_turn(session, None, &result).await;
                 return result;
             }
         }
-        // Both preparation steps run after the user input is persisted, so
-        // their failures end an opened turn all the same: settle before
-        // returning, or the turn folds into the next one.
         if let Err(e) = self.memory.recall(session).await {
             let failed: Result<RunResult, RunError> = Err(e);
             self.settle_turn(session, None, &failed).await;
@@ -234,7 +212,6 @@ impl Runner {
         let result = self.drive_loop(session, 0, Usage::identity(), &token).await;
         self.settle_turn(session, Some(started), &result).await;
         self.emit_run_result(&result);
-        // Best-effort fact persistence: failures are logged, not fatal.
         if let Ok(_) = result
             && let Some(memory) = self.memory.provider()
         {
@@ -275,6 +252,35 @@ impl Runner {
         result
     }
 
+    /// Consume queued completion notifications as a turn. No user input is
+    /// written; the notifications are the turn's material. Returns an empty
+    /// result when nothing is queued, so the wake signal cannot provoke a
+    /// paid no-op turn.
+    pub async fn run_notification_turn(&self, session: SessionId) -> Result<RunResult, RunError> {
+        let Some(_drive) = self.begin_drive() else {
+            return Err(RunError::Busy);
+        };
+        if self.queued_notification_count() == 0 {
+            return Ok(RunResult {
+                outcome: RunOutcome::FinalOutput(String::new()),
+                turns: 0,
+                usage: Usage::default(),
+            });
+        }
+        self.prune_snapshots();
+        self.reset_run_state();
+        self.reset_user_turn();
+        self.reapply_skill_entitlements();
+        let token = CancellationToken::new();
+        *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
+        self.drain_turn_boundary(session).await?;
+        let started = Instant::now();
+        let result = self.drive_loop(session, 0, Usage::identity(), &token).await;
+        self.settle_turn(session, Some(started), &result).await;
+        self.emit_run_result(&result);
+        result
+    }
+
     /// Continue a run paused on Interruption. Applies caller decisions to
     /// pending approvals: approved calls execute, rejected calls get a
     /// rejection-note result. Undecided approvals are re-raised as a fresh
@@ -288,34 +294,20 @@ impl Runner {
         let Some(_drive) = self.begin_drive() else {
             return Err(RunError::Busy);
         };
-        // A resume is also an entry: after a restart the first thing a session
-        // may do is continue a turn parked on an approval, and the model must
-        // not read a spawn with no return there either. The scan runs once per
-        // runtime, so the later new-turn entry does no work.
+        // A resume is also an entry: the scan runs once per runtime.
         if let Some(handle) = self.spawn_handle() {
             handle.reconcile_orphans(session).await;
         }
         let aborted = match self.aborted_short_circuit(session).await {
             Ok(aborted) => aborted,
             Err(e) => {
-                // The failed resume ends the turn as a completed one does, so
-                // its record lands too: without it the turn stays open and its
-                // work carries into the next turn's row. This call drives no
-                // leg of its own, so the record reports what the legs before
-                // the pause accounted.
                 let failed: Result<RunResult, RunError> = Err(e);
                 self.settle_turn(session, None, &failed).await;
                 return failed;
             }
         };
         if let Some(r) = aborted {
-            // Abort skips drive_loop, so finalize here.
             let result = Ok(r);
-            // The turn still ends here, so the record closes it: skipping it
-            // would leave the aborted turn open and its reasoning and tool
-            // calls would fold into the next turn's summary row. This call
-            // drives no leg of its own, so the record reports the work the
-            // legs before the pause already accounted.
             self.settle_turn(session, None, &result).await;
             self.emit_run_result(&result);
             self.finalize_input_buffer(&result);
@@ -323,16 +315,10 @@ impl Runner {
         }
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
-        // The leg opens before the decisions are applied: executing the
-        // approved tools is work this turn spends, so the clock has to cover it.
         let started = Instant::now();
         let remaining = match self.apply_decisions(session, decisions, &token).await {
             Ok(remaining) => remaining,
             Err(e) => {
-                // A released call that could not be recorded leaves the turn
-                // unfinished all the same. The record closes it and reports the
-                // work this leg did, so a failed resume is not mistaken for a
-                // turn still running.
                 let failed: Result<RunResult, RunError> = Err(e);
                 self.settle_turn(session, Some(started), &failed).await;
                 return failed;
@@ -345,16 +331,9 @@ impl Runner {
                 turns: self.user_turn(),
                 usage: Usage::default(),
             });
-            // The turn is still open, so no completion is recorded. The drain
-            // runs all the same, so a change a leg landed cannot wait for the
-            // leg that finishes the turn. No shipped tool leaves one here, since
-            // the only writer of the recorder auto-approves and never pauses.
             self.settle_turn(session, Some(started), &result).await;
             return result;
         }
-        // Resume the same user turn from its current per-turn count, so the
-        // cap, the reported turns, and the convergence reminder all share the
-        // per-turn budget rather than the session's accumulated turns.
         let result = self
             .drive_loop(session, self.user_turn(), Usage::identity(), &token)
             .await;

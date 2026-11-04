@@ -571,6 +571,92 @@ impl Tool for EnqueueNotificationTool {
     }
 }
 
+/// The notification turn consumes what the queue holds without a user input:
+/// the notification is the turn's material, the log records it as the
+/// injected completion it is, and the model answers from it. A second call
+/// with nothing queued drives no leg at all — a wake the queue does not back
+/// must not cost a paid no-op turn.
+#[tokio::test]
+async fn test_notification_turn_consumes_queue() {
+    let runner = Arc::new(runner_with(
+        Arc::new(FakeProvider::text("noted")) as Arc<dyn ModelProvider>,
+        ToolRegistry::new(),
+    ));
+    let session = SessionId::new();
+    runner.enqueue_notification(
+        "test-child".into(),
+        NotificationTopic::ChildCompletion,
+        "the child finished".into(),
+        None,
+    );
+    let result = runner
+        .run_notification_turn(session)
+        .await
+        .expect("notification turn");
+    assert!(
+        matches!(result.outcome, RunOutcome::FinalOutput(t) if t == "noted"),
+        "the model answers the drained ending"
+    );
+    let log = runner.store().replay(session).await.expect("read the log");
+    let notices = log
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.event,
+                SessionEvent::NotificationInjected { child_session_id, .. }
+                    if child_session_id == "test-child"
+            )
+        })
+        .count();
+    assert_eq!(
+        notices, 1,
+        "the queued ending lands as the turn's opening material"
+    );
+    let user_inputs = log
+        .iter()
+        .filter(|entry| matches!(entry.event, SessionEvent::UserInput { .. }))
+        .count();
+    assert_eq!(
+        user_inputs, 0,
+        "a notification turn writes no user input of its own"
+    );
+    assert!(
+        runner.queued_notifications_snapshot().is_empty(),
+        "the turn consumed the queue"
+    );
+    // Nothing is queued now: the call is an immediate empty result, not
+    // another provider round trip.
+    let idle = runner
+        .run_notification_turn(session)
+        .await
+        .expect("idle notification turn");
+    assert_eq!(idle.turns, 0, "an empty queue drives no leg");
+}
+
+/// A notification turn refuses to start under a live drive: the wake runs
+/// only at idle, and the Busy error is the same contract a user turn gets.
+#[tokio::test]
+async fn test_notification_turn_refuses_busy() {
+    let runner = Arc::new(runner_with(
+        Arc::new(FakeProvider::text("noted")) as Arc<dyn ModelProvider>,
+        ToolRegistry::new(),
+    ));
+    let session = SessionId::new();
+    runner.enqueue_notification(
+        "test-child".into(),
+        NotificationTopic::ChildCompletion,
+        "the child finished".into(),
+        None,
+    );
+    let held = runner.begin_drive().expect("hold the drive");
+    let refused = runner.run_notification_turn(session).await;
+    drop(held);
+    assert!(
+        matches!(refused, Err(RunError::Busy)),
+        "a busy runner refuses the notification turn"
+    );
+}
+
 /// A clean log (every ToolCall has a matching ToolResult) must not gain any
 /// extra ToolResult from the entry reconcile — it is a no-op. Pins idempotence
 /// so a healthy session is not mutated.

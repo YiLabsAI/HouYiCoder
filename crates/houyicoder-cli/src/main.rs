@@ -33,9 +33,12 @@ use std::sync::mpsc::channel;
 
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::session_log_root;
-#[cfg(unix)]
-use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+#[cfg(unix)]
+use {
+    houyicoder_service::composition::notification_drain,
+    houyicoder_tui::agent_message::SessionMessage,
+};
 
 mod cli_args;
 mod composition;
@@ -381,16 +384,12 @@ fn run_serve(
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let provider = resolve_provider(project.as_deref());
-    // Taken before the provider moves into the runner: a reattaching client's
-    // status needs what the provider was built from.
     let facts = provider.facts.clone();
     let mut bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
-    // A serving host records this session for as long as it runs, so it holds
-    // the session lock: a background pass, in this launch or a later one,
-    // skips the session rather than writing over the record kept current here.
+    // A serving host holds the session lock for its whole lifetime.
     let lease = SessionLock::acquire(&bundle.session.to_string(), &session_log_root())?;
     if let Some(store) = bundle.runner.descriptor_store() {
         lease.bind(StoreIdentity::of(store.as_ref()));
@@ -409,8 +408,6 @@ fn run_serve(
             p.to_string_lossy().into_owned()
         }
     };
-    // Remove a stale socket file at the path so a fresh bind does not fail on
-    // a previous process that crashed without cleanup.
     remove_file(&socket_path).ok();
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     let background_tasks = bundle.background_tasks.clone();
@@ -428,9 +425,17 @@ fn run_serve(
         runtime.handle().clone(),
         relay_cancel.clone(),
     );
+    let drain_cancel = CancellationToken::new();
+    let runner = Arc::new(bundle.runner);
+    let drain_handle = notification_drain::spawn(
+        bundle.bus.clone(),
+        Arc::downgrade(&runner),
+        event_sequencer.clone(),
+        runtime.handle().clone(),
+        drain_cancel.clone(),
+    );
     let gate: Arc<dyn ModeGate> = bundle.gate;
     let session = bundle.session;
-    let runner = Arc::new(bundle.runner);
     background_tasks.attach(Some(event_sequencer.clone()), &runner);
     host.insert(
         session,
@@ -448,6 +453,10 @@ fn run_serve(
         background_tasks.shutdown();
         relay_cancel.cancel();
         if let Some(handle) = relay_handle {
+            drop(handle.await);
+        }
+        drain_cancel.cancel();
+        if let Some(handle) = drain_handle {
             drop(handle.await);
         }
     });

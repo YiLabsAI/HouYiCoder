@@ -82,6 +82,11 @@ impl App {
     /// another turn is active. New turns render an immediate user echo after
     /// the enqueue is accepted. Returns false when the enqueue was refused.
     pub fn spawn_run(&mut self, input: String) -> bool {
+        // A user turn outranks the auto-wake: the budget that bounds
+        // consecutive notification turns restarts here, and any half-open
+        // debounce window closes so a background ending queued in the
+        // meantime rides the next wake rather than racing this submission.
+        self.ui.notification_wake.user_interrupted();
         // A running shell command holds the host's one cancel slot, so a turn
         // sent now would be refused there. Refuse it here, where the refusal
         // can keep the draft, and name the way out.

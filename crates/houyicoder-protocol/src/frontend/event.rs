@@ -119,6 +119,12 @@ pub enum FrontendEvent {
     BackgroundTaskChanged {
         task: BackgroundTaskSnapshot,
     },
+    /// How many completion notifications wait for the parent model. An idle
+    /// client reads this as the wake signal; the drain request consumes the
+    /// whole queue, so a missed frame costs freshness, not an ending.
+    NotificationsPending {
+        count: u32,
+    },
 }
 
 #[cfg(test)]

@@ -167,6 +167,10 @@ pub enum ServerEvent {
         last_activity: Option<String>,
         completed: Option<CompletionStatus>,
     },
+    /// How many completion notifications now wait for the parent model. An
+    /// idle session reads this as the wake signal: the client may send the
+    /// drain request that consumes them as a real turn.
+    NotificationsPending { count: u32 },
 }
 
 /// Server-initiated requests: the request direction. The client answers each
@@ -319,6 +323,15 @@ pub enum ClientCommand {
         req_id: RequestId,
         session_id: FrontendSessionId,
         content: Vec<ContentBlock>,
+        disabled_skills: HashSet<String>,
+    },
+    /// Send the notification-drain request: consume queued completion
+    /// notifications as a real model turn. Minted only at idle with
+    /// notifications pending, so the turn runs through the same request
+    /// cycle as a user message.
+    NotificationDrain {
+        req_id: RequestId,
+        session_id: FrontendSessionId,
         disabled_skills: HashSet<String>,
     },
     /// Run a dollar-mode command directly in the host sandbox, no model turn.

@@ -25,8 +25,8 @@ ACTIVE_OWNERS = {
         "mut_app": 29,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
-        # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session. The tasks pane's cursor and open detail join them for the same reason: where the user is looking is view state, while the task records it indexes belong to the session.
-        "fields": 26,
+        # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session. The tasks pane's cursor and open detail join them for the same reason: where the user is looking is view state, while the task records it indexes belong to the session. Grew by one for the notification wake pacing, which is interaction cadence (debounce window and consecutive budget), not a session fact.
+        "fields": 27,
     },
     "crates/houyicoder-tui/src/ui/renderer.rs:Renderer": {
         # The draw pass's reusable caches: the per-line parse cache and the
@@ -61,8 +61,8 @@ ACTIVE_OWNERS = {
         "fields": 2,
     },
     "crates/houyicoder-tui/src/session.rs:Session": {
-        # The presented session: identity, connection, run lifecycle, the direct shell command running beside it, tally, pending ask, restore stash, checklist, capabilities, the history and search read states, and transcript.
-        "fields": 17,
+        # The presented session: identity, connection, run lifecycle, the direct shell command running beside it, tally, pending ask, restore stash, checklist, capabilities, the history and search read states, and transcript. Grew by one for the pending-notification count the server reports, which is a session fact the idle wake reads.
+        "fields": 18,
     },
     "crates/houyicoder-tui/src/session/sessions.rs:Sessions": {
         # The presented session, the resumable catalog, and the current session's persistence ports, swapped together.

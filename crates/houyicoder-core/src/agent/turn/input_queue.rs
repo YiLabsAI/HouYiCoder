@@ -136,6 +136,17 @@ impl Runner {
             .collect()
     }
 
+    /// How many notifications currently wait for a turn boundary to consume
+    /// them. The drain task reports this to the frontend as the wake signal;
+    /// the count is read after the enqueue in the same lock domain, so a
+    /// client that wakes consumes at least the reported figure.
+    pub fn queued_notification_count(&self) -> u32 {
+        self.queued_notifications
+            .lock()
+            .expect("queued_notifications lock")
+            .len() as u32
+    }
+
     /// Test-only snapshot of the queued texts in FIFO order.
     #[cfg(test)]
     pub(crate) fn queued_input_snapshot(&self) -> Vec<String> {

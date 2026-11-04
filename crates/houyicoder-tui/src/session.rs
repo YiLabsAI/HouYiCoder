@@ -85,6 +85,11 @@ pub(crate) struct Session {
     /// a clean end, so the carried value is the true state, not a forged run
     /// result.
     pub(crate) last_run_final: bool,
+    /// How many completion notifications the server says wait for the parent
+    /// model. An idle session reads this as the wake signal for the drain
+    /// request; any user input resets the auto-wake budget so the user's own
+    /// turn always goes first.
+    pub(crate) notifications_pending: u32,
     /// The working transcript: the resident frame window and the lines,
     /// blocks, and fold groups derived from it. The conversation belongs to
     /// the session, so a switch rebuilds it empty instead of carrying the
@@ -143,6 +148,7 @@ impl Session {
             run_metrics: RunMetrics::default(),
             last_run_input: None,
             last_run_final: false,
+            notifications_pending: 0,
             transcript: Transcript::with_budget_from_env(),
             prompt: None,
             todos: TodoState::default(),

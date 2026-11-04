@@ -101,7 +101,7 @@ impl FrontendEvent {
                     + completed.as_ref().map_or(0, |status| status.as_str().len())
             }
             FrontendEvent::BackgroundTaskChanged { task } => task.command.len(),
-            FrontendEvent::Metrics { .. } => 0,
+            FrontendEvent::Metrics { .. } | FrontendEvent::NotificationsPending { .. } => 0,
         }
     }
 }

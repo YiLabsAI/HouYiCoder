@@ -20,6 +20,7 @@ pub(crate) mod renderer;
 pub(crate) mod rows;
 pub mod selection;
 pub(crate) mod selections;
+pub(crate) mod switch_state;
 pub(crate) mod toggle_hint;
 
 mod navigation;
@@ -45,6 +46,7 @@ use crate::state::model_draft::ModelDraft;
 use crate::state::transcript::view::TranscriptViewState;
 use crate::state::{ParkedViewStates, Stage, TrajectoryPaneState, ViewportMode};
 use crate::tasks_state::TasksPaneState;
+use crate::ui::switch_state::NotificationWake;
 
 mod sandbox;
 mod worktree;
@@ -174,6 +176,13 @@ pub struct Ui {
     /// resume). Read back by the event loop as its stop condition; a session
     /// swap that lands in-process resets it to false.
     pub quit: bool,
+    /// The idle wake pacing for pending completion notifications: the
+    /// debounce window the pending count must stay stable inside before the
+    /// session wakes itself, the deadline that window started from, and how
+    /// many consecutive auto-wake turns the session has run. User input
+    /// resets the count so a background ending never outranks the user's
+    /// own next turn.
+    pub(crate) notification_wake: NotificationWake,
     /// The draw pass's reusable caches: the per-line parse cache and the
     /// transcript's pre-rendered slot rows. A line or a slot row built at one
     /// width or expansion is reused across frames and transcript rebuilds; a
@@ -232,6 +241,7 @@ impl Ui {
         self.hooks_pane = Default::default();
         self.memory = Default::default();
         self.model = Default::default();
+        self.notification_wake = Default::default();
         self.last_title = None;
         self.renderer.reset_for_session_switch();
         self.frame.reset_for_session_switch();

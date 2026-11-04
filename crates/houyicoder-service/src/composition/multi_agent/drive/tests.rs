@@ -84,3 +84,44 @@ async fn test_route_approvals_cancel_none() {
         "canceled route returns None, not a hang"
     );
 }
+
+/// A denied verdict reaches the child as a reject decision. The timeout arm
+/// pushes the same shape (approved=false), so this covers the deny path the
+/// timeout takes.
+#[tokio::test]
+async fn test_route_approvals_deny() {
+    let bus = Arc::new(AgentBus::new());
+    let mut parent_rx = bus.subscribe(permission_request_topic());
+    let bus_for_parent = Arc::clone(&bus);
+    tokio::spawn(async move {
+        let req = parent_rx.recv().await.expect("got the ask");
+        let BusMessage::PermissionRequest {
+            child_id, call_id, ..
+        } = req
+        else {
+            panic!()
+        };
+        bus_for_parent.publish(
+            &permission_response_topic(&child_id, &call_id),
+            BusMessage::PermissionResponse {
+                call_id,
+                approved: false,
+                updated_input: None,
+                scope: "once".to_string(),
+            },
+        );
+    });
+    let cancel = CancellationToken::new();
+    let approvals = vec![ApprovalRequest::new(
+        "call-d".into(),
+        "bash".into(),
+        serde_json::json!({}),
+        None,
+    )];
+    let decisions = route_approvals_via_bus(&bus, "child-d", "explore", approvals, &cancel)
+        .await
+        .expect("not canceled");
+    assert_eq!(decisions.len(), 1);
+    assert!(!decisions[0].approved);
+    assert_eq!(decisions[0].call_id, "call-d");
+}

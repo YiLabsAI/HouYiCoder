@@ -15,6 +15,7 @@ use std::time::Duration;
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_client::{Client, InProcTransport};
+use houyicoder_context::NotificationTopic;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
@@ -22,6 +23,7 @@ use houyicoder_memory::{InMemoryBackend, LocalFileBackend};
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload, ServerFrame};
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
 use houyicoder_protocol::frontend::run::{ContentBlock, RunOutcome};
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::server::{FrameCarrier, Server};
@@ -242,5 +244,129 @@ async fn test_attach_sends_newest_rows() {
     assert!(
         !delivered.contains("oldest-row"),
         "and the row below the window does not"
+    );
+}
+
+/// The notification drain over the real wire: an idle client that learned a
+/// background ending waits sends the drain request, and the server runs the
+/// notification turn through the same request cycle a user message uses —
+/// the queued ending reaches the model and the reply pairs to the request id.
+#[tokio::test]
+async fn test_drains_notifications() {
+    let (runner, session) = stub_runner();
+    runner.enqueue_notification(
+        "wire-child".to_string(),
+        NotificationTopic::ChildCompletion,
+        "the child finished".to_string(),
+        None,
+    );
+    let (client_tx, server_rx) = mpsc::channel::<String>(8);
+    let (server_tx, client_rx) = mpsc::channel::<String>(8);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
+    let client_transport = InProcTransport::from_halves(client_tx, client_rx);
+    let mut client = Client::new(Box::new(client_transport));
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let handle = tokio::spawn(async move { drop(server.serve(server_io).await) });
+
+    client.connect().await.expect("handshake");
+
+    let req_id = RequestId(202);
+    client
+        .send_request(
+            req_id,
+            FrontendRequest::NotificationDrain {
+                session_id: WireSessionId::new(session.to_string()),
+                disabled_skills: Default::default(),
+            },
+        )
+        .await
+        .expect("send drain request");
+
+    let mut saw_notification = false;
+    let mut outcome = None;
+    for _ in 0..32 {
+        match client.next_frame().await.expect("server frame") {
+            ServerFrame::Event(ev) => {
+                let text = serde_json::to_string(&ev.payload).expect("event encodes");
+                if text.contains("the child finished") {
+                    saw_notification = true;
+                }
+            }
+            ServerFrame::Response(resp) => {
+                assert_eq!(resp.req_id, req_id, "the drain reply pairs to the request");
+                match resp.payload {
+                    ResponsePayload::RunOk(run) => {
+                        outcome = Some(run.outcome);
+                        break;
+                    }
+                    other => panic!("expected RunOk, got {other:?}"),
+                }
+            }
+            _ => {}
+        }
+    }
+    drop(client);
+    drop(handle.await);
+
+    assert!(
+        matches!(outcome, Some(RunOutcome::FinalOutput { .. })),
+        "the notification turn answers the drained ending: {outcome:?}"
+    );
+    assert!(
+        saw_notification,
+        "the drained ending reached the client as an event frame"
+    );
+}
+
+/// The drain request names another session: the reply is a typed request
+/// error, not a run on the wrong session — the id the client sent is the
+/// gate, the same one a user message gets.
+#[tokio::test]
+async fn test_drain_rejects_mismatch() {
+    let (runner, session) = stub_runner();
+    runner.enqueue_notification(
+        "wire-child".to_string(),
+        NotificationTopic::ChildCompletion,
+        "the child finished".to_string(),
+        None,
+    );
+    let (client_tx, server_rx) = mpsc::channel::<String>(8);
+    let (server_tx, client_rx) = mpsc::channel::<String>(8);
+    let server_io = FrameCarrier::new(server_tx, server_rx);
+    let client_transport = InProcTransport::from_halves(client_tx, client_rx);
+    let mut client = Client::new(Box::new(client_transport));
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    let handle = tokio::spawn(async move { drop(server.serve(server_io).await) });
+
+    client.connect().await.expect("handshake");
+
+    let req_id = RequestId(203);
+    client
+        .send_request(
+            req_id,
+            FrontendRequest::NotificationDrain {
+                session_id: WireSessionId::new("another-session".to_string()),
+                disabled_skills: Default::default(),
+            },
+        )
+        .await
+        .expect("send drain request");
+
+    let mut reply = None;
+    for _ in 0..8 {
+        if let ServerFrame::Response(resp) = client.next_frame().await.expect("server frame") {
+            reply = Some(resp);
+            break;
+        }
+    }
+    drop(client);
+    drop(handle.await);
+
+    let resp = reply.expect("the mismatch answer pairs to the request");
+    assert_eq!(resp.req_id, req_id);
+    assert!(
+        matches!(resp.payload, ResponsePayload::Error(_)),
+        "a foreign session id is a request error, not a run: {:?}",
+        resp.payload
     );
 }

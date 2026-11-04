@@ -248,11 +248,13 @@ pub(crate) fn start_local_server(
     // Completion notification injector: when a detached (async) child
     // finishes, enqueue a lower-priority notification into the parent's
     // mid-turn queue so the parent model learns the child finished on its
-    // next turn boundary. Shares the same bus as the fleet status relay;
-    // no-op without one.
+    // next turn boundary, and tell the frontend how many now wait so an idle
+    // client can wake the session to consume them. Shares the same bus and
+    // sequencer as the fleet status relay; no-op without one.
     if let Some(handle) = notification_drain::spawn(
         server_bus.clone(),
         Arc::downgrade(&runner),
+        event_sequencer.clone(),
         shared_runtime().handle().clone(),
         host.cancel_token(),
     ) {

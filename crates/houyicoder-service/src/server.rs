@@ -18,9 +18,12 @@
 use std::sync::Arc;
 
 use houyicoder_async::bus::MessageBus;
-use houyicoder_core::agent::multi_agent::bus_types::permission_request_topic;
+use houyicoder_core::agent::multi_agent::bus_types::{
+    AgentBus, BusMessage, permission_request_topic,
+};
 
 use tokio::sync::Notify;
+use tokio::sync::broadcast::Receiver;
 
 use crate::composition::SessionHost;
 use crate::composition::background_tasks::BackgroundTasks;
@@ -49,7 +52,6 @@ use futures::future::Either;
 use futures::future::pending;
 use houyicoder_api::agent_event::UserNoticeEvent;
 use houyicoder_api::sandbox::SandboxSession;
-use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
     RunOutcome, RunResult,
@@ -100,6 +102,9 @@ mod trust;
 /// The wait loop that keeps a running host operation answered.
 mod driving;
 
+/// The notification-consumption turn an idle client asked for.
+mod notification_turn;
+
 /// Outbound frame emission: push durable events, send typed responses/events
 /// on the seq stream.
 mod outbound_frames;
@@ -111,44 +116,21 @@ mod outbound_frames;
 enum ServeWake {
     Frame(Result<Option<String>, ProtocolError>),
     Event,
-    /// A recap entry is due: the user left the session open, or reopened it.
     Recap,
+    /// A background child's permission ask arrived between runs.
+    Permission(BusMessage),
 }
 
 pub struct Server {
     runner: Arc<Runner>,
     session: SessionId,
-    /// Session-scoped event ordering, reliable replay, and trajectory cursor.
-    /// Every event producer submits typed values here; this Server is the only
-    /// code that assigns sequence numbers and writes them to the carrier.
     event_sequencer: EventSequencer,
-    /// The highest event sequence reported by this connection during Hello.
-    /// None requests the complete reliable journal.
     replay_after: Option<EventSeq>,
-    /// The next reverse-request id the server mints for a mid-turn permission
-    /// ask. Distinct from the event seq so the two correlation axes never
-    /// collide.
     next_req_id: u64,
-    /// The permission mode gate. The server reads current() + rules() for
-    /// the /mode and /rules wire requests so the TUI does not import the
-    /// permission crate directly.
     gate: Arc<dyn houyicoder_permission::ModeGate>,
-    /// Sandbox session shared with the runner's tool provider. When set,
-    /// the /permissions Workspace verbs mutate this fence so the next exec
-    /// sees the new allow-paths. The gate's rule engine is a separate
-    /// (tool allow/ask/deny) concern, not path access.
     sandbox_session: Option<Arc<dyn SandboxSession>>,
-    /// The write journal the session's file tools record through. Carried from
-    /// the same instance those tools hold, so a listing judges the writes this
-    /// session made. None when the store keeps no root on disk: no record
-    /// outlives the process, so there is nothing to list.
     file_transaction: Option<Arc<FileTransaction>>,
-    /// The session-indexed host a reattaching connection re-hydrates from.
-    /// None on the single-shot path; Some when serve_session built this Server
-    /// so permission interruptions survive a connection change.
     host: Option<Arc<SessionHost>>,
-    /// The settings file path the /memory toggle handler persists to. Tests
-    /// override it with a temp path so a flip never touches the real file.
     settings_path: PathBuf,
     /// The project workspace path the startup trust prompt gates on. None
     /// for a non-project session (a test harness, a home-dir run) so no
@@ -363,46 +345,17 @@ impl Server {
     /// loop onto a runtime.
     pub async fn serve(mut self, mut io: FrameCarrier) -> Result<(), ProtocolError> {
         let _negotiated = self.handshake(&mut io).await?;
-        // Register this connection with the session's recap state. The
-        // attachment lives as long as the serve loop, so a disconnect detaches
-        // its client and the last one leaving stops the away timer.
         self.recap_client = self.recap.clone().map(RecapAttachment::attach);
-        // Ask the client to trust the project workspace before any run
-        // proceeds. One-time, workspace-level (not per-call): a project not
-        // yet acknowledged in user-level settings prompts once, persists the
-        // answer on accept, and ends the session on decline. No-op for a
-        // non-project session (project_path None) or an already-trusted path.
-        // The resolved state is written back through the runner's registrar so
-        // a Project or Local skill hook invoked later reads the live value,
-        // not the fail-closed default the registrar was built with.
         let trust = self.ensure_trust(&mut io).await?;
         self.runner.set_trust(trust);
         self.replay_events(&mut io).await?;
-        // A reattaching connection may find a parked permission turn after its
-        // reliable history has replayed. Resume it against the same sequencer.
         session::resume_pending(&mut self, &mut io).await?;
+        let mut perm_rx = self
+            .bus
+            .as_ref()
+            .map(|b| b.subscribe(permission_request_topic()));
         loop {
-            let wake = {
-                let append_fut = match &self.append_notify {
-                    Some(notify) => Either::Left(notify.notified()),
-                    None => Either::Right(pending::<()>()),
-                };
-                let event_fut = self.event_sequencer.notified();
-                let recap_fut = match self
-                    .recap
-                    .as_ref()
-                    .and_then(|recap| recap.next_due(Instant::now()))
-                {
-                    Some(due) => Either::Left(sleep_until(due)),
-                    None => Either::Right(pending::<()>()),
-                };
-                tokio::select! {
-                    frame = io.next_frame() => ServeWake::Frame(frame),
-                    _ = append_fut => ServeWake::Event,
-                    _ = event_fut => ServeWake::Event,
-                    _ = recap_fut => ServeWake::Recap,
-                }
-            };
+            let wake = self.next_serve_wake(&mut io, perm_rx.as_mut()).await;
             let frame = match wake {
                 ServeWake::Event => {
                     self.flush_events(&mut io).await?;
@@ -410,6 +363,12 @@ impl Server {
                 }
                 ServeWake::Recap => {
                     self.start_recap();
+                    continue;
+                }
+                ServeWake::Permission(msg) => {
+                    if let Err(e) = child_permission::handle(&mut self, &mut io, msg).await {
+                        tracing::warn!("between-run child permission ask failed: {e}");
+                    }
                     continue;
                 }
                 ServeWake::Frame(Ok(Some(frame))) => frame,
@@ -492,6 +451,44 @@ impl Server {
                 self.send_protocol_error(&mut io, e.clone()).await.ok();
                 return Err(e);
             }
+        }
+    }
+
+    /// One step of the between-run select: frames, events, recap, and
+    /// permission asks all compete. The permission receiver is shared across
+    /// the whole serve loop so a background child's ask between runs reaches
+    /// the approval flow without waiting for the next user turn.
+    async fn next_serve_wake(
+        &mut self,
+        io: &mut FrameCarrier,
+        perm_rx: Option<&mut Receiver<BusMessage>>,
+    ) -> ServeWake {
+        let append_fut = match &self.append_notify {
+            Some(notify) => Either::Left(notify.notified()),
+            None => Either::Right(pending::<()>()),
+        };
+        let event_fut = self.event_sequencer.notified();
+        let recap_fut = match self
+            .recap
+            .as_ref()
+            .and_then(|recap| recap.next_due(Instant::now()))
+        {
+            Some(due) => Either::Left(sleep_until(due)),
+            None => Either::Right(pending::<()>()),
+        };
+        let perm_fut = match perm_rx {
+            Some(rx) => Either::Left(rx.recv()),
+            None => Either::Right(pending()),
+        };
+        tokio::select! {
+            frame = io.next_frame() => ServeWake::Frame(frame),
+            _ = append_fut => ServeWake::Event,
+            _ = event_fut => ServeWake::Event,
+            _ = recap_fut => ServeWake::Recap,
+            msg = perm_fut => match msg {
+                Ok(msg) => ServeWake::Permission(msg),
+                Err(_) => ServeWake::Event,
+            },
         }
     }
 

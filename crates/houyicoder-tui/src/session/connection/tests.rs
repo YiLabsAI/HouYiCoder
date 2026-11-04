@@ -493,6 +493,55 @@ async fn test_drive_survives_unknown_method() {
     );
 }
 
+/// The pending-notification report reaches the event loop as its own event
+/// kind: the idle wake reads it, so the translation must not fold it into a
+/// frame the transcript would draw.
+#[tokio::test]
+async fn test_drive_translates_pending_report() {
+    let mut engine = FakeEngine::new();
+    engine.event(FrontendEvent::NotificationsPending { count: 3 });
+    engine.close();
+    let run = engine.drive(Vec::new()).await;
+    let counts: Vec<u32> = run
+        .msgs
+        .iter()
+        .filter_map(|m| match m {
+            SessionMessage::Event(ServerEvent::NotificationsPending { count }) => Some(*count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        counts,
+        [3],
+        "the report arrives as the wake signal: {run:?}"
+    );
+}
+
+/// The drain command carries its session id and skill set to the wire as the
+/// typed request the server dispatches: an idle client's wake is a real
+/// request, not a notification the serve loop would drop.
+#[tokio::test]
+async fn test_drive_sends_drain_request() {
+    let engine = FakeEngine::new();
+    let run = engine
+        .drive(vec![ClientCommand::NotificationDrain {
+            req_id: RequestId(9),
+            session_id: SessionId("sess-1".to_string()),
+            disabled_skills: ["disabled-skill".to_string()].into_iter().collect(),
+        }])
+        .await;
+    assert!(
+        run.has_request(9, |p| matches!(
+            p,
+            FrontendRequest::NotificationDrain {
+                session_id,
+                disabled_skills
+            } if session_id.0 == "sess-1" && disabled_skills.contains("disabled-skill")
+        )),
+        "the drain command maps to its typed request: {run:?}"
+    );
+}
+
 // --- driver dispatch and translation contracts ---
 
 /// A fake engine at the other end of the connection. It speaks the full

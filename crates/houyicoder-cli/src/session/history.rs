@@ -53,16 +53,10 @@ const LOOKBACK_MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// carries beside it, so this state stays the same size over any log.
 #[derive(Default)]
 struct EpochScan {
-    /// Where each history began, by the event that began it, newest first.
-    ///
-    /// A clear starts a new history, and the walk that finds it reads the log
-    /// backwards a chunk at a time. The scan already passes over those events,
-    /// so it records them: a caller that asks where a history began can look
-    /// here instead of walking the log again.
+    /// Where each history began, newest first. The backwards scan records
+    /// these so a caller need not walk the log again.
     epoch_starts: Vec<(EventId, u64)>,
-    /// How many bytes from the tail have been read.
     built_from_tail: u64,
-    /// Total log file size.
     total_bytes: u64,
     /// True when the reverse read reached BOF (the scan is complete).
     done: bool,

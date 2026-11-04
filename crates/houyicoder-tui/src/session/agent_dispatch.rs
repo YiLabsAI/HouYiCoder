@@ -235,6 +235,12 @@ impl App {
                 last_activity,
                 completed,
             }),
+            // The count is the wake signal the idle drain reads; nothing here
+            // renders, because a pending ending is the child's row to report
+            // and this event only tells the client the session can wake.
+            ServerEvent::NotificationsPending { count } => {
+                self.sessions.current.notifications_pending = count;
+            }
         }
     }
 

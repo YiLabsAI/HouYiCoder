@@ -356,6 +356,11 @@ async fn drive_connection(
                             completed,
                         }));
                     }
+                    FrontendEvent::NotificationsPending { count } => {
+                        let _send = agent_tx.send(SessionMessage::Event(
+                            ServerEvent::NotificationsPending { count },
+                        ));
+                    }
                     // A future event kind the driver does not model; ignore it
                     // rather than killing the driver.
                     _ => {}
