@@ -10,7 +10,6 @@ use crate::input::InputMode;
 use crate::state::enums::{CyclicTab, StatusTab};
 use crate::state::{App, Pane};
 use crate::view::skill_origin::display_order;
-use std::time::Instant;
 
 use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
@@ -22,6 +21,8 @@ use super::sandbox_pane;
 use super::trajectory;
 use super::worktree_pane;
 use crate::history::current_project;
+
+mod shell;
 
 /// Lines moved per PageUp/PageDown in the artifact pane. Fixed rather than
 /// view-height-aware to keep the page handler out of the render loop.
@@ -143,7 +144,7 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
     // Backspace on an empty draft exits, and typing refreshes the ghost. The
     // pane-specific arms below never run while the composer is in this mode.
     if app.ui.input.mode == InputMode::DirectShell {
-        handle_direct_shell(app, k);
+        shell::handle_direct_shell(app, k);
         return;
     }
     if app.ui.navigation.pane == Pane::Memory && app.ui.memory.detail().is_some() {
@@ -608,71 +609,19 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         KeyCode::Backspace if !pane_replaces_input(app.ui.navigation.pane) => {
             app.ui.input.editor.pop()
         }
-        KeyCode::Char(c) if !pane_replaces_input(app.ui.navigation.pane) => {
+        // Only an unmodified character is text for this router. Without the
+        // guard an unbound control chord reaches the chat editor as its own
+        // character, so pressing a shortcut the product does not bind
+        // corrupts the draft.
+        KeyCode::Char(c)
+            if !k.modifiers.contains(KeyModifiers::CONTROL)
+                && !pane_replaces_input(app.ui.navigation.pane) =>
+        {
             app.ui.input.editor.push(c);
             // A leading dollar plus a space enters DirectShell mode and
             // consumes the prefix; a dollar followed by anything else stays
             // Chat, so variables and numbers do not false-trigger.
             app.ui.input.recompute_mode();
-        }
-        _ => {}
-    }
-}
-
-/// Handle a keystroke while the composer is in DirectShell mode. Tab and Right
-/// accept the ghost suffix without running; Enter runs the typed command (the
-/// ghost is never swallowed into it); Esc drops the ghost first and exits the
-/// mode on a second press; Backspace on an empty draft exits; typing refreshes
-/// the ghost.
-fn handle_direct_shell(app: &mut App, k: KeyEvent) {
-    let now = Instant::now();
-    match k.code {
-        KeyCode::Tab | KeyCode::Right if app.ui.input.ghost.is_some() => {
-            app.ui.input.accept_ghost(now);
-        }
-        KeyCode::Enter => {
-            // A refused submission leaves the composer as it is: the command
-            // stays in the box in shell mode, so the user can retry it once
-            // the work blocking it finishes.
-            if let Some(command) = app.ui.input.shell_command()
-                && app.submit_direct_shell(command.clone())
-            {
-                app.ui.input.record_shell_command(&command);
-                app.ui.input.editor = Default::default();
-                app.ui.input.mode = InputMode::Chat;
-                app.ui.input.ghost = None;
-            }
-        }
-        KeyCode::Esc => {
-            if app.ui.input.ghost.is_some() {
-                app.ui.input.clear_ghost();
-            } else {
-                app.ui.input.exit_shell_mode();
-            }
-        }
-        KeyCode::Backspace => {
-            if app.ui.input.editor.is_empty() {
-                app.ui.input.exit_shell_mode();
-            } else {
-                app.ui.input.editor.pop();
-                app.ui.input.refresh_ghost(now);
-            }
-        }
-        KeyCode::Char(c) => {
-            app.ui.input.editor.push(c);
-            app.ui.input.refresh_ghost(now);
-        }
-        KeyCode::Left => {
-            app.ui.input.editor.move_left();
-            app.ui.input.refresh_ghost(now);
-        }
-        KeyCode::Home => {
-            app.ui.input.editor.move_home();
-            app.ui.input.refresh_ghost(now);
-        }
-        KeyCode::End => {
-            app.ui.input.editor.move_end();
-            app.ui.input.refresh_ghost(now);
         }
         _ => {}
     }

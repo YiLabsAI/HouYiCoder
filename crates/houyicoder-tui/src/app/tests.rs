@@ -8,6 +8,7 @@ use crate::composition::app;
 use crate::composition::shared_runtime;
 use crate::keys::handle_working;
 use crate::records::TranscriptLine;
+use crate::selection::RecordingClipboard;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::{
@@ -21,6 +22,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
 use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::thread::yield_now;
 use std::time::Duration;
@@ -1340,5 +1342,29 @@ fn test_click_header_folds() {
     assert!(
         !app.sessions.current.todos.expanded,
         "a click on the header folds the list"
+    );
+}
+
+/// Ctrl+C with no selection writes nothing to the clipboard. The positive
+/// case lives beside the selection machinery (a held transcript selection is
+/// copied by the same key), so what this covers is the other side: an
+/// unselected press must not fall back to copying the whole draft, which
+/// would overwrite whatever the user already had there.
+#[test]
+fn test_ctrl_c_unselected_noop() {
+    let mut app = working_app();
+    let clipboard = Arc::new(RecordingClipboard {
+        captured: Arc::new(Mutex::new(Vec::new())),
+    });
+    app.ui.clipboard = Arc::clone(&clipboard) as Arc<dyn crate::selection::ClipboardWriter>;
+    app.ui.input.editor.set("draft content".to_string());
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+    let captured = clipboard.captured.lock().unwrap();
+    assert!(
+        captured.is_empty(),
+        "an unselected press copies nothing: {captured:?}"
     );
 }
