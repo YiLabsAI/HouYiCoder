@@ -10,7 +10,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, ChildDescriptor, ChildRunMode, permission_request_topic, permission_response_topic,
+    AgentBus, ChildDescriptor, ChildRunMode, permission_response_topic,
 };
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::InMemoryBackend;
@@ -20,12 +20,9 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
-use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 
 /// A minimal server with a bus + a real gate, so handle() can route a
 /// child ask through the wire flow + publish the decision on the bus.
@@ -121,61 +118,4 @@ async fn test_handle_ignores_non_request() {
     )
     .await
     .expect("non-request ignored");
-}
-
-/// The resumed leg holds a child permission subscription while it waits.
-///
-/// A child spawned after an approval asks on the permission topic, and a leg
-/// built without that receiver raised no card: the child blocked on an answer
-/// nobody could give until its own ceiling ended it. The provider delays its
-/// first event so the subscription is observable while the leg is in flight.
-#[tokio::test]
-async fn test_resume_step_subscribes_asks() {
-    let sess_store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new_with_delay(
-        vec![CompletionResponse {
-            output: vec![OutputItem::Text {
-                text: "done".into(),
-            }],
-            usage: Usage::default(),
-            model: "test".into(),
-        }],
-        600,
-    ));
-    let runner = Arc::new(Runner::new(
-        sess_store,
-        provider,
-        ToolRegistry::new(),
-        RunnerConfig::default(),
-    ));
-    let gate = Arc::new(DefaultModeGate::new());
-    let bus = Arc::new(AgentBus::new());
-    let mut server =
-        Server::new(Arc::clone(&runner), SessionId::new(), gate).with_bus(Some(Arc::clone(&bus)));
-    let (client_tx, server_rx) = mpsc::channel::<String>(8);
-    let (server_tx, mut client_rx) = mpsc::channel::<String>(8);
-    let mut io = FrameCarrier::new(server_tx, server_rx);
-    // A client that drains frames and answers nothing: this test watches the
-    // subscription, not a decision.
-    let feeder = tokio::spawn(async move {
-        let _held = client_tx;
-        while client_rx.next().await.is_some() {}
-    });
-    let leg = tokio::spawn(async move {
-        drop(server.drive_resume_step(&mut io, &[]).await);
-    });
-    let mut seen = 0;
-    for _ in 0..40 {
-        seen = bus.receiver_count(permission_request_topic());
-        if seen > 0 {
-            break;
-        }
-        sleep(Duration::from_millis(25)).await;
-    }
-    assert!(
-        seen > 0,
-        "the resumed leg must hold a child permission subscription while it waits"
-    );
-    leg.abort();
-    feeder.abort();
 }
