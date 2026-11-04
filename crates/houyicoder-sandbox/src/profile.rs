@@ -257,6 +257,9 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     // builder's documentation: writes stay denied, reads are allowed so git
     // works, and transcript-side redaction is the real fix.
     s.push_str(&allow_home_gitconfig(home, tag));
+    // After the credential deny, so last-match-wins lets the ssh client read
+    // the tree its host-key and identity configuration lives in.
+    s.push_str(&allow_ssh_client_reads(home, tag));
     s.push_str(&network_rules(network, tag));
     s
 }
@@ -295,6 +298,45 @@ pub fn allow_home_gitconfig(home: &str, tag: &str) -> String {
     let _ = tag;
     format!("(allow file-read* (literal \"{home}/.gitconfig\"))\n")
 }
+
+/// Re-allow reads of the ssh tree for the ssh client itself.
+///
+/// An ssh remote cannot authenticate without reading its host-key store, its
+/// configuration, and the identity file that configuration names. Denying the
+/// whole tree makes every ssh remote unusable, which is what a push and a fetch
+/// both are when the remote is an ssh URL.
+///
+/// The read is bound to the client binary, not to the path: a shell, a script,
+/// or any other program that tries to read the same tree is still refused by
+/// the credential deny, so the key never reaches a command the model wrote.
+/// Writes stay denied for every process, the client included.
+pub fn allow_ssh_client_reads(home: &str, tag: &str) -> String {
+    let _ = tag;
+    let mut out = String::new();
+    for program in SSH_CLIENTS {
+        out.push_str(&format!(
+            "(allow file-read* (require-all (subpath \"{home}/.ssh\") (process-path \"{program}\")))\n"
+        ));
+    }
+    out
+}
+
+/// The binaries that authenticate an ssh remote: the client and the two
+/// file-transfer programs built on it, at the paths a package manager installs
+/// them to. The list is literal, not a pattern, so a program the agent could
+/// write is never one of them; a wider list would hand the key to a program
+/// that is not an ssh client.
+const SSH_CLIENTS: &[&str] = &[
+    "/usr/bin/ssh",
+    "/usr/bin/scp",
+    "/usr/bin/sftp",
+    "/opt/homebrew/bin/ssh",
+    "/opt/homebrew/bin/scp",
+    "/opt/homebrew/bin/sftp",
+    "/usr/local/bin/ssh",
+    "/usr/local/bin/scp",
+    "/usr/local/bin/sftp",
+];
 
 /// (deny default (with message tag)) — the catch-all. Every operation not
 /// explicitly allowed is denied; the tag attributes the violation in

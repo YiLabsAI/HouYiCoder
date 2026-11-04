@@ -453,3 +453,37 @@ fn test_signal_scope() {
         "task ports stay local:\n{p}"
     );
 }
+
+/// An ssh remote cannot authenticate without reading its host-key store and the
+/// identity its configuration names, so the client binary is allowed to read the
+/// ssh tree. Every other program stays refused by the credential deny, which is
+/// what keeps the key out of a command the model wrote.
+#[test]
+fn test_ssh_client_reads_tree() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-2"),
+        "/tmp",
+        "/Users/bob",
+        "tag-z",
+    ));
+    assert!(
+        p.contains(
+            "(allow file-read* (require-all (subpath \"/Users/bob/.ssh\") (process-path \"/usr/bin/ssh\")))"
+        ),
+        "the ssh client may read its own configuration:\n{p}"
+    );
+    assert!(
+        p.contains("(deny file-read* file-write* (subpath \"/Users/bob/.ssh\")"),
+        "the credential deny still covers the tree:\n{p}"
+    );
+    assert!(
+        !p.contains("(allow file-read* (subpath \"/Users/bob/.ssh\"))"),
+        "the tree is not opened to every program:\n{p}"
+    );
+    // The client exemption lands after the deny, so last-match-wins applies.
+    let deny = p
+        .find("(deny file-read* file-write* (subpath \"/Users/bob/.ssh\")")
+        .unwrap();
+    let allow = p.find("(process-path \"/usr/bin/ssh\")").unwrap();
+    assert!(allow > deny, "the exemption follows the deny:\n{p}");
+}
