@@ -155,9 +155,11 @@ pub(crate) fn durable_grant(
         if !egress_outputs_safe(&command, fence.writes_confined) {
             return DurableGrant::Once;
         }
-        if let Some(scopes) =
-            houyicoder_permission::egress_scope_list(&command, fence.writes_confined)
-            && !scopes.is_empty()
+        if let Some(scopes) = houyicoder_permission::egress_scope_list(
+            &command,
+            fence.writes_confined,
+            fence.egress_blocked,
+        ) && !scopes.is_empty()
         {
             return DurableGrant::Network(scopes);
         }
@@ -176,6 +178,10 @@ pub(crate) fn durable_grant(
         {
             return DurableGrant::Rule(rule.with_scope(Scope::Session));
         }
+        // A shape no destination can be derived for keeps a single answer.
+        // The remembered rule this module can build names the program, not the
+        // command, so offering it would turn one answered request into
+        // standing egress consent for every request through that program.
         return DurableGrant::Once;
     }
     // The four history-moving git subcommands shadow their builtin ask rule

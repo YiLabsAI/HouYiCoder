@@ -67,6 +67,98 @@ fn test_egress_channels_always_ask() {
     }
 }
 
+/// A trusted host answers silently even when the command carries a stream
+/// redirect or feeds a formatter through a pipe. Neither changes where the
+/// request goes, and reading a response is the traffic the trusted list exists
+/// for. A formatter that could reach out on its own is not a formatter.
+#[test]
+fn test_trusted_read_silent() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto).with_trusted_hosts();
+    for command in [
+        "curl -s \"https://api.github.com/repos/o/r/commits/abc/check-runs\" 2>&1",
+        "cd /repo && curl -s --max-time 20 \"https://api.github.com/repos/o/r\" -H \"Accept: application/json\" 2>&1 | head -30",
+        "curl -s \"https://api.github.com/repos/o/r\" | jq .",
+    ] {
+        assert!(
+            !matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} reads a trusted host and must not ask"
+        );
+    }
+
+    // A formatter that could open a socket of its own is not a consumer, so the
+    // command stops being a plain read.
+    let sneaky = "curl -s \"https://api.github.com/x\" | python3 -c \"import socket\"";
+    assert!(
+        matches!(g.decide(&bash_req(sneaky)).outcome(), Outcome::Ask),
+        "a pipe consumer that can reach out is not trusted"
+    );
+    // Nor is one that writes a file.
+    let writer = "curl -s \"https://api.github.com/x\" | python3 -c \"open('out','w')\"";
+    assert!(
+        matches!(g.decide(&bash_req(writer)).outcome(), Outcome::Ask),
+        "a pipe consumer that writes is not trusted"
+    );
+}
+
+/// The validator that asked, when the outcome was a question.
+fn network_validator(gate: &DefaultModeGate, command: &str) -> Option<&'static str> {
+    match gate.decide(&bash_req(command)) {
+        Decision::Ask(reason) => Some(reason.validator),
+        _ => None,
+    }
+}
+
+/// A formatter reading a trusted response is a consumer only when the kernel
+/// refuses egress. Code can reach the network through a library, which no scan
+/// of its text can rule out, so the proof has to come from the fence: with the
+/// network closed the stage cannot leave the machine however it is written,
+/// and with it open the stage is a second destination and asks.
+#[test]
+fn test_formatter_needs_closed_egress() {
+    struct Fence {
+        egress_blocked: bool,
+    }
+    impl Containment for Fence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![PathBuf::from("/ws")],
+            }
+        }
+        fn would_block(&self, effect: SideEffect) -> Option<String> {
+            (self.egress_blocked && effect == SideEffect::Network)
+                .then(|| "the fence refuses egress".to_string())
+        }
+        // The writes axis is what decides whether a compound is effect-safe;
+        // without it the relaxation never reaches the consumer check.
+        fn capability(&self) -> houyicoder_api::sandbox::FenceCapability {
+            houyicoder_api::sandbox::FenceCapability::filesystem()
+        }
+    }
+
+    let command = "curl -s \"https://api.github.com/x\" | python3 -c \"print(1)\"";
+    let closed = DefaultModeGate::with_mode(PermissionMode::Auto)
+        .with_trusted_hosts()
+        .with_containment(Arc::new(Fence {
+            egress_blocked: true,
+        }));
+    assert_ne!(
+        network_validator(&closed, command),
+        Some("network_egress"),
+        "a closed network makes the formatter a consumer"
+    );
+
+    let open = DefaultModeGate::with_mode(PermissionMode::Auto)
+        .with_trusted_hosts()
+        .with_containment(Arc::new(Fence {
+            egress_blocked: false,
+        }));
+    assert_eq!(
+        network_validator(&open, command),
+        Some("network_egress"),
+        "an open network makes the formatter a second destination"
+    );
+}
+
 #[test]
 fn test_interpreter_wrapped_egress_asks() {
     // Egress wrapped in an interpreter (bash -c "curl x") must still Ask —

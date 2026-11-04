@@ -305,39 +305,197 @@ impl Approval {
 #[cfg(test)]
 mod tests;
 
-/// Whether every segment of a command only reads from the network.
+/// Whether the network access in a command only reads.
+///
+/// A command is a list of segments, and only some of them reach the network.
+/// A leading change of directory, a formatter at the end of a pipe, or a
+/// redirect that moves a stream says nothing about the destination, so each is
+/// skipped rather than read as an unrecognized command. What remains must be a
+/// recognized read, and the command must contain at least one: a send, an
+/// interactive transport, or a segment this walk does not know is held.
 fn reads_network(command: &str) -> bool {
-    let mut saw = false;
+    let mut saw_network_read = false;
+    let stripped = without_stream_redirects(command);
     // The command keeps its case: a short flag is case-sensitive, and folding
     // it would read an upload flag as the fail flag beside it.
-    for segment in command.split(['&', ';', '|', '\n', '(', ')', '`']) {
+    for segment in stripped.split(['&', ';', '|', '\n', '(', ')', '`']) {
         let words: Vec<&str> = segment
             .split_whitespace()
             .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
-            .filter(|w| !w.is_empty())
+            .filter(|w| !w.is_empty() && !is_assignment(w))
             .collect();
         let Some(&first) = words.first() else {
             continue;
         };
-        saw = true;
-        let reads = match first.to_ascii_lowercase().as_str() {
-            "git" => matches!(
-                git_subcommand(&words[1..]),
-                "pull" | "fetch" | "clone" | "ls-remote"
-            ),
-            "curl" | "wget" => !words.iter().any(|w| sends_body(w)),
-            // The group is the middle word, so the read verb is the third.
-            "gh" => matches!(
-                words.get(2).copied().unwrap_or(""),
-                "view" | "list" | "diff" | "checks" | "status"
-            ),
-            _ => false,
-        };
-        if !reads {
-            return false;
+        let args = &words[1..];
+        match first.to_ascii_lowercase().as_str() {
+            "git" => match git_subcommand(args) {
+                "push" => return false,
+                "pull" | "fetch" | "clone" | "ls-remote" => saw_network_read = true,
+                // A local repository verb says nothing about a destination.
+                _ => {}
+            },
+            "curl" | "wget" => {
+                if words.iter().any(|w| sends_body(w)) || names_write_method(&words) {
+                    return false;
+                }
+                saw_network_read = true;
+            }
+            "gh" => {
+                let group = words.get(1).copied().unwrap_or("");
+                let verb = words.get(2).copied().unwrap_or("");
+                let reads = matches!(group, "version" | "help" | "status" | "search")
+                    || (group == "auth" && verb == "status")
+                    || (matches!(
+                        group,
+                        "pr" | "issue"
+                            | "repo"
+                            | "release"
+                            | "run"
+                            | "workflow"
+                            | "label"
+                            | "cache"
+                    ) && matches!(verb, "view" | "list" | "diff" | "checks" | "status"));
+                if !reads {
+                    return false;
+                }
+                saw_network_read = true;
+            }
+            // An interactive transport carries whatever the far side asks for.
+            "scp" | "rsync" | "sftp" | "ssh" | "nc" | "netcat" | "telnet" => return false,
+            "npm" | "cargo" if args.first() == Some(&"publish") => return false,
+            "pip" if args.first() == Some(&"upload") => return false,
+            local if is_local_consumer(local) => {}
+            // Not a form this walk knows. A countdown that publishes work is
+            // the failure this exists to prevent, so it is held.
+            _ => return false,
         }
     }
-    saw
+    saw_network_read
+}
+
+/// Remove the redirects that only move a stream.
+///
+/// The split below cuts on a bare ampersand, which would turn 2>&1 into a
+/// segment of its own and read it as a command. Removing the stream forms
+/// first keeps the split on the command separators it is meant for.
+fn without_stream_redirects(command: &str) -> String {
+    let mut out = command.to_string();
+    for form in [
+        "2>&1",
+        "1>&2",
+        "&>/dev/null",
+        "2>/dev/null",
+        ">/dev/null",
+        "2>&-",
+    ] {
+        out = out.replace(form, " ");
+    }
+    out
+}
+
+/// Whether a request names a method that writes.
+///
+/// A request body is not the only way to write on the far side: a method on
+/// its own says so. The read methods are the ones that leave the far side
+/// unchanged.
+fn names_write_method(words: &[&str]) -> bool {
+    let mut index = 0;
+    while index < words.len() {
+        let word = words[index];
+        index += 1;
+        let value = word
+            .strip_prefix("--request=")
+            .map(str::to_string)
+            .or_else(|| {
+                let rest = word
+                    .strip_prefix("--request")
+                    .or_else(|| word.strip_prefix("-X"))?;
+                if !rest.is_empty() {
+                    return Some(rest.trim_start_matches('=').to_string());
+                }
+                let next = words.get(index).copied().unwrap_or("");
+                index += 1;
+                Some(next.to_string())
+            });
+        if let Some(value) = value {
+            let method = value.trim().to_ascii_uppercase();
+            if !method.is_empty() && !matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether a word is a leading NAME=value assignment rather than a command.
+fn is_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether a segment is a local command that only reads.
+///
+/// The set is the readers a shell user puts beside a request: a change of
+/// directory, a formatter at the end of a pipe, a filter. An interpreter is
+/// absent on purpose. Code handed to one can reach the network through a
+/// library, which no command scan sees.
+///
+/// A countdown resolves unattended, so an interpreter beside a request is held
+/// like any other form this walk cannot read. What the user gets instead is a
+/// remembered answer scoped to that exact command, which costs one press rather
+/// than one per run.
+fn is_local_consumer(word: &str) -> bool {
+    matches!(
+        word,
+        "cd" | "echo"
+            | "printf"
+            | "head"
+            | "tail"
+            | "cat"
+            | "jq"
+            | "grep"
+            | "egrep"
+            | "fgrep"
+            | "rg"
+            | "sed"
+            | "awk"
+            | "wc"
+            | "sort"
+            | "uniq"
+            | "cut"
+            | "tr"
+            | "true"
+            | "false"
+            | "test"
+            | "ls"
+            | "pwd"
+            | "basename"
+            | "dirname"
+            | "realpath"
+            | "date"
+            | "stat"
+            | "file"
+            | "strings"
+            | "shasum"
+            | "sha256sum"
+            | "md5"
+            | "diff"
+            | "which"
+            | "whereis"
+            | "whoami"
+            | "id"
+            | "uname"
+            | "df"
+            | "du"
+            | "groups"
+            | "seq"
+            | "sleep"
+    )
 }
 
 /// The subcommand a git invocation runs, past the flags that precede it.

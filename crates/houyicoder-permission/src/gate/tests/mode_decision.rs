@@ -277,6 +277,50 @@ fn test_remembered_remote_op_settles() {
     }
 }
 
+/// Reading through the GitHub client is a read: the inspection verbs and a
+/// bare api request run like any other fetch. A method or a field turns the api
+/// call into a write, and publishing verbs always ask.
+#[test]
+fn test_gh_reads_allowed() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    for command in [
+        "gh run list",
+        "gh pr view 12",
+        "gh issue list",
+        "gh status",
+        "gh api repos/o/r/commits/abc/check-runs",
+        "gh api --method GET repos/o/r",
+        "gh api -X GET repos/o/r",
+        "gh api --method=HEAD repos/o/r",
+        "gh run view 12",
+        "gh workflow list",
+        "gh auth status",
+    ] {
+        assert!(
+            !matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} only reads and must not ask"
+        );
+    }
+    for command in [
+        "gh api --method POST repos/o/r/issues",
+        "gh api --method=PATCH repos/o/r/issues",
+        "gh api -X POST repos/o/r/issues",
+        "gh api -XPOST repos/o/r/issues",
+        "gh api -f title=x repos/o/r/issues",
+        "gh api -ftitle=x repos/o/r/issues",
+        "gh api -F title=x repos/o/r/issues",
+        "gh api --input body.json repos/o/r/issues",
+        "gh pr create",
+        "gh release create v1",
+        "gh run download 12",
+    ] {
+        assert!(
+            matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} writes through the client and must ask"
+        );
+    }
+}
+
 /// A command that signals another process asks in every mode, because the
 /// kernel permits the signal and this is the only place that decides it. The
 /// check reads the command position, so prose that mentions the word is not a

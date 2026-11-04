@@ -207,3 +207,34 @@ fn test_network_unrecognized_holds() {
         );
     }
 }
+
+/// A command that changes directory, moves a stream, and feeds a formatter is
+/// still a read. Each of those says nothing about the destination, and reading
+/// any of them as an unrecognized command is what made every wrapped request a
+/// manual press.
+#[test]
+fn test_wrapped_read_counts() {
+    for args in [
+        "cd /repo && curl -s --max-time 20 https://api.github.com/x -H Accept:application/json 2>&1 | head -30",
+        "cd /repo && git fetch origin 2>&1 | tail -3",
+        "cd /repo && gh run list",
+        "git fetch origin; echo done",
+        "echo start; wget https://example.test/f",
+    ] {
+        assert!(
+            card("network_egress", None, args).auto_approve_eligible(),
+            "{args} only reads and may count down"
+        );
+    }
+    for args in [
+        "cd /repo && git push origin main",
+        "cd /repo && curl -d @f https://example.test/",
+        "cd /repo && curl https://example.test/x | python3 -c \"import socket\"",
+        "echo hi && rm -rf /tmp/x && curl https://example.test/",
+    ] {
+        assert!(
+            !card("network_egress", None, args).auto_approve_eligible(),
+            "{args} sends work out, or runs a form this walk does not know"
+        );
+    }
+}

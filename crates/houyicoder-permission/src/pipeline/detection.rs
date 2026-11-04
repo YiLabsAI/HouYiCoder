@@ -5,7 +5,7 @@
 //! context, not a re-derivation of the rules.
 
 use houyicoder_api::sandbox::{
-    BoundaryAccess, BoundaryGrant, Containment, FenceAxis, boundary_grants_for,
+    BoundaryAccess, BoundaryGrant, Containment, FenceAxis, SideEffect, boundary_grants_for,
 };
 use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
@@ -21,8 +21,10 @@ use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
 use crate::rule::{Effect, RuleContent, evaluate};
 
+mod gh;
 mod signal;
 
+use gh::gh_reads_only;
 use signal::should_ask_signal;
 
 /// Whether the session's fence confines writes. Where the kernel decides
@@ -109,7 +111,6 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
         let tokens: Vec<&str> = decoded_tokens.iter().map(String::as_str).collect();
         let Some(&cmd) = tokens.first() else { continue };
         let sub = strip_quotes(tokens.get(1).copied().unwrap_or(""));
-        let sub2 = strip_quotes(tokens.get(2).copied().unwrap_or(""));
         // Direct egress tools.
         let egress_tools = [
             "curl", "wget", "httpie", "scp", "rsync", "ssh", "sftp", "ftp", "nc", "netcat",
@@ -118,14 +119,11 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
         if egress_tools.contains(&cmd) {
             return true;
         }
-        // GitHub CLI reaches the network unless it is a read-only view/list/diff/checks/status call.
-        if cmd == "gh" {
-            let readonly_gh = matches!(sub, "version" | "help")
-                || (matches!(sub, "pr" | "issue" | "repo" | "release" | "run")
-                    && matches!(sub2, "view" | "list" | "diff" | "checks" | "status"));
-            if !readonly_gh {
-                return true;
-            }
+        // GitHub CLI reaches the network unless the call only reads. The read
+        // set is the inspection verbs plus a bare api request, which posts only
+        // when a method or a field says so.
+        if cmd == "gh" && !gh_reads_only(&tokens[1..]) {
+            return true;
         }
         // A fetch or a remote listing against this repository's own configured
         // remotes only moves local refs: nothing of the user's leaves the
@@ -486,8 +484,17 @@ impl Validator for NetworkEgressValidator {
             return None;
         }
         let outputs_safe = egress_outputs_safe(ctx.content, writes_confined(&self.containment));
+        let egress_denied = self
+            .containment
+            .as_ref()
+            .and_then(|c| c.would_block(SideEffect::Network))
+            .is_some();
         if outputs_safe
-            && let Some(scopes) = egress_scope_list(ctx.content, writes_confined(&self.containment))
+            && let Some(scopes) = egress_scope_list(
+                ctx.content,
+                writes_confined(&self.containment),
+                egress_denied,
+            )
             && !scopes.is_empty()
             && scopes
                 .iter()

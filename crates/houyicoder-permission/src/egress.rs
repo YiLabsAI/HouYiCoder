@@ -23,6 +23,8 @@ use crate::compound::normalize_shell_command;
 use crate::compound::sets_tmpdir;
 use crate::compound::split_compound;
 use crate::compound::starts_with_supported_command;
+use crate::compound::strip_safe_redirects;
+use crate::pipeline::detection::interpreter_inline_code;
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
 
@@ -115,7 +117,7 @@ enum Segment {
 /// https://api.github.com, and is used both as the durable scope key and as the
 /// text the approval card shows for its remember option.
 pub fn egress_destination(command: &str) -> Option<String> {
-    let list = collect_egress_scopes(command, false, false)?;
+    let list = collect_egress_scopes(command, false, false, false)?;
     if list.len() == 1 {
         list.into_iter().next()
     } else {
@@ -127,8 +129,8 @@ pub fn egress_destination(command: &str) -> Option<String> {
 /// non-network clause in the command is effect-safe. Used by the egress
 /// validator to check whether every destination in a multi-step command has
 /// already been approved or trusted.
-pub fn egress_scope_list(command: &str, fenced: bool) -> Option<Vec<String>> {
-    collect_egress_scopes(command, true, fenced)
+pub fn egress_scope_list(command: &str, fenced: bool, egress_denied: bool) -> Option<Vec<String>> {
+    collect_egress_scopes(command, true, fenced, egress_denied)
 }
 
 /// Whether supported output arguments name only stdout, /dev/null, or (with an
@@ -206,6 +208,7 @@ fn collect_egress_scopes(
     command: &str,
     allow_effect_safe: bool,
     fenced: bool,
+    egress_denied: bool,
 ) -> Option<Vec<String>> {
     let normalized = normalize_shell_command(command);
     let mut scopes: Vec<String> = Vec::new();
@@ -228,7 +231,14 @@ fn collect_egress_scopes(
             }
             match classify_segment(trimmed) {
                 Segment::Local => {
-                    if piped && idx > 0 && !is_readonly_compound(&stage_refs[idx..=idx]) {
+                    // A local stage after a pipe is a consumer of the response.
+                    // The same rule as a scoped stage's downstream: a static
+                    // reader, or an interpreter only while the kernel refuses
+                    // egress.
+                    if piped
+                        && idx > 0
+                        && !safe_pipe_consumer(trimmed, allow_effect_safe, fenced, egress_denied)
+                    {
                         return None;
                     }
                 }
@@ -238,9 +248,9 @@ fn collect_egress_scopes(
                     origin_list,
                 } => {
                     if piped
-                        && !stage_refs[idx + 1..]
-                            .iter()
-                            .all(|s| is_readonly_compound(&[*s]))
+                        && !stage_refs[idx + 1..].iter().all(|s| {
+                            safe_pipe_consumer(s, allow_effect_safe, fenced, egress_denied)
+                        })
                     {
                         return None;
                     }
@@ -318,6 +328,11 @@ fn split_clauses(command: &str) -> Vec<String> {
 
 /// Classify one command segment by where it reaches.
 fn classify_segment(segment: &str) -> Segment {
+    // A redirect that only moves a stream is not an argument to the program.
+    // Left in, a trailing 2>&1 reads as an unknown operand and refuses a
+    // request whose destination is already trusted.
+    let cleaned = strip_safe_redirects(segment);
+    let segment = cleaned.as_str();
     let words = shell_words(segment);
     if words
         .iter()
@@ -348,6 +363,28 @@ fn classify_segment(segment: &str) -> Segment {
         },
         None => Segment::Refused,
     }
+}
+
+/// Whether a pipe stage downstream of a request only consumes what it is fed.
+///
+/// A statically read-only command is the first answer. A stage that reads an
+/// interpreter's inline code is the second, and it is accepted only when the
+/// kernel refuses egress outright: code can reach the network through a
+/// library instead of a command, and no scan of its text can prove it will
+/// not, so the proof has to come from the fence rather than from the text.
+fn safe_pipe_consumer(
+    stage: &str,
+    allow_effect_safe: bool,
+    fenced: bool,
+    egress_denied: bool,
+) -> bool {
+    if is_readonly_compound(&[stage]) {
+        return true;
+    }
+    if !allow_effect_safe || !fenced || should_ask_egress("bash", stage) {
+        return false;
+    }
+    interpreter_inline_code(stage.trim()).is_some() && egress_denied
 }
 
 fn allow_multi_origin_for(program: &str) -> bool {
