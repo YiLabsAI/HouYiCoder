@@ -487,3 +487,31 @@ fn test_ssh_client_reads_tree() {
     let allow = p.find("(process-path \"/usr/bin/ssh\")").unwrap();
     assert!(allow > deny, "the exemption follows the deny:\n{p}");
 }
+
+/// A bare mktemp does not read TMPDIR on this platform: it asks confstr for the
+/// per-user temp root and creates its entry there. The rule admits that one
+/// entry and nothing beside it, so a script works without opening the temp root
+/// the other programs' fixtures live in.
+#[test]
+fn test_temp_entries() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-2"),
+        "/tmp",
+        "/Users/bob",
+        "tag-z",
+    ));
+    assert!(
+        p.contains(r#"(regex #"^/private/var/folders/[^/]+/[^/]+/T/tmp\.[A-Za-z0-9]+(/|$)"#),
+        "a mktemp entry under the temp root is writable:\n{p}"
+    );
+    assert!(
+        !p.contains(r#"(subpath "/private/var/folders")"#),
+        "the whole temp root stays closed:\n{p}"
+    );
+    // The rule lands after the shared-temp guards, so last-match-wins applies.
+    let guard = p
+        .find("(deny file-write* (regex #\"^/private/tmp/")
+        .unwrap_or(0);
+    let entry = p.find("^/private/var/folders/[^/]+/[^/]+/T/tmp").unwrap();
+    assert!(entry > guard, "the entry rule follows the guards:\n{p}");
+}

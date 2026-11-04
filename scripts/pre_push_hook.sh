@@ -42,7 +42,11 @@ if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
     if [ "$count" -gt 0 ]; then
         echo "pre-push: re-scanning $count commit(s) in $range through the style lint..."
         while read -r sha; do
-            tmp=$(mktemp)
+            # A bare mktemp writes under the system temp root on macOS, which
+            # a process confined to its own scratch directory cannot write to.
+            # Respecting TMPDIR keeps the scan runnable wherever the caller has
+            # a writable temp dir.
+            tmp=$(mktemp "${TMPDIR:-/tmp}/houyi-push-msg.XXXXXX")
             git log --format='%B' -n 1 "$sha" > "$tmp"
             if ! bash "$repo/scripts/commit_msg_check.sh" "$tmp" >/dev/null 2>&1; then
                 cat >&2 <<EOF

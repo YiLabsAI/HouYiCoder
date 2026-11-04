@@ -246,6 +246,7 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     s.push_str(&deny_settings_files(home, tag));
     s.push_str(&deny_snapshot_stores_anywhere(tag));
     s.push_str(&allow_tmpdir_writes(tmpdir, workspace));
+    s.push_str(&allow_temp_entries());
     s.push_str(&deny_permission_stores(home, tag));
     s.push_str(&deny_snapshot_store(workspace, tag));
     s.push_str(&deny_home_snapshot_store(home, tag));
@@ -457,6 +458,26 @@ fn allow_tmpdir_writes(tmpdir: &str, workspace: &Path) -> String {
         return String::new();
     }
     format!("(allow file-write* (subpath \"{trimmed}\"))\n")
+}
+
+/// Allow creating and using one temporary entry directly under the user's
+/// Darwin temp root.
+///
+/// A bare mktemp does not read TMPDIR on this platform: it asks confstr for
+/// the per-user temp root and creates the entry there. A session that can only
+/// write its own scratch directory therefore fails every script that calls
+/// mktemp without a template, which is most of them, including this
+/// repository's own pre-push hook.
+///
+/// The rule is tight on purpose. It admits a single entry whose name starts
+/// with the prefix mktemp itself uses, under the temp root, and nothing else:
+/// the siblings in that directory are other programs' fixtures and stay
+/// closed. Both spellings are emitted because the kernel matches the resolved
+/// path.
+pub fn allow_temp_entries() -> String {
+    "(allow file-read* file-write* (regex #\"^/private/var/folders/[^/]+/[^/]+/T/tmp\\.[A-Za-z0-9]+(/|$)\"))\n\
+     (allow file-read* file-write* (regex #\"^/var/folders/[^/]+/[^/]+/T/tmp\\.[A-Za-z0-9]+(/|$)\"))\n"
+        .to_string()
 }
 
 /// Re-emit nested read denies after allow-backs so they remain authoritative.
