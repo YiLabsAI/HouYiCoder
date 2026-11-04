@@ -47,7 +47,9 @@ pub(super) fn without_formatter_code(command: &str) -> Option<String> {
 fn is_interpreter(word: &str) -> bool {
     matches!(
         word.to_ascii_lowercase().as_str(),
-        "python" | "python2" | "python3" | "node" | "perl" | "ruby"
+        // Only Python: the check reads import statements, and an interpreter
+        // without them has no form to read.
+        "python" | "python2" | "python3"
     )
 }
 
@@ -123,6 +125,8 @@ fn is_formatter_code(code: &str) -> bool {
         "load_module",
         "meta_path",
         "modules",
+        "attrgetter",
+        "methodcaller",
         "__builtins__",
         "__globals__",
         "__import__",
@@ -180,7 +184,6 @@ fn imports_permitted(code: &str) -> bool {
         "itertools",
         "json",
         "math",
-        "operator",
         "re",
         "statistics",
         "string",

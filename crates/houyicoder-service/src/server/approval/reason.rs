@@ -30,10 +30,10 @@ pub(crate) fn disclose_directory_grants(reason: &mut Option<AskReason>, grants: 
         BoundaryAccess::ReadOnly => "read-only directory",
         BoundaryAccess::ReadWrite => "parent directory with read-write access",
     };
-    let remaining = if grants.len() > 1 {
-        format!(" and {} additional directories", grants.len() - 1)
-    } else {
-        String::new()
+    let remaining = match grants.len() {
+        0 | 1 => String::new(),
+        2 => " and 1 additional directory".to_string(),
+        n => format!(" and {} additional directories", n - 1),
     };
     current.detail.push_str(&format!(
         ". Approving also grants {capability} {}{remaining}.",

@@ -215,7 +215,9 @@ impl Server {
                     };
                     self.record_verdict(approval, &refused, reason, ApprovalScope::Once)
                         .await;
-                    self.notify_user(format!("The call was not approved. {}", error.message));
+                    self.notify_user(format!(
+                        "The approved call did not run because the directory it needs could not be added. {error}"
+                    ));
                     return Ok(refused);
                 }
             }

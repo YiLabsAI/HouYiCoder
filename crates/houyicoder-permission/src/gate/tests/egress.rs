@@ -152,6 +152,8 @@ fn test_formatter_is_consumer() {
         "__import__('so'+'cket')",
         "open('out','w').write('x')",
         "import subprocess",
+        // An attribute getter by another name is still one.
+        "import operator; operator.attrgetter('x')(())",
         // The module table and the frame accessor are two ways back to every
         // name the import list refused, so the module's surface is read too.
         "import sys; sys._getframe()",

@@ -1617,7 +1617,7 @@ async fn test_uninstallable_grant_keeps_session() {
     let told = notices.messages();
     assert_eq!(told.len(), 1, "the user is told once: {told:?}");
     assert!(
-        told[0].contains("not approved"),
+        told[0].contains("did not run"),
         "the notice says the call did not run: {}",
         told[0]
     );
@@ -1660,12 +1660,29 @@ fn test_grant_sentence_prose() {
         detail: "protected path".into(),
         containment_note: None,
     });
-    disclose_directory_grants(&mut two, &[write, read.clone()]);
+    disclose_directory_grants(&mut two, &[write.clone(), read.clone()]);
     let detail = two.as_ref().expect("a reason").detail.clone();
     assert!(
         detail.contains("parent directory with read-write access /data/write")
-            && detail.contains("1 additional directories"),
+            && detail.contains("1 additional directory"),
         "the first is named and the rest counted: {detail}"
+    );
+
+    let third = BoundaryGrant {
+        directory: PathBuf::from("/data/third"),
+        access: BoundaryAccess::ReadOnly,
+    };
+    let mut many = Some(AskReason {
+        source: AskSource::Detection,
+        validator: "protected_path".to_string(),
+        detail: "protected path".into(),
+        containment_note: None,
+    });
+    disclose_directory_grants(&mut many, &[write.clone(), read.clone(), third]);
+    let detail = many.as_ref().expect("a reason").detail.clone();
+    assert!(
+        detail.contains("2 additional directories"),
+        "the count of the rest is kept: {detail}"
     );
 
     // A path-bounds reason already names every grant, so it is left alone.
