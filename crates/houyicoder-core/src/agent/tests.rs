@@ -703,6 +703,11 @@ async fn test_resume_emits_final_completion() {
     let events = Arc::clone(&captured);
     let mut handlers = AgentEventHandlers::default();
     handlers.set_run_lifecycle(Arc::new(move |event| {
+        // Pulses say the run is still producing; this test is about the
+        // completion it emits, and a pause emits none.
+        if matches!(event, RunLifecycleEvent::Pulse { .. }) {
+            return;
+        }
         events.lock().expect("lifecycle events").push(event);
     }));
     let mut runner = runner_with(p, tools);

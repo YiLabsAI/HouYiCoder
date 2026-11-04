@@ -364,8 +364,8 @@ fn test_ceiling_defaults() {
     let bare = serde_json::json!({"subagent_type": "explore", "prompt": "go"});
     assert_eq!(
         delegation_ceiling(&bare),
-        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
-        "a call that names no ceiling still gets one"
+        None,
+        "a call that names no ceiling leaves the bound to the execution path"
     );
 }
 
@@ -385,12 +385,12 @@ fn test_ceiling_explicit_wins() {
 fn test_ceiling_rejects_zero() {
     assert_eq!(
         delegation_ceiling(&serde_json::json!({"timeout_secs": 0})),
-        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        None,
         "zero is not a ceiling, it is a missing one"
     );
     assert_eq!(
         delegation_ceiling(&serde_json::json!({"timeout_secs": -5})),
-        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        None,
         "a negative value is not a u64 at all"
     );
 }
@@ -401,7 +401,7 @@ fn test_ceiling_rejects_zero() {
 fn test_ceiling_ignores_wrong_type() {
     assert_eq!(
         delegation_ceiling(&serde_json::json!({"timeout_secs": "600"})),
-        Some(DEFAULT_DELEGATION_TIMEOUT_SECS),
+        None,
         "a string is not a number"
     );
 }

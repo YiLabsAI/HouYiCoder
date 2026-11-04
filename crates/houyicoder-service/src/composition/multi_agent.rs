@@ -539,9 +539,13 @@ impl SpawnHandle for MultiAgentRuntime {
     }
 
     fn take_pending_child_permissions(&self) -> Vec<PendingChildPermission> {
+        // A snapshot, not a drain: the ask is settled by the response, the
+        // timeout, or the cancel that clears it, so a connection that drops
+        // again before the user answers must still find it on the next
+        // reattach. Draining here lost the card on the second reconnect.
         self.pending_permissions
             .lock()
-            .map(|mut v| take(&mut *v))
+            .map(|v| v.clone())
             .unwrap_or_default()
     }
 }

@@ -66,6 +66,9 @@ pub(super) async fn drive_child_to_terminal(
         let Some(bus) = contact.bus.as_ref() else {
             return result;
         };
+        // The run is parked on a human answer, not stalled: the watchdog reads
+        // this phase to hold off its idle cut for the approval window.
+        runner.pulse_approval();
         let decisions = match route_approvals_via_bus(
             bus,
             child_id,
@@ -87,6 +90,8 @@ pub(super) async fn drive_child_to_terminal(
                 return runner.resume(session, &[]).await;
             }
         };
+        // Back to work: a tool runs next on the answered decision.
+        runner.pulse_tool();
         result = {
             let mut run = Box::pin(runner.resume(session, &decisions));
             tokio::select! {

@@ -425,6 +425,7 @@ impl Runner {
             // Process events as they arrive so response handlers and the log
             // observe each delta without waiting for stream completion.
             if let Some(ev) = first {
+                self.pulse_streaming();
                 blocks.note(&ev);
                 if is_first_output(&ev) {
                     first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);
@@ -474,6 +475,7 @@ impl Runner {
                         return Err(RunError::ProviderFatal(ProviderError::Network));
                     }
                 };
+                self.pulse_streaming();
                 blocks.note(&ev);
                 if first_token_elapsed.is_none() && is_first_output(&ev) {
                     first_token_elapsed = Some(api_start.elapsed().as_millis() as u64);

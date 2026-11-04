@@ -63,11 +63,14 @@ impl ChildExecution {
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
         let task = request.prompt.clone();
-        let idle_timeout = request
+        // Two different bounds: the idle window cuts a run that stopped
+        // producing, the wall clock caps one that never stops. A caller's
+        // timeout_secs is the second, not the first.
+        let idle_timeout = DEFAULT_IDLE_TIMEOUT;
+        let max_wall_clock = request
             .timeout_secs
             .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_IDLE_TIMEOUT);
-        let max_wall_clock = idle_timeout.max(DEFAULT_MAX_WALL_CLOCK);
+            .unwrap_or(DEFAULT_MAX_WALL_CLOCK);
         tokio::spawn(async move {
             // The completion signal fires when this task ends, however it ends:
             // the guard rides the whole task, so the shutdown join's wait on it
@@ -166,11 +169,14 @@ impl ChildExecution {
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
         let task = request.prompt.clone();
-        let idle_timeout = request
+        // Two different bounds: the idle window cuts a run that stopped
+        // producing, the wall clock caps one that never stops. A caller's
+        // timeout_secs is the second, not the first.
+        let idle_timeout = DEFAULT_IDLE_TIMEOUT;
+        let max_wall_clock = request
             .timeout_secs
             .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_IDLE_TIMEOUT);
-        let max_wall_clock = idle_timeout.max(DEFAULT_MAX_WALL_CLOCK);
+            .unwrap_or(DEFAULT_MAX_WALL_CLOCK);
         tokio::spawn(async move {
             // The completion signal fires when this task ends, however it ends:
             // the guard rides the whole task, so the shutdown join's wait on it

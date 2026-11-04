@@ -181,6 +181,10 @@ impl Runner {
     /// alone so a mutating tool never overlaps another. The transcript
     /// pairs each result with its tool_use by call_id (unique from the
     /// provider boundary), which is what makes that ordering safe.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one dispatch loop whose branches are the batch, the cancel, and the result"
+    )]
     pub(crate) async fn execute_partitioned(
         &self,
         session: SessionId,
@@ -237,6 +241,7 @@ impl Runner {
                             // honoring cancellation (Grep/Glob) returns
                             // promptly on a stop; the batch select below drops
                             // whatever is still running in the group.
+                            self.pulse_tool();
                             let ctx = self.tool_ctx(id.as_str(), session, token);
                             let r = t.execute(ctx, input).await;
                             let duration_ms = start.elapsed().as_millis() as u64;

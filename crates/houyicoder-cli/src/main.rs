@@ -414,6 +414,7 @@ fn run_serve(
     let host = Arc::new(
         SessionHost::new(SessionLeaseStore::new())
             .with_provider_facts(facts)
+            .with_bus(bundle.bus.clone())
             .with_background_tasks(background_tasks.clone()),
     );
     let event_sequencer = EventSequencer::new();

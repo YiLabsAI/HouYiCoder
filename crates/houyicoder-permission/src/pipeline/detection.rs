@@ -58,9 +58,16 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
         .chars()
         .filter(|&c| c != '\'' && c != '"' && c != '\\')
         .collect();
+    // An underscore joins a word: a search pattern such as rm_targets_are_temp
+    // is one identifier, not the verb rm followed by arguments. Splitting on
+    // the underscore read a read-only search for that name as the deletion it
+    // was looking for, so the gate asked about a call that could not delete
+    // anything, and a child agent waiting on that card stalled until its
+    // ceiling. Hyphens stay separators: a real invocation may be written
+    // without spaces only across a word boundary, never inside a verb.
     for text in [scan.as_str(), unquoted.as_str()] {
         let lower_content = text.to_ascii_lowercase();
-        for word in lower_content.split(|c: char| !c.is_alphanumeric()) {
+        for word in lower_content.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
             if matches!(word, "rm" | "rmdir" | "unlink" | "sudo" | "dd" | "truncate") {
                 return true;
             }

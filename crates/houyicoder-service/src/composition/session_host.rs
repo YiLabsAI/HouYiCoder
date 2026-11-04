@@ -18,6 +18,8 @@ use crate::lifecycle::SessionLeaseStore;
 use crate::server::EventSequencer;
 use crate::server::recap::RecapSession;
 
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+
 use super::Runner;
 use super::background_tasks::BackgroundTasks;
 
@@ -55,6 +57,10 @@ pub struct SessionHost {
     /// does not yet key a registry per session: today one process assembles
     /// one session, so one registry serves the reattach path.
     background_tasks: Option<Arc<BackgroundTasks>>,
+    /// The process's multi-agent bus. A reattached connection needs it for the
+    /// same reason the live one does: a child's permission ask arrives on this
+    /// bus, and a serve loop built without it never raises the card.
+    bus: Option<Arc<AgentBus>>,
 }
 
 impl SessionHost {
@@ -67,6 +73,7 @@ impl SessionHost {
             store,
             provider_facts: None,
             background_tasks: None,
+            bus: None,
         }
     }
 
@@ -83,6 +90,18 @@ impl SessionHost {
     pub fn with_background_tasks(mut self, tasks: Arc<BackgroundTasks>) -> Self {
         self.background_tasks = Some(tasks);
         self
+    }
+
+    /// Attach the process's multi-agent bus, so a reattached connection routes
+    /// a child's permission ask instead of dropping it.
+    pub fn with_bus(mut self, bus: Option<Arc<AgentBus>>) -> Self {
+        self.bus = bus;
+        self
+    }
+
+    /// The bus a reattaching connection routes child asks on.
+    pub(crate) fn bus(&self) -> Option<&Arc<AgentBus>> {
+        self.bus.as_ref()
     }
 
     /// The facts a reattaching connection should report, or None when the

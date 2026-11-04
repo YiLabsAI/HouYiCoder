@@ -63,9 +63,8 @@ impl Server {
             diagnostics: handle(),
             recap: Some(recap),
             recap_client: None,
-            // Resume path does not wire the bus yet; a reconnecting session
-            // mid-child-approval is a follow-up (the parent serve path covers
-            // the common case).
+            // Set by serve_session from the host, which is where the
+            // process-scoped bus lives for a detached session.
             bus: None,
             // Attached by serve_session from the host, which is where the
             // process-scoped registry lives for a detached session.
@@ -346,6 +345,9 @@ pub(crate) async fn serve_session(
         handle.append_notify,
         handle.recap,
     );
+    // The bus is process-scoped too, and without it this connection would drop
+    // every child permission ask the detached run is still waiting on.
+    server = server.with_bus(host.bus().cloned());
     // The facts are process-scoped, so a reattaching connection reports the
     // same ones the live connection does instead of falling back to the
     // environment's view.
