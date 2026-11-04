@@ -49,7 +49,6 @@ mod ceiling;
 mod execution;
 pub(super) mod handover;
 mod request;
-use ceiling::run_with_deadline;
 use execution::ChildExecution;
 use handover::ParentCancelLink;
 use request::{ChildRunSpec, build_spawn_request, map_registry_err, map_spawn_err};

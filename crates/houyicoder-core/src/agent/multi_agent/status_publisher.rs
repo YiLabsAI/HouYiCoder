@@ -1,8 +1,12 @@
 //! Publishes child lifecycle status on targeted and global bus topics.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
+use houyicoder_api::agent_event::{
+    EventHandler, LivenessPhase, RunCompletionStatus, RunLifecycleEvent,
+};
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::frontend::completion::CompletionStatus;
@@ -15,24 +19,62 @@ use super::ending::EndingClaim;
 use super::spawn::CutReason;
 use super::spawn::PartialTranscript;
 
+/// The liveness state a watchdog reads: when the last pulse arrived and what
+/// phase the run was in. A stalled child (no pulse within the idle window) is
+/// cut with the phase naming where it stopped.
+pub struct ChildLiveness {
+    last_pulse_ms: AtomicU64,
+    phase: Mutex<LivenessPhase>,
+}
+
+impl Default for ChildLiveness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChildLiveness {
+    pub fn new() -> Self {
+        Self {
+            last_pulse_ms: AtomicU64::new(now_ms()),
+            phase: Mutex::new(LivenessPhase::Streaming),
+        }
+    }
+
+    pub fn record(&self, phase: LivenessPhase) {
+        self.last_pulse_ms.store(now_ms(), Ordering::Release);
+        if let Ok(mut p) = self.phase.lock() {
+            *p = phase;
+        }
+    }
+
+    pub fn last_pulse_ms(&self) -> u64 {
+        self.last_pulse_ms.load(Ordering::Acquire)
+    }
+
+    pub fn phase(&self) -> LivenessPhase {
+        self.phase
+            .lock()
+            .map(|p| *p)
+            .unwrap_or(LivenessPhase::Streaming)
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Publishes lifecycle status for one child.
 pub struct ChildStatusPublisher {
     bus: Arc<AgentBus>,
     child: ChildDescriptor,
-    /// Who receives this child's ending. The publisher claims it for the
-    /// waiting caller at publish time; a hand-over claims it for the parent's
-    /// notification stream instead, whichever lands first.
     ending: Arc<EndingClaim>,
-    /// The reason an outside stop ended this child, when one did.
-    ///
-    /// The ending is published from inside the child's run, after the stop was
-    /// requested and before the spawn code that requested it gets the run back.
-    /// A stop that wants to name its cause therefore records it in this slot
-    /// first, and the ending reads it here.
     cut_reason: Option<Arc<Mutex<Option<CutReason>>>>,
-    /// Reads the child's last assistant text, so an ending cut short reports
-    /// what the child had produced rather than the stop reason alone.
     partial: Option<Arc<dyn PartialTranscript>>,
+    liveness: Option<Arc<ChildLiveness>>,
 }
 
 impl ChildStatusPublisher {
@@ -45,7 +87,13 @@ impl ChildStatusPublisher {
             ending,
             cut_reason: None,
             partial: None,
+            liveness: None,
         }
+    }
+
+    pub fn with_liveness(mut self, liveness: Arc<ChildLiveness>) -> Self {
+        self.liveness = Some(liveness);
+        self
     }
 
     /// Install the cut reason this publisher shares with the child handle and,
@@ -115,6 +163,11 @@ impl EventHandler<RunLifecycleEvent> for ChildStatusPublisher {
                 self.bus
                     .publish(&progress_topic(&self.child.agent_id), message.clone());
                 self.bus.publish(global_progress_topic(), message);
+            }
+            RunLifecycleEvent::Pulse { phase } => {
+                if let Some(liveness) = self.liveness.as_ref() {
+                    liveness.record(phase);
+                }
             }
             RunLifecycleEvent::Completed { status, summary } => {
                 // The ending carries the mode the child has now, not the one it

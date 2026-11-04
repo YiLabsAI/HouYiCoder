@@ -1,48 +1,72 @@
-//! The wall-clock ceiling a delegation runs under, and how a run that hits it
-//! is reported.
+//! The liveness watchdog a delegation runs under.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::CutReason;
+use houyicoder_core::agent::multi_agent::status_publisher::ChildLiveness;
 use houyicoder_protocol::llm::Usage;
-use tokio::time::timeout;
+use tokio::time::sleep;
 
-/// Await a child's drive under its ceiling.
-///
-/// Dropping the drive at the deadline would dismantle the child before its
-/// tail ran: that tail publishes the child's terminal, closes its inbox, and
-/// releases the fence slot, so the parent would lose both the cleanup and
-/// whatever the child had already finished. The deadline therefore stops the
-/// child through the same cancellation a shutdown uses and keeps awaiting,
-/// which yields the ending the cancelled run reconciles.
-///
-/// The reason is recorded in the shared slot before the cancel, not after: the
-/// cancel provokes the child's own terminal publish, and that publish reads the
-/// slot to name the ending. Writing it afterwards would race the very message
-/// it has to explain, and the ending would report a plain interrupt.
-pub(super) async fn run_with_deadline(
+const CHECK_INTERVAL: Duration = Duration::from_secs(10);
+pub(super) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+pub(super) const DEFAULT_MAX_WALL_CLOCK: Duration = Duration::from_secs(3600);
+
+/// Await a child's drive under a liveness watchdog. A child that keeps
+/// producing pulses may run past the old fixed deadline; the watchdog cuts
+/// only when the child goes quiet for the idle window. An absolute cap still
+/// bounds the total.
+pub(super) async fn watch_liveness(
     drive: impl std::future::Future<Output = (String, String, Usage)>,
-    timeout_secs: Option<u64>,
+    liveness: Arc<ChildLiveness>,
+    idle_timeout: Duration,
+    max_wall_clock: Duration,
     cancel: CancellationToken,
     cut_reason: Arc<Mutex<Option<CutReason>>>,
 ) -> (String, String, Usage) {
     let mut drive = Box::pin(drive);
-    let Some(secs) = timeout_secs else {
-        return drive.await;
-    };
-    match timeout(Duration::from_secs(secs), &mut drive).await {
-        Ok(done) => done,
-        Err(_) => {
-            match cut_reason.lock() {
-                Ok(mut slot) => *slot = Some(CutReason::TimedOut { secs, stage: None }),
-                Err(_) => tracing::warn!(
-                    "the cut reason slot is poisoned; the timed-out child will report as an interrupt"
-                ),
+    let start = Instant::now();
+    let check = CHECK_INTERVAL.min(idle_timeout);
+    loop {
+        tokio::select! {
+            biased;
+            done = &mut drive => return done,
+            _ = cancel.cancelled() => return drive.await,
+            _ = sleep(check) => {
+                let elapsed = start.elapsed();
+                let idle = elapsed_from_ms(liveness.last_pulse_ms());
+                if idle >= idle_timeout {
+                    record_cut(&cut_reason, CutReason::TimedOut {
+                        secs: idle_timeout.as_secs(),
+                        stage: Some(format!("{:?}", liveness.phase())),
+                    });
+                    cancel.cancel();
+                    return drive.await;
+                }
+                if elapsed >= max_wall_clock {
+                    record_cut(&cut_reason, CutReason::TimedOut {
+                        secs: max_wall_clock.as_secs(),
+                        stage: None,
+                    });
+                    cancel.cancel();
+                    return drive.await;
+                }
             }
-            cancel.cancel();
-            drive.await
         }
     }
+}
+
+fn record_cut(slot: &Arc<Mutex<Option<CutReason>>>, reason: CutReason) {
+    if let Ok(mut s) = slot.lock() {
+        *s = Some(reason);
+    }
+}
+
+fn elapsed_from_ms(past_ms: u64) -> Duration {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(past_ms);
+    Duration::from_millis(now_ms.saturating_sub(past_ms))
 }

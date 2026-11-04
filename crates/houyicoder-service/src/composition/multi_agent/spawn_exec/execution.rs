@@ -6,7 +6,10 @@
 //! task of its own, and that task holds the concurrency slot, the admission
 //! slot, and the completion signal until the child is finished.
 
+use std::time::Duration;
+
 use super::super::{AdmissionLease, ChildHandle};
+use super::ceiling::{DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_WALL_CLOCK, watch_liveness};
 use super::handover::EndingBinding;
 use super::*;
 
@@ -59,8 +62,12 @@ impl ChildExecution {
         } = self;
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
-        let timeout_secs = request.timeout_secs;
         let task = request.prompt.clone();
+        let idle_timeout = request
+            .timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_IDLE_TIMEOUT);
+        let max_wall_clock = idle_timeout.max(DEFAULT_MAX_WALL_CLOCK);
         tokio::spawn(async move {
             // The completion signal fires when this task ends, however it ends:
             // the guard rides the whole task, so the shutdown join's wait on it
@@ -119,8 +126,17 @@ impl ChildExecution {
             // the two ended the child.
             let ceiling = handle.cancel.clone();
             let cut_reason = Arc::clone(&handle.cut_reason);
+            let liveness = Arc::clone(&handle.liveness);
             let run = finalize_child(&runtime, handle, parent, child_sid, child, hooks, task);
-            run_with_deadline(run, timeout_secs, ceiling, cut_reason).await;
+            watch_liveness(
+                run,
+                liveness,
+                idle_timeout,
+                max_wall_clock,
+                ceiling,
+                cut_reason,
+            )
+            .await;
         })
     }
 
@@ -149,8 +165,12 @@ impl ChildExecution {
         } = self;
         let subagent_type = request.subagent_type.clone();
         let description = request.prompt_summary.clone();
-        let timeout_secs = request.timeout_secs;
         let task = request.prompt.clone();
+        let idle_timeout = request
+            .timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_IDLE_TIMEOUT);
+        let max_wall_clock = idle_timeout.max(DEFAULT_MAX_WALL_CLOCK);
         tokio::spawn(async move {
             // The completion signal fires when this task ends, however it ends:
             // the guard rides the whole task, so the shutdown join's wait on it
@@ -213,12 +233,17 @@ impl ChildExecution {
             fire_subagent_start(hooks.as_ref(), parent, &child_str, &subagent_type).await;
             let ceiling = handle.cancel.clone();
             let cut_reason = Arc::clone(&handle.cut_reason);
+            let liveness = Arc::clone(&handle.liveness);
             let run = finalize_child(&runtime, handle, parent, child_sid, child, hooks, task);
-            // The ending is read from the drive rather than rewritten here: the
-            // child's own terminal publish already reported the cut, and the
-            // caller must be told the same ending the bus carried.
-            let (status, summary, usage) =
-                run_with_deadline(run, timeout_secs, ceiling, cut_reason).await;
+            let (status, summary, usage) = watch_liveness(
+                run,
+                liveness,
+                idle_timeout,
+                max_wall_clock,
+                ceiling,
+                cut_reason,
+            )
+            .await;
             Ok(SpawnOutcome::foreground(child_str, status, summary, usage))
         })
     }

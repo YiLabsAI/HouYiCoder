@@ -23,7 +23,7 @@ use super::bus_types::{ChildDescriptor, ChildRunMode};
 use super::child_prompt::resolve_child_effort;
 use super::ending::EndingClaim;
 use super::registry::IsolationMode;
-use super::status_publisher::ChildStatusPublisher;
+use super::status_publisher::{ChildLiveness, ChildStatusPublisher};
 use houyicoder_api::spawn::AgentIdentity;
 use houyicoder_async::bus::MessageBus;
 use tokio::sync::mpsc::unbounded_channel;
@@ -212,16 +212,9 @@ pub struct ChildHandle {
     pub runner: Arc<Runner>,
     pub cancel: CancellationToken,
     pub worktree: Option<ChildWorktree>,
-    /// Who receives this child's ending, shared with its status publisher.
-    ///
-    /// A foreground child can be handed to the background while it runs, so
-    /// the runtime claims the ending instead of rebuilding the publisher. A
-    /// spawn with no bus carries an unclaimed ending that nothing reads.
     pub ending: Arc<EndingClaim>,
-    /// The reason an outside stop ended this child, when one did. Shared with
-    /// the status publisher, so the ending the run publishes and the return
-    /// record the parent keeps name the same cause.
     pub cut_reason: Arc<Mutex<Option<CutReason>>>,
+    pub liveness: Arc<ChildLiveness>,
 }
 
 /// Why a spawn was rejected. Budget and capability failures are policy,
@@ -338,10 +331,12 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
     // It exists on every handle, so a spawn with no bus pays one allocation
     // and the foreground path reports a cut to its caller the same way.
     let cut_reason = Arc::new(Mutex::new(None));
+    let liveness = Arc::new(ChildLiveness::new());
     if let Some(bus) = bus {
         let mut events = AgentEventHandlers::default();
         let publisher = ChildStatusPublisher::new(bus.clone(), child)
-            .with_cut_report(Arc::clone(&cut_reason), req.partial_transcript.clone());
+            .with_cut_report(Arc::clone(&cut_reason), req.partial_transcript.clone())
+            .with_liveness(Arc::clone(&liveness));
         // The publisher owns the mode its ending is published with, so the
         // handle carries the publisher's own claim rather than a second copy
         // that could disagree with it.
@@ -406,6 +401,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         worktree,
         ending,
         cut_reason,
+        liveness,
     })
 }
 

@@ -101,3 +101,30 @@ fn test_child_stays_foreground() {
         BusMessage::Completed { child, .. } if child.run_mode == ChildRunMode::Foreground
     ));
 }
+
+/// A Pulse event updates the liveness state: the phase changes and the
+/// last-pulse timestamp moves forward. The watchdog reads these to decide
+/// whether the child stalled.
+#[test]
+fn test_pulse_updates_liveness() {
+    let liveness = Arc::new(ChildLiveness::new());
+    let before = liveness.last_pulse_ms();
+    liveness.record(LivenessPhase::Tool);
+    assert_eq!(liveness.phase(), LivenessPhase::Tool);
+    assert!(liveness.last_pulse_ms() >= before);
+}
+
+/// A publisher wired with liveness forwards Pulse events to the shared
+/// state, so the watchdog sees the child is still making progress.
+#[test]
+fn test_publisher_forwards_pulse() {
+    let bus = Arc::new(AgentBus::new());
+    let child = child(ChildRunMode::Background);
+    let liveness = Arc::new(ChildLiveness::new());
+    let publisher =
+        ChildStatusPublisher::new(Arc::clone(&bus), child).with_liveness(Arc::clone(&liveness));
+    publisher.handle(RunLifecycleEvent::Pulse {
+        phase: LivenessPhase::Streaming,
+    });
+    assert_eq!(liveness.phase(), LivenessPhase::Streaming);
+}

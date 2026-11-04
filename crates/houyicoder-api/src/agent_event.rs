@@ -83,22 +83,32 @@ pub use houyicoder_context::RunCompletionStatus;
 pub enum RunLifecycleEvent {
     /// One turn completed and the run will continue.
     TurnCompleted {
-        /// One-based turn number.
         turn: u32,
-        /// Cumulative token usage through this turn.
         cumulative_tokens: u64,
-        /// Number of tool calls in this turn.
         tool_uses: u32,
-        /// Most recent tool activity when present.
         last_activity: Option<String>,
     },
     /// The run reached a terminal state.
     Completed {
-        /// Typed terminal state.
         status: RunCompletionStatus,
-        /// Final or best available response summary.
         summary: String,
     },
+    /// A liveness pulse: the run is still making progress in the given phase.
+    /// A watchdog reads these to cut a child that stalled (no pulse within
+    /// the idle window) without killing one that is merely slow.
+    Pulse { phase: LivenessPhase },
+}
+
+/// What the run is doing at the last pulse. Names the stage a stall shows up
+/// in so the cut reason can say where the child stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivenessPhase {
+    /// Waiting for the model stream to produce a chunk.
+    Streaming,
+    /// A tool is executing.
+    Tool,
+    /// Waiting for a human approval.
+    Approval,
 }
 
 /// The producer responsible for a set of memory changes.
