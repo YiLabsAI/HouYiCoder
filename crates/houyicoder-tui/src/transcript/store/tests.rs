@@ -451,3 +451,49 @@ fn test_unframed_rows_named_separately() {
         "the rebuild drops raised rows along with their names"
     );
 }
+
+/// A row can arrive between the submit and the server's own message: the
+/// engine closes a call an interrupted turn left open as the next run starts.
+/// The echo is then no longer the last frame, and reading only that frame left
+/// the message rendering twice with the result between the copies.
+#[test]
+fn test_echo_dropped_after_row() {
+    let mut app = crate::composition::app();
+    app.push_transcript_line(TranscriptLine::User("hello".into()));
+    let store = &mut app.sessions.current.transcript;
+    store.push_frame(TranscriptFrame::Frontend(FrontendRow::System(
+        "the turn before closed".into(),
+    )));
+
+    // The batch entry drops the echo, then appends the server's own message.
+    store.drop_trailing_echo("hello");
+    store.push_frame(user_frame("hello"));
+    app.rebuild_transcript();
+
+    assert!(
+        !app.sessions
+            .current
+            .transcript
+            .frames()
+            .iter()
+            .any(|frame| matches!(
+                frame.as_ref(),
+                TranscriptFrame::Frontend(FrontendRow::Echo(text)) if text == "hello"
+            )),
+        "the echo is dropped even when a row landed after it"
+    );
+    let users = app
+        .sessions
+        .current
+        .transcript
+        .lines()
+        .iter()
+        .filter(|line| matches!(line, TranscriptLine::User(text) if text == "hello"))
+        .count();
+    assert_eq!(
+        users,
+        1,
+        "the message renders once: {:?}",
+        app.sessions.current.transcript.lines()
+    );
+}

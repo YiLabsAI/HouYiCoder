@@ -20,6 +20,7 @@ use crate::transcript::SequencedFrame;
 use crate::transcript::frame::{FrontendRow, TranscriptFrame};
 use crate::transcript::rows::NamedRows;
 use crate::transcript::turn_fold::{TurnCheckpoint, turn_state_from_frames_at};
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use std::slice::Iter;
 
 #[derive(Debug)]
@@ -278,30 +279,51 @@ impl Transcript {
         self.front_checkpoint.as_ref()
     }
 
-    /// Drop the trailing Echo frame when the server's user message for the same
-    /// text is now arriving, so the row renders once from the server frame
-    /// instead of twice (the tentative echo the frontend raised plus the
-    /// server's own UserMessageChunk). Only the trailing Echo is examined, so
-    /// no earlier frame's index shifts and the block ranges that name log
-    /// positions stay valid. The caller is the frame batch entry, the one
-    /// place that knows a server user message is arriving.
+    /// Drop the Echo frame the frontend raised when the server's user message
+    /// for the same text arrives, so the row renders once from the server frame
+    /// instead of twice.
+    ///
+    /// The echo is not always the last frame. A result for the turn before can
+    /// arrive between the submit and the server's own message, which is what
+    /// happens when an interrupted turn left a call open: the engine closes it
+    /// as the next run starts, ahead of the new message. Reading only the last
+    /// frame then misses the echo, and the message renders twice with that
+    /// result between the copies. The walk therefore goes back to the echo,
+    /// stopping at a user message that is already there.
     pub fn drop_trailing_echo(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
-        let matches_trailing_echo = matches!(
-            self.frames.last(),
-            Some(sf) if matches!(
-                sf.as_ref(),
-                TranscriptFrame::Frontend(FrontendRow::Echo(t)) if t.as_str() == text
-            )
+        let mut found = None;
+        for at in (0..self.frames.len()).rev() {
+            match self.frames[at].as_ref() {
+                TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => break,
+                TranscriptFrame::Frontend(FrontendRow::Echo(current))
+                    if current.as_str() == text =>
+                {
+                    found = Some(at);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(at) = found else {
+            return;
+        };
+        let dropped = self.frames.remove(at);
+        self.resident_bytes.set(
+            self.resident_bytes
+                .get()
+                .saturating_sub(dropped.estimated_bytes() as u64),
         );
-        if matches_trailing_echo && let Some(dropped) = self.frames.pop() {
-            self.resident_bytes.set(
-                self.resident_bytes
-                    .get()
-                    .saturating_sub(dropped.estimated_bytes() as u64),
-            );
+        // Frames after the echo moved down one position, so every block range
+        // that names a log position past it is stale. Clearing them makes the
+        // rebuild re-derive from the frames themselves.
+        // Checked after the removal, so the length already excludes the
+        // dropped frame: any frame at this position now sits where the echo
+        // did, which is what makes the ranges stale.
+        if at < self.frames.len() {
+            self.blocks.clear();
         }
     }
 
