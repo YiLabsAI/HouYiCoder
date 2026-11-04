@@ -19,6 +19,7 @@ use crate::server::EventSequencer;
 use crate::server::recap::RecapSession;
 
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
+use houyicoder_core::snapshot::file_transaction::FileTransaction;
 
 use super::Runner;
 use super::background_tasks::BackgroundTasks;
@@ -61,6 +62,10 @@ pub struct SessionHost {
     /// same reason the live one does: a child's permission ask arrives on this
     /// bus, and a serve loop built without it never raises the card.
     bus: Option<Arc<AgentBus>>,
+    /// The write journal the assembled runner records through. A reattached
+    /// connection needs it to list and restore the writes the detached run
+    /// made; without it the pane has no record to show.
+    file_transaction: Option<Arc<FileTransaction>>,
 }
 
 impl SessionHost {
@@ -74,6 +79,7 @@ impl SessionHost {
             provider_facts: None,
             background_tasks: None,
             bus: None,
+            file_transaction: None,
         }
     }
 
@@ -102,6 +108,18 @@ impl SessionHost {
     /// The bus a reattaching connection routes child asks on.
     pub(crate) fn bus(&self) -> Option<&Arc<AgentBus>> {
         self.bus.as_ref()
+    }
+
+    /// Attach the write journal, so a reattached connection lists and restores
+    /// the writes the detached run made.
+    pub fn with_file_transaction(mut self, journal: Option<Arc<FileTransaction>>) -> Self {
+        self.file_transaction = journal;
+        self
+    }
+
+    /// The write journal a reattaching connection reads.
+    pub(crate) fn file_transaction(&self) -> Option<&Arc<FileTransaction>> {
+        self.file_transaction.as_ref()
     }
 
     /// The facts a reattaching connection should report, or None when the
@@ -173,3 +191,6 @@ pub(crate) struct RunnerHandleClone {
     pub(crate) append_notify: Arc<Notify>,
     pub(crate) recap: Arc<RecapSession>,
 }
+
+#[cfg(test)]
+mod tests;

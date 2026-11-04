@@ -41,6 +41,10 @@ impl Server {
         recap: Arc<RecapSession>,
     ) -> Self {
         let sandbox_session = runner.sandbox_session();
+        // The runner already holds the store its prompts are recorded through,
+        // so a reattached connection describes the session it reattached to
+        // instead of reporting nothing.
+        let descriptor_store = runner.descriptor_store();
         Self {
             runner,
             session,
@@ -59,7 +63,7 @@ impl Server {
             project_path: None,
             provider_facts: None,
             append_notify: Some(append_notify),
-            descriptor_store: None,
+            descriptor_store,
             diagnostics: handle(),
             recap: Some(recap),
             recap_client: None,
@@ -348,6 +352,9 @@ pub(crate) async fn serve_session(
     // The bus is process-scoped too, and without it this connection would drop
     // every child permission ask the detached run is still waiting on.
     server = server.with_bus(host.bus().cloned());
+    if let Some(journal) = host.file_transaction() {
+        server = server.with_file_transaction(Arc::clone(journal));
+    }
     // The facts are process-scoped, so a reattaching connection reports the
     // same ones the live connection does instead of falling back to the
     // environment's view.

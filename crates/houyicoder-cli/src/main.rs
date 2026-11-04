@@ -415,6 +415,7 @@ fn run_serve(
         SessionHost::new(SessionLeaseStore::new())
             .with_provider_facts(facts)
             .with_bus(bundle.bus.clone())
+            .with_file_transaction(bundle.file_transaction.clone())
             .with_background_tasks(background_tasks.clone()),
     );
     let event_sequencer = EventSequencer::new();

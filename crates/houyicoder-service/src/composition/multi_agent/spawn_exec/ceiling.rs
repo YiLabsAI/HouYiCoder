@@ -52,7 +52,7 @@ pub(super) async fn watch_liveness(
                 };
                 if idle >= window {
                     record_cut(&cut_reason, CutReason::TimedOut {
-                        secs: idle_timeout.as_secs(),
+                        secs: window.as_secs(),
                         stage: Some(format!("{:?}", liveness.phase())),
                     });
                     cancel.cancel();
