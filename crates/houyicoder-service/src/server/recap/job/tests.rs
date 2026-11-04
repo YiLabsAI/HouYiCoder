@@ -536,3 +536,30 @@ fn test_dedup_key_needs_request() {
         "a session with no user request has nothing to summarize"
     );
 }
+
+/// A recap is prose the user reads at a glance. Code formatting is the habit a
+/// summary of a coding session falls into, so the marks are dropped whatever
+/// the answer asked for.
+#[test]
+fn test_recap_drops_marks() {
+    let output = vec![OutputItem::Text {
+        text: "Goal was fixing `server.rs:679`. Next: rerun `make check`.".into(),
+    }];
+    assert_eq!(
+        answer_text(&output).expect("usable text"),
+        "Goal was fixing server.rs:679. Next: rerun make check.",
+        "the marks are gone, the words stay"
+    );
+}
+
+/// The instruction has to name what it forbids: an instruction that only asks
+/// for a high-level task leaves the register of the conversation in place.
+#[test]
+fn test_instruction_names_limits() {
+    for phrase in ["no file paths", "no line numbers", "no code formatting"] {
+        assert!(
+            INSTRUCTION.contains(phrase),
+            "the instruction names the prohibition: {phrase}"
+        );
+    }
+}
