@@ -1,8 +1,10 @@
 //! Foreground child execution and permission routing.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
+use houyicoder_api::spawn::PendingChildPermission;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::SessionId;
@@ -13,34 +15,26 @@ use houyicoder_core::agent::multi_agent::bus_types::{
 use houyicoder_core::agent::{ApprovalDecision, ApprovalRequest, RunError, RunOutcome, RunResult};
 use tokio::time::sleep;
 
-/// How long a child waits for a human verdict before fail-closed deny. A
-/// background child whose parent is gone must not hold a concurrency slot
-/// forever on an answer that will not come.
+/// How long a child waits for a human verdict before fail-closed deny.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Drive a foreground child to a terminal state, routing mid-run permission asks
-/// through the bus to the parent's approval flow. Mirrors the parent server's
-/// serve loop: run() returns RunOutcome::Interruption(approvals) when a
-/// guarded tool needs approval; each approval is published on the bus, the
-/// parent responds on the per-request response topic, and resume(decisions)
-/// continues the run. A child with no bus takes the headless path: the
-/// Interruption result is returned as-is so the caller surfaces it as
-/// interrupted (the parentless child has no host). A cancel ends the child at
-/// a terminal status rather than dropping it mid-run, so the caller gets a
-/// result to report as long as the run can observe the stop: a run blocked in
-/// work that never reads the token stays held until that work returns.
-///
-/// The parent's serve-loop perm_rx is scoped to its inner run block; sync-only
-/// spawn keeps that safe (no child publishes while the parent's own
-/// Interruption breaks the block), but a background-spawn path must make
-/// perm_rx long-lived across the whole serve loop or running child asks are
-/// lost to broadcast lag.
+/// The parent-side routing a child uses to reach the approval flow: the bus
+/// that carries the ask, and the park that survives a client disconnect so a
+/// reconnecting serve loop can re-emit the card.
+pub(super) struct ParentContact {
+    pub bus: Option<Arc<AgentBus>>,
+    pub pending_permissions: Arc<Mutex<Vec<PendingChildPermission>>>,
+}
+
+/// Drive a foreground child to a terminal state, routing mid-run permission
+/// asks through the bus to the parent's approval flow. A child with no bus
+/// takes the headless path. A cancel ends the child at a terminal status.
 pub(super) async fn drive_child_to_terminal(
     runner: Arc<Runner>,
     session: SessionId,
     task: String,
     cancel: CancellationToken,
-    bus: Option<Arc<AgentBus>>,
+    contact: ParentContact,
     child_id: &str,
     agent_type: &str,
 ) -> Result<RunResult, RunError> {
@@ -69,22 +63,30 @@ pub(super) async fn drive_child_to_terminal(
         };
         // No bus: headless. The Interruption result reaches the caller's
         // terminal_summary, which maps it to "interrupted".
-        let Some(bus) = bus.as_ref() else {
+        let Some(bus) = contact.bus.as_ref() else {
             return result;
         };
-        let decisions =
-            match route_approvals_via_bus(bus, child_id, agent_type, approvals, &cancel).await {
-                Some(d) => d,
-                // The ask was cancelled: the run is parked on a decision that
-                // will not arrive, so abort it and resume with no decisions.
-                // The resume short-circuits on the abort and reports
-                // Interrupted — the terminal status the fleet clears the row on
-                // — rather than leaving the child parked on the ask.
-                None => {
-                    runner.abort();
-                    return runner.resume(session, &[]).await;
-                }
-            };
+        let decisions = match route_approvals_via_bus(
+            bus,
+            child_id,
+            agent_type,
+            approvals,
+            &cancel,
+            &contact.pending_permissions,
+        )
+        .await
+        {
+            Some(d) => d,
+            // The ask was cancelled: the run is parked on a decision that
+            // will not arrive, so abort it and resume with no decisions.
+            // The resume short-circuits on the abort and reports
+            // Interrupted — the terminal status the fleet clears the row on
+            // — rather than leaving the child parked on the ask.
+            None => {
+                runner.abort();
+                return runner.resume(session, &[]).await;
+            }
+        };
         result = {
             let mut run = Box::pin(runner.resume(session, &decisions));
             tokio::select! {
@@ -109,11 +111,23 @@ pub(super) async fn route_approvals_via_bus(
     agent_type: &str,
     approvals: Vec<ApprovalRequest>,
     cancel: &CancellationToken,
+    pending: &Arc<Mutex<Vec<PendingChildPermission>>>,
 ) -> Option<Vec<ApprovalDecision>> {
     let mut decisions = Vec::with_capacity(approvals.len());
     for req in approvals {
         let call_id = req.call_id.clone();
         let mut rx = bus.subscribe(&permission_response_topic(child_id, &call_id));
+        let parked = PendingChildPermission {
+            child_id: child_id.to_string(),
+            subagent_type: agent_type.to_string(),
+            call_id: call_id.clone(),
+            tool: req.tool_name.clone(),
+            input: req.input.clone(),
+            reason: req.reason.clone(),
+        };
+        if let Ok(mut v) = pending.lock() {
+            v.push(parked);
+        }
         bus.publish(
             permission_request_topic(),
             BusMessage::PermissionRequest {
@@ -127,8 +141,12 @@ pub(super) async fn route_approvals_via_bus(
         );
         let resp = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return None,
+            _ = cancel.cancelled() => {
+                clear_pending(pending, &call_id);
+                return None;
+            }
             _ = sleep(APPROVAL_TIMEOUT) => {
+                clear_pending(pending, &call_id);
                 decisions.push(ApprovalDecision {
                     call_id,
                     approved: false,
@@ -139,6 +157,7 @@ pub(super) async fn route_approvals_via_bus(
             r = rx.recv() => r,
         };
         let Ok(resp) = resp else {
+            clear_pending(pending, &call_id);
             return None;
         };
         let BusMessage::PermissionResponse {
@@ -148,8 +167,10 @@ pub(super) async fn route_approvals_via_bus(
             ..
         } = resp
         else {
+            clear_pending(pending, &call_id);
             return None;
         };
+        clear_pending(pending, &cid);
         decisions.push(ApprovalDecision {
             call_id: cid,
             approved,
@@ -157,6 +178,24 @@ pub(super) async fn route_approvals_via_bus(
         });
     }
     Some(decisions)
+}
+
+fn clear_pending(pending: &Arc<Mutex<Vec<PendingChildPermission>>>, call_id: &str) {
+    if let Ok(mut v) = pending.lock() {
+        v.retain(|p| p.call_id != call_id);
+    }
+}
+
+/// Reconstruct the bus message a reconnecting serve loop re-emits.
+pub(crate) fn permission_request_from(ask: PendingChildPermission) -> BusMessage {
+    BusMessage::PermissionRequest {
+        child_id: ask.child_id,
+        subagent_type: ask.subagent_type,
+        call_id: ask.call_id,
+        tool: ask.tool,
+        input: ask.input,
+        reason: ask.reason,
+    }
 }
 
 #[cfg(test)]

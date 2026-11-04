@@ -6,6 +6,7 @@
 use crate::tool::ToolCtx;
 use houyicoder_async::PFut;
 use houyicoder_context::SessionId;
+use houyicoder_protocol::frontend::permission::AskReason;
 use houyicoder_protocol::llm::Usage;
 #[cfg(test)]
 use std::sync::Arc;
@@ -399,6 +400,24 @@ pub trait SpawnHandle: Send + Sync {
     fn reconcile_orphans(&self, _parent_sid: SessionId) -> PFut<'_, ()> {
         Box::pin(async {})
     }
+
+    /// Take the child permission asks that arrived while no client was
+    /// connected, so a reconnecting serve loop re-emits them as cards.
+    fn take_pending_child_permissions(&self) -> Vec<PendingChildPermission> {
+        Vec::new()
+    }
+}
+
+/// A child permission ask parked while no client was connected. A
+/// reconnecting serve loop re-emits each as an approval card.
+#[derive(Clone)]
+pub struct PendingChildPermission {
+    pub child_id: String,
+    pub subagent_type: String,
+    pub call_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub reason: Option<AskReason>,
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::composition::multi_agent::permission_request_from;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, permission_request_topic,
@@ -132,30 +133,11 @@ pub struct Server {
     file_transaction: Option<Arc<FileTransaction>>,
     host: Option<Arc<SessionHost>>,
     settings_path: PathBuf,
-    /// The project workspace path the startup trust prompt gates on. None
-    /// for a non-project session (a test harness, a home-dir run) so no
-    /// prompt fires. Set at the composition root from the resolved cwd.
     project_path: Option<PathBuf>,
-    /// What the provider was built from, so /status describes the traffic
-    /// actually sent. None on a server assembled without a resolution (the
-    /// in-process test harness); /status then reports the environment's view.
     provider_facts: Option<ProviderFacts>,
-    /// Optional Append Notify shared with the runner's store: the store fires
-    /// notify_one per append, this select's notified() branch wakes to drain
-    /// mid-run so a tool-call frame ships while the run is still in flight.
-    /// None = the branch awaits a never-resolving pending future,
-    /// so behavior is exactly today's (events push only at run resolve). The
-    /// composition root shares one Arc<Notify> between the store impl + here.
     append_notify: Option<Arc<Notify>>,
-    /// Descriptor store used to attach session identity to status responses.
     descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
-    /// The process-wide diagnostic sink's control handle. None when no sink
-    /// was installed (the loader binary, tests). A /debug wire request
-    /// against a server with no sink returns an error rather than silently
-    /// succeeding — the user should know the sink is not there.
     diagnostics: Option<DiagnosticsHandle>,
-    /// Shared multi-agent bus; routes a child permission ask to the
-    /// wire-approval flow. None on the single-agent path.
     bus: Option<Arc<AgentBus>>,
     /// The session's recap state. One instance per session, shared across
     /// connections; None on a server assembled without the feature, which
@@ -350,6 +332,7 @@ impl Server {
         self.runner.set_trust(trust);
         self.replay_events(&mut io).await?;
         session::resume_pending(&mut self, &mut io).await?;
+        self.reemit_pending_child_permissions(&mut io).await;
         let mut perm_rx = self
             .bus
             .as_ref()
@@ -458,6 +441,22 @@ impl Server {
     /// permission asks all compete. The permission receiver is shared across
     /// the whole serve loop so a background child's ask between runs reaches
     /// the approval flow without waiting for the next user turn.
+    /// Re-emit child permission asks that arrived while no client was
+    /// connected. Each becomes a wire Permission card the user sees on
+    /// reconnect; the child is still waiting on the response.
+    async fn reemit_pending_child_permissions(&mut self, io: &mut FrameCarrier) {
+        let pending: Vec<_> = self
+            .runner
+            .spawn_handle()
+            .map(|h| h.take_pending_child_permissions())
+            .unwrap_or_default();
+        for ask in pending {
+            if let Err(e) = child_permission::handle(self, io, permission_request_from(ask)).await {
+                tracing::warn!("re-emitted child permission ask failed: {e}");
+            }
+        }
+    }
+
     async fn next_serve_wake(
         &mut self,
         io: &mut FrameCarrier,

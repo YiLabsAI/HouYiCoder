@@ -12,7 +12,9 @@ use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::SkillRegistry;
-use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome};
+use houyicoder_api::spawn::{
+    PendingChildPermission, SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome,
+};
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
@@ -50,6 +52,7 @@ use tokio::time::timeout;
 mod boundary_claims;
 mod children;
 mod drive;
+pub(crate) use drive::permission_request_from;
 mod orphan_reconcile;
 use boundary_claims::BoundaryClaims;
 use children::{
@@ -113,46 +116,19 @@ pub struct MultiAgentRuntime {
     worktree_controller: Option<Arc<WorktreeController>>,
     cwd: PathBuf,
     bus: Option<Arc<AgentBus>>,
-    /// The per-parent concurrency gate shared across every spawn call from
-    /// this runtime. One gate per runtime instance (one parent); the
-    /// per-call clone in spawn shares the Arc so all concurrent spawns of
-    /// one parent cap against the same slots.
     gate: Arc<ConcurrencyGate>,
-    /// Live child runners keyed by child session id, so a per-turn abort
-    /// (the viewed-child Esc path) can reach the child's turn-cancel token
-    /// without holding the Arc (the child's task moves the Arc into itself;
-    /// a Weak upgrades only while the child is still running). Stale entries
-    /// (child completed + dropped) are pruned on a failed upgrade.
     children: Arc<Mutex<HashMap<String, ChildEntry>>>,
-    /// The children still running, plus the gate that refuses new ones once a
-    /// shutdown starts. The gate and the registry share one lock, so closing
-    /// the gate and setting the running children aside is atomic against a
-    /// child being admitted: the admission either lands before the close (the
-    /// child is waited for) or is refused (the caller waits on it inline),
-    /// never silently after.
     running: Arc<Mutex<RunningChildren>>,
-    /// Descriptor store for stamping SpawnedBy provenance on child sessions.
     descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
-    /// Skill registry + activator + hooks inherited by every child, so a
-    /// sub-agent discovers and loads skills natively and answers to the same
-    /// write-time gates its parent does.
     skill_registry: Option<Arc<dyn SkillRegistry>>,
     conditional: Option<Arc<dyn ConditionalSkillActivator>>,
     hooks: Option<Arc<HookRegistry>>,
-    /// The parent's compaction components, installed on every child runner.
     inherited: RunnerInheritance,
-    /// The foreground delegation wait budget, in milliseconds. Zero leaves a
-    /// foreground child blocking; a non-zero value sends it to the background
-    /// once it elapses.
     delegation_wait_ms: u64,
-    /// The child sessions a spawn is continuing right now, claimed before
-    /// construction so two resumes cannot drive one session at once.
     reserved: Arc<Mutex<HashSet<String>>>,
-    /// The generations that decide whether a scan for boundaries a previous
-    /// host left open is due.
     orphan_scan: ScanGeneration,
-    /// The children whose return boundary a writer here has claimed.
     boundary_claims: BoundaryClaims,
+    pending_permissions: Arc<Mutex<Vec<PendingChildPermission>>>,
 }
 
 /// One live child: its runner (Weak, so a finished child drops the entry's
@@ -189,6 +165,7 @@ impl MultiAgentRuntime {
             reserved: Arc::new(Mutex::new(HashSet::new())),
             orphan_scan: ScanGeneration::default(),
             boundary_claims: BoundaryClaims::default(),
+            pending_permissions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -559,6 +536,13 @@ impl SpawnHandle for MultiAgentRuntime {
             &self.boundary_claims,
             parent_sid,
         ))
+    }
+
+    fn take_pending_child_permissions(&self) -> Vec<PendingChildPermission> {
+        self.pending_permissions
+            .lock()
+            .map(|mut v| take(&mut *v))
+            .unwrap_or_default()
     }
 }
 

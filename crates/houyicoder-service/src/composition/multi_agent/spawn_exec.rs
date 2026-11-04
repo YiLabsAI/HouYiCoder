@@ -31,7 +31,7 @@ use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
 
 use super::announce_spawn;
-use super::drive::drive_child_to_terminal;
+use super::drive::{ParentContact, drive_child_to_terminal};
 use super::fire_subagent_start;
 use super::record_provenance;
 use super::{ChildReservation, ChildWatch, MultiAgentRuntime, RunningChildren};
@@ -120,7 +120,10 @@ pub(super) async fn finalize_child(
         child_sid,
         task,
         cancel_token,
-        bus.clone(),
+        ParentContact {
+            bus: bus.clone(),
+            pending_permissions: Arc::clone(&runtime.pending_permissions),
+        },
         &child_str,
         &subagent_type,
     ))
