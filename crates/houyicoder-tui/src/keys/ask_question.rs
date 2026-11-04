@@ -225,7 +225,11 @@ impl AskQuestion {
                 }
                 AskDecision::None
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
+                if !k
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 let entry = self.other_text[qi].get_or_insert_with(String::new);
                 entry.push(c);
                 AskDecision::None

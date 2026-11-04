@@ -112,3 +112,40 @@ fn test_height_submit_view() {
     // 2 questions + 8 base = 10
     assert_eq!(aq.card_height(), 10);
 }
+
+/// The Other row shows its input cursor as soon as the cursor rests on it.
+/// Waiting for a separate "open" step left the row looking inert while the
+/// keys already went to it.
+#[test]
+fn test_other_row_shows_cursor() {
+    let mut app = app();
+    app.ui.navigation.screen = Screen::Working;
+    let mut aq = AskQuestion::parse("c1", &single_input()).expect("parse");
+    aq.cursors[0] = aq.current_other_idx();
+    app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(0), aq));
+    let out = render_text(&app, 80, 30);
+    let row = out
+        .lines()
+        .find(|line| line.contains("Type something"))
+        .expect("the Other row renders");
+    assert!(
+        row.trim_end().ends_with('_'),
+        "the row shows where typing goes: {row:?}"
+    );
+}
+
+/// The review view draws two rows per question, so its height has to count
+/// them: a formula that counted one clipped the select rows off the bottom.
+#[test]
+fn test_review_height_counts_rows() {
+    let aq = AskQuestion::parse("c1", &two_question_input()).expect("parse");
+    let mut review = aq;
+    review.current = review.max_index();
+    assert!(review.is_submit_view(), "the last tab is the review view");
+    let needed = 2 * review.questions.len() as u16 + 6;
+    assert_eq!(
+        review.card_height_for(80),
+        needed,
+        "two rows per question plus the fixed rows"
+    );
+}

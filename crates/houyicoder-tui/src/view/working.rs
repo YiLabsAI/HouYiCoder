@@ -246,8 +246,16 @@ fn build_working_layout(
     constraints.push(Constraint::Min(1));
     let transcript_idx = constraints.len() - 1;
     let status_h = if pane_hides_status(app) { 0 } else { 1 };
+    // The card shows its text by default, so a long question can ask for more
+    // rows than the terminal has. It may use what is left once the composer
+    // keeps its minimum and the transcript its floor: the keys that answer the
+    // card come from the card, but the user still needs somewhere to see the
+    // conversation it is blocking.
     let ask_h = if let Some(aq) = app.ask_question() {
-        aq.card_height_for(area.width)
+        let room = area
+            .height
+            .saturating_sub(MIN_INPUT_ROWS + status_h + banner_h + 1);
+        aq.card_height_for(area.width).min(room.max(1))
     } else {
         0u16
     };

@@ -761,18 +761,19 @@ fn test_card_height_wraps() {
     )
     .expect("parse card");
 
-    let narrow = c.card_height_for(40);
-    let wide = c.card_height_for(200);
-    assert_eq!(
-        narrow, wide,
-        "a collapsed card is the same height at any width"
-    );
-
-    c.expanded = true;
+    // The card shows its text by default, so the height follows the width.
     assert!(
         c.card_height_for(40) > c.card_height_for(200),
-        "expanded, the narrower card needs more rows"
+        "the narrower card needs more rows for the same text"
     );
     let rows = c.content_rows(40);
     assert!(rows[0] > 1, "the long question wraps: {rows:?}");
+
+    // Folded, every line is one row whatever the width.
+    c.expanded = false;
+    assert_eq!(
+        c.card_height_for(40),
+        c.card_height_for(200),
+        "a folded card is the same height at any width"
+    );
 }

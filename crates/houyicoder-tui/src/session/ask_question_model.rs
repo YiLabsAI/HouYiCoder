@@ -134,7 +134,7 @@ impl AskQuestion {
             cursors: vec![0; n],
             other_text: vec![None; n],
             other_focused: false,
-            expanded: false,
+            expanded: true,
             submit_cursor: 0,
             original_input: input.clone(),
         })
@@ -262,7 +262,7 @@ impl AskQuestion {
         // Each row is drawn with a marker and a checkbox ahead of its text, so
         // the columns left for the text are the width minus that prefix.
         const OPTION_PREFIX: u16 = 7;
-        const OTHER_PREFIX: u16 = 9;
+        const OTHER_PREFIX: u16 = 10;
         let mut rows = vec![line_rows(
             &q.question,
             width.saturating_sub(1),
@@ -304,7 +304,9 @@ impl AskQuestion {
     /// this width.
     pub fn card_height_for(&self, width: u16) -> u16 {
         if self.is_submit_view() {
-            return (self.questions.len() + 8) as u16;
+            // Two rows per question plus the separator, the navigation bar,
+            // the title, the warning, and the two select rows.
+            return (2 * self.questions.len() + 6) as u16;
         }
         let content: u16 = self.content_rows(width).iter().sum();
         let nav_bar = if self.hide_submit_tab() { 0 } else { 1 };
@@ -319,22 +321,6 @@ impl AskQuestion {
     /// prompt + select.
     pub fn card_height(&self) -> u16 {
         self.card_height_for(80)
-    }
-
-    #[allow(dead_code)]
-    fn card_height_collapsed(&self) -> u16 {
-        if self.is_submit_view() {
-            (self.questions.len() + 8) as u16
-        } else {
-            let q = match self.questions.get(self.current) {
-                Some(q) => q,
-                None => return 0,
-            };
-            let opts = q.options.len() + 1;
-            let nav_bar = if self.hide_submit_tab() { 0 } else { 1 };
-            let submit_btn = if q.multi_select { 1 } else { 0 };
-            (opts + 6 + nav_bar + submit_btn) as u16
-        }
     }
 
     /// Build the answers map from the current selections. Each question maps

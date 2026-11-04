@@ -329,12 +329,12 @@ fn draw_other_option(f: &mut Frame, aq: &AskQuestion, focused: usize, area: Rect
         "Type something."
     };
     let other_label = if !other_text.is_empty() {
-        if aq.other_focused {
+        if other_focused {
             format!("{other_text}_")
         } else {
             other_text.to_string()
         }
-    } else if aq.other_focused {
+    } else if other_focused {
         format!("{placeholder}_")
     } else {
         placeholder.to_string()
