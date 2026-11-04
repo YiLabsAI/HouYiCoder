@@ -259,7 +259,15 @@ impl AskQuestion {
         let Some(q) = self.questions.get(self.current) else {
             return Vec::new();
         };
-        let mut rows = vec![line_rows(&q.question, width, self.expanded)];
+        // Each row is drawn with a marker and a checkbox ahead of its text, so
+        // the columns left for the text are the width minus that prefix.
+        const OPTION_PREFIX: u16 = 7;
+        const OTHER_PREFIX: u16 = 9;
+        let mut rows = vec![line_rows(
+            &q.question,
+            width.saturating_sub(1),
+            self.expanded,
+        )];
         let focused = self.cursors.get(self.current).copied().unwrap_or(0);
         for (i, opt) in q.options.iter().enumerate() {
             let text = if i == focused && !opt.description.is_empty() {
@@ -267,7 +275,11 @@ impl AskQuestion {
             } else {
                 format!("{}. {}", i + 1, opt.label)
             };
-            rows.push(line_rows(&text, width, self.expanded));
+            rows.push(line_rows(
+                &text,
+                width.saturating_sub(OPTION_PREFIX),
+                self.expanded,
+            ));
         }
         let other = self.other_text[self.current]
             .as_deref()
@@ -277,7 +289,11 @@ impl AskQuestion {
             } else {
                 "Type something."
             });
-        rows.push(line_rows(other, width, self.expanded));
+        rows.push(line_rows(
+            other,
+            width.saturating_sub(OTHER_PREFIX),
+            self.expanded,
+        ));
         if q.multi_select {
             rows.push(1);
         }

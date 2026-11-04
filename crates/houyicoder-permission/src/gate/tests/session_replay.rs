@@ -361,6 +361,10 @@ fn test_effect_boundary_checks() {
     ));
     assert!(removes_only_temp("rm -rf \"$TMPDIR/fresh\"", true));
     assert!(!removes_only_temp("rm -rf \"$TMPDIR/fresh\"", false));
+    // The shared temp root is not the session's: a fence that refuses writes
+    // there would refuse the removal after this gate had waived it.
+    assert!(!removes_only_temp("rm /tmp/x", true));
+    assert!(!removes_only_temp("cd /tmp && rm x", true));
 }
 
 #[test]

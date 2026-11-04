@@ -212,6 +212,26 @@ fn is_assignment_word(word: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Whether a deletion target names a single child of the session temporary
+/// directory.
+///
+/// Deletion is narrower than a redirect: the expansion forms are the session's
+/// own directory, and nothing else is. The literal shared roots are not
+/// accepted here, because a fence that refuses them would refuse the removal
+/// after this gate had already waived it.
+fn is_temp_delete_target(target: &str) -> bool {
+    if marker_hit(target) {
+        return false;
+    }
+    let rest = target
+        .strip_prefix("$TMPDIR/")
+        .or_else(|| target.strip_prefix("${TMPDIR}/"));
+    let Some(suffix) = rest else {
+        return false;
+    };
+    is_single_temp_child(suffix)
+}
+
 /// Whether a redirect target names a single child of the session temporary
 /// directory. A nested path, a traversal, a glob, or an expansion cannot be
 /// resolved from text, so none of them qualify. The literal /tmp and
@@ -455,7 +475,7 @@ fn rm_targets_are_temp(segment: &str, cwd_in_temp: bool) -> bool {
             continue;
         }
         saw_target = true;
-        if !(is_temp_output_target(word) || cwd_in_temp && is_single_temp_child(word)) {
+        if !(is_temp_delete_target(word) || cwd_in_temp && is_single_temp_child(word)) {
             return false;
         }
     }
