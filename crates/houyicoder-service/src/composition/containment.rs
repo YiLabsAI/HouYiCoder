@@ -14,7 +14,7 @@ use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SandboxSes
 use houyicoder_permission::{DefaultModeGate, RuleStore};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
 use houyicoder_sandbox::PlatformSession;
-use houyicoder_skill::discover::user_skill_roots;
+use houyicoder_skill::discover::{MANAGED_DIR, user_skill_roots};
 
 /// The fences and the permission gate one session runs under.
 pub(super) struct SessionFences {
@@ -279,18 +279,32 @@ mod tests;
 /// be read. Only trees that exist are granted, so a machine that never had one
 /// pays nothing.
 fn attach_user_skill_roots(session: &dyn SandboxSession) {
-    let Some(home) = houyicoder_config::user_home_dir() else {
-        return;
-    };
-    attach_user_skill_roots_in(session, &home);
+    let mut roots = houyicoder_config::user_home_dir()
+        .map(|home| user_skill_roots(&home))
+        .unwrap_or_default();
+    // The managed tree is a system path, so it does not depend on a home
+    // resolving: discovery reads it either way.
+    roots.push(PathBuf::from(MANAGED_DIR));
+    grant_read_roots(session, &roots);
 }
 
 /// The same grant for a named home, so the caller that resolves the real home
 /// and the test that proves the grant stay separate.
 fn attach_user_skill_roots_in(session: &dyn SandboxSession, home: &Path) {
-    for root in user_skill_roots(home) {
-        if root.is_dir() {
-            drop(session.add_reading_dir(&root.to_string_lossy()));
+    grant_read_roots(session, &user_skill_roots(home));
+}
+
+/// Grant every root that exists, reporting one the fence refuses.
+fn grant_read_roots(session: &dyn SandboxSession, roots: &[PathBuf]) {
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        if session.add_reading_dir(&root.to_string_lossy()).is_err() {
+            tracing::warn!(
+                "startup: the fence refused read access to the skill tree at {}; skills discovered there will be refused when read",
+                root.display()
+            );
         }
     }
 }

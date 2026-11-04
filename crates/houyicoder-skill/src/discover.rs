@@ -32,7 +32,7 @@ pub(crate) const CONFIG_DIR_FAMILIES: &[&str] = &[".houyicoder", ".claude", ".ag
 /// System-level managed skills directory (enterprise policy push). The
 /// managed path is itself the skills dir (no family segment), so the
 /// watcher treats it as a deep watch when it exists.
-pub(crate) const MANAGED_DIR: &str = "/etc/houyicoder/skills";
+pub const MANAGED_DIR: &str = "/etc/houyicoder/skills";
 
 /// The skills root of every config family under one home.
 ///

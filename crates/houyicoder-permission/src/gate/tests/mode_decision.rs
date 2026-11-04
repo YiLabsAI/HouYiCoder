@@ -189,6 +189,76 @@ fn test_auto_asks_destructive_rm() {
     ));
 }
 
+/// A command that signals another process asks in every mode, because the
+/// kernel permits the signal and this is the only place that decides it. The
+/// check reads the command position, so prose that mentions the word is not a
+/// signal and does not cost the user a card.
+#[test]
+fn test_auto_asks_signal() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    for command in [
+        "kill -9 4242",
+        "killall houyi",
+        "pkill -f houyi",
+        "echo hi; kill 1",
+        "git status && kill -TERM 42",
+        // A wrapper that runs the command verbatim must not hide it: the
+        // kernel rule permits the signal, so this check is the only one.
+        "timeout 5 kill -9 1",
+        "nohup kill 1",
+        "nice -n 10 kill 1",
+        "env kill 1",
+        "xargs kill",
+        "command kill 1",
+        "sudo kill 1",
+        "find . -name x -exec kill {} \\;",
+        "python -c 'import os; os.kill(1, 9)'",
+        // The interpreter may itself sit behind a wrapper, and the wrapper's
+        // flag may carry a value.
+        "timeout 5 bash -c 'kill -9 1'",
+        "env sh -c 'kill 1'",
+        "nohup python -c 'import os;os.kill(1,9)'",
+        "find . -exec sh -c 'kill 1' \\;",
+        "doas -u root kill 1",
+        "xargs -I{} kill",
+        "timeout -s KILL 5 kill 1",
+        "kill$(echo 1)",
+    ] {
+        assert!(
+            matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} sends a signal and must ask"
+        );
+    }
+    for command in [
+        "echo 'kill the stale cache'",
+        "grep -rn kill src",
+        "echo kill",
+        // A quoted heredoc body is literal text, not a command.
+        "cat <<'EOF'\nkill 1\nEOF",
+    ] {
+        assert!(
+            !matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} only mentions the word and must not ask"
+        );
+    }
+}
+
+/// A broad allow rule does not settle the signal question: the check runs in
+/// the detection stage, before any rule is consulted, exactly as the
+/// destructive check does. Otherwise a single allow on the shell tool would
+/// let an Auto-mode kill reach any process on the host.
+#[test]
+fn test_allow_rule_blocks_signal() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
+    assert!(matches!(
+        g.decide(&bash_req("kill -9 4242")).outcome(),
+        Outcome::Ask
+    ));
+    assert_eq!(g.decide(&bash_req("ls -la")).outcome(), Outcome::Allow);
+}
+
 #[test]
 fn test_auto_compound_readonly_allow() {
     // Auto allows a read-only compound: find|wc's segments are attestable

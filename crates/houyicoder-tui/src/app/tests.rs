@@ -1550,3 +1550,52 @@ fn test_copy_active_selection_targets() {
     app.ui.selection.clear();
     assert!(!app.copy_active_selection(), "no selection copies nothing");
 }
+
+/// A click on the second row of a wrapped draft lands at the start of that
+/// row. The row only exists at the width the draft actually wraps at, so a
+/// click mapped through the terminal width instead would clamp to the end of
+/// the single row it thought the draft had.
+#[test]
+fn test_click_wrapped_row() {
+    let mut app = working_app();
+    // Four columns narrower than the terminal: a draft this long wraps to two
+    // rows at the composer's width and stays on one at the terminal's.
+    let draft = "x".repeat(40);
+    app.ui.input.editor.set(draft.clone());
+    drop(render_text(&app, 40, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    assert!(rect.height >= 2, "the box grew to hold two rows: {rect:?}");
+    assert_eq!(rect.width as usize, 36, "the published width wraps");
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y + 1,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert_eq!(
+        app.ui.input.editor.cursor(),
+        rect.width as usize,
+        "the caret sits at the start of the second row"
+    );
+
+    // The margin past the text area is not the composer. A rect published two
+    // columns wider than the draft wraps at would swallow this press and move
+    // the caret to a column no row has.
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + rect.width,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert_eq!(
+        app.ui.input.editor.cursor(),
+        rect.width as usize,
+        "a press in the right margin leaves the caret alone"
+    );
+}

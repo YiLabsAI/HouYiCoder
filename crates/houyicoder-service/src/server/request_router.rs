@@ -230,6 +230,15 @@ impl Server {
             | FrontendRequest::PermissionAskBeforeGit { .. } => {
                 self.dispatch_permission(io, req_id, payload).await
             }
+            // The diagnostic level is process-wide and a run does not read
+            // it, so raising it while a turn runs is exactly what a user
+            // diagnosing that turn reaches for. Without this branch the
+            // request would fall through to an empty acknowledgement and the
+            // level would never change.
+            FrontendRequest::DebugSet { level } => {
+                self.send_response(io, req_id, self.debug_response(level))
+                    .await
+            }
             _ => self.send_response(io, req_id, ResponsePayload::Ack).await,
         }
     }

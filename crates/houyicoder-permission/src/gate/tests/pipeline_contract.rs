@@ -57,6 +57,12 @@ fn test_ladder_matches_spec() {
         ),
         (
             Stage::Detection,
+            "signal_command",
+            Immunity::ModeImmune,
+            true,
+        ),
+        (
+            Stage::Detection,
             "git_checkpoint",
             Immunity::ModeImmune,
             true,

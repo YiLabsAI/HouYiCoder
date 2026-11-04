@@ -312,12 +312,12 @@ pub fn deny_default(tag: &str) -> String {
 /// read-write on /dev/ptmx and /dev/ttys* let a test harness open a terminal
 /// pair under the sandbox. Without this set sh aborts under deny default.
 ///
-/// Signal is not narrowed to this sandbox: sending one is a control action
-/// the permission gate already puts behind an explicit approval, and a kernel
-/// rule that refused it would overrule the user's own decision, leaving a
-/// command the user approved unable to stop a process it started. Task ports
-/// stay narrowed, because reaching into another process's memory is not
-/// something an approval can make recoverable.
+/// Signal is not restricted to this sandbox: sending one is a control action
+/// the permission gate decides, and a kernel rule that refused an approved
+/// signal would overrule the user's own decision, leaving a command unable to
+/// stop a process it started. Task ports stay restricted, because reaching
+/// into another process's memory is not something an approval can make
+/// recoverable.
 pub fn allow_set(tag: &str) -> String {
     let _ = tag;
     let mach = MACH_SERVICES

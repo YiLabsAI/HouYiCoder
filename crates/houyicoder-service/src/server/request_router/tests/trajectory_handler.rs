@@ -12,6 +12,7 @@ use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::envelope::{ClientFrame, RequestEnvelope, RequestId};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::debug::DebugLevel;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::CompletionResponse;
@@ -464,6 +465,40 @@ async fn test_permission_edit_during_run() {
     assert!(
         !resp.contains("waits for the running turn"),
         "a fence edit is not refused mid-run: {resp}"
+    );
+}
+
+/// The diagnostic level is process-wide and a run does not read it, so
+/// raising it while a turn runs has to take effect. An empty acknowledgement
+/// would tell the client the level changed when nothing happened, which is
+/// worse than the refusal it replaced.
+#[tokio::test]
+async fn test_debug_set_during_run() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(13),
+                FrontendRequest::DebugSet {
+                    level: DebugLevel::Debug,
+                },
+            ),
+        )
+        .await;
+    let resp = client_rx.try_recv().expect("a debug request is answered");
+    assert!(
+        !resp.contains("waits for the running turn"),
+        "the diagnostic level is not refused mid-run: {resp}"
+    );
+    assert!(
+        !resp.contains("\"type\":\"ack\""),
+        "the answer carries the resulting state, not an empty ack: {resp}"
     );
 }
 

@@ -429,9 +429,9 @@ fn test_trust_service_allowed() {
     }
 }
 
-/// Signal is a control action the permission gate approves, so the profile
-/// must not narrow it to this sandbox; task ports stay narrowed because no
-/// approval makes reaching into another process's memory recoverable.
+/// Signal is a control action the permission gate decides, so the profile
+/// must not restrict it to this sandbox; task ports stay restricted because
+/// no approval makes reaching into another process's memory recoverable.
 #[test]
 fn test_signal_scope() {
     let p = render(&ProfileSpec::new(
@@ -446,7 +446,7 @@ fn test_signal_scope() {
     );
     assert!(
         !p.contains("(allow signal (target same-sandbox))"),
-        "signal must not be narrowed to this sandbox:\n{p}"
+        "signal must not be restricted to this sandbox:\n{p}"
     );
     assert!(
         p.contains("(allow mach-priv-task-port (target same-sandbox))"),

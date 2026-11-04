@@ -27,7 +27,7 @@ use crate::mode::{PermissionMode, ToolRequest};
 use crate::rule::{Effect, Rule};
 use detection::{
     CompoundCommandValidator, DestructiveCommandValidator, GitCheckpointValidator,
-    NetworkEgressValidator, PathBoundsValidator,
+    NetworkEgressValidator, PathBoundsValidator, SignalCommandValidator,
 };
 use houyicoder_api::sandbox::Containment;
 use protected_path::ProtectedPathValidator;
@@ -152,6 +152,7 @@ impl Pipeline {
             Box::new(rule::RuleDenyValidator),
             Box::new(ProtectedPathValidator::new(None)),
             Box::new(DestructiveCommandValidator::new(None)),
+            Box::new(SignalCommandValidator),
             Box::new(GitCheckpointValidator),
             Box::new(NetworkEgressValidator::new(None)),
             Box::new(CompoundCommandValidator::new(None)),
