@@ -2,7 +2,10 @@
 //! counter a directory install reads before and after.
 
 use super::super::*;
-use houyicoder_api::sandbox::{Containment, Egress, FenceAxis, NetworkPolicy, SandboxSession};
+use houyicoder_api::sandbox::{
+    Containment, Egress, FenceAxis, NetworkPolicy, SandboxSession, is_within_bounds,
+    normalize_tool_path,
+};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -81,4 +84,72 @@ fn test_grant_advances_revision() {
     );
 
     remove_dir_all(&scratch).ok();
+}
+
+/// The shared temp root is reported as inside the fence, because the profile
+/// grants it outright. A tool that writes there is not escaping the workspace,
+/// so the gate must have nothing to ask about.
+#[test]
+fn test_shared_temp_in_bounds() {
+    let session = MacSeatbeltSession::new().expect("session");
+    let roots = session.shared_temp_roots();
+    assert!(
+        !roots.is_empty(),
+        "the profile grants the shared temp root, so it is reported"
+    );
+    let shared = PathBuf::from("/tmp");
+    let canonical = dunce::canonicalize(&shared).unwrap_or(shared);
+    assert!(
+        roots.contains(&canonical),
+        "the canonical shared temp root is among them: {roots:?}"
+    );
+}
+
+/// One directory is reported once. The two spellings of the shared temp root
+/// name the same directory here, so listing both would put a duplicate in the
+/// bounds the gate reads and in whatever a user-facing report walks them.
+#[test]
+fn test_shared_temp_listed_once() {
+    let session = MacSeatbeltSession::new().expect("session");
+    let roots = session.shared_temp_roots();
+    let mut unique = roots.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        roots.len(),
+        "no directory appears twice: {roots:?}"
+    );
+
+    // The two spellings must resolve to one entry, not two.
+    let canonical: Vec<PathBuf> = roots
+        .iter()
+        .map(|root| dunce::canonicalize(root).unwrap_or_else(|_| root.clone()))
+        .collect();
+    let mut distinct = canonical.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        canonical.len(),
+        "and no two entries resolve to the same directory: {roots:?}"
+    );
+}
+
+/// A path spelled through the short form of the shared temp root still reads
+/// as inside once both sides are resolved. The bounds hold the canonical
+/// directory, and a tool names whichever spelling the user typed, so the
+/// comparison has to happen after resolution rather than on the raw strings.
+#[test]
+fn test_short_spelling_in_bounds() {
+    let session = MacSeatbeltSession::new().expect("session");
+    let roots = session.shared_temp_roots();
+    let workspace = session.workspace_root();
+
+    let short = PathBuf::from("/tmp/houyi-probe.txt");
+    let resolved = normalize_tool_path(&short).expect("resolve");
+    assert!(
+        is_within_bounds(&resolved, &workspace, &roots),
+        "a path typed through the short spelling is inside: resolved {resolved:?} roots {roots:?}"
+    );
 }

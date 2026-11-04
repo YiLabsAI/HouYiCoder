@@ -159,6 +159,30 @@ impl SandboxSession for MacSeatbeltSession {
         Some(self.tmpdir.clone())
     }
 
+    /// The shared temp root is writable through this profile, so a tool writing
+    /// there is inside the fence and the gate has nothing to ask about. A
+    /// handful of subtrees inside it stay denied to protect other processes,
+    /// which the kernel enforces on its own; asking here would add nothing.
+    ///
+    /// The root has two spellings and they name one directory, the shorter
+    /// being a link to the longer. Both are tried because either may arrive in
+    /// a tool's path, and the answer is reduced to canonical form so that one
+    /// directory appears once in the bounds the gate reads.
+    fn shared_temp_roots(&self) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for spelling in ["/tmp", "/private/tmp"] {
+            let path = PathBuf::from(spelling);
+            if !path.is_dir() {
+                continue;
+            }
+            let identity = dunce::canonicalize(&path).unwrap_or(path);
+            if !roots.contains(&identity) {
+                roots.push(identity);
+            }
+        }
+        roots
+    }
+
     fn active_exec_count(&self) -> usize {
         self.exec_count.load(Ordering::SeqCst) as usize
     }

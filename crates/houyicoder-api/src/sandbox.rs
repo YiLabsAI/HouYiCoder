@@ -597,6 +597,21 @@ pub trait SandboxSession: Send + Sync {
         None
     }
 
+    /// The shared temporary roots this backend's fence already grants, in
+    /// addition to the workspace and the scratch directory.
+    ///
+    /// The answer belongs to the backend because two fences of the same
+    /// product can differ here. A ruleset that opens the system temp root
+    /// leaves a tool that writes there inside the fence, so the gate has
+    /// nothing to ask. A path-based ruleset that grants only the workspace and
+    /// the scratch directory leaves the same write outside, and reporting it
+    /// as inside would let the gate approve a call the kernel then refuses.
+    /// Default empty: a backend that grants nothing shared says so by saying
+    /// nothing.
+    fn shared_temp_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Resolve a logical path against the workspace root, refusing escapes
     /// (absolute paths are rejected; .. is collapsed and must stay inside).
     /// The application guard supplements the kernel fence; under the no-op

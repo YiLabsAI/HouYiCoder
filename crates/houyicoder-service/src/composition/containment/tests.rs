@@ -377,6 +377,87 @@ impl SandboxSession for CapableSession {
     }
 }
 
+/// A backend whose fence grants one shared temp root on top of its scratch
+/// directory, so the adapter's report of that root can be read without
+/// depending on what the host platform's fence happens to grant.
+struct SharedTempSession;
+
+impl SandboxSession for SharedTempSession {
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(Path::new("/ws"))
+    }
+    fn scratch_dir(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/ws/scratch"))
+    }
+    fn shared_temp_roots(&self) -> Vec<PathBuf> {
+        vec![PathBuf::from("/shared-temp")]
+    }
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+}
+
+/// A backend that grants nothing shared, for the negative half below.
+struct NothingShared;
+
+impl SandboxSession for NothingShared {
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(Path::new("/ws"))
+    }
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+}
+
+/// Which shared temp roots count as inside the fence is the backend's answer.
+///
+/// A fence that opens the system temp root leaves a write there inside it, so
+/// the gate must not ask. A path-based ruleset that grants only the workspace
+/// and the scratch directory leaves the same write outside, so the gate must
+/// ask. Naming the roots in this layer instead made the gate stop asking on
+/// the second kind of backend, and the kernel then refused a call the gate had
+/// already approved.
+#[test]
+fn test_bounds_follow_temp_roots() {
+    let granting = ContainmentAdapter(Arc::new(SharedTempSession));
+    let dirs = granting.boundary_dirs();
+    assert!(
+        dirs.contains(&PathBuf::from("/shared-temp")),
+        "a root the backend grants is inside the fence: {dirs:?}"
+    );
+    assert!(
+        dirs.contains(&PathBuf::from("/ws/scratch")),
+        "and so is the session scratch dir: {dirs:?}"
+    );
+
+    let withholding = ContainmentAdapter(Arc::new(NothingShared));
+    assert!(
+        withholding.boundary_dirs().is_empty(),
+        "a backend that grants nothing shared adds nothing: {:?}",
+        withholding.boundary_dirs()
+    );
+}
+
 /// The gate reads the capability and its revision through the adapter, so a
 /// fallback that reported a different fence than the session enforces would
 /// either relax what the session never earned or ask against a fence that is

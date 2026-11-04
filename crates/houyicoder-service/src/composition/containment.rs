@@ -170,19 +170,25 @@ impl Containment for ContainmentAdapter {
 
 /// The directories the fence already lets a tool touch besides the workspace.
 ///
-/// The session scratch directory and the shared temp roots are writable by the
-/// profile, so a tool that reads or writes there is inside the fence and the
-/// gate has nothing to ask about. Leaving them out made a write to a temporary
-/// file look like an escape from the workspace, which is how a model writing
-/// scratch output ended up facing a directory-capability card.
+/// The session scratch directory and whatever shared temp roots the backend
+/// reports are writable through the fence, so a tool that reads or writes
+/// there is inside it and the gate has nothing to ask about. Leaving them out
+/// made a write to a temporary file look like an escape from the workspace,
+/// which is how a model writing scratch output ended up facing a
+/// directory-capability card.
+///
+/// Which shared roots qualify is the backend's answer, not a constant here.
+/// A fence whose ruleset opens the system temp root leaves a write there
+/// inside it; a path-based ruleset that grants only the workspace and the
+/// scratch directory leaves the same write outside. Naming the roots in this
+/// layer made the gate approve calls the second kind of fence then refuses.
 fn fence_temp_dirs(session: &dyn SandboxSession) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(scratch) = session.scratch_dir() {
         dirs.push(scratch);
     }
-    for shared in ["/tmp", "/private/tmp"] {
-        let path = PathBuf::from(shared);
-        if path.is_dir() && !dirs.contains(&path) {
+    for path in session.shared_temp_roots() {
+        if !dirs.contains(&path) {
             dirs.push(path);
         }
     }
