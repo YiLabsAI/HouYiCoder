@@ -13,7 +13,8 @@ use ratatui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::input::InputMode;
+use crate::input::{InputMode, WrappedLine};
+use crate::selection::TAG_PLAIN;
 use crate::state::App;
 
 /// Render the inline Ctrl+F search bar (one line below the input box).
@@ -88,6 +89,7 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         body_style
     };
     let wrapped = app.ui.input.editor.wrapped_lines(content_cols);
+    publish_text_area(app, inner, &wrapped);
     // Show the cursor even while a run is in flight: queueing, recalling,
     // and editing queued input are all busy-period flows, so hiding the
     // cursor then leaves the user blind to edits (and to a click that did
@@ -150,6 +152,24 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         inner.x.saturating_add(2).saturating_add(ccol as u16),
         inner.y.saturating_add(row),
     )));
+}
+
+/// Publish the composer's text area and its wrapped rows for the selection and
+/// click paths.
+///
+/// The text starts past the border and the prompt glyph, so the published rect
+/// is the area a drag can select and a click can map, and the rows are the
+/// draft without the glyph that leads it.
+fn publish_text_area(app: &App, inner: Rect, wrapped: &[WrappedLine]) {
+    app.ui.frame.layout.input_rect.set(Rect {
+        x: inner.x.saturating_add(2),
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
+    });
+    let mut rows = app.ui.frame.layout.last_input_rows.borrow_mut();
+    rows.clear();
+    rows.extend(wrapped.iter().map(|wl| (TAG_PLAIN, wl.text.clone())));
 }
 
 #[cfg(test)]

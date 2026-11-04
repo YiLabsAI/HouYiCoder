@@ -1368,3 +1368,185 @@ fn test_ctrl_c_unselected_noop() {
         "an unselected press copies nothing: {captured:?}"
     );
 }
+
+/// A press in the composer places the caret where the pointer landed.
+#[test]
+fn test_click_places_composer_caret() {
+    let mut app = working_app();
+    app.ui.input.editor.set("hello world".to_string());
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    assert!(rect.width > 0, "the draw published the composer: {rect:?}");
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 5,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert_eq!(
+        app.ui.input.editor.cursor(),
+        5,
+        "the caret follows the click"
+    );
+}
+
+/// A drag over the draft selects it and copies the text, not the prompt glyph.
+#[test]
+fn test_drag_copies_composer_draft() {
+    let mut app = working_app();
+    app.ui.input.editor.set("hello world".to_string());
+    let clipboard = Arc::new(RecordingClipboard {
+        captured: Arc::new(Mutex::new(Vec::new())),
+    });
+    app.ui.clipboard = Arc::clone(&clipboard) as Arc<dyn crate::selection::ClipboardWriter>;
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = match kind {
+            MouseEventKind::Down(_) => rect.x,
+            // Past the last character, which is how a drag to the end of a
+            // line reads: everything on it.
+            _ => rect.x + 11,
+        };
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind,
+                column,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    }
+    let got = clipboard.captured.lock().expect("captured").clone();
+    assert_eq!(got.len(), 1, "one copy on release: {got:?}");
+    assert!(
+        got[0].starts_with("hello worl") && "hello world".starts_with(&got[0]),
+        "the copy is the dragged draft text: {got:?}"
+    );
+    assert!(
+        !got[0].contains('\u{276f}'),
+        "the prompt glyph is not part of the selection: {got:?}"
+    );
+    assert!(
+        app.ui.selection.input.has_selection(),
+        "the composer keeps its highlight after the release"
+    );
+}
+
+/// Typing after a selection drops the highlight: the text it named is gone.
+#[test]
+fn test_typing_clears_composer_selection() {
+    let mut app = working_app();
+    app.ui.input.editor.set("hello".to_string());
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: rect.x + 4,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(
+        app.ui.selection.input.has_selection(),
+        "a range was dragged"
+    );
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    assert!(
+        !app.ui.selection.input.has_selection(),
+        "a keystroke drops the highlight"
+    );
+}
+
+/// A composer drag whose release never arrived closes on the next motion, so a
+/// stale range cannot extend into later frames.
+#[test]
+fn test_composer_drag_motion_closes() {
+    let mut app = working_app();
+    app.ui.input.editor.set("hello".to_string());
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(
+        app.ui.selection.input.is_dragging,
+        "the press started a drag"
+    );
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(
+        !app.ui.selection.input.is_dragging,
+        "motion without a button closes the drag"
+    );
+}
+
+/// Ctrl+C copies whichever surface holds a selection, not the draft.
+#[test]
+fn test_copy_active_selection_targets() {
+    let mut app = working_app();
+    let clipboard = Arc::new(RecordingClipboard {
+        captured: Arc::new(Mutex::new(Vec::new())),
+    });
+    app.ui.clipboard = Arc::clone(&clipboard) as Arc<dyn crate::selection::ClipboardWriter>;
+    app.ui.input.editor.set("draft".to_string());
+
+    app.ui.selection.status.start(0, 0);
+    app.ui.selection.status.update(2, 0);
+    assert!(app.copy_active_selection(), "a status selection is copied");
+    assert!(
+        !clipboard
+            .captured
+            .lock()
+            .expect("captured")
+            .iter()
+            .any(|t| t == "draft"),
+        "the draft is not the target"
+    );
+
+    app.ui.selection.clear();
+    app.ui.selection.approval.start(0, 0);
+    app.ui.selection.approval.update(2, 0);
+    assert!(
+        app.copy_active_selection(),
+        "an approval selection is copied"
+    );
+
+    app.ui.selection.clear();
+    assert!(!app.copy_active_selection(), "no selection copies nothing");
+}

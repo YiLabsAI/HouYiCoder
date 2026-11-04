@@ -122,6 +122,7 @@ pub(crate) fn reset_click_regions(app: &App) {
     layout.pane_rect.set(zero);
     layout.status_rect.set(zero);
     layout.approval_rect.set(zero);
+    layout.input_rect.set(zero);
     layout.fleet_rect.set(zero);
     layout.queue_rect.set(zero);
 }

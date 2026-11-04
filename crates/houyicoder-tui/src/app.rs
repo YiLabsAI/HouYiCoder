@@ -31,6 +31,7 @@ use crate::terminal_guard::{
     CrosstermModes, TerminalGuard, assert_mouse_modes, set_terminal_progress,
 };
 use crate::termination::{TerminationWatch, watch_termination};
+use crate::ui::selection::paint_regions;
 use crate::view;
 use crate::view::working::fleet_strip::{FleetClick, click_route};
 
@@ -328,6 +329,13 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 return;
             }
+            // The composer owns a press inside it: the caret goes where the
+            // pointer landed and a drag from there selects the draft.
+            if app.press_in_composer(&m) {
+                app.composer_press(&m);
+                return;
+            }
+
             let rect = app.ui.frame.layout.transcript_rect.get();
             if in_rect(rect, m.column, m.row) {
                 // Byte-window browsing does not share transcript selection
@@ -347,7 +355,9 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if app.ui.selection.pane.is_dragging {
+            if app.ui.selection.input.is_dragging {
+                app.composer_drag(&m);
+            } else if app.ui.selection.pane.is_dragging {
                 let intent = PaneRegion {
                     view: app.region_view(),
                 }
@@ -381,6 +391,12 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::Moved => {
             // Motion without a pressed button closes any drag whose release
             // was lost. Multiple surfaces may still carry stale drag state.
+            if app.ui.selection.input.is_dragging {
+                app.composer_moved();
+            }
+            if app.ui.selection.input.is_dragging {
+                app.composer_moved();
+            }
             if app.ui.selection.pane.is_dragging {
                 let intent = PaneRegion {
                     view: app.region_view(),
@@ -411,6 +427,10 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            if app.ui.selection.input.is_dragging {
+                app.composer_release();
+                return;
+            }
             if app.ui.selection.pane.is_dragging {
                 let intent = PaneRegion {
                     view: app.region_view(),
@@ -489,36 +509,7 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
             scroll_top,
         );
     }
-    {
-        let rows = app.ui.frame.layout.last_pane_rows.borrow();
-        paint_overlay(
-            buf,
-            app.ui.frame.layout.pane_rect.get(),
-            &rows,
-            &app.ui.selection.pane,
-            0,
-        );
-    }
-    {
-        let rows = app.ui.frame.layout.last_status_rows.borrow();
-        paint_overlay(
-            buf,
-            app.ui.frame.layout.status_rect.get(),
-            &rows,
-            &app.ui.selection.status,
-            0,
-        );
-    }
-    {
-        let rows = app.ui.frame.layout.last_approval_rows.borrow();
-        paint_overlay(
-            buf,
-            app.ui.frame.layout.approval_rect.get(),
-            &rows,
-            &app.ui.selection.approval,
-            0,
-        );
-    }
+    paint_regions(buf, app);
 }
 
 impl App {
@@ -638,15 +629,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // a running direct shell command; otherwise no-op. It never quits -- the
     // panic key is not an exit.
     if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
-        if app.ui.selection.transcript.has_selection() {
-            let intent = TranscriptRegion {
-                view: app.region_view(),
-            }
-            .copy_current();
-            app.apply_region_intent(intent);
-            return;
-        }
-        if app.agent_busy() || app.shell_run_active() {
+        if !app.copy_active_selection() && (app.agent_busy() || app.shell_run_active()) {
             app.abort_run();
         }
         return;

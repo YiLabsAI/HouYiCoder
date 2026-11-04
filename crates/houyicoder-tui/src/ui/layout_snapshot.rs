@@ -39,6 +39,13 @@ pub(crate) struct LayoutSnapshot {
     pub(crate) last_status_rows: RefCell<Vec<(u8, String)>>,
     pub(crate) approval_rect: Cell<Rect>,
     pub(crate) last_approval_rows: RefCell<Vec<(u8, String)>>,
+    /// The composer's text area as drawn: the box inside its border, past the
+    /// prompt glyph. The layout can shrink the box to make room for an
+    /// approval card, so the click path reads the rect the draw produced.
+    pub(crate) input_rect: Cell<Rect>,
+    /// The composer's wrapped rows, prompt excluded, so a drag over the draft
+    /// copies the text and not the glyph that leads it.
+    pub(crate) last_input_rows: RefCell<Vec<(u8, String)>>,
     /// Where the footer fleet strip was drawn this frame, for the mouse
     /// router. Zero when not drawn, so a stale rect cannot swallow clicks.
     pub(crate) fleet_rect: Cell<Rect>,
@@ -68,6 +75,8 @@ impl Default for LayoutSnapshot {
             last_status_rows: RefCell::new(Vec::new()),
             approval_rect: Cell::new(Rect::new(0, 0, 0, 0)),
             last_approval_rows: RefCell::new(Vec::new()),
+            input_rect: Cell::new(Rect::new(0, 0, 0, 0)),
+            last_input_rows: RefCell::new(Vec::new()),
             fleet_rect: Cell::new(Rect::new(0, 0, 0, 0)),
             queue_rect: Cell::new(Rect::new(0, 0, 0, 0)),
             fleet_granted: Cell::new(0),

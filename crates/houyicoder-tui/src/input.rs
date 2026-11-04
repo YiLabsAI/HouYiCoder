@@ -426,6 +426,34 @@ impl InputField {
         (lines.len().saturating_sub(1), 0)
     }
 
+    /// Move the caret to a visual row and display column of the wrapped text.
+    ///
+    /// This is what a click in the composer means: the row is the wrapped line
+    /// the pointer landed on and the column is where along it. Both are
+    /// clamped, so a click past the end of a line parks the caret at its end.
+    pub fn move_to_row_col(&mut self, cols: usize, row: usize, col: usize) {
+        let lines = self.wrapped_lines(cols);
+        let Some(wl) = lines.get(row.min(lines.len().saturating_sub(1))) else {
+            self.cursor = 0;
+            return;
+        };
+        // The caret goes to the start of the grapheme the column falls inside,
+        // which is what a pointer over a character means. The boundary search
+        // used for up/down movement answers a different question (keep this
+        // display column), and reusing it here parked the caret one grapheme
+        // early.
+        let mut w = 0usize;
+        for (g_rel, g) in wl.text.grapheme_indices(true) {
+            let gw = UnicodeWidthStr::width(g);
+            if col < w + gw {
+                self.cursor = wl.start_offset + g_rel;
+                return;
+            }
+            w += gw;
+        }
+        self.cursor = wl.start_offset + wl.text.len();
+    }
+
     /// Byte offset of the grapheme boundary nearest the column on this
     /// wrapped line, clamped to the line start..end.
     fn byte_at_column(&self, wl: &WrappedLine, col: usize) -> usize {

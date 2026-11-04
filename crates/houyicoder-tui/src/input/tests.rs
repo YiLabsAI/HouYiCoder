@@ -446,3 +446,23 @@ fn test_shell_command_expands_paste() {
         "the shell receives the pasted text, not the placeholder"
     );
 }
+
+/// A row past the end parks the caret at the end of the text, and a column
+/// past the end of a line parks it at that line's end.
+#[test]
+fn test_move_row_col_clamps() {
+    let mut field = InputField::new();
+    field.set("ab\ncd".to_string());
+    field.move_to_row_col(80, 9, 0);
+    assert_eq!(
+        field.cursor(),
+        3,
+        "a row past the end clamps to the last one"
+    );
+    field.move_to_row_col(80, 0, 40);
+    assert_eq!(
+        field.cursor(),
+        2,
+        "a column past the line clamps to its end"
+    );
+}

@@ -205,12 +205,18 @@ ACTIVE_OWNERS = {
         # the granted height. The identity of each row in the full set sits
         # here beside the rows, written in the same step: a selection names
         # each end by the line under it, and that name can only be resolved
-        # against the rows and names of one frame.
-        "fields": 16,
+        # against the rows and names of one frame. The composer's text area
+        # and its wrapped rows sit here beside the other regions': the layout
+        # can shrink that box for an approval card, so a click has to map
+        # against what the draw produced, and a drag has to copy the draft
+        # rather than the prompt glyph that leads it.
+        "fields": 18,
     },
     "crates/houyicoder-tui/src/ui/selections.rs:Selections": {
-        # The four per-region drag selections, each in its own coordinate space.
-        "fields": 4,
+        # The five per-region drag selections, each in its own coordinate
+        # space: the composer joins the transcript, pane, status bar, and
+        # approval card as a surface a drag can select.
+        "fields": 5,
     },
     "crates/houyicoder-tui/src/transcript/view.rs:TranscriptViewState": {
         # One view's scroll, search corpus and query, byte-window, expansion sets, unseen cursor, and presentation revision.

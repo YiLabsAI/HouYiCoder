@@ -445,8 +445,13 @@ impl Selection {
     }
 }
 
+use ratatui::buffer::Buffer;
+
+use crate::state::App;
+
 mod anchor;
 mod clipboard;
+pub(crate) mod composer;
 mod linux;
 pub mod region;
 #[cfg(test)]
@@ -459,3 +464,31 @@ pub(crate) use anchor::anchor_row;
 pub use clipboard::RecordingClipboard;
 pub use clipboard::{ClipboardWriter, SystemClipboard, get_clipboard_path, write_clipboard};
 pub use text::extract_text;
+
+/// Paint every region's held selection over the frame.
+///
+/// Each surface owns its own rows and rect, so the paint lives beside them
+/// rather than in the loop that also draws the frame.
+pub(crate) fn paint_regions(buf: &mut Buffer, app: &App) {
+    let layout = &app.ui.frame.layout;
+    for (rect, rows, sel) in [
+        (
+            layout.pane_rect.get(),
+            &layout.last_pane_rows,
+            &app.ui.selection.pane,
+        ),
+        (
+            layout.status_rect.get(),
+            &layout.last_status_rows,
+            &app.ui.selection.status,
+        ),
+        (
+            layout.approval_rect.get(),
+            &layout.last_approval_rows,
+            &app.ui.selection.approval,
+        ),
+    ] {
+        region::paint_overlay(buf, rect, &rows.borrow(), sel, 0);
+    }
+    composer::paint(buf, app);
+}

@@ -31,6 +31,9 @@ const ARTIFACT_PAGE_SIZE: usize = 10;
 /// Input box keys: type, send, open palette, switch pane, toggle plan mode,
 /// and per-pane hunk/finding keys.
 pub(super) fn handle_input(app: &mut App, k: KeyEvent) {
+    // Any keystroke that reaches the composer edits or moves through the
+    // draft, so the range a drag selected no longer describes what is there.
+    app.ui.selection.input.clear();
     if let Some(remaining) = pane_action_key(app, k) {
         // The key was not consumed by the pane action controls; fall through
         // to the generic input handler.
