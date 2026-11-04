@@ -308,8 +308,7 @@ fn test_trusted_egress_scopes() {
     assert_eq!(
         egress_scope_list(
             "curl https://docs.rs/a; curl https://arxiv.org/abs/2401.00001",
-            true,
-            false
+            true
         ),
         Some(vec![
             "curl https://docs.rs".to_string(),

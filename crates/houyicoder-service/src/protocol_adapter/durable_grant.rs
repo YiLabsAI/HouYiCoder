@@ -155,11 +155,9 @@ pub(crate) fn durable_grant(
         if !egress_outputs_safe(&command, fence.writes_confined) {
             return DurableGrant::Once;
         }
-        if let Some(scopes) = houyicoder_permission::egress_scope_list(
-            &command,
-            fence.writes_confined,
-            fence.egress_blocked,
-        ) && !scopes.is_empty()
+        if let Some(scopes) =
+            houyicoder_permission::egress_scope_list(&command, fence.writes_confined)
+            && !scopes.is_empty()
         {
             return DurableGrant::Network(scopes);
         }

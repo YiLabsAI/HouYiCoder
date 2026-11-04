@@ -25,8 +25,12 @@ use crate::compound::split_compound;
 use crate::compound::starts_with_supported_command;
 use crate::compound::strip_safe_redirects;
 use crate::pipeline::detection::interpreter_inline_code;
+
+mod formatter;
+
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
+use formatter::is_pure_formatter;
 
 const TRUSTED_HOSTS_JSON: &str = include_str!("../preapproved_hosts.json");
 
@@ -117,7 +121,7 @@ enum Segment {
 /// https://api.github.com, and is used both as the durable scope key and as the
 /// text the approval card shows for its remember option.
 pub fn egress_destination(command: &str) -> Option<String> {
-    let list = collect_egress_scopes(command, false, false, false)?;
+    let list = collect_egress_scopes(command, false, false)?;
     if list.len() == 1 {
         list.into_iter().next()
     } else {
@@ -129,8 +133,8 @@ pub fn egress_destination(command: &str) -> Option<String> {
 /// non-network clause in the command is effect-safe. Used by the egress
 /// validator to check whether every destination in a multi-step command has
 /// already been approved or trusted.
-pub fn egress_scope_list(command: &str, fenced: bool, egress_denied: bool) -> Option<Vec<String>> {
-    collect_egress_scopes(command, true, fenced, egress_denied)
+pub fn egress_scope_list(command: &str, fenced: bool) -> Option<Vec<String>> {
+    collect_egress_scopes(command, true, fenced)
 }
 
 /// Whether supported output arguments name only stdout, /dev/null, or (with an
@@ -208,7 +212,6 @@ fn collect_egress_scopes(
     command: &str,
     allow_effect_safe: bool,
     fenced: bool,
-    egress_denied: bool,
 ) -> Option<Vec<String>> {
     let normalized = normalize_shell_command(command);
     let mut scopes: Vec<String> = Vec::new();
@@ -235,10 +238,7 @@ fn collect_egress_scopes(
                     // The same rule as a scoped stage's downstream: a static
                     // reader, or an interpreter only while the kernel refuses
                     // egress.
-                    if piped
-                        && idx > 0
-                        && !safe_pipe_consumer(trimmed, allow_effect_safe, fenced, egress_denied)
-                    {
+                    if piped && idx > 0 && !safe_pipe_consumer(trimmed, allow_effect_safe, fenced) {
                         return None;
                     }
                 }
@@ -248,9 +248,9 @@ fn collect_egress_scopes(
                     origin_list,
                 } => {
                     if piped
-                        && !stage_refs[idx + 1..].iter().all(|s| {
-                            safe_pipe_consumer(s, allow_effect_safe, fenced, egress_denied)
-                        })
+                        && !stage_refs[idx + 1..]
+                            .iter()
+                            .all(|s| safe_pipe_consumer(s, allow_effect_safe, fenced))
                     {
                         return None;
                     }
@@ -367,24 +367,24 @@ fn classify_segment(segment: &str) -> Segment {
 
 /// Whether a pipe stage downstream of a request only consumes what it is fed.
 ///
-/// A statically read-only command is the first answer. A stage that reads an
-/// interpreter's inline code is the second, and it is accepted only when the
-/// kernel refuses egress outright: code can reach the network through a
-/// library instead of a command, and no scan of its text can prove it will
-/// not, so the proof has to come from the fence rather than from the text.
-fn safe_pipe_consumer(
-    stage: &str,
-    allow_effect_safe: bool,
-    fenced: bool,
-    egress_denied: bool,
-) -> bool {
+/// A statically read-only command is the first answer. The second is an
+/// interpreter handed code that only formats the response: that code is read
+/// for the modules it imports and for the primitives it would need to leave the
+/// machine or write a file, and it is accepted only when both are clean. The
+/// test is positive on purpose. A list of forbidden words loses to any spelling
+/// the author did not think of, while a list of permitted imports fails closed:
+/// a module this file has not named is not permitted.
+fn safe_pipe_consumer(stage: &str, allow_effect_safe: bool, fenced: bool) -> bool {
     if is_readonly_compound(&[stage]) {
         return true;
     }
     if !allow_effect_safe || !fenced || should_ask_egress("bash", stage) {
         return false;
     }
-    interpreter_inline_code(stage.trim()).is_some() && egress_denied
+    if !is_effect_safe(stage, fenced) {
+        return false;
+    }
+    interpreter_inline_code(stage.trim()).is_some_and(is_pure_formatter)
 }
 
 fn allow_multi_origin_for(program: &str) -> bool {

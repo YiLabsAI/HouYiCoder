@@ -238,3 +238,33 @@ fn test_wrapped_read_counts() {
         );
     }
 }
+
+/// A formatter beside a request keeps the countdown. The card is still shown,
+/// the command is still read, and the countdown lands on a single yes, so an
+/// opaque program does not get one while a data formatter does.
+#[test]
+fn test_formatter_counts_down() {
+    for args in [
+        "cd /repo && curl -s https://example.test/x | python3 -c \"import json,sys; print(json.load(sys.stdin))\"",
+        "curl -s https://example.test/x | jq .",
+    ] {
+        assert!(
+            card("network_egress", None, args).auto_approve_eligible(),
+            "{args} only reads and may count down"
+        );
+    }
+    for args in [
+        "cd /repo && curl https://example.test/x | python3 -c \"import socket\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import httpx\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import os\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"getattr(__builtins__,'x')\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"open('o','w')\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import sys; sys._getframe()\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import sys; sys.modules\"",
+    ] {
+        assert!(
+            !card("network_egress", None, args).auto_approve_eligible(),
+            "{args} hands the response to a program this walk cannot read"
+        );
+    }
+}

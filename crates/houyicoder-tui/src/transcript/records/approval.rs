@@ -302,6 +302,10 @@ impl Approval {
     }
 }
 
+mod formatter;
+
+use formatter::without_formatter_code;
+
 #[cfg(test)]
 mod tests;
 
@@ -315,7 +319,14 @@ mod tests;
 /// interactive transport, or a segment this walk does not know is held.
 fn reads_network(command: &str) -> bool {
     let mut saw_network_read = false;
-    let stripped = without_stream_redirects(command);
+    // An interpreter's inline code carries the separators the split below cuts
+    // on, so it is read and set aside first. A body that is not a formatter
+    // stops the walk: the countdown resolves unattended, and an opaque program
+    // beside a request does not get one.
+    let Some(without_code) = without_formatter_code(command) else {
+        return false;
+    };
+    let stripped = without_stream_redirects(&without_code);
     // The command keeps its case: a short flag is case-sensitive, and folding
     // it would read an upload flag as the fail flag beside it.
     for segment in stripped.split(['&', ';', '|', '\n', '(', ')', '`']) {

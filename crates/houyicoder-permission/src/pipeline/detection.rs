@@ -5,7 +5,7 @@
 //! context, not a re-derivation of the rules.
 
 use houyicoder_api::sandbox::{
-    BoundaryAccess, BoundaryGrant, Containment, FenceAxis, SideEffect, boundary_grants_for,
+    BoundaryAccess, BoundaryGrant, Containment, FenceAxis, boundary_grants_for,
 };
 use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
@@ -292,8 +292,24 @@ pub(crate) fn interpreter_inline_code(content: &str) -> Option<&str> {
     }
     let quote = after.as_bytes()[0];
     if quote == b'"' || quote == b'\'' {
-        let close = after[1..].find(quote as char)?;
-        Some(&after[1..1 + close])
+        // A backslash escapes the next character inside double quotes, so a
+        // closing quote that follows one is part of the code rather than its
+        // end. Reading the first match instead would cut the body short and
+        // hand the caller a prefix that looks clean.
+        let body = &after[1..];
+        let mut close = None;
+        let mut chars = body.char_indices();
+        while let Some((at, c)) = chars.next() {
+            if quote == b'"' && c == '\\' {
+                chars.next();
+                continue;
+            }
+            if c as u8 == quote {
+                close = Some(at);
+                break;
+            }
+        }
+        Some(&body[..close?])
     } else {
         let end = after.find(char::is_whitespace).unwrap_or(after.len());
         Some(&after[..end])
@@ -484,17 +500,8 @@ impl Validator for NetworkEgressValidator {
             return None;
         }
         let outputs_safe = egress_outputs_safe(ctx.content, writes_confined(&self.containment));
-        let egress_denied = self
-            .containment
-            .as_ref()
-            .and_then(|c| c.would_block(SideEffect::Network))
-            .is_some();
         if outputs_safe
-            && let Some(scopes) = egress_scope_list(
-                ctx.content,
-                writes_confined(&self.containment),
-                egress_denied,
-            )
+            && let Some(scopes) = egress_scope_list(ctx.content, writes_confined(&self.containment))
             && !scopes.is_empty()
             && scopes
                 .iter()
@@ -680,3 +687,6 @@ fn authorized_dirs(grants: &[BoundaryGrant]) -> Option<String> {
         (_, _) => format!("parent directories {joined} with read-write access"),
     })
 }
+
+#[cfg(test)]
+mod tests;

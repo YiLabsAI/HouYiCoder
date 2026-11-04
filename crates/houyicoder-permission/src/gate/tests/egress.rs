@@ -100,63 +100,74 @@ fn test_trusted_read_silent() {
     );
 }
 
-/// The validator that asked, when the outcome was a question.
-fn network_validator(gate: &DefaultModeGate, command: &str) -> Option<&'static str> {
-    match gate.decide(&bash_req(command)) {
-        Decision::Ask(reason) => Some(reason.validator),
-        _ => None,
-    }
-}
-
-/// A formatter reading a trusted response is a consumer only when the kernel
-/// refuses egress. Code can reach the network through a library, which no scan
-/// of its text can rule out, so the proof has to come from the fence: with the
-/// network closed the stage cannot leave the machine however it is written,
-/// and with it open the stage is a second destination and asks.
+/// A formatter reading a trusted response is a consumer, so the command keeps
+/// the silent answer its destination already had. The test is on the code, not
+/// on the fence: a module outside the permitted set, or a primitive that could
+/// reach out on its own, puts the card back.
 #[test]
-fn test_formatter_needs_closed_egress() {
-    struct Fence {
-        egress_blocked: bool,
-    }
+fn test_formatter_is_consumer() {
+    struct Fence;
     impl Containment for Fence {
         fn coverage(&self) -> Coverage {
             Coverage::Fenced {
                 writable_roots: vec![PathBuf::from("/ws")],
             }
         }
-        fn would_block(&self, effect: SideEffect) -> Option<String> {
-            (self.egress_blocked && effect == SideEffect::Network)
-                .then(|| "the fence refuses egress".to_string())
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
         }
-        // The writes axis is what decides whether a compound is effect-safe;
-        // without it the relaxation never reaches the consumer check.
         fn capability(&self) -> houyicoder_api::sandbox::FenceCapability {
             houyicoder_api::sandbox::FenceCapability::filesystem()
         }
     }
-
-    let command = "curl -s \"https://api.github.com/x\" | python3 -c \"print(1)\"";
-    let closed = DefaultModeGate::with_mode(PermissionMode::Auto)
+    let gate = DefaultModeGate::with_mode(PermissionMode::Auto)
         .with_trusted_hosts()
-        .with_containment(Arc::new(Fence {
-            egress_blocked: true,
-        }));
-    assert_ne!(
-        network_validator(&closed, command),
-        Some("network_egress"),
-        "a closed network makes the formatter a consumer"
+        .with_containment(Arc::new(Fence));
+
+    let formats = concat!(
+        "cd /repo && curl -s --max-time 25 \"https://api.github.com/repos/o/r/commits/abc/check-runs\" ",
+        "-H \"Accept: application/vnd.github+json\" | python3 -c \"import json,sys; ",
+        "d=json.load(sys.stdin); [print(c['name']) for c in d.get('check_runs',[])]\""
+    );
+    assert!(
+        !matches!(gate.decide(&bash_req(formats)).outcome(), Outcome::Ask),
+        "a trusted read piped to a formatter keeps its silent answer: {formats}"
+    );
+    // The permitted attributes of the standard-input module still work.
+    let reads_stdin = concat!(
+        "curl -s \"https://api.github.com/x\" | python3 -c \"import json,sys; ",
+        "print(json.load(sys.stdin)['name'], sys.version_info[0])\""
+    );
+    assert!(
+        !matches!(gate.decide(&bash_req(reads_stdin)).outcome(), Outcome::Ask),
+        "reading stdin through the module is the idiom: {reads_stdin}"
     );
 
-    let open = DefaultModeGate::with_mode(PermissionMode::Auto)
-        .with_trusted_hosts()
-        .with_containment(Arc::new(Fence {
-            egress_blocked: false,
-        }));
-    assert_eq!(
-        network_validator(&open, command),
-        Some("network_egress"),
-        "an open network makes the formatter a second destination"
-    );
+    for code in [
+        "import socket",
+        "import httpx",
+        "from multiprocessing.connection import Client",
+        "import os",
+        "getattr(__builtins__, 'x')",
+        "__import__('so'+'cket')",
+        "open('out','w').write('x')",
+        "import subprocess",
+        // The module table and the frame accessor are two ways back to every
+        // name the import list refused, so the module's surface is read too.
+        "import sys; sys._getframe()",
+        "import sys; sys.modules",
+        "import sys; sys._getframe().f_builtins",
+        "import sys; sys._getframe().f_globals",
+        "import json; json.loads.__globals__",
+        "import json; json.__loader__.load_module('os')",
+        "import sys; sys.meta_path",
+    ] {
+        let command = format!("curl -s \"https://api.github.com/x\" | python3 -c \"{code}\"");
+        assert!(
+            matches!(gate.decide(&bash_req(&command)).outcome(), Outcome::Ask),
+            "{code} is not a formatter: {command}"
+        );
+    }
 }
 
 #[test]
