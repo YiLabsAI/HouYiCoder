@@ -51,7 +51,7 @@ pub fn draw_banner(f: &mut Frame, app: &App, area: Rect) {
         .and_then(|e| e.outcome)
         .unwrap_or(SubagentOutcome::Unknown);
     let hint = if running {
-        " (running) · Esc return · ctrl+x stop".to_string()
+        " (running) · Esc to return · Ctrl+X to kill".to_string()
     } else {
         format!(" ({}) · Esc to return to the main session", ending.label())
     };

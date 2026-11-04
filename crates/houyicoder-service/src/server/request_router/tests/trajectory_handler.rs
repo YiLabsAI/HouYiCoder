@@ -437,6 +437,36 @@ async fn test_rename_served_during_run() {
     );
 }
 
+/// A directory grant typed into the permission pane is a fence edit, not a
+/// conversation change. Refusing it mid-run is what made the pane look frozen
+/// while a delegated child ran: the user could not grant the directory the
+/// child needed in order to keep going.
+#[tokio::test]
+async fn test_permission_edit_during_run() {
+    let runner = stub_runner();
+    let session = houyicoder_context::SessionId::new();
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let (_client_tx, server_rx) = mpsc::channel::<String>(256);
+    let mut io = FrameCarrier::new(server_tx, server_rx);
+    let mut server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    server
+        .handle_request_during_run(
+            &mut io,
+            RequestEnvelope::new(
+                RequestId(11),
+                FrontendRequest::PermissionAddWorkingDir {
+                    path: "/tmp/granted-mid-run".into(),
+                },
+            ),
+        )
+        .await;
+    let resp = client_rx.try_recv().expect("a fence edit is answered");
+    assert!(
+        !resp.contains("waits for the running turn"),
+        "a fence edit is not refused mid-run: {resp}"
+    );
+}
+
 /// A cancel request is handled, not deferred: refusing it would refuse the
 /// verb exactly when the user needs it.
 #[tokio::test]

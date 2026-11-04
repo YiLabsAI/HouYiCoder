@@ -197,7 +197,7 @@ fn test_background_row_reports_ending() {
         tcall("c1", "bash", "cargo build", ToolOutcome::Success),
         bash_result(
             "c1",
-            "Running in background (task #3 \u{00b7} /tasks to manage)",
+            "Running in background (task #3 \u{00b7} \u{2193} or /tasks to manage)",
             Some(3),
         ),
     ]
@@ -243,7 +243,7 @@ fn test_released_task_reads_gone() {
         tcall("c1", "bash", "cargo build", ToolOutcome::Success),
         bash_result(
             "c1",
-            "Running in background (task #3 \u{00b7} /tasks to manage)",
+            "Running in background (task #3 \u{00b7} \u{2193} or /tasks to manage)",
             Some(3),
         ),
     ]

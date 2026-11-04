@@ -89,7 +89,7 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         body_style
     };
     let wrapped = app.ui.input.editor.wrapped_lines(content_cols);
-    publish_text_area(app, inner, &wrapped);
+    publish_text_area(app, inner, content_cols, &wrapped);
     // Show the cursor even while a run is in flight: queueing, recalling,
     // and editing queued input are all busy-period flows, so hiding the
     // cursor then leaves the user blind to edits (and to a click that did
@@ -157,14 +157,15 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 /// Publish the composer's text area and its wrapped rows for the selection and
 /// click paths.
 ///
-/// The text starts past the border and the prompt glyph, so the published rect
-/// is the area a drag can select and a click can map, and the rows are the
-/// draft without the glyph that leads it.
-fn publish_text_area(app: &App, inner: Rect, wrapped: &[WrappedLine]) {
+/// The text starts past the border and the prompt glyph and stops short of the
+/// right margin, so the published rect is exactly the width the draft wraps at.
+/// A rect wider than that would let a click in the margin map to a column no
+/// row has. The rows are the draft without the glyph that leads it.
+fn publish_text_area(app: &App, inner: Rect, content_cols: usize, wrapped: &[WrappedLine]) {
     app.ui.frame.layout.input_rect.set(Rect {
         x: inner.x.saturating_add(2),
         y: inner.y,
-        width: inner.width.saturating_sub(2),
+        width: content_cols.min(u16::MAX as usize) as u16,
         height: inner.height,
     });
     let mut rows = app.ui.frame.layout.last_input_rows.borrow_mut();

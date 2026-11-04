@@ -394,9 +394,6 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) {
             if app.ui.selection.input.is_dragging {
                 app.composer_moved();
             }
-            if app.ui.selection.input.is_dragging {
-                app.composer_moved();
-            }
             if app.ui.selection.pane.is_dragging {
                 let intent = PaneRegion {
                     view: app.region_view(),

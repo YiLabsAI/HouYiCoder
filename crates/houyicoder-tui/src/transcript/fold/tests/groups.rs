@@ -73,7 +73,7 @@ fn background_result(cid: &str) -> TranscriptLine {
         outcome: ToolOutcome::Success,
         call_id: cid.to_string(),
         background_task: Some(BackgroundTaskId(1)),
-        body: "Running in background (task #1 \u{00b7} /tasks to manage)".to_string(),
+        body: "Running in background (task #1 \u{00b7} \u{2193} or /tasks to manage)".to_string(),
         is_diff: false,
     }
 }

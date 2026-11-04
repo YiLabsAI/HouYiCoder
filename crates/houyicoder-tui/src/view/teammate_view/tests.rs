@@ -171,11 +171,11 @@ fn test_banner_hint_follows_state() {
         });
     let running = render_text(&app, 80, 24);
     assert!(
-        running.contains("ctrl+x stop"),
+        running.contains("Ctrl+X to kill"),
         "a running child names the stop key, got:\n{running}"
     );
     assert!(
-        running.contains("Esc return"),
+        running.contains("Esc to return"),
         "and still names the way out, got:\n{running}"
     );
 }
@@ -364,11 +364,11 @@ fn test_banner_hint_matches_state() {
         .unwrap_or_else(|| panic!("no banner:\n{running}"));
     assert!(title.contains("running"), "the state is named: {title}");
     assert!(
-        title.contains("Esc return"),
+        title.contains("Esc to return"),
         "the way out is named: {title}"
     );
     assert!(
-        title.contains("ctrl+x stop"),
+        title.contains("Ctrl+X to kill"),
         "and so is the way to stop it: {title}"
     );
 

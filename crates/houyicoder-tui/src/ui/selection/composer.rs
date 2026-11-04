@@ -67,9 +67,10 @@ impl App {
         .handle_down(m.column, m.row);
         self.apply_region_intent(intent);
         let rect = self.ui.frame.layout.input_rect.get();
-        let cols = self.ui.frame.feedback.terminal_cols.get();
+        // The published rect is the draft's wrap width, so the row and column
+        // a press maps to are the ones the draw used to wrap.
         self.ui.input.editor.move_to_row_col(
-            cols,
+            rect.width as usize,
             (m.row - rect.y) as usize,
             (m.column - rect.x) as usize,
         );
