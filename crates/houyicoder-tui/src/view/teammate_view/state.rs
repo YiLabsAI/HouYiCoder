@@ -192,7 +192,7 @@ impl App {
     /// A child that is not running has no turn to cancel, so the keystroke
     /// does nothing rather than exiting: exiting is Esc's job, and giving one
     /// key two meanings is how the destructive one gets pressed by accident.
-    pub(crate) fn cancel_viewed_child_turn(&mut self) {
+    pub(crate) fn kill_viewed_child(&mut self) {
         let Some(view) = self.ui.teammate_view.as_ref() else {
             return;
         };
@@ -204,7 +204,7 @@ impl App {
         if !running {
             return;
         }
-        if let Err(e) = self.enqueue(ClientCommand::CancelChildTurn { child_sid }) {
+        if let Err(e) = self.enqueue(ClientCommand::KillChild { child_sid }) {
             self.system_line(Self::enqueue_failure_line("cancel", e));
         }
     }

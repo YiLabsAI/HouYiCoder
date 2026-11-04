@@ -116,16 +116,17 @@ mod focus {
         let mut app = app_with(&["c1", "c2"]);
         app.ui.fleet.set_selected(Some(1));
         let entries = &app.sessions.current.capabilities.fleet.entries;
+        // The strip is drawn above the input box, so Down from its last row is
+        // the way back to the box rather than a clamped no-op.
         assert!(matches!(
             super::handle_focused(&mut app.ui.fleet, entries, key(KeyCode::Down)),
-            super::FleetKey::Stay
+            super::FleetKey::Leave
         ));
-        assert_eq!(app.ui.fleet.selected(), Some(1));
 
         app.ui.fleet.set_selected(Some(0));
         assert!(matches!(
             super::handle_focused(&mut app.ui.fleet, entries, key(KeyCode::Up)),
-            super::FleetKey::Leave
+            super::FleetKey::Stay
         ));
         assert_eq!(app.ui.fleet.selected(), Some(0));
     }

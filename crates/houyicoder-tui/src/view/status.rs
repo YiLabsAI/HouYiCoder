@@ -211,7 +211,7 @@ fn agents_hint(app: &App) -> Option<String> {
     Some(match app.ui.frame.layout.fleet_granted.get() {
         0 => format!("{label} · /agents"),
         1 if n > 1 => format!("{label} · /agents to manage"),
-        _ => format!("{label} · shift+\u{2191}\u{2193} · enter"),
+        _ => format!("{label} · shift+\u{2191} to select"),
     })
 }
 

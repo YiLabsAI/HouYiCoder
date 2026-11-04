@@ -170,16 +170,22 @@ impl App {
         }
         // Only errors matching this request terminate the active run.
         self.sessions.current.run.start(req_id, Instant::now());
-        self.sessions.current.todos.set_replaying_history(false);
         // Preserve the submitted input in case interruption restores the turn.
         self.sessions.current.last_run_input = Some(input.clone());
         // A fresh submission answers the previous turn's interruption, so its
         // notice and restore line leave the log before this turn's lines land:
         // both are rows the frontend raised, and a rebuild renders them again
         // from the log they would still sit in.
+        // The marker cleanup below removes frames, which makes the todo
+        // accumulator see a shorter log than the cursor it holds. Read as a
+        // rewind, that rescans from the first frame and reinstalls a finished
+        // checklist as if it had just completed, so the rebuild runs in the
+        // replay phase and only the live run that follows leaves it.
+        self.sessions.current.todos.set_replaying_history(true);
         let transcript = &mut self.sessions.current.transcript;
         transcript.with_frames_mut(clear_interruption_markers);
         self.rebuild_transcript();
+        self.sessions.current.todos.set_replaying_history(false);
         self.push_transcript_line(TranscriptLine::User(input));
         self.ui.displayed_tokens.set(0);
         // start() just built fresh progress, so these preview resets touch

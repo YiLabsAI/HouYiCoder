@@ -82,16 +82,16 @@ pub(super) fn handle_focused(
     }
     let current = strip.selected().unwrap_or(0).min(len - 1);
     match k.code {
-        // At the top there is nothing above to select, and the input box is
-        // the surface above: Up is the way back, symmetric with Down being
-        // the way in.
-        KeyCode::Up if current == 0 => FleetKey::Leave,
-        KeyCode::Up => {
+        // The strip is drawn above the input box, so the way back is the one
+        // that points at it: Down from the last row. Up at the top stays put,
+        // because nothing sits above the strip to move into.
+        KeyCode::Down if current + 1 >= len => FleetKey::Leave,
+        KeyCode::Up if current > 0 => {
             strip.set_selected(Some(current - 1));
             FleetKey::Stay
         }
         KeyCode::Down => {
-            strip.set_selected(Some((current + 1).min(len - 1)));
+            strip.set_selected(Some(current + 1));
             FleetKey::Stay
         }
         KeyCode::Enter => FleetKey::Open(entries[current].agent_id.clone()),

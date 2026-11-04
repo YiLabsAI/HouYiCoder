@@ -661,6 +661,11 @@ fn does_not_wait_for_turn(payload: &FrontendRequest) -> bool {
             | FrontendRequest::PermissionMode
             | FrontendRequest::PermissionRules
             | FrontendRequest::PermissionAskBeforeGit { .. }
+            // Permission and configuration edits change what the next tool
+            // call is allowed to do; they do not touch the turn in flight, and
+            // a user reaching for them mid-turn is exactly the moment they are
+            // needed.
+            | FrontendRequest::RecapConfigSet { .. }
     )
 }
 

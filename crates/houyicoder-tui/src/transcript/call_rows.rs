@@ -93,7 +93,7 @@ pub(super) fn tool_result_line(
 /// starts from.
 fn background_row_body(task: BackgroundTaskId) -> String {
     format!(
-        "Running in background (task {} \u{00b7} /tasks to manage)",
+        "Running in background (task {} \u{00b7} \u{2193} or /tasks to manage)",
         task.label()
     )
 }

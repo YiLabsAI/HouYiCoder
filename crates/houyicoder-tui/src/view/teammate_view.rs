@@ -20,7 +20,7 @@ use crate::view::badge_color;
 use crate::view::working::fleet_strip::ending_style;
 
 /// Draw the teammate-view banner. No-op when no teammate is in view. The
-/// banner is two lines: the title "Viewing @type · shift+↑↓ return" with
+/// banner is two lines: the title "Esc to return · Ctrl+X to kill" with
 /// the agent name bold and tinted by its badge color, then a dim line
 /// carrying the delegation summary. A blank margin follows, reserved by
 /// the layout so the title sits clear of the transcript.

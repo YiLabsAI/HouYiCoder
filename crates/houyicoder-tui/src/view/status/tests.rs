@@ -86,11 +86,11 @@ fn test_agents_hint_ladder() {
     assert_eq!(agents_hint(&fleet_app(0, 0)), None);
     assert_eq!(
         agents_hint(&fleet_app(2, 2)).unwrap(),
-        "2 agents · shift+\u{2191}\u{2193} · enter"
+        "2 agents · shift+\u{2191} to select"
     );
     assert_eq!(
         agents_hint(&fleet_app(1, 1)).unwrap(),
-        "1 agent · shift+\u{2191}\u{2193} · enter",
+        "1 agent · shift+\u{2191} to select",
         "a single agent on one row is a real row, not a summary"
     );
     assert_eq!(

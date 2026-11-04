@@ -531,7 +531,7 @@ fn test_ctrl_x_cancels_child() {
             completed_at: None,
             started_at: None,
         });
-    app.cancel_viewed_child_turn();
+    app.kill_viewed_child();
     assert!(
         app.ui.teammate_view.is_some(),
         "cancelling keeps the view open so the interrupt is visible"
@@ -565,7 +565,7 @@ fn test_ctrl_x_idle_noop() {
             completed_at: None,
             started_at: None,
         });
-    app.cancel_viewed_child_turn();
+    app.kill_viewed_child();
     assert!(
         app.ui.teammate_view.is_some(),
         "an idle child leaves the view alone"

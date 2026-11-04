@@ -113,7 +113,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         && k.code == KeyCode::Char('x')
         && !pane_owns_esc(app.ui.navigation.pane)
     {
-        app.cancel_viewed_child_turn();
+        app.kill_viewed_child();
         return;
     }
     // A pane owns its keys wherever it is drawn, and Focus draws it full
