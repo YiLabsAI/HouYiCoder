@@ -658,9 +658,7 @@ impl Validator for PathBoundsValidator {
         if consent_allows(req, _ctx) {
             return None;
         }
-        let detail = format!(
-            "path outside the workspace; approval authorizes {authorized}; choosing always persists it"
-        );
+        let detail = format!("Path is outside the workspace. Approving grants {authorized}.");
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),

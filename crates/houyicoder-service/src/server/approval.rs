@@ -7,7 +7,6 @@ use houyicoder_api::sandbox::{
     BoundaryAccess, BoundaryGrant, Containment, FenceAxis, SandboxSession, SideEffect,
     boundary_grants_for,
 };
-use houyicoder_api::skill::SkillScriptRef;
 use houyicoder_api::tool::is_shell_tool;
 use houyicoder_context::{EventId, PermissionVerdict, SandboxError, SessionEvent, SessionLogEntry};
 use houyicoder_core::agent::{
@@ -21,7 +20,7 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
-use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
+use houyicoder_protocol::frontend::permission::AskReason;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope, DelegationSource};
 
 use crate::composition::ContainmentAdapter;
@@ -144,21 +143,25 @@ impl Server {
                 ));
             }
         };
-        self.settle_answer(
-            approval,
-            &decision,
-            reason.as_ref(),
-            &directory_grants,
-            is_entitlement,
-        )
-        .await?;
+        // The settled answer is the decision to resume with: an answer whose
+        // grant could not be installed comes back as a refusal of that one
+        // call, so the connection and the turn carry on.
+        let settled = self
+            .settle_answer(
+                approval,
+                &decision,
+                reason.as_ref(),
+                &directory_grants,
+                is_entitlement,
+            )
+            .await?;
         // Move this ask from remaining into decided so a mid-batch disconnect
         // re-emits only the tail and the runner resumes with the full decided
         // set.
         if let Some(host) = &self.host {
-            host.store().advance_pending(self.session, decision.clone());
+            host.store().advance_pending(self.session, settled.clone());
         }
-        Ok(parse_approval_decision(decision))
+        Ok(parse_approval_decision(settled))
     }
 
     /// Install what the answer keeps, then record the durable verdict at the
@@ -175,7 +178,7 @@ impl Server {
         reason: Option<&AskReason>,
         grants: &[BoundaryGrant],
         is_entitlement: bool,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<ApprovalDecision, ProtocolError> {
         let grant = self.consent_plan(&approval.tool_name, &approval.input, reason, grants);
         let chosen = if !decision.approved {
             ApprovalScope::Once
@@ -198,13 +201,22 @@ impl Server {
                 }
                 Err(error) => {
                     // Nothing was installed, so the record must not claim a
-                    // grant the session does not hold. The install failure
-                    // also aborts the run before the frozen call executes, so
-                    // the approved Once record below is the whole trail: no
-                    // ToolResult follows it.
-                    self.record_verdict(approval, decision, reason, ApprovalScope::Once)
+                    // grant the session does not hold. The answer becomes a
+                    // refusal of this one call rather than a broken
+                    // connection: the user approved a path the fence could not
+                    // take, and the model can retry somewhere it can write.
+                    // Ending the session here is how one uninstallable
+                    // directory used to close the whole client.
+                    let refused = ApprovalDecision {
+                        call_id: decision.call_id.clone(),
+                        approved: false,
+                        updated_input: None,
+                        scope: ApprovalScope::Once,
+                    };
+                    self.record_verdict(approval, &refused, reason, ApprovalScope::Once)
                         .await;
-                    return Err(error);
+                    self.notify_user(format!("The call was not approved. {}", error.message));
+                    return Ok(refused);
                 }
             }
         } else {
@@ -212,7 +224,7 @@ impl Server {
         };
         self.record_verdict(approval, decision, reason, committed)
             .await;
-        Ok(())
+        Ok(decision.clone())
     }
 
     /// Append the durable record that a card was shown. An ask the connection
@@ -697,62 +709,10 @@ fn grant_already_held(held: &[String], directory: &Path) -> bool {
     })
 }
 
-/// Add the effective directory capability to the approval reason, so a call
-/// refused for another cause still says which outside directory a yes
-/// authorizes. A path-bounds reason already names every grant, so it is left
-/// as it is; otherwise the first directory is named and the rest counted.
-pub(crate) fn disclose_directory_grants(reason: &mut Option<AskReason>, grants: &[BoundaryGrant]) {
-    if grants.is_empty()
-        || reason
-            .as_ref()
-            .is_some_and(|current| current.validator == "path-bounds")
-    {
-        return;
-    }
-    let current = reason.get_or_insert_with(|| AskReason {
-        source: AskSource::Detection,
-        validator: "directory-capability".to_string(),
-        detail: "external path requires a sandbox directory capability".into(),
-        containment_note: None,
-    });
-    let first = &grants[0];
-    let capability = match first.access {
-        BoundaryAccess::ReadOnly => "read-only directory",
-        BoundaryAccess::ReadWrite => "parent directory with read-write access",
-    };
-    let remaining = if grants.len() > 1 {
-        format!(" and {} additional directories", grants.len() - 1)
-    } else {
-        String::new()
-    };
-    current.detail.push_str(&format!(
-        "; approval also authorizes {capability} {}{remaining}; the remember option states how long it lasts",
-        first.directory.display()
-    ));
-}
+mod reason;
 
-/// Format the approval-card detail for a Bash command that runs one or more
-/// skill-directory scripts: the skill name + relative script path. No first
-/// line is shown — it is attacker-controlled text the card would frame as an
-/// authoritative summary. Multiple scripts name the first and count the rest.
-fn format_skill_script_detail(scripts: &[SkillScriptRef]) -> String {
-    match scripts.len() {
-        0 => String::new(),
-        1 => {
-            let s = &scripts[0];
-            format!("runs skill script {}/{}", s.skill_name, s.script_rel_path)
-        }
-        _ => {
-            let s = &scripts[0];
-            format!(
-                "runs {} skill scripts, first is {}/{}",
-                scripts.len(),
-                s.skill_name,
-                s.script_rel_path
-            )
-        }
-    }
-}
+pub(crate) use reason::disclose_directory_grants;
+use reason::format_skill_script_detail;
 
 #[cfg(test)]
 mod tests;

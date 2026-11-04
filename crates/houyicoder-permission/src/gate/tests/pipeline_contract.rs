@@ -240,8 +240,8 @@ fn test_outside_edit_asks_path() {
     assert!(
         matches!(decision, Decision::Ask(ref reason)
             if reason.validator == "path-bounds"
-                && reason.detail.contains("authorizes parent directory")
-                && reason.detail.contains("always persists")),
+                && reason.detail.contains("grants parent directory")
+                && reason.detail.contains("Approving grants")),
         "outside edit must disclose the directory grant: {decision:?}"
     );
     remove_dir_all(base).ok();
@@ -291,7 +291,7 @@ fn test_outside_patch_asks_path() {
     assert!(
         matches!(decision, Decision::Ask(ref reason)
             if reason.validator == "path-bounds"
-                && reason.detail.contains("authorizes parent directory")
+                && reason.detail.contains("grants parent directory")
                 && reason.detail.contains(&parent.to_string_lossy().to_string())),
         "outside patch must disclose the parent directory grant: {decision:?}"
     );
@@ -349,7 +349,7 @@ fn test_outside_asks_inside_defers() {
     assert!(
         matches!(decision, Decision::Ask(ref reason)
             if reason.detail.contains("read-only directory")
-                && reason.detail.contains("always persists")),
+                && reason.detail.contains("Approving grants")),
         "out-of-workspace grep must disclose its read-only grant: {decision:?}"
     );
 
@@ -552,7 +552,7 @@ fn test_outside_new_file_asks() {
     assert!(
         matches!(decision, Decision::Ask(ref reason)
             if reason.validator == "path-bounds"
-                && reason.detail.contains("authorizes parent directory")),
+                && reason.detail.contains("grants parent directory")),
         "write to a not-yet-existing outside file must ask: {decision:?}"
     );
 

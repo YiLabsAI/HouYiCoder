@@ -27,9 +27,12 @@ use houyicoder_protocol::envelope::{
 };
 use houyicoder_protocol::framing;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::permission::AskSource;
 use houyicoder_protocol::frontend::run::{self, ApprovalDecision, ApprovalScope};
 use houyicoder_protocol::frontend::trust::TrustAccept;
 use houyicoder_provider::FakeProvider;
+use std::path::PathBuf;
+use std::slice;
 // Only the macOS-gated consent tests build a real platform session; the
 // cross-platform tests drive the gate through a stub fence or read it
 // directly, so on other platforms this import would be unused.
@@ -1559,3 +1562,123 @@ fn test_card_fence_reads_axes() {
 /// submodule is platform-gated rather than each test inside it.
 #[cfg(target_os = "macos")]
 mod consent_chain;
+
+/// A grant the fence cannot install answers the call, not the connection.
+///
+/// The reported failure was a model writing to a scratch directory that no
+/// longer existed: the user pressed yes, the install failed, and the error
+/// travelled all the way out of the serve loop and closed the client. The
+/// answer is now a refusal of that one call, so the turn continues and the
+/// model can retry somewhere it can write.
+#[tokio::test]
+async fn test_uninstallable_grant_keeps_session() {
+    let root = env::temp_dir().join(format!("gone-grant-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir root");
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let fence = Arc::new(RevisionFence {
+        root: Arc::from(repo.as_path()),
+        granted: Mutex::new(Vec::new()),
+        revision: AtomicU64::new(1),
+        advance_on_grant: true,
+    });
+    let notices = NoticeLog::new();
+    let server = server_over_fence_noted(fence, Arc::new(DefaultModeGate::new()), Some(&notices));
+
+    // A directory that does not exist, the shape a session scratch directory
+    // left behind by a finished process has.
+    let gone = root.join("hy-tmp-gone");
+    let input = json!({"path": gone.join("note.txt").to_string_lossy()});
+    let approval = ApprovalRequest::new("call-1".into(), "write".into(), input, None);
+    let decision = ApprovalDecision {
+        call_id: "call-1".into(),
+        approved: true,
+        updated_input: None,
+        scope: ApprovalScope::Workspace,
+    };
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds".to_string(),
+        detail: "Path is outside the workspace.".into(),
+        containment_note: None,
+    };
+    let grants = server.approval_directory_grants("write", &approval.input);
+
+    let settled = server
+        .settle_answer(&approval, &decision, Some(&reason), &grants, false)
+        .await
+        .expect("a failed install is answered, not fatal");
+    assert!(
+        !settled.approved,
+        "the grant did not install, so the call is refused"
+    );
+
+    let told = notices.messages();
+    assert_eq!(told.len(), 1, "the user is told once: {told:?}");
+    assert!(
+        told[0].contains("not approved"),
+        "the notice says the call did not run: {}",
+        told[0]
+    );
+    drop(fs::remove_dir_all(&root));
+}
+
+/// The card states what a yes installs, in sentences rather than in a run of
+/// clauses joined by semicolons. Both access kinds are named, and the count of
+/// the rest is kept so the row stays one line.
+#[test]
+fn test_grant_sentence_prose() {
+    let read = BoundaryGrant {
+        directory: PathBuf::from("/data/read"),
+        access: BoundaryAccess::ReadOnly,
+    };
+    let write = BoundaryGrant {
+        directory: PathBuf::from("/data/write"),
+        access: BoundaryAccess::ReadWrite,
+    };
+    let mut reason = Some(AskReason {
+        source: AskSource::Detection,
+        validator: "protected_path".to_string(),
+        detail: "protected path".into(),
+        containment_note: None,
+    });
+    disclose_directory_grants(&mut reason, slice::from_ref(&read));
+    let detail = reason.as_ref().expect("a reason").detail.clone();
+    assert!(
+        detail.contains("read-only directory /data/read"),
+        "the grant is named: {detail}"
+    );
+    assert!(
+        !detail.contains(';'),
+        "the sentence carries no clause separator: {detail}"
+    );
+
+    let mut two = Some(AskReason {
+        source: AskSource::Detection,
+        validator: "protected_path".to_string(),
+        detail: "protected path".into(),
+        containment_note: None,
+    });
+    disclose_directory_grants(&mut two, &[write, read.clone()]);
+    let detail = two.as_ref().expect("a reason").detail.clone();
+    assert!(
+        detail.contains("parent directory with read-write access /data/write")
+            && detail.contains("1 additional directories"),
+        "the first is named and the rest counted: {detail}"
+    );
+
+    // A path-bounds reason already names every grant, so it is left alone.
+    let mut named = Some(AskReason {
+        source: AskSource::Detection,
+        validator: "path-bounds".to_string(),
+        detail: "Path is outside the workspace.".into(),
+        containment_note: None,
+    });
+    disclose_directory_grants(&mut named, &[read]);
+    assert_eq!(
+        named.expect("a reason").detail,
+        "Path is outside the workspace.",
+        "a reason that already names its grants is not extended"
+    );
+}

@@ -212,7 +212,10 @@ async fn reemit_and_settle_ask(
     // one place derives the plan, caps the lifetime, records the verdict, and
     // installs the grant, so a reconnecting client cannot end up with a
     // different grant than a connected one.
-    server
+    // A re-emitted card settles through the same router as the first card, so
+    // an answer whose grant could not be installed comes back as a refusal of
+    // that one call instead of dropping the connection.
+    let settled = server
         .settle_answer(
             &engine_approval,
             &decision,
@@ -221,7 +224,7 @@ async fn reemit_and_settle_ask(
             ask_perm.tool == ENTITLEMENT_TOOL,
         )
         .await?;
-    Ok((decision, cancelled))
+    Ok((settled, cancelled))
 }
 
 /// Re-emit a parked PendingTurn a reattaching connection finds in the host

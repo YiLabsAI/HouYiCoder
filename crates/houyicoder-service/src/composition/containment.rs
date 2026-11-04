@@ -146,20 +146,47 @@ impl Containment for ContainmentAdapter {
         Some(self.0.workspace_root())
     }
     fn boundary_dirs(&self) -> Vec<PathBuf> {
-        self.0
+        let mut dirs: Vec<PathBuf> = self
+            .0
             .working_dirs()
             .into_iter()
             .map(PathBuf::from)
-            .collect()
+            .collect();
+        dirs.extend(fence_temp_dirs(self.0.as_ref()));
+        dirs
     }
 
     fn boundary_write_dirs(&self) -> Vec<PathBuf> {
-        self.0
+        let mut dirs: Vec<PathBuf> = self
+            .0
             .writing_dirs()
             .into_iter()
             .map(PathBuf::from)
-            .collect()
+            .collect();
+        dirs.extend(fence_temp_dirs(self.0.as_ref()));
+        dirs
     }
+}
+
+/// The directories the fence already lets a tool touch besides the workspace.
+///
+/// The session scratch directory and the shared temp roots are writable by the
+/// profile, so a tool that reads or writes there is inside the fence and the
+/// gate has nothing to ask about. Leaving them out made a write to a temporary
+/// file look like an escape from the workspace, which is how a model writing
+/// scratch output ended up facing a directory-capability card.
+fn fence_temp_dirs(session: &dyn SandboxSession) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(scratch) = session.scratch_dir() {
+        dirs.push(scratch);
+    }
+    for shared in ["/tmp", "/private/tmp"] {
+        let path = PathBuf::from(shared);
+        if path.is_dir() && !dirs.contains(&path) {
+            dirs.push(path);
+        }
+    }
+    dirs
 }
 
 /// Restore persistent directory grants from the rule store into the kernel
