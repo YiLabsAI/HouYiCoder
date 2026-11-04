@@ -2,6 +2,7 @@
 
 use super::*;
 use houyicoder_context::SessionId;
+use houyicoder_protocol::tool::{tool_result_failed, tool_result_not_run};
 use std::collections::HashSet;
 
 fn make_tool() -> DelegationTool {
@@ -318,6 +319,25 @@ fn test_toolctx_threads_spawn() {
     assert_eq!(ctx.agent_identity.as_ref().unwrap().depth, 0);
     assert!(ctx.spawn_handle.is_some());
     let _sid = SessionId::new();
+}
+
+/// The answer a reconciliation pass writes for an orphaned delegation is the
+/// result of a call that ran a child, so the parent's failure fold counts it as
+/// a completed call; the ending reaches the model through the status word, not
+/// through a not-run marker.
+#[test]
+fn test_orphaned_result_completed() {
+    let out = orphaned_result("child-1", "interrupted", "half of the work");
+    assert_eq!(out["agentId"], "child-1");
+    assert_eq!(out["status"], "interrupted");
+    assert!(
+        !tool_result_not_run(&out),
+        "the call ran a child, so it is not a call that never ran"
+    );
+    assert!(
+        !tool_result_failed(&out, "agent", &Value::Null),
+        "the ending is the status word, not a failure of the call"
+    );
 }
 
 /// A boundary the store could not write reaches the model as that, not as

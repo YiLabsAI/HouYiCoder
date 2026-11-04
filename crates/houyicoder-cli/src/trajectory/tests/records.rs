@@ -102,6 +102,8 @@ fn test_agent_merges_spawn_return() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -305,6 +307,8 @@ fn test_delegation_hides_tool_call() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -505,6 +509,8 @@ fn test_delegation_legacy_hides_tool() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -561,6 +567,8 @@ fn test_agent_return_shown() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -618,6 +626,8 @@ fn test_agent_unknown_status() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -680,6 +690,8 @@ fn test_subagent_return_folds_calls() {
                 tool_calls: 91,
                 tool_failures: 2,
                 duration_ms: 4200,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -703,6 +715,68 @@ fn test_subagent_return_folds_calls() {
         agent.duration_ms, 4200,
         "child duration used when timestamps match"
     );
+}
+
+/// A return whose writer could not read the child's log carries zeroes nobody
+/// measured, so the pane leaves them out: the turn reports what ran, and the
+/// session header, which applies the same gate, cannot disagree with it.
+#[test]
+fn test_unmeasured_child_not_counted() {
+    let events = vec![
+        ev(100, SessionEvent::UserInput { text: "go".into() }),
+        ev(
+            105,
+            SessionEvent::TurnStarted {
+                turn: 1,
+                call_in_turn: 0,
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentSpawn {
+                child_session_id: "child-92".into(),
+                subagent_type: "verify".into(),
+                prompt_summary: "audit".into(),
+                isolation: "worktree".into(),
+                policy: "read-only".into(),
+                trigger_source: "model:c1".into(),
+            },
+        ),
+        ev(
+            110,
+            SessionEvent::SubagentReturn {
+                child_session_id: "child-92".into(),
+                status: "interrupted".into(),
+                summary: "the host stopped".into(),
+                result_ref: "child-92".into(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                input_reported: false,
+                cache_read_reported: false,
+                cache_write_reported: false,
+                tool_calls: 91,
+                tool_failures: 2,
+                duration_ms: 4200,
+                ledger_measured: false,
+                orphaned: true,
+            },
+        ),
+    ];
+    let view = build_view(&events, "test", 0);
+    let turn = match &view.rows[0] {
+        TrajectoryRow::Turn(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(turn.tool_count, 0, "an unmeasured ledger is not a zero");
+    assert_eq!(turn.tool_fail, 0);
+    assert_eq!(
+        view.tool_calls, 0,
+        "the session header applies the same gate as the turn row"
+    );
+    assert_eq!(view.failures, 0);
 }
 
 /// Model calls are numbered inside their turn, so a multi-call turn reads as a

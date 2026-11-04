@@ -88,6 +88,8 @@ async fn test_sidechain_isolates_sessions() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ))
         .await

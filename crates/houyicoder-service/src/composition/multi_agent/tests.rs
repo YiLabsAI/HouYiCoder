@@ -17,7 +17,7 @@ use houyicoder_core::agent::multi_agent::bus_types::{
 use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
 use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::runner_config::RunnerConfig;
-use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
+use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::llm::{LlmEvent, ModelCapabilities, OutputItem};

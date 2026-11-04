@@ -22,6 +22,7 @@ pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::agent::multi_agent::spawn::completion_notice_pending;
 use crate::agent::turn::result::run_completion_status;
 use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
 use houyicoder_context::{EventId, NotificationTopic, SessionEvent, SessionId, SessionLogEntry};
@@ -99,6 +100,11 @@ impl Runner {
     /// user message. The topic decides how the assembly frames it. turn +
     /// order are best-effort (the event-log order is authoritative, as with
     /// SubagentReturn).
+    ///
+    /// A child completion is appended under the log lock and only when the log
+    /// still owes the model that notice: the reconciliation pass can announce
+    /// the same ending while the completion sits in the in-memory queue, and
+    /// the model reads one report per ending.
     pub(crate) async fn append_notification(
         &self,
         session: SessionId,
@@ -107,19 +113,29 @@ impl Runner {
         text: String,
         capture: Option<Value>,
     ) -> Result<(), RunError> {
-        self.store
-            .append(new_event(
-                session,
-                SessionEvent::NotificationInjected {
-                    child_session_id: source_id,
-                    turn: 0,
-                    order: 0,
-                    topic: topic.as_word().to_string(),
-                    summary: text,
-                    capture,
-                },
-            ))
-            .await?;
+        let event = new_event(
+            session,
+            SessionEvent::NotificationInjected {
+                child_session_id: source_id.clone(),
+                turn: 0,
+                order: 0,
+                topic: topic.as_word().to_string(),
+                summary: text,
+                capture,
+            },
+        );
+        match topic {
+            NotificationTopic::ChildCompletion => {
+                let word = topic.as_word().to_string();
+                let owed = move |log: &[SessionLogEntry]| {
+                    completion_notice_pending(log, &source_id, &word)
+                };
+                self.store.append_if(event, &owed).await?;
+            }
+            NotificationTopic::Task => {
+                self.store.append(event).await?;
+            }
+        }
         Ok(())
     }
 

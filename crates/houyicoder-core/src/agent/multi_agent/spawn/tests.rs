@@ -232,6 +232,33 @@ async fn test_spawn_records_system_trigger() {
     );
 }
 
+/// The durable trigger form is written by a spawn and read back by the restart
+/// scan, which recovers the model's call id through it. A writer change the
+/// reader does not follow drops the delegation answer with no compile error,
+/// so both directions are checked together.
+#[test]
+fn test_trigger_durable_round_trip() {
+    let model = TriggerSource::ModelTool {
+        tool_call_id: "call_7".into(),
+    };
+    assert_eq!(
+        TriggerSource::from_durable(&model.as_durable()),
+        Some(model.clone())
+    );
+    let system = TriggerSource::System {
+        hook: "review_gate".into(),
+    };
+    assert_eq!(
+        TriggerSource::from_durable(&system.as_durable()),
+        Some(system)
+    );
+    assert_eq!(
+        TriggerSource::from_durable("hook:review_gate"),
+        None,
+        "a form this codebase never wrote is unknown, not a model call"
+    );
+}
+
 /// The recursion guard rejects a spawn at the depth cap before any side
 /// effect: no child session is created, no boundary is written to the
 /// parent log. A reject that left a dangling boundary would break resume

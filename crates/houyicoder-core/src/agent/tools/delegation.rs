@@ -365,5 +365,21 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
     result
 }
 
+/// The model-facing result for a delegation whose boundary a reconciliation
+/// pass closed. The envelope is the one a foreground return builds, so every
+/// reader sees one shape; usage is left out because this envelope carries no
+/// figures, and the return the pass writes in the parent log records what the
+/// child's own log measured.
+///
+/// The call did run a child, so the result carries no not-run marker and the
+/// failure fold counts it as a completed call; the status word carries the
+/// ending instead.
+pub(crate) fn orphaned_result(child: &str, status: &str, summary: &str) -> Value {
+    build_tool_result(
+        SpawnOutcome::foreground_without_usage(child, status, summary),
+        None,
+    )
+}
+
 #[cfg(test)]
 mod tests;

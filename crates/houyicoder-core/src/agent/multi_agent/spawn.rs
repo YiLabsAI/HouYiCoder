@@ -26,9 +26,15 @@ use super::registry::IsolationMode;
 use super::status_publisher::ChildStatusPublisher;
 use houyicoder_api::spawn::AgentIdentity;
 use houyicoder_async::bus::MessageBus;
-use houyicoder_protocol::llm::Usage;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::warn;
+
+mod boundary;
+
+pub use boundary::{
+    BoundaryOutcome, ChildLedger, OrphanedChild, RecordOwed, completion_notice_pending,
+    logged_usage, orphaned_summary, record_orphaned_child, record_subagent_return,
+};
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.
 /// A child cannot delegate further, so the topology is exactly two levels:
@@ -43,7 +49,7 @@ const MAX_SPAWN_DEPTH: u32 = 1;
 /// capability baseline is the parent's session capability at the trigger
 /// moment either way, so a system trigger cannot bypass the capability∩
 /// rule.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerSource {
     /// The model delegated via the agent tool (the existing path).
     ModelTool { tool_call_id: String },
@@ -60,6 +66,21 @@ impl TriggerSource {
             Self::ModelTool { tool_call_id } => format!("model:{tool_call_id}"),
             Self::System { hook } => format!("system:{hook}"),
         }
+    }
+
+    /// Recover the trigger from the durable form a spawn recorded, so a reader
+    /// of the log sees the same trigger the writer wrote. A form this codebase
+    /// never wrote is None, which a reader treats as an unknown trigger rather
+    /// than silently as a model call.
+    pub fn from_durable(durable: &str) -> Option<Self> {
+        if let Some(tool_call_id) = durable.strip_prefix("model:") {
+            return Some(Self::ModelTool {
+                tool_call_id: tool_call_id.to_string(),
+            });
+        }
+        durable.strip_prefix("system:").map(|hook| Self::System {
+            hook: hook.to_string(),
+        })
     }
 }
 
@@ -496,56 +517,6 @@ fn validate_resume_target(req: &SpawnRequest, child_sid: SessionId) -> Result<()
     Err(SpawnError::InvalidResumeTarget {
         reason: "the session is not a delegation of this parent".to_string(),
     })
-}
-
-/// Append the SubagentReturn boundary to the parent log: the durable marker
-/// that pairs with SubagentSpawn so replay reconstructs the delegation
-/// (child reached a terminal state, with its summary + usage). The runtime
-/// writes this after driving a foreground child to terminal.
-pub async fn record_subagent_return(
-    store: &dyn SessionLog,
-    parent_sid: SessionId,
-    child_session_id: &str,
-    status: &str,
-    summary: &str,
-    result_ref: &str,
-    usage: &Usage,
-) -> Result<(), SpawnError> {
-    let (tool_calls, tool_failures, duration_ms) = SessionId::from_display_string(child_session_id)
-        .map(|sid| {
-            let s = store.trajectory_head(sid).summary;
-            (
-                s.usage.tool_calls as u32,
-                s.usage.failures as u32,
-                s.duration_ms,
-            )
-        })
-        .unwrap_or((0, 0, 0));
-    let event = new_event(
-        parent_sid,
-        SessionEvent::SubagentReturn {
-            child_session_id: child_session_id.to_string(),
-            status: status.to_string(),
-            summary: summary.to_string(),
-            result_ref: result_ref.to_string(),
-            input_tokens: usage.input_tokens as u64,
-            output_tokens: usage.output_tokens as u64,
-            cache_read_input_tokens: usage.cache_read_input_tokens as u64,
-            cache_write_input_tokens: usage.cache_write_input_tokens as u64,
-            reasoning_tokens: usage.reasoning_tokens as u64,
-            input_reported: usage.provenance.input_reported,
-            cache_read_reported: usage.provenance.cache_read_reported,
-            cache_write_reported: usage.provenance.cache_write_reported,
-            tool_calls,
-            tool_failures,
-            duration_ms,
-        },
-    );
-    store
-        .append(event)
-        .await
-        .map(|_| ())
-        .map_err(|_| SpawnError::BoundaryWriteFailed)
 }
 
 #[cfg(test)]

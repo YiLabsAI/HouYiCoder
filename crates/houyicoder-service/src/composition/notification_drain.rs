@@ -29,7 +29,7 @@ use tokio::task::JoinHandle;
 /// notification needs. The line below carries the whole one, because continuing
 /// the child means passing its id back exactly, and a shortened id is not
 /// something the model can reconstruct.
-fn notification_text(
+pub(crate) fn notification_text(
     subagent_type: &str,
     child_id: &str,
     status: &CompletionStatus,

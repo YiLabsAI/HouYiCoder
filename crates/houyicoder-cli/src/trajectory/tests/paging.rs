@@ -334,6 +334,8 @@ fn test_subagent_usage_summed() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         )
     };
@@ -432,6 +434,8 @@ fn test_subagent_usage_parent_unknown() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -497,6 +501,8 @@ fn test_subagent_usage_unmeasured_unknown() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -553,6 +559,8 @@ fn test_subagent_usage_unknown() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -597,6 +605,8 @@ fn test_delegated_cache_unknown() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -743,6 +753,8 @@ fn test_disk_delegated_cache() {
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     }))
     .expect("append");

@@ -161,16 +161,19 @@ impl Runner {
         let token = CancellationToken::new();
         *self.cancel.lock().expect("cancel mutex") = Some(token.clone());
         let pending_facts = fact::extract_save_facts(&user_input);
+        // Reconcile delegation boundaries a host restart left open before the
+        // turn reads the parent log, so the model does not see a spawn with no
+        // return and the fleet list holds no dangling child. It runs ahead of
+        // the generic orphan-call pass below, which answers every unanswered
+        // call; the scan answers its own delegation call with the result that
+        // names the child, and the pass then finds it settled.
+        if let Some(handle) = self.spawn_handle() {
+            handle.reconcile_orphans(session).await;
+        }
         // Reconcile orphan ToolCall before appending user input: the
         // interrupted result must land adjacent to its tool_use or the
         // provider rejects with a role-order 400.
         self.reconcile_tool_results(session).await?;
-        // Reconcile delegation boundaries a host restart left open before the
-        // turn reads the parent log, so the model does not see a spawn with no
-        // return and the fleet list holds no dangling child.
-        if let Some(handle) = self.spawn_handle() {
-            handle.reconcile_orphans(session).await;
-        }
         // Resolve @skill: before appending so the raw text is the UserInput
         // and the body lands as a durable SkillBody (survives compaction).
         let skill_meta = self.resolve_skill_slash(session, &user_input).await;
@@ -285,6 +288,13 @@ impl Runner {
         let Some(_drive) = self.begin_drive() else {
             return Err(RunError::Busy);
         };
+        // A resume is also an entry: after a restart the first thing a session
+        // may do is continue a turn parked on an approval, and the model must
+        // not read a spawn with no return there either. The scan runs once per
+        // runtime, so the later new-turn entry does no work.
+        if let Some(handle) = self.spawn_handle() {
+            handle.reconcile_orphans(session).await;
+        }
         let aborted = match self.aborted_short_circuit(session).await {
             Ok(aborted) => aborted,
             Err(e) => {

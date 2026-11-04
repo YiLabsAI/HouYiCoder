@@ -40,6 +40,8 @@ async fn test_return_usage_covers_subtree() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         })
         .await

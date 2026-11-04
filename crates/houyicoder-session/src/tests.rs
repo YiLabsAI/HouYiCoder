@@ -33,6 +33,8 @@ fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
         tool_calls: 0,
         tool_failures: 0,
         duration_ms: 0,
+        ledger_measured: true,
+        orphaned: false,
     }
 }
 

@@ -169,6 +169,8 @@ pub fn seed_session_with_context_cost(
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     ];
     write_session(root, sid_str, model, &cwd, &events);

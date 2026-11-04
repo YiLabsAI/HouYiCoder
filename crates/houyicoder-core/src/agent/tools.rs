@@ -44,6 +44,7 @@ pub use ask_user_question::AskUserQuestionTool;
 pub use bash_tool::BashTool;
 pub use conversation_search::ConversationSearchTool;
 pub use delegation::DelegationTool;
+pub(crate) use delegation::orphaned_result;
 pub use edit::EditTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;

@@ -5,6 +5,7 @@ use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::multi_agent::bus_types::{ChildDescriptor, spawned_topic};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use std::time::Duration;

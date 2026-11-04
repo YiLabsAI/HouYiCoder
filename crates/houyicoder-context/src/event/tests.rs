@@ -78,6 +78,8 @@ fn test_subagent_return_round_trip() {
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -112,25 +114,27 @@ fn test_subagent_return_old_log() {
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
     // Strip the three provenance keys so the JSON looks like a pre-provenance
     // log line.
     let value = serde_json::from_str::<Value>(&json).expect("parse");
-    let kind = value
+    let mut body = value
         .get("event")
         .and_then(Value::as_object)
+        .cloned()
         .expect("event object");
-    let mut kind_obj = kind.clone();
-    kind_obj.remove("input_reported");
-    kind_obj.remove("cache_read_reported");
-    kind_obj.remove("cache_write_reported");
+    body.remove("input_reported");
+    body.remove("cache_read_reported");
+    body.remove("cache_write_reported");
     let mut wrapped = Map::new();
     if let Value::Object(top) = value {
         for (k, v) in top {
             if k == "event" {
-                wrapped.insert("event".into(), Value::Object(kind_obj.clone()));
+                wrapped.insert("event".into(), Value::Object(body.clone()));
             } else {
                 wrapped.insert(k, v);
             }
@@ -151,6 +155,72 @@ fn test_subagent_return_old_log() {
                 !input_reported && !cache_read_reported && !cache_write_reported,
                 "missing provenance flags default to unreported"
             );
+        }
+        other => panic!("expected SubagentReturn, got {other:?}"),
+    }
+}
+
+/// A return written before the ledger flags existed carried figures its writer
+/// measured, so an absent flag must read as measured: defaulting it to unmeasured
+/// would strip every old session's child tool counts from its header.
+#[test]
+fn test_return_old_log_measured() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        SessionEvent::SubagentReturn {
+            child_session_id: "child-4".into(),
+            status: "completed".into(),
+            summary: "done".into(),
+            result_ref: "child-4".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: false,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            tool_calls: 7,
+            tool_failures: 2,
+            duration_ms: 500,
+            ledger_measured: true,
+            orphaned: false,
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let value = serde_json::from_str::<Value>(&json).expect("parse");
+    let mut wrapped = Map::new();
+    if let Value::Object(top) = value {
+        for (k, v) in top {
+            if k == "event" {
+                let mut body = v.as_object().cloned().expect("event object");
+                body.remove("ledger_measured");
+                body.remove("orphaned");
+                wrapped.insert("event".into(), Value::Object(body));
+            } else {
+                wrapped.insert(k, v);
+            }
+        }
+    }
+    let old = serde_json::to_string(&Value::Object(wrapped)).expect("re-serialize");
+    let back: SessionLogEntry = serde_json::from_str(&old).expect("old log deserializes");
+    match back.event {
+        SessionEvent::SubagentReturn {
+            tool_calls,
+            tool_failures,
+            ledger_measured,
+            orphaned,
+            ..
+        } => {
+            assert_eq!(tool_calls, 7, "the measured figures survive");
+            assert_eq!(tool_failures, 2);
+            assert!(
+                ledger_measured,
+                "an absent measured flag reads as measured, not unknown"
+            );
+            assert!(!orphaned, "only a restart scan writes an orphan return");
         }
         other => panic!("expected SubagentReturn, got {other:?}"),
     }

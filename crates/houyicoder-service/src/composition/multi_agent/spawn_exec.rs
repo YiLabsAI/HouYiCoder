@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use futures::FutureExt;
 use houyicoder_api::agent_event::{EventHandler, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_api::hook_fire::HookFire;
+use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::{SessionId, SessionLogEntry};
@@ -189,20 +190,16 @@ pub(super) async fn finalize_child(
         super::last_assistant_text(&child_tail),
     )
     .await;
-    if super::record_subagent_return(
+    write_return_boundary(
+        runtime,
         store.as_ref(),
         parent_sid,
         &child_str,
         &status,
         &summary,
-        &child_str,
         &usage,
     )
-    .await
-    .is_err()
-    {
-        tracing::warn!("subagent return boundary write failed for child {child_str}");
-    }
+    .await;
     if let Some(payload) = payload {
         // The child is finalized; the panic continues outward from here, so a
         // caller awaiting the task still sees it as the panic it is rather
@@ -210,6 +207,45 @@ pub(super) async fn finalize_child(
         resume_unwind(payload);
     }
     (status, summary, usage)
+}
+
+/// Write the return boundary for a finished child, under the writer claim.
+///
+/// The restart scan can reach the same child when its run outlived the host
+/// that started it. Whichever writer claims the boundary writes the return;
+/// the other reports nothing about work it does not own. The claim is held
+/// until this function returns, so a failed write releases it for the next
+/// writer.
+///
+/// A failed write reopens the reconciliation pass: the spawn stays open, and a
+/// pass that already recorded its epoch would never retry it in this runtime.
+/// A refused claim reopens it too: the pass holding the claim may have just
+/// found this child running and backed out, and neither writer would otherwise
+/// write the boundary before the next process start.
+async fn write_return_boundary(
+    runtime: &MultiAgentRuntime,
+    store: &dyn SessionLog,
+    parent_sid: SessionId,
+    child: &str,
+    status: &str,
+    summary: &str,
+    usage: &Usage,
+) {
+    let Some(_claim) = runtime.boundary_claims.claim(child) else {
+        runtime.orphan_scan.reopen();
+        tracing::warn!(
+            child = %child,
+            "subagent return boundary is claimed by the reconciliation pass"
+        );
+        return;
+    };
+    if super::record_subagent_return(store, parent_sid, child, status, summary, child, usage)
+        .await
+        .is_err()
+    {
+        runtime.orphan_scan.reopen();
+        tracing::warn!("subagent return boundary write failed for child {child}");
+    }
 }
 
 /// The usage a finished child reports to its parent: its own provider calls

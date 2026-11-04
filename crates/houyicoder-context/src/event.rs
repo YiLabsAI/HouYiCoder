@@ -73,38 +73,15 @@ pub struct RecapUsage {
     pub duration_ms: Option<u64>,
 }
 
-/// Why a notification was injected into a session's context.
-///
-/// The durable record carries the word; code branches on this enum, so a new
-/// reason is declared here rather than spelled again at every reader. A word
-/// written by a build that knows a reason this one does not reads as None, and
-/// the reader keeps the framing it already applies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NotificationTopic {
-    /// A background subagent reported the result of a delegated task.
-    ChildCompletion,
-    /// A command that outlived its tool call reached a terminal state.
-    Task,
-}
+/// The reasons a notification was injected into a session's context.
+mod notification;
+pub use notification::NotificationTopic;
 
-impl NotificationTopic {
-    /// The word the durable record carries.
-    pub fn as_word(self) -> &'static str {
-        match self {
-            Self::ChildCompletion => "completion",
-            Self::Task => "task",
-        }
-    }
-
-    /// The reason a recorded word names, or None for a word this build does
-    /// not know.
-    pub fn from_word(word: &str) -> Option<Self> {
-        match word {
-            "completion" => Some(Self::ChildCompletion),
-            "task" => Some(Self::Task),
-            _ => None,
-        }
-    }
+/// Default for a measured ledger: a return written before the flag existed
+/// carried the figures its writer measured, so an absent flag reads as
+/// measured rather than as unknown.
+fn measured_by_default() -> bool {
+    true
 }
 
 /// The payload of a SessionLogEntry. Tagged for JSONL. ToolResult carries call_id
@@ -569,7 +546,8 @@ pub enum SessionEvent {
         /// What initiated the spawn — "model:<call_id>" for a model
         /// delegation via the agent tool, "system:<hook>" for a
         /// service/hook/gate-driven spawn. Empty on events written
-        /// before the field existed; a replay treats empty as model.
+        /// before the field existed; a reader then attributes the spawn to the
+        /// most recent delegation call it has not claimed.
         #[serde(default)]
         trigger_source: String,
     },
@@ -622,6 +600,21 @@ pub enum SessionEvent {
         /// Wall-clock span of the child session in milliseconds.
         #[serde(default)]
         duration_ms: u64,
+        /// Whether the writer measured the child's tool counts and span. A
+        /// return written for a child whose log could not be read carries
+        /// zeroes it did not measure, and a reader counts those as unknown
+        /// rather than as a child that ran no tools. Defaults to true: a
+        /// return written before the field existed carried the figures its
+        /// writer measured, so an absent field must not discard them.
+        #[serde(default = "measured_by_default")]
+        ledger_measured: bool,
+        /// Whether a restart scan wrote this return for a delegation an
+        /// earlier host left open. Neither the status nor the summary can say
+        /// so: both carry text that a live ending or the child's own answer
+        /// can also produce, and only this flag records who wrote the
+        /// boundary.
+        #[serde(default)]
+        orphaned: bool,
     },
     /// This session was delegated to by the named parent: the child side of
     /// the delegation boundary, written as the child session's first durable

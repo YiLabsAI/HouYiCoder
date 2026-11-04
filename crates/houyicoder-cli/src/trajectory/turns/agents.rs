@@ -131,6 +131,7 @@ impl TurnBuilder {
             tool_calls,
             tool_failures,
             duration_ms,
+            ledger_measured,
             ..
         } = &ev.event
         else {
@@ -164,11 +165,26 @@ impl TurnBuilder {
             summary,
             usage,
             provenance,
-            ChildReturnStats {
-                calls: *tool_calls,
-                failures: *tool_failures,
-                duration_ms: *duration_ms,
-                ts: ev.ts,
+            // A return whose writer could not read the child's log carries
+            // zeroes nobody measured, so the turn counts none of them. The
+            // session header applies the same gate, so the header and this
+            // turn count one return alike. The child's own row shows no count
+            // for the same reason: a number there would state a measurement
+            // nobody made.
+            if *ledger_measured {
+                ChildReturnStats {
+                    calls: *tool_calls,
+                    failures: *tool_failures,
+                    duration_ms: *duration_ms,
+                    ts: ev.ts,
+                }
+            } else {
+                ChildReturnStats {
+                    calls: 0,
+                    failures: 0,
+                    duration_ms: 0,
+                    ts: ev.ts,
+                }
             },
         );
     }

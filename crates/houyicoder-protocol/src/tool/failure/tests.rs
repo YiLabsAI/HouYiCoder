@@ -105,6 +105,67 @@ fn test_compound_not_exempt() {
     assert!(tool_result_failed(&out, "bash", &bash("grep x | head")));
 }
 
+/// A command over the retention cap is reduced to the least text that still
+/// yields its verdict. A git diff keeps its subcommand and exit flag, so the
+/// folded call judges the same as the whole command; a plain command keeps its
+/// word and stays a failure.
+#[test]
+fn test_long_command_keeps_verdict() {
+    let out = serde_json::json!({"success": false, "exit_code": 1});
+    let diff = format!("git diff --exit-code {}", "a".repeat(600));
+    let retained = retained_command(&diff).expect("a simple command is retained");
+    assert_eq!(retained, "git diff --exit-code");
+    assert_eq!(
+        tool_result_failed(&out, "bash", &failure_rule_input(Some(&retained))),
+        tool_result_failed(&out, "bash", &bash(&diff)),
+        "the folded command reports the difference the whole one reports"
+    );
+    let plain = format!("echo {}", "a".repeat(600));
+    let retained = retained_command(&plain).expect("a simple command is retained");
+    assert_eq!(retained, "echo");
+    assert!(
+        tool_result_failed(&out, "bash", &failure_rule_input(Some(&retained))),
+        "a command word with no exit-status meaning stays a failure"
+    );
+}
+
+/// A command that merely carries git's words is not a git invocation: its
+/// verdict stays the one its own command word yields, whether it is long or
+/// spans lines.
+#[test]
+fn test_non_git_keeps_verdict() {
+    let out = serde_json::json!({"success": false, "exit_code": 1});
+    for command in [
+        format!("echo diff --exit-code {}", "a".repeat(600)),
+        "echo diff --exit-code\nHEAD~1".to_string(),
+    ] {
+        let retained = retained_command(&command).expect("a simple command is retained");
+        assert_eq!(retained, "echo");
+        let folded = tool_result_failed(&out, "bash", &failure_rule_input(Some(&retained)));
+        assert_eq!(
+            folded,
+            tool_result_failed(&out, "bash", &bash(&command)),
+            "the folded command reports the verdict the whole one reports"
+        );
+        assert!(folded, "the command word carries no exit-status meaning");
+    }
+}
+
+/// A command carrying a line break is reduced the same way, so a multi-line
+/// git diff keeps the verdict its exit status carries.
+#[test]
+fn test_multiline_command_keeps_verdict() {
+    let out = serde_json::json!({"success": false, "exit_code": 1});
+    let diff = "git diff --exit-code\nHEAD~1";
+    let retained = retained_command(diff).expect("a simple command is retained");
+    assert_eq!(retained, "git diff --exit-code");
+    assert_eq!(
+        tool_result_failed(&out, "bash", &failure_rule_input(Some(&retained))),
+        tool_result_failed(&out, "bash", &bash(diff)),
+        "the folded command reports the difference the whole one reports"
+    );
+}
+
 /// A result whose call is outside the window has nothing to consult, so
 /// the plain rule applies.
 #[test]

@@ -47,13 +47,16 @@ use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
+mod boundary_claims;
 mod children;
 mod drive;
 mod orphan_reconcile;
+use boundary_claims::BoundaryClaims;
 use children::{
     AdmissionLease, ChildAdmission, ChildEntry, ChildReservation, ChildWatch, RunningChildren,
     join_child,
 };
+use orphan_reconcile::ScanGeneration;
 mod spawn_exec;
 mod strip;
 pub(crate) use strip::last_assistant_text;
@@ -145,6 +148,11 @@ pub struct MultiAgentRuntime {
     /// The child sessions a spawn is continuing right now, claimed before
     /// construction so two resumes cannot drive one session at once.
     reserved: Arc<Mutex<HashSet<String>>>,
+    /// The generations that decide whether a scan for boundaries a previous
+    /// host left open is due.
+    orphan_scan: ScanGeneration,
+    /// The children whose return boundary a writer here has claimed.
+    boundary_claims: BoundaryClaims,
 }
 
 /// One live child: its runner (Weak, so a finished child drops the entry's
@@ -179,6 +187,8 @@ impl MultiAgentRuntime {
             inherited: RunnerInheritance::default(),
             delegation_wait_ms: 0,
             reserved: Arc::new(Mutex::new(HashSet::new())),
+            orphan_scan: ScanGeneration::default(),
+            boundary_claims: BoundaryClaims::default(),
         }
     }
 
@@ -542,11 +552,13 @@ impl SpawnHandle for MultiAgentRuntime {
     }
 
     fn reconcile_orphans(&self, parent_sid: SessionId) -> PFut<'_, ()> {
-        let store = Arc::clone(&self.store);
-        let children = Arc::clone(&self.children);
-        Box::pin(async move {
-            orphan_reconcile::run(&store, &children, parent_sid).await;
-        })
+        Box::pin(orphan_reconcile::run_once(
+            &self.orphan_scan,
+            &self.store,
+            &self.children,
+            &self.boundary_claims,
+            parent_sid,
+        ))
     }
 }
 

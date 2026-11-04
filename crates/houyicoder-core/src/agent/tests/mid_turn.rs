@@ -416,6 +416,80 @@ async fn test_notification_drains_when_idle() {
     );
 }
 
+/// The log can already report the ending the queue holds: a reconciliation
+/// pass writes the notice for a return the parent never drained. The drained
+/// completion must not append a second report of that one ending.
+#[tokio::test]
+async fn test_notification_skips_delivered_ending() {
+    let slot = Arc::new(OnceLock::<Arc<Runner>>::new());
+    let provider = Arc::new(CaptureProvider::with_tool("enqueue_notification"));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(EnqueueNotificationTool::new(
+        Arc::clone(&slot),
+        "child finished working",
+    )));
+    let runner = Arc::new(runner_with(
+        Arc::clone(&provider) as Arc<dyn ModelProvider>,
+        tools,
+    ));
+    slot.set(Arc::clone(&runner)).ok();
+    let session = SessionId::new();
+    let returned = SessionEvent::SubagentReturn {
+        child_session_id: "test-child".into(),
+        status: "completed".into(),
+        summary: "the answer".into(),
+        result_ref: "test-child".into(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        reasoning_tokens: 0,
+        input_reported: false,
+        cache_read_reported: false,
+        cache_write_reported: false,
+        tool_calls: 0,
+        tool_failures: 0,
+        duration_ms: 0,
+        ledger_measured: true,
+        orphaned: false,
+    };
+    let notified = SessionEvent::NotificationInjected {
+        child_session_id: "test-child".into(),
+        turn: 0,
+        order: 0,
+        topic: "completion".into(),
+        summary: "from the reconciliation pass".into(),
+        capture: None,
+    };
+    for event in [returned, notified] {
+        runner
+            .store()
+            .append(new_event(session, event))
+            .await
+            .expect("seed the delivered ending");
+    }
+    let result = runner
+        .run(session, "do the task".into())
+        .await
+        .expect("run");
+    assert!(matches!(result.outcome, RunOutcome::FinalOutput(t) if t == "done"));
+    let log = runner.store().replay(session).await.expect("read the log");
+    let notices = log
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.event,
+                SessionEvent::NotificationInjected { child_session_id, .. }
+                    if child_session_id == "test-child"
+            )
+        })
+        .count();
+    assert_eq!(
+        notices, 1,
+        "one ending produces one completion notice, whichever writer reaches it"
+    );
+}
+
 struct EnqueueBothTool {
     slot: Arc<OnceLock<Arc<Runner>>>,
     user_msg: String,

@@ -20,8 +20,9 @@ pub mod status_publisher;
 pub mod usage;
 
 pub use spawn::{
-    ChildHandle, CutReason, PartialTranscript, RunnerInheritance, SpawnError, SpawnRequest,
-    record_subagent_return, spawn_child,
+    BoundaryOutcome, ChildHandle, ChildLedger, CutReason, OrphanedChild, PartialTranscript,
+    RecordOwed, RunnerInheritance, SpawnError, SpawnRequest, completion_notice_pending,
+    logged_usage, orphaned_summary, record_orphaned_child, record_subagent_return, spawn_child,
 };
 pub use status_publisher::{ChildStatusPublisher, recorded_cut, timed_out_summary};
 pub use usage::{SubagentUsage, aggregate_subagent_usage};

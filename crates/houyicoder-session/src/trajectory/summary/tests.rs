@@ -184,6 +184,8 @@ fn test_leading_partial_turn_unknown() {
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     )];
     let summary = fold(&events);
@@ -438,34 +440,72 @@ fn test_evicted_call_plain_rule() {
     assert_eq!(state.snapshot().usage.failures, 1);
 }
 
-/// A call keeps only the command word the failure rule reduces a command to,
-/// so a call carrying a large body does not hold it.
+/// A call keeps the command text the failure rule reads, reduced only when
+/// holding it whole would be expensive.
 #[test]
-fn test_call_facts_keep_word() {
+fn test_call_facts_keep_command() {
     let mut state = TrajectorySummaryState::default();
     state.record(&entry(
         0,
         SessionEvent::ToolCall {
             call_id: "c1".into(),
             tool: "bash".into(),
-            input: serde_json::json!({"command": "grep foo", "body": "x".repeat(1 << 20)}),
+            input: serde_json::json!({"command": "git diff --exit-code", "body": "x".repeat(1 << 20)}),
         },
     ));
     let facts = state.pending_calls.get("c1").expect("the call is held");
-    assert_eq!(facts.command_word.as_deref(), Some("grep"));
+    assert_eq!(facts.command.as_deref(), Some("git diff --exit-code"));
+
+    // A command carrying a body of its own is reduced to its command word.
+    let mut long = TrajectorySummaryState::default();
+    long.record(&entry(
+        0,
+        SessionEvent::ToolCall {
+            call_id: "c2".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({
+                "command": format!("grep foo {}", "x".repeat(1 << 20)),
+            }),
+        },
+    ));
+    let facts = long.pending_calls.get("c2").expect("the call is held");
+    assert_eq!(facts.command.as_deref(), Some("grep"));
 
     // A compound command has no command word, so nothing is exempted later.
     let mut compound = TrajectorySummaryState::default();
     compound.record(&entry(
         0,
         SessionEvent::ToolCall {
-            call_id: "c2".into(),
+            call_id: "c3".into(),
             tool: "bash".into(),
             input: serde_json::json!({"command": "grep x | head"}),
         },
     ));
-    let facts = compound.pending_calls.get("c2").expect("the call is held");
-    assert_eq!(facts.command_word, None);
+    let facts = compound.pending_calls.get("c3").expect("the call is held");
+    assert_eq!(facts.command, None);
+}
+
+/// The exit status git reports for a difference is the command's answer, not
+/// a failure, so the header does not count it as one.
+#[test]
+fn test_fold_exempts_git_diff() {
+    let mut state = TrajectorySummaryState::default();
+    state.record(&entry(
+        0,
+        SessionEvent::ToolCall {
+            call_id: "c1".into(),
+            tool: "bash".into(),
+            input: serde_json::json!({"command": "git diff --exit-code"}),
+        },
+    ));
+    state.record(&result(
+        "c1",
+        serde_json::json!({"success": false, "exit_code": 1}),
+        0,
+    ));
+    let usage = state.snapshot().usage;
+    assert_eq!(usage.failures, 0);
+    assert_eq!(usage.successes, 1);
 }
 
 /// A repeated call id replaces its facts, so it must not also leave its old
@@ -517,6 +557,8 @@ fn test_unmeasured_child_breaks_totals() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
         entry(
@@ -533,6 +575,74 @@ fn test_unmeasured_child_breaks_totals() {
         !summary.usage.totals_known,
         "the parent is complete, but a child reported nothing"
     );
+}
+
+/// A measured return contributes the child's figures to the session's tool
+/// totals, so the gate on the unmeasured one is not constant-false: the child's
+/// work reaches the header it was paid for.
+#[test]
+fn test_measured_ledger_counted() {
+    let events = vec![entry(
+        0,
+        SessionEvent::SubagentReturn {
+            child_session_id: "child".into(),
+            status: "completed".into(),
+            summary: String::new(),
+            result_ref: "child".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: false,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            tool_calls: 5,
+            tool_failures: 2,
+            duration_ms: 900,
+            ledger_measured: true,
+            orphaned: false,
+        },
+    )];
+    let usage = fold(&events).usage;
+    assert_eq!(usage.tool_calls, 5);
+    assert_eq!(usage.failures, 2);
+    assert_eq!(
+        usage.successes, 3,
+        "the calls the child did not report failing came back clean"
+    );
+}
+
+/// A return whose writer could not measure the child carries no figures the
+/// fold may count, so its zeroes stay out of the session's tool totals.
+#[test]
+fn test_unmeasured_ledger_not_counted() {
+    let events = vec![entry(
+        0,
+        SessionEvent::SubagentReturn {
+            child_session_id: "child".into(),
+            status: "interrupted".into(),
+            summary: String::new(),
+            result_ref: "child".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: false,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            tool_calls: 5,
+            tool_failures: 2,
+            duration_ms: 900,
+            ledger_measured: false,
+            orphaned: false,
+        },
+    )];
+    let usage = fold(&events).usage;
+    assert_eq!(usage.tool_calls, 0);
+    assert_eq!(usage.failures, 0);
+    assert_eq!(usage.successes, 0);
 }
 
 /// The headline account is what the whole session spent: the parent's calls
@@ -616,6 +726,8 @@ fn child_return(ts: u64, input: u64, output: u64, reported: bool) -> SessionLogE
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     )
 }
@@ -640,6 +752,8 @@ fn test_delegated_usage_folds() {
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     )];
     let summary = fold(&events);
@@ -668,6 +782,8 @@ fn test_unmeasured_child_flagged() {
             tool_calls: 0,
             tool_failures: 0,
             duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
         },
     )];
     assert!(fold(&events).usage.subagent_unmeasured);

@@ -16,7 +16,9 @@ use houyicoder_api::session::{
 use houyicoder_context::{PermissionVerdict, RunCompletionStatus, SessionEvent, SessionLogEntry};
 use houyicoder_protocol::frontend::run::ApprovalScope;
 use houyicoder_protocol::llm::UsageProvenance;
-use houyicoder_protocol::tool::{simple_command_word, tool_result_failed, tool_result_not_run};
+use houyicoder_protocol::tool::{
+    failure_rule_input, retained_command, tool_result_failed, tool_result_not_run,
+};
 use serde_json::Value;
 
 use self::cas_usage::CasUsageFold;
@@ -27,12 +29,12 @@ mod ttft;
 
 /// What a tool call carried, so a later result can be judged against it.
 ///
-/// Only the command word is kept: the failure rule reduces a command to its
-/// first word anyway, and a call can carry a heredoc or an inline script whose
-/// body would cost far more to hold than the decision it serves.
+/// Only the command text the failure verdict can use is kept, reduced by the
+/// shared retention rule: a call can carry a heredoc or a long multi-line body
+/// that would cost far more to hold than the decision it serves.
 struct ToolCallFacts {
     tool: String,
-    command_word: Option<String>,
+    command: Option<String>,
 }
 
 /// How many approval calls the fold remembers while counting each card and
@@ -449,18 +451,26 @@ impl TrajectorySummaryState {
             SessionEvent::SubagentReturn {
                 tool_calls,
                 tool_failures,
+                ledger_measured,
                 ..
             } => {
-                let calls = *tool_calls as usize;
-                let failures = *tool_failures as usize;
-                self.tool_calls = self.tool_calls.saturating_add(calls);
-                self.failures = self.failures.saturating_add(failures);
-                // The child's return reports its totals rather than its
-                // individual results, so the remainder stands for the calls
-                // that came back clean.
-                self.successes = self
-                    .successes
-                    .saturating_add(calls.saturating_sub(failures));
+                // A return whose writer could not read the child's log carries
+                // zeroes it never measured. Counting them would report a child
+                // that ran no tools, so they stay out of the totals. A payload
+                // written before the flag existed carried figures its writer
+                // measured, so the field defaults to measured.
+                if *ledger_measured {
+                    let calls = *tool_calls as usize;
+                    let failures = *tool_failures as usize;
+                    self.tool_calls = self.tool_calls.saturating_add(calls);
+                    self.failures = self.failures.saturating_add(failures);
+                    // The child's return reports its totals rather than its
+                    // individual results, so the remainder stands for the calls
+                    // that came back clean.
+                    self.successes = self
+                        .successes
+                        .saturating_add(calls.saturating_sub(failures));
+                }
                 self.subagent.record(event);
             }
             // A recap runs between turns, so its spend joins the session's own
@@ -555,11 +565,10 @@ impl TrajectorySummaryState {
             call_id.to_string(),
             ToolCallFacts {
                 tool: tool.to_string(),
-                command_word: input
+                command: input
                     .get("command")
                     .and_then(|c| c.as_str())
-                    .and_then(simple_command_word)
-                    .map(str::to_string),
+                    .and_then(retained_command),
             },
         );
         self.pending_order.push_back(call_id.to_string());
@@ -570,20 +579,13 @@ impl TrajectorySummaryState {
         if let Some(index) = self.pending_order.iter().position(|id| id == call_id) {
             self.pending_order.remove(index);
         }
-        // Only the command word is rebuilt. It is already a simple command
-        // word, so re-reading it yields the same word, and the rule sees the
-        // shape it does everywhere else.
+        // The call input is rebuilt from what the call kept, so the verdict
+        // reads the same command text it would from the log.
         let command_input;
         let (tool, input) = match &facts {
             Some(facts) => {
-                command_input = facts
-                    .command_word
-                    .as_ref()
-                    .map(|word| serde_json::json!({ "command": word }));
-                (
-                    facts.tool.as_str(),
-                    command_input.as_ref().unwrap_or(&Value::Null),
-                )
+                command_input = failure_rule_input(facts.command.as_deref());
+                (facts.tool.as_str(), &command_input)
             }
             // A result whose call sits outside what this fold has seen: the
             // plain error-or-success rule still applies.

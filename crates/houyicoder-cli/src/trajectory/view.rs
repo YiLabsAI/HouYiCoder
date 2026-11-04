@@ -579,9 +579,15 @@ fn accumulate_session(events: &[SessionLogEntry], acc: &mut AccTotals) {
                 }
                 acc.tool_ms += *duration_ms;
             }
+            // The figures a return carries are the child's measured spend; a
+            // return written without reading the child's log carries zeroes
+            // nobody measured, and counting those would report a child that
+            // ran no tools. The session header applies the same gate, so the
+            // header and the turn rows count one log alike.
             SessionEvent::SubagentReturn {
                 tool_calls,
                 tool_failures,
+                ledger_measured: true,
                 ..
             } => {
                 acc.tool_calls += *tool_calls as usize;

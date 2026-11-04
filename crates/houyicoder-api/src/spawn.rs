@@ -150,6 +150,27 @@ impl SpawnOutcome {
         }
     }
 
+    /// Build an outcome for a foreground child that reached a terminal state
+    /// whose spend this envelope does not carry. Usage stays unknown rather
+    /// than zero, so a reader that sums usage leaves this child out instead of
+    /// counting it as free; the parent log's return may still record the
+    /// figures a reader of the log can sum.
+    pub fn foreground_without_usage(
+        child_session_id: impl Into<String>,
+        status: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Self {
+        let child = child_session_id.into();
+        Self {
+            result_ref: Some(child.clone()),
+            child_session_id: child,
+            status: Some(status.into()),
+            summary: Some(summary.into()),
+            usage: None,
+            background: None,
+        }
+    }
+
     /// Build an outcome after a background child starts because its caller
     /// asked for the background up front.
     pub fn background_started(child_session_id: impl Into<String>) -> Self {
@@ -362,12 +383,19 @@ pub trait SpawnHandle: Send + Sync {
 
     /// Reconcile delegation boundaries left open by a host restart: for every
     /// spawn record in the parent log whose return has not landed and whose
-    /// child is not still running, write the missing return so the parent
-    /// context and the fleet list hold no dangling delegation. Runs at the
-    /// entry of a parent turn, before the user input is appended, so the
-    /// reconciled state is what the model reads. The default is a no-op (no
-    /// multi-agent runtime wired); a runtime with a child registry overrides
-    /// it.
+    /// child is not still running, write the missing return, plus the record
+    /// the model reads — the answer to its still-unanswered delegation call,
+    /// or the completion notice a live ending would have queued — so the work
+    /// can continue under the same child id. The parent context and the fleet
+    /// list then hold no dangling delegation.
+    ///
+    /// Runs at the entry of a parent turn and of a resumed turn, before the
+    /// user input and the approval state are read, so the reconciled log is
+    /// what the model sees. A runtime serves one parent session, so one
+    /// completed pass per runtime suffices: the implementation latches after
+    /// its first pass that wrote every boundary, and retries on the next
+    /// entry after a pass that failed. The default is a no-op (no multi-agent
+    /// runtime attached).
     fn reconcile_orphans(&self, _parent_sid: SessionId) -> PFut<'_, ()> {
         Box::pin(async {})
     }

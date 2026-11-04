@@ -224,6 +224,8 @@ fn test_unmeasured_child_hides_share() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -289,6 +291,8 @@ fn test_cache_only_child_folds() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -353,6 +357,8 @@ fn test_child_report_hides_share() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
@@ -404,6 +410,8 @@ fn test_child_report_gates_session() {
                 tool_calls: 0,
                 tool_failures: 0,
                 duration_ms: 0,
+                ledger_measured: true,
+                orphaned: false,
             },
         ),
     ];
