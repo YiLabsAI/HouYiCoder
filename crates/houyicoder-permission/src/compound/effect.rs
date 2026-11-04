@@ -425,10 +425,15 @@ fn cd_target(segment: &str) -> Option<&str> {
     Some(strip_quotes(tokens[1]))
 }
 
-/// Whether a directory names a session temporary root the fence allows writes
-/// into.
+/// Whether a directory names the session's own temporary root.
+///
+/// Only the expansion is accepted. The literal shared roots used to be
+/// accepted too, which read as a promise this fence lets writes into the
+/// shared temp root. The Linux fence does not, so removing a file there was
+/// waived here and then refused by the kernel. A path this gate cannot verify
+/// is a path it must ask about.
 fn is_temp_root(dir: &str) -> bool {
-    dir == "$TMPDIR" || dir == "${TMPDIR}" || dir == "/tmp" || dir == "/private/tmp"
+    dir == "$TMPDIR" || dir == "${TMPDIR}"
 }
 
 fn is_rm_segment(segment: &str) -> bool {
