@@ -185,6 +185,15 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
             Ok(true)
         }
         Event::Paste(data) => {
+            // A card that owns the keyboard owns the paste too: the composer
+            // is not receiving keys while it is up, so text pasted into its
+            // Other row would otherwise land in a draft nobody can see.
+            if let Some(aq) = app.ask_question_mut()
+                && aq.cursor_on_other()
+            {
+                aq.append_other(&data);
+                return Ok(true);
+            }
             // Accumulate chunks (large pastes arrive in multiple Paste
             // events). Flushed in the run loop when the gap exceeds 50ms.
             if let Some(buf) = app.ui.input.pending_paste.buffer.as_mut() {

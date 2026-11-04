@@ -66,6 +66,30 @@ impl AskQuestion {
         }
         let total = self.current_option_count();
         let qi = self.current;
+        // The Other row is a text field as soon as the cursor rests on it. A
+        // keystroke that edits text opens it, so the user does not have to
+        // press Enter first to discover that typing works.
+        if self.cursors.get(qi).copied().unwrap_or(0) == self.current_other_idx() {
+            match k.code {
+                KeyCode::Char(c)
+                    if !k
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.focus_other(qi);
+                    self.other_text[qi].get_or_insert_with(String::new).push(c);
+                    return AskDecision::None;
+                }
+                KeyCode::Backspace => {
+                    self.focus_other(qi);
+                    if let Some(text) = self.other_text[qi].as_mut() {
+                        text.pop();
+                    }
+                    return AskDecision::None;
+                }
+                _ => {}
+            }
+        }
         match k.code {
             // Tab navigation between questions: Tab/Right forward,
             // Shift+Tab/Left backward. Clamped to [0, max_index].
@@ -116,13 +140,7 @@ impl AskQuestion {
         // Other: focus the text input and record the Other row as chosen, so
         // the answers carry whatever the user types into it.
         if cursor == other_idx {
-            self.other_focused = true;
-            if self.other_text[qi].is_none() {
-                self.other_text[qi] = Some(String::new());
-            }
-            if !self.selections[qi].contains(&other_idx) {
-                self.selections[qi].push(other_idx);
-            }
+            self.focus_other(qi);
             return AskDecision::None;
         }
         // Multi-select Submit button: advance to the next question or the
@@ -153,11 +171,38 @@ impl AskQuestion {
         self.advance_decision()
     }
 
+    /// Open the Other row as the text input and record it as chosen, so the
+    /// answers carry whatever is typed into it.
+    fn focus_other(&mut self, qi: usize) {
+        self.other_focused = true;
+        let other_idx = self.current_other_idx();
+        if self.other_text[qi].is_none() {
+            self.other_text[qi] = Some(String::new());
+        }
+        if !self.selections[qi].contains(&other_idx) {
+            self.selections[qi].push(other_idx);
+        }
+    }
+
     /// Handle keys while the Other text input is focused.
     fn handle_other_input(&mut self, k: KeyEvent) -> AskDecision {
         let qi = self.current;
         let hide_submit = self.hide_submit_tab();
+        let total = self.current_option_count();
         match k.code {
+            // Up and Down leave the text field for the list: an editor that
+            // traps the only keys that move between options is a dead end.
+            KeyCode::Up | KeyCode::Down => {
+                self.other_focused = false;
+                if let Some(cursor) = self.cursors.get_mut(qi) {
+                    *cursor = if k.code == KeyCode::Up {
+                        (*cursor + total.saturating_sub(1)) % total.max(1)
+                    } else {
+                        (*cursor + 1) % total.max(1)
+                    };
+                }
+                AskDecision::None
+            }
             KeyCode::Esc => {
                 self.other_focused = false;
                 AskDecision::None

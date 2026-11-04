@@ -740,3 +740,39 @@ fn test_question_esc_clears_disconnected() {
         "Esc clears the prompt"
     );
 }
+
+/// A collapsed card gives every line one row. Expanded, a long question takes
+/// the rows its text needs at the width it is drawn in, so the card grows
+/// instead of cutting the text at the edge.
+#[test]
+fn test_card_height_wraps() {
+    let long = "x".repeat(200);
+    let mut c = AskQuestion::parse(
+        "call-1",
+        &json!({ "questions": [{
+            "question": long,
+            "header": "Long",
+            "options": [
+                { "label": "alpha", "description": "" },
+                { "label": "beta", "description": "" }
+            ],
+            "multiSelect": false
+        }]}),
+    )
+    .expect("parse card");
+
+    let narrow = c.card_height_for(40);
+    let wide = c.card_height_for(200);
+    assert_eq!(
+        narrow, wide,
+        "a collapsed card is the same height at any width"
+    );
+
+    c.expanded = true;
+    assert!(
+        c.card_height_for(40) > c.card_height_for(200),
+        "expanded, the narrower card needs more rows"
+    );
+    let rows = c.content_rows(40);
+    assert!(rows[0] > 1, "the long question wraps: {rows:?}");
+}

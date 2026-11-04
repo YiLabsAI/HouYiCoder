@@ -252,3 +252,44 @@ fn test_submit_view_cancel_choice() {
         "choosing Cancel declines"
     );
 }
+
+/// The Other row is a text field as soon as the cursor rests on it. A
+/// keystroke that edits text opens it, so the user does not have to press
+/// Enter first to discover that typing works.
+#[test]
+fn test_other_takes_typing() {
+    let mut c = single();
+    let other = c.current_other_idx();
+    // Move the cursor onto the Other row.
+    for _ in 0..other {
+        c.handle_key(key(KeyCode::Down));
+    }
+    assert!(c.cursor_on_other(), "the cursor rests on the Other row");
+
+    c.handle_key(key(KeyCode::Char('h')));
+    c.handle_key(key(KeyCode::Char('i')));
+    assert_eq!(
+        c.other_text[0].as_deref(),
+        Some("hi"),
+        "typing reaches the row without an Enter first"
+    );
+    assert!(c.other_focused, "the row is the input now");
+
+    // Up leaves the field for the list rather than being swallowed.
+    c.handle_key(key(KeyCode::Up));
+    assert!(!c.other_focused, "Up leaves the text field");
+    assert_eq!(c.cursors[0], other - 1, "Up moves the option cursor");
+}
+
+/// Pasted text belongs to the card while the card owns the keyboard.
+#[test]
+fn test_paste_lands_in_other() {
+    let mut c = single();
+    let other = c.current_other_idx();
+    for _ in 0..other {
+        c.handle_key(key(KeyCode::Down));
+    }
+    c.append_other("pasted");
+    assert_eq!(c.other_text[0].as_deref(), Some("pasted"));
+    assert!(c.other_is_selected(0), "pasting chooses the Other row");
+}

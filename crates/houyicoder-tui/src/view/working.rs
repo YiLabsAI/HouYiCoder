@@ -119,6 +119,11 @@ fn draw_working(f: &mut Frame, app: &App) {
     }
     if let Some(i) = layout.slots.ask {
         super::ask_question::draw(f, app, outer[i]);
+        // The card is text the user reads and may want to copy, so it
+        // publishes its rows and rect like the approval card beside it.
+        // Without this the selection router has no rect to hit and every
+        // press falls through.
+        panes::stash_approval_rows(f, outer[i], app);
     }
     // The @ skill picker and the / palette share the overlay slot —
     // mutually exclusive (can't have both open). The picker is inline
@@ -242,7 +247,7 @@ fn build_working_layout(
     let transcript_idx = constraints.len() - 1;
     let status_h = if pane_hides_status(app) { 0 } else { 1 };
     let ask_h = if let Some(aq) = app.ask_question() {
-        aq.card_height()
+        aq.card_height_for(area.width)
     } else {
         0u16
     };

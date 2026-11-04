@@ -211,6 +211,14 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
         card.expanded = !card.expanded;
         return;
     }
+    // The question card is the other surface that bounds its rows: collapsed
+    // it keeps one line per entry, and this chord shows the rest.
+    if app.ui.navigation.viewport == ViewportMode::Working
+        && let Some(card) = app.ask_question_mut()
+    {
+        card.expanded = !card.expanded;
+        return;
+    }
     if app.toggle_subagent_expand() {
         return;
     }

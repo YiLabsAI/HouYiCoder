@@ -30,10 +30,12 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 /// Render a single question view: separator, nav bar, header chip, question
 /// text, options (incl Other), multi-select Submit/Next button, hint.
 fn draw_question_view(f: &mut Frame, aq: &AskQuestion, q: &QuestionCard, area: Rect) {
-    let option_count = q.options.len() + 1; // +1 for Other
     let has_nav = !aq.hide_submit_tab();
-    let has_submit_btn = q.multi_select;
-    let chunks = build_question_layout(area, option_count, has_nav, has_submit_btn);
+    // One height per content line: the question, every option, Other, and the
+    // multi-select button when the question has one. Collapsed each is one
+    // row; expanded a long line takes the rows its text needs.
+    let rows = aq.content_rows(area.width);
+    let chunks = build_question_layout(area, &rows, has_nav);
     let mut idx = 0;
 
     // Separator.
@@ -88,13 +90,14 @@ fn draw_question_view(f: &mut Frame, aq: &AskQuestion, q: &QuestionCard, area: R
         );
         idx += 1;
     }
+    let _ = &q;
 
     // Other option (auto-appended).
     draw_other_option(f, aq, focused, chunks[idx]);
     idx += 1;
 
     // Multi-select Submit/Next button.
-    if has_submit_btn {
+    if q.multi_select {
         let btn_idx = aq.current_submit_btn_idx();
         let is_focused = focused == btn_idx && !aq.other_focused;
         let label = aq.submit_btn_label();
@@ -291,7 +294,10 @@ fn draw_option_row(
     } else {
         Style::new().fg(Color::White)
     };
-    f.render_widget(Paragraph::new(line).style(style), area);
+    f.render_widget(
+        Paragraph::new(line).style(style).wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// Draw the auto-appended Other option row.
@@ -344,17 +350,17 @@ fn draw_other_option(f: &mut Frame, aq: &AskQuestion, focused: usize, area: Rect
     } else {
         Style::new().fg(Color::DarkGray)
     };
-    f.render_widget(Paragraph::new(other_line).style(other_style), area);
+    f.render_widget(
+        Paragraph::new(other_line)
+            .style(other_style)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 /// Build the vertical layout for a question view: separator + nav_bar +
 /// header + question + gap + options + submit_btn + gap + hint.
-fn build_question_layout(
-    area: Rect,
-    option_count: usize,
-    has_nav: bool,
-    has_submit_btn: bool,
-) -> Vec<Rect> {
+fn build_question_layout(area: Rect, content: &[u16], has_nav: bool) -> Vec<Rect> {
     let mut constraints: Vec<Constraint> = vec![
         Constraint::Length(1), // separator
     ];
@@ -362,13 +368,12 @@ fn build_question_layout(
         constraints.push(Constraint::Length(1)); // nav bar
     }
     constraints.push(Constraint::Length(1)); // header
-    constraints.push(Constraint::Length(1)); // question
+    let mut lines = content.iter();
+    // Question, then every option and Other, then the button when present.
+    constraints.push(Constraint::Length(lines.next().copied().unwrap_or(1)));
     constraints.push(Constraint::Length(1)); // gap
-    for _ in 0..option_count {
-        constraints.push(Constraint::Length(1)); // option rows
-    }
-    if has_submit_btn {
-        constraints.push(Constraint::Length(1)); // submit button
+    for height in lines {
+        constraints.push(Constraint::Length(*height));
     }
     constraints.push(Constraint::Length(1)); // gap
     constraints.push(Constraint::Length(1)); // hint

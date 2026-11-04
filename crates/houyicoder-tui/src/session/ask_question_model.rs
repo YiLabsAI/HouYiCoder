@@ -11,6 +11,7 @@
 
 use serde_json::Map;
 use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 
 /// One question card parsed from the model's AskUserQuestion tool call. The
 /// header is capped at 12 chars by the schema; the TUI truncates the display
@@ -52,8 +53,26 @@ pub struct AskQuestion {
     pub cursors: Vec<usize>,
     pub other_text: Vec<Option<String>>,
     pub other_focused: bool,
+    /// Whether the card shows every row its text needs. Collapsed, each row
+    /// takes one line so the card stays inside the footer budget; expanded, a
+    /// long question or option wraps instead of being cut at the edge.
+    pub expanded: bool,
     pub submit_cursor: usize,
     pub original_input: Value,
+}
+
+/// The rows one line needs at this width. A collapsed card gives every line
+/// one row, which is what keeps it inside the footer budget.
+fn line_rows(text: &str, width: u16, expanded: bool) -> u16 {
+    if !expanded || width == 0 {
+        return 1;
+    }
+    let limit = usize::from(width);
+    let mut rows = 0usize;
+    for line in text.lines() {
+        rows += UnicodeWidthStr::width(line).max(1).div_ceil(limit);
+    }
+    rows.max(1) as u16
 }
 
 /// The sentinel label for the auto-appended Other option.
@@ -115,6 +134,7 @@ impl AskQuestion {
             cursors: vec![0; n],
             other_text: vec![None; n],
             other_focused: false,
+            expanded: false,
             submit_cursor: 0,
             original_input: input.clone(),
         })
@@ -158,6 +178,30 @@ impl AskQuestion {
     }
 
     /// The index of the auto-appended Other option for the current question.
+    /// Whether the cursor rests on the Other row, where typing goes into the
+    /// card rather than into the composer.
+    pub fn cursor_on_other(&self) -> bool {
+        !self.is_submit_view()
+            && self.cursors.get(self.current).copied().unwrap_or(0) == self.current_other_idx()
+    }
+
+    /// Append pasted text to the Other row, opening it as the input if the
+    /// cursor is already there.
+    pub fn append_other(&mut self, text: &str) {
+        let qi = self.current;
+        self.other_focused = true;
+        let other_idx = self.current_other_idx();
+        if self.other_text[qi].is_none() {
+            self.other_text[qi] = Some(String::new());
+        }
+        if !self.selections[qi].contains(&other_idx) {
+            self.selections[qi].push(other_idx);
+        }
+        if let Some(entry) = self.other_text[qi].as_mut() {
+            entry.push_str(text);
+        }
+    }
+
     pub fn current_other_idx(&self) -> usize {
         self.questions
             .get(self.current)
@@ -208,12 +252,61 @@ impl AskQuestion {
         }
     }
 
+    /// The rows each content line needs at this width, in draw order:
+    /// question, every option, Other, and the multi-select button when the
+    /// question has one. Collapsed, each is one row.
+    pub fn content_rows(&self, width: u16) -> Vec<u16> {
+        let Some(q) = self.questions.get(self.current) else {
+            return Vec::new();
+        };
+        let mut rows = vec![line_rows(&q.question, width, self.expanded)];
+        let focused = self.cursors.get(self.current).copied().unwrap_or(0);
+        for (i, opt) in q.options.iter().enumerate() {
+            let text = if i == focused && !opt.description.is_empty() {
+                format!("{}. {} -- {}", i + 1, opt.label, opt.description)
+            } else {
+                format!("{}. {}", i + 1, opt.label)
+            };
+            rows.push(line_rows(&text, width, self.expanded));
+        }
+        let other = self.other_text[self.current]
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .unwrap_or(if q.multi_select {
+                "Type something"
+            } else {
+                "Type something."
+            });
+        rows.push(line_rows(other, width, self.expanded));
+        if q.multi_select {
+            rows.push(1);
+        }
+        rows
+    }
+
+    /// The height (in terminal rows) the card needs for the current view at
+    /// this width.
+    pub fn card_height_for(&self, width: u16) -> u16 {
+        if self.is_submit_view() {
+            return (self.questions.len() + 8) as u16;
+        }
+        let content: u16 = self.content_rows(width).iter().sum();
+        let nav_bar = if self.hide_submit_tab() { 0 } else { 1 };
+        // separator + nav + header + content + gap + gap + hint
+        content + 5 + nav_bar
+    }
+
     /// The height (in terminal rows) the card needs for the current view.
     /// Question view: separator + nav_bar + header + question + gap +
     /// options(inc Other) + submit_btn(multi only) + gap + hint.
     /// Submit view: separator + nav_bar + title + warning + answers +
     /// prompt + select.
     pub fn card_height(&self) -> u16 {
+        self.card_height_for(80)
+    }
+
+    #[allow(dead_code)]
+    fn card_height_collapsed(&self) -> u16 {
         if self.is_submit_view() {
             (self.questions.len() + 8) as u16
         } else {
