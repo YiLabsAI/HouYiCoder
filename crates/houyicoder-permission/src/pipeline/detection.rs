@@ -19,7 +19,11 @@ use crate::git_safety::{collect_git_ask_ops, decode_token, is_shell_control_keyw
 use crate::heredoc::strip_quoted_heredoc_bodies;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator, consent_allows};
-use crate::rule::{Effect, evaluate};
+use crate::rule::{Effect, RuleContent, evaluate};
+
+mod signal;
+
+use signal::should_ask_signal;
 
 /// Whether the session's fence confines writes. Where the kernel decides
 /// where a write lands, the gate only has to reason about constructs that
@@ -63,149 +67,6 @@ fn should_ask_destructive(tool_name: &str, content: &str) -> bool {
     false
 }
 
-/// Detect signal-sending commands in bash: kill, pkill, killall.
-///
-/// The sandbox profile lets a signal reach any process, because the decision
-/// belongs to the permission gate rather than to the kernel. That only holds
-/// if the gate can see the command, so this is the check the profile relies on.
-/// It reads the command position of each segment rather than any word in the
-/// text: a commit message that mentions the word is not a signal, and the
-/// destructive scan's wider match is not repeated here.
-fn should_ask_signal(tool_name: &str, content: &str) -> bool {
-    if !is_shell_tool(tool_name) || content.is_empty() {
-        return false;
-    }
-    let expanded = expand_inline_interpreter(content);
-    // A quoted heredoc body is literal text, so a signal word inside one is
-    // not a command. The destructive scan strips the same bodies.
-    let scan = strip_quoted_heredoc_bodies(&expanded);
-    let lower = scan.to_ascii_lowercase();
-    // Code handed to an interpreter may contain separators of its own, so the
-    // whole command is offered to the extractor before the split would cut a
-    // quoted body apart.
-    if segment_runs_signal_code(&lower) {
-        return true;
-    }
-    for segment in lower.split(['&', ';', '|', '\n', '(', ')', '`']) {
-        let segment = segment.trim().trim_start_matches('$');
-        let tokens: Vec<String> = segment
-            .split_whitespace()
-            .map(decode_token)
-            .filter(|t| !t.is_empty() && !t.contains('=') && !is_shell_control_keyword(t))
-            .collect();
-        if segment_signals(&tokens) || segment_runs_signal_code(segment) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether one segment's tokens run a signal-sending command.
-///
-/// The command may sit behind a wrapper that runs it verbatim, and the
-/// wrapper's own flags may take a value, so the segment is accepted as a
-/// command only when it starts with a verb or a wrapper, and then any token
-/// may be the verb. Reading a fixed position instead missed a wrapper whose
-/// flag carried an argument, and the kernel rule no longer offers a backstop
-/// for a signal.
-fn segment_signals(tokens: &[String]) -> bool {
-    let Some(first) = tokens.first().map(|t| normalize_word(t)) else {
-        return false;
-    };
-    // A find action names the command it runs after its own flag.
-    if first == "find" {
-        return tokens.windows(2).any(|pair| {
-            matches!(
-                normalize_word(&pair[0]).as_str(),
-                "-exec" | "-execdir" | "-ok"
-            ) && is_signal_verb(&normalize_word(&pair[1]))
-        });
-    }
-    if !is_signal_verb(&first) && !is_transparent_prefix(&first) {
-        return false;
-    }
-    tokens.iter().any(|t| is_signal_verb(&normalize_word(t)))
-}
-
-/// Whether the segment hands code to an interpreter and that code signals.
-///
-/// Code is not a shell segment, so the token walk cannot see a call inside it.
-/// The interpreter may itself sit behind a wrapper, so every suffix of the
-/// segment is offered to the shared extractor rather than only the first.
-fn segment_runs_signal_code(segment: &str) -> bool {
-    let tokens: Vec<&str> = segment.split_whitespace().collect();
-    for start in 0..tokens.len() {
-        let suffix = tokens[start..].join(" ");
-        let Some(code) = interpreter_inline_code(&suffix) else {
-            continue;
-        };
-        if code_signals(code) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Whether interpreter code signals: either an API call, or a shell command
-/// inside the code when the interpreter is a shell.
-fn code_signals(code: &str) -> bool {
-    if calls_signal(code) {
-        return true;
-    }
-    let lower = code.to_ascii_lowercase();
-    for segment in lower.split(['&', ';', '|', '\n', '(', ')', '`']) {
-        let tokens: Vec<String> = segment
-            .split_whitespace()
-            .map(decode_token)
-            .filter(|t| !t.is_empty() && !t.contains('=') && !is_shell_control_keyword(t))
-            .collect();
-        if segment_signals(&tokens) {
-            return true;
-        }
-    }
-    false
-}
-
-fn calls_signal(code: &str) -> bool {
-    let code = code.to_ascii_lowercase();
-    ["kill(", "killall(", ".kill(", "pkill("]
-        .iter()
-        .any(|call| code.contains(call))
-}
-
-/// A token reduced to the word a shell would run: quotes and the punctuation
-/// that can wrap a command in place are dropped.
-fn normalize_word(word: &str) -> String {
-    strip_quotes(word)
-        .trim_matches(|c: char| matches!(c, '$' | '{' | '}' | ',' | ';' | '\\'))
-        .to_string()
-}
-
-fn is_signal_verb(word: &str) -> bool {
-    matches!(word, "kill" | "pkill" | "killall")
-}
-
-/// A command that runs another command verbatim, so the real command follows
-/// it. The list is the wrappers a shell user reaches for, not every program
-/// that can run something.
-fn is_transparent_prefix(word: &str) -> bool {
-    matches!(
-        word,
-        "env"
-            | "nice"
-            | "nohup"
-            | "timeout"
-            | "stdbuf"
-            | "setsid"
-            | "command"
-            | "builtin"
-            | "exec"
-            | "doas"
-            | "sudo"
-            | "xargs"
-    )
-}
-
 /// Detect network-egress commands in bash: curl, wget, git push, package
 /// publish, scp, rsync, ssh. These carry external side effects (data leaves
 /// the sandbox). The gate always asks for these — never a silent allow in
@@ -239,7 +100,11 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
         let decoded_tokens: Vec<String> = segment
             .split_whitespace()
             .map(decode_token)
-            .filter(|t| !t.is_empty() && !t.contains('=') && !is_shell_control_keyword(t))
+            .filter(|t| {
+                !t.is_empty()
+                    && (!t.contains('=') || t.starts_with('-'))
+                    && !is_shell_control_keyword(t)
+            })
             .collect();
         let tokens: Vec<&str> = decoded_tokens.iter().map(String::as_str).collect();
         let Some(&cmd) = tokens.first() else { continue };
@@ -262,8 +127,20 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
                 return true;
             }
         }
-        // git push / clone / fetch / pull / ls-remote — network git ops.
-        if cmd == "git" && matches!(sub, "push" | "clone" | "fetch" | "pull" | "ls-remote") {
+        // A fetch or a remote listing against this repository's own configured
+        // remotes only moves local refs: nothing of the user's leaves the
+        // machine and no working file changes. It is the same traffic as a
+        // package fetch, so it asks only when it names a source outside the
+        // repository's configuration.
+        if cmd == "git" && matches!(sub, "fetch" | "ls-remote") {
+            if !git_egress_names_external_source(&tokens[1..]) {
+                continue;
+            }
+            return true;
+        }
+        // git push / clone / pull — these send local work out, or bring a tree
+        // in and check it out, so they stay behind the ask.
+        if cmd == "git" && matches!(sub, "push" | "clone" | "pull") {
             return true;
         }
         // Package publish: npm publish, cargo publish, pip upload.
@@ -275,6 +152,87 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
         }
     }
     false
+}
+
+/// The git subcommands that reach a remote, as the words the card and the
+/// consent router name.
+const GIT_NETWORK_OPS: &[&str] = &["push", "pull", "clone", "fetch", "ls-remote"];
+
+/// The git network subcommand a command names, when the first one it runs is
+/// such a call.
+///
+/// The consent router reads this to build the rule a remembered answer
+/// installs, and the network check reads it to honor that rule, so both name
+/// the same subcommand.
+pub fn egress_remote_op(content: &str) -> Option<&'static str> {
+    let lower = content.to_ascii_lowercase();
+    for segment in lower.split(['&', ';', '|', '\n', '(', ')', '`']) {
+        let decoded: Vec<String> = segment
+            .split_whitespace()
+            .map(decode_token)
+            .filter(|t| !t.is_empty() && !t.contains('=') && !is_shell_control_keyword(t))
+            .collect();
+        if decoded.first().map(|t| strip_quotes(t)) != Some("git") {
+            continue;
+        }
+        let Some(sub) = decoded.get(1).map(|t| strip_quotes(t)) else {
+            continue;
+        };
+        if let Some(op) = GIT_NETWORK_OPS.iter().find(|op| **op == sub) {
+            return Some(op);
+        }
+    }
+    None
+}
+
+/// Whether a command names a network destination the user never configured.
+///
+/// A bare fetch or remote listing reads the remotes git already has configured;
+/// an explicit URL, path, or transport override names something else, so the
+/// destination is unknown and the call asks. A remembered answer reads this too:
+/// a session answer about configured remotes must not cover a later call that
+/// names an arbitrary host.
+pub fn egress_names_external_source(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    // Rebinding the transport picks the program that speaks to the remote, so
+    // the destination is no longer the one the repository configured.
+    if lower.contains("git_ssh_command=") || lower.contains("git_ssh=") {
+        return true;
+    }
+    for segment in lower.split(['&', ';', '|', '\n', '(', ')', '`']) {
+        // Every word is kept here, including the flag=value form: the check is
+        // about where the call points, and dropping the value would hide the
+        // one argument that says so.
+        let words: Vec<String> = segment
+            .split_whitespace()
+            .map(decode_token)
+            .filter(|t| !t.is_empty() && !is_shell_control_keyword(t))
+            .collect();
+        if words.first().map(|t| strip_quotes(t)) != Some("git") {
+            continue;
+        }
+        let args: Vec<&str> = words[1..].iter().map(|t| strip_quotes(t)).collect();
+        if git_egress_names_external_source(&args) {
+            return true;
+        }
+    }
+    false
+}
+
+fn git_egress_names_external_source(args: &[&str]) -> bool {
+    args.iter().any(|arg| {
+        let arg = strip_quotes(arg);
+        arg.contains("://")
+            || arg.starts_with("git@")
+            || arg.starts_with("--upload-pack")
+            // The ssh transport's own spelling: a host and a path joined by a
+            // colon, with an optional user. A refspec also carries a colon, so
+            // this reads one as a destination and asks rather than guessing.
+            || (arg.contains(':') && !arg.starts_with('-'))
+            || arg.starts_with('/')
+            || arg.starts_with('.')
+            || arg.starts_with('~')
+    })
 }
 
 /// Strip a matching pair of surrounding quotes from a token. Used so a quoted
@@ -537,6 +495,9 @@ impl Validator for NetworkEgressValidator {
         {
             return None;
         }
+        if remembered_network_op(req, ctx) {
+            return None;
+        }
         if consent_allows(req, ctx) {
             return None;
         }
@@ -552,6 +513,41 @@ impl Validator for NetworkEgressValidator {
             containment_note: None,
         }))
     }
+}
+
+/// Whether the user remembered this network subcommand for the session.
+///
+/// Only a rule that names the subcommand counts. A tool-level allow says the
+/// shell may run, not that it may reach the network, so reading it here would
+/// turn one broad allow into standing egress consent.
+fn remembered_network_op(req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> bool {
+    // An explicit destination is never covered by a remembered remote: the
+    // answer was about the remotes git already had.
+    if egress_names_external_source(ctx.content) {
+        return false;
+    }
+    // Only a lone git call is covered. A remembered answer about a remote says
+    // nothing about the other commands a compound runs, and waiving the whole
+    // compound would let one remembered fetch carry an arbitrary call with it.
+    let mut segments = ctx
+        .content
+        .split(['&', ';', '|', '\n', '(', ')', '`'])
+        .filter(|part| !part.trim().is_empty());
+    let Some(only) = segments.next() else {
+        return false;
+    };
+    if segments.next().is_some() {
+        return false;
+    }
+    let Some(op) = egress_remote_op(only) else {
+        return false;
+    };
+    let prefix = format!("git {op}");
+    ctx.rules.iter().any(|rule| {
+        rule.effect == Effect::Allow
+            && rule.action.eq_ignore_ascii_case(req.tool_name)
+            && matches!(&rule.content, Some(RuleContent::Prefix(p)) if *p == prefix)
+    })
 }
 
 /// A compound shell command that is not statically attestable.

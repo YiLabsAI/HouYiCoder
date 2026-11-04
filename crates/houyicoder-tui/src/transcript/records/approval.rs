@@ -119,20 +119,47 @@ impl Approval {
         }
         match self.validator.as_deref() {
             Some(
-                "path_bounds"
-                | "path-bounds"
-                | "directory_capability"
-                | "directory-capability"
-                | "network_egress"
-                | "network-egress",
+                "path_bounds" | "path-bounds" | "directory_capability" | "directory-capability",
             ) => {
                 return false;
+            }
+            // A read that the fence already contains may land on yes
+            // unattended; sending the user's work to a remote may not.
+            Some("network_egress" | "network-egress") => {
+                return !self.egress_sends_work();
             }
             Some("git_checkpoint") => return !self.is_forced_push(),
             Some("tool_native") => return self.discards_changes(),
             _ => {}
         }
         true
+    }
+
+    /// Whether the network access this ask describes sends local work out.
+    ///
+    /// A read is recognized positively: every segment of the command must be a
+    /// form this walk knows to read. Anything it does not recognize is held for
+    /// a human, because a countdown that publishes the user's work is the
+    /// failure this exists to prevent.
+    fn egress_sends_work(&self) -> bool {
+        !reads_network(&self.egress_command())
+    }
+
+    /// The command a shell ask carries, read out of the serialized arguments.
+    ///
+    /// The classifiers work on a command line, not on the argument record, so
+    /// the two are not interchangeable. A record that does not parse falls back
+    /// to its own text, which still contains the command.
+    fn egress_command(&self) -> String {
+        serde_json::from_str::<serde_json::Value>(&self.args)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| self.args.clone())
     }
 
     /// Whether the serialized args name a forced push, the one git checkpoint
@@ -277,3 +304,85 @@ impl Approval {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether every segment of a command only reads from the network.
+fn reads_network(command: &str) -> bool {
+    let mut saw = false;
+    // The command keeps its case: a short flag is case-sensitive, and folding
+    // it would read an upload flag as the fail flag beside it.
+    for segment in command.split(['&', ';', '|', '\n', '(', ')', '`']) {
+        let words: Vec<&str> = segment
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
+            .filter(|w| !w.is_empty())
+            .collect();
+        let Some(&first) = words.first() else {
+            continue;
+        };
+        saw = true;
+        let reads = match first.to_ascii_lowercase().as_str() {
+            "git" => matches!(
+                git_subcommand(&words[1..]),
+                "pull" | "fetch" | "clone" | "ls-remote"
+            ),
+            "curl" | "wget" => !words.iter().any(|w| sends_body(w)),
+            // The group is the middle word, so the read verb is the third.
+            "gh" => matches!(
+                words.get(2).copied().unwrap_or(""),
+                "view" | "list" | "diff" | "checks" | "status"
+            ),
+            _ => false,
+        };
+        if !reads {
+            return false;
+        }
+    }
+    saw
+}
+
+/// The subcommand a git invocation runs, past the flags that precede it.
+///
+/// The flags that take a value are named rather than guessed: skipping only the
+/// flag would take its value for the subcommand and read a push as whatever
+/// that value happened to be.
+fn git_subcommand<'a>(args: &[&'a str]) -> &'a str {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if arg.starts_with('-') {
+            index += if matches!(arg, "-C" | "-c" | "--git-dir" | "--work-tree") {
+                2
+            } else {
+                1
+            };
+            continue;
+        }
+        return arg;
+    }
+    ""
+}
+
+/// Whether an argument turns a curl or wget request into an upload or a write
+/// on the far side.
+fn sends_body(word: &str) -> bool {
+    if let Some(long) = word.strip_prefix("--") {
+        let name = long.split('=').next().unwrap_or(long);
+        return matches!(
+            name,
+            "data"
+                | "data-raw"
+                | "data-binary"
+                | "data-urlencode"
+                | "form"
+                | "upload-file"
+                | "json"
+                | "post-data"
+                | "post-file"
+                | "body-data"
+        );
+    }
+    let Some(short) = word.strip_prefix('-') else {
+        return false;
+    };
+    !short.starts_with('-') && short.chars().any(|c| matches!(c, 'd' | 'F' | 'T'))
+}

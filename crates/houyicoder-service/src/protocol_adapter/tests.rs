@@ -1005,3 +1005,38 @@ fn test_run_result_maps_outcomes() {
     );
     assert!(matches!(budget.stop_reason, StopReason::MaxTurnRequests));
 }
+
+/// A remote git call names a configured remote, so the answer that fits is a
+/// session rule for that subcommand rather than one URL. A call that names its
+/// own destination keeps a single approval: remembering a configured remote
+/// must not cover an arbitrary host.
+#[test]
+fn test_git_remote_session_rule() {
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "network_egress".to_string(),
+        detail: "this command reaches the network".into(),
+        containment_note: None,
+    };
+    let input = serde_json::json!({"command": "git push origin main"});
+    match durable_grant("bash", &input, Some(&reason), FENCED, &[]) {
+        DurableGrant::Rule(rule) => {
+            assert_eq!(rule.scope, Scope::Session, "the answer lasts this session");
+            assert!(
+                matches!(&rule.content, Some(RuleContent::Prefix(p)) if p == "git push"),
+                "the rule names the subcommand: {:?}",
+                rule.content
+            );
+        }
+        _ => panic!("expected a session rule"),
+    }
+
+    let external = serde_json::json!({"command": "git push https://example.invalid/r main"});
+    assert!(
+        matches!(
+            durable_grant("bash", &external, Some(&reason), FENCED, &[]),
+            DurableGrant::Once
+        ),
+        "a named destination is not covered by a remembered remote"
+    );
+}

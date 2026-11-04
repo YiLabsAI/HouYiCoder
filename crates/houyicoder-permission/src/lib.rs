@@ -72,6 +72,8 @@ pub use guarded_tool::GuardedTool;
 pub use metrics::{DecisionBucket, DecisionCounter, outcome_label};
 pub use mode::{ModeChange, ModeError, PermissionMode, ToolRequest};
 pub use pipeline::detection::NETWORK_EGRESS;
+pub use pipeline::detection::egress_names_external_source;
+pub use pipeline::detection::egress_remote_op;
 pub use rule::{
     Effect, GlobPattern, Rule, RuleContent, bash_always_allow_prefix, builtin_rule_id,
     builtin_rules, denied_agent_types, evaluate, input_content,

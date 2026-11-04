@@ -88,6 +88,11 @@ const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "rev-parse",
     "rev-list",
     "hash-object",
+    // A fetch or a remote listing against a configured remote only moves local
+    // refs. A call that names an outside source is caught by the network check,
+    // which runs before this one, so the destination is never assumed here.
+    "fetch",
+    "ls-remote",
 ];
 
 /// Repository options that write a file, run a program the user did not

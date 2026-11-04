@@ -197,7 +197,7 @@ fn test_fenced_never_relaxes_immune() {
     fenced.add_rule(ask_rule.clone()).expect("saved");
     unfenced.add_rule(ask_rule).expect("saved");
 
-    let corpus: [(&str, Outcome); 12] = [
+    let corpus: [(&str, Outcome); 13] = [
         ("cat file", Outcome::Allow),
         ("ls", Outcome::Allow),
         ("rm -rf .git/", Outcome::Ask),
@@ -205,7 +205,8 @@ fn test_fenced_never_relaxes_immune() {
         ("curl http://x", Outcome::Ask),
         ("wget http://x", Outcome::Ask),
         ("git push", Outcome::Ask),
-        ("git fetch", Outcome::Ask),
+        ("git fetch https://x.example/r", Outcome::Ask),
+        ("git fetch origin", Outcome::Allow),
         ("git commit -m x", Outcome::Ask),
         ("git rebase main", Outcome::Ask),
         ("cargo publish", Outcome::Ask),

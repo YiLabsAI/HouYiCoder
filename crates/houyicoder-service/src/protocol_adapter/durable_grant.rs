@@ -155,10 +155,28 @@ pub(crate) fn durable_grant(
         if !egress_outputs_safe(&command, fence.writes_confined) {
             return DurableGrant::Once;
         }
-        return match houyicoder_permission::egress_scope_list(&command, fence.writes_confined) {
-            Some(scopes) if !scopes.is_empty() => DurableGrant::Network(scopes),
-            _ => DurableGrant::Once,
-        };
+        if let Some(scopes) =
+            houyicoder_permission::egress_scope_list(&command, fence.writes_confined)
+            && !scopes.is_empty()
+        {
+            return DurableGrant::Network(scopes);
+        }
+        // A remote git call names a configured remote rather than one URL, so
+        // there is no destination to remember. The answer that fits is a
+        // session rule for that subcommand, offered only while the call names
+        // no destination of its own: remembering a configured remote must not
+        // cover a later call to an arbitrary host.
+        if !houyicoder_permission::egress_names_external_source(&command)
+            && let Some(op) = houyicoder_permission::egress_remote_op(&command)
+            && let Ok(rule) = Rule::with_content(
+                tool_name,
+                RuleContent::Prefix(format!("git {op}")),
+                Effect::Allow,
+            )
+        {
+            return DurableGrant::Rule(rule.with_scope(Scope::Session));
+        }
+        return DurableGrant::Once;
     }
     // The four history-moving git subcommands shadow their builtin ask rule
     // for this session only: the approval is about one commit, not about every

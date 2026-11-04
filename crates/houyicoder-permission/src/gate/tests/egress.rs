@@ -30,7 +30,12 @@ fn test_egress_detects_all_channels() {
             "direct egress `{cmd}` should Ask"
         );
     }
-    let git = ["git clone u", "git fetch", "git pull", "git ls-remote u"];
+    let git = [
+        "git clone u",
+        "git fetch https://x.example/r",
+        "git pull",
+        "git ls-remote https://x.example/r",
+    ];
     for cmd in git {
         assert!(
             g.decide(&bash_req(cmd)).outcome() == Outcome::Ask,
@@ -49,7 +54,12 @@ fn test_egress_detects_all_channels() {
 fn test_egress_channels_always_ask() {
     // C3: all egress channels Ask regardless of fence state.
     let g = DefaultModeGate::with_mode(PermissionMode::Auto);
-    for cmd in ["wget http://x", "git fetch", "cargo publish", "pip upload"] {
+    for cmd in [
+        "wget http://x",
+        "git fetch https://x.example/r",
+        "cargo publish",
+        "pip upload",
+    ] {
         assert!(
             g.decide(&bash_req(cmd)).outcome() == Outcome::Ask,
             "egress `{cmd}` should Ask"

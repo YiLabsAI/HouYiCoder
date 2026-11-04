@@ -32,8 +32,8 @@ fn test_level1_compound_destructive() {
     assert!(card("destructive_command", None, "rm /tmp/x").auto_approve_eligible());
 }
 
-/// A protected path, a bounds-widening ask, a network call, and a forced push
-/// are Level 2: each needs a human press and never auto-approves.
+/// A protected path, a bounds-widening ask, and a network call that sends work
+/// out are Level 2: each needs a human press and never auto-approves.
 #[test]
 fn test_level2_never_approves() {
     assert!(
@@ -46,7 +46,8 @@ fn test_level2_never_approves() {
     );
     assert!(!card("path_bounds", None, "cd /etc").auto_approve_eligible());
     assert!(!card("directory_capability", None, "ls /private").auto_approve_eligible());
-    assert!(!card("network_egress", None, "curl http://x").auto_approve_eligible());
+    assert!(!card("network_egress", None, "curl -d @f http://x").auto_approve_eligible());
+    assert!(!card("network_egress", None, "git push origin main").auto_approve_eligible());
     assert!(
         !card("git_checkpoint", None, "git push --force origin main").auto_approve_eligible(),
         "a forced push rewrites published history"
@@ -151,4 +152,58 @@ fn test_auto_approve_fires() {
     assert!(!a.auto_approve_expired(now), "not yet expired");
     let later = now + Duration::from_secs(4);
     assert!(a.auto_approve_expired(later), "expired after the deadline");
+}
+
+/// A network call that only reads may count down: the fence contains it and
+/// the worst a wrong yes does is fetch something. A call that sends the user's
+/// work out may not, whatever else the card offers.
+#[test]
+fn test_network_read_counts_down() {
+    for args in [
+        "git pull",
+        "git fetch origin",
+        "git clone https://example.test/r",
+        "curl https://example.test/",
+        "wget https://example.test/f",
+        "gh pr view 12",
+    ] {
+        assert!(
+            card("network_egress", None, args).auto_approve_eligible(),
+            "{args} only reads and may count down"
+        );
+    }
+    for args in [
+        "git push origin main",
+        "npm publish",
+        "cargo publish",
+        "pip upload dist/x",
+        "scp out.tar host:/tmp",
+        "rsync -a ./ host:/tmp",
+        "curl --upload-file f https://example.test/",
+        "curl -F file=@x https://example.test/",
+    ] {
+        assert!(
+            !card("network_egress", None, args).auto_approve_eligible(),
+            "{args} sends work out and must be held"
+        );
+    }
+}
+
+/// A flag in front of the subcommand does not hide a send, and a form the walk
+/// does not recognize is held rather than counted down.
+#[test]
+fn test_network_unrecognized_holds() {
+    for args in [
+        "git -C repo push origin main",
+        "git --git-dir=r push origin main",
+        "git push origin main",
+        "ssh host uptime",
+        "nc example.com 80",
+        "some-tool --send it",
+    ] {
+        assert!(
+            !card("network_egress", None, args).auto_approve_eligible(),
+            "{args} is not a recognized read and must be held"
+        );
+    }
 }

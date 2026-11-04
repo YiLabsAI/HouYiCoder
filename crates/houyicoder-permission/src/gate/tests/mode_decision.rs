@@ -189,6 +189,94 @@ fn test_auto_asks_destructive_rm() {
     ));
 }
 
+/// A fetch or a remote listing against the repository's own remotes only moves
+/// local refs, so Auto runs it like any other read. A call that names a source
+/// the user never configured still asks, and a push always asks.
+#[test]
+fn test_auto_fetch_configured_remote() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    for command in [
+        "git fetch",
+        "git fetch origin",
+        "git fetch --all --prune",
+        "git ls-remote origin HEAD",
+    ] {
+        assert!(
+            !matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} reads configured remotes and must not ask"
+        );
+    }
+    for command in [
+        "git fetch https://example.invalid/repo",
+        "git ls-remote git@example.invalid:repo",
+        "git fetch --upload-pack=/tmp/x origin",
+        "git push origin main",
+        "git pull",
+    ] {
+        assert!(
+            matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} reaches a destination the user did not configure, or sends work"
+        );
+    }
+}
+
+/// A remembered remote subcommand settles the network question for this
+/// session, and a tool-level allow does not: one says the shell may run, the
+/// other says it may reach the network.
+#[test]
+fn test_remembered_remote_op_settles() {
+    let g = DefaultModeGate::with_mode(PermissionMode::Auto);
+    let req = bash_req("git push origin main");
+    assert!(matches!(g.decide(&req).outcome(), Outcome::Ask));
+
+    // A tool-level allow leaves the network question open.
+    g.add_rule(Rule::new("bash", Effect::Allow).unwrap())
+        .expect("saved");
+    assert!(
+        matches!(g.decide(&req).outcome(), Outcome::Ask),
+        "a tool-level allow is not network consent"
+    );
+
+    // A rule naming the subcommand settles it.
+    g.add_rule(
+        Rule::with_content(
+            "bash",
+            RuleContent::Prefix("git push".into()),
+            Effect::Allow,
+        )
+        .unwrap()
+        .with_scope(Scope::Session),
+    )
+    .expect("saved");
+    assert!(
+        !matches!(g.decide(&req).outcome(), Outcome::Ask),
+        "the remembered subcommand settles the ask"
+    );
+    // A call that names its own destination is not covered.
+    for command in [
+        "git push https://example.invalid/r main",
+        "git push user@example.invalid:repo main",
+        "git push --upload-pack=/tmp/x origin main",
+        "GIT_SSH_COMMAND=/tmp/x git push origin main",
+    ] {
+        assert!(
+            matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} names a destination the user did not configure"
+        );
+    }
+    // A remembered answer covers a lone call, not the other commands a
+    // compound runs with it.
+    for command in [
+        "git push origin main && curl https://example.invalid/x",
+        "git push origin main; git fetch https://example.invalid/r",
+    ] {
+        assert!(
+            matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
+            "{command} must not ride a remembered remote"
+        );
+    }
+}
+
 /// A command that signals another process asks in every mode, because the
 /// kernel permits the signal and this is the only place that decides it. The
 /// check reads the command position, so prose that mentions the word is not a
@@ -922,7 +1010,14 @@ fn test_egress_no_false_positive() {
         g.decide(&bash_req("curl http://evil.com")).outcome(),
         Outcome::Ask
     ));
+    // A remote listing that names its own host is still an egress call; the
+    // bare form reads the remotes git already has configured.
     assert!(matches!(
+        g.decide(&bash_req("git ls-remote https://x.example/r"))
+            .outcome(),
+        Outcome::Ask
+    ));
+    assert!(!matches!(
         g.decide(&bash_req("git ls-remote origin")).outcome(),
         Outcome::Ask
     ));
