@@ -17,7 +17,7 @@ fn test_persist_then_trusted() {
     let path = settings_file("roundtrip");
     // Seed an unrelated key so the merge-preserving write must keep it.
     fs::write(&path, r#"{"model":{"id":"opencoder"}}"#).unwrap();
-    let proj = temp_dir().join("trust-proj-roundtrip");
+    let proj = temp_dir().join(format!("trust-proj-roundtrip-{}", id()));
     drop(fs::remove_dir_all(&proj));
     fs::create_dir_all(&proj).unwrap();
 
@@ -38,7 +38,7 @@ fn test_persist_then_trusted() {
 #[test]
 fn test_ancestor_trust_covers_child() {
     let path = settings_file("ancestor");
-    let root = temp_dir().join("trust-ancestor-root");
+    let root = temp_dir().join(format!("trust-ancestor-root-{}", id()));
     drop(fs::remove_dir_all(&root));
     let parent = root.join("parent");
     let child = parent.join("child");
@@ -60,7 +60,7 @@ fn test_ancestor_trust_covers_child() {
 #[test]
 fn test_untrusted_returns_false() {
     let path = settings_file("none");
-    let proj = temp_dir().join("trust-proj-none");
+    let proj = temp_dir().join(format!("trust-proj-none-{}", id()));
     drop(fs::remove_dir_all(&proj));
     fs::create_dir_all(&proj).unwrap();
 
