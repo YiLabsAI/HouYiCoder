@@ -179,7 +179,11 @@ impl Tool for DelegationTool {
                 ));
             };
             match handle.spawn(&ctx, args).await {
-                Ok(outcome) => Ok(build_tool_result(outcome, def.color.as_deref())),
+                Ok(outcome) => Ok(build_tool_result(
+                    outcome,
+                    def.color.as_deref(),
+                    &subagent_type,
+                )),
                 Err(failure) => Err(ToolError::Failed(spawn_failure_msg(failure))),
             }
         })
@@ -277,11 +281,45 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
 /// Build the tool_result JSON from a spawn outcome. A foreground outcome
 /// carries the child's summary text, session id (the result ref for
 /// follow-up), terminal status, and usage; an empty summary gets a placeholder
-/// so the parent does not read "nothing" as "done", and a summary past the 100k
-/// char cap is tail-truncated with a note that the child log holds the full
-/// output. A background outcome carries no usage or terminal status: its
-/// content says the result arrives later as a turn-boundary notification.
-fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
+/// so the parent does not read an empty summary as a finished answer, and a
+/// summary past the two-thousand-token inline budget keeps its head and tail
+/// with a spill pointer naming the child. A background outcome carries no
+/// usage or terminal status; its content says the result arrives later as a
+/// turn-boundary notification.
+/// Bound a child summary to the inline budget, shared by the delegation
+/// result and the background completion notice. The head and the tail are
+/// kept — the head names what the child set out to find, the tail carries
+/// its conclusions — each cut at a newline so no line arrives half-spoken,
+/// and the middle names the task id so the model pages the rest through
+/// task_output instead of receiving it whole.
+pub fn bound_child_summary(content: &str, child_id: &str) -> String {
+    const MAX_SUMMARY_CHARS: usize = 8_000;
+    const HEAD_CHARS: usize = 2_500;
+    const TAIL_CHARS: usize = 5_000;
+    let total = content.chars().count();
+    if total <= MAX_SUMMARY_CHARS {
+        return content.to_string();
+    }
+    let head: String = content.chars().take(HEAD_CHARS).collect();
+    let head = match head.rfind('\n') {
+        Some(at) => head[..=at].to_string(),
+        None => head,
+    };
+    let tail_start = total.saturating_sub(TAIL_CHARS);
+    let tail: String = content.chars().skip(tail_start).collect();
+    let tail = match tail.find('\n') {
+        Some(at) => tail[at + 1..].to_string(),
+        None => tail,
+    };
+    let omitted = total - head.chars().count() - tail.chars().count();
+    format!(
+        "{head}[summary truncated to fit the 2k-token budget; \
+         {omitted} chars omitted; call task_output with \
+         task_id=\"{child_id}\" and offset/limit to read the full output]\n{tail}",
+    )
+}
+
+fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>, subagent_type: &str) -> Value {
     let usage = outcome.usage;
     let background = outcome.background;
     let status = outcome.status.clone().unwrap_or_default();
@@ -311,19 +349,29 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
         }
         None => {}
     }
-    const MAX_CHARS: usize = 100_000;
-    let truncated = content.chars().count() > MAX_CHARS;
-    if truncated {
-        let tail: String = content
-            .chars()
-            .rev()
-            .take(MAX_CHARS)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        content = format!("[truncated; the child log holds the full output]\n{tail}",);
-    }
+    // The inline summary is bounded to roughly two thousand tokens so a long
+    // child report cannot crowd the parent's context; the shared bound also
+    // governs the background completion notice, so both delivery paths hold
+    // the same budget.
+    let content = bound_child_summary(&content, &child);
+    // A finished child a caller can continue: the envelope names how, in its
+    // own field, so the child's answer stays verbatim. One-shot readers
+    // (explore, plan) exist to hand back a report and be dropped, so they
+    // carry no continuation hint; every other terminal result does. A
+    // background launch is not finished, so its result says nothing here.
+    let continuation = if background.is_none() {
+        let one_shot = matches!(subagent_type, "explore" | "plan");
+        let terminal = !status.is_empty() && status != "running";
+        (terminal && !one_shot && !content.is_empty()).then(|| {
+            format!(
+                "To continue this agent's work, call send_message with \
+                 to=\"{child}\"; to read its full output, call task_output with \
+                 task_id=\"{child}\"."
+            )
+        })
+    } else {
+        None
+    };
     // The badge color is surfaced so the TUI can color the teammate header
     // and the inline fold-group summary without a registry lookup. Null
     // (not omitted) when the agent has no color, so the TUI distinguishes
@@ -343,6 +391,11 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>) -> Value {
         "result_ref": result_ref,
         "color": color,
     });
+    // The continuation hint is written only when it exists, so readers that
+    // distinguish an absent field from a null do not see a null.
+    if let Some(text) = continuation {
+        result["continuation"] = Value::String(text);
+    }
     // A background child has no measured usage yet. Omitting the field keeps
     // unknown distinct from a measured zero for a reader that later sums it.
     if let Some(usage) = usage {
@@ -370,6 +423,7 @@ pub(crate) fn orphaned_result(child: &str, status: &str, summary: &str) -> Value
     build_tool_result(
         SpawnOutcome::foreground_without_usage(child, status, summary),
         None,
+        "general-purpose",
     )
 }
 

@@ -12,6 +12,7 @@ use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::NotificationTopic;
 use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::bound_child_summary;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, ChildRunMode, global_completed_topic,
 };
@@ -38,6 +39,9 @@ pub(crate) fn notification_text(
     status: &CompletionStatus,
     summary: &str,
 ) -> String {
+    // The notice holds the same inline budget the delegation result does, so
+    // a long background summary reaches the parent bounded on both paths.
+    let summary = bound_child_summary(summary, child_id);
     format!(
         "Subagent {subagent_type} ({short}) {status}: {summary}\nresumable via {child_id}",
         short = &child_id[..child_id.len().min(8)],

@@ -180,6 +180,7 @@ fn test_tool_result_placeholder() {
     let out = build_tool_result(
         SpawnOutcome::foreground("c1", "completed", "", Usage::default()),
         None,
+        "general-purpose",
     );
     assert_eq!(out["content"], "(Subagent returned no output.)");
     // No color surfaces as JSON null, not omitted.
@@ -190,7 +191,11 @@ fn test_tool_result_placeholder() {
 /// an empty foreground result.
 #[test]
 fn test_background_result_reports_start() {
-    let out = build_tool_result(SpawnOutcome::background_started("c1"), None);
+    let out = build_tool_result(
+        SpawnOutcome::background_started("c1"),
+        None,
+        "general-purpose",
+    );
     assert_eq!(
         out["status"], "",
         "background outcome carries no terminal status"
@@ -211,7 +216,11 @@ fn test_background_result_reports_start() {
 /// message that says nothing about work already running.
 #[test]
 fn test_outlived_wait_keeps_summary() {
-    let out = build_tool_result(SpawnOutcome::background_after_wait("c1", 5), None);
+    let out = build_tool_result(
+        SpawnOutcome::background_after_wait("c1", 5),
+        None,
+        "general-purpose",
+    );
     let content = out["content"].as_str().unwrap_or("");
     assert!(
         content.contains("exceeded the 5s foreground wait"),
@@ -227,7 +236,11 @@ fn test_outlived_wait_keeps_summary() {
 /// did not ask for the background and has no terminal result to read.
 #[test]
 fn test_handover_reports_launch() {
-    let out = build_tool_result(SpawnOutcome::background_handed_over("c1"), None);
+    let out = build_tool_result(
+        SpawnOutcome::background_handed_over("c1"),
+        None,
+        "general-purpose",
+    );
     let content = out["content"].as_str().unwrap_or("");
     assert!(
         content.contains("Launched in the background"),
@@ -246,7 +259,7 @@ fn test_handover_reports_launch() {
 fn test_direct_launch_replaces_summary() {
     let mut outcome = SpawnOutcome::background_started("c1");
     outcome.summary = Some("stale".into());
-    let out = build_tool_result(outcome, None);
+    let out = build_tool_result(outcome, None, "general-purpose");
     let content = out["content"].as_str().unwrap_or("");
     assert!(
         content.contains("Launched in the background"),
@@ -262,7 +275,11 @@ fn test_direct_launch_replaces_summary() {
 /// omitted so a reader cannot sum an unknown as a measured zero.
 #[test]
 fn test_background_omits_usage() {
-    let out = build_tool_result(SpawnOutcome::background_started("c1"), None);
+    let out = build_tool_result(
+        SpawnOutcome::background_started("c1"),
+        None,
+        "general-purpose",
+    );
     assert!(
         out.get("usage").is_none(),
         "unknown usage must not render as zero: {out}"
@@ -274,24 +291,57 @@ fn test_tool_result_carries_color() {
     let out = build_tool_result(
         SpawnOutcome::foreground("c1", "completed", "done", Usage::default()),
         Some("red"),
+        "general-purpose",
     );
     assert_eq!(out["color"], "red");
 }
 
+/// A summary past the inline budget keeps its two ends and names the task id
+/// so the model can page the rest through task_output. The head and the tail
+/// survive whole, and the marker states what was omitted.
 #[test]
-fn test_tool_result_truncates_tail() {
-    // 100k + 5 chars: the tail keeps the last 100k; the marker notes the
-    // child log holds the full output.
-    let big: String = "a".repeat(100_005);
+fn test_summary_spills_over_budget() {
+    // 9000 chars: 2500 head + 4000 middle + 2500 tail. The budget is 8000,
+    // so the head and the tail survive and the middle drops.
+    let mut big = String::new();
+    big.push_str(&"h".repeat(2_500));
+    big.push_str(&"m".repeat(4_000));
+    big.push_str(&"t".repeat(2_500));
     let out = build_tool_result(
         SpawnOutcome::foreground("child-xyz", "completed", &big, Usage::default()),
         None,
+        "general-purpose",
     );
     let content = out["content"].as_str().unwrap();
-    assert!(content.starts_with("[truncated; the child log holds the full output]"));
-    // tail-preserving: the last chars of the original survive.
-    assert!(content.ends_with("aaaaa"));
-    assert!(content.chars().count() < big.chars().count() + 200);
+    assert!(
+        content.contains("task_output with task_id=\"child-xyz\""),
+        "the spill marker names the task to page: {content}"
+    );
+    // The head and the tail survive whole.
+    assert!(content.starts_with("hhhh"), "the head survives");
+    assert!(content.ends_with("tttt"), "the tail survives");
+    // The body is bounded to the budget, not forwarded whole.
+    assert!(
+        content.chars().count() < big.chars().count(),
+        "the content is smaller than the original: {} vs {}",
+        content.chars().count(),
+        big.chars().count()
+    );
+}
+
+/// A summary under the inline budget passes through untouched: no marker,
+/// no spill pointer, exactly what the child answered.
+#[test]
+fn test_summary_under_budget() {
+    let body = "a".repeat(8_000);
+    let out = build_tool_result(
+        SpawnOutcome::foreground("c1", "completed", &body, Usage::default()),
+        None,
+        "general-purpose",
+    );
+    let content = out["content"].as_str().unwrap();
+    assert_eq!(content, &body);
+    assert!(!content.contains("task_output"));
 }
 
 #[test]
@@ -404,4 +454,34 @@ fn test_ceiling_ignores_wrong_type() {
         None,
         "a string is not a number"
     );
+}
+
+/// A one-shot child's result carries no continuation field at all, not a
+/// null: a reader that distinguishes absent from null reads absent.
+#[test]
+fn test_one_shot_omits_continuation() {
+    let out = build_tool_result(
+        SpawnOutcome::foreground("c1", "completed", "report", Usage::default()),
+        None,
+        "explore",
+    );
+    assert!(
+        out.get("continuation").is_none(),
+        "explore hands back a report and is dropped: {out}"
+    );
+}
+
+/// A delegable child's terminal result carries the continuation hint with
+/// both tool names and the child id, so the model reads how to continue.
+#[test]
+fn test_continuation_names_tools() {
+    let out = build_tool_result(
+        SpawnOutcome::foreground("child-9", "completed", "found it", Usage::default()),
+        None,
+        "general-purpose",
+    );
+    let hint = out["continuation"].as_str().expect("the hint is present");
+    assert!(hint.contains("send_message"), "{hint}");
+    assert!(hint.contains("task_output"), "{hint}");
+    assert!(hint.contains("child-9"), "{hint}");
 }

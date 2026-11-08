@@ -455,3 +455,40 @@ fn test_notification_names_full_child() {
         "the full id is there to continue the child: {text}"
     );
 }
+
+/// A background completion notice holds the same inline budget as a
+/// delegation result: a long summary keeps its head and tail with a spill
+/// pointer naming the child, so a long child report cannot crowd the
+/// parent's context through the notification path either.
+#[test]
+fn test_notice_bounds_summary() {
+    let long = "x".repeat(9_000);
+    let text = notification_text(
+        "explore",
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        &CompletionStatus::Completed,
+        &long,
+    );
+    assert!(
+        text.chars().count() < long.chars().count(),
+        "the notice is smaller than the raw summary"
+    );
+    assert!(
+        text.contains("task_output with task_id=\"01ARZ3NDEKTSV4RRFFQ69G5FAV\""),
+        "the spill pointer names the child"
+    );
+}
+
+/// A short summary passes through the notice untouched: the budget only
+/// bounds the overlong, so ordinary endings read exactly what the child said.
+#[test]
+fn test_notice_keeps_short_summary() {
+    let text = notification_text(
+        "explore",
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        &CompletionStatus::Completed,
+        "done",
+    );
+    assert!(text.contains("done"), "{text}");
+    assert!(!text.contains("truncated"), "{text}");
+}
