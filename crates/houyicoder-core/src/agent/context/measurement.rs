@@ -144,7 +144,7 @@ impl ContextMeasurement {
                 is_reserved: false,
             });
         }
-        let grid = build_grid(&categories, context_window, 80);
+        let grid = build_grid(&categories, context_window, 80, None);
         ContextBreakdown {
             model: model.to_string(),
             total_tokens: total,

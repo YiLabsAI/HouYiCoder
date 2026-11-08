@@ -3,7 +3,9 @@
 
 use super::super::suggestions_for;
 use crate::records::SuggestionSeverity;
-use houyicoder_protocol::frontend::context::{ContextBreakdown, ContextFileEntry, ToolFootprint};
+use houyicoder_protocol::frontend::context::{
+    CategoryBreakdown, ContextBreakdown, ContextFileEntry, ToolFootprint,
+};
 
 /// A breakdown whose only content is the footprints and memory files given, so
 /// a band crossing comes from the measurement under test rather than from a
@@ -244,5 +246,57 @@ fn test_warnings_sort_first() {
             .iter()
             .all(|s| *s == SuggestionSeverity::Warning),
         "no warning sorts after an informational row: {severities:?}"
+    );
+}
+
+#[test]
+fn test_large_window_1m_adapts() {
+    // In a 1M window, 35.6k of memory files is 3.56% (below 5% window share),
+    // but its absolute cost of 35.6k is high enough that it must fire.
+    let bd = breakdown(
+        1_000_000,
+        vec![footprint("bash", 1_000, 39_000)], // 40k bash
+        vec![memory_file("MEMORY.md", 35_600)],
+    );
+    let suggestions = suggestions_for(&bd);
+    assert!(
+        suggestions.iter().any(|s| s.title.contains("Bash results")),
+        "40k bash in 1M window fires by absolute/used-share: {suggestions:?}"
+    );
+    assert!(
+        suggestions.iter().any(|s| s.title.contains("Memory files")),
+        "35.6k memory in 1M window fires by absolute watermark: {suggestions:?}"
+    );
+}
+
+#[test]
+fn test_compact_bloat_warns() {
+    let mut bd = breakdown(
+        400_000,
+        vec![footprint("read", 500, 22_000)],
+        vec![memory_file("MEMORY.md", 21_000)],
+    );
+    bd.total_tokens += 182_400;
+    bd.categories.push(CategoryBreakdown {
+        label: "Compact buffer".into(),
+        color_hint: 109,
+        tokens: 182_400,
+        is_deferred: false,
+        is_reserved: false,
+    });
+    let suggestions = suggestions_for(&bd);
+    assert!(
+        suggestions
+            .iter()
+            .any(|s| s.title.contains("Compacted history using 182.4k tokens")),
+        "oversized compact buffer warns: {suggestions:?}"
+    );
+    assert!(
+        suggestions.iter().any(|s| s.title.contains("File reads")),
+        "22k file reads in 400k window fires: {suggestions:?}"
+    );
+    assert!(
+        suggestions.iter().any(|s| s.title.contains("Memory files")),
+        "21k memory in 400k window fires: {suggestions:?}"
     );
 }

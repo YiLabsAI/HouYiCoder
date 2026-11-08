@@ -66,109 +66,27 @@ pub(super) fn cas_rows(cas: Option<&CasUsage>) -> Vec<Vec<Span<'static>>> {
     let dim = Style::new().fg(Color::DarkGray);
     let mut rows: Vec<Vec<Span>> = Vec::new();
     rows.push(vec![
-        Span::styled("CAS storage", bold),
+        Span::styled("Saved large outputs", bold),
         Span::styled(" \u{00b7} /trajectory", dim),
     ]);
-    let results = match cas.results {
-        Some(n) => n.to_string(),
-        None => "unknown".to_string(),
-    };
-    let captured = format!(
-        "captured: raw {} \u{00b7} {} save failed \u{00b7} {} truncated",
-        cas.raw_bytes
-            .map(format_byte_size)
-            .unwrap_or_else(|| "unknown".to_string()),
-        cas.save_failed
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        cas.truncated
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-    );
-    let mut lines = vec![
-        format!(
-            "results: {results} \u{00b7} unique blocks: {} \u{00b7} verified: unknown",
-            cas.blocks
+    let results = cas.results.unwrap_or(0);
+    let raw_str = cas
+        .raw_bytes
+        .map(format_byte_size)
+        .unwrap_or_else(|| "0 B".to_string());
+    let model_str = cas
+        .assembly
+        .as_ref()
+        .and_then(assembly_size)
+        .unwrap_or_else(|| "~0 tokens".to_string());
+    rows.push(vec![
+        Span::styled("\u{2514} ", dim),
+        Span::styled(
+            format!(
+                "{results} large results offloaded ({raw_str} raw \u{2192} {model_str} in context)"
+            ),
+            dim,
         ),
-        match cas.unmeasured_results.filter(|n| *n > 0) {
-            Some(unmeasured) => format!("{captured} \u{00b7} {unmeasured} unmeasured"),
-            None => captured,
-        },
-        assembly_row(cas.assembly.as_ref()),
-        index_row(cas),
-        reads_row(cas),
-    ];
-    if !cas.tracked {
-        lines.push(
-            "this log predates the capture account \u{00b7} only the block count is measured"
-                .to_string(),
-        );
-    }
-    let last = lines.len().saturating_sub(1);
-    for (i, line) in lines.drain(..).enumerate() {
-        rows.push(vec![
-            Span::styled(if i == last { "\u{2514} " } else { "\u{251C} " }, dim),
-            Span::styled(line, dim),
-        ]);
-    }
+    ]);
     rows
-}
-
-fn reads_row(cas: &CasUsage) -> String {
-    if !cas.reads_recorded {
-        return "reads: not recorded".to_string();
-    }
-    let mut row = format!(
-        "reads: model {} \u{00b7} UI {} \u{00b7} failed {} \u{00b7} /trajectory",
-        cas.model_reads,
-        cas.ui_reads
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        cas.failed_reads,
-    );
-    if cas.unknown_reads > 0 {
-        row.push_str(&format!(" \u{00b7} unknown {}", cas.unknown_reads));
-    }
-    row
-}
-
-fn assembly_row(assembly: Option<&CasAssemblyUsage>) -> String {
-    let Some(assembly) = assembly else {
-        return "current assembly: unknown".to_string();
-    };
-    let mut forms = vec![
-        format!("{} full", assembly.full),
-        format!("{} preview", assembly.preview),
-        format!("{} pointer", assembly.pointer),
-    ];
-    if assembly.unavailable > 0 {
-        forms.push(format!("{} unavailable", assembly.unavailable));
-    }
-    if assembly.unclassified > 0 {
-        forms.push(format!("{} unclassified", assembly.unclassified));
-    }
-    let size = assembly_size(assembly).unwrap_or_else(|| "unknown size".to_string());
-    format!("current assembly: {} ({})", size, forms.join(", "))
-}
-
-fn index_row(cas: &CasUsage) -> String {
-    let Some(index) = cas.indexed.as_ref() else {
-        return "indexed: unavailable".to_string();
-    };
-    let coverage = if index.complete {
-        "complete"
-    } else {
-        "partial"
-    };
-    let as_of = index.as_of.as_deref().unwrap_or("unknown");
-    let held = match cas.results {
-        Some(results) if results > 0 => format!("{}/{}", index.indexed, results),
-        Some(_) => index.indexed.to_string(),
-        None => format!("{} of unknown", index.indexed),
-    };
-    let mut row = format!("indexed: {held} \u{00b7} {coverage} \u{00b7} as of event {as_of}");
-    if index.corrupt > 0 {
-        row.push_str(&format!(" \u{00b7} {} corrupt", index.corrupt));
-    }
-    row
 }

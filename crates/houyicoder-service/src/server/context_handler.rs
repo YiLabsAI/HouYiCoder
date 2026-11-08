@@ -9,6 +9,7 @@ use crate::protocol_adapter as pa;
 use crate::protocol_adapter::cas_usage::{map_cas_usage, reports_cas};
 use houyicoder_core::agent::CategoryBreakdown;
 use houyicoder_core::agent::SectionKind;
+use houyicoder_protocol::frontend::context::build_grid;
 use pa::compaction::map_compact_reply;
 
 impl Server {
@@ -44,6 +45,10 @@ impl Server {
         bd.compact_summary = self.runner.compact_summary(self.session).await;
         let summary_tokens = self.runner.compact_summary_tokens(self.session).await;
         if summary_tokens > 0 {
+            // Subtract summary_tokens from Messages to prevent double counting.
+            if let Some(msg_cat) = bd.categories.iter_mut().find(|c| c.label == "Messages") {
+                msg_cat.tokens = msg_cat.tokens.saturating_sub(summary_tokens);
+            }
             let insert_at = bd
                 .categories
                 .iter()
@@ -53,12 +58,40 @@ impl Server {
                 insert_at,
                 CategoryBreakdown {
                     label: "Compact buffer".into(),
-                    color_hint: 61,
+                    color_hint: 109,
                     tokens: summary_tokens,
                     is_deferred: false,
                     is_reserved: false,
                 },
             );
+        }
+        // Add Autocompact buffer reservation when applicable, aligning with
+        // proactive auto-compaction safety headroom.
+        const AUTOCOMPACT_RESERVE_TOKENS: u32 = 33_000;
+        let window = snap.context_window;
+        let total_content = bd
+            .categories
+            .iter()
+            .filter(|c| !c.is_reserved && !c.is_deferred && c.label != "Free space")
+            .map(|c| c.tokens)
+            .sum::<u32>();
+        let free_raw = window.saturating_sub(total_content);
+        let reserved_tokens = if window >= 100_000 && free_raw > AUTOCOMPACT_RESERVE_TOKENS {
+            AUTOCOMPACT_RESERVE_TOKENS
+        } else {
+            0
+        };
+        if let Some(free_cat) = bd.categories.iter_mut().find(|c| c.label == "Free space") {
+            free_cat.tokens = free_raw.saturating_sub(reserved_tokens);
+        }
+        if reserved_tokens > 0 {
+            bd.categories.push(CategoryBreakdown {
+                label: "Autocompact buffer".into(),
+                color_hint: 244,
+                tokens: reserved_tokens,
+                is_deferred: false,
+                is_reserved: true,
+            });
         }
         // The prefix the request repeats across turns is the whole system
         // prompt, memory blocks included, plus the tool schemas.
@@ -71,8 +104,25 @@ impl Server {
         let usage = &snap.cumulative_usage;
         // The same ratio the status Usage rows render, from one definition.
         bd.cache_hit_rate = usage.cache_hit_rate();
+        let cas = self.cas_usage().await;
+        // Rebuild grid with updated categories and exact legend row count so
+        // the left grid and right legend align without under-run or extra rows.
+        let legend_rows_count = 3
+            + bd.categories
+                .iter()
+                .filter(|c| c.tokens > 0 && !c.is_deferred)
+                .count()
+            + usize::from(bd.cache_prefix_tokens.is_some())
+            + usize::from(bd.compact_summary.is_some())
+            + usize::from(cas.is_some());
+        bd.grid = build_grid(
+            &bd.categories,
+            bd.context_window,
+            80,
+            Some(legend_rows_count),
+        );
         let mut context = pa::map_context_breakdown(&bd);
-        context.cas = self.cas_usage().await;
+        context.cas = cas;
         self.send_response(io, req_id, ResponsePayload::Context(context))
             .await
     }

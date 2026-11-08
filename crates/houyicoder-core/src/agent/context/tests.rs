@@ -776,7 +776,7 @@ fn test_build_grid_200k_100() {
             is_reserved: false,
         },
     ];
-    let grid = build_grid(&cats, 200_000, 100);
+    let grid = build_grid(&cats, 200_000, 100, None);
     // 10x10 = 100 cells, 10 rows of 10.
     assert_eq!(grid.len(), 10, "10 rows");
     assert!(grid.iter().all(|r| r.len() <= 10), "rows <= 10 wide");

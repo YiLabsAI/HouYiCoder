@@ -462,9 +462,13 @@ impl Runner {
             .filter(|g| matches!(g.disposition, Disposition::Summarized))
             .count();
         let summary_preview = truncate_summary_preview(manifest.summary.as_deref());
-        Some(format!(
-            "{compact_count} compacts · {folded} turns folded · {summary_preview}"
-        ))
+        if summary_preview.is_empty() {
+            Some(format!("{compact_count} compacts · {folded} turns folded"))
+        } else {
+            Some(format!(
+                "{compact_count} compacts · {folded} turns folded · {summary_preview}"
+            ))
+        }
     }
 }
 
@@ -477,7 +481,10 @@ fn truncate_summary_preview(summary: Option<&str>) -> String {
     let Some(s) = summary else {
         return String::new();
     };
-    let line = s.lines().next().unwrap_or("");
+    let line = s.lines().next().unwrap_or("").trim();
+    if line.is_empty() || line.starts_with("Earlier conversation context (") {
+        return String::new();
+    }
     // char_indices().nth(80) is the byte offset of the 81st char; if present,
     // the line has >80 chars and we slice at that char boundary (safe).
     match line.char_indices().nth(80) {

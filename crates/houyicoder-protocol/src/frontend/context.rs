@@ -281,19 +281,28 @@ pub struct CasUsage {
 /// count reflects its token share of the window, with reserved categories
 /// allocated first and free space filling the rest. Pure-data over the wire
 /// types, so the frontend can render the viz without an engine dependency.
+///
+/// When target_height is provided (e.g. from legend rows count), the grid
+/// height dynamically adapts so the left visual block matches or exceeds the
+/// right legend, avoiding awkward layout under-runs.
 pub fn build_grid(
     categories: &[CategoryBreakdown],
     context_window: u32,
     terminal_cols: u16,
+    target_height: Option<usize>,
 ) -> Vec<Vec<GridCell>> {
     if context_window == 0 || categories.is_empty() {
         return Vec::new();
     }
     let narrow = terminal_cols < 80;
-    let (w, h) = if context_window >= 1_000_000 {
+    let (w, base_h) = if context_window >= 1_000_000 {
         (if narrow { 5 } else { 20 }, 10)
     } else {
         (if narrow { 5 } else { 10 }, if narrow { 5 } else { 10 })
+    };
+    let h = match target_height {
+        Some(th) => base_h.max(th as u16),
+        None => base_h,
     };
     let total = (w as usize) * (h as usize);
     let reserved_count: usize = categories
@@ -420,7 +429,7 @@ pub fn stub_breakdown() -> ContextBreakdown {
         },
     ];
     let total: u32 = cats.iter().map(|c| c.tokens).sum();
-    let grid = build_grid(&cats, window, 100);
+    let grid = build_grid(&cats, window, 100, None);
     ContextBreakdown {
         model: "glm-5.2".into(),
         total_tokens: total,

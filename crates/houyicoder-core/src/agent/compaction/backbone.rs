@@ -247,6 +247,26 @@ pub fn derive_backbone(
     file_touch_set.sort();
     file_touch_set.dedup();
 
+    // Retain only the most recent test commands, truncated to a single line and capped.
+    let mut clean_tests: Vec<TestResult> = Vec::new();
+    for t in test_results.into_iter().rev() {
+        let first_line = t.command.lines().next().unwrap_or("").trim();
+        let cmd = if first_line.chars().count() > 120 {
+            format!("{}…", first_line.chars().take(120).collect::<String>())
+        } else {
+            first_line.to_string()
+        };
+        clean_tests.push(TestResult {
+            command: cmd,
+            outcome: t.outcome,
+        });
+        if clean_tests.len() >= 20 {
+            break;
+        }
+    }
+    clean_tests.reverse();
+    let test_results = clean_tests;
+
     let last_folded_event_id = folded.last().map(|e| e.id).unwrap_or_default();
     let (workspace_revision, dirty_tree_hash) = match probe {
         Some(p) => (p.git_rev(), p.dirty_tree_hash()),
@@ -273,8 +293,14 @@ pub fn render_backbone_block(b: &CompactBackbone) -> String {
     out.push_str("--- derived-from-log (authoritative) ---\n");
     if !b.file_touch_set.is_empty() {
         out.push_str("Files touched:\n");
-        for p in &b.file_touch_set {
+        for p in b.file_touch_set.iter().take(50) {
             out.push_str(&format!("- {p}\n"));
+        }
+        if b.file_touch_set.len() > 50 {
+            out.push_str(&format!(
+                "- ... and {} more files\n",
+                b.file_touch_set.len() - 50
+            ));
         }
     }
     if !b.test_results.is_empty() {

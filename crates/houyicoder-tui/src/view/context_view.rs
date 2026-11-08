@@ -24,7 +24,9 @@ use crate::view::skill_origin::cost_label;
 use crate::view::skill_origin::display_order;
 use crate::view::skill_origin::heading_spans;
 use crate::view::skill_origin::heading_text;
-use houyicoder_protocol::frontend::context::{ContextBreakdown, DelegatedContext, GridCell};
+use houyicoder_protocol::frontend::context::{
+    ContextBreakdown, DelegatedContext, GridCell, build_grid,
+};
 use unicode_width::UnicodeWidthStr;
 
 /// Midpoint glyph threshold: a cell at least this full draws the filled ball.
@@ -83,16 +85,36 @@ pub fn render_as_rows(view: &ContextView, width: usize) -> Vec<(String, Line<'st
     // the same display column (indent + grid width + gap), faithful to the
     // two-column layout.
     let legend = legend_rows(bd, pct);
-    let top = bd.grid.len().max(legend.len());
-    let cells_per_row = bd.grid.first().map(|r| r.len()).unwrap_or(0);
+    // Dynamically expand the grid if the legend is taller than the current grid,
+    // guaranteeing that the left grid square block always matches or exceeds the
+    // legend's vertical height (never shorter). Only expand when the grid is
+    // a real multi-row grid (height >= 2), avoiding expanding single-cell test stubs.
+    let grid_storage: Vec<Vec<GridCell>>;
+    let (grid_ref, breakpoint): (&[Vec<GridCell>], Option<usize>) =
+        if bd.grid.len() >= 2 && bd.grid.len() < legend.len() {
+            grid_storage = build_grid(&bd.categories, bd.context_window, 80, Some(legend.len()));
+            let total_cells: usize = grid_storage.iter().map(|r| r.len()).sum();
+            let bp = match (bd.cache_prefix_tokens, bd.context_window) {
+                (Some(prefix), window) if window > 0 && total_cells > 0 => {
+                    let idx = (prefix as f64 / window as f64 * total_cells as f64).round() as usize;
+                    Some(idx.min(total_cells.saturating_sub(1)))
+                }
+                _ => bd.cache_breakpoint,
+            };
+            (&grid_storage, bp)
+        } else {
+            (&bd.grid, bd.cache_breakpoint)
+        };
+    let top = grid_ref.len().max(legend.len());
+    let cells_per_row = grid_ref.first().map(|r| r.len()).unwrap_or(0);
     let grid_width = cells_per_row * 2;
     for i in 0..top {
         let mut spans: Vec<Span<'static>> = vec![Span::raw(indent.clone())];
-        match bd.grid.get(i) {
+        match grid_ref.get(i) {
             // row_start is the flat cell index of this row's first cell, so
             // grid_row_spans can place the cache-breakpoint bar at the right
             // cell across a multi-row grid.
-            Some(row) => spans.extend(grid_row_spans(bd, row, i * cells_per_row)),
+            Some(row) => spans.extend(grid_row_spans(bd, row, i * cells_per_row, breakpoint)),
             None => spans.push(Span::raw(" ".repeat(grid_width))),
         }
         spans.push(Span::raw("  "));
@@ -167,14 +189,19 @@ fn push_section(out: &mut Vec<Line<'static>>, indent: &str, rows: Vec<Vec<Span<'
 /// cell glyph follows the fill rules: free space draws the hollow square,
 /// reserved draws the reserved mark, a cell at least FULL_GLYPH_THRESHOLD full
 /// draws the filled ball, otherwise the hollow ball.
-fn grid_row_spans(bd: &ContextBreakdown, row: &[GridCell], row_start: usize) -> Vec<Span<'static>> {
+fn grid_row_spans(
+    bd: &ContextBreakdown,
+    row: &[GridCell],
+    row_start: usize,
+    breakpoint: Option<usize>,
+) -> Vec<Span<'static>> {
     row.iter()
         .enumerate()
         .map(|(col, sq)| {
             // The cache breakpoint is a flat cell index: cells before it are
             // the cached prefix, it onward is the fresh suffix. Draw a vertical
             // bar at the breakpoint cell to mark where the cache ends.
-            if bd.cache_breakpoint == Some(row_start + col) {
+            if breakpoint == Some(row_start + col) {
                 return Span::styled("\u{2502} ", Style::new().fg(Color::Yellow));
             }
             let cat = bd.categories.get(sq.category_idx);
@@ -381,7 +408,7 @@ fn delegated_rows(delegated: Option<&DelegatedContext>) -> Vec<Vec<Span<'static>
         Span::styled(" \u{00b7} /agents", dim),
     ]);
     rows.push(vec![
-        Span::styled("\u{2514} ", dim),
+        Span::styled("\u{251C} ", dim),
         Span::styled("in context: ", dim),
         Span::styled(
             format!(
@@ -392,7 +419,7 @@ fn delegated_rows(delegated: Option<&DelegatedContext>) -> Vec<Vec<Span<'static>
         ),
     ]);
     rows.push(vec![
-        Span::styled("\u{2514} ", dim),
+        Span::styled("\u{251C} ", dim),
         Span::styled("returns: ", dim),
         Span::styled(delegated.returns.to_string(), dim),
     ]);

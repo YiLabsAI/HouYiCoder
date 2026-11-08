@@ -279,3 +279,19 @@ fn test_backbone_continuation() {
         "all completed items do not trigger continuation directive"
     );
 }
+
+#[test]
+fn test_derive_caps_rendered_files() {
+    let mut events = Vec::new();
+    for i in 0..60 {
+        let name = format!("src/file_{i:02}.rs");
+        events.push(tool_call(&format!("f{i}"), "edit", json!({"path": name})));
+    }
+    let ids = folded_ids(&events);
+    let b = derive_backbone(&events, &ids, None);
+    assert_eq!(b.file_touch_set.len(), 60);
+    let (_merged, conflict) = merge_summary("edited src/file_59.rs", &b);
+    assert_eq!(conflict.llm_fabrications, 0);
+    let rendered = render_backbone_block(&b);
+    assert!(rendered.contains("... and 10 more files"));
+}
