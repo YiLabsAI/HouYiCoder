@@ -49,7 +49,7 @@ use crate::observability::tool_failure_reason;
 use std::time::Instant;
 
 /// Forwards progress from one tool call to the tool-execution event handler,
-/// and refreshes the run-liveness pulse so a long tool that keeps producing
+/// and refreshes the run-liveness heartbeat so a long tool that keeps
 /// output is not mistaken for a stall. The call identity lets the host route
 /// each update to the correct tool.
 struct ToolExecutionReporter {
@@ -82,10 +82,11 @@ impl ToolProgressReporter for ToolExecutionReporter {
                 tail: update.tail,
             });
         }
-        // A tool that reported progress is alive: refresh the liveness pulse so
-        // a watchdog holding the run sees the I/O and does not cut it.
+        // A tool that reported progress is alive: refresh the liveness
+        // heartbeat so a watchdog holding the run sees the I/O and does not
+        // cut it.
         if let Some(lifecycle) = &self.lifecycle {
-            lifecycle.handle(RunLifecycleEvent::Pulse {
+            lifecycle.handle(RunLifecycleEvent::Heartbeat {
                 phase: LivenessPhase::Tool,
             });
         }
@@ -261,7 +262,7 @@ impl Runner {
                             // honoring cancellation (Grep/Glob) returns
                             // promptly on a stop; the batch select below drops
                             // whatever is still running in the group.
-                            self.pulse_tool();
+                            self.heartbeat(LivenessPhase::Tool);
                             let ctx = self.tool_ctx(id.as_str(), session, token);
                             let r = t.execute(ctx, input).await;
                             let duration_ms = start.elapsed().as_millis() as u64;

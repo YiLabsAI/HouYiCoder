@@ -19,11 +19,11 @@ use super::ending::EndingClaim;
 use super::spawn::CutReason;
 use super::spawn::PartialTranscript;
 
-/// The liveness state a watchdog reads: when the last pulse arrived and what
-/// phase the run was in. A stalled child (no pulse within the idle window) is
-/// cut with the phase naming where it stopped.
+/// The liveness state a watchdog reads: when the last heartbeat arrived
+/// and what phase the run was in. A stalled child (no heartbeat within
+/// the idle window) is cut with the phase naming where it stopped.
 pub struct ChildLiveness {
-    last_pulse_ms: AtomicU64,
+    last_heartbeat_ms: AtomicU64,
     phase: Mutex<LivenessPhase>,
 }
 
@@ -36,20 +36,20 @@ impl Default for ChildLiveness {
 impl ChildLiveness {
     pub fn new() -> Self {
         Self {
-            last_pulse_ms: AtomicU64::new(now_ms()),
+            last_heartbeat_ms: AtomicU64::new(now_ms()),
             phase: Mutex::new(LivenessPhase::Streaming),
         }
     }
 
     pub fn record(&self, phase: LivenessPhase) {
-        self.last_pulse_ms.store(now_ms(), Ordering::Release);
+        self.last_heartbeat_ms.store(now_ms(), Ordering::Release);
         if let Ok(mut p) = self.phase.lock() {
             *p = phase;
         }
     }
 
-    pub fn last_pulse_ms(&self) -> u64 {
-        self.last_pulse_ms.load(Ordering::Acquire)
+    pub fn last_heartbeat_ms(&self) -> u64 {
+        self.last_heartbeat_ms.load(Ordering::Acquire)
     }
 
     pub fn phase(&self) -> LivenessPhase {
@@ -164,7 +164,7 @@ impl EventHandler<RunLifecycleEvent> for ChildStatusPublisher {
                     .publish(&progress_topic(&self.child.agent_id), message.clone());
                 self.bus.publish(global_progress_topic(), message);
             }
-            RunLifecycleEvent::Pulse { phase } => {
+            RunLifecycleEvent::Heartbeat { phase } => {
                 if let Some(liveness) = self.liveness.as_ref() {
                     liveness.record(phase);
                 }

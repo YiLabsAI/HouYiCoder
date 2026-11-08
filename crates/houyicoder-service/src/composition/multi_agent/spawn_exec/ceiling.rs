@@ -27,7 +27,8 @@ const MAX_PROBE: Duration = Duration::from_secs(120);
 #[cfg(test)]
 const MAX_PROBE: Duration = Duration::from_millis(80);
 
-/// How long a tool may run with no I/O pulse before the watchdog cuts it.
+/// How long a tool may run with no I/O heartbeat before the watchdog cuts
+/// it.
 /// The backoff probes sum to this (the base plus three doublings), so a tool
 /// that produced nothing across all four probes is cut at the last one.
 #[cfg(not(test))]
@@ -42,14 +43,14 @@ pub(super) const DEFAULT_MAX_WALL_CLOCK: Duration = Duration::from_secs(3600);
 const APPROVAL_WINDOW: Duration = Duration::from_secs(300);
 
 /// The probe interval at a given stall depth. The base doubles each probe
-/// that finds no new pulse, capped at MAX_PROBE: 15s, 30s, 60s, 120s, 120s.
+/// that finds no new heartbeat, capped at MAX_PROBE: 15s, 30s, 60s, 120s, 120s.
 fn probe_interval(stalled: u32) -> Duration {
     let shift = stalled.min(3);
     (BASE_PROBE * (1u32 << shift)).min(MAX_PROBE)
 }
 
 /// Await a child's drive under a liveness watchdog. A child that keeps
-/// producing pulses may run past the old fixed deadline; the watchdog cuts
+/// producing heartbeats may run past the old fixed deadline; the watchdog cuts
 /// only when the child goes quiet for the phase's window. The probe cadence
 /// backs off while a long tool runs so a healthy build or test suite is not
 /// polled at the streaming rate, and snaps back to the base the moment output
@@ -65,7 +66,7 @@ pub(super) async fn watch_liveness(
     let mut drive = Box::pin(drive);
     let start = Instant::now();
     let mut stalled_probes = 0u32;
-    let mut last_pulse = liveness.last_pulse_ms();
+    let mut last_heartbeat = liveness.last_heartbeat_ms();
     let mut last_phase = liveness.phase();
     loop {
         let phase = liveness.phase();
@@ -87,15 +88,15 @@ pub(super) async fn watch_liveness(
             _ = cancel.cancelled() => return drive.await,
             _ = sleep(probe) => {
                 let elapsed = start.elapsed();
-                let now_pulse = liveness.last_pulse_ms();
-                if now_pulse != last_pulse {
+                let now_heartbeat = liveness.last_heartbeat_ms();
+                if now_heartbeat != last_heartbeat {
                     // Output arrived since the last probe: reset the backoff.
                     stalled_probes = 0;
-                    last_pulse = now_pulse;
+                    last_heartbeat = now_heartbeat;
                 } else if phase == LivenessPhase::Tool {
                     stalled_probes = stalled_probes.saturating_add(1);
                 }
-                let idle = elapsed_from_ms(liveness.last_pulse_ms());
+                let idle = elapsed_from_ms(liveness.last_heartbeat_ms());
                 let window = match phase {
                     LivenessPhase::Approval => APPROVAL_WINDOW,
                     LivenessPhase::Tool => TOOL_QUIET_WINDOW,

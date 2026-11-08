@@ -141,32 +141,15 @@ impl Runner {
         self.user_turn.lock().expect("user_turn lock").begin();
     }
 
-    /// Record that the run is still producing while it waits on the model.
-    ///
-    /// A delegated child runs under a watchdog that cuts it after a stretch
-    /// with no progress. The pulse is the only signal that distinguishes slow
-    /// work from a stalled run, so the streaming path calls this as events
-    /// arrive rather than letting the last one stand for the whole call.
-    pub fn pulse_streaming(&self) {
-        self.events.emit_run_lifecycle(RunLifecycleEvent::Pulse {
-            phase: LivenessPhase::Streaming,
-        });
-    }
-
-    /// Record that a tool is running. A tool call is progress even when the
-    /// model is silent, and it is the phase a stall is named after.
-    pub fn pulse_tool(&self) {
-        self.events.emit_run_lifecycle(RunLifecycleEvent::Pulse {
-            phase: LivenessPhase::Tool,
-        });
-    }
-
-    /// Record that the run is parked on a human answer. The watchdog reads
-    /// this phase to hold off its idle cut while the card is on screen.
-    pub fn pulse_approval(&self) {
-        self.events.emit_run_lifecycle(RunLifecycleEvent::Pulse {
-            phase: LivenessPhase::Approval,
-        });
+    /// Send a liveness heartbeat in the given phase. A delegated child runs
+    /// under a watchdog that cuts it after a stretch with no progress. The
+    /// heartbeat is the only signal that distinguishes slow work from a
+    /// stalled run, so the streaming path calls this as events arrive, the
+    /// tool path calls it on each output tick, and the approval path holds
+    /// off the idle cut while a card is on screen.
+    pub fn heartbeat(&self, phase: LivenessPhase) {
+        self.events
+            .emit_run_lifecycle(RunLifecycleEvent::Heartbeat { phase });
     }
 
     /// Run the agent on a user input. Appends the user event, then drives the

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use houyicoder_api::agent_event::LivenessPhase;
 use houyicoder_api::spawn::PendingChildPermission;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
@@ -68,7 +69,7 @@ pub(super) async fn drive_child_to_terminal(
         };
         // The run is parked on a human answer, not stalled: the watchdog reads
         // this phase to hold off its idle cut for the approval window.
-        runner.pulse_approval();
+        runner.heartbeat(LivenessPhase::Approval);
         let decisions = match route_approvals_via_bus(
             bus,
             child_id,
@@ -91,7 +92,7 @@ pub(super) async fn drive_child_to_terminal(
             }
         };
         // Back to work: a tool runs next on the answered decision.
-        runner.pulse_tool();
+        runner.heartbeat(LivenessPhase::Tool);
         result = {
             let mut run = Box::pin(runner.resume(session, &decisions));
             tokio::select! {

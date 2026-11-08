@@ -93,14 +93,15 @@ pub enum RunLifecycleEvent {
         status: RunCompletionStatus,
         summary: String,
     },
-    /// A liveness pulse: the run is still making progress in the given phase.
-    /// A watchdog reads these to cut a child that stalled (no pulse within
-    /// the idle window) without killing one that is merely slow.
-    Pulse { phase: LivenessPhase },
+    /// A liveness heartbeat: the run is still making progress in the given
+    /// phase. A watchdog reads these to cut a child that stalled (no
+    /// heartbeat within the idle window) without killing one that is merely
+    /// slow.
+    Heartbeat { phase: LivenessPhase },
 }
 
-/// What the run is doing at the last pulse. Names the stage a stall shows up
-/// in so the cut reason can say where the child stopped.
+/// What the run is doing at the last heartbeat. Names the stage a stall
+/// shows up in so the cut reason can say where the child stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LivenessPhase {
     /// Waiting for the model stream to produce a chunk.
