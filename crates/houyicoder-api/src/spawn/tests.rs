@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_context::SessionId;
 
 struct NoSpawn;
 
@@ -72,4 +73,23 @@ fn test_toolctx_carries_spawn_context() {
     assert!(ctx.spawn_handle.is_some());
     assert!(ToolCtx::new("call-2").agent_identity.is_none());
     assert!(ToolCtx::new("call-3").spawn_handle.is_none());
+}
+
+/// The default list_children returns empty when no multi-agent runtime is
+/// wired, so a caller without a fleet reads a definite empty list rather
+/// than an error.
+#[tokio::test]
+async fn test_default_list_children_empty() {
+    let handle: Box<dyn SpawnHandle> = Box::new(NoSpawn);
+    let rows = handle.list_children(SessionId::new()).await;
+    assert!(rows.is_empty(), "no runtime means no children");
+}
+
+/// The default child_output refuses, so a caller without a fleet learns the
+/// port is unwired rather than receiving a fabricated view.
+#[tokio::test]
+async fn test_default_child_output_refuses() {
+    let handle: Box<dyn SpawnHandle> = Box::new(NoSpawn);
+    let result = handle.child_output(SessionId::new(), "c1", 0, 10).await;
+    assert!(result.is_err(), "no runtime means the read is refused");
 }

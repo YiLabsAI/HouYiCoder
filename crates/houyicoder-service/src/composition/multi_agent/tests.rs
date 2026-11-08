@@ -1948,7 +1948,9 @@ fn test_terminal_handoff() {
 }
 
 mod admission_credential;
+mod agent_loading;
 mod auto_background;
+mod fleet_query;
 mod handover;
 mod join_children;
 mod orphan;

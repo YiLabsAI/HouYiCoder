@@ -406,6 +406,64 @@ pub trait SpawnHandle: Send + Sync {
     fn take_pending_child_permissions(&self) -> Vec<PendingChildPermission> {
         Vec::new()
     }
+
+    /// List every child the parent session delegates to, running and
+    /// finished. A finished child folds out of the durable parent log, so the
+    /// list serves the model's view of its fleet in one call rather than
+    /// making it guess from remembered spawn results. The default returns
+    /// empty (no multi-agent runtime wired).
+    fn list_children(&self, _parent_sid: SessionId) -> PFut<'_, Vec<ChildTaskSummary>> {
+        Box::pin(async { Vec::new() })
+    }
+
+    /// Read one child's output through a character window. The status names
+    /// the child's current state, the summary carries its latest result, and
+    /// the text is the child's assistant output sliced to offset and limit —
+    /// so a caller pages through a long result instead of receiving it whole.
+    /// The default returns an Err (no multi-agent runtime wired).
+    fn child_output(
+        &self,
+        _parent_sid: SessionId,
+        _child_id: &str,
+        _offset: usize,
+        _limit: usize,
+    ) -> PFut<'_, Result<ChildOutputView, String>> {
+        Box::pin(async { Err("no multi-agent runtime wired".into()) })
+    }
+}
+
+/// One child's row for the fleet list: identity, state, and the progress
+/// figures a caller needs to decide what to do next.
+#[derive(Debug, Clone)]
+pub struct ChildTaskSummary {
+    pub child_session_id: String,
+    pub subagent_type: String,
+    /// A one-line description of the work the child was given.
+    pub description: String,
+    /// "running", or the child's terminal status string.
+    pub status: String,
+    /// Turns the child has completed, from its durable log.
+    pub turn_count: u64,
+    /// Wall-clock ms since the child was spawned, or its run span when it
+    /// finished.
+    pub elapsed_ms: u64,
+}
+
+/// One child's output view for a paged read.
+#[derive(Debug, Clone)]
+pub struct ChildOutputView {
+    pub child_session_id: String,
+    /// "running", or the child's terminal status string.
+    pub status: String,
+    /// The child's latest result summary when it has one.
+    pub summary: Option<String>,
+    /// The slice of the child's assistant output this window holds.
+    pub text: String,
+    /// Total characters the full output holds, so a caller knows when it
+    /// has read to the end.
+    pub total_chars: usize,
+    /// The offset this window started at.
+    pub offset: usize,
 }
 
 /// A child permission ask parked while no client was connected. A

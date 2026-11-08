@@ -13,7 +13,8 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::spawn::{
-    PendingChildPermission, SpawnArgs, SpawnFailure, SpawnHandle, SpawnOutcome,
+    ChildOutputView, ChildTaskSummary, PendingChildPermission, SpawnArgs, SpawnFailure,
+    SpawnHandle, SpawnOutcome,
 };
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
@@ -30,8 +31,6 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_core::agent::multi_agent::ending::EndingClaim;
 use houyicoder_core::agent::multi_agent::record_subagent_return;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
-use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
-use houyicoder_core::agent::multi_agent::registry::built_in_all;
 use houyicoder_core::agent::multi_agent::registry::delegatable_agents;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, RunnerInheritance, TriggerSource};
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -52,7 +51,10 @@ use tokio::time::timeout;
 mod boundary_claims;
 mod children;
 mod drive;
+mod fleet_query;
+mod registry_load;
 pub(crate) use drive::permission_request_from;
+pub(crate) use registry_load::load_agent_registry;
 mod orphan_reconcile;
 use boundary_claims::BoundaryClaims;
 use children::{
@@ -133,10 +135,8 @@ pub struct MultiAgentRuntime {
 
 /// One live child: its runner (Weak, so a finished child drops the entry's
 /// reach) and its lifecycle cancel token. The token is level-triggered and
-/// exists from the spawn boundary, before the run's first poll mints the
-/// turn token — so a shutdown stop issued while the child's task has not
-/// started the run still reaches the child instead of firing at a runner with
-/// no token to cancel.
+/// exists from the spawn boundary, so a shutdown stop issued before the
+/// child's first run still reaches it.
 impl MultiAgentRuntime {
     pub fn new(deps: MultiAgentDeps) -> Self {
         Self {
@@ -266,13 +266,6 @@ impl MultiAgentRuntime {
         self.delegation_wait_ms = ms;
         self
     }
-}
-
-/// The built-in agent registry: the five built-in agent definitions. Shared
-/// between the agent tool (resolve) and the spawn runtime (materialize) so
-/// the two see one source of truth.
-pub(super) fn built_in_registry() -> Arc<dyn AgentRegistry> {
-    Arc::new(BuiltInRegistry::from_agents(built_in_all()))
 }
 
 /// Install the sub-agent types the model may delegate to (registered, minus
@@ -447,17 +440,13 @@ impl SpawnHandle for MultiAgentRuntime {
         let running = Arc::clone(&self.running);
         let worktree_controller = self.worktree_controller.clone();
         Box::pin(async move {
-            // End the children's lifecycle tokens and the running children's
-            // close tokens, then close the gate and set them aside, all under
-            // the two locks. The guards must not live across the awaits below:
-            // a mutex guard is not Send, so the inner scope drops both before
-            // the first yield. The lock order (running then children) and the
-            // absence of an await under either lock keep an admission racing
-            // the shutdown seeing either a cancelled token or a closed gate,
-            // never neither. A poisoned lock still holds a consistent map (the
-            // entries are independently owned, and the writes under it are
-            // single infallible map operations), so it is recovered and fully
-            // enumerated rather than read as an empty close.
+            // End the children's tokens and close the gate under both locks.
+            // The guards must not live across the awaits below (a mutex guard
+            // is not Send), so the inner scope drops both before the first
+            // yield. The lock order and the absence of an await under either
+            // lock keep an admission racing the shutdown seeing a cancelled
+            // token or a closed gate, never neither. A poisoned lock still
+            // holds a consistent map, so it is recovered and enumerated.
             let live: Vec<Arc<Runner>> = {
                 let mut gate = running.lock().unwrap_or_else(PoisonError::into_inner);
                 let kids = children.lock().unwrap_or_else(PoisonError::into_inner);
@@ -483,12 +472,10 @@ impl SpawnHandle for MultiAgentRuntime {
             for (_, child) in pending {
                 join_child(child, CHILD_JOIN_TIMEOUT).await;
             }
-            // A child force-aborted before its finalize cleanup tail dropped
-            // its task and skipped cleanup_child, so its per-child worktree is
-            // only reachable through the controller's reclaim map. Every child
-            // is joined by this point, so reclaim every tree left behind: a
-            // clean tree is removed before the parent lease releases, rather
-            // than leaking its dir and branch.
+            // A child force-aborted before its finalize tail skipped
+            // cleanup_child, so its per-child worktree is only reachable
+            // through the controller's reclaim map. Every child is joined by
+            // now, so reclaim what is left before the parent lease releases.
             if let Some(ctrl) = &worktree_controller {
                 ctrl.reclaim_abandoned().await;
             }
@@ -498,15 +485,13 @@ impl SpawnHandle for MultiAgentRuntime {
     /// First-party spawn from a service/hook caller: same spawn pipeline as
     /// the model path, but the trigger is System{hook} so the durable
     /// boundary records a flow-driven origin. A system trigger introduces no
-    /// new bypass — the tool-set narrowing (the disallowed list) applies the
-    /// same way. The capability-token intersection is not yet wired on either
-    /// path (a separate task), so neither path enforces a permission-mode
-    /// intersection yet. depth is 0 (the caller must be the root session; a
-    /// system spawn from a nested context would reset the recursion counter);
-    /// cancel is None (a system spawn is detached — the caller cancels via
-    /// the returned child handle); hook_fire is None (no per-call seam from a
-    /// non-tool caller; SubagentStart/Stop do not fire for system spawns in
-    /// v0 — the first real consumer wires that).
+    /// new bypass — the tool-set narrowing applies the same way. The
+    /// capability-token intersection is not yet wired on either path, so
+    /// neither path enforces a permission-mode intersection yet. depth is 0
+    /// (the caller must be the root session); cancel is None (a system spawn
+    /// is detached — the caller cancels via the returned child handle);
+    /// hook_fire is None (no per-call seam from a non-tool caller; the first
+    /// real consumer wires that).
     fn spawn_system(
         &self,
         parent_sid: houyicoder_context::SessionId,
@@ -547,6 +532,26 @@ impl SpawnHandle for MultiAgentRuntime {
             .lock()
             .map(|v| v.clone())
             .unwrap_or_default()
+    }
+
+    fn list_children(&self, parent_sid: SessionId) -> PFut<'_, Vec<ChildTaskSummary>> {
+        let this = self.clone();
+        Box::pin(async move { this.fleet_list(parent_sid).await })
+    }
+
+    fn child_output(
+        &self,
+        parent_sid: SessionId,
+        child_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> PFut<'_, Result<ChildOutputView, String>> {
+        let this = self.clone();
+        let child_id = child_id.to_string();
+        Box::pin(async move {
+            this.fleet_output(parent_sid, &child_id, offset, limit)
+                .await
+        })
     }
 }
 
