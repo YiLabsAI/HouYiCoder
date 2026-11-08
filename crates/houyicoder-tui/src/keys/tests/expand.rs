@@ -273,10 +273,119 @@ fn test_ctrl_o_follows_cursor() {
     );
 }
 
+/// The cursor on a result row expands that result even while a checklist is
+/// open and a newer reasoning block sits at the tail. Without the early
+/// anchor path the checklist or the tail block swallowed the chord and the
+/// result under the cursor could not be opened.
+#[test]
+fn test_result_expands_at_cursor() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = vec![TodoView {
+        content: "write the fix".into(),
+        active_form: Some("writing the fix".into()),
+        status: TodoStatus::Pending,
+    }];
+    app.sessions.current.transcript = vec![
+        TranscriptLine::Tool {
+            name: "result".into(),
+            tool: "result".into(),
+            status: String::new(),
+            invocation: String::new(),
+            outcome: ToolOutcome::Success,
+            call_id: "r1".into(),
+            background_task: None,
+            body: "line one\nline two\nline three\nline four\n".into(),
+            is_diff: false,
+        },
+        TranscriptLine::ThoughtFor {
+            ms: Some(9_000),
+            reasoning: Some("a train of reasoning".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        },
+    ]
+    .into();
+    drop(render_text(&app, 80, 24));
+    let ri = app
+        .ui
+        .frame
+        .layout
+        .last_transcript_rows
+        .borrow()
+        .iter()
+        .position(|(_, text)| text.contains("line one"))
+        .expect("the result row is on screen");
+    let top = app.whole_scroll().top_offset();
+    app.ui.selection.transcript.start(0, top + ri);
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.ui.transcript_view.expanded.results.contains("r1"),
+        "the result under the cursor expands"
+    );
+    assert!(
+        !app.sessions.current.todos.expanded,
+        "the checklist did not take the chord"
+    );
+    assert!(
+        app.ui.transcript_view.expanded.thinking.is_empty(),
+        "the tail reasoning did not take the chord"
+    );
+}
+
 /// The checklist answers the shared expand chord. It used to sit behind the
 /// tail fallback, which claims the chord whenever any foldable block is on
 /// screen — in a real session that is always — so the checklist branch never
 /// ran and the list could not be opened at all.
+/// A foldable block at the tail takes the chord over the checklist. The
+/// checklist is the fallback when no tail block is on screen, not the first
+/// claim, so a reasoning summary or a result the user just produced opens
+/// while a checklist is open.
+#[test]
+fn test_tail_beats_checklist() {
+    let mut app = working_app();
+    app.sessions.current.todos.items = vec![
+        TodoView {
+            content: "write the fix".into(),
+            active_form: Some("writing the fix".into()),
+            status: TodoStatus::Pending,
+        },
+        TodoView {
+            content: "run the gate".into(),
+            active_form: Some("running the gate".into()),
+            status: TodoStatus::Pending,
+        },
+    ];
+    app.sessions
+        .current
+        .transcript
+        .push(TranscriptLine::ThoughtFor {
+            ms: Some(9_000),
+            reasoning: Some("a train of reasoning".into()),
+            tool_summary: None,
+            turn_id: "t1".into(),
+        });
+    assert!(!app.sessions.current.todos.expanded);
+    handle_ctrl_o(&mut app);
+    assert!(
+        !app.sessions.current.todos.expanded,
+        "the tail block takes the chord, not the checklist"
+    );
+    assert!(
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"t1".into()),
+        "the tail reasoning expanded"
+    );
+    handle_ctrl_o(&mut app);
+    assert!(
+        app.ui.transcript_view.expanded.thinking.is_empty(),
+        "and the same chord closes it"
+    );
+}
+
+/// With no foldable block at the tail, the chord reaches the checklist.
 #[test]
 fn test_ctrl_o_reaches_checklist() {
     let mut app = working_app();
@@ -292,21 +401,11 @@ fn test_ctrl_o_reaches_checklist() {
             status: TodoStatus::Pending,
         },
     ];
-    // A foldable block at the tail, the state that used to swallow the chord.
-    app.sessions
-        .current
-        .transcript
-        .push(TranscriptLine::ThoughtFor {
-            ms: Some(9_000),
-            reasoning: Some("a train of reasoning".into()),
-            tool_summary: None,
-            turn_id: "t1".into(),
-        });
     assert!(!app.sessions.current.todos.expanded);
     handle_ctrl_o(&mut app);
     assert!(
         app.sessions.current.todos.expanded,
-        "the chord reaches the checklist even with a fold at the tail"
+        "the chord reaches the checklist with no tail block"
     );
     handle_ctrl_o(&mut app);
     assert!(

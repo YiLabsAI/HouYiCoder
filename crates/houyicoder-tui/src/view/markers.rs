@@ -45,7 +45,7 @@ pub(crate) type PlannedRow = (
 /// A 5-line find output still shows 3 + "… +2 lines" so the transcript
 /// never buries the rest. Expanded per-result via Ctrl+O (keyed by
 /// call_id, survives the transcript rebuild on each event batch).
-const COLLAPSE_SHOW: usize = 3;
+pub(crate) const COLLAPSE_SHOW: usize = 3;
 
 /// Pre-truncate a body's logical lines to a byte budget (a maxChars pre-cut
 /// of COLLAPSE_SHOW * wrap_width * 4). Stops at the last line that fits within

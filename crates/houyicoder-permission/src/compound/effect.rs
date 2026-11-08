@@ -598,6 +598,17 @@ fn is_readonly_protected_segment(segment: &str) -> bool {
         return false;
     };
     let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    // A move into one directory is read-only when the destination is a literal
+    // path. An expansion or redirect in it would point the move at a path the
+    // check cannot see, and a second argument is not a form cd takes.
+    // command_reads_only does not carry cd, because the compound path treats a
+    // trailing cd as a second command rather than setup, so the move is
+    // recognized here instead of added to the shared table. The attestable
+    // check above refuses backticks and command substitution but not a bare
+    // variable, so the destination is scanned for one here.
+    if cmd == "cd" {
+        return args.len() <= 1 && args.iter().all(|a| !a.contains(['$', '`', '>', '<']));
+    }
     command_reads_only(cmd, &args, &cleaned, false)
 }
 

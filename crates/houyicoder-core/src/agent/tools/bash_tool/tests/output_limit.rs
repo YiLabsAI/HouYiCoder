@@ -7,7 +7,7 @@ use std::path::Path;
 
 #[test]
 fn test_bound_under_cap_passes() {
-    let (o, e) = bound_bash_output("hello".into(), "world".into(), None, &[]);
+    let (o, e) = bound_bash_output("hello".into(), "world".into(), None, &[], false);
     assert_eq!(o, "hello");
     assert_eq!(e, "world");
 }
@@ -18,7 +18,7 @@ fn test_bound_under_cap_passes() {
 #[test]
 fn test_over_cap_without_capture() {
     let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
-    let (o, e) = bound_bash_output(big.clone(), String::new(), None, &[]);
+    let (o, e) = bound_bash_output(big.clone(), String::new(), None, &[], false);
     assert!(
         o.contains("Output truncated"),
         "truncation marker missing: {o}"
@@ -48,6 +48,7 @@ fn test_over_cap_names_kept() {
         String::new(),
         None,
         &["call-1:stdout".to_string(), "call-1:stderr".to_string()],
+        false,
     );
     assert!(o.contains("call-1:stdout"), "names the stdout stream: {o}");
     assert!(o.contains("call-1:stderr"), "names the stderr stream: {o}");
@@ -68,10 +69,87 @@ fn test_bound_stopped_says_prefix() {
         String::new(),
         Some(CaptureStopReason::WallBudget),
         &["call-1".to_string()],
+        false,
     );
     assert!(
         o.contains("the command was stopped") && o.contains("only the prefix"),
         "a stopped command keeps a prefix: {o}"
+    );
+}
+
+/// Both ends of an over-cap output land on newline boundaries, so a line is
+/// never split at the head's last line or the tail's first. The first and
+/// last original lines survive, and the truncation marker sits between whole
+/// lines.
+#[test]
+fn test_truncation_keeps_line_boundaries() {
+    let stdout: String = (0..5000).map(|i| format!("line {i}\n")).collect();
+    let (o, _) = bound_bash_output(stdout, String::new(), None, &[], false);
+    assert!(o.contains("[truncated"), "marker present: {o}");
+    assert!(o.contains("line 0\n"), "head keeps the first line: {o}");
+    assert!(o.contains("line 4999\n"), "tail keeps the last line: {o}");
+    let head_end = o.split("\n... [truncated").next().unwrap();
+    let last_head_line = head_end.rsplit('\n').next().unwrap();
+    assert!(
+        last_head_line.starts_with("line "),
+        "head ends on a whole line, not a split one: {last_head_line:?}"
+    );
+    let tail_start = o.split("...\n").last().unwrap();
+    let first_tail_line = tail_start.lines().next().unwrap();
+    assert!(
+        first_tail_line.starts_with("line "),
+        "tail starts on a whole line, not a split one: {first_tail_line:?}"
+    );
+}
+
+/// A command the user typed at the direct shell prompt is not shown the
+/// model-facing recall hint, because the user already knows where the output
+/// is and the pointer is tool jargon. The model's bash call still gets it.
+#[test]
+fn test_user_shell_omits_hint() {
+    let big = "a".repeat(BASH_MAX_OUTPUT_CHARS + 1);
+    let (o, _) = bound_bash_output(
+        big.clone(),
+        String::new(),
+        None,
+        &["call-1:stdout".to_string()],
+        true,
+    );
+    assert!(
+        !o.contains("conversation_search"),
+        "user shell hides the recall hint: {o}"
+    );
+    assert!(o.contains("Output truncated"), "still says truncated: {o}");
+    let (o2, _) = bound_bash_output(
+        big,
+        String::new(),
+        None,
+        &["call-1:stdout".to_string()],
+        false,
+    );
+    assert!(
+        o2.contains("conversation_search"),
+        "model bash shows the recall hint: {o2}"
+    );
+}
+
+/// The line at the tail boundary is kept when the tail window starts at a
+/// line boundary. The first complete line of the tail used to be stripped
+/// along with a partial line, dropping a whole line of output.
+#[test]
+fn test_truncation_keeps_boundary_line() {
+    // Six 6-char lines (line0\n .. line5\n), head and tail both 12 chars.
+    // The tail window starts at char 24, the start of line4, so line4 is the
+    // first line the tail must keep.
+    let stdout: String = (0..6).map(|i| format!("line{i}\n")).collect();
+    let (o, _) = bound_bash_output(stdout, String::new(), None, &[], false);
+    assert!(
+        o.contains("line4\n"),
+        "the boundary line is kept in the tail: {o}"
+    );
+    assert!(
+        o.contains("line5\n"),
+        "the last line is kept in the tail: {o}"
     );
 }
 

@@ -230,16 +230,23 @@ pub(crate) fn handle_ctrl_o(app: &mut App) {
     if app.toggle_focused_fold_expand() {
         return;
     }
-    // The checklist is a session-wide block the user reads whole or not at
-    // all, and its collapsed form says how many rows it is hiding. It is
-    // offered before the tail fallback because that fallback claims the chord
-    // whenever any foldable block is on screen, which in a real session is
-    // always: ranked after it, this branch never ran.
-    if !app.sessions.current.todos.items.is_empty() {
-        app.sessions.current.todos.expanded = !app.sessions.current.todos.expanded;
+    // A cursor on a result row expands that result before the tail-most block
+    // and the checklist claim the chord. Without this, a result higher in the
+    // transcript could not be opened once a checklist or a newer block was on
+    // screen.
+    if app.toggle_result_at_anchor() {
         return;
     }
     if app.toggle_tail_expand() {
+        return;
+    }
+    // The checklist is a session-wide block the user reads whole or not at
+    // all, and its collapsed form says how many rows it is hiding. It follows
+    // the tail fallback so a result, a reasoning summary, or a delegation the
+    // user just produced expands before the checklist does; the checklist is
+    // the fallback when no tail block is on screen.
+    if !app.sessions.current.todos.items.is_empty() {
+        app.sessions.current.todos.expanded = !app.sessions.current.todos.expanded;
         return;
     }
     app.toggle_focused_result_expand();

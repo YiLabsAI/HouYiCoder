@@ -361,6 +361,14 @@ pub fn deny_default(tag: &str) -> String {
 /// stop a process it started. Task ports stay restricted, because reaching
 /// into another process's memory is not something an approval can make
 /// recoverable.
+///
+/// The literal /bin/ps runs with no-sandbox because macOS refuses to execve a
+/// setuid binary inside a sandbox seatbelt. The kernel will not both raise
+/// privilege and confine it. ps is a read-only leaf on the SIP-protected
+/// system volume with no spawn or write surface, so the exception is narrow
+/// and does not extend to the shell or to any path-prefix match. The broad
+/// process-exec allow above does not help, because setuid is a kernel gate,
+/// not a profile permission.
 pub fn allow_set(tag: &str) -> String {
     let _ = tag;
     let mach = MACH_SERVICES
@@ -375,6 +383,7 @@ pub fn allow_set(tag: &str) -> String {
         .join(" ");
     format!(
         "(allow process-exec)\n\
+         (allow process-exec (literal \"/bin/ps\") (with no-sandbox))\n\
          (allow process-fork)\n\
          (allow process-info*)\n\
          (allow signal)\n\

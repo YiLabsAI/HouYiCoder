@@ -18,6 +18,7 @@ use houyicoder_protocol::capture_record::{
     STDOUT_BYTES_KEY, STDOUT_KEY, STOP_REASON_KEY,
 };
 use houyicoder_protocol::frontend::BackgroundTaskId;
+use houyicoder_protocol::tool::is_user_shell_call_id;
 use serde_json::{Value, json};
 
 /// Fold a notice about the call itself into stderr so the user sees it inline
@@ -51,6 +52,7 @@ pub(super) async fn complete_run(
                 result.stderr,
                 capture.stop().map(|stop| stop.reason),
                 &kept_streams(&capture, &call_id),
+                is_user_shell_call_id(&call_id),
             );
             let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
             CommandCompletion {
@@ -79,8 +81,13 @@ pub(super) async fn complete_run(
                 .map(|stop| stop.reason)
                 .or(Some(CaptureStopReason::WallBudget));
             let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
-            let (stdout, stderr) =
-                bound_bash_output(stdout, stderr, stopped, &kept_streams(&capture, &call_id));
+            let (stdout, stderr) = bound_bash_output(
+                stdout,
+                stderr,
+                stopped,
+                &kept_streams(&capture, &call_id),
+                is_user_shell_call_id(&call_id),
+            );
             let stderr = fold_notice(Some(format!("bash: stopped, {message}")), stderr);
             CommandCompletion {
                 exit_code: None,
@@ -262,11 +269,16 @@ async fn finish_capture(
 /// but no stored bytes.
 pub(super) const BASH_MAX_OUTPUT_CHARS: usize = 30_000;
 
-/// Max chars kept in the tail the model sees once the output passes the cap.
-/// Char-based (not line) so a no-newline megabyte blob still yields a bounded
-/// tail; the tail carries the exit/error context the model most needs, and
-/// the note under it names where the rest can be read.
-const BASH_STUB_CHARS: usize = 5_000;
+/// Chars kept from the head of an over-cap output, before the truncation
+/// marker. A head-heavy listing (a log or a grep) keeps its newest context at
+/// the top, which a tail-only bound discarded entirely.
+const BASH_HEAD_CHARS: usize = 4_000;
+
+/// Chars kept from the tail of an over-cap output, after the truncation
+/// marker. A tail-heavy listing (a compiler or a test runner) keeps its
+/// errors and summary at the bottom. Both ends are kept so one bound serves a
+/// head-heavy and a tail-heavy output alike.
+const BASH_TAIL_CHARS: usize = 8_000;
 
 /// Whether the model view loses bytes to the bound. One answer serves both the
 /// bounding itself and the decision to keep the raw output, so the two cannot
@@ -276,13 +288,18 @@ fn model_view_loses_bytes(stdout: &str, stderr: &str) -> bool {
 }
 
 /// Bound a bash result before it enters the model context. Under the cap the
-/// output passes through verbatim. Over the cap the model gets the tail plus a
-/// note saying where the rest is read back: when the capture kept a stream the
-/// note names it and points at conversation_search, so the full output is read
-/// in bounded windows instead of copied into the workspace. When no capture
-/// holds the bytes, the model gets a head+tail stub and is told the rest was
-/// not kept, rather than being sent to a workspace file it would have to
-/// re-run a command to read.
+/// output passes through verbatim. Over the cap the model gets a newline-aligned
+/// head and tail with a truncation count between them, plus a note saying where
+/// the rest is read back. When the capture kept a stream the note names it and
+/// points at conversation_search, so the full output is read in bounded windows
+/// instead of copied into the workspace. When no capture holds the bytes, the
+/// model gets the head and tail and is told the rest was not kept, rather than
+/// being sent to a workspace file it would have to re-run a command to read.
+///
+/// A command the user typed at the direct shell prompt is not shown the
+/// model-facing note. The user already knows where the output is, and the
+/// conversation_search pointer is tool jargon the user does not need. The full
+/// output is still kept in the capture and expands in the transcript.
 ///
 /// When the command was stopped before it finished, neither copy holds more
 /// than it printed before the stop. The note says so: a reader told the full
@@ -292,34 +309,101 @@ pub(super) fn bound_bash_output(
     stderr: String,
     stopped: Option<CaptureStopReason>,
     kept: &[String],
+    is_user_shell: bool,
 ) -> (String, String) {
     if !model_view_loses_bytes(&stdout, &stderr) {
         return (stdout, stderr);
     }
     let kb = (stdout.len() + stderr.len()) / 1024;
+    let body = head_tail_chars(&stdout, BASH_HEAD_CHARS, BASH_TAIL_CHARS);
     if !kept.is_empty() {
-        let tail = tail_chars(&stdout, BASH_STUB_CHARS);
-        let note = kept_note(kept, stopped);
-        return (
-            format!("{tail}\n\nOutput truncated ({kb}KB total). {note}\n"),
-            String::new(),
-        );
+        let suffix = if is_user_shell {
+            format!("\n\nOutput truncated ({kb}KB total).\n")
+        } else {
+            format!(
+                "\n\nOutput truncated ({kb}KB total). {}\n",
+                kept_note(kept, stopped)
+            )
+        };
+        return (format!("{body}{suffix}"), String::new());
     }
     // No capture holds the bytes (a legacy session, or the host supplied no
-    // capture source). Keep the result bounded with the stdout tail and say
+    // capture source). Keep the result bounded with the head and tail and say
     // the rest was not kept, so the model is not pointed at a file it would
-    // need another command to read. Stderr is bounded to the same tail too:
-    // it is usually small, but a command that floods stderr must not blow the
+    // need another command to read. Stderr is bounded to a tail too. It is
+    // usually small, but a command that floods stderr must not blow the
     // context the way an unbounded stdout would.
-    let stdout_tail = tail_chars(&stdout, BASH_STUB_CHARS);
-    let stderr_tail = tail_chars(&stderr, BASH_STUB_CHARS);
+    let stderr_tail = tail_chars(&stderr, BASH_TAIL_CHARS);
     let why = match stopped {
         Some(reason) => format!("the command was stopped, {reason}"),
         None => format!("{kb}KB total"),
     };
     (
-        format!("{stdout_tail}\n\nOutput truncated ({why}); the rest was not kept.\n"),
+        format!("{body}\n\nOutput truncated ({why}); the rest was not kept.\n"),
         stderr_tail,
+    )
+}
+
+/// The byte offset where the char-index-th character starts, or the string
+/// length when the index reaches past the last character. Char-based so the
+/// head and tail bounds land on character boundaries, never inside a multi-byte
+/// sequence.
+fn char_offset(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+/// The head and tail of a string with a truncation count between them. Both
+/// ends are cut at a newline boundary when one sits inside the window, so a
+/// line is never split at the head's last line or the tail's first. A string
+/// with no newlines in a window keeps that window verbatim, so a megabyte blob
+/// with no newlines still yields a bounded head and tail. The count reports
+/// the lines and bytes the middle omitted, so a reader knows how much was
+/// dropped without reading it.
+fn head_tail_chars(s: &str, head_chars: usize, tail_chars_n: usize) -> String {
+    let total = s.chars().count();
+    let combined = head_chars.saturating_add(tail_chars_n);
+    if total <= combined {
+        return s.to_string();
+    }
+    let head_end = char_offset(s, head_chars);
+    let head_region = &s[..head_end];
+    let head_cut = match head_region.rfind('\n') {
+        Some(p) => &head_region[..=p],
+        None => head_region,
+    };
+    let tail_start = char_offset(s, total.saturating_sub(tail_chars_n));
+    let tail_region = &s[tail_start..];
+    // The tail starts at a line boundary when the byte before it is a newline,
+    // so its first line is complete and is kept verbatim. A tail that starts
+    // mid-line drops the partial first line, which continues into the middle.
+    let at_line_boundary =
+        tail_start.checked_sub(1).and_then(|i| s.as_bytes().get(i)) == Some(&b'\n');
+    let tail_cut = if at_line_boundary {
+        tail_region
+    } else {
+        match tail_region.find('\n') {
+            Some(p) => &tail_region[p + 1..],
+            None => tail_region,
+        }
+    };
+    let middle_start = head_cut.len();
+    let middle_end = s.len().saturating_sub(tail_cut.len());
+    let middle = if middle_start <= middle_end {
+        &s[middle_start..middle_end]
+    } else {
+        ""
+    };
+    let omitted_lines = middle.matches('\n').count();
+    let omitted_kb = middle.len() / 1024;
+    format!(
+        "{}\n... [truncated {} lines, {}KB] ...\n{}",
+        head_cut.trim_end_matches('\n'),
+        omitted_lines,
+        omitted_kb,
+        tail_cut,
     )
 }
 

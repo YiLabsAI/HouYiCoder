@@ -36,12 +36,11 @@ fn child_app() -> (App, std::sync::mpsc::Receiver<TransportEvent>) {
     (app, events)
 }
 
-/// The checklist answers the shared expand chord. It used to sit behind the
-/// tail fallback, which claims the chord whenever any foldable block is on
-/// screen — in a real session that is always — so the checklist branch never
-/// ran and the list could not be opened at all.
+/// A foldable block at the tail takes the expand chord over the checklist.
+/// The checklist is the fallback when no tail block is on screen, so a
+/// reasoning summary the user just produced opens while a checklist is open.
 #[test]
-fn test_ctrl_o_reaches() {
+fn test_ctrl_o_tail_first() {
     let mut app = working_app();
     app.sessions.current.todos.items = vec![
         TodoView {
@@ -55,7 +54,6 @@ fn test_ctrl_o_reaches() {
             status: TodoStatus::Pending,
         },
     ];
-    // A foldable block at the tail, the state that used to swallow the chord.
     app.sessions
         .current
         .transcript
@@ -68,13 +66,21 @@ fn test_ctrl_o_reaches() {
     assert!(!app.sessions.current.todos.expanded);
     handle_ctrl_o(&mut app);
     assert!(
-        app.sessions.current.todos.expanded,
-        "the chord reaches the checklist even with a fold at the tail"
+        !app.sessions.current.todos.expanded,
+        "the tail block takes the chord, not the checklist"
+    );
+    assert!(
+        app.ui
+            .transcript_view
+            .expanded
+            .thinking
+            .contains(&"t1".into()),
+        "the tail reasoning expanded"
     );
     handle_ctrl_o(&mut app);
     assert!(
-        !app.sessions.current.todos.expanded,
-        "and the same chord closes it again"
+        app.ui.transcript_view.expanded.thinking.is_empty(),
+        "and the same chord closes it"
     );
 }
 

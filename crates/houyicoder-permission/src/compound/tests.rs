@@ -454,6 +454,27 @@ fn test_not_readonly_cd_destination() {
 }
 
 #[test]
+fn test_protected_read_leading_cd() {
+    // A move into a protected directory tree that only sets up a following
+    // read must not ask. The marker sits on the cd destination, and a move
+    // into a literal path reads. An expansion in the destination still asks,
+    // because the check cannot see where the move lands.
+    for cmd in [
+        "cd ~/.houyicoder/skills && ls",
+        "cd /work/.claude/agents && cat x",
+        "cd ~/.houyicoder/hooks && git status",
+    ] {
+        assert!(reads_only_protected(cmd), "reads only: {cmd}");
+    }
+    for cmd in [
+        "cd $DIR/.houyicoder/skills && ls",
+        "cd `echo x`/.houyicoder/hooks && ls",
+    ] {
+        assert!(!reads_only_protected(cmd), "asks: {cmd}");
+    }
+}
+
+#[test]
 fn test_not_readonly_leading_assignment() {
     // A variable set for one command can redirect the repository directory
     // or the loader search path, so the argv no longer describes what runs.

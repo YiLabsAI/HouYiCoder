@@ -144,7 +144,7 @@ fn test_wall_budget_accepts_timeout() {
 #[test]
 fn test_truncation_without_capture() {
     let stdout = "x".repeat(BASH_MAX_OUTPUT_CHARS + 1);
-    let (out, stderr) = bound_bash_output(stdout, String::new(), None, &[]);
+    let (out, stderr) = bound_bash_output(stdout, String::new(), None, &[], false);
     assert!(
         out.contains("Output truncated"),
         "the stub says truncated: {out}"

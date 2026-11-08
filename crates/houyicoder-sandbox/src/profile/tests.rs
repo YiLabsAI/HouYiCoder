@@ -22,6 +22,18 @@ fn test_allow_set_mach_services() {
     assert!(p.contains("(literal \"/dev/tty\")"));
 }
 
+/// The setuid leaf /bin/ps runs with no-sandbox because the kernel refuses
+/// to execve a setuid binary under a seatbelt. The rule is a literal path
+/// match, not a prefix, so only that one binary escapes.
+#[test]
+fn test_ps_setuid_unsandboxed() {
+    let p = allow_set("tag-x");
+    assert!(
+        p.contains("(allow process-exec (literal \"/bin/ps\") (with no-sandbox))"),
+        "ps setuid exception present: {p}"
+    );
+}
+
 /// Extra mach services declared via ProfileSpec are emitted as
 /// standalone allow mach-lookup global-name lines after the base
 /// allow_set block. Uses a name not in the base list so the test

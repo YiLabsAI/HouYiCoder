@@ -54,6 +54,27 @@ async fn test_heredoc_executes() {
     );
 }
 
+/// The setuid binary /bin/ps runs inside the fence. macOS refuses to execve
+/// a setuid binary under a seatbelt unless the profile names it with
+/// no-sandbox, so ps -o pid exited 126 before the literal exception. The
+/// command is a read-only leaf, so success here is the whole contract.
+#[tokio::test]
+async fn test_ps_runs_under_fence() {
+    let s = MacSeatbeltSession::new().unwrap();
+    if nested_fence(&s).await {
+        return;
+    }
+    let out = s
+        .exec_with_config("ps -o pid", ExecConfig::default())
+        .await
+        .expect("ps should run");
+    assert!(out.is_success(), "ps should succeed: {out:?}");
+    assert!(
+        out.stdout.lines().count() >= 2,
+        "ps should list at least the header and this process: {out:?}"
+    );
+}
+
 /// TMPDIR inside the sandbox is the per-session dir, not the host temp root
 /// the snapshot would re-export. Pins the inject re-assert against the
 /// snapshot source clobber.

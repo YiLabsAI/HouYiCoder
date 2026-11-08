@@ -11,6 +11,7 @@ use crate::fold::{DisplaySlot, display_slots};
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::ui::selection::anchor_row;
+use crate::view::markers::COLLAPSE_SHOW;
 use crate::view::todo_list::TODO_FOLD_KEY;
 use houyicoder_protocol::frontend::SessionId;
 
@@ -59,6 +60,22 @@ impl App {
         let top = self.active_scroll().top_offset();
         let ri = content_row.checked_sub(top)?;
         (ri < self.ui.frame.layout.transcript_rect.get().height as usize).then_some(ri)
+    }
+
+    /// Toggle the tool result the selection anchor sits on, without falling
+    /// back to the last result. Returns false when the anchor is not on a
+    /// result row, so the chord can fall through to the tail-most block and
+    /// the checklist. This is the early path that keeps a cursor on a result
+    /// row from being outranked by the checklist or a newer tail block.
+    pub(crate) fn toggle_result_at_anchor(&mut self) -> bool {
+        let Some(ri) = self.anchor_visible_row() else {
+            return false;
+        };
+        let Some(id) = self.ui.frame.keys.borrow().callid_at(ri) else {
+            return false;
+        };
+        self.ui.transcript_view.toggle_result(id);
+        true
     }
 
     /// Toggle expand/collapse of a tool result row (Ctrl+O). If the selection
@@ -136,6 +153,7 @@ impl App {
             Delegation(String, bool),
             Thinking,
             Notice(String),
+            Result(String),
         }
         // The tail is taken from the transcript the view renders. Reading the
         // live transcript while a search or delegation view is open picks a
@@ -192,6 +210,21 @@ impl App {
             if let Some((idx, key)) = latest_notice {
                 candidates.push((idx, TailTarget::Notice(key)));
             }
+            // A result row whose body folds (more than the always-shown head)
+            // competes by position with the other tail blocks, so a chord with
+            // the cursor elsewhere still reaches the newest collapsible result.
+            if let Some(idx) = lines.iter().rposition(|l| {
+                matches!(
+                    l,
+                    TranscriptLine::Tool { name, body, call_id, .. }
+                    if name.as_str() == "result"
+                        && !call_id.is_empty()
+                        && body.lines().count() > COLLAPSE_SHOW
+                )
+            }) && let TranscriptLine::Tool { call_id, .. } = &lines[idx]
+            {
+                candidates.push((idx, TailTarget::Result(call_id.clone())));
+            }
         }
         let Some((_, target)) = candidates.into_iter().max_by_key(|(at, _)| *at) else {
             return false;
@@ -209,6 +242,11 @@ impl App {
             TailTarget::Thinking => self.toggle_thinking_expand(),
             TailTarget::Notice(key) => {
                 self.ui.transcript_view.toggle_fold(key);
+                true
+            }
+            TailTarget::Result(id) => {
+                self.ui.transcript_view.toggle_result(id);
+                self.pin_transcript_top();
                 true
             }
         }
