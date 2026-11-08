@@ -134,6 +134,15 @@ fn restore_host_chrome() {
     clear_terminal_progress(&mut stdout());
 }
 
+/// Restore the terminal from alternate screen and raw mode on fatal panic, so
+/// the panic message prints on the primary screen.
+pub fn restore_terminal_for_panic() {
+    disable_raw_mode().ok();
+    let mut out = stdout();
+    drop(execute!(out, LeaveAlternateScreen, Show));
+    restore_host_chrome();
+}
+
 /// Owns the TUI's terminal modes for the session's lifetime. An explicit
 /// release runs on the normal path; drop runs on every other path. One flag
 /// keeps the two from both running the restore.

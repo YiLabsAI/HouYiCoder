@@ -6,6 +6,7 @@
 //! what stopped it — and the model views and reads the turn itself recorded.
 
 use std::fmt::Write as _;
+use std::mem::take;
 
 use houyicoder_context::{
     CachedModelView, CachedRead, ReadActor as LogReadActor, ReadOutcome as LogReadOutcome, ViewForm,
@@ -196,13 +197,22 @@ impl TurnBuilder {
     /// result that answers it, and a read of a result this turn never stored
     /// stays unknown rather than being counted as a miss.
     pub(super) fn resolve_storage(&mut self) {
-        for (index, call_id) in &self.stored_results {
-            let Some(fact) = self.records[*index].storage.as_mut() else {
+        let stored_results = take(&mut self.stored_results);
+        let mut stored_reads = take(&mut self.stored_reads);
+        for (index, call_id) in &stored_results {
+            let Some(record) = self.records.get_mut(*index) else {
+                tracing::warn!(
+                    index,
+                    records_len = self.records.len(),
+                    "trajectory storage result record index out of bounds"
+                );
+                continue;
+            };
+            let Some(fact) = record.storage.as_mut() else {
                 continue;
             };
             let address = format!("{call_id}:");
-            fact.reads = self
-                .stored_reads
+            fact.reads = stored_reads
                 .iter()
                 .filter(|(_, read)| read.result_id.starts_with(&address))
                 .map(|(_, read)| read.clone())
@@ -217,11 +227,18 @@ impl TurnBuilder {
                 fact.assembly_at_ms = Some(facts.at_ms);
             }
         }
-        for (index, read) in &mut self.stored_reads {
+        for (index, read) in &mut stored_reads {
             if let Some(hash) = self.stream_blocks.get(&read.result_id) {
                 read.block = Some(hash.clone());
             }
-            let record = &mut self.records[*index];
+            let Some(record) = self.records.get_mut(*index) else {
+                tracing::warn!(
+                    index,
+                    records_len = self.records.len(),
+                    "trajectory storage read record index out of bounds"
+                );
+                continue;
+            };
             record.summary = read_summary(read);
             if let Some(fact) = record.storage.as_mut() {
                 fact.reads = vec![read.clone()];

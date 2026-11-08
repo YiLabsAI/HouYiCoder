@@ -32,7 +32,9 @@ use crate::session::history::SessionHistory;
 use crate::session::housekeeping::fire_after_bundle;
 use crate::session::log_snapshot::SessionLogSnapshot;
 use crate::trajectory::SessionLogTrajectory;
+use houyicoder_service::diagnostics;
 use std::env::current_dir;
+use std::panic::{set_hook, take_hook};
 
 /// A wired TUI bundle, the frontend startup policy the TUI applies to its Ui
 /// and Input owners, and the host lifecycle owner for the session's background
@@ -346,6 +348,18 @@ pub(crate) fn start_local_server(
     let transport = InProcTransport::from_halves(c2s_tx, s2c_rx);
     let client = Client::new(Box::new(transport));
     (runner, client, startup_warnings, host)
+}
+
+/// Install a panic hook that restores the terminal from alternate screen before
+/// printing, and writes the panic record to debug.log so terminal crash messages
+/// are not wiped on exit.
+pub(crate) fn install_panic_hook() {
+    let prev_hook = take_hook();
+    set_hook(Box::new(move |info| {
+        houyicoder_tui::restore_terminal_for_panic();
+        diagnostics::record_panic(info);
+        prev_hook(info);
+    }));
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ mod frame_timing;
 mod test_harness;
 
 pub use app::state;
+pub use composition::terminal_guard::restore_terminal_for_panic;
 pub(crate) use composition::{terminal_guard, terminal_title, termination};
 pub(crate) use input::palette;
 pub use input::{history, paste};

@@ -111,26 +111,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     if cmd.no_sandbox() {
         houyicoder_service::set_unfenced(true);
     }
-    // Install the process-wide diagnostic sink before any server or bundle
-    // is built. Starts disabled: a normal run pays a filter check per call
-    // site and nothing else. The sink is file-backed because the TUI runs in
-    // the alternate screen, which does not capture stderr — a print macro
-    // from library code would land in the input box. A /debug wire command
-    // raises the level at runtime; the handle is stored process-wide so the
-    // server (in-proc, UDS, or ACP) reads it at construction. A failure to
-    // install is not fatal: the /debug command will report the sink is
-    // absent, and the session proceeds without a diagnostic channel.
     let log_path = env::current_dir()
         .unwrap_or_default()
         .join(".houyicoder")
         .join("debug.log");
     if let Err(e) = install(&log_path) {
-        // Not fatal: the session proceeds without a diagnostic channel, and
-        // /debug will report the sink is absent. Logged to stderr here
-        // because the alternate screen is not up yet — this is the one
-        // window where stderr is a legitimate sink.
         eprintln!("warning: could not install the diagnostic sink: {e}");
     }
+    composition::install_panic_hook();
     match cmd {
         CliCommand::Help => {
             print_help();

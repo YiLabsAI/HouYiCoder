@@ -70,7 +70,9 @@ pub fn run_with_runner(
         }
         // Mirror busy transitions to supporting terminal chrome.
         if app.agent_busy() != reported_busy {
-            set_terminal_progress(app.agent_busy())?;
+            if let Err(e) = set_terminal_progress(app.agent_busy()) {
+                tracing::warn!(error = %e, "terminal progress update failed");
+            }
             reported_busy = app.agent_busy();
         }
         // Idle drain consumes queued work only after a clean run; interrupted
@@ -117,8 +119,10 @@ pub fn run_with_runner(
             // error unwinds to the terminal guard, so nothing reads a
             // half-written one.
             app.ui.settle_frame(published, drawn)?;
-            if let Some((x, y)) = app.ui.frame.feedback.native_cursor_position.get() {
-                execute!(stdout(), MoveTo(x, y), Hide)?;
+            if let Some((x, y)) = app.ui.frame.feedback.native_cursor_position.get()
+                && let Err(e) = execute!(stdout(), MoveTo(x, y), Hide)
+            {
+                tracing::warn!(error = %e, "cursor positioning failed");
             }
             dirty = false;
         }
@@ -129,7 +133,10 @@ pub fn run_with_runner(
             Input::Event(event) => dirty |= handle_event(&mut app, event)?,
             // Nothing left to draw on or type: leaving restores what the
             // guard took before the descriptor closed.
-            Input::Gone => app.ui.quit = true,
+            Input::Gone => {
+                tracing::warn!("terminal input channel closed (Input::Gone), quitting");
+                app.ui.quit = true;
+            }
             Input::Idle => {}
         }
         if edge_scroll_if_at_edge(&mut app) {
@@ -144,6 +151,7 @@ pub fn run_with_runner(
     // Restore the terminal modes the guard owns. The tab title and the
     // progress indicator are restored inside the guard's teardown, so this is
     // the one teardown step the loop has to drive explicitly.
+    tracing::info!(quit = app.ui.quit, "TUI run loop exiting");
     guard.release();
     Ok(app.exit_target(&termination))
 }

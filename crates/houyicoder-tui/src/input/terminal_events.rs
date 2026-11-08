@@ -198,6 +198,7 @@ fn read_event_with(
         // A terminal that already hung up must not be read: the event source
         // answers that state by reading again, forever.
         if hung_up() {
+            tracing::warn!("terminal hung up");
             return None;
         }
         match poll() {
@@ -216,8 +217,13 @@ fn read_event_with(
             // mean no event yet. Returning here would end the reader, and a
             // session whose reader is gone can never be typed into again.
             Ok(false) => continue,
-            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-            Err(_) => return None,
+            Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => {
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "terminal event poll failed");
+                return None;
+            }
         }
     }
 }

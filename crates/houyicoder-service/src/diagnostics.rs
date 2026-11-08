@@ -22,11 +22,7 @@
 //! switch flipped at runtime reached only one of them -- so the log looked
 //! healthy while the half a reader most needed was silently absent.
 
-use std::path::Path;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-
-use reload::Layer;
+use std::backtrace::Backtrace;
 #[cfg(test)]
 use std::env::temp_dir;
 use std::fmt::Display;
@@ -36,12 +32,20 @@ use std::fs::OpenOptions;
 use std::fs::create_dir_all;
 #[cfg(test)]
 use std::fs::remove_dir_all;
+use std::io::Write;
+use std::panic::PanicHookInfo;
+use std::path::Path;
 use std::path::PathBuf;
 #[cfg(test)]
 use std::process::id;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::subscriber::set_global_default;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::reload::Layer;
 use tracing_subscriber::{Registry, fmt, reload};
 
 /// The handle stored at install time, if install was called in this process.
@@ -197,6 +201,45 @@ pub fn handle() -> Option<DiagnosticsHandle> {
 /// truth in one place.
 pub fn installed_path() -> Option<PathBuf> {
     HANDLE.get().and_then(|h| h.as_ref()).and_then(|h| h.path())
+}
+
+/// Record a fatal panic to the installed diagnostic log file, if one exists,
+/// regardless of the current filter level.
+pub fn record_panic(info: &PanicHookInfo<'_>) {
+    let Some(path) = installed_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        drop(create_dir_all(parent));
+    }
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let thread = thread::current();
+    let thread_name = thread.name().unwrap_or("unnamed");
+    let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+        *s
+    } else if let Some(s) = info.payload().downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "non-string panic payload"
+    };
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "unknown location".to_string());
+    let backtrace = Backtrace::capture();
+    drop(writeln!(
+        file,
+        "[{now}] FATAL panic in thread '{thread_name}' at {location}: {payload}\n{backtrace}"
+    ));
+    drop(file.flush());
 }
 
 /// A handle whose subscriber was dropped, so set_level fails. Production

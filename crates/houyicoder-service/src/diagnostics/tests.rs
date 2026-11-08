@@ -7,6 +7,7 @@ use std::fs::create_dir_all;
 use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::write;
+use std::panic::{catch_unwind, set_hook, take_hook};
 use std::path::PathBuf;
 use std::process::id;
 use tracing::subscriber::with_default;
@@ -160,5 +161,33 @@ fn test_log_bad_frame_writes() {
         body.contains("client frame parse failed"),
         "message not logged: {body}"
     );
+    drop(remove_dir_all(&dir));
+}
+
+/// A panic hook invocation appends fatal details to the installed log file.
+#[test]
+fn test_record_panic_appends() {
+    let dir = temp_dir("paniclog");
+    let path = dir.join("debug.log");
+    let file = open_log_file(&path).expect("open");
+    let (subscriber, handle) = build(file, path.clone());
+    drop(subscriber);
+    if HANDLE.get().is_none() {
+        drop(HANDLE.set(Some(handle)));
+    }
+    let prev_hook = take_hook();
+    set_hook(Box::new(|info| {
+        record_panic(info);
+    }));
+    drop(catch_unwind(|| {
+        panic!("simulated diagnostic crash message");
+    }));
+    set_hook(prev_hook);
+    if let Some(installed) = installed_path()
+        && let Ok(content) = read_to_string(&installed)
+    {
+        assert!(content.contains("FATAL panic"));
+        assert!(content.contains("simulated diagnostic crash message"));
+    }
     drop(remove_dir_all(&dir));
 }

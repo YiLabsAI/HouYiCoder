@@ -244,3 +244,89 @@ fn test_unstored_read_names_result() {
         .expect("the read is its own row");
     assert_eq!(read.summary, "read older:stdout from 4096 (2.0 KiB)");
 }
+
+/// TurnBuilder must clear storage-indexed offsets between turns so a short
+/// second turn does not panic accessing an index recorded during an earlier,
+/// longer turn.
+#[test]
+fn test_storage_resets_turns() {
+    let mut events = Vec::new();
+    events.push(ev(
+        100,
+        SessionEvent::UserInput {
+            text: "first long turn".into(),
+        },
+    ));
+    events.push(ev(
+        101,
+        SessionEvent::TurnStarted {
+            turn: 1,
+            call_in_turn: 0,
+        },
+    ));
+    for i in 1..=4 {
+        events.push(ev(
+            110 + i,
+            SessionEvent::ToolCall {
+                call_id: format!("c{i}"),
+                tool: "read".into(),
+                input: json!({ "path": "file.rs" }),
+            },
+        ));
+        events.push(ev(
+            120 + i,
+            SessionEvent::ToolResult {
+                call_id: format!("c{i}"),
+                output: json!({ "lines": 10 }),
+                duration_ms: 5,
+            },
+        ));
+    }
+    events.push(ev(
+        130,
+        SessionEvent::ToolCall {
+            call_id: "c5".into(),
+            tool: "bash".into(),
+            input: json!({ "command": "cargo test" }),
+        },
+    ));
+    events.push(ev(
+        135,
+        SessionEvent::ToolResult {
+            call_id: "c5".into(),
+            output: kept_envelope(),
+            duration_ms: 50,
+        },
+    ));
+
+    events.push(ev(
+        200,
+        SessionEvent::UserInput {
+            text: "short turn".into(),
+        },
+    ));
+    events.push(ev(
+        205,
+        SessionEvent::TurnStarted {
+            turn: 2,
+            call_in_turn: 0,
+        },
+    ));
+    events.push(ev(
+        210,
+        SessionEvent::AssistantMessage {
+            text: "done with short turn".into(),
+            thinking: None,
+        },
+    ));
+
+    events.push(ev(
+        300,
+        SessionEvent::UserInput {
+            text: "third turn".into(),
+        },
+    ));
+
+    let view = build_view(&events, "test", 0);
+    assert_eq!(view.total_turns, 3);
+}

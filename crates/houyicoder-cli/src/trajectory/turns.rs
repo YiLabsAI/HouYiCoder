@@ -177,6 +177,10 @@ impl TurnBuilder {
         self.open_model = None;
         self.open_tools.clear();
         self.open_agents.clear();
+        self.block_forms.clear();
+        self.stored_results.clear();
+        self.stored_reads.clear();
+        self.stream_blocks.clear();
     }
 
     /// Whether an event has opened a turn in this builder.
