@@ -217,6 +217,11 @@ impl AgentEventHandlers {
         self.run_lifecycle = Some(handler);
     }
 
+    /// Return the installed run-lifecycle handler.
+    pub fn run_lifecycle_handler(&self) -> Option<Arc<dyn EventHandler<RunLifecycleEvent>>> {
+        self.run_lifecycle.clone()
+    }
+
     /// Replace the memory-change handler.
     pub fn set_memory_changed(&mut self, handler: Arc<dyn EventHandler<MemoryChangedEvent>>) {
         self.memory_changed = Some(handler);

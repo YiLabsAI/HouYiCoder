@@ -22,7 +22,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::stream::{FuturesUnordered, StreamExt};
-use houyicoder_api::agent_event::{EventHandler, ToolExecutionEvent};
+use houyicoder_api::agent_event::{
+    EventHandler, LivenessPhase, RunLifecycleEvent, ToolExecutionEvent,
+};
 use houyicoder_api::tool::progress::{ToolProgressReporter, ToolProgressUpdate};
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_context::SessionId;
@@ -46,16 +48,27 @@ use crate::agent::{RunError, Runner};
 use crate::observability::tool_failure_reason;
 use std::time::Instant;
 
-/// Forwards progress from one tool call to the tool-execution event handler.
-/// The call identity lets the host route each update to the correct tool.
+/// Forwards progress from one tool call to the tool-execution event handler,
+/// and refreshes the run-liveness pulse so a long tool that keeps producing
+/// output is not mistaken for a stall. The call identity lets the host route
+/// each update to the correct tool.
 struct ToolExecutionReporter {
     call_id: String,
     handler: Option<Arc<dyn EventHandler<ToolExecutionEvent>>>,
+    lifecycle: Option<Arc<dyn EventHandler<RunLifecycleEvent>>>,
 }
 
 impl ToolExecutionReporter {
-    fn new(call_id: String, handler: Option<Arc<dyn EventHandler<ToolExecutionEvent>>>) -> Self {
-        Self { call_id, handler }
+    fn new(
+        call_id: String,
+        handler: Option<Arc<dyn EventHandler<ToolExecutionEvent>>>,
+        lifecycle: Option<Arc<dyn EventHandler<RunLifecycleEvent>>>,
+    ) -> Self {
+        Self {
+            call_id,
+            handler,
+            lifecycle,
+        }
     }
 }
 
@@ -67,6 +80,13 @@ impl ToolProgressReporter for ToolExecutionReporter {
                 elapsed_secs: update.elapsed_secs,
                 timeout_secs: update.timeout_secs,
                 tail: update.tail,
+            });
+        }
+        // A tool that reported progress is alive: refresh the liveness pulse so
+        // a watchdog holding the run sees the I/O and does not cut it.
+        if let Some(lifecycle) = &self.lifecycle {
+            lifecycle.handle(RunLifecycleEvent::Pulse {
+                phase: LivenessPhase::Tool,
             });
         }
     }
@@ -449,6 +469,7 @@ impl Runner {
             .with_progress(Arc::new(ToolExecutionReporter::new(
                 call_id.to_string(),
                 self.events.tool_execution_handler(),
+                self.events.run_lifecycle_handler(),
             )))
             .with_agent_identity(self.agent_identity().clone())
             .with_result_capture(Arc::new(SessionResultCapture::new(self.store())));
