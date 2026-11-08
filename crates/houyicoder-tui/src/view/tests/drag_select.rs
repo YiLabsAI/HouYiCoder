@@ -1220,3 +1220,165 @@ fn test_moved_closes_stale_click() {
         "and ends the drag"
     );
 }
+
+/// A clean click on a tool result's fold hint (the … +N lines row) toggles
+/// the result open, and a second click closes it. The fold hint carries the
+/// call id so the click router reaches the result the way Ctrl+O does. A drag
+/// across the same rows selects and copies the text instead of toggling.
+#[test]
+fn test_click_result_hint_toggles() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript = vec![TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "result".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Success,
+        call_id: "r1".into(),
+        background_task: None,
+        body: (0..10)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        is_diff: false,
+    }]
+    .into();
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    let _out = render_text(&app, 80, 24);
+    let rect = app.ui.frame.layout.transcript_rect.get();
+    let ri = row_index(&app, "+7 lines");
+    let y = screen_y(&app, ri);
+    let x = rect.x;
+    // Clean click opens the result.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    assert!(
+        app.ui.transcript_view.expanded.results.contains("r1"),
+        "clicking the fold hint expands the result"
+    );
+    // A second clean click closes it.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    assert!(
+        !app.ui.transcript_view.expanded.results.contains("r1"),
+        "a second click collapses the result"
+    );
+    // A drag across the rows selects and copies instead of toggling.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), x + 6, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), x + 6, y),
+    );
+    assert!(
+        !app.ui.transcript_view.expanded.results.contains("r1"),
+        "a drag does not toggle the result"
+    );
+    assert!(
+        !captured.lock().unwrap().is_empty(),
+        "a drag copies the selected text"
+    );
+}
+
+/// A clean click on the approval card's argument-block fold hint toggles the
+/// card open the way Ctrl+O does, and a second click closes it. A drag across
+/// the card selects and copies the text instead of toggling.
+#[test]
+fn test_click_approval_hint_toggles() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let long_args = (0..150)
+        .map(|i| format!("arg-{i:03}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "bash".into(),
+            args: long_args,
+            reason: "destructive".into(),
+            source: None,
+            delegation: None,
+            containment_note: None,
+            selected: 0,
+            expanded: false,
+            call_id: "c1".into(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    app.ui.clipboard = Arc::new(RecordingClipboard {
+        captured: captured.clone(),
+    });
+    let _out = render_text(&app, 100, 40);
+    let arect = app.ui.frame.layout.approval_rect.get();
+    let ri = app
+        .ui
+        .frame
+        .layout
+        .last_approval_rows
+        .borrow()
+        .iter()
+        .position(|(_, t)| t.contains("lines hidden"))
+        .expect("approval fold hint rendered");
+    let y = arect.y + ri as u16;
+    let x = arect.x;
+    // Clean click opens the argument block.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    assert!(
+        app.approval_mut().unwrap().expanded,
+        "clicking the fold hint expands the approval card"
+    );
+    // A second clean click closes it.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(&mut app, mouse(MouseEventKind::Up(MouseButton::Left), x, y));
+    assert!(
+        !app.approval_mut().unwrap().expanded,
+        "a second click collapses the approval card"
+    );
+    // A drag across the card selects and copies instead of toggling.
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Drag(MouseButton::Left), x + 6, y),
+    );
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Up(MouseButton::Left), x + 6, y),
+    );
+    assert!(
+        !app.approval_mut().unwrap().expanded,
+        "a drag does not toggle the approval card"
+    );
+    assert!(
+        !captured.lock().unwrap().is_empty(),
+        "a drag copies the selected card text"
+    );
+}

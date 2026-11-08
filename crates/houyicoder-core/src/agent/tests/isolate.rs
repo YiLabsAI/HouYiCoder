@@ -10,6 +10,7 @@ use houyicoder_context::BlockHash;
 use houyicoder_context::SessionEvent;
 use houyicoder_protocol::block_ref::{BLOCK_REF_KEY, CONTAINS_KEY, block_addresses};
 use houyicoder_protocol::llm::InputItem;
+use houyicoder_protocol::tool::user_shell_call_id;
 use serde_json::Value;
 
 #[tokio::test]
@@ -39,7 +40,7 @@ async fn test_externalizes_large_tool_result() {
             .await
             .unwrap();
     }
-    let big_payload = "line with \"quotes\" and \\ backslash\nnext line\n".repeat(400);
+    let big_payload = "line with \"quotes\" and \\ backslash\nnext line\n".repeat(1000);
     let big = serde_json::json!({"data": big_payload});
     runner
         .append_tool_result(session, "c1".into(), "bash", big.clone(), 0)
@@ -131,7 +132,7 @@ async fn test_isolate_reduces_large_output() {
         .await
         .unwrap();
     // Large output (> ISOLATE threshold) carrying ANSI color codes.
-    let big = serde_json::json!({"stdout": format!("\u{1b}[32m{}\u{1b}[0m", "x".repeat(9000))});
+    let big = serde_json::json!({"stdout": format!("\u{1b}[32m{}\u{1b}[0m", "x".repeat(33_000))});
     runner
         .append_tool_result(session, "cr".into(), "bash", big, 0)
         .await
@@ -188,7 +189,7 @@ async fn test_blob_result_whole_externalize() {
         ))
         .await
         .unwrap();
-    let files: Vec<String> = (0..600)
+    let files: Vec<String> = (0..1000)
         .map(|i| format!("src/deeply/nested/path/to/file_{i:04}.rs"))
         .collect();
     let big = serde_json::json!({"filenames": files});
@@ -328,5 +329,51 @@ async fn test_many_refs_stay_inline() {
         block_addresses(output).len(),
         200,
         "the walk reaches every reference the inline output carries"
+    );
+}
+
+/// A direct-shell result (a command the user typed at the dollar prompt) is
+/// already bounded by the bash tool and is meant to expand inline in the
+/// transcript, so the isolate stage leaves it alone: the appended ToolResult
+/// carries the full bounded body, with no block_ref marker, even past the
+/// threshold that would externalize a model-issued result.
+#[tokio::test]
+async fn test_user_shell_skips_isolate() {
+    let p = Arc::new(FakeProvider::text("done"));
+    let runner = runner_with(p, ToolRegistry::new());
+    let session = SessionId::new();
+    let cid = user_shell_call_id("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    runner
+        .store()
+        .append(new_event(
+            session,
+            SessionEvent::ToolCall {
+                call_id: cid.clone(),
+                tool: "bash".into(),
+                input: serde_json::json!({}),
+            },
+        ))
+        .await
+        .unwrap();
+    let big = serde_json::json!({"stdout": "x".repeat(ISOLATE_LARGE_OUTPUT_BYTES + 1000)});
+    runner
+        .append_tool_result(session, cid.clone(), "bash", big.clone(), 0)
+        .await
+        .unwrap();
+    let events = runner.store().replay(session).await.unwrap();
+    let tr = events
+        .iter()
+        .find(|e| matches!(&e.event, SessionEvent::ToolResult { call_id, .. } if call_id == &cid))
+        .expect("tool result appended");
+    let SessionEvent::ToolResult { output, .. } = &tr.event else {
+        unreachable!()
+    };
+    assert_eq!(
+        output, &big,
+        "a direct-shell result stays inline, not externalized to a marker"
+    );
+    assert!(
+        output["stdout"].get("block_ref").is_none(),
+        "no block_ref marker on a direct-shell result"
     );
 }

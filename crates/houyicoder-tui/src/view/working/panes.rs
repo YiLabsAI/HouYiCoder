@@ -8,7 +8,7 @@ use ratatui::{
     style::Color,
 };
 
-use crate::selection::TAG_PLAIN;
+use crate::selection::{TAG_FOLD, TAG_PLAIN};
 use crate::state::App;
 use crate::view::agents_pane::{AGENTS_PANE_HEIGHT, draw_content};
 use crate::view::pane::render;
@@ -78,7 +78,20 @@ pub(super) fn stash_approval_rows(f: &mut Frame, area: Rect, app: &App) {
                 row.push_str(cell.symbol());
             }
         }
-        rows.push((TAG_PLAIN, row.trim_end().to_string()));
+        // The argument-block fold hint ("… (N lines hidden — ctrl+o to
+        // expand) …") is the one row a clean click toggles, so it carries the
+        // fold tag the click router reads. Every other row stays plain, so a
+        // drag still selects and copies the card text.
+        let trimmed_row = row.trim_end();
+        let tag = if trimmed_row.contains("lines hidden")
+            || trimmed_row.contains("ctrl+o to collapse")
+            || trimmed_row.contains("ctrl+o to expand")
+        {
+            TAG_FOLD
+        } else {
+            TAG_PLAIN
+        };
+        rows.push((tag, trimmed_row.to_string()));
     }
 }
 

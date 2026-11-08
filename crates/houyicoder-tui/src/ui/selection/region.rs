@@ -206,6 +206,10 @@ pub(crate) enum RegionIntent {
     ToggleSubagent(usize),
     /// Toggle the thinking block on the visible row, when it offers one.
     ToggleThinking(usize),
+    /// Toggle the tool or shell result the visible row belongs to.
+    ToggleResult(usize),
+    /// Toggle the approval card argument block on a clean click.
+    ToggleApprovalExpand,
     /// Open the child session the visible row is the trace of.
     DrillChild(String),
     /// Collapse whatever expanded block contains the selection anchor.
@@ -436,6 +440,7 @@ impl Region for TranscriptRegion<'_> {
                 )
             });
             if let Some((ri, tag, fold_key, turn_id, trace_child)) = target {
+                let call_id = self.view.frame.keys.borrow().callid_at(ri);
                 if tag == selection::TAG_FOLD {
                     return RegionIntent::ToggleFold(ri);
                 }
@@ -443,18 +448,19 @@ impl Region for TranscriptRegion<'_> {
                     return RegionIntent::ToggleSubagent(ri);
                 }
                 // A row publishes a turn handle exactly when it offers a
-                // toggle, so the handle is the row's shape. Matching the
-                // rendered text instead missed every summary whose duration
-                // is unknown, because that text names a duration the row
-                // cannot state.
+                // toggle, so the handle is the row's shape.
                 if turn_id.is_some() {
                     return RegionIntent::ToggleThinking(ri);
                 }
                 // Ranked after the toggles so a row that both offers a block
-                // and names a child keeps opening its block; the trace row is
-                // the row that publishes this and no fold or turn handle.
+                // and names a child keeps opening its block.
                 if let Some(child_sid) = trace_child {
                     return RegionIntent::DrillChild(child_sid);
+                }
+                // A result publishes its call id on every body and hint row,
+                // so a clean click on any of them toggles it.
+                if call_id.is_some() {
+                    return RegionIntent::ToggleResult(ri);
                 }
             }
             return RegionIntent::CollapseUnderAnchor;
@@ -546,6 +552,26 @@ impl Region for ApprovalSelection<'_> {
     }
     fn is_dragging(&self) -> bool {
         self.view.selections.approval.is_dragging
+    }
+    fn handle_up(&mut self) -> RegionIntent {
+        // A clean click on the fold hint toggles the card; a drag releases so
+        // the dragged text is still copied.
+        let sel = &self.view.selections.approval;
+        let clean = !sel.drag_moved && sel.is_click_only() && sel.span_origin.is_none();
+        if clean && let Some((x, y)) = sel.cursor {
+            let layout = &self.view.frame.layout;
+            let (_, ri) = pane_mouse_to_content(layout.approval_rect.get(), x, y);
+            let is_fold = layout
+                .last_approval_rows
+                .borrow()
+                .get(ri)
+                .map(|(t, _)| *t == selection::TAG_FOLD)
+                .unwrap_or(false);
+            if is_fold {
+                return RegionIntent::ToggleApprovalExpand;
+            }
+        }
+        self.release()
     }
 }
 

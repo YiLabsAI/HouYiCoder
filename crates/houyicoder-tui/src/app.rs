@@ -44,14 +44,10 @@ pub fn run_with_runner(
     startup: FrontendStartup,
     resume_builder: Option<ResumeBuilder>,
 ) -> io::Result<Option<String>> {
-    // The guard owns every terminal mode change below, so an early error
-    // return or a panic unwinding past this loop restores the console
-    // instead of leaving it on the alternate screen in raw mode.
-    // A termination signal does not unwind, so the guard's Drop never runs on
-    // that path. The watch raises a flag the loop reads, and the loop then
-    // leaves through the same teardown every other exit uses. It is installed
-    // before the guard so the window between taking the terminal modes and
-    // being able to hear a signal does not exist.
+    // The guard owns every terminal mode change below, so an early return or
+    // a panic unwinding past this loop restores the console. The watch is
+    // installed before the guard so a termination signal between taking the
+    // modes and hearing a signal still reaches the loop's teardown path.
     let termination = watch_termination()?;
     let mut guard = TerminalGuard::acquire(CrosstermModes)?;
     let backend = CrosstermBackend::new(stdout());
@@ -78,9 +74,8 @@ pub fn run_with_runner(
             reported_busy = app.agent_busy();
         }
         // Idle drain consumes queued work only after a clean run; interrupted
-        // work stays available for editing.
-        // Idle frames render only on state changes. Busy frames keep the
-        // spinner live without toggling terminal cursor visibility.
+        // work stays available for editing. Idle frames render on state
+        // changes; busy frames keep the spinner live.
         app.idle_drain(resume_builder.as_deref(), &mut dirty);
         if app.drop_completed_fleet() {
             dirty = true;
@@ -111,11 +106,8 @@ pub fn run_with_runner(
         if dirty || app.agent_busy() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
-            // Stage the frame: the draw writes into a fresh value, and the
-            // last published frame is held aside until the draw reports
-            // success.
-            // The staged frame starts empty, so the parked cursor position
-            // needs no reset here.
+            // Stage the frame: the draw writes into a fresh value, held aside
+            // until the draw reports success.
             let published = app.ui.stage_frame();
             let drawn = terminal.draw(|f| {
                 view::draw(f, &app);
@@ -157,13 +149,9 @@ pub fn run_with_runner(
 }
 
 impl App {
-    /// What the loop hands up when it ends.
-    ///
-    /// A signal ends the process, not the session: nothing that survives this
-    /// frame may start another one, so the run in flight is cancelled and a
-    /// queued resume target is dropped. A normal quit hands up whatever the
-    /// queue holds, because the caller may have to rebuild the session
-    /// outside this loop.
+    /// What the loop hands up when it ends. A signal ends the process, not
+    /// the session: the run in flight is cancelled and a queued resume target
+    /// is dropped. A normal quit hands up whatever the queue holds.
     fn exit_target(&mut self, termination: &TerminationWatch) -> Option<String> {
         if termination.requested() {
             self.stop_for_signal();
@@ -519,12 +507,10 @@ pub(crate) fn apply_selection_overlay(f: &mut Frame, app: &App) {
 }
 
 impl App {
-    /// The pieces a selection leaf may read: the four selections, the last
-    /// published frame, the transcript's current top display row, and the
-    /// clipboard port. Handing a leaf this instead of the App is what keeps a
-    /// gesture from reaching domain state; the effects it asks for come back
-    /// as a RegionIntent. The top is the live offset, so a gesture that
-    /// scrolled first maps through the value it just moved.
+    /// The pieces a selection leaf may read: the selections, the last frame,
+    /// the transcript's top row, and the clipboard. Handing a leaf this
+    /// instead of the App keeps a gesture off domain state; its effects come
+    /// back as a RegionIntent.
     pub(crate) fn region_view(&mut self) -> RegionView<'_> {
         let scroll_top = self.active_scroll().top_offset();
         RegionView {
@@ -550,9 +536,8 @@ impl App {
                 self.clear_transcript_click();
             }
             // A row publishes a turn handle exactly when it offers a toggle,
-            // but the toggle can still decline (the block is not there any
-            // more). It then falls through to the collapse, which falls
-            // through to the release, the way one click always did.
+            // but the toggle can decline. It then falls through to collapse
+            // and release, the way one click always did.
             RegionIntent::ToggleThinking(ri) => {
                 if self.toggle_thinking_expand_at_row(ri) {
                     self.clear_transcript_click();
@@ -574,6 +559,20 @@ impl App {
             RegionIntent::DrillChild(child_sid) => {
                 self.enter_teammate_view_for_sid(&child_sid, true);
                 self.clear_transcript_click();
+            }
+            RegionIntent::ToggleResult(ri) => {
+                let id = self.ui.frame.keys.borrow().callid_at(ri);
+                if let Some(id) = id {
+                    self.ui.transcript_view.toggle_result(id);
+                    self.clear_transcript_click();
+                }
+            }
+            RegionIntent::ToggleApprovalExpand => {
+                if let Some(card) = self.approval_mut() {
+                    card.expanded = !card.expanded;
+                }
+                self.ui.selection.approval.last_click = None;
+                self.ui.selection.approval.clear();
             }
             RegionIntent::ScrollUp => self.scroll_transcript_line_up(1),
             RegionIntent::ScrollDown => self.scroll_transcript_line_down(1),

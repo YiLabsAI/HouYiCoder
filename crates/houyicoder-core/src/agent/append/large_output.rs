@@ -19,9 +19,13 @@ use crate::agent::Runner;
 use crate::agent::reducer::{ReduceCtx, TrustLevel};
 
 /// Tool outputs larger than this (serialized bytes) are externalized to
-/// the CAS at the PostToolUse point. The 8KB threshold balances a single
-/// large result against per-turn retrieval cost.
-pub(crate) const ISOLATE_LARGE_OUTPUT_BYTES: usize = 8192;
+/// the CAS at the PostToolUse point. The 32KB threshold sits above the bash
+/// output bound (a 4KB head plus an 8KB tail, or a verbatim result under the
+/// 30KB cap), so a result the tool already bounded is not externalized a
+/// second time into a 200-char preview that hides the tail the model and the
+/// user need. Genuinely large results (a raw capture the tool did not bound)
+/// still externalize.
+pub(crate) const ISOLATE_LARGE_OUTPUT_BYTES: usize = 32_768;
 
 /// The most distinct block addresses one externalized output may restate.
 ///

@@ -255,6 +255,10 @@ pub(crate) fn result_body_rows(
     };
     let suppress_hint = show_extra;
     let mut out = Vec::with_capacity(shown + usize::from(hidden > 0 && !suppress_hint));
+    // Every row of a foldable result carries the call id, so a click on the
+    // fold hint or any body row toggles. A short result keeps None on its
+    // continuation rows, since there is nothing to expand.
+    let foldable = hidden > 0 || expanded;
     // Guard the empty-after-marker bug: a result whose body is empty or whose
     // first line is blank would render a bare "⎿ " with no text. Show a
     // "(no output)" placeholder instead so the marker always carries text.
@@ -275,7 +279,13 @@ pub(crate) fn result_body_rows(
         // matching the 2-space ⎿ gutter + the ⎿ glyph + two spaces) with no
         // repeat ⎿ — continuations are indented rather than
         // re-glyphed every line, so the eye reads the body as one block.
-        out.push((plain, format!("     {l}"), None, None, None));
+        out.push((
+            plain,
+            format!("     {l}"),
+            None,
+            foldable.then(|| call_id.to_string()),
+            None,
+        ));
     }
     if hidden > 0 && !suppress_hint {
         // In-app collapse form: the expand-hint
@@ -284,7 +294,13 @@ pub(crate) fn result_body_rows(
         // body. Ctrl+O still expands (toggle_focused_result_expand),
         // the verbose inline hint text is dropped so a long transcript is not
         // littered with "Ctrl+O to expand" on every collapsed result.
-        out.push((plain, format!("     … +{hidden} lines"), None, None, None));
+        out.push((
+            plain,
+            format!("     … +{hidden} lines"),
+            None,
+            Some(call_id.to_string()),
+            None,
+        ));
     }
     out
 }

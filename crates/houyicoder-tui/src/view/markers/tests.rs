@@ -119,7 +119,8 @@ fn test_result_body_long_collapses() {
     assert_eq!(rows[1].1, "     line1");
     assert_eq!(rows[2].1, "     line2");
     assert!(rows[3].1.contains("+7 lines"));
-    assert_eq!(rows[3].3, None);
+    // The fold hint carries the call id so a click on it toggles the result.
+    assert_eq!(rows[3].3.as_deref(), Some("c1"));
 }
 
 #[test]

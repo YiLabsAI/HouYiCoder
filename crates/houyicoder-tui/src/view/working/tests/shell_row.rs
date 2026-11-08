@@ -317,11 +317,12 @@ fn test_shell_row_refused_yellow() {
     assert_eq!(verdict_color(&app), Color::Yellow, "a refusal reads yellow");
 }
 
-/// An output moved to the block store adds its tag after the verdict in the
-/// same cyan the prompt uses, so a reader sees the full text still exists
-/// without the row growing.
+/// The block-store address is a storage detail for the /context and
+/// /trajectory panes, not the main transcript row. A shell result that moved
+/// its output to the block store still reports the storage word (truncated,
+/// saved), but the CAS hash never reaches the row a user reads.
 #[test]
-fn test_shell_row_cas_tag() {
+fn test_shell_row_omits_cas() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     let line = TranscriptLine::ShellCommand {
@@ -341,10 +342,13 @@ fn test_shell_row_cas_tag() {
         .expect("the command row renders")
         .trim_end();
     assert!(
-        row.ends_with("exit 0 · 10ms · CAS a1b2c3d4 (22.5 KiB)"),
-        "{row:?}"
+        !row.contains("CAS") && !row.contains("a1b2c3d4"),
+        "the block address stays out of the main row: {row:?}"
     );
-    assert_eq!(verdict_color(&app), Color::Cyan, "the tag reads cyan");
+    assert!(
+        row.ends_with("exit 0 · 10ms"),
+        "the verdict and time still report: {row:?}"
+    );
 }
 
 fn find_shell_row(out: &str) -> String {
@@ -401,12 +405,11 @@ fn test_shell_row_truncated() {
     assert!(row.ends_with("exit 0 · 10ms · truncated"), "{row:?}");
 }
 
-/// Both tags cannot fit a limited width, so the one that says less goes first:
-/// the row keeps what was kept of the output and drops the block tag. At 50
-/// columns the verdict and the storage word fit with a readable command,
-/// while the block tag asks for twenty-five more columns than the row has;
-/// the room is measured over every surviving tag, so one that fits alone
-/// cannot push the row past the terminal.
+/// The storage word fits a limited width while the block address never
+/// reaches the row at all. At 50 columns the verdict and the storage word
+/// fit with a readable command; the CAS hash is a pane detail and stays out
+/// of the main row regardless of width, so the room is measured only over the
+/// tags the row actually shows.
 #[test]
 fn test_shell_row_tag_degrades() {
     let mut app = composition::app();

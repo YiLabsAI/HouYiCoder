@@ -30,7 +30,6 @@ pub(super) struct ShellRow<'a> {
     pub timed_out: bool,
     pub cancelling: bool,
     pub storage: Option<ShellStorage>,
-    pub cas: Option<&'a str>,
 }
 
 impl<'a> ShellRow<'a> {
@@ -45,7 +44,7 @@ impl<'a> ShellRow<'a> {
             exit_code,
             timed_out,
             storage,
-            cas,
+            ..
         } = line
         else {
             return None;
@@ -58,7 +57,6 @@ impl<'a> ShellRow<'a> {
             timed_out: *timed_out,
             cancelling,
             storage: *storage,
-            cas: cas.as_deref(),
         })
     }
 
@@ -122,15 +120,13 @@ fn storage_label(storage: ShellStorage) -> Option<&'static str> {
 
 /// The right-block parts beyond the verdict, in the order they survive a
 /// limited width: what was kept of the output outranks where it was kept, so
-/// the block tag is the first to go.
+/// the block tag is the first to go. The CAS block address is a storage detail
+/// for the /context and /trajectory panes, not the main transcript row.
 fn right_extras(row: &ShellRow<'_>) -> Vec<(String, Style)> {
     let warning = Style::new().fg(Color::Yellow);
     let mut extras = Vec::new();
     if let Some(label) = row.storage.and_then(storage_label) {
         extras.push((label.to_string(), warning));
-    }
-    if let Some(tag) = row.cas {
-        extras.push((tag.to_string(), Style::new().fg(Color::Cyan)));
     }
     extras
 }

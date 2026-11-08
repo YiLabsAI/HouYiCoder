@@ -27,6 +27,7 @@ use crate::agent::turn::result::run_completion_status;
 use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
 use houyicoder_context::{EventId, NotificationTopic, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{OutputItem, Usage};
+use houyicoder_protocol::tool::is_user_shell_call_id;
 use serde_json::Value;
 
 use super::compaction::CompactionOutcome;
@@ -359,7 +360,17 @@ impl Runner {
         output: serde_json::Value,
         duration_ms: u64,
     ) -> Result<(), RunError> {
-        let output = self.isolate_large_output(tool, output).await;
+        // A command the user typed at the direct shell prompt is already
+        // bounded by the bash tool (a newline-aligned head and tail) and is
+        // meant to expand inline in the transcript. Externalizing it here
+        // would replace the bounded body with a 200-char preview the user
+        // cannot read without a retrieval, so the isolate step is skipped for
+        // those calls. The exec-time capture still holds the full output.
+        let output = if is_user_shell_call_id(&call_id) {
+            output
+        } else {
+            self.isolate_large_output(tool, output).await
+        };
         self.store
             .append(new_event(
                 session,
