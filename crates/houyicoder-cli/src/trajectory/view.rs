@@ -180,9 +180,6 @@ fn build_summary(
     // understated, and so does a recap.
     let subagent_usage = (acc.subagent.calls > 0).then_some(acc.subagent);
     let recap_usage = (acc.recap.calls > 0).then_some(acc.recap);
-    // One child that never reported its usage leaves a hole in the sum, so the
-    // session total is unknown rather than short by that child, and a recap
-    // written without figures is the same hole.
     // A turn interrupted before the model answered, or a child that ended
     // without producing a call, spent no tokens the runner could measure. The
     // measured turns still sum to a real figure, so the totals are shown

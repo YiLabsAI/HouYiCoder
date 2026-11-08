@@ -25,7 +25,7 @@ fn test_probe_interval_doubles() {
 /// without being cut, even though the window would end a silent drive. The
 /// watchdog sees the heartbeat and resets its stall count each probe.
 #[tokio::test]
-async fn test_pulsing_drive_survives() {
+async fn test_heartbeat_drive_survives() {
     let liveness = Arc::new(ChildLiveness::new());
     let cancel = CancellationToken::new();
     let cut_reason: Arc<Mutex<Option<CutReason>>> = Arc::new(Mutex::new(None));
@@ -54,7 +54,7 @@ async fn test_pulsing_drive_survives() {
     .await;
     assert!(
         cut_reason.lock().unwrap().is_none(),
-        "a drive that keeps pulsing is not cut"
+        "a drive that keeps sending heartbeats survives"
     );
 }
 
