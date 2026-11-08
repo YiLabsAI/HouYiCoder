@@ -65,6 +65,7 @@ async fn test_sidechain_isolates_sessions() {
                 isolation: "worktree".into(),
                 policy: "delegate".into(),
                 trigger_source: "model:call-1".into(),
+                run_in_background: false,
             },
         ))
         .await

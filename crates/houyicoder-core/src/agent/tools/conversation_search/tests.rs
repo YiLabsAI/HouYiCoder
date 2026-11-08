@@ -566,6 +566,7 @@ async fn test_turn_rows_dense_index() {
         isolation: "worktree".to_string(),
         policy: "auto".to_string(),
         trigger_source: "model:call_1".to_string(),
+        run_in_background: false,
     });
     let e1 = make_event(SessionEvent::UserInput {
         text: "beta".to_string(),
@@ -820,6 +821,7 @@ fn test_turn_listing_skips_textless() {
         isolation: "worktree".to_string(),
         policy: "auto".to_string(),
         trigger_source: "model:call_1".to_string(),
+        run_in_background: false,
     });
     let long = make_event(SessionEvent::Summary {
         text: "s".repeat(1200),

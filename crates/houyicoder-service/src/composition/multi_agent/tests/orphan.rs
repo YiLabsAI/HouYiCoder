@@ -60,6 +60,7 @@ async fn test_orphan_reconciles_on_run() {
                 isolation: "none".into(),
                 policy: "delegate".into(),
                 trigger_source: "model:c_dead".into(),
+                run_in_background: false,
             },
         })
         .await
@@ -157,6 +158,7 @@ async fn test_orphan_answers_model_call() {
                 isolation: "none".into(),
                 policy: "delegate".into(),
                 trigger_source: "model:c_dead".into(),
+                run_in_background: false,
             },
         ))
         .await
@@ -237,6 +239,7 @@ async fn test_orphan_answers_returned_call() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "model:c_done".into(),
+            run_in_background: false,
         },
         SessionEvent::SubagentReturn {
             child_session_id: done.to_string(),
@@ -375,6 +378,7 @@ async fn test_run_entry_answers_orphan() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "model:c_dead".into(),
+            run_in_background: false,
         },
     ] {
         store
@@ -463,6 +467,7 @@ async fn test_orphan_keeps_answered_call() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "model:c_bg".into(),
+            run_in_background: true,
         },
     ] {
         store
@@ -536,6 +541,7 @@ async fn test_orphan_skips_unreadable_id() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "system:test".into(),
+            run_in_background: false,
         },
         returned.event,
     ] {
@@ -1239,6 +1245,7 @@ async fn test_orphan_skips_unparsable_child() {
                 isolation: "none".into(),
                 policy: "delegate".into(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ))
         .await
@@ -1615,5 +1622,6 @@ fn spawn_event(child: &SessionId) -> SessionEvent {
         isolation: "none".into(),
         policy: "delegate".into(),
         trigger_source: "model:c1".into(),
+        run_in_background: false,
     }
 }

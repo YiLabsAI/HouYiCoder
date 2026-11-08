@@ -201,7 +201,17 @@ fn read_event_with(
             return None;
         }
         match poll() {
-            Ok(true) => return read().ok(),
+            // A ready poll does not promise a complete event. The reader can
+            // still be interrupted by a signal or meet a partial escape
+            // sequence. Treating either as the end of the source kills the
+            // reader thread on a transient blip, and a session whose reader
+            // is gone can never be typed into again. The hangup check at the
+            // top of the loop is the only real end; a read that fails while
+            // the terminal is still live is retried.
+            Ok(true) => match read() {
+                Ok(event) => return Some(event),
+                Err(_) => continue,
+            },
             // A deadline that expired and a wait a signal interrupted both
             // mean no event yet. Returning here would end the reader, and a
             // session whose reader is gone can never be typed into again.

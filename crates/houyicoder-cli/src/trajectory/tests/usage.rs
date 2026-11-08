@@ -204,6 +204,7 @@ fn test_unmeasured_child_hides_share() {
                 isolation: String::new(),
                 policy: String::new(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -271,6 +272,7 @@ fn test_cache_only_child_folds() {
                 isolation: String::new(),
                 policy: String::new(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -337,6 +339,7 @@ fn test_child_report_hides_share() {
                 isolation: String::new(),
                 policy: String::new(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(

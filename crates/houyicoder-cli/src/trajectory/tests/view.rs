@@ -1611,6 +1611,7 @@ fn test_delegation_split_across_batches() {
             isolation: String::new(),
             policy: String::new(),
             trigger_source: "model:c1".into(),
+            run_in_background: false,
         },
     );
     let result = ev(

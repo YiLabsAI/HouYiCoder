@@ -41,6 +41,7 @@ async fn test_orphan_restores_missed_notice() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "model:c_bg".into(),
+            run_in_background: true,
         },
         return_event(parent_sid, &child).event,
     ] {
@@ -102,6 +103,7 @@ async fn test_orphan_keeps_foreground_ending() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "model:c_fg".into(),
+            run_in_background: false,
         },
         return_event(parent_sid, &child).event,
         // The foreground result lands after the return, so the call already
@@ -128,6 +130,80 @@ async fn test_orphan_keeps_foreground_ending() {
                 if child_session_id == &child.to_string()
         )),
         "a foreground ending the call already answered needs no notice"
+    );
+}
+
+/// A foreground child the user interrupted writes its interrupted tool result
+/// before its interrupted return, the order a position heuristic once read as
+/// a background launch. The launch mode travels on the spawn event, so the
+/// interrupted foreground child is not mistaken for a background child and no
+/// completion notice is written for it on restart.
+#[tokio::test]
+async fn test_orphan_skips_interrupted_foreground() {
+    let (runtime, store, parent_sid) = runtime_with(
+        Arc::new(FakeProvider::text("kept")),
+        None,
+        ToolRegistry::new(),
+    );
+    let child = SessionId::new();
+    for event in [
+        SessionEvent::ToolCall {
+            call_id: "c_fg".into(),
+            tool: "agent".into(),
+            input: serde_json::json!({ "prompt": "foreground task" }),
+        },
+        SessionEvent::SubagentSpawn {
+            child_session_id: child.to_string(),
+            subagent_type: "explore".into(),
+            prompt_summary: "foreground task".into(),
+            isolation: "none".into(),
+            policy: "delegate".into(),
+            trigger_source: "model:c_fg".into(),
+            run_in_background: false,
+        },
+        // The interrupted result lands before the return, the order that used
+        // to be misread as a background launch.
+        SessionEvent::ToolResult {
+            call_id: "c_fg".into(),
+            output: serde_json::json!({ "error": "interrupted by user", "not_run": true }),
+            duration_ms: 0,
+        },
+        SessionEvent::SubagentReturn {
+            child_session_id: child.to_string(),
+            status: "interrupted".into(),
+            summary: String::new(),
+            result_ref: child.to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: false,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
+        },
+    ] {
+        store
+            .append(entry(parent_sid, event))
+            .await
+            .expect("seed the interrupted foreground child");
+    }
+
+    runtime.reconcile_orphans(parent_sid).await;
+
+    let log = store.replay(parent_sid).await.expect("read the parent log");
+    assert!(
+        !log.iter().any(|e| matches!(
+            &e.event,
+            SessionEvent::NotificationInjected { child_session_id, .. }
+                if child_session_id == &child.to_string()
+        )),
+        "an interrupted foreground child is not a background launch and owes no notice"
     );
 }
 
@@ -161,6 +237,7 @@ async fn test_orphan_repairs_interrupted_notice() {
             isolation: "none".into(),
             policy: "delegate".into(),
             trigger_source: "model:c_bg".into(),
+            run_in_background: true,
         },
         orphan_return_event(parent_sid, &child).event,
     ] {

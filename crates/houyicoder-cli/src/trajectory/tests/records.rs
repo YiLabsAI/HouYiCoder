@@ -82,6 +82,7 @@ fn test_agent_merges_spawn_return() {
                 isolation: "worktree".into(),
                 policy: "read-only".into(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -287,6 +288,7 @@ fn test_delegation_hides_tool_call() {
                 isolation: "worktree".into(),
                 policy: "read-only".into(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -489,6 +491,7 @@ fn test_delegation_legacy_hides_tool() {
                 isolation: "worktree".into(),
                 policy: "read-only".into(),
                 trigger_source: String::new(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -606,6 +609,7 @@ fn test_agent_unknown_status() {
                 isolation: "worktree".into(),
                 policy: "read-only".into(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -670,6 +674,7 @@ fn test_subagent_return_folds_calls() {
                 isolation: "worktree".into(),
                 policy: "read-only".into(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(
@@ -740,6 +745,7 @@ fn test_unmeasured_child_not_counted() {
                 isolation: "worktree".into(),
                 policy: "read-only".into(),
                 trigger_source: "model:c1".into(),
+                run_in_background: false,
             },
         ),
         ev(

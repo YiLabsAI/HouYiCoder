@@ -44,6 +44,7 @@ fn test_subagent_spawn_round_trip() {
             isolation: "worktree".into(),
             policy: "delegate".into(),
             trigger_source: "model:call-1".into(),
+            run_in_background: false,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -54,6 +55,59 @@ fn test_subagent_spawn_round_trip() {
         json.contains("\"trigger_source\":\"model:call-1\""),
         "trigger_source round-trips so a replay distinguishes the origin: {json}"
     );
+}
+
+/// A spawn written before the launch-mode field existed must still deserialize,
+/// defaulting to foreground. A replay then treats the child as foreground,
+/// which is safe against the spurious-notice bug this field fixes but means an
+/// old background orphan whose call is still visible will not be re-notified.
+#[test]
+fn test_subagent_spawn_old_log() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        SessionEvent::SubagentSpawn {
+            child_session_id: "child-2".into(),
+            subagent_type: "explore".into(),
+            prompt_summary: String::new(),
+            isolation: String::new(),
+            policy: String::new(),
+            trigger_source: String::new(),
+            run_in_background: true,
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let value = serde_json::from_str::<Value>(&json).expect("parse");
+    let mut body = value
+        .get("event")
+        .and_then(Value::as_object)
+        .cloned()
+        .expect("event object");
+    body.remove("run_in_background");
+    let mut wrapped = Map::new();
+    if let Value::Object(top) = value {
+        for (k, v) in top {
+            if k == "event" {
+                wrapped.insert("event".into(), Value::Object(body.clone()));
+            } else {
+                wrapped.insert(k, v);
+            }
+        }
+    }
+    let old = serde_json::to_string(&Value::Object(wrapped)).expect("re-serialize");
+    let back: SessionLogEntry = serde_json::from_str(&old).expect("old log deserializes");
+    match back.event {
+        SessionEvent::SubagentSpawn {
+            run_in_background, ..
+        } => {
+            assert!(
+                !run_in_background,
+                "a spawn without the launch-mode field defaults to foreground"
+            );
+        }
+        other => panic!("expected SubagentSpawn, got {other:?}"),
+    }
 }
 
 #[test]

@@ -259,6 +259,7 @@ fn test_byte_len_spawn_zero() {
             isolation: "worktree".into(),
             policy: "delegate".into(),
             trigger_source: "model:call-1".into(),
+            run_in_background: false,
         },
     };
     assert_eq!(event_byte_len(&ev), 0);

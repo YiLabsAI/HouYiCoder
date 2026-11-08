@@ -141,16 +141,16 @@ fn fold(log: &[SessionLogEntry]) -> ParentLog {
             _ => {}
         }
     }
-    // Where each call's result sits, so a return can tell whether the call had
-    // already been answered when it landed. A background launch is answered at
-    // once, so its result precedes the return; a foreground result lands after.
-    let mut answered_at: HashMap<&str, usize> = HashMap::new();
-    for (index, entry) in log.iter().enumerate() {
+    // Fold the delegation boundaries in event order. The launch mode travels
+    // on the spawn event itself, so the return does not need to infer it from
+    // where the tool result landed.
+    for entry in log.iter() {
         match &entry.event {
             SessionEvent::SubagentSpawn {
                 child_session_id,
                 subagent_type,
                 trigger_source,
+                run_in_background,
                 ..
             } => {
                 let delegation = folded
@@ -166,7 +166,12 @@ fn fold(log: &[SessionLogEntry]) -> ParentLog {
                 delegation.orphaned = false;
                 delegation.status.clear();
                 delegation.summary.clear();
-                delegation.launched_in_background = false;
+                // The launch mode is read from the boundary, not inferred from
+                // the order of the tool result and the return. A foreground
+                // child interrupted by the user also writes its result before
+                // its return, which a position heuristic would mistake for a
+                // background launch and re-notify on restart.
+                delegation.launched_in_background = *run_in_background;
             }
             SessionEvent::SubagentReturn {
                 child_session_id,
@@ -180,15 +185,7 @@ fn fold(log: &[SessionLogEntry]) -> ParentLog {
                     delegation.orphaned = *orphaned;
                     delegation.status = status.clone();
                     delegation.summary = summary.clone();
-                    delegation.launched_in_background = delegation
-                        .call_id
-                        .as_deref()
-                        .and_then(|call| answered_at.get(call))
-                        .is_some_and(|answered| *answered < index);
                 }
-            }
-            SessionEvent::ToolResult { call_id, .. } => {
-                answered_at.entry(call_id.as_str()).or_insert(index);
             }
             _ => {}
         }

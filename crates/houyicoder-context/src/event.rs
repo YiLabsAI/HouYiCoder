@@ -312,19 +312,14 @@ pub enum SessionEvent {
         #[serde(default)]
         retry_after_error: u32,
     },
-    /// A hook signal recorded for audit + self-evolution. Covers every
-    /// verdict EXCEPT bare Allow — Allow is derivable from absence (no
-    /// HookSignal for a tool call ⟹ every configured hook allowed; the
-    /// config is known, so Allow carries no non-derivable information and
-    /// recording it would only scale volume with tool-call count). verdict
-    /// is the EFFECTIVE control-flow result (fail-closed: a hook error
-    /// surfaces here as Deny), error carries the CAUSE separately so the
-    /// two never share a field (Some(error) ⟹ the Deny came from a fault,
-    /// not a policy decision). hook_name attributes the signal to the hook
-    /// that produced it; tool_name is None for non-tool events
-    /// (SessionStart/UserPromptSubmit/...); turn/call_in_turn are None when
-    /// the signal sits outside a round-trip context. triggered_event is Some
-    /// only for a Trigger verdict. Old logs deserialize to defaults.
+    /// A hook signal recorded for audit and self-evolution. Covers every
+    /// verdict except a bare Allow, which is derivable from absence. No
+    /// HookSignal for a call means every configured hook allowed it. verdict
+    /// is the effective control-flow result; a hook error surfaces as Deny
+    /// with its cause in error separately, so a fault and a policy decision
+    /// never share a field. hook_name attributes the signal; tool_name is None
+    /// for non-tool events; turn and call_in_turn are None outside a
+    /// round-trip; triggered_event is Some only for a Trigger verdict.
     #[serde(rename = "HookSignal")]
     HookSignal {
         #[serde(default)]
@@ -529,10 +524,9 @@ pub enum SessionEvent {
         reads: Vec<CachedRead>,
     },
     /// A parent runner spawned a sub-agent. The durable boundary so a parent
-    /// log replay reconstructs the spawn + its config; the child's turns live
-    /// in the child's own sidechain log, not here. Fields are wire-stable
-    /// primitives: the runtime serializes its typed isolation + policy to
-    /// strings at append, matching the String-sid convention on ForkedFrom.
+    /// log replay reconstructs the spawn and its config; the child's turns live
+    /// in the child's own sidechain log. Fields are wire-stable primitives. The
+    /// runtime serializes its typed isolation and policy to strings at append.
     #[serde(rename = "SubagentSpawn")]
     SubagentSpawn {
         child_session_id: String,
@@ -543,13 +537,15 @@ pub enum SessionEvent {
         isolation: String,
         #[serde(default)]
         policy: String,
-        /// What initiated the spawn — "model:<call_id>" for a model
-        /// delegation via the agent tool, "system:<hook>" for a
-        /// service/hook/gate-driven spawn. Empty on events written
-        /// before the field existed; a reader then attributes the spawn to the
-        /// most recent delegation call it has not claimed.
+        /// What initiated the spawn. The string model: plus a call id marks a
+        /// delegation; system: plus a hook name marks a service or gate. Empty on
+        /// older events, where a reader attributes the spawn to the nearest unclaimed call.
         #[serde(default)]
         trigger_source: String,
+        /// Whether the child runs in the background or blocks the parent; read
+        /// at spawn so replay never infers it from result and return order.
+        #[serde(default)]
+        run_in_background: bool,
     },
     /// A spawned sub-agent returned. The status string drives retry policy
     /// (timeout retries, killed does not); summary is the inline result the

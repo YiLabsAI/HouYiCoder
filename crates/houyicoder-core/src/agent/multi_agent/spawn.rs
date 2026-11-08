@@ -387,6 +387,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
             isolation: isolation_str.to_string(),
             policy: "delegate".to_string(),
             trigger_source: req.trigger.as_durable(),
+            run_in_background: req.run_mode == ChildRunMode::Background,
         },
     );
     store_for_boundary

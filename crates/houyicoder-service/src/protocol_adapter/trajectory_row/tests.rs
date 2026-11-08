@@ -49,6 +49,7 @@ fn test_subagent_kinds_labeled() {
             isolation: String::new(),
             policy: String::new(),
             trigger_source: String::new(),
+            run_in_background: false,
         }),
         "spawn"
     );

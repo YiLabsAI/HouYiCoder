@@ -2,6 +2,7 @@
 
 use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use std::io::Error;
 #[cfg(unix)]
 use std::os::fd::AsFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -92,6 +93,30 @@ fn test_read_retries_when_unready() {
         || Ok(press('x')),
     );
     assert!(err.is_none(), "other error returns None");
+}
+
+/// A ready poll whose read fails on a signal or a partial sequence retries
+/// instead of ending the reader. Ending here on a transient blip would drop
+/// the reader thread and leave the session with no keyboard.
+#[test]
+fn test_reader_survives_read_error() {
+    let mut reads = 0;
+    let event = read_event_with(
+        || false,
+        || Ok(true),
+        || {
+            reads += 1;
+            match reads {
+                1 => Err(Error::from(ErrorKind::Interrupted)),
+                _ => Ok(press('z')),
+            }
+        },
+    );
+    assert!(
+        matches!(event, Some(Event::Key(key)) if key.code == KeyCode::Char('z')),
+        "a read that fails once must not end the reader"
+    );
+    assert_eq!(reads, 2, "the failed read was retried");
 }
 
 /// A reader whose thread is gone reports no input rather than blocking, so a
