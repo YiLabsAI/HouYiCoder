@@ -525,7 +525,9 @@ impl Runner {
                     // the bus inbox, + lower-priority completion notifications,
                     // appending each as a user message before the next model
                     // call. Extracted so the drive loop body stays readable.
-                    self.drain_turn_boundary(session).await?;
+                    if self.drain_turn_boundary(session).await? {
+                        todo_continuations = 0;
+                    }
                     // Arm the per-turn abort token so an external cancel_turn
                     // (the viewed-child Esc path) can abort this turn's model
                     // fetch without killing the run. Cleared after the call.
@@ -592,13 +594,7 @@ impl Runner {
                 }
                 NextStep::FinalOutput(text) => {
                     if let Some(continued) = self
-                        .try_continue_incomplete(
-                            session,
-                            turn,
-                            &text,
-                            &mut todo_continuations,
-                            token,
-                        )
+                        .try_continue_incomplete(session, turn, &mut todo_continuations, token)
                         .await?
                     {
                         next_step = continued;
@@ -631,7 +627,6 @@ impl Runner {
         &self,
         session: SessionId,
         turn: u32,
-        final_text: &str,
         continuations: &mut u32,
         token: &CancellationToken,
     ) -> Result<Option<NextStep>, RunError> {
@@ -643,8 +638,7 @@ impl Runner {
             return Ok(None);
         }
         let snapshot = self.store.current_view(session).await?;
-        if let Some(nudge) = incomplete_tasks::check_incomplete_tasks(&snapshot.events, final_text)
-        {
+        if let Some(nudge) = incomplete_tasks::check_incomplete_tasks(&snapshot.events) {
             *continuations += 1;
             tracing::info!(
                 turn,

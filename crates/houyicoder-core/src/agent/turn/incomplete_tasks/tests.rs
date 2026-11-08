@@ -46,7 +46,7 @@ fn test_incomplete_todos_detected() {
         }),
     ];
 
-    let nudge = check_incomplete_tasks(&events, "I finished task 1. Shall I continue?");
+    let nudge = check_incomplete_tasks(&events);
     assert!(nudge.is_some());
     let msg = nudge.unwrap();
     assert!(msg.contains("incomplete item(s)"));
@@ -75,8 +75,7 @@ fn test_completed_todos_pass() {
         }),
     ];
 
-    let nudge = check_incomplete_tasks(&events, "All work is complete.");
-    assert!(nudge.is_none());
+    assert!(check_incomplete_tasks(&events).is_none());
 }
 
 #[test]
@@ -98,22 +97,110 @@ fn test_empty_todos_pass() {
         }),
     ];
 
-    let nudge = check_incomplete_tasks(&events, "Everything done.");
-    assert!(nudge.is_none());
+    assert!(check_incomplete_tasks(&events).is_none());
 }
 
 #[test]
-fn test_continuous_prompt_nudge() {
-    let events = vec![make_entry(SessionEvent::UserInput {
-        text: "请修复所有问题，不要停，一次性解决完".into(),
-    })];
+fn test_stale_prior_turn_ignored() {
+    let events = vec![
+        make_entry(SessionEvent::UserInput {
+            text: "Old multi-step task".into(),
+        }),
+        make_entry(SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: json!({
+                "todos": [
+                    { "content": "old pending task", "status": "pending" },
+                ],
+                "pending": 1,
+                "in_progress": 0,
+                "completed": 0,
+                "cleared": false,
+            }),
+            duration_ms: 5,
+        }),
+        make_entry(SessionEvent::UserInput {
+            text: "What branch am I on?".into(),
+        }),
+    ];
 
-    let nudge = check_incomplete_tasks(&events, "已完成第一部分。要我接着做第二部分吗？");
-    assert!(nudge.is_some());
-    let msg = nudge.unwrap();
-    assert!(msg.contains("end-to-end without stopping"));
+    assert!(check_incomplete_tasks(&events).is_none());
+}
 
-    // Without asking for confirmation, do not intercept.
-    let normal_nudge = check_incomplete_tasks(&events, "已经全部修复完成并通过测试。");
-    assert!(normal_nudge.is_none());
+#[test]
+fn test_background_task_waits() {
+    let mut events = vec![
+        make_entry(SessionEvent::UserInput {
+            text: "Run suite and fix".into(),
+        }),
+        make_entry(SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: json!({
+                "todos": [
+                    { "content": "run suite", "status": "in_progress" },
+                ],
+                "pending": 0,
+                "in_progress": 1,
+                "completed": 0,
+                "cleared": false,
+            }),
+            duration_ms: 5,
+        }),
+        make_entry(SessionEvent::ToolResult {
+            call_id: "c2".into(),
+            output: json!({
+                "stdout": "",
+                "stderr": "moved to the background as task #1",
+                "background_task": 1,
+            }),
+            duration_ms: 15_000,
+        }),
+    ];
+
+    assert!(check_incomplete_tasks(&events).is_none());
+
+    events.push(make_entry(SessionEvent::NotificationInjected {
+        child_session_id: "task-1".into(),
+        turn: 1,
+        order: 0,
+        topic: "task".into(),
+        summary: "task #1 finished".into(),
+        capture: None,
+    }));
+
+    assert!(check_incomplete_tasks(&events).is_some());
+}
+
+#[test]
+fn test_mid_turn_resets_cap() {
+    let mut events = vec![
+        make_entry(SessionEvent::UserInput {
+            text: "Do work".into(),
+        }),
+        make_entry(SessionEvent::ToolResult {
+            call_id: "c1".into(),
+            output: json!({
+                "todos": [
+                    { "content": "task 1", "status": "pending" },
+                ],
+                "pending": 1,
+                "in_progress": 0,
+                "completed": 0,
+                "cleared": false,
+            }),
+            duration_ms: 5,
+        }),
+    ];
+
+    for _ in 0..MAX_TODO_CONTINUATIONS {
+        let nudge = check_incomplete_tasks(&events).expect("nudge before cap");
+        events.push(make_entry(SessionEvent::MetaUser { text: nudge }));
+    }
+    assert!(check_incomplete_tasks(&events).is_none());
+
+    events.push(make_entry(SessionEvent::MidTurnInput {
+        text: "keep going with the new parameters".into(),
+        pending_input_id: None,
+    }));
+    assert!(check_incomplete_tasks(&events).is_some());
 }

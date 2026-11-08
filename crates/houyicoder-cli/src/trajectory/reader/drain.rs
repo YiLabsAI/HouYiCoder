@@ -191,6 +191,11 @@ impl SessionLogTrajectory {
     /// a run of them is reported rather than dispatching a worker per frame.
     fn refuse(state: &mut TrajectoryState, dispatched: DurableWatermark) {
         state.read_failures += 1;
+        tracing::warn!(
+            failures = state.read_failures,
+            count = dispatched.count,
+            "trajectory page read refused because it fell short of watermark"
+        );
         if state.read_failures > MAX_READ_RETRIES {
             state.failed = true;
             state.failed_watermark = Some(dispatched);
@@ -245,6 +250,11 @@ impl SessionLogTrajectory {
                 let dispatched = pending.dispatched;
                 state.pending = None;
                 state.read_failures += 1;
+                tracing::warn!(
+                    failures = state.read_failures,
+                    count = dispatched.count,
+                    "trajectory page reader thread disconnected without sending"
+                );
                 state.window_watermark = None;
                 // A read that never arrived leaves no view to serve: dropping
                 // it is what lets the next frame dispatch the retry.

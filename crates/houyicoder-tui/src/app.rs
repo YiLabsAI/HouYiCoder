@@ -151,7 +151,11 @@ pub fn run_with_runner(
     // Restore the terminal modes the guard owns. The tab title and the
     // progress indicator are restored inside the guard's teardown, so this is
     // the one teardown step the loop has to drive explicitly.
-    tracing::info!(quit = app.ui.quit, "TUI run loop exiting");
+    tracing::info!(
+        quit = app.ui.quit,
+        signal = termination.requested(),
+        "TUI run loop exiting"
+    );
     guard.release();
     Ok(app.exit_target(&termination))
 }
@@ -201,20 +205,16 @@ pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
             Ok(true)
         }
         Event::Resize(_, _) => {
-            // Re-assert the mouse modes alongside the redraw: a resize often
-            // accompanies emulator-side state churn (window/tab operations)
-            // that can drop DECSET modes.
-            assert_mouse_modes()?;
+            if let Err(e) = assert_mouse_modes() {
+                tracing::warn!(error = %e, "mouse mode assertion on resize failed");
+            }
             Ok(true)
         }
         Event::FocusGained => {
-            // Focus changes can reset terminal mouse modes; re-enabling them
-            // is idempotent.
-            assert_mouse_modes()?;
+            if let Err(e) = assert_mouse_modes() {
+                tracing::warn!(error = %e, "mouse mode assertion on focus failed");
+            }
             app.ui.terminal_focused = true;
-            // The host cancels an away recap the moment someone is looking
-            // again, so the report goes out with the change, not on the next
-            // turn.
             app.report_focus(true);
             Ok(true)
         }
