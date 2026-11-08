@@ -37,8 +37,8 @@ pub(crate) use skill::{
 pub(crate) use status::{obs_wire, redundancy};
 pub(crate) use tools::{diff, registry as tool};
 pub(crate) use turn::{
-    call, direct_shell, fallback, input_queue, outcome_counts, resolve, result, step, thinking,
-    truncation, user_turn, verify,
+    call, direct_shell, fallback, incomplete_tasks, input_queue, outcome_counts, resolve, result,
+    step, thinking, truncation, user_turn, verify,
 };
 pub use worktree::{controller as worktree_controller, git_safety, session as worktree_session};
 
@@ -104,7 +104,6 @@ use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::skill::grant::SkillGrantStore;
 use houyicoder_api::spawn::AgentIdentity;
 use houyicoder_api::spawn::SpawnHandle;
-use houyicoder_protocol::frontend::QueuedInput;
 pub use result::{RunError, RunOutcome, RunResult};
 use std::path::Path;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -504,6 +503,7 @@ impl Runner {
         token: &CancellationToken,
     ) -> Result<RunResult, RunError> {
         let mut next_step = NextStep::RunAgain;
+        let mut todo_continuations = 0u32;
         loop {
             match next_step {
                 NextStep::RunAgain => {
@@ -591,32 +591,22 @@ impl Runner {
                     }
                 }
                 NextStep::FinalOutput(text) => {
-                    // A cancel observed while this turn rendered its answer,
-                    // or while the verify gate below ran, still ends the run:
-                    // the stream-ending work that folds usage + parses the
-                    // answer never reads the token, so without this the run
-                    // reports a finished turn the user already stopped. A
-                    // failed verify becomes RunOutcome::VerifyFailed so the
-                    // caller can re-prompt the model to fix its own work; no
-                    // gate installed passes the answer through unchanged.
-                    if let Some(ended) = self
-                        .verify_at_answer(session, turn, usage.clone(), token)
+                    if let Some(continued) = self
+                        .try_continue_incomplete(
+                            session,
+                            turn,
+                            &text,
+                            &mut todo_continuations,
+                            token,
+                        )
                         .await?
                     {
-                        return Ok(ended);
+                        next_step = continued;
+                        continue;
                     }
-                    // Background memory at query-loop end: extractor + dream.
-                    // Reward withheld when HOUYICODER_REWARD_OFF suppresses the
-                    // dream reward signal only — the extractor always fires.
-                    self.fire_background_memory(session).await;
-                    if token.is_cancelled() {
-                        return self.interrupted_at_boundary(session, turn, usage).await;
-                    }
-                    return Ok(RunResult {
-                        outcome: RunOutcome::FinalOutput(text),
-                        turns: turn,
-                        usage,
-                    });
+                    return self
+                        .complete_final_output(session, turn, usage, text, token)
+                        .await;
                 }
                 NextStep::Handoff(agent) => {
                     return Ok(RunResult {
@@ -637,67 +627,59 @@ impl Runner {
         }
     }
 
-    /// Drain the turn-boundary injection buffer: host-submitted user
-    /// interjections, bus-inbox steering texts, and lower-priority completion
-    /// notifications. Appends each as a user message the next model call sees,
-    /// then re-runs memory recall + skill listing for the injected query.
-    /// Notifications defer to user input — drained only when the user queue is
-    /// empty — so a notification never jumps ahead of a pending user message.
-    async fn drain_turn_boundary(&self, session: SessionId) -> Result<bool, RunError> {
-        let pending_user: Vec<QueuedInput> = self.drain_pending_input();
-        let inbox_pending = self.drain_inbox();
-        // Notifications are lower priority than a user interjection: drain
-        // them only when no user input is pending, so a notification that
-        // queued the same instant as a user message never lands first. A
-        // pending notification waits for the next idle boundary.
-        let pending_notifications: Vec<input_queue::QueuedNotification> = if pending_user.is_empty()
+    async fn try_continue_incomplete(
+        &self,
+        session: SessionId,
+        turn: u32,
+        final_text: &str,
+        continuations: &mut u32,
+        token: &CancellationToken,
+    ) -> Result<Option<NextStep>, RunError> {
+        const MAX_TODO_CONTINUATIONS: u32 = 3;
+        if token.is_cancelled()
+            || turn >= self.config.max_turns
+            || *continuations >= MAX_TODO_CONTINUATIONS
         {
-            let mut q = self
-                .queued_notifications
-                .lock()
-                .expect("queued_notifications lock");
-            q.drain(..).collect()
-        } else {
-            Vec::new()
-        };
-        let had_pending = !pending_user.is_empty()
-            || !inbox_pending.is_empty()
-            || !pending_notifications.is_empty();
-        for input in pending_user {
-            self.append_mid_turn_input(session, input.text, Some(input.id.0))
-                .await?;
+            return Ok(None);
         }
-        for msg in inbox_pending {
-            self.append_mid_turn_input(session, msg, None).await?;
+        let snapshot = self.store.current_view(session).await?;
+        if let Some(nudge) = incomplete_tasks::check_incomplete_tasks(&snapshot.events, final_text)
+        {
+            *continuations += 1;
+            tracing::info!(
+                turn,
+                continuations = *continuations,
+                "intercepted premature final output with incomplete tasks"
+            );
+            self.append_meta_user(session, nudge).await?;
+            return Ok(Some(NextStep::RunAgain));
         }
-        // A background notification is a distinct boundary from a user
-        // interjection: it records what produced it (NotificationInjected,
-        // not MidTurnInput) so the durable log + the assembled input
-        // distinguish "a background result arrived" from "the user sent a
-        // message" -- the model sees the framing its topic calls for, not a
-        // continue-the-task note.
-        for notification in pending_notifications {
-            self.append_notification(
-                session,
-                notification.source_id,
-                notification.topic,
-                notification.text,
-                notification.capture,
-            )
-            .await?;
+        Ok(None)
+    }
+
+    async fn complete_final_output(
+        &self,
+        session: SessionId,
+        turn: u32,
+        usage: Usage,
+        text: String,
+        token: &CancellationToken,
+    ) -> Result<RunResult, RunError> {
+        if let Some(ended) = self
+            .verify_at_answer(session, turn, usage.clone(), token)
+            .await?
+        {
+            return Ok(ended);
         }
-        // Recall memory for the injected query (the latest user input), so a
-        // mid-turn "now help with X" gets X's memories rather than riding the
-        // original turn's recall. No-op without a memory provider.
-        if had_pending {
-            self.memory.recall(session).await?;
-            // A drained mid-turn input may follow a compaction that folded
-            // the listing + invoked bodies out; re-announce both so the
-            // model keeps skill discovery + the directives for the rest of
-            // the run.
-            self.inject_skill_listing_and_body(session).await?;
+        self.fire_background_memory(session).await;
+        if token.is_cancelled() {
+            return self.interrupted_at_boundary(session, turn, usage).await;
         }
-        Ok(had_pending)
+        Ok(RunResult {
+            outcome: RunOutcome::FinalOutput(text),
+            turns: turn,
+            usage,
+        })
     }
 }
 

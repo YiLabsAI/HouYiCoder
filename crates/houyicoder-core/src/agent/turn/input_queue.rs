@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use houyicoder_context::NotificationTopic;
+use houyicoder_context::{NotificationTopic, SessionId};
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
 use serde_json::Value;
 
@@ -189,6 +189,51 @@ impl Runner {
             .iter()
             .map(|notification| notification.capture.clone())
             .collect()
+    }
+
+    /// Drain the turn-boundary injection buffer: host-submitted user
+    /// interjections, bus-inbox steering texts, and lower-priority completion
+    /// notifications. Appends each as a user message the next model call sees,
+    /// then re-runs memory recall + skill listing for the injected query.
+    /// Notifications defer to user input — drained only when the user queue is
+    /// empty — so a notification never jumps ahead of a pending user message.
+    pub(crate) async fn drain_turn_boundary(&self, session: SessionId) -> Result<bool, RunError> {
+        let pending_user: Vec<QueuedInput> = self.drain_pending_input();
+        let inbox_pending = self.drain_inbox();
+        let pending_notifications: Vec<QueuedNotification> = if pending_user.is_empty() {
+            let mut q = self
+                .queued_notifications
+                .lock()
+                .expect("queued_notifications lock");
+            q.drain(..).collect()
+        } else {
+            Vec::new()
+        };
+        let had_pending = !pending_user.is_empty()
+            || !inbox_pending.is_empty()
+            || !pending_notifications.is_empty();
+        for input in pending_user {
+            self.append_mid_turn_input(session, input.text, Some(input.id.0))
+                .await?;
+        }
+        for msg in inbox_pending {
+            self.append_mid_turn_input(session, msg, None).await?;
+        }
+        for notification in pending_notifications {
+            self.append_notification(
+                session,
+                notification.source_id,
+                notification.topic,
+                notification.text,
+                notification.capture,
+            )
+            .await?;
+        }
+        if had_pending {
+            self.memory.recall(session).await?;
+            self.inject_skill_listing_and_body(session).await?;
+        }
+        Ok(had_pending)
     }
 }
 

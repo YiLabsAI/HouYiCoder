@@ -553,6 +553,20 @@ impl Runner {
         )
         .await;
     }
+
+    /// Append a meta-user reminder event to the session log. The model sees
+    /// this in its conversation assembly as a user-role reminder, while the
+    /// transcript view skips it so it does not pollute the chat screen.
+    pub(crate) async fn append_meta_user(
+        &self,
+        session: SessionId,
+        text: String,
+    ) -> Result<(), RunError> {
+        self.store
+            .append(new_event(session, SessionEvent::MetaUser { text }))
+            .await?;
+        Ok(())
+    }
 }
 
 /// Build a SessionLogEntry with a fresh id and wall-clock timestamp.

@@ -235,3 +235,47 @@ fn test_merge_path_no_conflict() {
     );
     assert!((conflict.rate - 0.0).abs() < 1e-9, "zero rate");
 }
+
+#[test]
+fn test_backbone_continuation() {
+    let mut backbone = CompactBackbone {
+        file_touch_set: vec![],
+        test_results: vec![],
+        todo_snapshot: Some(vec![
+            TodoLine {
+                content: "first item".into(),
+                status: "completed".into(),
+            },
+            TodoLine {
+                content: "second item".into(),
+                status: "pending".into(),
+            },
+        ]),
+        derivation: BackboneDerivation {
+            last_folded_event_id: EventId::new(),
+            workspace_revision: None,
+            dirty_tree_hash: None,
+        },
+    };
+    let rendered = render_backbone_block(&backbone);
+    assert!(
+        rendered.contains("Continuation: Pending todo items remain above"),
+        "pending item triggers continuation directive"
+    );
+
+    backbone.todo_snapshot = Some(vec![
+        TodoLine {
+            content: "first item".into(),
+            status: "completed".into(),
+        },
+        TodoLine {
+            content: "second item".into(),
+            status: "completed".into(),
+        },
+    ]);
+    let all_done_rendered = render_backbone_block(&backbone);
+    assert!(
+        !all_done_rendered.contains("Continuation: Pending todo items remain above"),
+        "all completed items do not trigger continuation directive"
+    );
+}

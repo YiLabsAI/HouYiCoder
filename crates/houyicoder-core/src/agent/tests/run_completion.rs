@@ -576,3 +576,65 @@ async fn test_stopped_run_records_end() {
         "the stop closes the turn with one record: {events:?}"
     );
 }
+
+#[tokio::test]
+async fn test_incomplete_todos_continue() {
+    let resp1 = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "todo_write".into(),
+            input: serde_json::json!({
+                "todos": [
+                    { "content": "task 1", "status": "completed" },
+                    { "content": "task 2", "status": "pending" },
+                ]
+            }),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let resp2 = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "Finished task 1. Want me to continue?".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let resp3 = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c2".into(),
+            name: "todo_write".into(),
+            input: serde_json::json!({
+                "todos": [
+                    { "content": "task 1", "status": "completed" },
+                    { "content": "task 2", "status": "completed" },
+                ]
+            }),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let resp4 = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "All tasks completed successfully.".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(TodoWriteTool::new()));
+    let runner = runner_with(
+        Arc::new(FakeProvider::new(vec![resp1, resp2, resp3, resp4])),
+        tools,
+    );
+    let session = SessionId::new();
+    let res = runner
+        .run(session, "Do task 1 and 2".into())
+        .await
+        .expect("run");
+    assert!(
+        matches!(res.outcome, RunOutcome::FinalOutput(ref text) if text.contains("All tasks completed"))
+    );
+    assert!(res.turns >= 3);
+}

@@ -6,6 +6,7 @@ pub(crate) mod call;
 pub(crate) mod direct_shell;
 pub(crate) mod driving;
 pub(crate) mod fallback;
+pub(crate) mod incomplete_tasks;
 pub(crate) mod input_queue;
 pub(crate) mod outcome_counts;
 pub(crate) mod recover;

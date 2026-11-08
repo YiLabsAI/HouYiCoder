@@ -288,6 +288,16 @@ pub fn render_backbone_block(b: &CompactBackbone) -> String {
         for line in todos {
             out.push_str(&format!("- [{}] {}\n", line.status, line.content));
         }
+        if todos
+            .iter()
+            .any(|t| t.status == "pending" || t.status == "in_progress")
+        {
+            out.push_str(
+                "Continuation: Pending todo items remain above. Continue working from \
+                 where the session left off without asking the user for confirmation or \
+                 stopping for a status recap.\n",
+            );
+        }
     }
     out.push_str(&format!(
         "Derivation: event={} rev={} dirty={}\n",
