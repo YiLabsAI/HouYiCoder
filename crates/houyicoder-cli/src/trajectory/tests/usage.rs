@@ -424,8 +424,9 @@ fn test_child_report_gates_session() {
         "a parent that reported everything does not cover a child that did not"
     );
     assert_eq!(
-        view.tokens_in, None,
-        "a child that measured nothing leaves the session total unknown"
+        view.tokens_in,
+        Some(1_000),
+        "a child that measured nothing no longer clears the measured parent total"
     );
 }
 

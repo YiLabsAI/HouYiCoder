@@ -512,8 +512,9 @@ fn test_subagent_usage_unmeasured_unknown() {
         "the delegation is reported even without usage"
     );
     assert_eq!(
-        view.tokens_in, None,
-        "an unmeasured child leaves the session total unknown"
+        view.tokens_in,
+        Some(1_000),
+        "an unmeasured child no longer clears the measured parent total"
     );
 }
 

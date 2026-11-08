@@ -314,14 +314,29 @@ pub(super) fn draw_turn_list(
     Vec<Line<'static>>,
     BodyScroll,
 ) {
+    // A leading tilde marks a total that is a lower bound rather than the
+    // full session cost: a child or recap that made calls but reported no
+    // usage leaves its spend absent, so the shown sum understates. A turn
+    // interrupted before the model answered spent nothing and does not mark
+    // the total partial.
+    let partial = !traj.usage_provenance.input_reported;
     let tokens_summary = match (traj.tokens_in, traj.tokens_out) {
         (Some(tin), Some(tout)) => format!(
-            "{} in {} out",
+            "{}{} in {} out",
+            if partial { "~" } else { "" },
             format_tokens(tin as u64),
             format_tokens(tout as u64)
         ),
-        (Some(tin), None) => format!("{} in", format_tokens(tin as u64)),
-        (None, Some(tout)) => format!("{} out", format_tokens(tout as u64)),
+        (Some(tin), None) => format!(
+            "{}{} in",
+            if partial { "~" } else { "" },
+            format_tokens(tin as u64)
+        ),
+        (None, Some(tout)) => format!(
+            "{}{} out",
+            if partial { "~" } else { "" },
+            format_tokens(tout as u64)
+        ),
         (None, None) => "—".to_string(),
     };
     // The header reads the same derivation as the rows below it, at the same
@@ -354,31 +369,35 @@ pub(super) fn draw_turn_list(
             not_loaded.join(", ")
         )
     };
-    let mut header = vec![line(vec![
-        sp(turns_label, Color::Cyan),
-        sp(" · ", Color::DarkGray),
-        sp(tokens_summary, Color::Gray),
-        sp(cache_hit_str, Color::Indexed(208)),
-        sp(
-            format!(" · {}", count_label(traj.tool_calls, "call")),
-            Color::Gray,
-        ),
-        // A failure count is a fact, not an alarm: red is kept for a session
-        // that actually had failures, so a clean session's header does not
-        // shout the zero on every frame.
-        sp(
-            format!(" · {}", count_label(traj.failures, "fail")),
-            if traj.failures > 0 {
-                Color::Red
-            } else {
-                Color::DarkGray
-            },
-        ),
-        sp(
-            format!(" · total {}", session_span_label(traj.duration_ms)),
-            Color::Gray,
-        ),
-    ])];
+    let mut header_spans = vec![sp(turns_label, Color::Cyan)];
+    // A session with no token figures drops the tokens segment and its
+    // separator rather than printing a placeholder dash between the turns and
+    // the call count.
+    if traj.tokens_in.is_some() || traj.tokens_out.is_some() {
+        header_spans.push(sp(" · ", Color::DarkGray));
+        header_spans.push(sp(tokens_summary, Color::Gray));
+        header_spans.push(sp(cache_hit_str, Color::Indexed(208)));
+    }
+    header_spans.push(sp(
+        format!(" · {}", count_label(traj.tool_calls, "call")),
+        Color::Gray,
+    ));
+    // A failure count is a fact, not an alarm: red is kept for a session
+    // that actually had failures, so a clean session's header does not
+    // shout the zero on every frame.
+    header_spans.push(sp(
+        format!(" · {}", count_label(traj.failures, "fail")),
+        if traj.failures > 0 {
+            Color::Red
+        } else {
+            Color::DarkGray
+        },
+    ));
+    header_spans.push(sp(
+        format!(" · total {}", session_span_label(traj.duration_ms)),
+        Color::Gray,
+    ));
+    let mut header = vec![line(header_spans)];
     if traj.skipped_records > 0 {
         header.push(line(vec![sp(
             format!(

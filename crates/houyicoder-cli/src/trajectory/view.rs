@@ -183,12 +183,13 @@ fn build_summary(
     // One child that never reported its usage leaves a hole in the sum, so the
     // session total is unknown rather than short by that child, and a recap
     // written without figures is the same hole.
-    let background_unknown = acc.subagent.unmeasured > 0 || acc.recap.unmeasured > 0;
-    // The totals are known only when every turn reported usage and no
-    // background call left its own usage unmeasured. A turn with no usage is a
-    // hole in the sum, and the background tokens do not fill it: they are that
-    // call's own spend.
-    let any_unknown = acc.usage_events == 0 || acc.usage_events < acc.turns || background_unknown;
+    // A turn interrupted before the model answered, or a child that ended
+    // without producing a call, spent no tokens the runner could measure. The
+    // measured turns still sum to a real figure, so the totals are shown
+    // whenever any usage was reported rather than cleared to unknown by the
+    // silent turns. Only a session with no usage events at all reads as
+    // unknown.
+    let any_unknown = acc.usage_events == 0;
     let total_turns = rows.len() + hidden_turns;
     let distinct_models: Vec<&str> = acc.models.iter().map(String::as_str).collect();
     let header_model = match distinct_models.len() {

@@ -95,9 +95,11 @@ fn test_totals_fold() {
 
 /// A turn that reaches its end without usage leaves the session total a lower
 /// bound. Two model calls in the first turn must not stand in for the second
-/// turn's missing usage, which is what a count comparison would do.
+/// A turn that never reported usage does not clear the totals when another
+/// turn did. The measured turn keeps the session sum a real figure rather
+/// than an unknown, which is what a count comparison would do.
 #[test]
-fn test_missing_usage_unknown() {
+fn test_partial_usage_still_shown() {
     let events = vec![
         entry(0, SessionEvent::UserInput { text: "a".into() }),
         usage(10, 100, 20, "m"),
@@ -114,8 +116,83 @@ fn test_missing_usage_unknown() {
     let summary = fold(&events);
     assert_eq!(summary.total_turns, 2);
     assert!(
-        !summary.usage.totals_known,
-        "the second turn never reported usage"
+        summary.usage.totals_known,
+        "a measured turn keeps the totals known even though another never reported"
+    );
+}
+
+/// A session with several measured turns keeps their summed totals even when
+/// another turn was interrupted before the model answered and a child ended
+/// without a model call. The silent turns spent nothing measurable, so they
+/// do not clear the headline the way a count-comparison once did.
+#[test]
+fn test_interrupted_turn_keeps_totals() {
+    let mut events = Vec::new();
+    for i in 0..5u64 {
+        events.push(entry(i * 10, SessionEvent::UserInput { text: "t".into() }));
+        events.push(usage(i * 10 + 5, 100, 20, "m"));
+        events.push(entry(
+            i * 10 + 6,
+            SessionEvent::RunCompleted {
+                ms: Some(1),
+                outcome: None,
+            },
+        ));
+    }
+    // A sixth turn interrupted before the model answered.
+    events.push(entry(60, SessionEvent::UserInput { text: "x".into() }));
+    events.push(entry(
+        61,
+        SessionEvent::RunCompleted {
+            ms: Some(1),
+            outcome: None,
+        },
+    ));
+    // A child that ended without a model call.
+    events.push(entry(
+        62,
+        SessionEvent::SubagentSpawn {
+            child_session_id: "c".into(),
+            subagent_type: "explore".into(),
+            prompt_summary: String::new(),
+            isolation: String::new(),
+            policy: String::new(),
+            trigger_source: String::new(),
+            run_in_background: false,
+        },
+    ));
+    events.push(entry(
+        63,
+        SessionEvent::SubagentReturn {
+            child_session_id: "c".into(),
+            status: "interrupted".into(),
+            summary: String::new(),
+            result_ref: "c".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: false,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            tool_calls: 0,
+            tool_failures: 0,
+            duration_ms: 0,
+            ledger_measured: true,
+            orphaned: false,
+        },
+    ));
+    let summary = fold(&events);
+    assert!(
+        summary.usage.totals_known,
+        "the five measured turns keep the totals known"
+    );
+    assert_eq!(summary.usage.input_tokens, 500, "the measured input sums");
+    assert_eq!(summary.usage.output_tokens, 100, "the measured output sums");
+    assert_eq!(
+        summary.usage.cache_read_tokens, 250,
+        "the measured cache-read sums"
     );
 }
 
@@ -532,10 +609,12 @@ fn test_duplicate_call_id_bounded() {
     );
 }
 
-/// A child that reached a terminal without reporting usage leaves the session
-/// total incomplete even when every parent turn reported its own usage.
+/// A child that reached a terminal without reporting usage no longer clears
+/// the session total when every parent turn reported its own usage. The
+/// parent's measured turns keep the totals a real figure; the unmeasured
+/// child is flagged separately.
 #[test]
-fn test_unmeasured_child_breaks_totals() {
+fn test_unmeasured_child_keeps_totals() {
     let events = vec![
         entry(0, SessionEvent::UserInput { text: "a".into() }),
         usage(10, 100, 20, "m"),
@@ -572,8 +651,8 @@ fn test_unmeasured_child_breaks_totals() {
     let summary = fold(&events);
     assert!(summary.usage.subagent_unmeasured);
     assert!(
-        !summary.usage.totals_known,
-        "the parent is complete, but a child reported nothing"
+        summary.usage.totals_known,
+        "the parent's measured turns keep the totals known even though a child reported nothing"
     );
 }
 
@@ -838,16 +917,17 @@ fn test_recap_usage_folds() {
     assert!(summary.usage.totals_known);
 }
 
-/// A recap written without figures leaves a hole in the same account, so the
-/// headline reads as partial rather than reporting a spend it never saw.
+/// A recap written without figures no longer clears the headline. The
+/// measured turn keeps the totals a real figure; the unmeasured recap is
+/// flagged separately.
 #[test]
-fn test_unmeasured_recap_hides_share() {
+fn test_unmeasured_recap_keeps_totals() {
     let events = vec![usage(10, 1_000, 100, "m"), recap(20, None)];
     let summary = fold(&events);
     assert_eq!(summary.usage.recap.unmeasured_calls, 1);
     assert!(
-        !summary.usage.totals_known,
-        "the account holds the recap, so its silence is a hole in it"
+        summary.usage.totals_known,
+        "the measured turn keeps the totals known even though the recap reported nothing"
     );
 }
 

@@ -621,11 +621,16 @@ impl TrajectorySummaryState {
             .saturating_add(usize::from(self.leading_partial_turn))
     }
 
-    /// Whether every turn reported usage, so the token total is the session's
-    /// cost rather than a lower bound.
+    /// Whether any turn reported usage, so the token total is a real figure
+    /// worth showing even when some turns were interrupted before the model
+    /// answered. A session with no measured turns at all reads as unknown.
     fn totals_known(&self) -> bool {
-        let open_turn_is_measured = !self.turn_open || self.open_turn_has_usage;
-        self.numbered_turns() > 0 && self.closed_turns_without_usage == 0 && open_turn_is_measured
+        let closed = self
+            .numbered_turns()
+            .saturating_sub(usize::from(self.turn_open));
+        let measured_closed = closed.saturating_sub(self.closed_turns_without_usage);
+        let measured_open = self.turn_open && self.open_turn_has_usage;
+        measured_closed > 0 || measured_open
     }
 
     pub(crate) fn snapshot(&self) -> TrajectorySummary {
@@ -636,12 +641,9 @@ impl TrajectorySummaryState {
         };
         let (ttft_p95_ms, p95_capped) = split(self.ttft.percentile(0.95));
         let (ttft_p99_ms, p99_capped) = split(self.ttft.percentile(0.99));
-        // A child that reached a terminal without reporting usage leaves a
-        // hole in the session total just as a turn does, and so does a recap
-        // written without figures, so the one definition of completeness
-        // covers all three. A reader that had to combine the fields itself
-        // would eventually read the total as complete.
-        let subagent_unmeasured = self.subagent.unmeasured_calls > 0;
+        // A child that ended without a model call, or a recap written without
+        // figures, spent no measurable tokens, so it does not clear the
+        // measured totals the way a silent turn once did.
         let turn_provenance = self
             .turn_provenance
             .unwrap_or(UsageProvenance::ALL_REPORTED);
@@ -665,9 +667,7 @@ impl TrajectorySummaryState {
                     .cache_read_tokens
                     .saturating_add(self.subagent.cache_read_input_tokens)
                     .saturating_add(self.recap.cache_read_input_tokens),
-                totals_known: self.totals_known()
-                    && !subagent_unmeasured
-                    && self.recap.unmeasured_calls == 0,
+                totals_known: self.totals_known(),
                 provenance: turn_provenance
                     .merge(self.subagent.provenance)
                     .merge(self.recap.provenance),
@@ -675,7 +675,7 @@ impl TrajectorySummaryState {
                 successes: self.successes,
                 tool_calls: self.tool_calls,
                 subagent: self.subagent,
-                subagent_unmeasured,
+                subagent_unmeasured: self.subagent.unmeasured_calls > 0,
                 recap: self.recap,
             },
             timing: TrajectoryTimingSummary {
