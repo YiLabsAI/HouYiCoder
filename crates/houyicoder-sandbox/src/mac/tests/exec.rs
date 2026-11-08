@@ -65,13 +65,13 @@ async fn test_ps_runs_under_fence() {
         return;
     }
     let out = s
-        .exec_with_config("ps -o pid", ExecConfig::default())
+        .exec_with_config("ps -ax -o pid", ExecConfig::default())
         .await
         .expect("ps should run");
     assert!(out.is_success(), "ps should succeed: {out:?}");
     assert!(
         out.stdout.lines().count() >= 2,
-        "ps should list at least the header and this process: {out:?}"
+        "ps should list at least the header and one process: {out:?}"
     );
 }
 

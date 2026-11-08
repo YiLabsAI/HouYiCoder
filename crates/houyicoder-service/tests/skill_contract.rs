@@ -196,9 +196,9 @@ async fn test_run_model_skill_tool() {
 #[tokio::test]
 async fn test_run_large_body_compacts() {
     let tmp = temp_dir().join(format!("skill-large-{}", id()));
-    // Body past ISOLATE_LARGE_OUTPUT_BYTES (8192) once the base-dir header
+    // Body past ISOLATE_LARGE_OUTPUT_BYTES (32768) once the base-dir header
     // + JSON envelope are added.
-    let large_body = "x".repeat(9_000);
+    let large_body = "x".repeat(33_000);
     write_skill(&tmp, "big", &large_body);
     let reg: Arc<dyn SkillRegistry> =
         Arc::new(SkillRegistryImpl::discover_with_home(Some(&tmp), None));
