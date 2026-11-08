@@ -42,8 +42,9 @@ pub use crate::agent::tool::{StubTool, ToolRegistry};
 pub use crate::agent::tools::{
     AskUserQuestionTool, BashTool, ConversationSearchTool, DelegationTool, EditTool,
     EnterWorktreeTool, ExitWorktreeTool, GlobTool, GrepTool, MemoryAddTool, MultiEditTool,
-    ReadTool, SessionResultCatalog, SkillTool, TodoItem, TodoStatus, TodoWriteTool, WebFetchTool,
-    WriteTool,
+    ReadTool, SendMessageTool, SessionResultCatalog, SkillTool, TaskListTool, TaskOutputTool,
+    TaskStopTool, TodoItem, TodoStatus, TodoWriteTool, WebFetchTool, WriteTool,
+    bound_child_summary,
 };
 pub use crate::agent::turn_group::assemble_model_input;
 pub use crate::agent::verify::{MakeCheckGate, VerifyFailure, VerifyGate};

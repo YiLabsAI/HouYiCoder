@@ -69,14 +69,15 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{
     CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
     HookRegistry, HookSource, HotPathReducer, LlmSummarizer, ModelCatalogResolver, Runner,
-    SessionResultCatalog, Summarizer, TodoWriteTool, ToolOutputReducer, ToolRegistry, parse_event,
+    SendMessageTool, SessionResultCatalog, Summarizer, TaskListTool, TaskOutputTool, TaskStopTool,
+    TodoWriteTool, ToolOutputReducer, ToolRegistry, parse_event,
 };
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_memory::{
     FileDescriptorStore, InMemoryBackend, InMemoryDescriptorStore, LocalFileBackend,
 };
-use houyicoder_permission::{DefaultModeGate, ModeGate, RuleStore};
+use houyicoder_permission::{DefaultModeGate, GuardedTool, ModeGate, RuleStore};
 use houyicoder_protocol::frontend::model::SpeedMode;
 use houyicoder_session::SessionStore;
 
@@ -311,11 +312,13 @@ pub(crate) fn assemble(
         warnings: provider_cfg_warnings,
     } = resolved;
     let provider_for_extractor = Arc::clone(&provider);
-    let agent_registry = multi_agent::built_in_registry();
-    let recall_meter = Arc::new(AtomicU32::new(0));
-    let (mut tools, stored_results) = build_base_tools(&store, &recall_meter, &agent_registry);
     let fences = build_session_fences(project, rule_store.clone());
+    let agent_registry =
+        multi_agent::load_agent_registry(fences.workspace.as_deref(), home.as_deref());
+    let recall_meter = Arc::new(AtomicU32::new(0));
     let gate_dyn: Arc<dyn ModeGate> = fences.gate.clone();
+    let (mut tools, stored_results) =
+        build_base_tools(&store, &recall_meter, &agent_registry, &gate_dyn);
     let worktree_controller = worktree::wire_worktree_controller(
         fences.workspace.as_deref(),
         fences.sandbox_session.as_ref(),
@@ -469,6 +472,7 @@ fn build_base_tools(
     store: &Arc<SessionStore>,
     recall_meter: &Arc<AtomicU32>,
     agent_registry: &Arc<dyn AgentRegistry>,
+    gate: &Arc<dyn ModeGate>,
 ) -> (ToolRegistry, StoredResultHandles) {
     let mut tools = ToolRegistry::new();
     let session_log: Arc<dyn SessionLog> = store.clone();
@@ -480,6 +484,17 @@ fn build_base_tools(
             .with_catalog(Arc::clone(&catalog)),
     ));
     tools.register(Arc::new(DelegationTool::new(Arc::clone(agent_registry))));
+    tools.register(Arc::new(TaskListTool));
+    tools.register(Arc::new(TaskOutputTool));
+    tools.register(Arc::new(SendMessageTool));
+    // Stopping a child ends work the session already paid for, so it routes
+    // through the permission gate the way a destructive edit does; an ask
+    // mode holds it for the user and an auto mode lets the model manage its
+    // own fleet.
+    tools.register(Arc::new(GuardedTool::new(
+        Arc::new(TaskStopTool),
+        gate.clone(),
+    )));
     (tools, StoredResultHandles { catalog })
 }
 

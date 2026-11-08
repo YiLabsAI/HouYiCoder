@@ -55,14 +55,15 @@ pub use exports::{
     HookPolicy, HookRegistry, HookSource, HookVerdict, HotPathReducer, LlmSummarizer,
     MakeCheckGate, MemoryAddTool, MemoryGateState, MemoryGates, MemoryRuntime, MultiEditTool,
     NextStep, RECAP_INPUT_TOKENS, RECAP_MESSAGE_LIMIT, ReadTool, RecapWindowSkip,
-    RecordedCompaction, ReduceCtx, ReducedOutput, Section, SectionKind, SessionResultCatalog,
-    SkillHookRegistrar, SkillReloadGuard, SkillTool, StatusSnapshot, StubTool, StubWorkspaceProbe,
-    SummarizeError, Summarizer, SystemPrompt, TodoItem, TodoStatus, TodoWriteTool, Tokenizer,
+    RecordedCompaction, ReduceCtx, ReducedOutput, Section, SectionKind, SendMessageTool,
+    SessionResultCatalog, SkillHookRegistrar, SkillReloadGuard, SkillTool, StatusSnapshot,
+    StubTool, StubWorkspaceProbe, SummarizeError, Summarizer, SystemPrompt, TaskListTool,
+    TaskOutputTool, TaskStopTool, TodoItem, TodoStatus, TodoWriteTool, Tokenizer,
     ToolOutputReducer, ToolRegistry, ToolResult, TrustLevel, TurnOutcome, UsageAccumulator,
     VerifyFailure, VerifyGate, WebFetchTool, WorkspaceProbe, WorktreeController, WriteTool,
-    apply_manifest, assemble_model_input, build_grid, build_hook_fire, build_manifest,
-    build_recap_input, combine_verdicts, derive_backbone, extraction_prompt, merge_summary,
-    never_worse, parse_event, render_backbone_block, thinking_brief, unified_diff,
+    apply_manifest, assemble_model_input, bound_child_summary, build_grid, build_hook_fire,
+    build_manifest, build_recap_input, combine_verdicts, derive_backbone, extraction_prompt,
+    merge_summary, never_worse, parse_event, render_backbone_block, thinking_brief, unified_diff,
 };
 pub use inference::{InferenceConfig, RequestInferenceConfig};
 
@@ -180,13 +181,11 @@ pub struct Runner {
     /// the transcript, so a second entry is refused rather than allowed to
     /// take the slot and leave the running call unstoppable.
     drive_active: AtomicBool,
-    /// The active turn's cancellation token, set at each turn start +
+    /// The active turn's cancellation token, set at each turn start and
     /// cleared when the turn ends. A per-turn abort (the viewed-child Esc
-    /// path) cancels it so the in-flight model fetch for this turn aborts
-    /// without killing the run: the drive loop appends an interrupt
-    /// marker + starts the next turn with a fresh token. Distinct from
-    /// the cancel field (the lifecycle token, terminal). Guarded by a std
-    /// Mutex.
+    /// path) cancels it so the in-flight model fetch aborts without killing
+    /// the run. Distinct from the cancel field (the lifecycle token,
+    /// terminal). Guarded by a std Mutex.
     turn_cancel: Mutex<Option<CancellationToken>>,
     /// The current user turn's budget and measured work, guarded by a std
     /// Mutex. Reset at every turn start, so a turn's record reports the work
