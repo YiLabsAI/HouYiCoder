@@ -673,6 +673,39 @@ fn test_empty_grid_renders_row() {
     assert!(rows[0].0.contains("no data yet"));
 }
 
+#[test]
+fn test_grid_text_searches_all() {
+    let mut bd = base_breakdown();
+    bd.categories.push(CategoryBreakdown {
+        label: "Free space".into(),
+        color_hint: 245,
+        tokens: 50_000,
+        is_deferred: false,
+        is_reserved: false,
+    });
+    bd.categories.push(CategoryBreakdown {
+        label: "Autocompact buffer".into(),
+        color_hint: 244,
+        tokens: 10_000,
+        is_deferred: false,
+        is_reserved: true,
+    });
+    bd.delegated = Some(DelegatedContext {
+        returned_tokens: 800,
+        child_tokens: Some(20_000),
+        returns: 1,
+    });
+    let view = ContextView {
+        breakdown: Box::new(bd),
+        drill: ContextDrillDown::default(),
+        suggestions: vec![],
+    };
+    let text = context_grid_text(&view);
+    assert!(text.contains("Free space: 50000 tokens"), "{text}");
+    assert!(text.contains("Autocompact buffer: 10000 tokens"), "{text}");
+    assert!(text.contains("Agents · /agents: 800 tokens"), "{text}");
+}
+
 mod command;
 
 /// The drill-down rows must come from the wire breakdown, not from a default

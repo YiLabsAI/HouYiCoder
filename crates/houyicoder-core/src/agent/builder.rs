@@ -13,8 +13,8 @@ use crate::agent::ToolRegistry;
 use crate::agent::append::PromptRecorder;
 use crate::agent::backbone::WorkspaceProbe;
 use crate::agent::conditional_activation::ConditionalSkillActivator;
-use crate::agent::context::AssemblyInput;
 use crate::agent::context::prompt::date::now_millis;
+use crate::agent::context::{AssemblyInput, ContextMeasurement};
 use crate::agent::hook::CompactTrigger;
 use crate::agent::hook::registry::HookRegistry;
 use crate::agent::manifest::Summarizer;
@@ -469,6 +469,47 @@ impl Runner {
                 "{compact_count} runs · {folded} turns · {summary_preview}"
             ))
         }
+    }
+
+    /// Measure the session and extract its compaction summary and summary token
+    /// count from a single store view read so /context does not clone the event
+    /// log three times.
+    pub async fn session_context_snapshot(
+        &self,
+        session: SessionId,
+    ) -> Result<(ContextMeasurement, Option<String>, u32), RunError> {
+        let view = self.store.current_view(session).await?;
+        let parts = self.assembly_parts();
+        let assembled = self.context_builder.measure(
+            &view.events,
+            view.manifest.as_ref(),
+            Some(self.store.backend()),
+            &parts.input(),
+        );
+        let summary_tokens = view
+            .manifest
+            .as_ref()
+            .and_then(|m| m.summary.as_deref())
+            .map_or(0, |s| self.context_builder.tokenizer().count(s));
+        let compact_summary = if view.rewind_points.is_empty() {
+            None
+        } else {
+            view.manifest.as_ref().map(|manifest| {
+                let compact_count = view.rewind_points.len();
+                let folded: usize = manifest
+                    .plan
+                    .iter()
+                    .filter(|g| matches!(g.disposition, Disposition::Summarized))
+                    .count();
+                let summary_preview = truncate_summary_preview(manifest.summary.as_deref());
+                if summary_preview.is_empty() {
+                    format!("{compact_count} runs · {folded} turns")
+                } else {
+                    format!("{compact_count} runs · {folded} turns · {summary_preview}")
+                }
+            })
+        };
+        Ok((assembled.measurement, compact_summary, summary_tokens))
     }
 }
 

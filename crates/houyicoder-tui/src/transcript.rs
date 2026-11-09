@@ -42,6 +42,7 @@ use houyicoder_protocol::frontend::recap::RecapNotice;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCall};
 
 use crate::brief::tool_call_brief;
+use crate::command::render::format_tokens;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::row_id::RowId;
 use crate::transcript::frame::payload::chunk_text;
@@ -523,6 +524,14 @@ impl<'a, F: AsRef<TranscriptFrame>> LineBuilder<'a, F> {
     fn emit_acpx(&mut self, n: &AcpxNotification, id: RowId) {
         match n.method {
             AcpxMethod::ContextCompactionBoundary => {
+                while matches!(
+                    self.out.last(),
+                    Some(TranscriptLine::System(s))
+                    if s.starts_with("Compacted ") || s == "compact: compacting..."
+                ) {
+                    self.out.pop();
+                    self.ids.pop();
+                }
                 let stats = boundary_stats(&n.params);
                 // The checkpoint id is the row's fold identity: two
                 // compactions in one session are two blocks, and a shared
@@ -705,8 +714,10 @@ fn boundary_stats(params: &serde_json::Value) -> String {
     let pre = params.get("preTokens").and_then(|v| v.as_u64());
     let post = params.get("postTokens").and_then(|v| v.as_u64());
     match (pre, post) {
-        (Some(pre), Some(post)) => format!("{pre} -> {post} tokens"),
-        (Some(pre), None) => format!("{pre} tokens"),
+        (Some(pre), Some(post)) => {
+            format!("{} -> {} tokens", format_tokens(pre), format_tokens(post))
+        }
+        (Some(pre), None) => format!("{} tokens", format_tokens(pre)),
         _ => String::new(),
     }
 }

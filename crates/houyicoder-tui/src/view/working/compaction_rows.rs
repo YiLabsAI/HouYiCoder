@@ -12,10 +12,13 @@ use ratatui::{
 
 use crate::records::compaction_row_text;
 use crate::rows::row_set::{Row, RowSet};
-use crate::selection::TAG_SYSTEM;
+use crate::selection::{TAG_FOLD, TAG_SYSTEM};
 use crate::state::App;
 use crate::toggle_hint::ToggleHint;
 use crate::view::line_wrap::wrap_line;
+
+/// Maximum wrapped lines rendered when a compaction digest is expanded inline.
+pub(crate) const MAX_EXPANDED_COMPACTION_ROWS: usize = 40;
 
 /// Push the compaction row and, when it is expanded, the digest under it.
 ///
@@ -32,7 +35,7 @@ pub(crate) fn push_compaction_rows(
     app: &App,
     sink: &mut RowSet,
 ) {
-    let expanded = app.ui.transcript_view.expanded.fold_groups.contains(key);
+    let expanded = app.ui.transcript_view.expanded.fold_groups.contains(key) || app.ui.verbose;
     // A row whose key is empty came from a digest with no boundary. No fold
     // group owns it, so it is drawn as a plain line: offering the chord would
     // promise a toggle that has nothing to act on.
@@ -45,7 +48,8 @@ pub(crate) fn push_compaction_rows(
         Some(ToggleHint::Expand)
     };
     let head = compaction_row_text(stats, hint);
-    let row = Row::new(TAG_SYSTEM, head.clone()).pre(Some(Line::from(Span::styled(
+    let head_tag = if foldable { TAG_FOLD } else { TAG_SYSTEM };
+    let row = Row::new(head_tag, head.clone()).pre(Some(Line::from(Span::styled(
         head,
         Style::default().fg(Color::DarkGray),
     ))));
@@ -58,12 +62,11 @@ pub(crate) fn push_compaction_rows(
     if !expanded || summary.is_empty() {
         return;
     }
-    const MAX_EXPANDED_ROWS: usize = 40;
     let mut count = 0;
     for line in summary.lines() {
         for wrapped in wrap_line(line, width as usize) {
             count += 1;
-            if count > MAX_EXPANDED_ROWS {
+            if count > MAX_EXPANDED_COMPACTION_ROWS {
                 sink.push(
                     Row::new(
                         TAG_SYSTEM,

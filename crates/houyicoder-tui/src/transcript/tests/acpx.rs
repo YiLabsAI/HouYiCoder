@@ -48,7 +48,7 @@ fn test_compaction_one_row() {
         panic!("one compaction row: {:?}", lines[1]);
     };
     assert!(
-        stats.contains("90000"),
+        stats.contains("90k -> 12k tokens"),
         "the statistics the boundary reported are kept: {stats}"
     );
     assert_eq!(

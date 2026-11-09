@@ -248,17 +248,6 @@ impl Runner {
                         return Err(RunError::ContextOverflowNoProgress);
                     }
                     overflow_retries += 1;
-                    // Compact folded older memory-recall events out of the
-                    // assembled context, where the Summarized disposition
-                    // drops them from the model's input. Re-inject so the
-                    // model is not memory-blind for the rest of this run:
-                    // the surfaced scan now sees the
-                    // folded set as empty, so recall re-surfaces entries the
-                    // model still needs for the remaining tool turns.
-                    self.memory.recall(session).await?;
-                    // Re-announce skills too: the compact folded the
-                    // listing out, so the scan resets and it re-surfaces.
-                    self.inject_skill_listing_and_body(session).await?;
                     continue 'outer;
                 }
             }

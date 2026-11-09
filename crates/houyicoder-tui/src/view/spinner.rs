@@ -195,12 +195,17 @@ pub fn spinner_line(
         return Line::from(Span::styled(row.to_string(), dim));
     };
     let after_glyph = &row[glyph.len_utf8()..];
+    let glyph_text = if row.contains("compact: compacting...") {
+        SPINNER_FRAMES[((elapsed.as_millis() / 120) % 12) as usize].to_string()
+    } else {
+        glyph.to_string()
+    };
     let after_glyph_trim = after_glyph.trim_start();
     let (verb, tail) = match after_glyph_trim.find('…') {
         Some(i) => (&after_glyph_trim[..i], &after_glyph_trim[i..]),
         None => (after_glyph_trim, ""),
     };
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(glyph.to_string(), glyph_style)];
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(glyph_text, glyph_style)];
     if verb.is_empty() {
         spans.push(Span::styled(tail.to_string(), dim));
         return Line::from(spans);

@@ -36,7 +36,7 @@ use crate::view::line_wrap::wrap_line;
 use crate::view::markers::{diff_row, diff_rows, styled_row};
 use crate::view::spinner::{spinner_line, stall_intensity, stall_intensity_reasoning};
 use ratatui::buffer::CellDiffOption;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthStr;
 
 /// The highest message count the jump-to-bottom label states. Past it the
@@ -112,7 +112,11 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn compute_spinner_params(app: &App) -> (Duration, f32, bool) {
-    let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_default();
+    let spin_elapsed = app.run_started().map(|t| t.elapsed()).unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+    });
     let prog = app.run_progress();
     let tool_active = prog.is_some_and(|p| p.tools.any_running());
     let reasoning_active = prog.is_some_and(|p| p.live_block == LiveBlock::Thinking);
@@ -490,6 +494,17 @@ pub(crate) fn push_line_rows(
         for row in rows {
             sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
         }
+        return true;
+    }
+    if matches!(line, TranscriptLine::System(s) if s == "compact: compacting...") {
+        sink.push(
+            Row::new(
+                TAG_SPINNER,
+                "\u{273b} Compacting\u{2026} (compact: compacting...)".to_string(),
+            )
+            .outcome(outcome)
+            .group(grp_key.clone()),
+        );
         return true;
     }
     let text = if app.ui.verbose {

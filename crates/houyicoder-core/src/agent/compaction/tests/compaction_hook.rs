@@ -350,6 +350,11 @@ async fn test_recompact_reuses_measurement() {
     let first = runner.compact(session).await.expect("first compact");
     let second = runner.compact(session).await.expect("second compact");
 
+    assert!(first.made_progress, "first compact makes progress");
+    assert!(
+        !second.made_progress,
+        "recompacting unchanged input is a no-op"
+    );
     assert_eq!(
         second.pre_compact_tokens, first.post_compact_tokens,
         "unchanged model input keeps the previous post measurement"

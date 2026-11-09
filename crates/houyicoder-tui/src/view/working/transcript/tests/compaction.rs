@@ -118,17 +118,35 @@ fn test_compaction_digest_capped() {
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    app.sessions.current.transcript = vec![TranscriptLine::Compaction {
+    let line = TranscriptLine::Compaction {
         key: "cp-cap".into(),
         stats: "900 -> 120 tokens".into(),
         summary: long_summary,
-    }]
-    .into();
-    app.ui.transcript_view.toggle_fold("cp-cap".into());
+    };
+    app.sessions.current.transcript = vec![line.clone()].into();
+    drop(render_text(&app, 100, 50));
+    assert!(
+        app.toggle_tail_expand(),
+        "ctrl+o tail expand reaches compaction row"
+    );
     let out = render_text(&app, 100, 50);
     assert!(out.contains("line 0"), "{out}");
     assert!(out.contains("line 39"), "{out}");
     assert!(out.contains("… and more (searchable via /search)"), "{out}");
+    assert_eq!(
+        app.line_display_rows(&line),
+        42,
+        "count matches capped render (1 head + 40 lines + 1 overflow notice)"
+    );
+    app.toggle_fold_at_row(0);
+    assert!(
+        !app.ui
+            .transcript_view
+            .expanded
+            .fold_groups
+            .contains("cp-cap"),
+        "clicking head row collapses compaction digest"
+    );
 }
 
 /// ATTACK: two compactions in one session. The second summary must attach to

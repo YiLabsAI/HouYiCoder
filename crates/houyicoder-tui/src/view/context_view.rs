@@ -197,7 +197,7 @@ fn grid_row_spans(
 ) -> Vec<Span<'static>> {
     row.iter()
         .enumerate()
-        .map(|(col, sq)| {
+        .flat_map(|(col, sq)| {
             let cat = bd.categories.get(sq.category_idx);
             let color = cat
                 .map(|c| Color::Indexed(c.color_hint))
@@ -218,13 +218,16 @@ fn grid_row_spans(
             // The cache breakpoint sits between cells: cells [0, bp) are the
             // cached prefix, and bp onward is the fresh suffix. Replace the
             // trailing space after cell (bp - 1) with a yellow vertical bar
-            // so the marker does not consume or replace any category cell.
+            // while keeping the cell glyph in its own category color.
             let cell_idx = row_start + col;
             let is_breakpoint_boundary = breakpoint.is_some_and(|bp| bp > 0 && cell_idx + 1 == bp);
             if is_breakpoint_boundary {
-                Span::styled(format!("{glyph}\u{2502}"), Style::new().fg(Color::Yellow))
+                vec![
+                    Span::styled(glyph.to_string(), style),
+                    Span::styled("\u{2502}", Style::new().fg(Color::Yellow)),
+                ]
             } else {
-                Span::styled(format!("{glyph} "), style)
+                vec![Span::styled(format!("{glyph} "), style)]
             }
         })
         .collect()
@@ -488,7 +491,7 @@ pub(crate) fn context_grid_text(view: &ContextView) -> String {
     ));
     s.push_str("  Estimated usage by category\n");
     for cat in &bd.categories {
-        if cat.tokens == 0 || cat.is_deferred || cat.is_reserved || cat.label == "Free space" {
+        if cat.tokens == 0 || cat.is_deferred {
             continue;
         }
         let c_pct = if bd.context_window > 0 {
@@ -499,6 +502,12 @@ pub(crate) fn context_grid_text(view: &ContextView) -> String {
         s.push_str(&format!(
             "  {}: {} tokens ({:.1}%)\n",
             cat.label, cat.tokens, c_pct
+        ));
+    }
+    if let Some(delegated) = bd.delegated.as_ref() {
+        s.push_str(&format!(
+            "  Agents · /agents: {} tokens ({} tasks)\n",
+            delegated.returned_tokens, delegated.returns
         ));
     }
     if !view.drill.memory_files.is_empty() {

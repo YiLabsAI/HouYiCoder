@@ -210,6 +210,16 @@ impl App {
             if let Some((idx, key)) = latest_notice {
                 candidates.push((idx, TailTarget::Notice(key)));
             }
+            if let Some(idx) = lines.iter().rposition(|l| {
+                matches!(
+                    l,
+                    TranscriptLine::Compaction { key, summary, .. }
+                    if !key.is_empty() && !summary.is_empty()
+                )
+            }) && let TranscriptLine::Compaction { key, .. } = &lines[idx]
+            {
+                candidates.push((idx, TailTarget::Notice(key.clone())));
+            }
             // A result row whose body folds (more than the always-shown head)
             // competes by position with the other tail blocks, so a chord with
             // the cursor elsewhere still reaches the newest collapsible result.

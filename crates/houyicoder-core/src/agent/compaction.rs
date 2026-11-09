@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 use houyicoder_context::{
-    CheckpointId, CheckpointManifest, ContextError, Disposition, EventId, SessionId,
+    CheckpointId, CheckpointManifest, ContextError, Disposition, EventId, SessionEvent, SessionId,
     SessionLogEntry,
 };
 
@@ -172,6 +172,20 @@ impl Runner {
         let pre_compact_tokens =
             estimate_selected_transcript(&current.events, current.manifest.as_ref());
         let events = current.events;
+        if trigger == CompactTrigger::Manual
+            && let Some(prev) = current.manifest.as_ref()
+            && !has_compaction_work(&events, prev)
+        {
+            return Ok(CompactionOutcome {
+                made_progress: false,
+                folded_count: 0,
+                manifest_id: prev.id,
+                pre_compact_tokens,
+                post_compact_tokens: pre_compact_tokens,
+                recall_rate: None,
+                conflict_rate: None,
+            });
+        }
 
         // Hooks may steer summarization but cannot block overflow recovery.
         let custom_instructions = self
@@ -231,8 +245,10 @@ impl Runner {
         self.memory.invalidate_index_snapshot();
 
         // Reinject active memory recalls and skills so they survive the compaction boundary.
-        self.memory.recall(session).await?;
-        self.inject_skill_listing_and_body(session).await?;
+        if result.made_progress {
+            self.memory.recall(session).await?;
+            self.inject_skill_listing_and_body(session).await?;
+        }
 
         let compression_ratio = if pre_compact_tokens > 0 {
             post_compact_tokens as f64 / pre_compact_tokens as f64
@@ -264,7 +280,23 @@ impl Runner {
         let recalls = self.recall_meter.swap(0, Ordering::Relaxed);
         (folded_count > 0 && recalls > 0).then(|| recalls as f64 / folded_count as f64)
     }
+}
 
+fn has_compaction_work(events: &[SessionLogEntry], prev: &CheckpointManifest) -> bool {
+    if prev.summary.as_deref().is_some_and(|s| s.len() > 80_000) {
+        return true;
+    }
+    let prev_ids: HashSet<EventId> = prev
+        .plan
+        .iter()
+        .flat_map(|g| g.event_ids.iter().copied())
+        .collect();
+    events.iter().any(|e| {
+        !prev_ids.contains(&e.id) && matches!(e.event, SessionEvent::AssistantMessage { .. })
+    })
+}
+
+impl Runner {
     fn merge_backbone_summary(
         &self,
         events: &[SessionLogEntry],

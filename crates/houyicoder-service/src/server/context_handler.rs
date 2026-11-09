@@ -25,8 +25,9 @@ impl Server {
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
         let snap = self.runner.status_snapshot();
-        let measurement = match self.runner.session_measurement(self.session).await {
-            Ok(measurement) => measurement,
+        let res = self.runner.session_context_snapshot(self.session).await;
+        let (measurement, compact_summary, summary_tokens) = match res {
+            Ok(snapshot) => snapshot,
             Err(e) => {
                 return self
                     .send_response(
@@ -42,8 +43,7 @@ impl Server {
             }
         };
         let mut bd = measurement.breakdown(&snap.model, snap.context_window);
-        bd.compact_summary = self.runner.compact_summary(self.session).await;
-        let summary_tokens = self.runner.compact_summary_tokens(self.session).await;
+        bd.compact_summary = compact_summary;
         if summary_tokens > 0 {
             // Subtract summary_tokens from Messages to prevent double counting.
             if let Some(msg_cat) = bd.categories.iter_mut().find(|c| c.label == "Messages") {

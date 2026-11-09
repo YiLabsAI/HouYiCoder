@@ -461,6 +461,7 @@ impl App {
     /// handle), kept out of the transcript; the compact count + token
     /// drop are the user-facing outcome.
     fn apply_compact(&mut self, reply: CompactReply) {
+        self.drop_compacting_notice();
         let line = if reply.made_progress {
             let tokens = match (reply.pre_compact_tokens, reply.post_compact_tokens) {
                 (Some(pre), Some(post)) => {

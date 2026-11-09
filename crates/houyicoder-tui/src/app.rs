@@ -105,7 +105,7 @@ pub fn run_with_runner(
         if app.pump_background_reads() {
             dirty = true;
         }
-        if dirty || app.agent_busy() {
+        if dirty || app.agent_busy() || app.compacting() {
             // Load older history before rendering its scroll position.
             app.load_older_frames();
             // Stage the frame: the draw writes into a fresh value, held aside
