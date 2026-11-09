@@ -271,7 +271,9 @@ fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
         };
         let row = inner.y.saturating_add(inner.height.saturating_sub(1));
         let label_w = (label.chars().count() as u16).min(inner.width);
-        let x = inner.x + (inner.width - label_w) / 2;
+        // Align toward the right edge (with a 2-col margin) instead of centering,
+        // so it never overlaps centered inline affordances such as "ctrl+o to expand".
+        let x = inner.x + inner.width.saturating_sub(label_w + 2);
         let rect = Rect::new(x, row, label_w, 1);
         f.render_widget(Clear, rect);
         // Bright text on the user-message bg so the label reads as a clickable

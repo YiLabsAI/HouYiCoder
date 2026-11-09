@@ -17,6 +17,7 @@ mod worktree;
 use std::iter;
 use std::time::Instant;
 
+use crate::command::render::format_tokens;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SessionId as FrontendSessionId;
 use houyicoder_protocol::frontend::compact::CompactReply;
@@ -463,7 +464,11 @@ impl App {
         let line = if reply.made_progress {
             let tokens = match (reply.pre_compact_tokens, reply.post_compact_tokens) {
                 (Some(pre), Some(post)) => {
-                    format!(" · {pre} → {post} estimated tokens")
+                    format!(
+                        " · {} → {} estimated tokens",
+                        format_tokens(pre),
+                        format_tokens(post)
+                    )
                 }
                 _ => String::new(),
             };

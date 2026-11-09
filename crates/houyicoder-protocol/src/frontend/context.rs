@@ -344,9 +344,9 @@ pub fn build_grid(
         .collect()
 }
 
-/// Cells a non-free, non-reserved category gets: max(1, round(exact)).
+/// Cells a non-free category gets: max(1, round(exact)).
 fn alloc_cells(c: &CategoryBreakdown, context_window: u32, total: usize) -> usize {
-    if c.tokens == 0 || c.label == "Free space" || c.is_reserved {
+    if c.tokens == 0 || c.label == "Free space" {
         return 0;
     }
     let exact = c.tokens as f64 / context_window as f64 * total as f64;

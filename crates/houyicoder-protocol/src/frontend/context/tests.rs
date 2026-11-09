@@ -181,3 +181,49 @@ fn test_stub_breakdown_renders_grid() {
         "the preview has no measured breakpoint"
     );
 }
+
+/// Verify that reserved categories (such as Autocompact buffer) are actually
+/// allocated cells in the real build_grid implementation.
+#[test]
+fn test_build_grid_reserved() {
+    let categories = vec![
+        CategoryBreakdown {
+            label: "Messages".into(),
+            color_hint: 61,
+            tokens: 50_000,
+            is_deferred: false,
+            is_reserved: false,
+        },
+        CategoryBreakdown {
+            label: "Free space".into(),
+            color_hint: 245,
+            tokens: 40_000,
+            is_deferred: false,
+            is_reserved: false,
+        },
+        CategoryBreakdown {
+            label: "Autocompact buffer".into(),
+            color_hint: 244,
+            tokens: 10_000,
+            is_deferred: false,
+            is_reserved: true,
+        },
+    ];
+    let grid = build_grid(&categories, 100_000, 100, None);
+    let total_cells: usize = grid.iter().map(|r| r.len()).sum();
+    assert_eq!(total_cells, 100);
+    // Find category index of Autocompact buffer
+    let reserved_idx = categories
+        .iter()
+        .position(|c| c.label == "Autocompact buffer")
+        .unwrap();
+    let reserved_cells: usize = grid
+        .iter()
+        .flat_map(|r| r.iter())
+        .filter(|c| c.category_idx == reserved_idx)
+        .count();
+    assert_eq!(
+        reserved_cells, 10,
+        "10k out of 100k must allocate exactly 10 reserved cells"
+    );
+}

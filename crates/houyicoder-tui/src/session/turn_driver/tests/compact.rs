@@ -55,7 +55,7 @@ fn test_result_renders_system_line() {
         .expect("compact reply lands a system line");
     assert!(line.contains("Compacted 12 events"), "folded count: {line}");
     assert!(
-        line.contains("8000 → 3000 estimated tokens"),
+        line.contains("8k → 3k estimated tokens"),
         "token drop: {line}"
     );
     // The checkpoint id is internal, kept out of the transcript.

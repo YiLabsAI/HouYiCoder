@@ -512,10 +512,7 @@ fn test_grid_renders_delegated_rows() {
         returns: 2,
     });
     let text = rows_text(bd);
-    assert!(
-        text.contains("Delegated"),
-        "delegated header missing:\n{text}"
-    );
+    assert!(text.contains("Agents"), "agents header missing:\n{text}");
     assert!(
         text.contains("/agents"),
         "the header points at the pane that acts on it:\n{text}"

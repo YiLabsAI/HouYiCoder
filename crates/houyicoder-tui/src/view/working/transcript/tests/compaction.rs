@@ -111,6 +111,26 @@ fn test_compaction_count_tracks_digest() {
     );
 }
 
+#[test]
+fn test_compaction_digest_capped() {
+    let mut app = working_app();
+    let long_summary = (0..50)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.sessions.current.transcript = vec![TranscriptLine::Compaction {
+        key: "cp-cap".into(),
+        stats: "900 -> 120 tokens".into(),
+        summary: long_summary,
+    }]
+    .into();
+    app.ui.transcript_view.toggle_fold("cp-cap".into());
+    let out = render_text(&app, 100, 50);
+    assert!(out.contains("line 0"), "{out}");
+    assert!(out.contains("line 39"), "{out}");
+    assert!(out.contains("… and more (searchable via /search)"), "{out}");
+}
+
 /// ATTACK: two compactions in one session. The second summary must attach to
 /// the second boundary, not overwrite the first one's digest.
 #[test]

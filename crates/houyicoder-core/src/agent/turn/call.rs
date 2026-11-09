@@ -217,12 +217,6 @@ impl Runner {
                             p = self.compress(session) => p?,
                         };
                         if progress {
-                            self.memory.recall(session).await?;
-                            // A compaction folded the listing out of the
-                            // assembled context; re-announce so the model is
-                            // not skill-blind for the rest of this run. No-op
-                            // when a listing still survives (dedup scan).
-                            self.inject_skill_listing_and_body(session).await?;
                             continue 'outer;
                         }
                     }

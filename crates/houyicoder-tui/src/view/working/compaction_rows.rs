@@ -58,8 +58,25 @@ pub(crate) fn push_compaction_rows(
     if !expanded || summary.is_empty() {
         return;
     }
+    const MAX_EXPANDED_ROWS: usize = 40;
+    let mut count = 0;
     for line in summary.lines() {
         for wrapped in wrap_line(line, width as usize) {
+            count += 1;
+            if count > MAX_EXPANDED_ROWS {
+                sink.push(
+                    Row::new(
+                        TAG_SYSTEM,
+                        "  └ … and more (searchable via /search)".to_string(),
+                    )
+                    .group(Some(key.to_string()))
+                    .pre(Some(Line::from(Span::styled(
+                        "  └ … and more (searchable via /search)",
+                        Style::default().fg(Color::DarkGray),
+                    )))),
+                );
+                return;
+            }
             sink.push(
                 Row::new(TAG_SYSTEM, wrapped.to_string())
                     .group(Some(key.to_string()))

@@ -226,12 +226,13 @@ impl Runner {
         if let Ok(mut ol) = self.observability.lock() {
             ol.clear_last_turn_delta();
         }
-        // The rebuilt transcript invalidates the prior cache baseline. Refresh
-        // the frozen memory index and the frozen prompt inputs at the same
-        // natural cache break.
+        // The rebuilt transcript invalidates the prior cache baseline.
         self.cached_prefix.invalidate();
         self.memory.invalidate_index_snapshot();
-        self.context_builder.reset_frozen_prompt();
+
+        // Reinject active memory recalls and skills so they survive the compaction boundary.
+        self.memory.recall(session).await?;
+        self.inject_skill_listing_and_body(session).await?;
 
         let compression_ratio = if pre_compact_tokens > 0 {
             post_compact_tokens as f64 / pre_compact_tokens as f64

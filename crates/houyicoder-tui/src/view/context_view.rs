@@ -198,12 +198,6 @@ fn grid_row_spans(
     row.iter()
         .enumerate()
         .map(|(col, sq)| {
-            // The cache breakpoint is a flat cell index: cells before it are
-            // the cached prefix, it onward is the fresh suffix. Draw a vertical
-            // bar at the breakpoint cell to mark where the cache ends.
-            if breakpoint == Some(row_start + col) {
-                return Span::styled("\u{2502} ", Style::new().fg(Color::Yellow));
-            }
             let cat = bd.categories.get(sq.category_idx);
             let color = cat
                 .map(|c| Color::Indexed(c.color_hint))
@@ -221,7 +215,17 @@ fn grid_row_spans(
             } else {
                 ("\u{26F6}", Style::new().fg(Color::DarkGray))
             };
-            Span::styled(format!("{glyph} "), style)
+            // The cache breakpoint sits between cells: cells [0, bp) are the
+            // cached prefix, and bp onward is the fresh suffix. Replace the
+            // trailing space after cell (bp - 1) with a yellow vertical bar
+            // so the marker does not consume or replace any category cell.
+            let cell_idx = row_start + col;
+            let is_breakpoint_boundary = breakpoint.is_some_and(|bp| bp > 0 && cell_idx + 1 == bp);
+            if is_breakpoint_boundary {
+                Span::styled(format!("{glyph}\u{2502}"), Style::new().fg(Color::Yellow))
+            } else {
+                Span::styled(format!("{glyph} "), style)
+            }
         })
         .collect()
 }
@@ -400,7 +404,7 @@ fn delegated_rows(delegated: Option<&DelegatedContext>) -> Vec<Vec<Span<'static>
     let dim = Style::new().fg(Color::DarkGray);
     let mut rows: Vec<Vec<Span>> = Vec::new();
     rows.push(vec![
-        Span::styled("Delegated", bold),
+        Span::styled("Agents", bold),
         Span::styled(" \u{00b7} /agents", dim),
     ]);
     let tasks_label = if delegated.returns == 1 {
