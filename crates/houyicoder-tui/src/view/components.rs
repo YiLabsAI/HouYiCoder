@@ -155,5 +155,42 @@ pub fn consensus_line(findings: &[ReviewFinding]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The body of a list that groups its rows under section headings, shared by
+/// the panes that read alike: a heading wherever the section changes, then one
+/// row each, with the cursor marker on the selected row. The row closure
+/// appends the spans that follow the marker.
+///
+/// Returns the lines and the line the cursor stands on, so the caller can
+/// scroll the selection into view. A heading carries no action, so the cursor
+/// indexes rows only and no key can land on a heading.
+pub(crate) fn section_list_body(
+    sections: &[&'static str],
+    cursor: usize,
+    mut row: impl FnMut(usize, &mut Vec<Span<'static>>),
+) -> (Vec<Line<'static>>, usize) {
+    let cursor = cursor.min(sections.len().saturating_sub(1));
+    let mut lines = Vec::with_capacity(sections.len() + 2);
+    let mut selected_line = 0;
+    let mut previous: Option<&str> = None;
+    for (index, section) in sections.iter().enumerate() {
+        if previous != Some(*section) {
+            let count = sections.iter().filter(|other| *other == section).count();
+            lines.push(Line::from(Span::styled(
+                format!("  {section} ({count})"),
+                Style::new().fg(Color::Cyan),
+            )));
+            previous = Some(section);
+        }
+        if index == cursor {
+            selected_line = lines.len();
+        }
+        let prefix = if index == cursor { "\u{25b6} " } else { "  " };
+        let mut spans = vec![Span::raw(prefix)];
+        row(index, &mut spans);
+        lines.push(Line::from(spans));
+    }
+    (lines, selected_line)
+}
+
 #[cfg(test)]
 mod tests;

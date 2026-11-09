@@ -29,6 +29,7 @@ use crate::state::App;
 use crate::view::agents_pane::rows::{AgentRow, pane_rows};
 use crate::view::agents_pane::state::AgentDetail;
 use crate::view::capability::titled_block;
+use crate::view::components::section_list_body;
 use crate::view::line_wrap::{cursor_window_offset, max_scroll_offset, pad_width, truncate_width};
 use crate::view::navigation::key_hint;
 
@@ -170,30 +171,11 @@ fn empty_line(app: &App) -> &'static str {
 /// into view. Headings carry no action, so the cursor indexes rows only and no
 /// key can land on a heading.
 fn list_body(rows: &[AgentRow<'_>], cursor: usize) -> (Vec<Line<'static>>, usize) {
-    let cursor = cursor.min(rows.len().saturating_sub(1));
     let type_width = widest_type(rows);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut selected_line = 0;
-    let mut previous: &str = "";
-    for (index, row) in rows.iter().enumerate() {
-        let section = row.section();
-        if section != previous {
-            let count = rows.iter().filter(|r| r.section() == section).count();
-            lines.push(Line::from(Span::styled(
-                format!("  {section} ({count})"),
-                Style::new().fg(Color::Cyan),
-            )));
-            previous = section;
-        }
-        if index == cursor {
-            selected_line = lines.len();
-        }
-        let prefix = if index == cursor { "▶ " } else { "  " };
-        let mut spans = vec![Span::raw(prefix)];
-        span_row(row, &mut spans, type_width);
-        lines.push(Line::from(spans));
-    }
-    (lines, selected_line)
+    let sections: Vec<&'static str> = rows.iter().map(AgentRow::section).collect();
+    section_list_body(&sections, cursor, |index, spans| {
+        span_row(&rows[index], spans, type_width);
+    })
 }
 
 /// The width of the type cell, measured over the whole list: every row starts

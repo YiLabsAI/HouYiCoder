@@ -114,3 +114,114 @@ fn test_task_list_controls() {
         s.screen().contents()
     );
 }
+
+/// A command that ends a moment after moving to the background, then one
+/// that keeps running until the test stops it.
+const TWO_TASKS_SCRIPT: &str = r#"[
+  [{"type":"ToolCall","id":"c1","name":"bash","input":{"command":"for i in 1 2 3; do echo early-$i; sleep 0.4; done"}}],
+  [{"type":"ToolCall","id":"c2","name":"bash","input":{"command":"for i in 1 2 3 4 5 6 7 8 9 10; do echo tick-$i; sleep 1; done"}}],
+  [{"type":"Text","text":"started"}]
+]"#;
+
+/// The task list lines, from its first section heading down to its key hints,
+/// so a row-order assertion cannot match transcript text above the pane.
+fn pane_lines(screen: &str) -> Option<Vec<&str>> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.contains("Running (") || line.contains("Ended ("))?;
+    let end = lines
+        .iter()
+        .rposition(|line| line.contains("Esc to close"))?;
+    (start < end).then(|| lines[start..end].to_vec())
+}
+
+/// One command finishes while another keeps running, so the list holds a row
+/// of each kind. The running row is listed first, the task that ends crosses
+/// into the ended section under the same selection, and reopening the pane
+/// lands on its first row whatever the last visit left selected.
+#[test]
+#[ignore]
+fn test_task_list_groups_sections() {
+    let budget = houyicoder_config::ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS.to_string();
+    let mut s = pty_session_scripted_env(TWO_TASKS_SCRIPT, &[(budget, "300".to_string())]);
+    s.send_str("run two commands");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen("Running in background (task #2", RENDER_TIMEOUT),
+        "the second command is the one still in flight:\n{}",
+        s.screen().contents()
+    );
+    s.send_key(&Key::Down);
+    assert!(
+        s.wait_for_screen("Enter to open", RENDER_TIMEOUT),
+        "Down opens the task list:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        screen_settles(&mut s, |screen| {
+            screen.contains("Running (1)") && screen.contains("Ended (1)")
+        }),
+        "the finished task moves to the ended section while the other runs:\n{}",
+        s.screen().contents()
+    );
+
+    let screen = s.screen().contents();
+    let lines = pane_lines(&screen).expect("the task list is on screen");
+    let at = |needle: &str| lines.iter().position(|line| line.contains(needle));
+    let running = at("Running (1)").expect("the running heading");
+    let ended = at("Ended (1)").expect("the ended heading");
+    let in_flight = at("#2").expect("the running row");
+    let finished = at("#1").expect("the ended row");
+    assert!(
+        running < in_flight && in_flight < ended && ended < finished,
+        "the running task is listed above the ended one:\n{screen}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("\u{25b6} #2")),
+        "the newest task starts out selected:\n{screen}"
+    );
+
+    s.send_key(&Key::Char('k'));
+    assert!(
+        screen_settles(&mut s, |screen| screen.contains("Ended (2)")),
+        "the stopped task crosses into the ended section:\n{}",
+        s.screen().contents()
+    );
+    let screen = s.screen().contents();
+    let lines = pane_lines(&screen).expect("the task list is on screen");
+    let at = |needle: &str| lines.iter().position(|line| line.contains(needle));
+    assert!(
+        at("#2").expect("the stopped row") < at("#1").expect("the earlier row"),
+        "the newest ended task leads its section:\n{screen}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("\u{25b6} #2")),
+        "the selection follows the task into the ended section:\n{screen}"
+    );
+
+    s.send_key(&Key::Down);
+    assert!(
+        s.wait_for_screen("\u{25b6} #1", RENDER_TIMEOUT),
+        "Down moves the selection to the older ended task:\n{}",
+        s.screen().contents()
+    );
+
+    s.send_key(&Key::Esc);
+    assert!(
+        screen_settles(&mut s, |screen| !screen.contains("Esc to close")),
+        "Esc walks back out to the transcript:\n{}",
+        s.screen().contents()
+    );
+    run_slash_command(&mut s, "tasks");
+    assert!(
+        s.wait_for_screen("Ended (2)", RENDER_TIMEOUT),
+        "the slash command opens the list again:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.screen().contents().contains("\u{25b6} #2"),
+        "reopening returns the selection to the first row:\n{}",
+        s.screen().contents()
+    );
+}

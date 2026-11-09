@@ -1,10 +1,12 @@
 //! /tasks pane content: every background command the session started, with a
-//! detail drill-down. The list shows each task's number, state, run time, and
-//! command. Enter opens one task: a running one shows its latest output lines
-//! and is re-read while it runs, and an ended one shows the output it
-//! produced. The detail keeps its state and key hints fixed and scrolls only
-//! the output.
+//! detail drill-down. The list groups the commands still running above the
+//! ones that ended, newest first in each group, and shows each task's number,
+//! state, run time, and command. Enter opens one task: a running one shows
+//! its latest output lines and is re-read while it runs, and an ended one
+//! shows the output it produced. The detail keeps its state and key hints
+//! fixed and scrolls only the output.
 
+pub(crate) mod rows;
 pub(crate) mod state;
 
 use ratatui::{
@@ -22,11 +24,13 @@ use houyicoder_protocol::tool::strip_ansi;
 
 use crate::state::App;
 use crate::tasks_state::TaskDetail;
+use crate::view::components::section_list_body;
 use crate::view::line_wrap::cursor_window_offset;
 use crate::view::line_wrap::max_scroll_offset;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
 use crate::view::relative_time::summary_span_label;
+use crate::view::tasks_pane::rows::{TaskRow, task_ids, task_rows};
 
 /// Rows the pane reserves when opened inline by the slash command or by Down
 /// on an empty input.
@@ -42,115 +46,119 @@ pub(crate) fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
         ])
         .split(inner);
 
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "Tasks",
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ))),
-        chunks[0],
-    );
+    let rows = task_rows(app.sessions.current.capabilities.tasks.iter());
+    f.render_widget(Paragraph::new(head_line(&rows)), chunks[0]);
 
-    let tasks: Vec<&BackgroundTaskSnapshot> =
-        app.sessions.current.capabilities.tasks.iter().collect();
-    let running = app.sessions.current.capabilities.tasks.running_count();
-    f.render_widget(
-        Paragraph::new(count_line(tasks.len(), running)).style(Style::new().fg(Color::DarkGray)),
-        chunks[1],
-    );
-
-    let selected = app
-        .ui
-        .tasks_pane
-        .cursor()
-        .min(tasks.len().saturating_sub(1));
-    if tasks.is_empty() {
+    let ids = task_ids(&rows);
+    let selected = app.ui.tasks_pane.selected_row(&ids).unwrap_or(0);
+    if rows.is_empty() {
         f.render_widget(
             Paragraph::new("No background commands.").style(Style::new().fg(Color::DarkGray)),
-            chunks[2],
+            chunks[1],
         );
     } else {
-        let (body, selected_line) = task_lines(&tasks, selected, chunks[2].width);
-        let offset = cursor_window_offset(selected_line, body.len(), chunks[2].height);
-        f.render_widget(Paragraph::new(body).scroll((offset, 0)), chunks[2]);
+        let (body, selected_line) = task_lines(&rows, selected, chunks[1].width);
+        let offset = cursor_window_offset(selected_line, body.len(), chunks[1].height);
+        f.render_widget(Paragraph::new(body).scroll((offset, 0)), chunks[1]);
     }
 
     // The list offers only the actions the selected row can take: an empty
     // list has nothing to open or stop, and an ended task has nothing left to
     // stop.
     let mut hints = vec![("Up/Down", "select")];
-    if !tasks.is_empty() {
+    if !rows.is_empty() {
         hints.push(("Enter", "open"));
-        if !tasks[selected].status.is_terminal() {
+        if matches!(rows[selected], TaskRow::Running(_)) {
             hints.push(("k", "kill"));
         }
     }
     hints.push(("Esc", "close"));
     f.render_widget(
         Paragraph::new(key_hint(&hints)).style(Style::new().fg(Color::DarkGray)),
-        chunks[3],
+        chunks[2],
     );
 }
 
-/// How many commands the session started and how many still run.
-fn count_line(total: usize, running: usize) -> String {
-    let word = if total == 1 { "task" } else { "tasks" };
-    if running == 0 {
-        format!("{total} {word}")
-    } else {
-        format!("{total} {word} \u{00b7} {running} running")
+/// The title and, beside it, how many commands still run and how many ended.
+/// The counts share the title line so the body keeps every row the pane can
+/// draw.
+fn head_line(rows: &[TaskRow<'_>]) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        "Tasks",
+        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )];
+    let counts = count_line(rows);
+    if !counts.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(counts, Style::new().fg(Color::DarkGray)));
     }
+    Line::from(spans)
 }
 
-/// One row per task, oldest first, with the cursor marker on the selected row.
-/// The state and time columns are as wide as their widest cell, so a row's
-/// columns stay aligned whatever endings and durations the list holds, and
-/// the command takes what width remains, elided when it does not fit rather
-/// than running past the pane.
-fn task_lines(
-    tasks: &[&BackgroundTaskSnapshot],
-    cursor: usize,
-    width: u16,
-) -> (Vec<Line<'static>>, usize) {
+/// How many commands still run and how many ended. An empty list states
+/// nothing here; the body below already says the session started no
+/// commands.
+fn count_line(rows: &[TaskRow<'_>]) -> String {
+    let running = rows
+        .iter()
+        .filter(|row| matches!(row, TaskRow::Running(_)))
+        .count();
+    let ended = rows.len() - running;
+    let mut parts: Vec<String> = Vec::new();
+    if running > 0 {
+        parts.push(format!("{running} running"));
+    }
+    if ended > 0 {
+        parts.push(format!("{ended} ended"));
+    }
+    parts.join(" \u{00b7} ")
+}
+
+/// The list body: a heading per section, then one row per task with the
+/// cursor marker on the selected row. The state and time columns are as wide
+/// as their widest cell, so a row's columns stay aligned whatever endings and
+/// durations the list holds, and the command takes what width remains, elided
+/// when it does not fit rather than running past the pane.
+fn task_lines(rows: &[TaskRow<'_>], cursor: usize, width: u16) -> (Vec<Line<'static>>, usize) {
+    let tasks: Vec<&BackgroundTaskSnapshot> = rows.iter().map(TaskRow::task).collect();
     let labels: Vec<String> = tasks.iter().map(|task| task.id.label()).collect();
     let states: Vec<String> = tasks.iter().map(|task| status_word(&task.status)).collect();
-    let spans: Vec<String> = tasks
+    let durations: Vec<String> = tasks
         .iter()
         .map(|task| summary_span_label(task.elapsed_ms))
         .collect();
     let label_width = labels.iter().map(|label| label.len()).max().unwrap_or(0);
     let state_width = states.iter().map(|state| state.len()).max().unwrap_or(0);
-    let span_width = spans.iter().map(|span| span.len()).max().unwrap_or(0);
+    let duration_width = durations.iter().map(|cell| cell.len()).max().unwrap_or(0);
     // Marker, the three columns, and the gap before the command.
-    let used = 2 + label_width + 2 + state_width + 2 + span_width + 2;
+    let used = 2 + label_width + 2 + state_width + 2 + duration_width + 2;
     let command_width = usize::from(width).saturating_sub(used);
 
-    let mut lines = Vec::with_capacity(tasks.len());
-    for (idx, task) in tasks.iter().enumerate() {
-        let prefix = if idx == cursor { "\u{25b6} " } else { "  " };
-        lines.push(Line::from(vec![
-            Span::raw(prefix),
-            Span::styled(
-                format!("{:<label_width$}  ", labels[idx]),
-                Style::new().fg(Color::Yellow),
-            ),
-            Span::styled(
-                format!("{:<state_width$}  ", states[idx]),
-                status_style(&task.status),
-            ),
-            Span::styled(
-                format!("{:<span_width$}  ", spans[idx]),
-                Style::new().fg(Color::DarkGray),
-            ),
-            Span::raw(truncate_width(&strip_ansi(&task.command), command_width)),
-        ]));
-    }
-    (lines, cursor)
+    let sections: Vec<&'static str> = rows.iter().map(TaskRow::section).collect();
+    section_list_body(&sections, cursor, |index, line| {
+        let task = tasks[index];
+        line.push(Span::styled(
+            format!("{:<label_width$}  ", labels[index]),
+            Style::new().fg(Color::Yellow),
+        ));
+        line.push(Span::styled(
+            format!("{:<state_width$}  ", states[index]),
+            status_style(&task.status),
+        ));
+        line.push(Span::styled(
+            format!("{:<duration_width$}  ", durations[index]),
+            Style::new().fg(Color::DarkGray),
+        ));
+        line.push(Span::raw(truncate_width(
+            &strip_ansi(&task.command),
+            command_width,
+        )));
+    })
 }
 
 /// The words a row uses for a task state: the protocol's text form, with the

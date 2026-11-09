@@ -20,17 +20,72 @@ fn record(id: u64, status: BackgroundTaskStatus) -> BackgroundTaskDetail {
     }
 }
 
-/// The cursor stays inside the rows the list shows: it does not run past the
-/// last task, below the first, or into an empty list.
+/// The selection stays inside the rows the list shows: it does not run past
+/// the last task, below the first, or into an empty list.
 #[test]
 fn test_cursor_clamps_to_rows() {
+    let ids = [
+        BackgroundTaskId(1),
+        BackgroundTaskId(2),
+        BackgroundTaskId(3),
+    ];
     let pane = TasksPaneState::default();
-    pane.move_cursor(-1, 3);
-    assert_eq!(pane.cursor(), 0, "the cursor cannot go above the first row");
-    pane.move_cursor(10, 3);
-    assert_eq!(pane.cursor(), 2, "the cursor cannot run past the last row");
-    pane.move_cursor(1, 0);
-    assert_eq!(pane.cursor(), 0, "an empty list has no row to point at");
+    pane.move_cursor(-1, &ids);
+    assert_eq!(
+        pane.selected_row(&ids),
+        Some(0),
+        "the selection cannot go above the first row"
+    );
+    pane.move_cursor(10, &ids);
+    assert_eq!(
+        pane.selected_row(&ids),
+        Some(2),
+        "the selection cannot run past the last row"
+    );
+    pane.move_cursor(1, &[]);
+    assert_eq!(
+        pane.selected_row(&[]),
+        None,
+        "an empty list has no row to point at"
+    );
+}
+
+/// The selection names a task, so inserting a newer row above it moves the
+/// row without moving the selection.
+#[test]
+fn test_selection_follows_task() {
+    let ids = [
+        BackgroundTaskId(3),
+        BackgroundTaskId(2),
+        BackgroundTaskId(1),
+    ];
+    let pane = TasksPaneState::default();
+    pane.move_cursor(1, &ids);
+    assert_eq!(pane.selected_row(&ids), Some(1));
+    let reordered = [
+        BackgroundTaskId(4),
+        BackgroundTaskId(3),
+        BackgroundTaskId(2),
+        BackgroundTaskId(1),
+    ];
+    assert_eq!(
+        pane.selected_row(&reordered),
+        Some(2),
+        "the same task, one row lower"
+    );
+}
+
+/// A selected task the host no longer holds hands the selection to the first
+/// row, so the highlight still names a task an action can reach.
+#[test]
+fn test_pruned_selection_falls_back() {
+    let ids = [BackgroundTaskId(2), BackgroundTaskId(1)];
+    let pane = TasksPaneState::default();
+    pane.move_cursor(1, &ids);
+    assert_eq!(pane.target(&ids), Some(BackgroundTaskId(1)));
+    let after = [BackgroundTaskId(2)];
+    assert_eq!(pane.selected_row(&after), Some(0));
+    assert_eq!(pane.target(&after), Some(BackgroundTaskId(2)));
 }
 
 /// The action acts on the open detail when one is open, and on the selected
@@ -39,7 +94,7 @@ fn test_cursor_clamps_to_rows() {
 fn test_target_follows_open_detail() {
     let rows = [BackgroundTaskId(1), BackgroundTaskId(2)];
     let mut pane = TasksPaneState::default();
-    pane.move_cursor(1, rows.len());
+    pane.move_cursor(1, &rows);
     assert_eq!(pane.target(&rows), Some(BackgroundTaskId(2)));
     pane.open_detail(BackgroundTaskId(1), RequestId(7), Instant::now());
     assert_eq!(

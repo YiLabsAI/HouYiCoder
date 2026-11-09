@@ -1,10 +1,9 @@
 //! State and transitions for the /tasks pane.
 //!
-//! The owner keeps the list cursor, the open detail, and the reads that keep
-//! both current. The pane shows no authoritative task state: the host owns
-//! every task, and each read replaces the record held here. A running
-//! task's detail reads again a second later; an ended one stops, so a closed
-//! or finished view costs no traffic.
+//! The selection names a task, not a row: the list reorders as tasks arrive
+//! and end, and an action must reach the task the user highlighted. The host
+//! owns every task, so each read replaces the record held here; a running
+//! task's detail reads again a second later, and an ended one stops.
 
 use std::cell::Cell;
 use std::time::{Duration, Instant};
@@ -49,31 +48,50 @@ impl TaskDetail {
     }
 }
 
-/// List cursor plus the open detail and the pending reads for the /tasks
-/// pane.
+/// The list selection plus the open detail and the pending reads for the
+/// /tasks pane.
 #[derive(Default)]
 pub(crate) struct TasksPaneState {
-    cursor: Cell<usize>,
+    /// The task the list acts on. It stays unset until the user moves, which
+    /// resolves to the first row: the newest running task, or the newest
+    /// ended one when nothing runs.
+    selected: Cell<Option<BackgroundTaskId>>,
     detail: Option<TaskDetail>,
     list_read: Cell<Option<Instant>>,
 }
 
 impl TasksPaneState {
-    /// The row the list cursor stands on.
-    pub(crate) fn cursor(&self) -> usize {
-        self.cursor.get()
+    /// The row the selection stands on in this ordering. The task it names
+    /// keeps its place as rows move around it; once that task leaves the
+    /// list, the first row takes the selection, so the highlight and the
+    /// action never disagree.
+    pub(crate) fn selected_row(&self, rows: &[BackgroundTaskId]) -> Option<usize> {
+        if rows.is_empty() {
+            return None;
+        }
+        Some(
+            self.selected
+                .get()
+                .and_then(|id| rows.iter().position(|row| *row == id))
+                .unwrap_or(0),
+        )
     }
 
-    /// Move the cursor by a signed delta, clamped to the list bounds. A no-op
-    /// on an empty list, where there is no row to point at.
-    pub(crate) fn move_cursor(&self, delta: i32, len: usize) {
-        if len == 0 {
-            self.cursor.set(0);
+    /// Move the selection by a signed delta, clamped to the list bounds. A
+    /// no-op on an empty list, where there is no row to point at.
+    pub(crate) fn move_cursor(&self, delta: i32, rows: &[BackgroundTaskId]) {
+        let Some(current) = self.selected_row(rows) else {
+            self.selected.set(None);
             return;
-        }
-        let current = self.cursor.get().min(len - 1) as i32;
-        self.cursor
-            .set((current + delta).clamp(0, (len - 1) as i32) as usize);
+        };
+        let next = (current as i32 + delta).clamp(0, (rows.len() - 1) as i32) as usize;
+        self.selected.set(Some(rows[next]));
+    }
+
+    /// Put the selection back on the first row, so a pane opened again shows
+    /// its newest running task rather than wherever the last visit stopped.
+    pub(crate) fn reset_selection(&self) {
+        self.selected.set(None);
     }
 
     /// The open detail, when the pane is one level down.
@@ -86,9 +104,7 @@ impl TasksPaneState {
     pub(crate) fn target(&self, rows: &[BackgroundTaskId]) -> Option<BackgroundTaskId> {
         match self.detail.as_ref() {
             Some(detail) => Some(detail.id),
-            None => rows
-                .get(self.cursor.get().min(rows.len().saturating_sub(1)))
-                .copied(),
+            None => self.selected_row(rows).map(|index| rows[index]),
         }
     }
 

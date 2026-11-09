@@ -7,14 +7,24 @@
 
 use std::time::Instant;
 
+use houyicoder_protocol::frontend::tasks::BackgroundTaskId;
+
 use crate::agent_message::ClientCommand;
 use crate::state::{App, Pane};
+use crate::view::tasks_pane::rows::{task_ids, task_rows};
 
 impl App {
-    /// Open the pane on the list and ask for the current set of tasks.
+    /// The pane's rows in screen order, as task numbers.
+    fn task_row_ids(&self) -> Vec<BackgroundTaskId> {
+        task_ids(&task_rows(self.sessions.current.capabilities.tasks.iter()))
+    }
+
+    /// Open the pane on the list, its first row selected, and ask for the
+    /// current set of tasks.
     pub(crate) fn open_tasks_pane(&mut self) {
         self.ui.navigation.pane = Pane::Tasks;
         self.ui.tasks_pane.close_detail();
+        self.ui.tasks_pane.reset_selection();
         self.ui.tasks_pane.begin_list_read(Instant::now());
         self.refresh_query(|req_id| ClientCommand::BackgroundTasksQuery { req_id });
     }
@@ -26,25 +36,16 @@ impl App {
         self.ui.tasks_pane.stop_list_read();
     }
 
-    /// Move the list cursor over the tasks the session holds.
+    /// Move the list cursor over the rows the pane shows.
     pub(crate) fn move_tasks_cursor(&mut self, delta: i32) {
-        let len = self.sessions.current.capabilities.tasks.iter().count();
-        self.ui.tasks_pane.move_cursor(delta, len);
+        self.ui.tasks_pane.move_cursor(delta, &self.task_row_ids());
     }
 
     /// Open the detail for the selected task and ask for its record. Without
     /// a connection there is no record to read, so the detail stays closed
     /// and the user is told rather than left on a read that never answers.
     pub(crate) fn open_task_detail(&mut self) {
-        let ids: Vec<_> = self
-            .sessions
-            .current
-            .capabilities
-            .tasks
-            .iter()
-            .map(|task| task.id)
-            .collect();
-        let Some(id) = self.ui.tasks_pane.target(&ids) else {
+        let Some(id) = self.ui.tasks_pane.target(&self.task_row_ids()) else {
             return;
         };
         let Some(req_id) = self.claim_request_id() else {
@@ -62,15 +63,7 @@ impl App {
     /// ended has nothing to stop, and the user learns that rather than
     /// pressing a key that does nothing.
     pub(crate) fn kill_selected_task(&mut self) {
-        let ids: Vec<_> = self
-            .sessions
-            .current
-            .capabilities
-            .tasks
-            .iter()
-            .map(|task| task.id)
-            .collect();
-        let Some(id) = self.ui.tasks_pane.target(&ids) else {
+        let Some(id) = self.ui.tasks_pane.target(&self.task_row_ids()) else {
             return;
         };
         let running = self

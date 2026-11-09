@@ -19,6 +19,7 @@ use crate::test_harness::{
     TransportEvent, connected_app_with_events, render_text, wait_for_request,
 };
 
+use super::rows::TaskRow;
 use super::{body_lines, header_line, task_lines};
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -80,13 +81,18 @@ fn open_detail(app: &mut App, record: BackgroundTaskDetail) {
     assert!(app.ui.tasks_pane.apply_detail(RequestId(1), record));
 }
 
-/// Every task gets a row carrying its number, state, run time, and command,
-/// and the count above the list says how many of them still run.
+/// Every task gets a row carrying its number, state, run time, and command;
+/// the title says how many still run and how many ended, and each section
+/// carries its own count.
 #[test]
 fn test_list_rows_render() {
     let app = tasks_app();
     let out = render_text(&app, 80, 24);
-    assert!(out.contains("2 tasks \u{00b7} 1 running"), "{out}");
+    assert!(out.contains("1 running \u{00b7} 1 ended"), "{out}");
+    assert!(
+        out.contains("Running (1)") && out.contains("Ended (1)"),
+        "{out}"
+    );
     assert!(out.contains("#1") && out.contains("#2"), "{out}");
     assert!(out.contains("running") && out.contains("finished"), "{out}");
     assert!(out.contains("4s"), "{out}");
@@ -98,6 +104,147 @@ fn test_list_rows_render() {
     assert!(
         out.contains("Enter to open") && out.contains("Esc to close"),
         "{out}"
+    );
+}
+
+/// The pane open on a session holding exactly these tasks.
+fn app_with(tasks: Vec<BackgroundTaskSnapshot>) -> App {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Tasks;
+    app.sessions.current.capabilities.tasks.replace_all(tasks);
+    app
+}
+
+/// Running commands come first, then ended ones, each group newest first, so
+/// the work still in flight and the most recent work are both above the fold.
+#[test]
+fn test_list_groups_by_state() {
+    let app = app_with(vec![
+        snapshot(
+            1,
+            BackgroundTaskStatus::Finished,
+            "old done",
+            1_000,
+            Some(0),
+        ),
+        snapshot(2, BackgroundTaskStatus::Running, "still up", 2_000, None),
+        snapshot(
+            3,
+            BackgroundTaskStatus::Finished,
+            "new done",
+            3_000,
+            Some(0),
+        ),
+        snapshot(4, BackgroundTaskStatus::Running, "fresh", 4_000, None),
+    ]);
+    let out = render_text(&app, 80, 24);
+    let running_at = out.find("Running (2)").unwrap_or(usize::MAX);
+    let fourth = out.find("#4").unwrap_or(usize::MAX);
+    let second = out.find("#2").unwrap_or(usize::MAX);
+    let ended_at = out.find("Ended (2)").unwrap_or(usize::MAX);
+    let third = out.find("#3").unwrap_or(usize::MAX);
+    let first = out.find("#1").unwrap_or(usize::MAX);
+    assert!(
+        running_at < fourth && fourth < second && second < ended_at,
+        "the running section leads with its newest task: {out}"
+    );
+    assert!(
+        ended_at < third && third < first,
+        "the ended section leads with its newest task: {out}"
+    );
+}
+
+/// The marker names a task, not a row: a newer task arriving above the
+/// selection moves the rows but not the selection.
+#[test]
+fn test_marker_follows_selected_task() {
+    let mut app = app_with(vec![
+        snapshot(1, BackgroundTaskStatus::Running, "older", 1_000, None),
+        snapshot(2, BackgroundTaskStatus::Running, "newer", 2_000, None),
+    ]);
+    handle_working(&mut app, key(KeyCode::Down));
+    assert!(render_text(&app, 80, 24).contains("\u{25b6} #1"));
+    app.sessions.current.capabilities.tasks.record(snapshot(
+        3,
+        BackgroundTaskStatus::Running,
+        "newest",
+        3_000,
+        None,
+    ));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("\u{25b6} #1"),
+        "the selection stays on task #1: {out}"
+    );
+    assert!(
+        !out.contains("\u{25b6} #2") && !out.contains("\u{25b6} #3"),
+        "no other row borrows the marker: {out}"
+    );
+}
+
+/// A task that ends moves to the ended section, and the selection goes with
+/// it: k then refuses that task instead of stopping whichever task the row it
+/// used to occupy now holds.
+#[test]
+fn test_kill_targets_selected_task() {
+    let (mut app, events) = connected_app_with_events();
+    app.sessions.current.capabilities.tasks.replace_all(vec![
+        snapshot(1, BackgroundTaskStatus::Running, "doomed", 1_000, None),
+        snapshot(2, BackgroundTaskStatus::Running, "survivor", 2_000, None),
+    ]);
+    app.ui.navigation.pane = Pane::Tasks;
+    handle_working(&mut app, key(KeyCode::Down));
+    assert!(render_text(&app, 80, 24).contains("\u{25b6} #1"));
+    app.sessions.current.capabilities.tasks.record(snapshot(
+        1,
+        BackgroundTaskStatus::Killed,
+        "doomed",
+        1_500,
+        None,
+    ));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("\u{25b6} #1") && out.contains("Ended (1)"),
+        "the selection follows the task into the ended section: {out}"
+    );
+    handle_working(&mut app, key(KeyCode::Char('k')));
+    assert!(
+        !kill_request_sent(&events),
+        "an ended task under the selection must not be killed"
+    );
+    let out = render_text(&app, 80, 24);
+    assert!(out.contains("#1: not running"), "{out}");
+}
+
+/// Opening the pane lands on its first row whatever the last visit left
+/// selected: the newest running task, even when a newer task has ended.
+#[test]
+fn test_open_selects_first() {
+    let (mut app, _events) = connected_app_with_events();
+    app.sessions.current.capabilities.tasks.replace_all(vec![
+        snapshot(1, BackgroundTaskStatus::Running, "one", 1_000, None),
+        snapshot(2, BackgroundTaskStatus::Finished, "two", 2_000, None),
+        snapshot(3, BackgroundTaskStatus::Running, "three", 3_000, None),
+    ]);
+    app.ui.navigation.pane = Pane::Transcript;
+    app.ui.input.editor.clear();
+    handle_working(&mut app, key(KeyCode::Down));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("\u{25b6} #3"),
+        "the pane opens on its first row, the newest running task: {out}"
+    );
+    handle_working(&mut app, key(KeyCode::Down));
+    assert!(render_text(&app, 80, 24).contains("\u{25b6} #1"));
+    handle_working(&mut app, key(KeyCode::Down));
+    assert!(render_text(&app, 80, 24).contains("\u{25b6} #2"));
+    handle_working(&mut app, key(KeyCode::Esc));
+    handle_working(&mut app, key(KeyCode::Down));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("\u{25b6} #3"),
+        "reopening returns to the first row: {out}"
     );
 }
 
@@ -115,15 +262,19 @@ fn test_list_marker_follows_cursor() {
 }
 
 /// A session that moved nothing to the background says so rather than
-/// showing a blank pane with no explanation.
+/// showing a blank pane with no explanation, and draws no section heading for
+/// a group that does not exist.
 #[test]
 fn test_empty_list_explains() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Tasks;
     let out = render_text(&app, 80, 24);
-    assert!(out.contains("0 tasks"), "{out}");
     assert!(out.contains("No background commands."), "{out}");
+    assert!(
+        !out.contains("Running (") && !out.contains("Ended ("),
+        "an empty list has no sections: {out}"
+    );
     assert!(
         !out.contains("k to kill") && !out.contains("Enter to open"),
         "an empty list offers neither action: {out}"
@@ -256,8 +407,8 @@ fn test_pane_strips_escape_codes() {
         4_000,
         None,
     );
-    let (rows, _) = task_lines(&[&task], 0, 80);
-    let list: String = rows[0]
+    let (rows, _) = task_lines(&[TaskRow::Running(&task)], 0, 80);
+    let list: String = rows[1]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
