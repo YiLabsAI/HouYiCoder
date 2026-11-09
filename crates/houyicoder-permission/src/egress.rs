@@ -27,6 +27,8 @@ use crate::compound::strip_safe_redirects;
 use crate::pipeline::detection::interpreter_inline_code;
 
 mod formatter;
+mod unwrapper;
+pub(crate) use unwrapper::{substitution_bodies, unwrap_clause};
 
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
@@ -215,10 +217,40 @@ fn collect_egress_scopes(
 ) -> Option<Vec<String>> {
     let normalized = normalize_shell_command(command);
     let mut scopes: Vec<String> = Vec::new();
-    for clause in split_clauses(&normalized) {
-        let stages: Vec<String> = split_compound(&clause);
+    collect_from_command(&normalized, allow_effect_safe, fenced, &mut scopes)?;
+    if scopes.is_empty() {
+        None
+    } else {
+        Some(scopes)
+    }
+}
+
+/// Walk a command's clauses, unwrapping shell constructs as it goes. The
+/// substitution bodies of an assignment or a loop header are commands the
+/// classifiers must judge too, so each body recurses through this same
+/// walk rather than being refused as an opaque word. A body that fails
+/// fails the whole command, the way a refused clause does.
+fn collect_from_command(
+    command: &str,
+    allow_effect_safe: bool,
+    fenced: bool,
+    scopes: &mut Vec<String>,
+) -> Option<()> {
+    for clause in split_clauses(command) {
+        // The clause's own words, with control-flow and case-label shells
+        // peeled, are what the stages below classify.
+        let peeled = unwrapper::unwrap_clause(&clause)?;
+        let stages: Vec<String> = split_compound(&peeled);
         let stage_refs: Vec<&str> = stages.iter().map(|s| s.as_str()).collect();
         let piped = stages.len() > 1;
+        // Substitution bodies inside the clause — a loop's generator, an
+        // assignment's capture — recurse through the same walk so their
+        // programs are judged, not refused as syntax.
+        if let Some(bodies) = unwrapper::substitution_bodies(&clause) {
+            for body in bodies {
+                collect_from_command(&body, allow_effect_safe, fenced, scopes)?;
+            }
+        }
         for (idx, stage) in stages.iter().enumerate() {
             let trimmed = stage.trim();
             if trimmed.is_empty() {
@@ -264,11 +296,7 @@ fn collect_egress_scopes(
             }
         }
     }
-    if scopes.is_empty() {
-        None
-    } else {
-        Some(scopes)
-    }
+    Some(())
 }
 
 /// Split a normalized command on semicolons and logical operators outside

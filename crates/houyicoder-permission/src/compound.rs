@@ -9,6 +9,7 @@
 //! substitution) that change which resources a command touches. A full grammar
 //! is out of scope; the gate escalates anything ambiguous to Ask.
 
+use crate::egress::{substitution_bodies, unwrap_clause};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 
 mod effect;
@@ -603,11 +604,48 @@ pub(crate) fn quotes_balanced(text: &str) -> bool {
 /// Whether all segments are independently attestable. This is the gate's
 /// per-segment safety predicate: returning false escalates the whole compound
 /// command to Ask.
+///
+/// A segment the attest scan refuses may still be a shell construct around
+/// attestable programs: a loop header, a case label, or an assignment whose
+/// substitution captured a pipeline. The construct is unwrapped and the
+/// programs inside — the peeled text and each substitution body — attest on
+/// their own; every one of them must, or the compound still escalates. A
+/// construct the unwrapper cannot prove benign leaves the refusal standing.
 pub fn compound_safe(segments: &[&str]) -> bool {
     if segments.is_empty() {
         return false;
     }
-    segments.iter().all(|s| is_attestable(s))
+    segments.iter().all(|s| segment_attestable(s))
+}
+
+/// Whether one segment attests, directly or through its unwrapped shells.
+/// A substitution body is text the shell re-forms at run time, so it must
+/// carry no parameter expansion: an expanded variable can re-split words
+/// and turn one attestable command into a different one. The direct
+/// attest scan holds the same line by refusing the whole construct when a
+/// body is opaque, so this stricter body rule closes the unwrapped path.
+fn segment_attestable(segment: &str) -> bool {
+    if is_attestable(segment) {
+        return true;
+    }
+    let Some(peeled) = unwrap_clause(segment) else {
+        return false;
+    };
+    let attestable_peeled = peeled.is_empty() || is_attestable(&peeled);
+    let Some(bodies) = substitution_bodies(segment) else {
+        return false;
+    };
+    let attestable_bodies = bodies.iter().all(|body| {
+        // A bare $ variable or a ${ expansion} in a body: the run-time text
+        // is not the text attested — an expanded IFS can re-split words and
+        // turn one command into another — so the body does not attest.
+        if body.contains("${") || body.contains('$') {
+            return false;
+        }
+        let inner = split_compound(body);
+        !inner.is_empty() && inner.iter().all(|s| segment_attestable(s))
+    });
+    attestable_peeled && attestable_bodies
 }
 
 /// A quote-aware char scanner. Tracks single and double quote state so
