@@ -143,17 +143,7 @@ impl Server {
         if !reports_cas(&summary) {
             return None;
         }
-        let index = match self.runner.result_catalog() {
-            Some(catalog) => match catalog.stats(self.session).await {
-                Ok(stats) => Some(stats),
-                Err(error) => {
-                    tracing::warn!(%error, "stored-result index unavailable for the context view");
-                    None
-                }
-            },
-            None => None,
-        };
-        Some(map_cas_usage(&summary, index.as_ref()))
+        Some(map_cas_usage(&summary, None))
     }
 
     /// Fold older events into a summary and reply with the outcome. The runner

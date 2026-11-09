@@ -11,6 +11,7 @@ use crate::view::context_view::render_as_rows;
 use crate::view::line_wrap::wrap_line;
 use crate::view::todo_list::render_rows;
 use crate::view::working::command_state;
+use crate::view::working::compaction_rows::visible_digest_lines;
 
 impl App {
     /// The row count a single transcript line renders to. A tool result uses
@@ -72,11 +73,9 @@ impl App {
             // exactly the digest and every offset after it drifts.
             TranscriptLine::Compaction { key, summary, .. } => {
                 let mut n = 1; // head row
-                if (self.ui.transcript_view.expanded.fold_groups.contains(key) || self.ui.verbose)
-                    && !summary.is_empty()
-                {
-                    let digest_rows: usize = summary
-                        .lines()
+                if self.ui.transcript_view.expanded.fold_groups.contains(key) || self.ui.verbose {
+                    let digest_rows: usize = visible_digest_lines(summary)
+                        .into_iter()
                         .map(|logical| wrap_line(logical, w as usize).len())
                         .sum();
                     n += if digest_rows > 40 { 41 } else { digest_rows };

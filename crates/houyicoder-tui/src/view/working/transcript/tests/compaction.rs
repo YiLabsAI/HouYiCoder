@@ -114,10 +114,11 @@ fn test_compaction_count_tracks_digest() {
 #[test]
 fn test_compaction_digest_capped() {
     let mut app = working_app();
-    let long_summary = (0..50)
+    let mut long_summary = (0..50)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
+    long_summary.push_str("\nEarlier conversation context (10 turns, 20 events).\nFiles touched:\n--- derived-from-log (authoritative) ---\nDerivation: event=01A");
     let line = TranscriptLine::Compaction {
         key: "cp-cap".into(),
         stats: "900 -> 120 tokens".into(),

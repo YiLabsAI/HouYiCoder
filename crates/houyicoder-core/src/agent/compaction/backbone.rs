@@ -217,14 +217,14 @@ pub fn derive_backbone(
             }
             "bash" => {
                 if let Some(cmd) = input.get("command").and_then(|v| v.as_str())
-                    && looks_like_test(cmd)
+                    && let Some(test_cmd) = extract_test_command(cmd)
                 {
                     let outcome = results_by_call
                         .get(call_id.as_str())
                         .map(|r| test_outcome(r))
                         .unwrap_or(TestOutcome::Unknown);
                     test_results.push(TestResult {
-                        command: cmd.to_string(),
+                        command: test_cmd,
                         outcome,
                     });
                 }
@@ -389,18 +389,29 @@ impl TestOutcome {
     }
 }
 
-/// Detect a test-invoking bash command. Conservative: matches the common test
-/// runners so a non-test command rarely lands here.
-fn looks_like_test(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    lower.contains("cargo test")
-        || lower.contains("cargo nextest")
-        || lower.contains("pytest")
-        || lower.contains("npm test")
-        || lower.contains("npm run test")
-        || lower.contains("jest")
-        || lower.contains("make test")
-        || lower.contains("make check")
+/// Extract the test-invoking line from a bash command, ignoring search or print
+/// commands that merely mention a test runner name inside an argument.
+fn extract_test_command(command: &str) -> Option<String> {
+    const RUNNERS: [&str; 9] = [
+        "cargo test",
+        "cargo nextest",
+        "pytest",
+        "npm test",
+        "npm run test",
+        "jest",
+        "make test",
+        "make check",
+        "make verify",
+    ];
+    command.lines().map(str::trim).find_map(|line| {
+        let lower = line.to_lowercase();
+        let has_runner = RUNNERS.iter().any(|r| lower.contains(r));
+        let is_search = lower.starts_with("grep ")
+            || lower.starts_with("rg ")
+            || lower.starts_with("echo ")
+            || (lower.contains("grep ") && !lower.contains("cargo test"));
+        (has_runner && !is_search).then(|| line.to_string())
+    })
 }
 
 /// Infer a test outcome from the bash ToolResult: Fail on a non-zero exit or a

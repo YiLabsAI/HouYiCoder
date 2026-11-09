@@ -72,8 +72,7 @@ async fn test_compact_summary_formats_manifest() {
     let summary = runner.compact_summary(session).await;
     assert!(summary.is_some(), "compact summary should be Some");
     let s = summary.unwrap();
-    assert!(s.contains("1 runs"), "{s}");
-    assert!(s.contains("1 turns"), "{s}");
+    assert!(s.contains("1 earlier turns (1x)"), "{s}");
     assert!(s.contains("folded earlier turns"), "{s}");
 }
 

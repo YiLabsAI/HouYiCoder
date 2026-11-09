@@ -976,6 +976,20 @@ fn test_cas_rows_singular() {
         ),
         "{text}"
     );
+    let mut zero_bd = base_breakdown();
+    let mut zero_cas = cas_usage();
+    zero_cas.results = Some(0);
+    zero_cas.blocks = 0;
+    zero_cas.raw_bytes = Some(0);
+    zero_bd.cas = Some(zero_cas);
+    assert!(!rows_text(zero_bd).contains("Saved large outputs"));
+    let mut no_raw_bd = base_breakdown();
+    let mut no_raw_cas = cas_usage();
+    no_raw_cas.results = None;
+    no_raw_cas.blocks = 4;
+    no_raw_cas.raw_bytes = None;
+    no_raw_bd.cas = Some(no_raw_cas);
+    assert!(rows_text(no_raw_bd).contains("4 large results offloaded (~1.2k tokens in context)"));
 }
 
 /// Every block-store row hangs inside the pane at a forty-column terminal, so

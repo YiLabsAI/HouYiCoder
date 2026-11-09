@@ -84,6 +84,9 @@ impl Tokenizer {
 
     /// Token count of a string.
     pub fn count(&self, text: &str) -> u32 {
+        if text.len() > 8_192 {
+            return (text.len() as u32).div_ceil(4);
+        }
         match self.bpe {
             Some(bpe) => bpe.encode_ordinary(text).len() as u32,
             // Fast path: ~4 chars per token (English) is the standard estimate.

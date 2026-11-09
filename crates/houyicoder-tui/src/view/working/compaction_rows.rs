@@ -20,6 +20,30 @@ use crate::view::line_wrap::wrap_line;
 /// Maximum wrapped lines rendered when a compaction digest is expanded inline.
 pub(crate) const MAX_EXPANDED_COMPACTION_ROWS: usize = 40;
 
+/// Filter out internal machine-only markers from a compaction summary so the
+/// expanded transcript block reads cleanly for humans.
+pub(crate) fn visible_digest_lines(summary: &str) -> Vec<&str> {
+    let has_structured = summary.contains("Files touched:")
+        || summary.contains("Test results:")
+        || summary.contains("Todo snapshot:");
+    summary
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            if trimmed == "--- derived-from-log (authoritative) ---"
+                || trimmed.starts_with("Derivation: event=")
+                || trimmed.starts_with("Continuation: Pending todo items remain above.")
+            {
+                return false;
+            }
+            if has_structured && trimmed.starts_with("Earlier conversation context (") {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
 /// Push the compaction row and, when it is expanded, the digest under it.
 ///
 /// The row is the only trace of the event, so it carries the fold affordance
@@ -59,11 +83,12 @@ pub(crate) fn push_compaction_rows(
     } else {
         row
     });
-    if !expanded || summary.is_empty() {
+    let lines = visible_digest_lines(summary);
+    if !expanded || lines.is_empty() {
         return;
     }
     let mut count = 0;
-    for line in summary.lines() {
+    for line in lines {
         for wrapped in wrap_line(line, width as usize) {
             count += 1;
             if count > MAX_EXPANDED_COMPACTION_ROWS {

@@ -27,7 +27,7 @@ use crate::view::{
 };
 
 pub(crate) mod command_state;
-mod compaction_rows;
+pub(crate) mod compaction_rows;
 mod delegation_rows;
 pub(crate) mod fleet_strip;
 mod footer_budget;
