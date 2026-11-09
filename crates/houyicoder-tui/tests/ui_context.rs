@@ -302,8 +302,8 @@ fn test_context_reports_measured_cost() {
     // cannot be an anchor here; the first drill section stands in for "the
     // block rendered".
     assert!(
-        s.wait_for("Delegated", RENDER_TIMEOUT),
-        "the delegated section missing:\n{}",
+        s.wait_for("Agents", RENDER_TIMEOUT) || s.wait_for("Subagent", RENDER_TIMEOUT),
+        "the agents section missing:\n{}",
         s.output()
     );
     for marker in [
