@@ -32,6 +32,8 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 from cov_lcov import cov_env, cov_target_dir, lcov_path
 
@@ -204,10 +206,19 @@ else:
 # the session. Landlock restricts the calling process irreversibly, so one
 # test constructing a sandbox fences the whole test binary and every sibling
 # temp-dir write then fails with EACCES. Production never sets this.
+#
+# HOUYICODER_RUNTIME_DIR: detached-session sockets and pidfiles land under
+# this base instead of the user home, so the detach tests write and reap in
+# their own directory and a cleanup pass never touches the real one. The
+# workspace denies unsafe, so a test cannot set the variable in-process; the
+# runner injects it the same way it injects the fast-token switch. Production
+# never sets it.
+runtime_dir = Path(tempfile.mkdtemp(prefix="houyi-runtime-"))
 env = {
     **os.environ,
     "HOUYICODER_FAST_TOKENS": "1",
     "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
+    "HOUYICODER_RUNTIME_DIR": str(runtime_dir),
 }
 # The instrumented build's cache-friendly environment (target dir, sccache,
 # path remap, no incremental, no debug info) is assembled in one place so

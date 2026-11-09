@@ -28,11 +28,22 @@ use std::fs::write;
 use std::path::PathBuf;
 use std::process::id;
 
+/// The environment variable that overrides where detached-session sockets
+/// and pidfiles land. Tests set it to a per-process temp directory so the
+/// suite never reads or reaps the user's real sessions.
+const ENV_HOUYICODER_RUNTIME_DIR: &str = "HOUYICODER_RUNTIME_DIR";
+
 /// The conventional per-user directory where detached-session sockets and
 /// pidfiles live. Created on first use; never silently uses a shared world
 /// location.
+///
+/// The runtime override sits above the standard per-user runtime dir so a
+/// test can point every socket and pidfile at its own temp directory: the
+/// tests that drive cleanup and listing must not touch the real home, where
+/// a cleanup pass would delete files the user placed there.
 pub fn sessions_dir() -> PathBuf {
-    let base = var_os("XDG_RUNTIME_DIR")
+    let base = var_os(ENV_HOUYICODER_RUNTIME_DIR)
+        .or_else(|| var_os("XDG_RUNTIME_DIR"))
         .map(PathBuf::from)
         .or_else(home_directory)
         .unwrap_or_else(temp_dir);
