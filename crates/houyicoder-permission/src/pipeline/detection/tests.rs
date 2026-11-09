@@ -59,3 +59,44 @@ fn test_destructive_verbs_still_ask() {
         );
     }
 }
+
+/// The reason string names the exact egress or destructive action even when
+/// wrapped in control flow, global git flags, or leading assignments.
+#[test]
+fn test_reason_edge_cases() {
+    use super::super::attribution::{describe_destructive, describe_egress_reason};
+
+    // Egress: git push behind control flow and -C global flag
+    let reason = describe_egress_reason(
+        "if git merge dev; then git -C /repo push origin main; fi",
+        true,
+    );
+    assert!(
+        reason.contains("publishes local commits to a remote"),
+        "names git push despite then and -C: {reason}"
+    );
+
+    // Egress: curl sends data inside assignment capture
+    let reason = describe_egress_reason(
+        "s=$(curl -X POST -d '{\"k\":1}' https://api.example.com)",
+        true,
+    );
+    assert!(
+        reason.contains("sends data to a remote"),
+        "names curl sends data inside assignment: {reason}"
+    );
+
+    // Destructive: dash in argument does not report rm
+    let reason = describe_destructive("cargo test test-rm-file");
+    assert!(
+        !reason.contains("rm deletes files"),
+        "an argument with dash-rm is not an rm command: {reason}"
+    );
+
+    // Destructive: sudo rm names the command
+    let reason = describe_destructive("sudo rm -rf /tmp/test");
+    assert!(
+        reason.contains("rm deletes files"),
+        "sudo rm names rm deletion: {reason}"
+    );
+}

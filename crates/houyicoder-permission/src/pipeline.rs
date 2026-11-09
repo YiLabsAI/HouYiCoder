@@ -14,12 +14,12 @@
 
 #![allow(dead_code)] // ladder view metadata pending permission view wiring; locally unused
 
+mod attribution;
 pub mod consent;
 pub mod detection;
 pub mod mode_default;
 pub mod post_transform;
 pub mod protected_path;
-mod reasons;
 pub mod rule;
 
 use crate::consent::{ConsentStore, args_key};

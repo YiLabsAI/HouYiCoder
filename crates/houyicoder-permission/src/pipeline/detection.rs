@@ -10,7 +10,7 @@ use houyicoder_api::sandbox::{
 use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
 
-use super::reasons::{compound_unverified_step, describe_destructive, describe_egress_reason};
+use super::attribution::{compound_unverified_step, describe_destructive, describe_egress_reason};
 use crate::compound::{
     compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp, split_compound,
 };
