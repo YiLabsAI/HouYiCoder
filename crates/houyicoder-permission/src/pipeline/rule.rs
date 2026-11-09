@@ -71,7 +71,7 @@ impl Validator for RuleAskValidator {
         }
         let detail = match should_ask_before_git(req.tool_name, ctx.content) {
             Some(git_word @ ("commit" | "rebase" | "reset" | "tag")) => {
-                format!("git {git_word} checkpoint op needs confirmation")
+                format!("git {git_word} modifies repository commit history and needs confirmation")
             }
             _ => "an ask rule matched this call".into(),
         };

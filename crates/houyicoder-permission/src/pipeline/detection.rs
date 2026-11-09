@@ -10,6 +10,7 @@ use houyicoder_api::sandbox::{
 use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
 
+use super::reasons::{compound_unverified_step, describe_destructive, describe_egress_reason};
 use crate::compound::{
     compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp, split_compound,
 };
@@ -363,7 +364,7 @@ impl Validator for DestructiveCommandValidator {
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),
-            detail: "destructive pattern needs confirmation".into(),
+            detail: describe_destructive(ctx.content),
             containment_note: None,
         }))
     }
@@ -451,9 +452,12 @@ impl Validator for GitCheckpointValidator {
                         .into()
                 }
                 "commit" | "rebase" | "reset" | "tag" => {
-                    format!("git {git_word} checkpoint op needs confirmation")
+                    format!("git {git_word} modifies repository commit history and needs confirmation")
                 }
-                other => format!("git {other} discard op needs confirmation"),
+                "checkout" | "restore" | "clean" | "switch" => {
+                    format!("git {git_word} discards uncommitted working-tree changes and needs confirmation")
+                }
+                other => format!("git {other} rewrites repository state and needs confirmation"),
             };
             return Some(Decision::Ask(AskReason {
                 source: AskSource::Detection,
@@ -525,12 +529,7 @@ impl Validator for NetworkEgressValidator {
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),
-            detail: if outputs_safe {
-                "this command reaches the network".into()
-            } else {
-                "this command writes a local file; origin approval does not authorize file output"
-                    .into()
-            },
+            detail: describe_egress_reason(ctx.content, outputs_safe),
             containment_note: None,
         }))
     }
@@ -613,10 +612,14 @@ impl Validator for CompoundCommandValidator {
         if consent_allows(req, ctx) {
             return None;
         }
+        let detail = format!(
+            "compound command contains an unverified step ({})",
+            compound_unverified_step(&refs)
+        );
         Some(Decision::Ask(AskReason {
             source: AskSource::Detection,
             validator: self.name(),
-            detail: "compound command needs confirmation".into(),
+            detail,
             containment_note: None,
         }))
     }

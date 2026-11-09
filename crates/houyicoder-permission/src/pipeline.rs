@@ -19,6 +19,7 @@ pub mod detection;
 pub mod mode_default;
 pub mod post_transform;
 pub mod protected_path;
+mod reasons;
 pub mod rule;
 
 use crate::consent::{ConsentStore, args_key};

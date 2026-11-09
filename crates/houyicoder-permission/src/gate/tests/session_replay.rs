@@ -199,7 +199,9 @@ fn test_git_checkpoint_specific_detail() {
         let commit = gate.decide(&bash_req(cmd));
         match commit {
             Decision::Ask(reason) => assert!(
-                reason.detail.contains("git commit checkpoint"),
+                reason
+                    .detail
+                    .contains("git commit modifies repository commit history"),
                 "commit prompt must name git commit for `{cmd}`: {}",
                 reason.detail
             ),

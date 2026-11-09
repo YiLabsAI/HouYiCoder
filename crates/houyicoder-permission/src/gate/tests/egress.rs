@@ -2,7 +2,7 @@ use super::*;
 use crate::decision::Outcome;
 use crate::decision::{AskReason, Decision};
 use crate::egress::egress_destination;
-use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SideEffect};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -116,8 +116,8 @@ fn test_formatter_is_consumer() {
         fn would_block(&self, _effect: SideEffect) -> Option<String> {
             None
         }
-        fn capability(&self) -> houyicoder_api::sandbox::FenceCapability {
-            houyicoder_api::sandbox::FenceCapability::filesystem()
+        fn capability(&self) -> FenceCapability {
+            FenceCapability::filesystem()
         }
     }
     let gate = DefaultModeGate::with_mode(PermissionMode::Auto)
@@ -391,4 +391,136 @@ fn test_real_session_metrics() {
     }
     assert_eq!(fenced_prompts, 1, "M4 fenced prompts across 5 calls = 1");
     assert_eq!(fenced_repeat, 0, "M1 fenced repeat-ask rate = 0/4");
+}
+
+/// A CI-watching polling loop over a trusted origin, with the loop header,
+/// the assignment capture, and the case branches all unwrapped: the shell
+/// constructs are structure around one trusted read, so the card stays
+/// silent the way a bare curl to the same origin would.
+#[test]
+fn test_polling_loop_trusted_silent() {
+    struct Fence;
+    impl Containment for Fence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![PathBuf::from("/ws")],
+            }
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+        fn capability(&self) -> FenceCapability {
+            FenceCapability::filesystem()
+        }
+    }
+    let gate = DefaultModeGate::with_mode(PermissionMode::Auto)
+        .with_trusted_hosts()
+        .with_containment(Arc::new(Fence));
+    let poll = concat!(
+        r#"cd /repo && for i in $(seq 1 40); do sleep 15; "#,
+        r#"s=$(curl -s "https://api.github.com/repos/o/r/actions/runs/1/jobs" "#,
+        r#"| python3 -c "import json,sys; d=json.load(sys.stdin); "#,
+        "print('|'.join(f\\\"{j['name']}:{j['status']}\\\" for j in d.get('jobs',[])))\"",
+        r#" 2>/dev/null); echo "$i $s"; "#,
+        r#"case "$s" in *in_progress*|*queued*|"") ;; *) break;; esac; done"#,
+    );
+    let decision = gate.decide(&bash_req(poll));
+    let outcome = decision.outcome();
+    if let Outcome::Ask = outcome
+        && let Decision::Ask(reason) = &decision
+    {
+        println!(
+            "GATE validator: {} detail: {}",
+            reason.validator, reason.detail
+        );
+    }
+    assert!(
+        !matches!(outcome, Outcome::Ask),
+        "a trusted read through loop and case shells keeps its silent answer: {poll}"
+    );
+}
+
+/// The same polling shape against an origin outside the trust list asks,
+/// and names its destination so the answer can remember that origin.
+#[test]
+fn test_polling_untrusted_asks() {
+    struct Fence;
+    impl Containment for Fence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![PathBuf::from("/ws")],
+            }
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+        fn capability(&self) -> FenceCapability {
+            FenceCapability::filesystem()
+        }
+    }
+    let gate = DefaultModeGate::with_mode(PermissionMode::Auto)
+        .with_trusted_hosts()
+        .with_containment(Arc::new(Fence));
+    let poll = concat!(
+        r#"for i in $(seq 1 10); do sleep 5; "#,
+        r#"s=$(curl -s "https://ci.example.com/jobs"); echo "$s"; done"#,
+    );
+    let outcome = gate.decide(&bash_req(poll)).outcome();
+    assert!(
+        matches!(outcome, Outcome::Ask),
+        "an untrusted origin through the same shells still asks: {poll}"
+    );
+    assert_eq!(
+        egress_destination(poll).as_deref(),
+        Some("curl https://ci.example.com"),
+        "the ask names its destination so the remember option exists"
+    );
+}
+
+/// The network ask names the action: a push says publish, a forced push
+/// says overwrite, a publish says registry, an ssh says remote login.
+/// The card is what the user decides with, so the sentence is the risk.
+#[test]
+fn test_egress_details_name_actions() {
+    struct Fence;
+    impl Containment for Fence {
+        fn coverage(&self) -> Coverage {
+            Coverage::Fenced {
+                writable_roots: vec![PathBuf::from("/ws")],
+            }
+        }
+        fn would_block(&self, _effect: SideEffect) -> Option<String> {
+            None
+        }
+        fn capability(&self) -> FenceCapability {
+            FenceCapability::filesystem()
+        }
+    }
+    let gate = DefaultModeGate::with_mode(PermissionMode::Manual).with_containment(Arc::new(Fence));
+    for (command, needle) in [
+        (
+            "cd /repo && git checkout main && git merge --ff-only dev && git push origin main",
+            "publishes local commits to a remote",
+        ),
+        // A forced push lands on the checkpoint validator first, whose
+        // wording is the ask the user reads; the network sentence is for
+        // the egress-only path.
+        ("git push --force origin main", "rewrites repository state"),
+        ("cargo publish", "external registry"),
+        ("ssh host.example.com", "remote host connection"),
+        (
+            "curl -X POST -d @f https://api.example.com",
+            "sends data to a remote",
+        ),
+    ] {
+        let decision = gate.decide(&bash_req(command));
+        match decision {
+            Decision::Ask(reason) => assert!(
+                reason.detail.contains(needle),
+                "detail for {command} names {needle}: {}",
+                reason.detail
+            ),
+            other => panic!("expected Ask for {command}, got {other:?}"),
+        }
+    }
 }
