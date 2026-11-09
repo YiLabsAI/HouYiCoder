@@ -280,10 +280,11 @@ pub fn allow_system_etc(tag: &str) -> String {
         }
     }
     // The leaf rules above never fire without this: the deny covers the /etc
-    // symlink node, so the kernel refuses while resolving the path. Metadata
-    // only, so nothing under /etc becomes readable.
+    // symlink node and its /private/etc target directory, so the kernel
+    // refuses while resolving the path. Metadata only, so nothing under /etc
+    // becomes readable.
     format!(
-        "(allow file-read* {})\n(allow file-read-metadata (literal \"/etc\"))\n",
+        "(allow file-read* {})\n(allow file-read-metadata (literal \"/etc\"))\n(allow file-read-metadata (literal \"/private/etc\"))\n",
         literals.join(" ")
     )
 }

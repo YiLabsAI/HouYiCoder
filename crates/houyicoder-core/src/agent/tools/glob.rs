@@ -16,7 +16,7 @@ use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_async::PFut;
 use serde_json::{Value, json};
 
-use super::path_util::{canonical_root, confine_path, relativize, require_dir};
+use super::path_util::{canonical_root, confine_path, lexical_escape, relativize, require_dir};
 use super::{Tool, ToolCtx, ToolError};
 use std::cmp::Reverse;
 #[cfg(test)]
@@ -276,12 +276,21 @@ fn check_pattern_confined(croot: &Path, base: &Path, pattern: &str) -> Result<()
     } else {
         base.join(dir_part)
     };
-    let canonical = dunce::canonicalize(&dir)
-        .map_err(|e| ToolError::Io(format!("path not accessible: {e}")))?;
-    if !canonical.starts_with(croot) {
-        return Err(ToolError::PathEscapes("pattern escapes workspace".into()));
+    match dunce::canonicalize(&dir) {
+        Ok(canonical) => {
+            if !canonical.starts_with(croot) {
+                return Err(ToolError::PathEscapes("pattern escapes workspace".into()));
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if lexical_escape(croot, &dir) {
+                Err(ToolError::PathEscapes("pattern escapes workspace".into()))
+            } else {
+                Err(ToolError::Io(format!("path not accessible: {e}")))
+            }
+        }
     }
-    Ok(())
 }
 
 /// Join a base path and a glob pattern into a single pattern string. If the

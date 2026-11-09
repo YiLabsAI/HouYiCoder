@@ -63,9 +63,9 @@ fn is_dangerous_env_name(name: &str) -> bool {
 /// declare, unset), and the network clients, which the egress check owns.
 const SUPPORTED_EFFECT_COMMANDS: &[&str] = &[
     "basename", "cargo", "cat", "cd", "cp", "cut", "df", "diff", "dirname", "du", "echo", "false",
-    "file", "find", "git", "grep", "head", "jq", "ls", "make", "mkdir", "nohup", "pwd", "realpath",
-    "rg", "rm", "rmdir", "sed", "sleep", "sort", "stat", "strings", "tail", "touch", "tr", "true",
-    "uniq", "wc", "which",
+    "file", "find", "git", "grep", "head", "jq", "ls", "make", "mkdir", "nohup", "printf", "pwd",
+    "realpath", "rg", "rm", "rmdir", "rustc", "sed", "sleep", "sort", "stat", "strings", "tail",
+    "touch", "tr", "true", "uniq", "wc", "which",
 ];
 
 /// Whether supported shell constructs avoid file output and nested risky

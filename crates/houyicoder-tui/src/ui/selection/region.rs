@@ -554,19 +554,31 @@ impl Region for ApprovalSelection<'_> {
         self.view.selections.approval.is_dragging
     }
     fn handle_up(&mut self) -> RegionIntent {
-        // A clean click on the fold hint toggles the card; a drag releases so
-        // the dragged text is still copied.
+        // A clean click on the fold hint (or on the expanded header/argument
+        // block) toggles the card; a drag releases so the dragged text is
+        // still copied.
         let sel = &self.view.selections.approval;
         let clean = !sel.drag_moved && sel.is_click_only() && sel.span_origin.is_none();
         if clean && let Some((x, y)) = sel.cursor {
             let layout = &self.view.frame.layout;
             let (_, ri) = pane_mouse_to_content(layout.approval_rect.get(), x, y);
-            let is_fold = layout
-                .last_approval_rows
-                .borrow()
+            let rows = layout.last_approval_rows.borrow();
+            let card_expanded = rows
+                .iter()
+                .any(|(t, s)| *t == selection::TAG_FOLD && s.contains("ctrl+o to collapse"));
+            let question_ri = rows
+                .iter()
+                .position(|(_, s)| {
+                    s.contains("Do you want to proceed?") || s.contains("Always authorize")
+                })
+                .unwrap_or(rows.len());
+            let is_fold = rows
                 .get(ri)
-                .map(|(t, _)| *t == selection::TAG_FOLD)
+                .map(|(t, _)| {
+                    *t == selection::TAG_FOLD || (card_expanded && ri > 0 && ri < question_ri)
+                })
                 .unwrap_or(false);
+            drop(rows);
             if is_fold {
                 return RegionIntent::ToggleApprovalExpand;
             }

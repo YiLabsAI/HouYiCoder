@@ -188,6 +188,14 @@ fn test_allows_system_etc_resolved() {
     assert!(p.contains("(literal \"/private/etc/profile\")"));
     assert!(p.contains("(literal \"/etc/gitconfig\")"));
     assert!(p.contains("(literal \"/private/etc/gitconfig\")"));
+    assert!(
+        p.contains("(allow file-read-metadata (literal \"/etc\"))"),
+        "metadata allow covers /etc symlink: {p}"
+    );
+    assert!(
+        p.contains("(allow file-read-metadata (literal \"/private/etc\"))"),
+        "metadata allow covers /private/etc target: {p}"
+    );
 }
 
 #[test]

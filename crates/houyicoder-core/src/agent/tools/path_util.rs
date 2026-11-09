@@ -79,7 +79,7 @@ pub(crate) fn confine_path(
 /// folding cur-dir and parent-dir segments without following symlinks or
 /// requiring any component to exist. True when the normalized candidate does
 /// not start with the normalized root.
-fn lexical_escape(root: &Path, candidate: &Path) -> bool {
+pub(super) fn lexical_escape(root: &Path, candidate: &Path) -> bool {
     !normalize_lexical(candidate).starts_with(normalize_lexical(root))
 }
 

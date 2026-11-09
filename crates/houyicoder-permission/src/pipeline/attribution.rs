@@ -6,7 +6,7 @@
 //! one vocabulary.
 
 use super::detection::expand_inline_interpreter;
-use crate::compound::is_attestable;
+use crate::compound::{is_attestable, is_effect_safe, starts_with_supported_command};
 use crate::heredoc::strip_quoted_heredoc_bodies;
 
 /// Parse the words of a shell command segment, stepping over leading shell
@@ -126,20 +126,35 @@ pub(super) fn describe_destructive(content: &str) -> String {
 /// reads which step to decide about. The step text is trimmed to the head
 /// of the segment, keeping the card to one line.
 pub(super) fn compound_unverified_step(segments: &[&str]) -> String {
+    // Prefer a segment that is neither attestable nor effect-safe under a
+    // fence, or whose leading command is outside the supported effect set, so
+    // a safe temporary redirect is not blamed ahead of an opaque interpreter
+    // or binary execution.
+    for segment in segments {
+        if (!is_attestable(segment) && !is_effect_safe(segment, true))
+            || !starts_with_supported_command(segment)
+        {
+            return clip_step_head(segment);
+        }
+    }
     for segment in segments {
         if !is_attestable(segment) {
-            let head: String = segment.chars().take(40).collect();
-            let mut head = head.trim().to_string();
-            if head.chars().count() == 40 {
-                head.push('…');
-            }
-            return head;
+            return clip_step_head(segment);
         }
     }
     segments
         .first()
-        .map(|s| s.chars().take(40).collect())
+        .map(|s| clip_step_head(s))
         .unwrap_or_default()
+}
+
+fn clip_step_head(segment: &str) -> String {
+    let head: String = segment.chars().take(40).collect();
+    let mut head = head.trim().to_string();
+    if head.chars().count() == 40 {
+        head.push('…');
+    }
+    head
 }
 
 pub(super) fn describe_egress_reason(content: &str, outputs_safe: bool) -> String {

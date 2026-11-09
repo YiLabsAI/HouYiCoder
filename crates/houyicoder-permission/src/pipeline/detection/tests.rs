@@ -1,7 +1,10 @@
 //! Tests for the detection stage.
 
 use super::{interpreter_inline_code, should_ask_destructive};
-use crate::pipeline::attribution::{describe_destructive, describe_egress_reason};
+use crate::compound::is_effect_safe;
+use crate::pipeline::attribution::{
+    compound_unverified_step, describe_destructive, describe_egress_reason,
+};
 
 /// A quote the code escapes belongs to the code, not to its end. Reading
 /// the first match would hand back a prefix that looks clean while the
@@ -97,5 +100,25 @@ fn test_reason_edge_cases() {
     assert!(
         reason.contains("rm deletes files"),
         "sudo rm names rm deletion: {reason}"
+    );
+
+    // Effect-safe: printf to $TMPDIR followed by rustc is effect-safe under a fence
+    assert!(
+        is_effect_safe(
+            "printf 'fn main(){}' > $TMPDIR/p.rs && rustc -O -o $TMPDIR/p $TMPDIR/p.rs",
+            true
+        ),
+        "printf to session temp followed by rustc is effect-safe when fenced"
+    );
+
+    // Compound attribution: names the opaque interpreter rather than the safe temp printf
+    let step = compound_unverified_step(&[
+        "cd /repo",
+        "python3 -c \"import os; os.listdir('/etc')\"",
+        "printf 'fn main(){}' > $TMPDIR/p.rs",
+    ]);
+    assert!(
+        step.starts_with("python3 -c"),
+        "names the opaque interpreter ahead of safe temp redirect: {step}"
     );
 }

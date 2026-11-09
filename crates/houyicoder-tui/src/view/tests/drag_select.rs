@@ -1350,7 +1350,14 @@ fn test_click_approval_hint_toggles() {
         app.approval_mut().unwrap().expanded,
         "clicking the fold hint expands the approval card"
     );
-    // A second clean click closes it.
+    // Re-render the expanded card so the second click hits the live expanded
+    // layout rather than the stale pre-expansion rows.
+    let expanded_out = render_text(&app, 100, 40);
+    assert!(
+        expanded_out.contains("ctrl+o to collapse"),
+        "expanded card shows collapse hint: {expanded_out}"
+    );
+    // A second clean click at the same spot closes it.
     handle_mouse(
         &mut app,
         mouse(MouseEventKind::Down(MouseButton::Left), x, y),

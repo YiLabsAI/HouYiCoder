@@ -302,15 +302,35 @@ fn test_confine_missing_is_io() {
 #[test]
 fn test_confine_rejects_abs_pattern() {
     let dir = test_dir();
+    let cdir = canonical_root(&dir).unwrap();
     touch(&dir, "a.rs", "");
-    // An absolute pattern pointing outside the workspace must error.
-    let result = glob_files(&dir, &dir, "/etc/*", 200);
-    assert!(result.is_err());
+    // An absolute pattern pointing outside the workspace must error with PathEscapes.
+    let result = glob_files(&cdir, &cdir, "/etc/*", 200);
+    assert!(
+        matches!(result, Err(ToolError::PathEscapes(_))),
+        "expected PathEscapes for /etc/*, got {result:?}"
+    );
+    // An inaccessible or non-existent absolute pattern outside the workspace
+    // also surfaces as PathEscapes rather than Io.
+    let result = glob_files(&cdir, &cdir, "/nonexistent_outside_root_xyz/*", 200);
+    assert!(
+        matches!(result, Err(ToolError::PathEscapes(_))),
+        "expected PathEscapes for non-existent outside path, got {result:?}"
+    );
     // Absolute single file (no wildcard) also rejected.
-    let result = glob_files(&dir, &dir, "/etc/passwd", 200);
-    assert!(result.is_err());
+    let result = glob_files(&cdir, &cdir, "/etc/passwd", 200);
+    assert!(
+        matches!(result, Err(ToolError::PathEscapes(_))),
+        "expected PathEscapes for /etc/passwd, got {result:?}"
+    );
+    // A missing directory inside the workspace surfaces as Io, not PathEscapes.
+    let result = glob_files(&cdir, &cdir, "missing_inside_subdir/*.rs", 200);
+    assert!(
+        matches!(result, Err(ToolError::Io(_))),
+        "expected Io for missing inside dir, got {result:?}"
+    );
     // A pattern that stays inside (relative) must succeed.
-    let result = glob_files(&dir, &dir, "**/*.rs", 200);
+    let result = glob_files(&cdir, &cdir, "**/*.rs", 200);
     assert!(result.is_ok());
     fs::remove_dir_all(&dir).ok();
 }

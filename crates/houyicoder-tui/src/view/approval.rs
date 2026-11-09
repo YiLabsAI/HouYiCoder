@@ -64,7 +64,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // from the parent's own tool call. An entitlement ask renders its own
     // title — it is not a tool call but a deny-log discovery.
     if plan.header {
-        let header = if a.is_entitlement() {
+        let base_header = if a.is_entitlement() {
             " Sandbox entitlement".to_string()
         } else {
             let title = approval_title(&a.tool);
@@ -75,6 +75,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 Some(d) => format!(" \u{29c9} {} (subagent) \u{b7} {title}", d.subagent_type),
                 None => format!(" {title}"),
             }
+        };
+        let header = if a.expanded {
+            format!("{base_header} (ctrl+o to collapse)")
+        } else {
+            base_header
         };
         f.render_widget(
             Paragraph::new(header)
