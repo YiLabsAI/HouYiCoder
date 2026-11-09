@@ -138,3 +138,20 @@ fn test_runtime_dir_redirects() {
     );
     remove_file(&sock).ok();
 }
+
+/// The home fallback joins the dotted configuration directory, the prefix
+/// every other home-level path uses. The undotted spelling this replaced
+/// never held a session, so the home arm must not name it; the runtime arm
+/// keeps the undotted join because a runtime dir is not a home.
+#[test]
+fn test_home_fallback_is_dotted() {
+    let source = include_str!("../detach.rs");
+    assert!(
+        source.contains(".join(\".houyicoder\")"),
+        "the home fallback spells the dotted configuration directory"
+    );
+    assert!(
+        !source.contains("or_else(temp_dir)\n            .join(\"houyicoder\")"),
+        "the home arm keeps no undotted join: {source:?}"
+    );
+}

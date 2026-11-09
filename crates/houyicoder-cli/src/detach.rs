@@ -41,13 +41,22 @@ const ENV_HOUYICODER_RUNTIME_DIR: &str = "HOUYICODER_RUNTIME_DIR";
 /// test can point every socket and pidfile at its own temp directory: the
 /// tests that drive cleanup and listing must not touch the real home, where
 /// a cleanup pass would delete files the user placed there.
+///
+/// The home fallback joins the dotted configuration directory the rest of
+/// the per-user state uses, so one prefix names every home-level path. The
+/// undotted path this replaced never held a session and no build binds a
+/// socket there any more, so no fallback reads it.
 pub fn sessions_dir() -> PathBuf {
     let base = var_os(ENV_HOUYICODER_RUNTIME_DIR)
         .or_else(|| var_os("XDG_RUNTIME_DIR"))
-        .map(PathBuf::from)
-        .or_else(home_directory)
-        .unwrap_or_else(temp_dir);
-    let dir = base.join("houyicoder").join("sessions");
+        .map(PathBuf::from);
+    let dir = match base {
+        Some(runtime) => runtime.join("houyicoder").join("sessions"),
+        None => home_directory()
+            .unwrap_or_else(temp_dir)
+            .join(".houyicoder")
+            .join("sessions"),
+    };
     create_dir_all(&dir).ok();
     dir
 }
