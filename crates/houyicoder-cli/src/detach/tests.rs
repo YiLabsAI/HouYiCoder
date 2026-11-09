@@ -141,8 +141,9 @@ fn test_runtime_dir_redirects() {
 
 /// The home fallback joins the dotted configuration directory, the prefix
 /// every other home-level path uses. The undotted spelling this replaced
-/// never held a session, so the home arm must not name it; the runtime arm
-/// keeps the undotted join because a runtime dir is not a home.
+/// never held a session, so the home fallback must not name it; the
+/// runtime fallback keeps the undotted join because a runtime dir is not
+/// a home.
 #[test]
 fn test_home_fallback_is_dotted() {
     let source = include_str!("../detach.rs");
@@ -152,6 +153,6 @@ fn test_home_fallback_is_dotted() {
     );
     assert!(
         !source.contains("or_else(temp_dir)\n            .join(\"houyicoder\")"),
-        "the home arm keeps no undotted join: {source:?}"
+        "the home fallback keeps no undotted join: {source:?}"
     );
 }
