@@ -1,6 +1,7 @@
 //! Tests for the detection stage.
 
 use super::{interpreter_inline_code, should_ask_destructive};
+use crate::pipeline::attribution::{describe_destructive, describe_egress_reason};
 
 /// A quote the code escapes belongs to the code, not to its end. Reading
 /// the first match would hand back a prefix that looks clean while the
@@ -64,8 +65,6 @@ fn test_destructive_verbs_still_ask() {
 /// wrapped in control flow, global git flags, or leading assignments.
 #[test]
 fn test_reason_edge_cases() {
-    use super::super::attribution::{describe_destructive, describe_egress_reason};
-
     // Egress: git push behind control flow and -C global flag
     let reason = describe_egress_reason(
         "if git merge dev; then git -C /repo push origin main; fi",
