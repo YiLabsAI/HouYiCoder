@@ -268,3 +268,37 @@ fn test_formatter_counts_down() {
         );
     }
 }
+
+/// A polling loop over an untrusted origin keeps the countdown: the loop
+/// and case shells are structure, and the read inside them is what the
+/// timer is for.
+#[test]
+fn test_polling_keeps_countdown() {
+    let cmd = r#"for i in $(seq 1 10); do sleep 5; s=$(curl -s "https://ci.example.com/jobs"); echo "$i $s"; case "$s" in *done*) break;; esac; done"#;
+    let c = card(
+        "network_egress",
+        None,
+        &format!("{{\"command\": \"{}\"}}", cmd.replace('"', "\\\"")),
+    );
+    assert!(
+        c.auto_approve_eligible(),
+        "a polling read keeps the auto-approve countdown"
+    );
+}
+
+/// An escaped quote inside a formatter body no longer ends the body early:
+/// the whole Python one-liner reads as one code span, so the countdown walk
+/// sees the interpreter as a formatter instead of an unknown command tail.
+#[test]
+fn test_formatter_escapes_quotes() {
+    let cmd = concat!(
+        r#"curl -s "https://api.github.com/repos/o/r/actions/runs/1/jobs" "#,
+        r#"| python3 -c "import json,sys; d=json.load(sys.stdin); "#,
+        "print('|'.join(f\\\"{j['name']}:{j['status']}\\\" for j in d.get('jobs',[])))\"",
+    );
+    let c = card("network_egress", None, cmd);
+    assert!(
+        c.auto_approve_eligible(),
+        "a formatter with escaped quotes keeps the countdown"
+    );
+}

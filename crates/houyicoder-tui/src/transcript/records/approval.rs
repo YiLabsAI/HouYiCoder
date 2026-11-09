@@ -335,6 +335,10 @@ fn reads_network(command: &str) -> bool {
             .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
             .filter(|w| !w.is_empty() && !is_assignment(w))
             .collect();
+        // A command substitution body arrives as its own split segment below;
+        // a leading control keyword or case label is structure, not a
+        // program, so it steps aside and the program word decides.
+        let words: Vec<&str> = skip_control_shell(words);
         let Some(&first) = words.first() else {
             continue;
         };
@@ -447,6 +451,46 @@ fn is_assignment(word: &str) -> bool {
     !name.is_empty()
         && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Step over the shell structure words that lead a split segment: loop and
+/// conditional keywords, case labels, and the capture half of an
+/// assignment substitution. A polling loop's body starts with do, a case
+/// branch with its pattern, and none of those is the program the countdown
+/// walk decides about.
+fn skip_control_shell(words: Vec<&str>) -> Vec<&str> {
+    let mut start = 0;
+    while start < words.len() {
+        let word = words[start];
+        let lowered = word.to_ascii_lowercase();
+        let bare = lowered.trim_end_matches(';');
+        match bare {
+            "do" | "done" | "then" | "else" | "elif" | "fi" | "esac" | "break" | "continue" => {
+                start += 1;
+            }
+            "for" | "while" | "until" | "case" | "if" => {
+                start += 1;
+                let opener = if bare == "case" { "in" } else { "do" };
+                while start < words.len() && words[start] != opener {
+                    start += 1;
+                }
+                start = (start + 1).min(words.len());
+            }
+            _ if is_assignment(word) && word.contains('$') => {
+                start += 1;
+            }
+            // A case pattern label: a word ending in a paren with none
+            // opening, such as *done*) or the default *), or the same label
+            // with the paren already split off.
+            _ if (word.ends_with(')') && !word.starts_with('('))
+                || (bare.starts_with('*') && bare.ends_with('*')) =>
+            {
+                start += 1;
+            }
+            _ => break,
+        }
+    }
+    words[start..].to_vec()
 }
 
 /// Whether a segment is a local command that only reads.

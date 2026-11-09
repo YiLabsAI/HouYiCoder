@@ -78,7 +78,18 @@ fn inline_body(chars: &[char], from: usize) -> Option<(String, usize)> {
     }
     let body_start = index + 1;
     let mut end = body_start;
-    while end < chars.len() && chars[end] != quote {
+    // A double-quoted body escapes its quote with a backslash, so a
+    // backslash skips the character after it: without this an escaped quote
+    // inside a Python format string ends the body early, and the tail reads
+    // as an unknown command in the outer walk.
+    while end < chars.len() {
+        if quote == '"' && chars[end] == '\\' && end + 1 < chars.len() {
+            end += 2;
+            continue;
+        }
+        if chars[end] == quote {
+            break;
+        }
         end += 1;
     }
     let body: String = chars[body_start..end].iter().collect();
