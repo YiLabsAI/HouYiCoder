@@ -117,8 +117,8 @@ async fn test_query_injects_compact_buffer() {
     let (runner, session) = stub_runner_with_checkpoint();
     seed_checkpoint(&runner, session).await;
     let bd = context_breakdown(runner, session).await;
-    let has_compact = bd.categories.iter().any(|c| c.label == "Compact buffer");
-    assert!(has_compact, "Compact buffer category present");
+    let has_compact = bd.categories.iter().any(|c| c.label == "Compacted history");
+    assert!(has_compact, "Compacted history category present");
     assert!(
         bd.cache_prefix_tokens.is_some(),
         "cache prefix tokens populated"

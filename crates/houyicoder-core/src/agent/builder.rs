@@ -463,10 +463,10 @@ impl Runner {
             .count();
         let summary_preview = truncate_summary_preview(manifest.summary.as_deref());
         if summary_preview.is_empty() {
-            Some(format!("{compact_count} compacts · {folded} turns folded"))
+            Some(format!("{compact_count} runs · {folded} turns"))
         } else {
             Some(format!(
-                "{compact_count} compacts · {folded} turns folded · {summary_preview}"
+                "{compact_count} runs · {folded} turns · {summary_preview}"
             ))
         }
     }

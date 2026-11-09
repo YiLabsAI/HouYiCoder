@@ -57,7 +57,7 @@ impl Server {
             bd.categories.insert(
                 insert_at,
                 CategoryBreakdown {
-                    label: "Compact buffer".into(),
+                    label: "Compacted history".into(),
                     color_hint: 109,
                     tokens: summary_tokens,
                     is_deferred: false,
@@ -113,8 +113,7 @@ impl Server {
                 .filter(|c| c.tokens > 0 && !c.is_deferred)
                 .count()
             + usize::from(bd.cache_prefix_tokens.is_some())
-            + usize::from(bd.compact_summary.is_some())
-            + usize::from(cas.is_some());
+            + usize::from(bd.compact_summary.is_some());
         bd.grid = build_grid(
             &bd.categories,
             bd.context_window,

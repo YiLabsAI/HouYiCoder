@@ -280,7 +280,7 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
             Span::styled(" Free space: ", dim),
             Span::styled(
                 format!(
-                    "{} ({:.1}%)",
+                    "{} tokens ({:.1}%)",
                     format_tokens(u64::from(free.tokens)),
                     cat_pct(free.tokens)
                 ),
@@ -308,21 +308,15 @@ fn legend_rows(bd: &ContextBreakdown, pct: f64) -> Vec<Vec<Span<'static>>> {
     // Cache prefix is the System prompt + Tools token footprint. Hit rate is
     // the provider-reported ratio from cumulative usage.
     if let Some(prefix) = bd.cache_prefix_tokens {
-        let mut line = format!("Cache prefix: {}", format_tokens(u64::from(prefix)));
+        let mut line = format!("Cache prefix: {} tokens", format_tokens(u64::from(prefix)));
         if let Some(rate) = bd.cache_hit_rate {
             line.push_str(&format!(" \u{00b7} hit rate {:.0}%", rate * 100.0));
         }
         rows.push(vec![Span::styled(line, dim)]);
     }
-    // Folded summary: present only after a compaction produced a checkpoint.
+    // Compacted summary: present only after a compaction produced a checkpoint.
     if let Some(cs) = &bd.compact_summary {
-        rows.push(vec![Span::styled(format!("folded: {}", cs), dim)]);
-    }
-    // The stored-block account: what the session kept, what it cost raw, and
-    // what its newest request carried. A log that records none of it says so
-    // rather than printing the zeros of an account that was never kept.
-    if let Some(line) = cas::cas_legend(bd.cas.as_ref()) {
-        rows.push(vec![Span::styled(line, dim)]);
+        rows.push(vec![Span::styled(format!("Compacted: {}", cs), dim)]);
     }
     rows
 }
@@ -342,9 +336,11 @@ fn memory_rows(files: &[ContextFileEntry]) -> Vec<Vec<Span<'static>>> {
         Span::styled("Memory files", bold),
         Span::styled(" \u{00b7} /memory", dim),
     ]);
-    for file in files {
+    let last = files.len().saturating_sub(1);
+    for (i, file) in files.iter().enumerate() {
+        let glyph = if i == last { "\u{2514} " } else { "\u{251C} " };
         rows.push(vec![
-            Span::styled("\u{2514} ", dim),
+            Span::styled(glyph, dim),
             Span::styled(format!("{}: ", file.label), dim),
             Span::styled(
                 format!("{} tokens", format_tokens(u64::from(file.tokens))),
@@ -407,21 +403,21 @@ fn delegated_rows(delegated: Option<&DelegatedContext>) -> Vec<Vec<Span<'static>
         Span::styled("Delegated", bold),
         Span::styled(" \u{00b7} /agents", dim),
     ]);
+    let tasks_label = if delegated.returns == 1 {
+        "1 completed task".to_string()
+    } else {
+        format!("{} completed tasks", delegated.returns)
+    };
     rows.push(vec![
         Span::styled("\u{251C} ", dim),
-        Span::styled("in context: ", dim),
+        Span::styled("In context: ", dim),
         Span::styled(
             format!(
-                "{} tokens",
+                "{} tokens ({tasks_label})",
                 format_tokens(u64::from(delegated.returned_tokens))
             ),
             dim,
         ),
-    ]);
-    rows.push(vec![
-        Span::styled("\u{251C} ", dim),
-        Span::styled("returns: ", dim),
-        Span::styled(delegated.returns.to_string(), dim),
     ]);
     let child = match delegated.child_tokens {
         Some(tokens) => format!("{} tokens", format_tokens(u64::from(tokens))),
@@ -429,7 +425,7 @@ fn delegated_rows(delegated: Option<&DelegatedContext>) -> Vec<Vec<Span<'static>
     };
     rows.push(vec![
         Span::styled("\u{2514} ", dim),
-        Span::styled("children used: ", dim),
+        Span::styled("Subagent work: ", dim),
         Span::styled(child, dim),
     ]);
     rows

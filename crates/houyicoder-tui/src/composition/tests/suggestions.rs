@@ -188,9 +188,9 @@ fn test_memory_names_largest() {
         100_000,
         Vec::new(),
         vec![
-            memory_file("MEMORY.md", 4_000),
-            memory_file("notes.md", 3_000),
-            memory_file("index.md", 1_000),
+            memory_file("Recalled memories (32 entries)", 4_000),
+            memory_file("Memory index (137 entries)", 3_000),
+            memory_file("AGENTS.md", 1_000),
         ],
     );
     let suggestions = suggestions_for(&bd);
@@ -206,8 +206,8 @@ fn test_memory_names_largest() {
     assert!(
         memory
             .detail
-            .contains("Largest: MEMORY.md (4k), notes.md (3k), index.md (1k)"),
-        "the three largest are named in order: {}",
+            .contains("Largest: Recalled memories (4k), Memory index (3k), AGENTS.md (1k)"),
+        "the three largest are named in order without double parentheses: {}",
         memory.detail
     );
 }
@@ -278,7 +278,7 @@ fn test_compact_bloat_warns() {
     );
     bd.total_tokens += 182_400;
     bd.categories.push(CategoryBreakdown {
-        label: "Compact buffer".into(),
+        label: "Compacted history".into(),
         color_hint: 109,
         tokens: 182_400,
         is_deferred: false,

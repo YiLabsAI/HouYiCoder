@@ -114,13 +114,13 @@ fn test_post_compact_shows_folded() {
         s.output()
     );
     assert!(
-        s.wait_for("Compact buffer", RENDER_TIMEOUT),
-        "compact buffer category missing:\n{}",
+        s.wait_for("Compacted history", RENDER_TIMEOUT),
+        "compacted history category missing:\n{}",
         s.output()
     );
     assert!(
-        s.wait_for("folded:", RENDER_TIMEOUT),
-        "folded summary line missing:\n{}",
+        s.wait_for("Compacted:", RENDER_TIMEOUT),
+        "compacted summary line missing:\n{}",
         s.output()
     );
     assert!(
@@ -309,9 +309,9 @@ fn test_context_reports_measured_cost() {
     for marker in [
         "Bash results using",
         "File reads using",
-        "in context:",
-        "returns: 1",
-        "children used:",
+        "In context:",
+        "1 completed task",
+        "Subagent work:",
     ] {
         assert!(
             s.wait_for(marker, RENDER_TIMEOUT),
@@ -322,7 +322,7 @@ fn test_context_reports_measured_cost() {
     // The child reported 900 input + 100 output, so the row reports that total
     // rather than reading unknown.
     assert!(
-        !s.output().contains("children used: unknown"),
+        !s.output().contains("Subagent work: unknown"),
         "a child that reported its totals is not unknown:\n{}",
         s.output()
     );

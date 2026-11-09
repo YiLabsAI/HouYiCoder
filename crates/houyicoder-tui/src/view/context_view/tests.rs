@@ -172,11 +172,11 @@ fn test_grid_renders_rate_suffix() {
 #[test]
 fn test_grid_renders_folded_summary() {
     let mut bd = base_breakdown();
-    bd.compact_summary = Some("3 compacts · 5 turns folded · \"preview\"".into());
+    bd.compact_summary = Some("3 runs · 5 turns · \"preview\"".into());
     let text = rows_text(bd);
     assert!(
-        text.contains("folded:") && text.contains("3 compacts"),
-        "folded summary row renders:\n{text}"
+        text.contains("Compacted:") && text.contains("3 runs"),
+        "compacted summary row renders:\n{text}"
     );
 }
 
@@ -193,15 +193,15 @@ fn test_grid_omits_rows_none() {
         "prefix row should be absent when cache_prefix_tokens is None:\n{text}"
     );
     assert!(
-        !text.contains("folded:"),
-        "folded row should be absent when compact_summary is None:\n{text}"
+        !text.contains("Compacted:"),
+        "compacted row should be absent when compact_summary is None:\n{text}"
     );
 }
 
 /// The combination cell: prefix Some + rate None + compact_summary Some
 /// (a post-compact session with zero new turns — /context run after a
 /// compact but before the next provider call so no cache hit yet). All
-/// three rows must render independently: prefix (no rate suffix) + folded.
+/// three rows must render independently: prefix (no rate suffix) + compacted.
 /// This is the state-derivation uncovered cell: the three are tested
 /// individually above, but the simultaneous combination (prefix has value +
 /// rate None + manifest exists) was not — the kind of gap any→same hides.
@@ -210,19 +210,19 @@ fn test_grid_renders_prefix_folded() {
     let mut bd = base_breakdown();
     bd.cache_prefix_tokens = Some(21_900);
     bd.cache_hit_rate = None;
-    bd.compact_summary = Some("3 compacts · 5 turns folded · \"preview\"".into());
+    bd.compact_summary = Some("3 runs · 5 turns · \"preview\"".into());
     let text = rows_text(bd);
     assert!(
-        text.contains("Cache prefix: 21.9k"),
-        "prefix renders with folded present + rate absent:\n{text}"
+        text.contains("Cache prefix: 21.9k tokens"),
+        "prefix renders with compacted present + rate absent:\n{text}"
     );
     assert!(
         !text.contains("hit rate"),
-        "no rate suffix when hit_rate is None even with folded present:\n{text}"
+        "no rate suffix when hit_rate is None even with compacted present:\n{text}"
     );
     assert!(
-        text.contains("folded:") && text.contains("3 compacts"),
-        "folded renders with prefix present:\n{text}"
+        text.contains("Compacted:") && text.contains("3 runs"),
+        "compacted renders with prefix present:\n{text}"
     );
 }
 
@@ -521,15 +521,11 @@ fn test_grid_renders_delegated_rows() {
         "the header points at the pane that acts on it:\n{text}"
     );
     assert!(
-        text.contains("in context: 1.2k tokens"),
-        "the return cost renders:\n{text}"
+        text.contains("In context: 1.2k tokens (2 completed tasks)"),
+        "the return cost and task count render:\n{text}"
     );
     assert!(
-        text.contains("returns: 2"),
-        "the return count renders:\n{text}"
-    );
-    assert!(
-        text.contains("children used: 38k tokens"),
+        text.contains("Subagent work: 38k tokens"),
         "the child total renders:\n{text}"
     );
 }
@@ -546,11 +542,15 @@ fn test_grid_delegated_unknown_usage() {
     });
     let text = rows_text(bd);
     assert!(
-        text.contains("children used: unknown"),
+        text.contains("In context: 400 tokens (1 completed task)"),
+        "singular task count renders:\n{text}"
+    );
+    assert!(
+        text.contains("Subagent work: unknown"),
         "an unmeasured child total reads unknown:\n{text}"
     );
     assert!(
-        !text.contains("children used: 0"),
+        !text.contains("Subagent work: 0"),
         "a zero would claim a measurement the session lacks:\n{text}"
     );
 }
@@ -901,94 +901,6 @@ fn cas_usage() -> CasUsage {
     }
 }
 
-/// The legend line carries every measured figure, and a non-zero failure
-/// count joins it rather than hiding behind the stored total.
-#[test]
-fn test_cas_legend_renders_account() {
-    let mut bd = base_breakdown();
-    let mut cas = cas_usage();
-    cas.save_failed = Some(1);
-    cas.truncated = Some(2);
-    bd.cas = Some(cas);
-    let text = rows_text(bd);
-    assert!(
-        text.contains(
-            "cas: 3 results \u{00b7} raw 22.5 KiB \u{00b7} model ~1.2k tokens \
-             \u{00b7} 1 save failed \u{00b7} 2 truncated"
-        ),
-        "{text}"
-    );
-}
-
-/// A session that measured no results still reports the measured zero. The
-/// line must not read as an unkept account just because the total is zero.
-#[test]
-fn test_cas_legend_zero_results() {
-    let mut bd = base_breakdown();
-    bd.cas = Some(CasUsage {
-        results: Some(0),
-        blocks: 0,
-        raw_bytes: Some(0),
-        assembly: None,
-        ..cas_usage()
-    });
-    let text = rows_text(bd);
-    let line = text
-        .lines()
-        .find(|line| line.contains("cas:"))
-        .expect("the legend names the account");
-    assert_eq!(
-        line.trim_start(),
-        "cas: 0 results \u{00b7} raw 0 B \u{00b7} model unknown"
-    );
-    assert!(text.contains("Saved large outputs"), "{text}");
-}
-
-/// A log written before the capture account existed still names its blocks
-/// through the markers its tool results carry, so the block count stays on
-/// both lines while every other figure reads as unknown.
-#[test]
-fn test_cas_unknown_untracked() {
-    let mut bd = base_breakdown();
-    bd.cas = Some(CasUsage {
-        results: None,
-        blocks: 4,
-        raw_bytes: None,
-        unmeasured_results: None,
-        save_failed: None,
-        truncated: None,
-        assembly: None,
-        reads_recorded: false,
-        tracked: false,
-        indexed: None,
-        ..cas_usage()
-    });
-    let text = rows_text(bd);
-    assert!(text.contains("cas: unknown \u{00b7} 4 blocks"), "{text}");
-    assert!(text.contains("Saved large outputs"), "{text}");
-}
-
-/// An account that measured its results but not its failures names the
-/// unknown count instead of dropping it from the line.
-#[test]
-fn test_cas_legend_unknown_failures() {
-    let mut bd = base_breakdown();
-    bd.cas = Some(CasUsage {
-        save_failed: None,
-        truncated: None,
-        ..cas_usage()
-    });
-    let text = rows_text(bd);
-    let line = text
-        .lines()
-        .find(|line| line.contains("cas:"))
-        .expect("the legend names the account");
-    assert!(
-        line.contains("save failures unknown") && line.contains("truncations unknown"),
-        "{line}"
-    );
-}
-
 #[test]
 fn test_cas_absent_renders_none() {
     let mut bd = base_breakdown();
@@ -998,16 +910,40 @@ fn test_cas_absent_renders_none() {
     assert!(!text.contains("Saved large outputs"), "{text}");
 }
 
-/// A session that stored results summarizes them clearly.
+/// A session that stored results summarizes them in uniform token units without
+/// repeating a raw cas legend row.
 #[test]
 fn test_cas_rows_show_summary() {
     let mut bd = base_breakdown();
     let cas = cas_usage();
     bd.cas = Some(cas);
     let text = rows_text(bd);
+    assert!(!text.contains("cas:"), "{text}");
     assert!(text.contains("Saved large outputs"), "{text}");
     assert!(
-        text.contains("3 large results offloaded (22.5 KiB raw \u{2192} ~1.2k tokens in context)"),
+        text.contains(
+            "3 large results offloaded (~5.8k tokens raw \u{2192} ~1.2k tokens in context)"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn test_cas_rows_singular() {
+    let mut bd = base_breakdown();
+    let mut cas = cas_usage();
+    cas.results = Some(1);
+    cas.raw_bytes = Some(35_020);
+    if let Some(a) = cas.assembly.as_mut() {
+        a.unit = CasSizeUnit::Bytes;
+        a.size = 492;
+    }
+    bd.cas = Some(cas);
+    let text = rows_text(bd);
+    assert!(
+        text.contains(
+            "1 large result offloaded (~8.8k tokens raw \u{2192} ~123 tokens in context)"
+        ),
         "{text}"
     );
 }

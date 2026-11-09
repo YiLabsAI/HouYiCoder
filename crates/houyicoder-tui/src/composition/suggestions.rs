@@ -88,7 +88,7 @@ fn push_compact_bloat(breakdown: &ContextBreakdown, out: &mut Vec<ContextSuggest
     let Some(compact) = breakdown
         .categories
         .iter()
-        .find(|c| c.label == "Compact buffer" && c.tokens >= 30_000)
+        .find(|c| c.label == "Compacted history" && c.tokens >= 30_000)
     else {
         return;
     };
@@ -253,7 +253,14 @@ fn push_memory_bloat(breakdown: &ContextBreakdown, out: &mut Vec<ContextSuggesti
     let names: Vec<String> = largest
         .iter()
         .take(3)
-        .map(|file| format!("{} ({})", file.label, format_tokens(u64::from(file.tokens))))
+        .map(|file| {
+            let base = file
+                .label
+                .split_once(" (")
+                .map(|(head, _)| head)
+                .unwrap_or(&file.label);
+            format!("{base} ({})", format_tokens(u64::from(file.tokens)))
+        })
         .collect();
     out.push(ContextSuggestion {
         severity: SuggestionSeverity::Info,
