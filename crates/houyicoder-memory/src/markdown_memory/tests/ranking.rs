@@ -1,5 +1,6 @@
 //! Markdown memory ranking, atomic writes, index repair, and boundary behavior.
 
+use super::super::io::MAX_KEY_BYTES;
 use super::super::*;
 use houyicoder_context::{MemoryOrigin, MemoryScope, MemorySource};
 use std::collections::HashMap;
@@ -10,8 +11,12 @@ use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::fs::{File, FileTimes, OpenOptions};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::channel;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn temp_root() -> PathBuf {
@@ -178,7 +183,7 @@ fn test_identical_add_is_unchanged() {
 }
 
 #[test]
-fn test_add_rollback_bad() {
+fn test_add_rejects_bad_key() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     // A traversal key is rejected before any file lands.
@@ -227,6 +232,12 @@ fn test_path_validator_rejects_bad() {
     ));
     // A clean key is accepted.
     assert!(sanitize_key("good-key").is_ok());
+    // The length bound admits the limit and rejects one byte past it.
+    assert!(sanitize_key(&"k".repeat(MAX_KEY_BYTES)).is_ok());
+    assert!(matches!(
+        sanitize_key(&"k".repeat(MAX_KEY_BYTES + 1)),
+        Err(MemoryError::InvalidPath(_))
+    ));
 }
 
 /// A control character in the key is rejected: a newline would split the
@@ -486,26 +497,43 @@ fn test_index_line_cap_warning() {
     remove_dir_all(&root).ok();
 }
 
-/// When append_index_pointer fails after the topic file has landed, the
-/// rollback must remove the topic file. We simulate the index write
-/// failure by making the index path a directory (rename-over-directory
-/// fails on Unix).
+/// When the index write fails after the topic file has landed, the topic is
+/// the source of truth and stays on disk. The index is derived: its failure
+/// is drift a later rebuild heals, never grounds to remove the record. The
+/// index path is made a directory (rename-over-directory fails on Unix) to
+/// force the failure.
 #[test]
-fn test_rollback_removes_topic() {
+fn test_broken_index_keeps_topic() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    // Make the index path a directory so append_index_pointer's write
-    // (temp + rename) fails: rename over a directory is rejected.
     fs::create_dir(root.join(INDEX_FILE)).unwrap();
     let res = p.add(entry("alpha", "alpha fox body", MemorySource::User));
+    assert!(res.is_ok(), "the topic write must still report success");
+    let topic = root.join("alpha.md");
     assert!(
-        matches!(res, Err(MemoryError::AtomicityFailed(_))),
-        "must return AtomicityFailed when index pointer fails"
+        topic.exists(),
+        "the topic file must survive an index failure"
     );
     assert!(
-        !root.join("alpha.md").exists(),
-        "rollback must remove the topic file"
+        read_to_string(&topic).unwrap().contains("alpha fox body"),
+        "the surviving topic must hold the written content"
     );
+    remove_dir_all(&root).ok();
+}
+
+/// A leftover file under the legacy shared temp name must not block a write.
+/// Temp names carry the writer's pid and a sequence number, so no two writers
+/// ever target the same temp file; a stale file under the old fixed name is
+/// not this writer's to touch. Pre-created as a directory so a write through
+/// the legacy name would fail loudly rather than silently write elsewhere.
+#[test]
+fn test_write_survives_stale_temp() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    fs::create_dir(root.join(".alpha.md.tmp")).unwrap();
+    p.add(entry("alpha", "alpha fox body", MemorySource::User))
+        .expect("a stale shared temp name must not block the write");
+    assert!(root.join("alpha.md").exists(), "the topic must land");
     remove_dir_all(&root).ok();
 }
 
@@ -871,4 +899,97 @@ fn test_stats_persist_across_instances() {
         "a fresh provider instance reads the persisted sidecar"
     );
     remove_dir_all(&root).ok();
+}
+
+/// A stats write that cannot land is advisory: the recording call returns
+/// without panicking and the counters read back empty.
+#[test]
+fn test_stats_write_failure() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    create_dir_all(root.join(STATS_FILE)).expect("plant a directory at the sidecar path");
+    p.record_recall_hits(&["alpha".to_string()]);
+    assert!(
+        p.read_recall_stats().is_empty(),
+        "a sidecar that cannot be written reads back empty"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A root that cannot be locked skips the advisory stats write instead of
+/// blocking or panicking, for both the recall and gate counters.
+#[test]
+fn test_stats_skip_unlocked_root() {
+    let root = temp_root();
+    let blocker = root.join("not-a-directory");
+    write(&blocker, b"occupied").expect("plant a file as the root");
+    let p = MarkdownMemoryProvider::new(blocker);
+    p.record_recall_hits(&["alpha".to_string()]);
+    p.record_gate_violation("alpha");
+    assert!(
+        p.read_recall_stats().is_empty(),
+        "no stats land under an unavailable root"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A root another writer holds skips the advisory stats write instead of
+/// waiting: recall counters must not stall a turn behind a store write.
+#[test]
+fn test_stats_skip_held_lock() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    let _held = RootLock::acquire(&root).expect("hold the root lock");
+    p.record_recall_hits(&["alpha".to_string()]);
+    p.record_gate_violation("alpha");
+    assert!(
+        p.read_recall_stats().is_empty(),
+        "a held root skips the advisory write"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// Two spellings of one directory collapse to one root: the store reports a
+/// key under one scope only, and a multi-root operation claims that
+/// directory once rather than waiting on its own second lock.
+#[cfg(unix)]
+#[test]
+fn test_roots_dedup_by_identity() {
+    let real = temp_root();
+    let holder = temp_root();
+    let link = holder.join("link");
+    symlink(&real, &link).expect("link the store root");
+    let p = MarkdownMemoryProvider::new_multi(vec![link, real.clone(), real.clone()]);
+    p.add(entry("alpha", "alpha body", MemorySource::User))
+        .unwrap();
+    assert_eq!(
+        p.scopes_for_key("alpha"),
+        vec![MemoryScope::User],
+        "one directory is one scope"
+    );
+    p.rebuild_index().expect("claim the deduped roots once");
+    remove_dir_all(&real).ok();
+    remove_dir_all(&holder).ok();
+}
+
+/// Two spellings of a directory that does not exist yet must still claim one
+/// lock. A fresh store cannot resolve them at construction, so identity is
+/// taken after the roots are created. Without that step the second claim
+/// waits forever on the lock the first claim already holds.
+#[cfg(unix)]
+#[test]
+fn test_fresh_roots_claim_once() {
+    let base = temp_root();
+    let plain = base.join("b").join("memory");
+    let alias = base.join("a").join("..").join("b").join("memory");
+    let p = MarkdownMemoryProvider::new_multi(vec![plain, alias]);
+    let (tx, rx) = channel();
+    thread::spawn(move || {
+        tx.send(p.rebuild_index()).expect("report the rebuild");
+    });
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(outcome) => assert!(outcome.is_ok(), "the rebuild must land: {outcome:?}"),
+        Err(_) => panic!("a fresh store with two spellings of one root must not deadlock"),
+    }
+    remove_dir_all(&base).ok();
 }

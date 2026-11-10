@@ -74,7 +74,7 @@ pub trait MemoryProvider: Send + Sync {
     }
     /// Atomically write a new memory entry (single source of truth; the
     /// derived index pointer is reconciled under the same lock; a failed
-    /// pointer triggers best-effort rollback of the topic file).
+    /// pointer leaves the topic in place as drift the next rebuild heals).
     fn add(&self, entry: MemoryEntry) -> Result<(), MemoryError>;
     /// Atomically write only when durable content differs. Providers without
     /// identity-aware storage conservatively report Created after add.

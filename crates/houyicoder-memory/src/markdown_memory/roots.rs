@@ -1,14 +1,18 @@
-//! Scope-root resolution for the markdown memory provider. Split out of the
-//! main module to keep it under the file-size gate. Inherent impl (not the
-//! trait impl) so it can live in a submodule; the trait impl resolves
-//! self.root_for_scope across impl blocks. The method is pub(super) so the
-//! parent module's trait impl can call it (a private fn in a child module is
-//! not visible to the parent).
-
-use std::path::Path;
+//! Scope-root resolution for the markdown memory provider. Roots are fixed
+//! at construction; this module maps a scope to the root that holds it and
+//! resolves two spellings of one directory to a single identity.
 
 use houyicoder_context::MemoryScope;
+use std::fs::canonicalize;
+use std::path::Path;
 use std::path::PathBuf;
+
+/// The identity two paths share when they name the same directory. A root
+/// that does not exist yet cannot be resolved and keeps its literal path;
+/// the first write creates it under that name.
+pub(super) fn canonical_identity(root: &Path) -> PathBuf {
+    canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+}
 
 impl super::MarkdownMemoryProvider {
     /// Resolve a storage root by scope. User -> roots[0], Project -> roots[1]

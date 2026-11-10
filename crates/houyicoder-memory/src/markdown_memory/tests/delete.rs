@@ -10,6 +10,7 @@ use houyicoder_context::MemorySource;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
+use std::fs::remove_file;
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -143,5 +144,35 @@ fn test_delete_prunes_stats_sidecar() {
         !p.read_recall_stats().iter().any(|s| s.key == "doomed"),
         "stats entry pruned on delete (no monotonic growth)"
     );
+    remove_dir_all(&root).ok();
+}
+
+/// A delete that fails for a reason other than a missing topic reports the
+/// failure instead of claiming success.
+#[test]
+fn test_delete_reports_unexpected_error() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    create_dir_all(root.join("blocked.md")).expect("plant a directory at the topic path");
+    assert!(
+        matches!(p.delete_memory("blocked"), Err(MemoryError::Io)),
+        "a topic path that is not a regular file must report Io"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A delete whose index rebuild fails still reports success: the topic is
+/// gone and the derived index heals on the next rebuild.
+#[test]
+fn test_delete_survives_broken_index() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    p.add(entry("doomed", "a fact to delete", MemorySource::Project))
+        .unwrap();
+    remove_file(root.join(INDEX_FILE)).unwrap();
+    create_dir_all(root.join(INDEX_FILE)).expect("plant a directory at the index path");
+    p.delete_memory("doomed")
+        .expect("the delete succeeds despite the broken index");
+    assert!(!root.join("doomed.md").exists(), "topic removed");
     remove_dir_all(&root).ok();
 }

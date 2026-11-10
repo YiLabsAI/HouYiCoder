@@ -8,8 +8,9 @@
 //! fire-and-forget task with a turn budget as backstop.
 //!
 //! A scan throttle (ten minutes) backs off when the gate has passed but a
-//! prior dream failed: the lock mtime rewinds on failure so the gate keeps
-//! passing, and the throttle prevents a retry storm.
+//! prior dream failed: a failed dream never advances the mtime of the last
+//! success, so the gate keeps passing and the throttle prevents a retry
+//! storm.
 //!
 //! The index is rebuilt in code before and after the LLM run, so the agent
 //! sees a clean store on entry and the derived index regenerates from the
@@ -21,10 +22,22 @@
 //! key that already lives in the project root writes that root in place, so
 //! the explicit entry is updated rather than shadowed.
 
+use std::fs::File;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::metadata;
+use std::fs::read_to_string;
+use std::io;
+use std::io::Write;
+use std::mem::take;
 use std::path::{Path, PathBuf};
+use std::process::id;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::{
@@ -47,28 +60,10 @@ use crate::agent::tools::{
     DeleteMemoryTool, DemoteMemoryTool, MemoryAddTool, PromoteMemoryTool, ShowMemoryTool,
 };
 use crate::agent::{RunError, RunResult, Runner, ToolRegistry};
-use std::fs::FileTimes;
-use std::fs::OpenOptions;
-use std::fs::create_dir_all;
-use std::fs::metadata;
-use std::fs::read_to_string;
-use std::fs::remove_file;
-use std::fs::write;
-use std::io::ErrorKind;
-use std::io::Write;
-use std::mem::take;
-use std::process::id;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tokio::time::sleep;
 
 const LOCK_FILE: &str = ".consolidate-lock";
 pub(crate) const INDEX_FILE: &str = "MEMORY.md";
-/// A lock holder is considered stale past this even if its PID is live.
-/// The forked agent has a maxTurns backstop, so no dream runs longer than
-/// this window. Uses a time-based staleness check instead of a libc
-/// PID-liveness probe (no libc dependency).
-const HOLDER_STALE_SECS: u64 = 3600;
 /// Minimum hours between dreams. The lock mtime is lastConsolidatedAt; the
 /// time-gate closes until this many hours have elapsed.
 const DEFAULT_MIN_HOURS: u64 = 24;
@@ -84,8 +79,8 @@ const EARLY_FIRE_SECS: u64 = 4 * 3600;
 const EARLY_FIRE_NEW: usize = 10;
 /// Scan throttle: once the time-gate has passed, do not re-attempt the lock
 /// more often than this. This is the retry backoff when a prior dream failed
-/// (the lock mtime rewinds on failure, so the time-gate keeps passing every
-/// turn — the throttle prevents a retry storm).
+/// (a failure leaves the last-success mtime untouched, so the time-gate
+/// keeps passing every turn — the throttle prevents a retry storm).
 const SCAN_INTERVAL_SECS: u64 = 600;
 /// Reward-dream: a lighter, sooner pass fired by reward signal (failure
 /// clusters / redundant calls) rather than the 24h memory-delta gate. Stays
@@ -106,10 +101,12 @@ const REWARD_DREAM_MAX_TURNS: u32 = 8;
 /// inspects, merges, and prunes, which takes several tool round-trips.
 pub const DEFAULT_DREAM_MAX_TURNS: u32 = 25;
 
-/// The consolidation lock. mtime = lastConsolidatedAt; body = holder PID.
-/// Relies on a stale guard (HOLDER_STALE_SECS) rather than a PID liveness
-/// check — the forked agent has maxTurns as the backstop, so no dream runs
-/// longer than the stale window. This avoids a libc dependency.
+/// The consolidation lock: an exclusive claim on one memory root's dream.
+/// Mutual exclusion is a kernel file lock, which the kernel releases when
+/// the holder exits, so a dead dream never wedges the store and no stale
+/// reclaim or timeout is needed. The lock file's mtime is lastConsolidatedAt;
+/// only a completed full dream stamps it, so a reward dream can hold the
+/// claim without moving the interval gate.
 pub(crate) struct ConsolidationLock {
     path: PathBuf,
 }
@@ -132,74 +129,80 @@ impl ConsolidationLock {
             .unwrap_or(0)
     }
 
-    /// Acquire: atomically create the lock file only if it does not exist.
-    /// Returns the prior mtime (for rollback), or None if the lock is recent
-    /// (held by another dream) or another process won the create race. A lock
-    /// older than HOLDER_STALE_SECS is reclaimed (unlinked then create_new).
-    ///
-    /// The create_new closes the cross-process TOCTOU race that a plain
-    /// stat-then-overwrite had (two processes both stat, both overwrite, both
-    /// think they hold the lock). create_new is atomic for the absent-lock
-    /// case (the common path). The stale-reclaim path (unlink then create_new)
-    /// has a narrow race between the unlink and the create_new — two
-    /// reclaimers both unlink, one wins create_new, the other bails on
-    /// AlreadyExists. The consequences of both winning are self-healing
-    /// (index drift healed by rebuild_if_stale; topic writes are atomic
-    /// temp+rename), so the narrow window is acceptable.
-    pub(crate) fn try_acquire(&self) -> Option<u64> {
-        let prior = self.last_consolidated_at();
-        let now = now_secs();
-        if now.saturating_sub(prior) < HOLDER_STALE_SECS {
-            return None;
-        }
+    /// Claim the dream slot, or None when another live process holds it.
+    /// The claim does not wait: a held lock means that dream is working, and
+    /// a second dream over one store would rewrite topics from a stale
+    /// listing. The pre-claim stamp is remembered so a claim that ends
+    /// without a completed full dream restores it.
+    pub(crate) fn try_acquire(&self) -> Option<ConsolidationGuard> {
         if let Some(parent) = self.path.parent() {
             drop(create_dir_all(parent));
         }
-        // Stale reclaim: a prior lock past the stale window means the holder
-        // died (maxTurns backstop is well under the stale window). Unlink it
-        // so create_new can land. Absent lock (prior == 0) skips the unlink.
-        if prior > 0 {
-            drop(remove_file(&self.path));
-        }
-        let pid = id();
-        match OpenOptions::new()
-            .create_new(true)
+        let prior_stamp = self.last_consolidated_at();
+        let file = OpenOptions::new()
+            .create(true)
             .write(true)
+            .truncate(false)
             .open(&self.path)
-        {
-            Ok(mut f) => {
-                drop(f.write_all(pid.to_string().as_bytes()));
-                drop(f.flush());
-                Some(prior)
+            .ok()?;
+        file.try_lock().ok()?;
+        Some(ConsolidationGuard {
+            file,
+            prior_stamp,
+            stamped: false,
+        })
+    }
+}
+
+/// A live dream's claim on the consolidation lock, released on drop.
+///
+/// The stamp is owned here rather than by the lock: creating the lock file
+/// stamps its mtime, so a claim that did not complete a full dream must put
+/// the last-success stamp back. Otherwise a reward dream on a fresh store,
+/// or a failed dream, would close the interval gate as if it had succeeded.
+pub(crate) struct ConsolidationGuard {
+    /// Held open for as long as the kernel lock is held. The stamp is
+    /// written through this handle: a second handle to a locked file is
+    /// refused on some platforms.
+    file: File,
+    /// The last-success stamp before the claim.
+    prior_stamp: u64,
+    /// Whether this claim completed a full dream and stamped its success.
+    stamped: bool,
+}
+
+impl ConsolidationGuard {
+    /// Stamp a completed full consolidation so the interval gate measures
+    /// from the last success.
+    pub(crate) fn record_consolidation(&mut self) {
+        match self.stamp() {
+            Ok(()) => self.stamped = true,
+            Err(e) => {
+                let msg = format!("consolidation stamp failed: {e}");
+                tracing::warn!("{msg}");
             }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => None,
-            Err(_) => None,
         }
     }
 
-    /// Rewind after a failed dream. prior 0 (no prior lock) → unlink so the
-    /// time-gate passes from a clean state. prior > 0 → restore the lock
-    /// file with its mtime rewound to the pre-acquire value, so the
-    /// time-gate passes again but the scan throttle gates the retry. Uses
-    /// std FileTimes, no libc.
-    pub(crate) fn rollback(&self, prior: u64) {
-        if prior == 0 {
-            drop(remove_file(&self.path));
-            return;
-        }
-        // Recreate the file and rewind its mtime so last_consolidated_at
-        // returns the pre-acquire value.
-        drop(write(&self.path, String::new()));
-        let times = FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(prior));
-        if let Ok(file) = OpenOptions::new().write(true).open(&self.path) {
-            drop(file.set_times(times));
-        }
+    fn stamp(&self) -> io::Result<()> {
+        self.file.set_len(0)?;
+        let mut file = &self.file;
+        file.write_all(id().to_string().as_bytes())?;
+        self.file.set_modified(SystemTime::now())
     }
+}
 
-    /// Stamp after a successful dream (write PID, mtime = now).
-    pub(crate) fn record_consolidation(&self) {
-        let pid = id();
-        drop(write(&self.path, pid.to_string()));
+impl Drop for ConsolidationGuard {
+    fn drop(&mut self) {
+        if !self.stamped {
+            let times =
+                FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(self.prior_stamp));
+            if let Err(e) = self.file.set_times(times) {
+                let msg = format!("consolidation stamp restore failed: {e}");
+                tracing::warn!("{msg}");
+            }
+        }
+        drop(self.file.unlock());
     }
 }
 
@@ -604,8 +607,9 @@ impl DreamRunner {
         }
         // Scan throttle: the time-gate has passed, but do not attempt the
         // lock more often than the throttle window. This is the retry
-        // backoff when a prior dream failed (the lock mtime rewinds, so the
-        // time-gate keeps passing every turn).
+        // backoff when a prior dream failed (a claim that ends without a
+        // completed full dream restores the stamp, so the time-gate keeps
+        // passing every turn).
         if now.saturating_sub(last_scan) < SCAN_INTERVAL_SECS {
             return;
         }
@@ -649,16 +653,13 @@ impl DreamRunner {
         // task. Without the guard, a panic below would wedge the flag true.
         let _guard = InProgressGuard::new(&self.in_progress);
         let lock = ConsolidationLock::new(Path::new(&root));
-        // Reward-dream skips the dream-lock so the 24h full dream's mtime
-        // gate is unaffected; in_progress + last_scan throttle bound it
-        // within one process. The full dream acquires the cross-process lock.
-        let prior = if is_reward_dream {
-            0
-        } else {
-            match lock.try_acquire() {
-                Some(p) => p,
-                None => return,
-            }
+        // Both dream kinds claim the same slot: two dreams over one store
+        // would each rewrite topics from a stale listing. The interval gate
+        // belongs to the full dream and reads the lock file's mtime, which
+        // only a completed full dream stamps, so a reward dream's claim does
+        // not move the full dream's schedule.
+        let Some(mut claim) = lock.try_acquire() else {
+            return;
         };
         // Deterministic pre-pass: heal any drifted index so the LLM sees a
         // clean store (a deterministic heal saves the LLM turns it would
@@ -724,7 +725,7 @@ impl DreamRunner {
                 let dream_msg = format!("dream outcome: {:?}", r.outcome);
                 tracing::debug!("{dream_msg}");
                 if !is_reward_dream {
-                    lock.record_consolidation();
+                    claim.record_consolidation();
                 }
                 // Deterministic post-pass: regenerate the index from the
                 // final topic set (a deterministic regenerate saves the LLM
@@ -737,9 +738,6 @@ impl DreamRunner {
             Err(e) => {
                 let fork_err = format!("auto-dream fork failed: {e}");
                 tracing::debug!("{fork_err}");
-                if !is_reward_dream {
-                    lock.rollback(prior);
-                }
             }
         }
         // _guard drops here, resetting in_progress (also on panic).

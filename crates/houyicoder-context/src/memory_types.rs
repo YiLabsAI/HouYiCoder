@@ -278,13 +278,13 @@ impl MemoryRankHit {
 /// Advisory recall-frequency counters for one memory key, persisted in a
 /// per-scope sidecar so the consolidation dream can nominate stale or
 /// high-frequency entries. Advisory: a lost or corrupt sidecar is a cold
-/// restart (counters re-accumulate), never an invariant violation — there is
-/// no atomic write, no lock, no self-heal. recall_hits increments when a
-/// recall surfaces the key; last_access_ts is the last recall time. The
-/// gate_violations counter is fed by the PreToolUse gate and stays zero
-/// today — the feed is not wired. The field is reserved so the on-disk
-/// schema carries it once that feed lands.
-/// does not change when that wiring lands.
+/// restart (counters re-accumulate), never an invariant violation. The
+/// sidecar is written atomically under the write root's lock, but a skipped
+/// or lost update is still just a cold restart for those counters.
+/// recall_hits increments when a recall surfaces the key; last_access_ts is
+/// the last recall time. The gate_violations counter is fed by the
+/// PreToolUse gate and stays zero today — the feed is not wired. The field
+/// is reserved so the on-disk schema does not change when that wiring lands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MemoryRecallStats {
     pub key: String,
@@ -337,8 +337,6 @@ pub enum MemoryError {
     InvalidPath(String),
     /// A record on disk was corrupt (unparseable frontmatter or body).
     Corrupt(String),
-    /// The atomic write could not leave the store in a consistent state.
-    AtomicityFailed(String),
 }
 
 impl fmt::Display for MemoryError {
@@ -348,7 +346,6 @@ impl fmt::Display for MemoryError {
             Self::NotFound => f.write_str("memory entry not found"),
             Self::InvalidPath(msg) => write!(f, "invalid memory path: {msg}"),
             Self::Corrupt(msg) => write!(f, "corrupt memory record: {msg}"),
-            Self::AtomicityFailed(msg) => write!(f, "atomic write failed: {msg}"),
         }
     }
 }

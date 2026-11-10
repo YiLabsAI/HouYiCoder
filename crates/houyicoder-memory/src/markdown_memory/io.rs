@@ -1,8 +1,8 @@
-//! Free-function helpers and supporting types for the markdown memory
-//! provider. Split out of markdown_memory.rs so the provider module stays
-//! under the file-size gate while the parsing, serialization, sanitization,
-//! and atomic-write helpers live here. These are module-private (pub(super))
-//! to the markdown_memory module — not part of any public surface.
+//! Record parsing, serialization, key validation, and the atomic write
+//! behind the markdown memory provider. A write lands through a writer-named
+//! sibling temp file and a rename, so a reader never sees a half-written
+//! record; a writer that dies in between leaves a temp the topic scan never
+//! lists as a record.
 
 use houyicoder_context::{
     MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, MemorySummary,
@@ -12,14 +12,20 @@ use std::path::Path;
 use super::MarkdownMemoryProvider;
 #[cfg(unix)]
 use std::fs::OpenOptions;
+use std::fs::read;
+use std::fs::remove_file;
 use std::fs::rename;
 #[cfg(not(unix))]
 use std::fs::write;
+use std::io;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
+use std::process::id;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use unicode_normalization::UnicodeNormalization;
 
 /// Fields parsed from a topic file frontmatter.
@@ -135,6 +141,12 @@ pub(super) fn sanitize_key(key: &str) -> Result<String, MemoryError> {
     if key.is_empty() {
         return Err(MemoryError::InvalidPath("empty key".into()));
     }
+    // The record and the temp file of its writer share one file name limit,
+    // so a key near that limit would fail a write whose plain record name
+    // still fit. The index line inherits the same bound.
+    if key.len() > MAX_KEY_BYTES {
+        return Err(MemoryError::InvalidPath("key too long".into()));
+    }
     if key.contains('\0') {
         return Err(MemoryError::InvalidPath("null byte in key".into()));
     }
@@ -167,16 +179,60 @@ pub(super) fn sanitize_key(key: &str) -> Result<String, MemoryError> {
     Ok(key)
 }
 
-/// Write bytes to a path atomically: write to a sibling temp file, then
-/// rename over the target. On Unix the rename is atomic.
+/// Per-process counter separating the temp names one process writes inside
+/// the same instant; the pid separates processes.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Write bytes to a path atomically. The bytes land in a sibling temp file
+/// named for this writer, which is then renamed over the target, so a reader
+/// never sees a half-written record. The temp name carries the process id and
+/// a sequence number, so two processes writing one store never target the
+/// same temp file, which a fixed name would let them truncate or rename out
+/// from under each other. A failed write or rename removes the temp, so the
+/// failure path leaves no residue behind.
 pub(super) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
+    write_bytes(path, bytes, true)
+}
+
+/// Write bytes atomically without forcing them to disk. The rename already
+/// makes the record appear whole, and an advisory counter can be rebuilt from
+/// a cold start, so the durability flush is a cost with nothing to protect.
+pub(super) fn write_bytes_advisory(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
+    write_bytes(path, bytes, false)
+}
+
+fn write_bytes(path: &Path, bytes: &[u8], durable: bool) -> Result<(), MemoryError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let temp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("memory")
-    ));
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("memory");
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".{name}.{}.{seq}.tmp", id()));
+    if write_temp(&temp, bytes, durable).is_err() {
+        drop(remove_file(&temp));
+        return Err(MemoryError::Io);
+    }
+    if rename(&temp, path).is_err() {
+        drop(remove_file(&temp));
+        return Err(MemoryError::Io);
+    }
+    Ok(())
+}
+
+/// Land a record at a new path, then remove the source. A rename that cannot
+/// span two devices uses this. The destination is written through the atomic
+/// path, so no reader lists it half-written, and the source stays until the
+/// destination is durable.
+pub(super) fn relocate_record(src: &Path, dst: &Path) -> Result<(), MemoryError> {
+    let bytes = read(src).map_err(|_| MemoryError::Io)?;
+    write_bytes_atomic(dst, &bytes)?;
+    remove_file(src).map_err(|_| MemoryError::Io)
+}
+
+/// The platform write behind the atomic write. A durable write is flushed to
+/// the device; an advisory one only has to land.
+fn write_temp(path: &Path, bytes: &[u8], durable: bool) -> io::Result<()> {
     #[cfg(unix)]
     {
         let mut f = OpenOptions::new()
@@ -184,17 +240,15 @@ pub(super) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), Memory
             .write(true)
             .truncate(true)
             .mode(0o600)
-            .open(&temp)
-            .map_err(|_| MemoryError::Io)?;
-        f.write_all(bytes).map_err(|_| MemoryError::Io)?;
-        f.sync_all().map_err(|_| MemoryError::Io)?;
+            .open(path)?;
+        f.write_all(bytes)?;
+        if durable { f.sync_all() } else { f.flush() }
     }
     #[cfg(not(unix))]
     {
-        write(&temp, bytes).map_err(|_| MemoryError::Io)?;
+        let _ = durable;
+        write(path, bytes)
     }
-    rename(&temp, path).map_err(|_| MemoryError::Io)?;
-    Ok(())
 }
 
 /// Truncate the index content to the line and byte caps, appending a warning
@@ -243,6 +297,11 @@ pub(super) fn first_line(content: &str) -> &str {
 
 /// Byte cap on the derived MEMORY index (keeps the always-on index small).
 pub(super) const INDEX_BYTE_CAP: usize = 25_000;
+
+/// Longest key the store accepts, in bytes. A record name adds the markdown
+/// suffix and a writing temp adds the process id and a sequence number, and
+/// all of them must fit the platform's file name limit.
+pub(super) const MAX_KEY_BYTES: usize = 200;
 
 /// Reserved index filename (excluded from the topic scan).
 pub(super) const INDEX_FILE: &str = "MEMORY.md";
@@ -330,3 +389,6 @@ pub(super) fn scopes_for_key_impl(
         .map(|(index, _)| MemoryScope::for_root_index(index))
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

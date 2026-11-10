@@ -451,16 +451,11 @@ fn normalized_body(event: &SessionEvent) -> String {
     normalize_quote(raw)
 }
 
-/// Map a memory store error onto the tool error the model sees. An
-/// atomicity failure is surfaced verbatim so the model knows the store was
-/// left half-written (rare; the provider best-effort-rolls-back).
+/// Map a memory store error onto the tool error the model sees.
 fn map_memory_error(e: MemoryError) -> ToolError {
     match e {
         MemoryError::InvalidPath(msg) => {
             ToolError::Failed(format!("save_memory: invalid key/path: {msg}"))
-        }
-        MemoryError::AtomicityFailed(msg) => {
-            ToolError::Failed(format!("save_memory: atomic write failed: {msg}"))
         }
         MemoryError::Corrupt(msg) => {
             ToolError::Failed(format!("save_memory: corrupt store: {msg}"))

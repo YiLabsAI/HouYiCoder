@@ -27,6 +27,7 @@ use houyicoder_context::MemoryOrigin;
 use houyicoder_context::MemorySummary;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::MarkdownMemoryProvider;
+use std::env;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::fs::create_dir_all;
@@ -34,8 +35,13 @@ use std::fs::read_dir;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::path::PathBuf;
+use std::process::Child;
+use std::process::Command;
+use std::process::Stdio;
 use std::process::id;
+use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::UNIX_EPOCH;
 
 struct RecordingChanges(StdMutex<Vec<MemoryChangedEvent>>);
@@ -66,8 +72,16 @@ impl RecordingChanges {
 
 // -- ConsolidationLock tests --
 
+/// Environment naming the memory root a child holds the dream lock on.
+const CHILD_ROOT_ENV: &str = "HOUYICODER_DREAM_TEST_ROOT";
+/// Markers the child and its parent poll, so neither waits on a shared clock.
+const READY_MARKER: &str = "child.ready";
+const RELEASE_MARKER: &str = "child.release";
+/// Deadline for the child to take the lock or finish its side.
+const CHILD_DEADLINE: Duration = Duration::from_secs(30);
+
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("auto-dream-{tag}-{}", id()));
+    let dir = env::temp_dir().join(format!("auto-dream-{tag}-{}", id()));
     drop(remove_dir_all(&dir));
     create_dir_all(&dir).unwrap();
     dir
@@ -85,56 +99,167 @@ fn test_lock_absent_returns_zero() {
 fn test_lock_acquire_then_record() {
     let dir = temp_dir("acquire");
     let lock = ConsolidationLock::new(&dir);
-    // No prior lock → try_acquire succeeds with prior=0.
-    let prior = lock.try_acquire().expect("no lock → acquire succeeds");
-    assert_eq!(prior, 0, "prior mtime is 0 when no prior lock");
-    // A fresh lock is now recent → a second acquire is blocked.
-    assert!(lock.try_acquire().is_none(), "recent lock blocks acquire");
-    // Stamp a successful dream.
-    lock.record_consolidation();
+    let mut claim = lock.try_acquire().expect("an absent lock is claimable");
+    assert!(lock.try_acquire().is_none(), "a live claim blocks a second");
+    claim.record_consolidation();
     assert!(lock.last_consolidated_at() > 0, "record stamps the mtime");
+    drop(claim);
+    assert!(lock.try_acquire().is_some(), "the claim frees on drop");
     drop(remove_dir_all(&dir));
 }
 
-/// rollback rewinds the mtime to the pre-acquire value (not unlink-to-0)
-/// so the time-gate passes again but the scan throttle gates the retry.
-/// prior 0 → unlink (clean state).
+/// A claim on a fresh store must not read as a consolidation: creating the
+/// lock file sets its mtime, and an uncompleted claim has to put the
+/// last-success stamp back. Otherwise the first reward dream on a new
+/// project closes the full dream's interval gate for a whole day.
 #[test]
-fn test_rollback_rewinds_mtime() {
-    let dir = temp_dir("rollback");
+fn test_fresh_claim_keeps_zero() {
+    let dir = temp_dir("fresh-claim");
     let lock = ConsolidationLock::new(&dir);
-    // Simulate a prior successful consolidation an hour ago.
-    let prior_at = now_secs().saturating_sub(3600);
-    drop(write(lock_path(&dir), "old"));
-    set_mtime(&lock_path(&dir), prior_at);
-    assert_eq!(lock.last_consolidated_at(), prior_at, "prior stamp set");
-
-    // Acquire (the prior is an hour ago, past the stale window).
-    let prior = lock.try_acquire().expect("stale lock reclaimed");
-    assert_eq!(prior, prior_at, "acquire returns the pre-acquire mtime");
-    // The acquire stamped now; rollback must rewind to prior_at, not 0.
-    lock.rollback(prior);
-    assert_eq!(
-        lock.last_consolidated_at(),
-        prior_at,
-        "rollback rewinds the mtime to the pre-acquire value"
-    );
-    drop(remove_dir_all(&dir));
-}
-
-#[test]
-fn test_rollback_unlinks_no_prior() {
-    let dir = temp_dir("rollback-zero");
-    let lock = ConsolidationLock::new(&dir);
-    let prior = lock.try_acquire().expect("acquire");
-    assert_eq!(prior, 0, "no prior lock");
-    lock.rollback(0);
+    let claim = lock.try_acquire().expect("a fresh store is claimable");
+    drop(claim);
     assert_eq!(
         lock.last_consolidated_at(),
         0,
-        "rollback to prior 0 unlinks"
+        "an uncompleted claim must not read as a consolidation"
     );
     drop(remove_dir_all(&dir));
+}
+
+/// Recording through the held claim advances the stamp while the claim is
+/// alive, and a confirmed claim keeps that stamp when it drops.
+#[test]
+fn test_record_stamps_held_claim() {
+    let dir = temp_dir("record-held");
+    let lock = ConsolidationLock::new(&dir);
+    let prior = now_secs().saturating_sub(3600);
+    drop(write(lock_path(&dir), "old"));
+    set_mtime(&lock_path(&dir), prior);
+    let mut claim = lock.try_acquire().expect("an old lock is claimable");
+    claim.record_consolidation();
+    let stamped = lock.last_consolidated_at();
+    assert!(
+        stamped > prior,
+        "recording while the claim is held advances the stamp: {stamped} vs {prior}"
+    );
+    drop(claim);
+    assert_eq!(
+        lock.last_consolidated_at(),
+        stamped,
+        "a confirmed claim keeps its stamp on drop"
+    );
+    drop(remove_dir_all(&dir));
+}
+
+/// A reward dream claims the same slot as a full dream without moving the
+/// last-success stamp: only a completed full dream advances the interval
+/// gate, so the reward pass cannot postpone the full one.
+#[test]
+fn test_claim_keeps_stamp() {
+    let dir = temp_dir("claim-keeps-stamp");
+    let lock = ConsolidationLock::new(&dir);
+    let prior_at = now_secs().saturating_sub(3600);
+    drop(write(lock_path(&dir), "old"));
+    set_mtime(&lock_path(&dir), prior_at);
+    let _claim = lock.try_acquire().expect("an old lock is claimable");
+    assert_eq!(
+        lock.last_consolidated_at(),
+        prior_at,
+        "claiming the slot must not move the last-success stamp"
+    );
+    drop(remove_dir_all(&dir));
+}
+
+#[test]
+fn test_claim_blocks_second() {
+    let dir = temp_dir("two-owners");
+    let lock = ConsolidationLock::new(&dir);
+    let claim = lock.try_acquire().expect("the first claim wins");
+    let other = ConsolidationLock::new(&dir);
+    assert!(
+        other.try_acquire().is_none(),
+        "one live dream holds the store"
+    );
+    drop(claim);
+    assert!(
+        other.try_acquire().is_some(),
+        "the slot frees once the claim drops"
+    );
+    drop(remove_dir_all(&dir));
+}
+
+/// The dream claim is refused while a different process holds the lock. Two
+/// handles in one process exercise the same primitive, but the guarantee is
+/// about separate processes, so one side of this test runs as a child of the
+/// test binary.
+#[test]
+fn test_claim_refused_across_processes() {
+    let Ok(root) = env::var(CHILD_ROOT_ENV) else {
+        return run_holder_parent();
+    };
+    let dir = PathBuf::from(root);
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path(&dir))
+        .expect("open the dream lock");
+    file.lock().expect("hold the dream lock");
+    write(dir.join(READY_MARKER), b"").expect("signal ready");
+    assert!(
+        wait_for(&dir.join(RELEASE_MARKER)),
+        "the parent must release the child"
+    );
+}
+
+/// The parent half of the cross-process claim test: start a child that holds
+/// the lock, check the claim is refused, then check it frees once the child
+/// exits.
+#[expect(clippy::disallowed_methods, reason = "the test starts its own binary")]
+fn run_holder_parent() {
+    let dir = temp_dir("child-holder");
+    let mut child = Command::new(env::current_exe().expect("the test binary path"))
+        .arg("--exact")
+        .arg("agent::memory::auto_dream::tests::test_claim_refused_across_processes")
+        .arg("--nocapture")
+        .env(CHILD_ROOT_ENV, &dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the child process");
+    assert!(
+        wait_for(&dir.join(READY_MARKER)),
+        "the child must take the lock before the parent claims"
+    );
+    let lock = ConsolidationLock::new(&dir);
+    assert!(
+        lock.try_acquire().is_none(),
+        "a claim must be refused while another process holds the lock"
+    );
+    write(dir.join(RELEASE_MARKER), b"").expect("release the child");
+    wait_child(&mut child);
+    assert!(
+        lock.try_acquire().is_some(),
+        "the slot frees once the child exits"
+    );
+    remove_dir_all(&dir).ok();
+}
+
+fn wait_for(path: &Path) -> bool {
+    let deadline = Instant::now() + CHILD_DEADLINE;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        sleep(Duration::from_millis(2));
+    }
+    false
+}
+
+fn wait_child(child: &mut Child) {
+    let status = child.wait().expect("the child exits");
+    assert!(status.success(), "the child failed");
 }
 
 fn lock_path(dir: &Path) -> PathBuf {
@@ -470,6 +595,26 @@ async fn test_dream_body_runs_direct() {
     drop(remove_dir_all(&root));
 }
 
+/// A dream body that cannot claim its lock slot returns without running the
+/// forked agent, so the store is never rewritten from a stale listing.
+#[tokio::test]
+async fn test_claim_skips_body() {
+    let root = temp_dir("claim-skip");
+    let memory = Arc::new(FsMemory::new(root.clone()));
+    let provider = Arc::new(DreamProvider {
+        calls: StdMutex::new(0),
+    });
+    let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
+    let held = ConsolidationLock::new(&root);
+    let _claim = held.try_acquire().expect("hold the dream slot");
+    Arc::clone(&dream)
+        .run_dream_body(root.to_string_lossy().into_owned(), None, false)
+        .await;
+    let calls = *provider.calls.lock().expect("calls");
+    assert_eq!(calls, 0, "a dream whose slot is taken must not run");
+    drop(remove_dir_all(&root));
+}
+
 /// A reward snapshot with only redundant clusters (no blind retries) does
 /// NOT fire the reward-dream gate — the gate keys on retry_after_error
 /// (agent decision), not redundant clusters (context loss is a different
@@ -656,30 +801,6 @@ async fn test_panic_resets_in_progress() {
         "in_progress must reset after a panic (Drop guard)"
     );
     drop(remove_dir_all(&root));
-}
-
-/// try_acquire uses create_new (atomic create-if-absent). A second
-/// acquirer on a fresh lock bails — closes the cross-process
-/// stat-then-overwrite race where two processes both thought they held it.
-/// In a single process the stale check already bails the second acquirer
-/// (the first's lock is fresh), so this test sets the lock then advances
-/// past the stale window to reach the create_new path, asserting the
-/// create_new fails on an existing (stale-but-reclaimed) target.
-#[test]
-fn test_lock_acquire_is_atomic() {
-    let dir = temp_dir("acquire-atomic");
-    let lock = ConsolidationLock::new(&dir);
-    // First acquire on an absent lock: create_new succeeds, prior = 0.
-    let prior = lock.try_acquire().expect("first acquire creates the lock");
-    assert_eq!(prior, 0, "no prior lock");
-    assert!(lock.last_consolidated_at() > 0, "lock file created");
-    // A fresh lock remains exclusively owned by its first acquirer.
-    let lock_b = ConsolidationLock::new(&dir);
-    assert!(
-        lock_b.try_acquire().is_none(),
-        "a fresh lock blocks a second acquirer"
-    );
-    drop(remove_dir_all(&dir));
 }
 
 #[test]
