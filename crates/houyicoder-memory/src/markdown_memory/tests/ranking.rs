@@ -11,13 +11,11 @@ use std::fs::read_to_string;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::fs::{File, FileTimes, OpenOptions};
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::channel;
-use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(unix)]
+use std::{os::unix::fs::symlink, sync::mpsc::channel, thread};
 
 fn temp_root() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
