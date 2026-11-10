@@ -815,8 +815,9 @@ fn test_fork_proceeds_unverified_source() {
     remove_dir_all(&sessions).ok();
 }
 
-/// resume_candidates returns the active in-cwd session (max log.jsonl mtime,
-/// excludes no-log + other-cwd sessions). Empty when no session matches.
+/// resume_candidates returns the active session of the current workspace,
+/// ranked by the log's last modification, and leaves out sessions with no
+/// log and sessions of another workspace. Empty when no session matches.
 /// Guards the --continue pick.
 #[test]
 fn test_candidates_pick_active_cwd() {

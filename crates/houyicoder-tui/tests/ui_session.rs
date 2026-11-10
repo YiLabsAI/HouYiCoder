@@ -404,8 +404,8 @@ fn test_picker_hides_held() {
 
 /// Two processes resume the same sid: the second --resume <sid> is rejected
 /// at the file lock (the hash chain's single-writer invariant). The second
-/// binary reports an "open in another process" error + exits, not a silent
-/// double-write. Proves the run_tui_loop lock acquisition path the unit tier
+/// binary says the session is open in another process and exits, rather than
+/// double-writing. Proves the run_tui_loop lock acquisition path the unit tier
 /// cannot reach (the loop is in the binary). The SessionLock unit test covers
 /// the lock semantics; this test covers the startup sequence.
 #[test]

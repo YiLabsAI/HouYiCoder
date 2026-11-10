@@ -47,7 +47,7 @@ const SCAN_FILE_CAP: usize = 200;
 const MAX_ENTRYPOINT_LINES: usize = 200;
 
 /// Advisory recall-frequency sidecar filename. Lives in the write root
-/// alongside the topic files + the derived index, written atomically under
+/// alongside the topic files and the derived index, written atomically under
 /// that root's lock. Advisory: a lost or corrupt sidecar is a cold restart
 /// (counters re-accumulate), never an invariant violation.
 const STATS_FILE: &str = ".stats.json";

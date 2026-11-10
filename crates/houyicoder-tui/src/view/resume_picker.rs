@@ -38,8 +38,8 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             Constraint::Length(1),
         ])
         .split(inner);
-    // Header: title + live filter query + how many sessions this process
-    // cannot open now, so a hidden row is not a silent absence.
+    // The header repeats the live filter query and states how many sessions
+    // this process cannot open now, so a hidden row is not a silent absence.
     let mut spans = vec![
         Span::styled(
             "Resume a session",
