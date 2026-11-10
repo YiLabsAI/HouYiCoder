@@ -1,7 +1,5 @@
 mod config_dir;
 
-use houyicoder_api::sandbox::CREDENTIAL_FILES;
-
 use super::*;
 
 #[test]
@@ -211,19 +209,6 @@ fn test_snapshot_store_asks() {
 fn test_credentials_file_asks() {
     let v = serde_json::json!({ "path": "/home/u/.claude/.credentials.json" });
     assert_eq!(safety_check("read", Some(&v)), Some(Effect::Ask));
-}
-
-/// A startup file runs at every later shell start, so the two lists that
-/// recognise credential reads and startup writes must stay in step: a name
-/// added to one and not the other opens a path the other list closes.
-#[test]
-fn test_startup_files_are_credentials() {
-    for name in STARTUP_FILES {
-        assert!(
-            CREDENTIAL_FILES.contains(name),
-            "{name} must also be recognised as a credential file"
-        );
-    }
 }
 
 #[test]

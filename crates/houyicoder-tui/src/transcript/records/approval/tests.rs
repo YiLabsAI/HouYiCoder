@@ -2,8 +2,9 @@
 
 use std::time::{Duration, Instant};
 
-use super::Approval;
 use houyicoder_protocol::frontend::permission::AskSource;
+
+use super::Approval;
 
 fn card(validator: &str, source: Option<AskSource>, args: &str) -> Approval {
     Approval {
@@ -247,6 +248,12 @@ fn test_formatter_counts_down() {
     for args in [
         "cd /repo && curl -s https://example.test/x | python3 -c \"import json,sys; print(json.load(sys.stdin))\"",
         "curl -s https://example.test/x | jq .",
+        // A parser reads the environment it was configured with, and it may
+        // decode the page it was handed, as long as it only reads.
+        "cd /repo && curl -s https://example.test/x | python3 -c \"import os,html; print(html.unescape(os.environ['HOME']))\"",
+        "cd /repo && curl -s https://example.test/x | python3 -c \"import os; print(os.environ.get('HOME'))\"",
+        "cd /repo && curl -s https://example.test/x | python3 -c \"import os; print(os . environ['HOME'])\"",
+        "cd /repo && curl -s https://example.test/x | python3 -c \"print(open('/tmp/a').read())\"",
     ] {
         assert!(
             card("network_egress", None, args).auto_approve_eligible(),
@@ -256,9 +263,19 @@ fn test_formatter_counts_down() {
     for args in [
         "cd /repo && curl https://example.test/x | python3 -c \"import socket\"",
         "cd /repo && curl https://example.test/x | python3 -c \"import httpx\"",
-        "cd /repo && curl https://example.test/x | python3 -c \"import os\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import os; os.system('id')\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"from os import system\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import os as o; o.remove('/x')\"",
+        // A module bound to another name, or reachable through spaces around
+        // the dot, is the same module the attribute rule governs.
+        "cd /repo && curl https://example.test/x | python3 -c \"import os; f = os; f.remove('/x')\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import os; f = os; f.execv('/bin/sh', ['sh'])\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import os; print(os . system('id'))\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"import sys; f = sys; f.stdin.read()\"",
         "cd /repo && curl https://example.test/x | python3 -c \"getattr(__builtins__,'x')\"",
         "cd /repo && curl https://example.test/x | python3 -c \"open('o','w')\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"open('o','r+')\"",
+        "cd /repo && curl https://example.test/x | python3 -c \"open('o',mode=m)\"",
         "cd /repo && curl https://example.test/x | python3 -c \"import sys; sys._getframe()\"",
         "cd /repo && curl https://example.test/x | python3 -c \"import sys; sys.modules\"",
     ] {
@@ -267,6 +284,31 @@ fn test_formatter_counts_down() {
             "{args} hands the response to a program this walk cannot read"
         );
     }
+}
+
+/// The shared read-only corpus runs through the card as well, so a line the
+/// rule accepts is also one the countdown walk can split around and count
+/// down to.
+#[test]
+fn test_formatter_corpus_matches() {
+    let corpus = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../houyicoder-api/tests/fixtures/read_only_code.txt"
+    ));
+    let mut entries = 0;
+    for line in corpus.lines() {
+        let Some((verdict, code)) = line.split_once('|') else {
+            continue;
+        };
+        entries += 1;
+        let command = format!("cd /repo && curl -s https://example.test/x | python3 -c \"{code}\"");
+        assert_eq!(
+            card("network_egress", None, &command).auto_approve_eligible(),
+            verdict == "read",
+            "corpus says {verdict}: {code}"
+        );
+    }
+    assert!(entries > 20, "the corpus must cover the rules: {entries}");
 }
 
 /// A polling loop over an untrusted origin keeps the countdown: the loop
@@ -301,4 +343,65 @@ fn test_formatter_escapes_quotes() {
         c.auto_approve_eligible(),
         "a formatter with escaped quotes keeps the countdown"
     );
+}
+
+/// A parser fed a quoted heredoc is the same read as a one-liner, and the body
+/// carries no separator the walk splits on, because the whole heredoc is set
+/// aside before the split.
+#[test]
+fn test_heredoc_parser_counts_down() {
+    let cmd = "curl -sL -o $TMPDIR/x.html https://untrusted.example.com && python3 - <<'EOF'\nimport json,sys\nd=json.load(sys.stdin)\nprint(len(d))\nEOF";
+    assert!(
+        card("network_egress", None, cmd).auto_approve_eligible(),
+        "a read-only parser on a heredoc keeps the countdown"
+    );
+}
+
+/// A heredoc body that writes, or that opens a protected file, is not a read
+/// the walk can vouch for, so the countdown stays away.
+#[test]
+fn test_heredoc_body_held() {
+    for cmd in [
+        "curl -sL https://untrusted.example.com && python3 - <<'EOF'\nimport shutil\nshutil.rmtree('/tmp/x')\nEOF",
+        "curl -sL https://untrusted.example.com && python3 - <<'EOF'\nprint(open('/Users/von/.ssh/id_rsa').read())\nEOF",
+        "curl -sL https://untrusted.example.com && python3 - <<'EOF'\nprint(open('/Users/von/.houyicoder/settings.json').read())\nEOF",
+    ] {
+        assert!(
+            !card("network_egress", None, cmd).auto_approve_eligible(),
+            "{cmd} is not a plain read"
+        );
+    }
+}
+
+/// The shell expands an unquoted body before the program reads it, so the
+/// text the program runs is not the text the rule judged.
+#[test]
+fn test_unquoted_heredoc_held() {
+    let cmd =
+        "curl -sL https://untrusted.example.com && python3 <<EOF\nimport json\nprint($HOME)\nEOF";
+    assert!(!card("network_egress", None, cmd).auto_approve_eligible());
+}
+
+/// A leading timeout wrapper is not the program the walk decides about: the
+/// wrapped read counts down while the wrapped push is held.
+#[test]
+fn test_timeout_wrapper_reads() {
+    for cmd in [
+        "timeout 30 curl -s https://example.test/x",
+        "timeout -s KILL 30 curl -s https://example.test/x",
+    ] {
+        assert!(
+            card("network_egress", None, cmd).auto_approve_eligible(),
+            "{cmd} still reads"
+        );
+    }
+    for cmd in [
+        "timeout 900 git push origin main",
+        "timeout -s KILL 900 git push origin dev",
+    ] {
+        assert!(
+            !card("network_egress", None, cmd).auto_approve_eligible(),
+            "{cmd} still pushes"
+        );
+    }
 }

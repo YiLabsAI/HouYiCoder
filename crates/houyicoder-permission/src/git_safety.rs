@@ -21,9 +21,7 @@
 
 use houyicoder_api::tool::is_shell_tool;
 
-use crate::compound::strip_safe_redirects;
-use crate::heredoc::strip_quoted_heredoc_bodies;
-use crate::pipeline::detection::expand_inline_interpreter;
+use crate::shell::canonical_scan;
 
 /// The git subcommand word for a discard form, for session-scoped consent.
 /// Returns None for a non-discard (a branch switch, an unstage, a stash save,
@@ -108,13 +106,21 @@ pub(crate) fn git_discard_consent_word(sub: &str, args: &[&str]) -> Option<&'sta
 /// Auto. Returns the matched git subcommand word (for session-scoped consent)
 /// or None. Closes the global-option / subshell / env-assignment bypasses
 /// (git -C <dir> checkout ., (git checkout .), FOO=bar git checkout .) via
-/// git_sub_and_args — the same fix core's snapshot trigger uses.
+/// the canonical scan's git_subcommand. Core's snapshot trigger keeps its own
+/// matcher, so the clear-cut forms are pinned by a drift vector both copies
+/// share.
 pub(crate) fn should_ask_before_git(tool_name: &str, content: &str) -> Option<&'static str> {
     collect_git_ask_ops(tool_name, content).into_iter().next()
 }
 
 /// Every git checkpoint or discard subcommand present across all segments of a
 /// shell command, in order of appearance.
+///
+/// The walk reads the canonical scan, so a git call wrapped in a timeout, a
+/// loop, a substitution, or an interpreter's inline code is found where it
+/// runs. Words are already decoded and quoting resolved, and the subcommand
+/// keeps its case: git's branch delete has a safe spelling and a forced one,
+/// and they differ only by the case of a single letter.
 pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'static str> {
     if !is_shell_tool(tool_name) {
         return Vec::new();
@@ -122,28 +128,13 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
     if content.is_empty() {
         return Vec::new();
     }
-    // Heredoc bodies are stripped before the scan, so a script that mentions a
-    // git discard form only inside a quoted heredoc body (a test string, a
-    // comment) does not read as a real git op the command runs.
-    let stripped = strip_quoted_heredoc_bodies(content);
-    let expanded = expand_inline_interpreter(&stripped);
-    let cleaned = strip_safe_redirects(&expanded);
+    let scan = canonical_scan(content);
     let mut ops = Vec::new();
-    // The scan runs over the command as written, not a lowercased copy. A
-    // lowercase copy erases the one distinction this classifier has to see:
-    // git's branch delete has a safe spelling and a forced one, and they
-    // differ only by the case of a single letter. Folding it made a delete
-    // that Git refuses to run on unmerged work read the same as one that
-    // throws the work away, so the safe form asked for consent it did not
-    // need. Case-insensitive matching happens where it belongs, on the
-    // subcommand word.
-    for segment in cleaned.split(['&', ';', '|', '\n', '(', ')', '`']) {
-        let raw_tokens: Vec<&str> = segment.split_whitespace().collect();
-        let unquoted: Vec<String> = raw_tokens.iter().map(|t| decode_token(t)).collect();
-        let token_refs: Vec<&str> = unquoted.iter().map(String::as_str).collect();
-        let Some((sub, args)) = git_sub_and_args(&token_refs) else {
+    for command in scan.commands() {
+        let Some((sub, args)) = command.git_subcommand() else {
             continue;
         };
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let sub_lower = sub.to_ascii_lowercase();
         let matched = match sub_lower.as_str() {
             "commit" => Some("commit"),
@@ -167,128 +158,6 @@ pub(crate) fn collect_git_ask_ops(tool_name: &str, content: &str) -> Vec<&'stati
         }
     }
     ops
-}
-
-/// Find the git subcommand + its args in a segment's tokens, skipping leading
-/// shell env-assignments (FOO=bar), subshell punctuation on the git token,
-/// and git global options that take a value (-C val, -c val, --git-dir[=val],
-/// --work-tree[=val], --namespace[=val], --exec-path[=val]). Returns None
-/// when the segment's first command is not git. Matches core's
-/// agent::git_safety::git_sub_and_args — keep both in sync.
-fn git_sub_and_args<'a>(tokens: &[&'a str]) -> Option<(&'a str, Vec<&'a str>)> {
-    let mut i = 0;
-    // Skip leading shell control keywords and env-assignments (FOO=bar) to reach "git".
-    while i < tokens.len() {
-        let t = trim_shell_punct(tokens[i]);
-        if t.is_empty() || is_shell_control_keyword(t) {
-            i += 1;
-            continue;
-        }
-        if t == "git" {
-            break;
-        }
-        if !t.starts_with('-') && t.contains('=') {
-            i += 1;
-            continue;
-        }
-        return None;
-    }
-    i += 1; // past "git"
-    while i < tokens.len() {
-        let t = trim_shell_punct(tokens[i]);
-        // --flag=value form of a global value option.
-        if let Some(eq) = t.find('=')
-            && is_git_global_value_flag(&t[..eq])
-        {
-            i += 1;
-            continue;
-        }
-        // bare global option taking a value (next token consumed).
-        if is_git_global_value_flag(t) {
-            i += 2;
-            continue;
-        }
-        break;
-    }
-    if i >= tokens.len() {
-        return None; // bare git with no subcommand
-    }
-    let sub = strip_quotes(trim_shell_punct(tokens[i]));
-    let args: Vec<&str> = tokens[i + 1..]
-        .iter()
-        .map(|t| strip_quotes(trim_shell_punct(t)))
-        .collect();
-    Some((sub, args))
-}
-
-/// True when a flag is a git global option that consumes the following token
-/// as its value.
-fn is_git_global_value_flag(flag: &str) -> bool {
-    matches!(
-        flag,
-        "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
-    )
-}
-
-/// Strip leading ( { and trailing ) } shell punctuation so a subshell-wrapped
-/// command still parses.
-fn trim_shell_punct(s: &str) -> &str {
-    let s = s.trim_start_matches(['(', '{']);
-    s.trim_end_matches([')', '}'])
-}
-
-/// Strip a matching pair of surrounding quotes from a token (so git "push"
-/// matches the bare push word). Delegates to mode::strip_quotes to avoid a
-/// second copy of the quote-strip logic.
-fn strip_quotes(s: &str) -> &str {
-    crate::pipeline::detection::strip_quotes(s)
-}
-
-pub(crate) fn is_shell_control_keyword(word: &str) -> bool {
-    matches!(
-        word,
-        "if" | "then"
-            | "elif"
-            | "else"
-            | "fi"
-            | "for"
-            | "while"
-            | "until"
-            | "do"
-            | "done"
-            | "time"
-            | "!"
-    )
-}
-
-pub(crate) fn decode_token(raw: &str) -> String {
-    let trimmed = trim_shell_punct(raw);
-    let mut out = String::with_capacity(trimmed.len());
-    let chars: Vec<char> = trimmed.chars().collect();
-    let mut i = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\'' && !in_double {
-            in_single = !in_single;
-            i += 1;
-            continue;
-        }
-        if c == '"' && !in_single {
-            in_double = !in_double;
-            i += 1;
-            continue;
-        }
-        if c == '\\' && !in_single && i + 1 < chars.len() {
-            out.push(chars[i + 1]);
-            i += 2;
-            continue;
-        }
-        out.push(c);
-        i += 1;
-    }
-    out
 }
 
 #[cfg(test)]

@@ -7,15 +7,20 @@
 //! decides where a write lands, so the gate only has to exclude constructs
 //! that can change what the fence is asked to open.
 
+use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
+
 use super::readonly::{command_reads_only, find_matching_paren};
 use super::{
     decode_shell_word, is_attestable, is_env_assignment, quotes_balanced, shell_word_spans,
     split_compound, strip_safe_redirects,
 };
-use crate::git_safety::{decode_token, is_shell_control_keyword, should_ask_before_git};
-use crate::heredoc::strip_quoted_heredoc_bodies;
+use crate::git_safety::should_ask_before_git;
 use crate::pipeline::detection::{should_ask_egress, strip_quotes};
 use crate::safety::marker_hit;
+use crate::shell::{
+    Stage, decode_token, leading_command_substitution, program_is_unresolved, stage_program,
+    substitution_bodies,
+};
 
 const MAX_DEPTH: u8 = 4;
 
@@ -59,13 +64,16 @@ fn is_dangerous_env_name(name: &str) -> bool {
 ///
 /// Deliberately absent: anything that creates a link or runs arbitrary code
 /// (ln, mv, tar, install, rsync, python, shell interpreters), anything that
-/// can rebind the temporary directory (getopts, printf -v, read, eval, export,
+/// can rebind the temporary directory (getopts, printf -v, eval, export,
 /// declare, unset), and the network clients, which the egress check owns.
+/// read is admitted only while the names it assigns are ordinary variables;
+/// assigning a name that rebinds the temporary directory or the loader is
+/// judged by the same rule as an environment assignment.
 const SUPPORTED_EFFECT_COMMANDS: &[&str] = &[
-    "basename", "cargo", "cat", "cd", "cp", "cut", "df", "diff", "dirname", "du", "echo", "false",
-    "file", "find", "git", "grep", "head", "jq", "ls", "make", "mkdir", "nohup", "printf", "pwd",
-    "realpath", "rg", "rm", "rmdir", "rustc", "sed", "sleep", "sort", "stat", "strings", "tail",
-    "touch", "tr", "true", "uniq", "wc", "which",
+    ":", "basename", "cargo", "cat", "cd", "cp", "cut", "df", "diff", "dirname", "du", "echo",
+    "false", "file", "find", "git", "grep", "head", "jq", "ls", "make", "mkdir", "nohup", "printf",
+    "pwd", "read", "realpath", "rg", "rm", "rmdir", "rustc", "sed", "sleep", "sort", "stat",
+    "strings", "tail", "touch", "tr", "true", "uniq", "wc", "which",
 ];
 
 /// Whether supported shell constructs avoid file output and nested risky
@@ -100,6 +108,12 @@ pub(crate) fn sets_tmpdir(command: &str) -> bool {
             }
         }
         let first = first_command_word(&seg).unwrap_or_default();
+        if first == "read" {
+            if read_assigns_dangerous_name(&seg) {
+                return true;
+            }
+            continue;
+        }
         if matches!(
             first.as_str(),
             "ln" | "pushd"
@@ -107,7 +121,6 @@ pub(crate) fn sets_tmpdir(command: &str) -> bool {
                 | "chroot"
                 | "builtin"
                 | "command"
-                | "read"
                 | "eval"
                 | "source"
                 | "."
@@ -157,6 +170,33 @@ pub(crate) fn sets_tmpdir(command: &str) -> bool {
     false
 }
 
+/// Whether a read call assigns a name that rebinds the execution environment.
+/// An option value and a flag are not names, and a prompt given to -p is text,
+/// so only an operand that is a plain identifier can count.
+fn read_assigns_dangerous_name(segment: &str) -> bool {
+    let mut skipped_value = false;
+    for token in segment.split_whitespace().skip(1) {
+        if skipped_value {
+            skipped_value = false;
+            continue;
+        }
+        let word = decode_token(token);
+        if word.starts_with('-') {
+            if matches!(
+                word.as_str(),
+                "-p" | "-n" | "-d" | "-t" | "-u" | "-a" | "-i"
+            ) {
+                skipped_value = true;
+            }
+            continue;
+        }
+        if is_dangerous_env_name(&word) {
+            return true;
+        }
+    }
+    false
+}
+
 fn check_compound_depth(command: &str, depth: u8, fenced: bool) -> bool {
     if depth == 0 {
         return false;
@@ -186,30 +226,45 @@ fn check_compound_depth(command: &str, depth: u8, fenced: bool) -> bool {
     true
 }
 
-/// Whether a segment starts with a command whose effect a fenced session can
-/// predict. A segment whose first word is unknown is not proof of danger, but
-/// it is not proof of safety either, so it cannot precede a temporary write.
+/// Whether a segment runs only commands whose effect a fenced session can
+/// predict. A segment whose program is unknown is not proof of danger, but it
+/// is not proof of safety either, so it cannot precede a temporary write; a
+/// segment that names no program at all is judged by the bodies its
+/// substitutions run, because those are the only commands it has.
 pub(crate) fn starts_with_supported_command(segment: &str) -> bool {
-    command_word(segment).is_some_and(|w| SUPPORTED_EFFECT_COMMANDS.contains(&w.as_str()))
-}
-
-/// The command word of a segment. Leading NAME=value words are skipped by
-/// shape, not by the value they carry: an assignment's value does not change
-/// which program runs, and a value with an expansion in it is still an
-/// assignment. Any substitution inside that value is scanned separately.
-fn command_word(segment: &str) -> Option<String> {
-    segment
-        .split_whitespace()
-        .map(decode_token)
-        .find(|w| !w.is_empty() && !is_shell_control_keyword(w) && !is_assignment_word(w))
-}
-
-fn is_assignment_word(word: &str) -> bool {
-    let Some((name, _)) = word.split_once('=') else {
+    if let Some(program) = program_of(segment)
+        && !SUPPORTED_EFFECT_COMMANDS.contains(&program.as_str())
+    {
         return false;
-    };
-    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+    match substitution_bodies(segment) {
+        Some(bodies) => bodies
+            .iter()
+            .all(|body| starts_with_supported_command(body)),
+        None => false,
+    }
+}
+
+/// Whether the segment's own program is one the scan resolved, so a write it
+/// opens is judged on that stage rather than borrowing confidence from an
+/// earlier one. A stage whose argument list the unwrapper refused is not
+/// resolved: a substitution in argument position can rewrite which program
+/// the shell starts.
+fn stage_resolved(segment: &str) -> bool {
+    match stage_program(segment) {
+        Stage::Program { exact, .. } => exact,
+        Stage::Empty => starts_with_supported_command(segment),
+    }
+}
+
+/// The program a segment runs, once wrappers, control-flow structure, and
+/// leading assignments are stepped over. A segment of pure structure names no
+/// program.
+fn program_of(segment: &str) -> Option<String> {
+    match stage_program(segment) {
+        Stage::Program { command, .. } => Some(command.program().to_string()),
+        Stage::Empty => None,
+    }
 }
 
 /// Whether a deletion target names a single child of the session temporary
@@ -295,6 +350,16 @@ fn copy_destination_is_safe(segment: &str) -> bool {
 }
 
 fn segment_effect_safe(segment: &str, depth: u8, fenced: bool, preceding_supported: bool) -> bool {
+    // A stage whose program name is a substitution or a variable runs text
+    // the scan never reads as a program, so no stage-level check vouches for
+    // it.
+    if leading_command_substitution(segment) || program_is_unresolved(segment) {
+        return false;
+    }
+    // A write borrows no confidence from its neighbours: the stage that opens
+    // the file must itself be one the scan resolved, or the command is not
+    // statically attestable whatever ran before it.
+    let current_resolved = stage_resolved(segment);
     let cleaned = strip_safe_redirects(segment);
     if first_command_word(&cleaned).as_deref() == Some("eval") {
         return false;
@@ -370,20 +435,13 @@ fn segment_effect_safe(segment: &str, depth: u8, fenced: bool, preceding_support
             continue;
         }
         if c == '>' {
-            if !(fenced && preceding_supported) {
-                return false;
-            }
-            let after_op = if chars.get(i + 1) == Some(&'>') {
-                i + 2
-            } else {
-                i + 1
-            };
-            let Some((target, next_i)) = read_redirect_token(&chars, after_op) else {
+            let Some(next_i) = scan_write_redirect_at(
+                &chars,
+                i,
+                fenced && preceding_supported && current_resolved,
+            ) else {
                 return false;
             };
-            if !is_temp_output_target(&target) && !is_safe_workspace_redirect_target(&target) {
-                return false;
-            }
             i = next_i;
             continue;
         }
@@ -482,14 +540,31 @@ fn rm_targets_are_temp(segment: &str, cwd_in_temp: bool) -> bool {
     saw_target
 }
 
+/// The index past a write redirect whose target the scan can vouch for, or
+/// None when the stage may not write there or may not write at all.
+fn scan_write_redirect_at(chars: &[char], i: usize, attestable: bool) -> Option<usize> {
+    if !attestable {
+        return None;
+    }
+    let after_op = if chars.get(i + 1) == Some(&'>') {
+        i + 2
+    } else {
+        i + 1
+    };
+    let (target, next_i) = read_redirect_token(chars, after_op)?;
+    (is_temp_output_target(&target) || is_safe_workspace_redirect_target(&target)).then_some(next_i)
+}
+
 fn scan_redirect_at(chars: &[char], i: usize) -> Option<usize> {
     let c = chars[i];
     if c == '<' && chars.get(i + 1) == Some(&'<') {
-        let after = chars.get(i + 2).copied();
-        return if matches!(after, Some('\'' | '"' | '-' | '\\')) {
-            Some(i + 2)
-        } else {
-            None
+        // Only a quoted delimiter feeds literal text. A bare one, with or
+        // without the tab-stripping dash, lets the shell expand the body, so
+        // the stage is not one this check can vouch for.
+        return match chars.get(i + 2).copied() {
+            Some('\'' | '"' | '\\') => Some(i + 2),
+            Some('-') if matches!(chars.get(i + 3), Some('\'' | '"' | '\\')) => Some(i + 3),
+            _ => None,
         };
     }
     let (target, next_i) = read_redirect_token(chars, i + 1)?;
@@ -613,9 +688,5 @@ fn is_readonly_protected_segment(segment: &str) -> bool {
 }
 
 fn first_command_word(segment: &str) -> Option<String> {
-    segment
-        .split_whitespace()
-        .filter(|w| !is_env_assignment(w))
-        .map(decode_token)
-        .find(|w| !w.is_empty() && !is_shell_control_keyword(w))
+    program_of(segment)
 }

@@ -12,9 +12,12 @@ use super::strip_quotes;
 /// or a field turns it into a write, which is the one form that would publish
 /// on the user's behalf.
 pub(super) fn gh_reads_only(args: &[&str]) -> bool {
-    let sub = strip_quotes(args.first().copied().unwrap_or(""));
-    let sub2 = strip_quotes(args.get(1).copied().unwrap_or(""));
-    if matches!(sub, "version" | "help" | "status" | "search") {
+    // Words arrive as written, so the group verb is folded before it is
+    // matched. The flags below are folded individually, because the case of a
+    // short flag carries nothing: -F and -f are the same field flag.
+    let sub = strip_quotes(args.first().copied().unwrap_or("")).to_ascii_lowercase();
+    let sub2 = strip_quotes(args.get(1).copied().unwrap_or("")).to_ascii_lowercase();
+    if matches!(sub.as_str(), "version" | "help" | "status" | "search") {
         return true;
     }
     if sub == "auth" {
@@ -59,10 +62,11 @@ pub(super) fn gh_reads_only(args: &[&str]) -> bool {
             // A field flag sends a value whatever its spelling: -f x, -fx,
             // -f=x, -F x. The bare flag and the attached form are the same
             // write, so the letter is what decides.
-            if arg.starts_with("--field")
-                || arg.starts_with("--raw-field")
-                || arg.starts_with("--input")
-                || arg.strip_prefix("-f").is_some()
+            let lower = arg.to_ascii_lowercase();
+            if lower.starts_with("--field")
+                || lower.starts_with("--raw-field")
+                || lower.starts_with("--input")
+                || lower.starts_with("-f")
             {
                 return false;
             }
@@ -70,7 +74,10 @@ pub(super) fn gh_reads_only(args: &[&str]) -> bool {
         return true;
     }
     matches!(
-        sub,
+        sub.as_str(),
         "pr" | "issue" | "repo" | "release" | "run" | "workflow" | "label" | "cache"
-    ) && matches!(sub2, "view" | "list" | "diff" | "checks" | "status")
+    ) && matches!(
+        sub2.as_str(),
+        "view" | "list" | "diff" | "checks" | "status"
+    )
 }

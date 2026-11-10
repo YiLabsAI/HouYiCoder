@@ -338,6 +338,10 @@ pub use boundary::{
 };
 mod credentials;
 pub use credentials::{CREDENTIAL_DIRS, CREDENTIAL_FILES, names_credential_path};
+mod protected;
+pub use protected::{
+    ProtectedPathHits, fence_covers_all_hits, fence_denied_path, protected_path_hits,
+};
 use std::fs::create_dir_all;
 use std::fs::read;
 use std::fs::read_dir;

@@ -2,124 +2,53 @@
 //! constructs to the concrete action taken — publishing, overwriting history,
 //! deleting files — so the user decides about the risk they are approving
 //! rather than an abstract category that hides it. The sentence derives from
-//! the same scans the validators use, so the card and the decision stay in
-//! one vocabulary.
+//! the same scan the validators use, so the card and the decision stay in one
+//! vocabulary.
 
-use super::detection::expand_inline_interpreter;
 use crate::compound::{is_attestable, is_effect_safe, starts_with_supported_command};
-use crate::heredoc::strip_quoted_heredoc_bodies;
-
-/// Parse the words of a shell command segment, stepping over leading shell
-/// structure words: loop and conditional keywords, case labels, and env
-/// assignments.
-fn parse_command_words(segment: &str) -> Vec<&str> {
-    let raw: Vec<&str> = segment.split_whitespace().collect();
-    let mut i = 0;
-    while i < raw.len() {
-        let w = raw[i].trim_matches(|c: char| c == '"' || c == '\'');
-        if w.is_empty() {
-            i += 1;
-            continue;
-        }
-        let bare = w.trim_end_matches(';');
-        if matches!(
-            bare,
-            "do" | "done" | "then" | "else" | "elif" | "fi" | "esac" | "break" | "continue"
-        ) {
-            i += 1;
-            continue;
-        }
-        if matches!(bare, "for" | "while" | "until" | "case" | "if") {
-            i += 1;
-            let opener = if bare == "case" { "in" } else { "do" };
-            while i < raw.len() && raw[i].trim_matches(|c| c == '"' || c == '\'') != opener {
-                i += 1;
-            }
-            if i < raw.len() {
-                i += 1;
-            }
-            continue;
-        }
-        if let Some((name, _)) = w.split_once('=')
-            && !name.is_empty()
-            && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            i += 1;
-            continue;
-        }
-        if (w.ends_with(')') && !w.starts_with('('))
-            || (bare.starts_with('*') && bare.ends_with('*'))
-        {
-            i += 1;
-            continue;
-        }
-        break;
-    }
-    raw[i..]
-        .iter()
-        .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
-        .filter(|w| !w.is_empty())
-        .collect()
-}
-
-/// Find the git subcommand and its trailing args, stepping past git global flags
-/// like -C, -c, --git-dir, and options taking a value.
-fn git_subcommand_and_args<'a>(words: &'a [&'a str]) -> Option<(&'a str, &'a [&'a str])> {
-    let mut idx = 1;
-    while idx < words.len() {
-        let w = words[idx];
-        if matches!(
-            w,
-            "-C" | "-c" | "--exec-path" | "--namespace" | "--work-tree"
-        ) {
-            idx += 2;
-            continue;
-        }
-        if w.starts_with("--git-dir=")
-            || w.starts_with("--work-tree=")
-            || w.starts_with("--namespace=")
-            || w.starts_with("-c")
-        {
-            idx += 1;
-            continue;
-        }
-        if w.starts_with('-') {
-            idx += 1;
-            continue;
-        }
-        return Some((w, &words[idx + 1..]));
-    }
-    None
-}
+use crate::shell::{ShellCommand, canonical_scan};
 
 /// The risk sentence for a destructive ask, naming the verb the scan found
-/// so the user reads what to decide about rather than a category.
+/// so the user reads what to decide about rather than a category. An escalated
+/// call names the launcher and the verb together: the privilege is the risk,
+/// and the verb is what the risk is taken for.
 pub(super) fn describe_destructive(content: &str) -> String {
-    let expanded = expand_inline_interpreter(content);
-    let scan = strip_quoted_heredoc_bodies(&expanded);
-    let lower = scan.to_ascii_lowercase();
-    for segment in lower.split(['&', ';', '|', '\n', '(', ')', '`']) {
-        let words = parse_command_words(segment);
-        let Some(&cmd) = words.first() else {
-            continue;
-        };
-        let target = if cmd == "sudo" {
-            words.get(1).copied().unwrap_or("sudo")
-        } else {
-            cmd
-        };
-        match target {
-            "rm" | "rmdir" | "unlink" => {
-                return format!("{target} deletes files or directories");
+    let scan = canonical_scan(content);
+    for command in scan.commands() {
+        let predicate = deletion_predicate(command.program());
+        let Some(launcher) = command.escalated() else {
+            match (command.program(), predicate) {
+                ("su" | "sudo", _) => {
+                    return format!(
+                        "{} runs a command with elevated privileges",
+                        command.program()
+                    );
+                }
+                (program, Some(predicate)) => return format!("{program} {predicate}"),
+                _ => continue,
             }
-            "sudo" => return "sudo runs a command with elevated privileges".into(),
-            "dd" => return "dd writes raw bytes to a device or file".into(),
-            "truncate" => return "truncate shrinks or empties a file".into(),
-            _ => {}
-        }
+        };
+        let Some(predicate) = predicate else {
+            return format!("{launcher} runs a command with elevated privileges");
+        };
+        return format!("{launcher} runs {}, which {predicate}", command.program());
+    }
+    // No named invocation carries the risk: the code this scan could not
+    // read does, and the card says so rather than naming a verb it never saw.
+    if scan.opaque_code() {
+        return "code this scan cannot read needs confirmation".into();
     }
     "destructive pattern needs confirmation".into()
+}
+
+/// What the program does to files, as the predicate a sentence completes with.
+fn deletion_predicate(program: &str) -> Option<&'static str> {
+    match program {
+        "rm" | "rmdir" | "unlink" => Some("deletes files or directories"),
+        "dd" => Some("writes raw bytes to a device or file"),
+        "truncate" => Some("shrinks or empties a file"),
+        _ => None,
+    }
 }
 
 /// The first step of a compound the gate cannot verify, named so the user
@@ -162,61 +91,95 @@ pub(super) fn describe_egress_reason(content: &str, outputs_safe: bool) -> Strin
         return "this command writes a local file; origin approval does not authorize file output"
             .into();
     }
-    let expanded = expand_inline_interpreter(content);
-    let lower = expanded.to_ascii_lowercase();
-    for segment in lower.split(['&', ';', '|', '\n', '(', ')', '`']) {
-        let words = parse_command_words(segment);
-        let Some(&cmd) = words.first() else {
-            continue;
-        };
-        match cmd {
-            "git" => {
-                if let Some((sub, args)) = git_subcommand_and_args(&words) {
-                    match sub {
-                        "push" => {
-                            if args.iter().any(|w| {
-                                *w == "--force" || *w == "-f" || *w == "--force-with-lease"
-                            }) {
-                                return "git push --force overwrites history on a remote repository"
-                                    .into();
-                            }
-                            return "git push publishes local commits to a remote repository"
-                                .into();
-                        }
-                        "pull" | "clone" => {
-                            return format!(
-                                "git {sub} fetches from a remote and modifies the local working tree"
-                            );
-                        }
-                        _ => {}
-                    }
-                }
+    let scan = canonical_scan(content);
+    for command in scan.commands() {
+        if let Some(reason) = git_reason(command) {
+            return reason;
+        }
+        let program = command.program();
+        match program {
+            "cargo" | "npm" if names_word(command, 1, "publish") => {
+                return format!("{program} publish publishes a package to an external registry");
             }
-            "cargo" | "npm" if words.get(1) == Some(&"publish") => {
-                return format!("{cmd} publish publishes a package to an external registry");
-            }
-            "pip" if words.get(1) == Some(&"upload") => {
+            "pip" if names_word(command, 1, "upload") => {
                 return "pip upload publishes a package to an external registry".into();
             }
             "ssh" | "scp" | "sftp" | "rsync" => {
-                return format!("{cmd} opens a remote host connection or file transfer");
+                return format!("{program} opens a remote host connection or file transfer");
             }
-            "curl" | "wget" => {
-                let sends = words.iter().any(|w| {
-                    w.starts_with("-x")
-                        || w.starts_with("--request")
-                        || w.starts_with("-d")
-                        || w.starts_with("--data")
-                        || w.starts_with("-T")
-                        || w.starts_with("--upload-file")
-                });
-                if sends {
-                    return format!("{cmd} sends data to a remote endpoint");
-                }
+            "curl" | "wget" if sends_data(command) => {
+                return format!("{program} sends data to a remote endpoint");
             }
-            "gh" => {}
             _ => {}
         }
     }
     "this command reaches the network".into()
+}
+
+/// The sentence for a git call that reaches a remote.
+fn git_reason(command: &ShellCommand) -> Option<String> {
+    let (sub, args) = command.git_subcommand()?;
+    match sub.to_ascii_lowercase().as_str() {
+        "push" => {
+            if args
+                .iter()
+                .any(|word| matches!(word.as_str(), "-f" | "--force" | "--force-with-lease"))
+            {
+                return Some("git push --force overwrites history on a remote repository".into());
+            }
+            Some("git push publishes local commits to a remote repository".into())
+        }
+        "pull" | "clone" => Some(format!(
+            "git {sub} fetches from a remote and modifies the local working tree"
+        )),
+        _ => None,
+    }
+}
+
+/// Short flags that carry a request body out, one letter each. Case matters:
+/// the request-method flag is upper case while the proxy flag is lower.
+const CURL_DATA_SHORT: &[&str] = &["-X", "-d", "-F", "-T"];
+
+/// Long flags under which a request program sends a body, an upload, or a
+/// method of its own choosing.
+const CURL_DATA_LONG: &[&str] = &["--request", "--data", "--form", "--upload-file"];
+const WGET_DATA_LONG: &[&str] = &[
+    "--method",
+    "--post-data",
+    "--post-file",
+    "--body-data",
+    "--body-file",
+];
+
+/// Whether a request program's arguments carry data out: a body, a form, an
+/// upload, or a write method. The programs spell these differently, and a
+/// short flag that means a retry count for one means data for the other, so
+/// each program is read against its own list.
+fn sends_data(command: &ShellCommand) -> bool {
+    let program = command.program().to_ascii_lowercase();
+    let (short, long) = if program == "wget" {
+        (&[][..], WGET_DATA_LONG)
+    } else {
+        (CURL_DATA_SHORT, CURL_DATA_LONG)
+    };
+    command.args().iter().any(|word| {
+        short.iter().any(|flag| carries_short_flag(word, flag))
+            || long
+                .iter()
+                .any(|flag| word.to_ascii_lowercase().starts_with(flag))
+    })
+}
+
+/// Whether the word is the flag itself or the flag with a value glued on. A
+/// longer word that merely starts with the same letters is another flag.
+fn carries_short_flag(word: &str, flag: &str) -> bool {
+    word.strip_prefix(flag)
+        .is_some_and(|rest| rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphabetic()))
+}
+
+/// Whether the word at an index is the named word, compared without case.
+fn names_word(command: &ShellCommand, index: usize, name: &str) -> bool {
+    command
+        .word(index)
+        .is_some_and(|word| word.eq_ignore_ascii_case(name))
 }

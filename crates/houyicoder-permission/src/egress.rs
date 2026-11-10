@@ -13,7 +13,7 @@
 //! else. Anything else returns None, which makes the caller ask every time
 //! instead of remembering a scope wider than the command the user saw.
 
-use std::mem::take;
+use houyicoder_api::shell::interpreter::is_read_only_program;
 
 use crate::compound::is_attestable;
 use crate::compound::is_effect_safe;
@@ -24,15 +24,17 @@ use crate::compound::sets_tmpdir;
 use crate::compound::split_compound;
 use crate::compound::starts_with_supported_command;
 use crate::compound::strip_safe_redirects;
-use crate::pipeline::detection::interpreter_inline_code;
-
-mod formatter;
-mod unwrapper;
-pub(crate) use unwrapper::{substitution_bodies, unwrap_clause};
+use crate::shell::Stage;
+use crate::shell::has_process_substitution;
+use crate::shell::program_name;
+use crate::shell::split_clauses;
+use crate::shell::stage_inline_code;
+use crate::shell::stage_program;
+use crate::shell::substitution_bodies;
+use crate::shell::unwrap_clause;
 
 use crate::pipeline::detection::should_ask_egress;
 use crate::pipeline::detection::strip_quotes;
-use formatter::is_pure_formatter;
 
 const TRUSTED_HOSTS_JSON: &str = include_str!("../preapproved_hosts.json");
 
@@ -58,7 +60,14 @@ const EGRESS_TOOLS: &[&str] = &["curl", "wget"];
 
 /// Long flags permitted on a read-only curl or wget request that take no
 /// separate value argument.
+///
+/// The location flag belongs here because it changes only how the response is
+/// followed. The derived scope is the origin written in the command, and a
+/// redirect may lead elsewhere, so a remembered answer covers the command as
+/// written; the request carries no body out, and the body-carrying flags are
+/// refused separately.
 const ALLOWED_BOOL_LONG: &[&str] = &[
+    "--location",
     "--silent",
     "--show-error",
     "--fail",
@@ -92,7 +101,7 @@ const ALLOWED_VALUE_LONG: &[&str] = &[
 
 /// Short flag letters permitted on a read-only curl or wget request that take
 /// no value.
-const ALLOWED_BOOL_SHORT: &[char] = &['s', 'S', 'f', 'I', 'i', 'N', 'q', '4', '6', 'v'];
+const ALLOWED_BOOL_SHORT: &[char] = &['L', 's', 'S', 'f', 'I', 'i', 'N', 'q', '4', '6', 'v'];
 
 /// Short flag letters permitted on a read-only curl or wget request that
 /// consume the next argument as their value.
@@ -150,26 +159,33 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
     let mut preceding_supported = true;
     for clause in split_clauses(&normalized) {
         for stage in split_compound(&clause) {
-            let words = shell_words(stage.trim());
-            let Some(first) = words.first() else {
-                continue;
+            let command = match stage_program(stage.trim()) {
+                Stage::Empty => continue,
+                Stage::Program { command, exact } => {
+                    // An argument the scan could not read could be the one
+                    // naming the output, so the outputs are not safe.
+                    if !exact {
+                        return false;
+                    }
+                    command
+                }
             };
-            let program = strip_quotes(first);
-            if !EGRESS_TOOLS.contains(&program) {
+            let program = program_name(command.program()).to_ascii_lowercase();
+            if !EGRESS_TOOLS.contains(&program.as_str()) {
                 preceding_supported = preceding_supported && starts_with_supported_command(&stage);
                 continue;
             }
             let allow_temp = can_use_temp && preceding_supported;
+            let args = command.args();
             let mut document_output = program == "curl";
-            let mut idx = 1;
-            while idx < words.len() {
-                let w = strip_quotes(&words[idx]);
+            let mut idx = 0;
+            while idx < args.len() {
+                let w = args[idx].as_str();
                 if let Some(val) = w
                     .strip_prefix("--output=")
                     .or_else(|| w.strip_prefix("--output-document="))
                 {
-                    let v = strip_quotes(val);
-                    if !output_target_safe(v, allow_temp) {
+                    if !output_target_safe(val, allow_temp) {
                         return false;
                     }
                     document_output = true;
@@ -177,7 +193,7 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
                     if program == "curl" && w == "-O" {
                         return false;
                     }
-                    let v = words.get(idx + 1).map(|s| strip_quotes(s)).unwrap_or("");
+                    let v = args.get(idx + 1).map(String::as_str).unwrap_or("");
                     if !output_target_safe(v, allow_temp) {
                         return false;
                     }
@@ -237,16 +253,23 @@ fn collect_from_command(
     scopes: &mut Vec<String>,
 ) -> Option<()> {
     for clause in split_clauses(command) {
+        // A process substitution hands a stage the output of another command
+        // as a file name. The inner command is walked and judged on its own,
+        // but the scope this walk derives would name it rather than the
+        // command line the user wrote, so the clause cannot be remembered.
+        if has_process_substitution(&clause) {
+            return None;
+        }
         // The clause's own words, with control-flow and case-label shells
         // peeled, are what the stages below classify.
-        let peeled = unwrapper::unwrap_clause(&clause)?;
+        let peeled = unwrap_clause(&clause)?;
         let stages: Vec<String> = split_compound(&peeled);
         let stage_refs: Vec<&str> = stages.iter().map(|s| s.as_str()).collect();
         let piped = stages.len() > 1;
         // Substitution bodies inside the clause — a loop's generator, an
         // assignment's capture — recurse through the same walk so their
         // programs are judged, not refused as syntax.
-        if let Some(bodies) = unwrapper::substitution_bodies(&clause) {
+        if let Some(bodies) = substitution_bodies(&clause) {
             for body in bodies {
                 collect_from_command(&body, allow_effect_safe, fenced, scopes)?;
             }
@@ -299,61 +322,6 @@ fn collect_from_command(
     Some(())
 }
 
-/// Split a normalized command on semicolons and logical operators outside
-/// quotes and parentheses, keeping each pipeline together as one clause so
-/// downstream pipe stages of an egress command can be checked independently
-/// of local pipelines in later statements.
-fn split_clauses(command: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let chars: Vec<char> = command.chars().collect();
-    let mut i = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut depth = 0i32;
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            '(' if !in_single && !in_double => depth += 1,
-            ')' if !in_single && !in_double && depth > 0 => depth -= 1,
-            '&' | '|'
-                if !in_single
-                    && !in_double
-                    && depth == 0
-                    && i + 1 < chars.len()
-                    && chars[i + 1] == c =>
-            {
-                let trimmed = cur.trim();
-                if !trimmed.is_empty() {
-                    out.push(trimmed.to_string());
-                }
-                cur.clear();
-                i += 2;
-                continue;
-            }
-            ';' if !in_single && !in_double && depth == 0 => {
-                let trimmed = cur.trim();
-                if !trimmed.is_empty() {
-                    out.push(trimmed.to_string());
-                }
-                cur.clear();
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        cur.push(c);
-        i += 1;
-    }
-    let trimmed = cur.trim();
-    if !trimmed.is_empty() {
-        out.push(trimmed.to_string());
-    }
-    out
-}
-
 /// Classify one command segment by where it reaches.
 fn classify_segment(segment: &str) -> Segment {
     // A redirect that only moves a stream is not an argument to the program.
@@ -361,19 +329,27 @@ fn classify_segment(segment: &str) -> Segment {
     // request whose destination is already trusted.
     let cleaned = strip_safe_redirects(segment);
     let segment = cleaned.as_str();
-    let words = shell_words(segment);
-    if words
+    let command = match stage_program(segment) {
+        Stage::Empty => return Segment::Local,
+        Stage::Program { command, exact } => {
+            // The destination is read from the arguments, so an argument the
+            // scan could not read leaves it unknown.
+            if !exact {
+                return Segment::Refused;
+            }
+            command
+        }
+    };
+    if command
+        .args()
         .iter()
-        .take_while(|w| w.contains('='))
-        .any(|w| is_refused_egress_env(w))
+        .take_while(|word| word.contains('='))
+        .any(|word| is_refused_egress_env(word))
     {
         return Segment::Refused;
     }
-    let Some(first) = words.first() else {
-        return Segment::Local;
-    };
-    let program = strip_quotes(first);
-    if !EGRESS_TOOLS.contains(&program) {
+    let program = program_name(command.program()).to_ascii_lowercase();
+    if !EGRESS_TOOLS.contains(&program.as_str()) {
         // A channel this module cannot name — git push, a package publish, an
         // interpreter-wrapped request — would ride along inside the remembered
         // scope, so the whole command stays unanswerable.
@@ -383,10 +359,10 @@ fn classify_segment(segment: &str) -> Segment {
             Segment::Local
         };
     }
-    let arg_refs: Vec<&str> = words[1..].iter().map(|s| s.as_str()).collect();
-    match literal_origin_list(&arg_refs, allow_multi_origin_for(program)) {
+    let arg_refs: Vec<&str> = command.args().iter().map(String::as_str).collect();
+    match literal_origin_list(&arg_refs, allow_multi_origin_for(&program)) {
         Some(origin_list) => Segment::Scoped {
-            program: program.to_string(),
+            program,
             origin_list,
         },
         None => Segment::Refused,
@@ -412,7 +388,7 @@ fn safe_pipe_consumer(stage: &str, allow_effect_safe: bool, fenced: bool) -> boo
     if !is_effect_safe(stage, fenced) {
         return false;
     }
-    interpreter_inline_code(stage.trim()).is_some_and(is_pure_formatter)
+    stage_inline_code(stage).is_some_and(|code| is_read_only_program(&code))
 }
 
 fn allow_multi_origin_for(program: &str) -> bool {
@@ -434,37 +410,6 @@ fn is_refused_egress_env(word: &str) -> bool {
             | "all_proxy"
             | "GIT_SSH_COMMAND"
     )
-}
-
-/// Split a segment into words while keeping single- and double-quoted spans
-/// intact, so a multi-word header argument stays one token.
-fn shell_words(segment: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut cur = String::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    for c in segment.chars() {
-        match c {
-            '\'' if !in_double => {
-                in_single = !in_single;
-                cur.push(c);
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-                cur.push(c);
-            }
-            c if c.is_whitespace() && !in_single && !in_double => {
-                if !cur.is_empty() {
-                    words.push(take(&mut cur));
-                }
-            }
-            _ => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        words.push(cur);
-    }
-    words
 }
 
 /// The single origin a request program's arguments name, or None when the
@@ -600,19 +545,21 @@ fn is_safe_flag_value(flag: &str, value: &str) -> bool {
 /// default port for that scheme dropped. None for anything a static check
 /// cannot read as a plain URL.
 pub(crate) fn http_origin(url: &str) -> Option<String> {
-    // A character the shell would expand or escape means the text does not
-    // name the destination the process will use. It is checked over the whole
-    // URL because an expansion in the path can extend the host.
-    if url.contains(['$', '`', '\\', '"', '\'']) {
-        return None;
-    }
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
-    if authority.is_empty() || authority.contains('@') {
+    // The authority is what a remembered answer names, so it must be literal.
+    if authority.is_empty() || authority.contains(['@', '$', '`', '\\', '"', '\'', ' ', '\t']) {
+        return None;
+    }
+    // The path and query ride along with the request, so a substitution or a
+    // quote there changes what is sent even when the host is the one the scope
+    // names. Only a plain variable expansion is admitted: it names a value the
+    // request carries, never a command this scan would have to run.
+    if !path_and_query_are_literal(&rest[authority.len()..]) {
         return None;
     }
     let (host, port) = match authority.rsplit_once(':') {
@@ -627,6 +574,47 @@ pub(crate) fn http_origin(url: &str) -> Option<String> {
         Some(port) if port != default_port => Some(format!("{scheme}://{host}:{port}")),
         _ => Some(format!("{scheme}://{host}")),
     }
+}
+
+/// Whether everything after the authority is text a static check reads.
+///
+/// A backtick, a command substitution, a backslash, a quote, or whitespace is
+/// a way to build the request from something this scan has not read, so each
+/// one refuses the origin. A variable reference stays admissible: $NAME and
+/// ${NAME} name a value the request carries.
+fn path_and_query_are_literal(rest: &str) -> bool {
+    let chars: Vec<char> = rest.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        match chars[index] {
+            '`' | '\\' | '"' | '\'' => return false,
+            c if c.is_whitespace() => return false,
+            '$' => {
+                if chars.get(index + 1) == Some(&'(') {
+                    return false;
+                }
+                index += 1;
+                let brace = chars.get(index) == Some(&'{');
+                if brace {
+                    index += 1;
+                }
+                let start = index;
+                while chars
+                    .get(index)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                {
+                    index += 1;
+                }
+                if index == start || (brace && chars.get(index) != Some(&'}')) {
+                    return false;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    true
 }
 
 /// Whether a header value names a credential rather than a content

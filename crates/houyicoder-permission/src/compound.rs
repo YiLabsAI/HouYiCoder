@@ -9,8 +9,9 @@
 //! substitution) that change which resources a command touches. A full grammar
 //! is out of scope; the gate escalates anything ambiguous to Ask.
 
-use crate::egress::{substitution_bodies, unwrap_clause};
-use crate::heredoc::strip_quoted_heredoc_bodies;
+use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
+
+use crate::shell::{substitution_bodies, unwrap_clause};
 
 mod effect;
 mod protected_write;
@@ -58,6 +59,18 @@ pub fn split_compound(cmd: &str) -> Vec<String> {
                 continue;
             }
             _ => {}
+        }
+        // A backslash makes the next character literal outside single quotes:
+        // an escaped quote does not end a quoted run, and an escaped separator
+        // does not split the command. A backslash before a newline is a line
+        // continuation, which the newline branch below joins.
+        if c == '\\' && !in_single && chars.get(i + 1).is_some_and(|next| *next != '\n') {
+            cur.push(c);
+            if let Some(next) = chars.get(i + 1) {
+                cur.push(*next);
+            }
+            i += 2;
+            continue;
         }
         if in_single || in_double {
             cur.push(c);
@@ -572,12 +585,18 @@ pub fn is_attestable(segment: &str) -> bool {
         if scan.in_double {
             continue;
         }
-        // Quoted heredoc (<< with quote, dash, or backslash after) feeds
-        // literal text; body already stripped. Skip so only single <
-        // (file input redirect) escalates.
+        // A quoted heredoc (<< with a quote, or with a dash before one) feeds
+        // literal text; the body is already stripped. Skip so only a single <
+        // (file input redirect) escalates. A bare delimiter, with or without
+        // the dash, is expanded by the shell and does not attest.
         if c == '<' && scan.peek_next() == Some('<') {
             let after = scan.chars.get(scan.pos + 1).copied();
-            if matches!(after, Some('\'') | Some('"') | Some('-') | Some('\\')) {
+            let literal = match after {
+                Some('\'' | '"' | '\\') => true,
+                Some('-') => matches!(scan.chars.get(scan.pos + 2), Some('\'' | '"' | '\\')),
+                _ => false,
+            };
+            if literal {
                 scan.next();
                 continue;
             }

@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 
-use houyicoder_api::sandbox::{Containment, FenceAxis, names_credential_path};
+use houyicoder_api::sandbox::{
+    Containment, FenceAxis, fence_covers_all_hits, names_credential_path,
+};
 use houyicoder_api::tool::{is_shell_tool, writes_files};
 
 use crate::compound::{reads_only_protected, writes_fence_denied_path};
@@ -27,7 +29,7 @@ use crate::decision::{AskReason, AskSource, Decision};
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
-use crate::safety::{fence_covers_all_hits, marker_hit, safety_check};
+use crate::safety::{marker_hit, safety_check};
 use std::fs::canonicalize;
 
 /// Protected paths: the version-control directory, the agent's own config

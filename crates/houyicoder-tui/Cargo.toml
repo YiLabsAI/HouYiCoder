@@ -38,6 +38,7 @@ crossterm = { version = "0", features = ["osc52"] }
 base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 houyicoder-protocol = { path = "../houyicoder-protocol" }
 houyicoder-client = { path = "../houyicoder-client" }
+houyicoder-api = { path = "../houyicoder-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
@@ -54,7 +55,6 @@ unicode-linebreak = "0.1.5"
 # Plain-form canonicalization for workspace-walk test assertions.
 dunce = "1"
 houyicoder-core = { path = "../houyicoder-core" }
-houyicoder-api = { path = "../houyicoder-api" }
 houyicoder-permission = { path = "../houyicoder-permission" }
 houyicoder-session = { path = "../houyicoder-session" }
 houyicoder-provider = { path = "../houyicoder-provider" }

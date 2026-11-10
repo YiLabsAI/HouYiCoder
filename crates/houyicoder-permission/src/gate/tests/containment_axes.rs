@@ -160,6 +160,25 @@ fn test_read_waiver_needs_reads() {
     }
 }
 
+/// The temporary-removal exemption rests on the scan reading the command as a
+/// removal of scratch files. Code the scan cannot read rides along with such a
+/// removal without being covered by that reading, so the unread code still
+/// asks.
+#[test]
+fn test_unread_code_outlives_removal() {
+    let gate = fenced_mode(PermissionMode::Auto, Arc::new(FilesystemFence));
+    for command in [
+        "rm -rf \"$TMPDIR/fresh\" && perl -e 'unlink \"/tmp/x\"'",
+        "rm -rf \"$TMPDIR/fresh\"; node -e \"process.kill(1)\"",
+    ] {
+        assert_eq!(
+            gate.decide(&bash_req(command)).outcome(),
+            Outcome::Ask,
+            "unread code is not part of the removal: {command}"
+        );
+    }
+}
+
 /// A backend that reports fenced coverage while withdrawing every axis keeps
 /// every relaxation a question: the premise of each is an axis the fence
 /// says it does not enforce, so nothing may be granted on its word.

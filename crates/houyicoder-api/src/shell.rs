@@ -9,6 +9,9 @@
 //! or arithmetic expression spells a comparison the same way, so it is read
 //! as an expression rather than a command and left alone.
 
+pub mod heredoc;
+pub mod interpreter;
+
 /// The shell a sandbox backend starts for one command.
 ///
 /// The value is a property of the backend, not of the caller: a backend

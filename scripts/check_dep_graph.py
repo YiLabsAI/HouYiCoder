@@ -32,7 +32,9 @@ CRATES = ROOT / "crates"
 # The layering whitelist: which houyicoder-* crates each crate may depend on.
 # Mirrors the layering design dependency rules. ports holds traits only;
 # the engine (core) depends on ports + the foundation; L1 domains depend
-# on ports + foundation; tui is a pure protocol client.
+# on ports + foundation; tui is a protocol client that also reads the shared
+# api foundation for the lexical shell scans and path names, which make no
+# trust decision on their own.
 WHITELIST: dict[str, set[str]] = {
     "houyicoder-protocol": set(),
     "houyicoder-async": set(),
@@ -100,7 +102,11 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-skill",
     },
     "houyicoder-client": {"houyicoder-protocol", "houyicoder-async"},
-    "houyicoder-tui": {"houyicoder-client", "houyicoder-protocol"},
+    "houyicoder-tui": {
+        "houyicoder-client",
+        "houyicoder-protocol",
+        "houyicoder-api",
+    },
     # cli is the binary entry point, above service in the stack. service owns
     # the composition logic (build_runner lives in service::composition); cli
     # is a thin binary that calls it and names the types the composition API

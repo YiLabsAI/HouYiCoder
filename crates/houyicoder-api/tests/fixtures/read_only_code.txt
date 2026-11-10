@@ -1,0 +1,39 @@
+# Interpreter code read by the shared read-only rule: the gate reads it to
+# decide whether to ask, and the approval card reads it to decide whether the
+# countdown may run. Each line is a verdict ("read" or "refuse"), a vertical
+# bar, and one line of Python. Both sides run this same corpus, so a verdict
+# that holds on one side and not the other shows up here.
+read|import json
+read|import json,sys; print(json.load(sys.stdin))
+read|import os; print(os.environ['HOME'])
+read|import os; print(os.environ.get('X'))
+read|import os; p = os.environ['TMPDIR'] + '/x'; print(open(p).read())
+read|import html,os; print(html.unescape(os.environ['HOME']))
+read|import sys; print(sys.stdin.read())
+read|open('x')
+read|open('x',encoding='utf-8')
+read|open('x','r')
+read|open('x','rb')
+read|for i,line in enumerate(open('x',encoding='utf-8',errors='ignore'),1): print(i)
+read|import re; print(re.search('a','a'))
+read|print('os')
+read|print('sys')
+read|print('use os.system here')
+refuse|import os; os.system('id')
+refuse|import os; os.remove('/tmp/x')
+refuse|import sys; sys.exit()
+refuse|import os; f = os; f.remove('/tmp/x')
+refuse|import os; f = os; f.execv('/bin/sh', ['sh'])
+refuse|import os as o; o.remove('/x')
+refuse|from os import system
+read|from os import environ as env; print(env['HOME'])
+refuse|import sys; f = sys; f.stdin.read()
+refuse|import sys; sys._getframe()
+refuse|import sys; sys.modules
+refuse|import socket
+refuse|import httpx
+refuse|getattr(__builtins__,'x')
+refuse|open('x','w')
+refuse|open('x','r+')
+refuse|open('x',mode=m)
+refuse|import subprocess; subprocess.run(['ls'])

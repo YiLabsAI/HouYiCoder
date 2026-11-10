@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use houyicoder_api::shell::interpreter::without_read_only_code;
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::AskSource;
@@ -302,10 +303,6 @@ impl Approval {
     }
 }
 
-mod formatter;
-
-use formatter::without_formatter_code;
-
 #[cfg(test)]
 mod tests;
 
@@ -320,10 +317,10 @@ mod tests;
 fn reads_network(command: &str) -> bool {
     let mut saw_network_read = false;
     // An interpreter's inline code carries the separators the split below cuts
-    // on, so it is read and set aside first. A body that is not a formatter
-    // stops the walk: the countdown resolves unattended, and an opaque program
-    // beside a request does not get one.
-    let Some(without_code) = without_formatter_code(command) else {
+    // on, so it is read and set aside first. A body that is not a verified
+    // read-only program stops the walk: the countdown resolves unattended, and
+    // an opaque program beside a request does not get one.
+    let Some(without_code) = without_read_only_code(command) else {
         return false;
     };
     let stripped = without_stream_redirects(&without_code);
@@ -339,6 +336,7 @@ fn reads_network(command: &str) -> bool {
         // a leading control keyword or case label is structure, not a
         // program, so it steps aside and the program word decides.
         let words: Vec<&str> = skip_control_shell(words);
+        let words: Vec<&str> = skip_timeout(words);
         let Some(&first) = words.first() else {
             continue;
         };
@@ -491,6 +489,27 @@ fn skip_control_shell(words: Vec<&str>) -> Vec<&str> {
         }
     }
     words[start..].to_vec()
+}
+
+/// Step over a leading timeout wrapper: its duration and options are not the
+/// program the walk decides about, while the command it runs is. The duration
+/// is required, so a bare timeout with no command stays where it is and holds.
+fn skip_timeout(words: Vec<&str>) -> Vec<&str> {
+    let mut start = 0;
+    while words
+        .get(start)
+        .is_some_and(|word| word.eq_ignore_ascii_case("timeout"))
+    {
+        start += 1;
+        while words.get(start).is_some_and(|word| word.starts_with('-')) {
+            let takes_value = matches!(words[start], "-s" | "-k" | "--signal" | "--kill-after");
+            start += if takes_value { 2 } else { 1 };
+        }
+        if words.get(start).is_some_and(|word| !word.starts_with('-')) {
+            start += 1;
+        }
+    }
+    words[start.min(words.len())..].to_vec()
 }
 
 /// Whether a segment is a local command that only reads.

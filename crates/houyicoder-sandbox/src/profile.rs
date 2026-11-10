@@ -234,6 +234,9 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
         v
     };
     s.push_str(&deny_read_always(DENY_REGIONS, &allow_paths, tag));
+    // The cross-compilation toolchain's download cache, opened before the
+    // mandatory denies so those still cover anything inside it.
+    s.push_str(&allow_cross_compilation_cache(home));
     // Lands after the allow-backs so opening the workspace for writing cannot
     // wash out a deny of a credential path inside it.
     s.push_str(&mandatory_deny(home, tag));
@@ -452,6 +455,22 @@ fn filesystem_rules_with_access(
          (deny file-read* {deny_regions} (with message \"{tag}\"))\n\
          (allow file-read* {read_subs})\n\
          (allow file-write* {write_subs} (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))\n"
+    )
+}
+
+/// Open the cross-compilation toolchain's download cache under the home
+/// directory.
+///
+/// A build for a foreign target downloads that target's system headers and
+/// libraries into a cache the build tool owns, outside the workspace. The
+/// grant is read and write, because the first run populates the cache and
+/// later runs read it, and it applies to every fenced session: the profile is
+/// rendered before the command is known, so it cannot be narrowed to one
+/// invocation. Both spellings the tool picks between are opened; nothing else
+/// under the home caches is.
+pub fn allow_cross_compilation_cache(home: &str) -> String {
+    format!(
+        "(allow file-read* file-write* (subpath \"{home}/Library/Caches/cargo-xwin\") (subpath \"{home}/.cache/cargo-xwin\"))\n"
     )
 }
 

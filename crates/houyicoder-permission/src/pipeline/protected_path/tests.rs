@@ -473,15 +473,17 @@ fn test_credential_read_asks() {
     }
 }
 
-/// A script that reads the settings file is the same read as cat, so it passes
-/// once the fence makes the file unwritable: the read cannot change it, and the
-/// kernel already refuses any write.
+/// A scripted read of the settings store asks. The read-only rule is the only
+/// proof an interpreter body offers, and it refuses every protected path: the
+/// same rule cannot tell a read of the store from a read of a private key,
+/// because both are one string literal the scan does not otherwise follow.
+/// The direct read keeps its waiver, because the command line names the file.
 #[test]
-fn test_script_settings_read_passes() {
+fn test_script_settings_read_asks() {
     let ws = Workspace::new(line!());
     let command = "cd /Users/von/workspace/hicoder && echo \"settings\"; python3 -c \"\nimport json\nd=json.load(open('/Users/von/.houyicoder/settings.json'))\nprint(json.dumps(d.get('model',{}),indent=2))\n\"";
     let d = ws.fenced_gate().decide(&bash_req(command));
-    assert_eq!(d.outcome(), Outcome::Allow, "reads only: {d:?}");
+    assert_eq!(d.outcome(), Outcome::Ask, "scripted read: {d:?}");
 }
 
 /// Backing the settings file up reads it and writes a temporary destination,

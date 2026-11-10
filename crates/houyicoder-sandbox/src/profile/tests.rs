@@ -218,6 +218,38 @@ fn test_render_profile_contains_mandatory() {
     assert!(mandatory > allow_back);
 }
 
+/// The cache a Windows-target build populates must be writable, and the rule
+/// must land before the mandatory denies so those still cover anything inside
+/// the cache path.
+#[test]
+fn test_cross_compile_cache_writable() {
+    let p = render(&ProfileSpec::new(
+        Path::new("/tmp/ws-2"),
+        "/tmp",
+        "/Users/bob",
+        "tag-z",
+    ));
+    for cache in [
+        "/Users/bob/Library/Caches/cargo-xwin",
+        "/Users/bob/.cache/cargo-xwin",
+    ] {
+        assert!(
+            p.contains(&format!("(subpath \"{cache}\")")),
+            "cache {cache} not opened: {p}"
+        );
+    }
+    let cache = p
+        .find("(subpath \"/Users/bob/.cache/cargo-xwin\")")
+        .expect("cross-compilation cache allow present");
+    let mandatory = p
+        .find("(subpath \"/Users/bob/.ssh\")")
+        .expect("mandatory deny present");
+    assert!(
+        cache < mandatory,
+        "cache allow must land before the mandatory denies"
+    );
+}
+
 /// System /etc files git reads at startup must be re-allowed AFTER the
 /// broad /etc deny and the mandatory rc-file regex denies, so git can read
 /// the system git config. Without this, git prints that it cannot access

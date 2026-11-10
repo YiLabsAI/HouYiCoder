@@ -143,14 +143,30 @@ fn test_formatter_is_consumer() {
         "reading stdin through the module is the idiom: {reads_stdin}"
     );
 
+    // A parser reads the environment it was configured with, and it may
+    // decode the page it was handed.
+    let reads_env = concat!(
+        "curl -s \"https://api.github.com/x\" | python3 -c \"import os,html; ",
+        "print(html.unescape(os.environ['HOME']))\""
+    );
+    assert!(
+        !matches!(gate.decide(&bash_req(reads_env)).outcome(), Outcome::Ask),
+        "reading the environment table is still a read: {reads_env}"
+    );
+
     for code in [
         "import socket",
         "import httpx",
         "from multiprocessing.connection import Client",
-        "import os",
+        "import os; os.system('id')",
+        "from os import system",
+        "import os as o; o.remove('/x')",
+        "open('out', mode=m)",
         "getattr(__builtins__, 'x')",
         "__import__('so'+'cket')",
         "open('out','w').write('x')",
+        // An update mode opens for writing too, so it is not a read.
+        "open('out','r+').write('x')",
         "import subprocess",
         // An attribute getter by another name is still one.
         "import operator; operator.attrgetter('x')(())",
@@ -276,13 +292,20 @@ fn test_egress_other_host_asks() {
         "curl https://api.github.com/x; curl https://evil.test/y",
         "curl https://api.github.com/x; wget https://evil.test/y",
         "A=$(curl${IFS}https://evil.test/x); curl https://api.github.com/x",
-        "curl -L https://api.github.com/x",
     ] {
         assert!(
             matches!(g.decide(&bash_req(command)).outcome(), Outcome::Ask),
             "must still ask: {command}"
         );
     }
+    // The scope names the origin written in the command. A read request that
+    // follows a redirect carries no body out, so the remembered answer still
+    // covers what the command itself names.
+    assert_eq!(
+        g.decide(&bash_req("curl -sL https://api.github.com/x"))
+            .outcome(),
+        Outcome::Allow
+    );
 }
 
 /// A request that uploads, retargets itself, carries a credential, or names

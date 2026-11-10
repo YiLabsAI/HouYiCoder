@@ -1,4 +1,19 @@
 use super::*;
+use crate::shell::canonical_scan;
+
+/// Whether the command's first git stage is a discard form this classifier
+/// asks about.
+fn discards(command: &str) -> bool {
+    let scan = canonical_scan(command);
+    let Some(stage) = scan.commands().iter().find(|stage| stage.runs("git")) else {
+        return false;
+    };
+    let Some((sub, args)) = stage.git_subcommand() else {
+        return false;
+    };
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    git_discard_consent_word(sub, &args).is_some()
+}
 
 /// Shared drift vector: the commands where the conservative consent
 /// matcher + core's aggressive snapshot matcher MUST agree (clear-cut
@@ -42,15 +57,7 @@ fn test_drift_vector_consent_matches() {
     for (cmd, exp) in DRIFT_VECTOR.iter().zip(expected.iter()) {
         // The scan reads the command as written: the case of a flag is what
         // separates a guarded branch delete from a forced one.
-        let (sub, args) = cmd
-            .split(['&', ';', '|', '\n'])
-            .find_map(|seg| git_sub_and_args(&seg.split_whitespace().collect::<Vec<_>>()))
-            .unwrap_or_else(|| panic!("no git sub in {cmd}"));
-        assert_eq!(
-            git_discard_consent_word(sub, &args).is_some(),
-            *exp,
-            "consent drift on {cmd}"
-        );
+        assert_eq!(discards(cmd), *exp, "consent drift on {cmd}");
     }
 }
 
@@ -106,13 +113,7 @@ fn test_consent_bypasses_closed() {
 /// an operation that cannot lose work.
 #[test]
 fn test_branch_delete_spellings_differ() {
-    let ask = |cmd: &str| {
-        let (sub, args) = cmd
-            .split(['&', ';', '|', '\n'])
-            .find_map(|seg| git_sub_and_args(&seg.split_whitespace().collect::<Vec<_>>()))
-            .unwrap_or_else(|| panic!("no git sub in {cmd}"));
-        git_discard_consent_word(sub, &args).is_some()
-    };
+    let ask = discards;
     assert!(
         !ask("git branch -d feature"),
         "the guarded delete asks nothing"

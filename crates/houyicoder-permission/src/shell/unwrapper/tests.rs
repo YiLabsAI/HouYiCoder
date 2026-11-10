@@ -1,6 +1,5 @@
 //! Tests for the shell construct unwrapper.
 
-use super::super::split_clauses;
 use super::*;
 
 /// A loop header and case labels peel away, leaving the programs the
@@ -52,6 +51,22 @@ fn test_substitution_bodies() {
 
     let refused = "echo `date`";
     assert!(substitution_bodies(refused).is_none(), "backquotes refuse");
+    let refused = "echo \"`date`\"";
+    assert!(
+        substitution_bodies(refused).is_none(),
+        "a backquote runs inside double quotes too"
+    );
+}
+
+/// Arithmetic expansion runs no command, so it contributes no body; a command
+/// substitution nested inside it still runs and is reported.
+#[test]
+fn test_arithmetic_carries_no_command() {
+    let bodies = substitution_bodies("echo $((1 << 2))").expect("arithmetic is tracked");
+    assert!(bodies.is_empty(), "a number runs nothing: {bodies:?}");
+
+    let bodies = substitution_bodies("echo $(( $(date) + 1 ))").expect("the pairs balance");
+    assert_eq!(bodies, vec!["date".to_string()]);
 }
 
 /// A word with a quoted closing paren is not a case label: the quotes make
@@ -87,15 +102,28 @@ fn test_dangerous_env_refuses() {
     }
 }
 
-/// Temporary trace of the clause path for the polling shape.
+/// Arithmetic expansion computes a number, so it stands in as a value: a
+/// quoted word keeps its shape and an unquoted one stays one word.
 #[test]
-fn test_trace_polling() {
-    let command = r#"cd /repo && for i in $(seq 1 40); do sleep 15; s=$(curl -s "https://api.github.com/repos/org/repo/actions/runs/1/jobs" | python3 -c "import json,sys; d=json.load(sys.stdin); print('|'.join(f\"{j['name']}:{j['status']}\" for j in d.get('jobs',[])))" 2>/dev/null); echo "$i $s"; case "$s" in *in_progress*|*queued*|"") ;; *) break;; esac; done"#;
-    for clause in split_clauses(command) {
-        let peeled = unwrap_clause(&clause);
-        let bodies = substitution_bodies(&clause);
-        println!("TRACE clause {clause:?}");
-        println!("       peeled {peeled:?}");
-        println!("       bodies {bodies:?}");
-    }
+fn test_arithmetic_expands_to_value() {
+    let peeled = unwrap_clause(r#"echo "after $((i))m""#).expect("the word stays whole");
+    assert!(peeled.contains("after 0m"), "the value stands in: {peeled}");
+
+    let peeled = unwrap_clause("sleep $((60 * 60))").expect("the argument stays one word");
+    assert!(
+        peeled.split_whitespace().count() == 2,
+        "the expansion is one value, not three words: {peeled}"
+    );
+}
+
+/// A command substitution inside double quotes is still a substitution: the
+/// marker becomes its own word so the clause refuses rather than treating a
+/// rewritten argument as text the shell passes as written.
+#[test]
+fn test_quoted_substitution_refuses() {
+    assert!(unwrap_clause(r#"echo "prefix$(date)suffix""#).is_none());
+    // At a command position the marker peels, and the body is the caller's
+    // recursion to judge.
+    let peeled = unwrap_clause(r#"h="$(date)""#).expect("a capture peels");
+    assert_eq!(peeled, "", "the capture carries nothing to judge");
 }

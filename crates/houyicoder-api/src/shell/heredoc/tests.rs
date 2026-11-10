@@ -1,4 +1,6 @@
-use super::strip_quoted_heredoc_bodies;
+//! Tests for the heredoc body walk.
+
+use super::{heredoc_starts, strip_quoted_heredoc_bodies};
 
 /// A quoted heredoc body is replaced; the operator + delimiter lines stay.
 #[test]
@@ -47,4 +49,18 @@ fn test_double_escaped_delim_stripped() {
         !strip_quoted_heredoc_bodies(cmd).contains("bad line 2"),
         "escaped-delimiter body stripped"
     );
+}
+
+/// The operator reports whether the shell will expand its body: a quoted or
+/// escaped delimiter makes it literal, an unquoted one does not, and the
+/// tab-stripping form is named.
+#[test]
+fn test_starts_report_quote_flag() {
+    let starts = heredoc_starts("python3 - <<'EOF'");
+    assert_eq!(starts.len(), 1);
+    assert!(starts[0].quoted);
+    assert_eq!(starts[0].delim, "EOF");
+    let starts = heredoc_starts("cat <<-EOF");
+    assert!(starts[0].tab_strip && !starts[0].quoted);
+    assert!(heredoc_starts("echo $((1 << 2))").is_empty());
 }

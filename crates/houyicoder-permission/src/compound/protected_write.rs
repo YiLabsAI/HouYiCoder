@@ -5,10 +5,10 @@
 //! interpreter is judged only when that interpreter runs it, because a quoted
 //! word the shell never reads as a command would otherwise read as a write.
 
+use houyicoder_api::sandbox::fence_denied_path;
+use houyicoder_api::shell::heredoc::{quoted_heredoc_bodies, strip_quoted_heredoc_bodies};
+
 use super::{decode_shell_word, is_env_assignment, shell_word_spans, split_compound};
-use crate::heredoc::quoted_heredoc_bodies;
-use crate::heredoc::strip_quoted_heredoc_bodies;
-use crate::safety::fence_denied_path;
 
 /// The commands whose own operands name the paths they write. Without this
 /// list an argument is only evidence that a word was used, so a command that

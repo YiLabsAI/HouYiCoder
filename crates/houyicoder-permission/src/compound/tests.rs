@@ -382,6 +382,41 @@ fn test_unbalanced_quote_asks() {
     assert!(!is_effect_safe(cmd, true));
 }
 
+/// A write redirect is judged on the stage that opens it: a stage whose own
+/// argument list the scan refused is not attested by the command before it,
+/// however safe that command was.
+#[test]
+fn test_unresolved_write_not_attested() {
+    assert!(is_effect_safe("cd /work/repo && echo hi > $TMPDIR/x", true));
+    assert!(!is_effect_safe(
+        "cd /work/repo && echo `date` > $TMPDIR/x",
+        true
+    ));
+    assert!(!is_effect_safe(
+        "cd /work/repo && echo \"$(date)\" > $TMPDIR/x",
+        true
+    ));
+    // The program name itself can be a substitution, which leaves the stage
+    // unreadable and the write unjudged.
+    assert!(!is_effect_safe(
+        "cd /work/repo && $(which echo) hi > $TMPDIR/x",
+        true
+    ));
+    assert!(!is_effect_safe("$(which rm) -rf $TMPDIR/x", true));
+    // A variable in command position names a program only the shell knows, so
+    // the write it carries is not one the scan has judged.
+    assert!(!is_effect_safe("$X hi > $TMPDIR/x", true));
+    assert!(!is_effect_safe(
+        "cd /work/repo && ${X} -rf . > $TMPDIR/x",
+        true
+    ));
+    // A capture fills a variable and is not a command position.
+    assert!(is_effect_safe(
+        "cd /work/repo && s=$(git rev-parse HEAD) && echo $s > $TMPDIR/x",
+        true
+    ));
+}
+
 #[test]
 fn test_split_quoted_pipe_nosplit() {
     // A pipe inside quotes is data, not a segment boundary.

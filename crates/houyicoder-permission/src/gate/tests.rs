@@ -35,6 +35,8 @@ mod egress;
 #[cfg(test)]
 mod git_ops;
 #[cfg(test)]
+mod launcher;
+#[cfg(test)]
 mod matrix;
 #[cfg(test)]
 mod mode_decision;
@@ -49,5 +51,8 @@ mod session_replay;
 #[cfg(test)]
 mod shell_policy;
 #[cfg(test)]
+mod shell_scan;
 #[cfg(test)]
 mod workdir_rule;
+#[cfg(test)]
+mod wrapped_shell;

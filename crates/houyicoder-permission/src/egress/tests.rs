@@ -1,6 +1,6 @@
 //! Tests for the egress scope derivation.
 
-use super::{egress_destination, egress_scope_list};
+use super::{egress_destination, egress_scope_list, http_origin};
 
 /// The two commands from a real session: a certificate path assigned first,
 /// the request second, and a local parser last. Both name the same origin, so
@@ -67,12 +67,30 @@ fn test_destination_rejects_data() {
         "curl --config config https://api.github.com/x",
         "curl -x proxy.test:8080 https://api.github.com/x",
         "curl --resolve api.github.com:443:1.2.3.4 https://api.github.com/x",
-        "curl -L https://api.github.com/x",
-        "curl -sSL https://api.github.com/x",
-        "curl --location https://api.github.com/x",
         "wget --post-data=@secret https://api.github.com/x",
     ] {
         assert_eq!(egress_destination(command), None, "must refuse: {command}");
+    }
+}
+
+/// A flag that only changes how the response is handled, and an expansion
+/// after the authority, leave the origin written in the command readable: that
+/// origin is the scope a remembered answer names. A read request carries no
+/// body out, and a redirect is followed at run time, possibly to another host;
+/// what the answer covers is the command as written.
+#[test]
+fn test_destination_keeps_scopable_flag() {
+    for command in [
+        "curl -L https://api.github.com/x",
+        "curl -sSL https://api.github.com/x",
+        "curl --location https://api.github.com/x",
+        "curl \"https://api.github.com/$PATH\"",
+    ] {
+        assert_eq!(
+            egress_destination(command).as_deref(),
+            Some("curl https://api.github.com"),
+            "must stay scopable: {command}"
+        );
     }
 }
 
@@ -113,13 +131,12 @@ fn test_destination_rejects_two_hosts() {
     );
 }
 
-/// A URL the shell would expand does not name the destination the process
-/// will use.
+/// A URL whose authority the shell would expand does not name the host the
+/// process will reach, so it cannot be remembered.
 #[test]
 fn test_destination_rejects_dynamic() {
     for command in [
         "curl \"$URL\"",
-        "curl \"https://api.github.com/$PATH\"",
         "curl https://api.github.com/x?q=$(whoami)",
         "curl `cat url`",
     ] {
@@ -189,6 +206,39 @@ fn test_destination_rejects_redirect() {
 fn test_destination_rejects_other_url() {
     assert_eq!(egress_destination("curl ftp://example.test/x"), None);
     assert_eq!(egress_destination("curl file:///etc/passwd"), None);
+}
+
+/// The path and query ride with the request, so a substitution or a quote
+/// there is not text this check read, even when the host is the scoped one.
+/// A plain variable reference names a value and stays readable.
+#[test]
+fn test_origin_rejects_dynamic_path() {
+    for url in [
+        "https://api.github.com/x?q=$(whoami)",
+        "https://api.github.com/`id`/x",
+        "https://api.github.com/x\"y",
+        "https://api.github.com/x'y",
+        "https://api.github.com/x y",
+        "https://api.github.com/x\\y",
+        "https://api.github.com/x/${X:-y}",
+        "https://api.github.com/x/$",
+        "https://api.github.com/x/$/y",
+    ] {
+        assert_eq!(http_origin(url), None, "must refuse: {url}");
+    }
+    for url in [
+        "https://api.github.com/repos/$OWNER/x",
+        "https://api.github.com/repos/${OWNER}/x",
+        "https://api.github.com/x?per_page=$N",
+        "https://api.github.com/x?per_page=${N}",
+        "https://api.github.com",
+    ] {
+        assert_eq!(
+            http_origin(url).as_deref(),
+            Some("https://api.github.com"),
+            "must read: {url}"
+        );
+    }
 }
 
 /// A channel this module cannot name stays unanswerable, because remembering

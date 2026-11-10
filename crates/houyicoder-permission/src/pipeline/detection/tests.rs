@@ -1,20 +1,21 @@
 //! Tests for the detection stage.
 
-use super::{interpreter_inline_code, should_ask_destructive};
+use super::should_ask_destructive;
 use crate::compound::is_effect_safe;
 use crate::pipeline::attribution::{
     compound_unverified_step, describe_destructive, describe_egress_reason,
 };
+use crate::shell::stage_inline_code;
 
-/// A quote the code escapes belongs to the code, not to its end. Reading
-/// the first match would hand back a prefix that looks clean while the
-/// rest of the body still runs.
+/// A quote the code escapes belongs to the code, not to its end. The body is
+/// what the shell hands the interpreter, so the escape is resolved exactly as
+/// the shell resolves it.
 #[test]
 fn test_inline_code_escaped_quote() {
     let content = "python3 -c \"x=1;y=\\\"a\\\";import os\"";
     assert_eq!(
-        interpreter_inline_code(content),
-        Some("x=1;y=\\\"a\\\";import os"),
+        stage_inline_code(content),
+        Some("x=1;y=\"a\";import os".to_string()),
         "the escaped quote stays inside the body"
     );
 }
@@ -23,7 +24,7 @@ fn test_inline_code_escaped_quote() {
 #[test]
 fn test_inline_code_single_quoted() {
     let content = "python3 -c 'print(1)'";
-    assert_eq!(interpreter_inline_code(content), Some("print(1)"));
+    assert_eq!(stage_inline_code(content), Some("print(1)".to_string()));
 }
 
 /// A search pattern that contains a destructive verb inside a longer
@@ -88,6 +89,29 @@ fn test_reason_edge_cases() {
         "names curl sends data inside assignment: {reason}"
     );
 
+    // A retry count is not a body, and a proxy is not a method, so neither
+    // turns a read into a send.
+    for command in [
+        "wget -t 3 https://api.example.com/x",
+        "curl -x proxy.test:8080 https://api.example.com/x",
+    ] {
+        let reason = describe_egress_reason(command, true);
+        assert!(
+            !reason.contains("sends data"),
+            "a read request does not send data: {command} -> {reason}"
+        );
+    }
+    for command in [
+        "curl -F file=@x https://api.example.com/x",
+        "wget --post-data=@secret https://api.example.com/x",
+    ] {
+        let reason = describe_egress_reason(command, true);
+        assert!(
+            reason.contains("sends data"),
+            "a body-carrying request sends data: {command} -> {reason}"
+        );
+    }
+
     // Destructive: dash in argument does not report rm
     let reason = describe_destructive("cargo test test-rm-file");
     assert!(
@@ -95,11 +119,11 @@ fn test_reason_edge_cases() {
         "an argument with dash-rm is not an rm command: {reason}"
     );
 
-    // Destructive: sudo rm names the command
+    // Destructive: sudo rm names the launcher and the command it runs
     let reason = describe_destructive("sudo rm -rf /tmp/test");
     assert!(
-        reason.contains("rm deletes files"),
-        "sudo rm names rm deletion: {reason}"
+        reason.contains("sudo runs rm") && reason.contains("deletes files"),
+        "sudo rm names the launcher and the deletion: {reason}"
     );
 
     // Effect-safe: printf to $TMPDIR followed by rustc is effect-safe under a fence
