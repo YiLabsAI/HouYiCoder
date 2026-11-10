@@ -18,14 +18,20 @@ const VERSION_CONTROL_DIR: &str = ".git/";
 const CONTROL_DIRS: [&str; 3] = [".claude/", ".houyicoder/", ".agents/"];
 
 /// Children of a configuration directory that decide what the agent may do
-/// later: the permission and settings stores, the hook and command
-/// definitions, the skill bodies and scripts, and the installed plugins that
-/// supply them.
+/// later: the permission and settings stores, the lock files that keep
+/// concurrent store writers from colliding, the hook and command definitions,
+/// the skill bodies and scripts, and the installed plugins that supply them.
 const CONTROL_CHILDREN: &[&str] = &[
+    // The settings store names its lock after the file it guards.
     "settings.json",
     "settings.local.json",
+    "settings.json.lock",
+    "settings.local.json.lock",
+    // The permission store hides its lock as a dotted sibling of the file.
     "permissions.json",
+    ".permissions.json.lock",
     "permissions.local.json",
+    ".permissions.local.json.lock",
     "skill-grants.json",
     ".credentials.json",
     "hooks",
@@ -55,9 +61,13 @@ const FENCE_DENIED_CHILDREN: &[(&str, &[&str])] = &[
         &[
             ".credentials.json",
             "permissions.json",
+            ".permissions.json.lock",
             "permissions.local.json",
+            ".permissions.local.json.lock",
             "settings.json",
             "settings.local.json",
+            "settings.json.lock",
+            "settings.local.json.lock",
             "skill-grants.json",
             "skills",
             "snapshots",

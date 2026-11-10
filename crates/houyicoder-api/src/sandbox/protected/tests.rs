@@ -54,6 +54,18 @@ fn test_fence_covers_only_denied() {
     assert!(fence_denied_path("repo/.git/hooks/pre-commit"));
     assert!(fence_covers_all_hits("repo/.git/hooks/pre-commit"));
     assert!(fence_denied_path("HOME=/tmp/.claude/.credentials.json"));
+    // A permission store's lock file is what keeps two writers from losing
+    // an update, so deleting it would undo the guarantee.
+    assert!(protected_path_hits("rm .houyicoder/.permissions.json.lock").control);
+    assert!(fence_denied_path(".houyicoder/.permissions.json.lock"));
+    assert!(fence_denied_path(
+        ".houyicoder/.permissions.local.json.lock"
+    ));
+    // The settings store serializes its writers with a lock file beside the
+    // scope file, and deleting one reopens the lost update there.
+    assert!(protected_path_hits("rm .houyicoder/settings.json.lock").control);
+    assert!(fence_denied_path(".houyicoder/settings.json.lock"));
+    assert!(fence_denied_path(".houyicoder/settings.local.json.lock"));
     for text in [
         ".houyicoder/hooks/run.sh",
         ".git/config",
