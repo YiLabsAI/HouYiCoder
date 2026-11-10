@@ -5,8 +5,12 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use dunce::canonicalize;
 use std::env;
 use std::fs;
+use std::fs::FileTimes;
+use std::fs::OpenOptions;
+use std::fs::remove_dir_all;
 use std::path::Path;
 use std::process;
 use std::thread;
@@ -241,7 +245,7 @@ fn test_resume_lock_released_exit() {
         s2.output()
     );
     assert!(
-        !s2.output().contains("held by another"),
+        !s2.output().contains("open in another process"),
         "b2 must not be rejected after b1 clean exit:\n{}",
         s2.output()
     );
@@ -331,7 +335,7 @@ fn test_resume_lock_released_crash() {
         s2.output()
     );
     assert!(
-        !s2.output().contains("held by another"),
+        !s2.output().contains("open in another process"),
         "b2 must not be rejected after b1 crash:\n{}",
         s2.output()
     );
@@ -371,6 +375,140 @@ fn test_continue_rejects_cwd_session() {
         "--continue must reject an other-cwd session, not silently jump to it:\n{}",
         s.output_plain()
     );
+}
+
+/// Stamp a path's mtime to a fixed age, so the activity order the pick
+/// depends on is deterministic: the listing resolves mtime at whole-second
+/// granularity, and two seeds written in one second would tie.
+fn stamp_age(path: &Path, secs_ago: u64) {
+    let t = SystemTime::now() - Duration::from_secs(secs_ago);
+    // Opened for write because windows stamps times through a handle that
+    // carries the write-attributes right.
+    OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open for set_times")
+        .set_times(FileTimes::new().set_modified(t))
+        .expect("set mtime");
+}
+
+/// --continue skips a session another process holds and resumes the next
+/// newest one, so a second terminal continues older work instead of exiting
+/// with a lock refusal.
+#[test]
+#[ignore]
+fn test_continue_skips_held() {
+    let sessions_dir = fresh_temp_dir("sessions-continue-held");
+    // The binary converges --continue on its own workspace, so the seeds
+    // record the workspace the child runs in, spelled as the child resolves
+    // it.
+    let ws = fresh_temp_dir("continue-ws");
+    let cwd = canonicalize(&ws).expect("canonical workspace");
+    let cwd_str = cwd.to_string_lossy().into_owned();
+    let older = "88888888-8888-8888-8888-888888888888";
+    let newer = "99999999-9999-9999-9999-999999999999";
+    common::seed_session_with_cwd(
+        &sessions_dir,
+        older,
+        "model-older",
+        "older prompt",
+        &cwd_str,
+    );
+    common::seed_session_with_cwd(
+        &sessions_dir,
+        newer,
+        "model-newer",
+        "newer prompt",
+        &cwd_str,
+    );
+    stamp_age(&sessions_dir.join(older).join("log.jsonl"), 100);
+    stamp_age(&sessions_dir.join(newer).join("log.jsonl"), 10);
+
+    // Hold the newest session from this process, a different process from
+    // the binary under test.
+    let lock = common::hold_session_lock(&sessions_dir.join(newer).join("session.lock"));
+
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        Some(ws.clone()),
+        &["--continue".to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for("model-older", RENDER_TIMEOUT),
+        "--continue should resume the newest free session:\n{}",
+        s.output()
+    );
+    assert!(
+        !s.output().contains("model-newer"),
+        "--continue must not resume the held session:\n{}",
+        s.output()
+    );
+    drop(lock);
+    drop(s);
+    remove_dir_all(ws).ok();
+}
+
+/// When every session of the workspace is held, --continue refuses before
+/// opening a host and prints one line per session naming that session's fork
+/// command, so the user has a way forward instead of an empty session.
+#[test]
+#[ignore]
+fn test_continue_refuses_all_held() {
+    let sessions_dir = fresh_temp_dir("sessions-continue-all-held");
+    let ws = fresh_temp_dir("continue-all-held-ws");
+    let cwd = canonicalize(&ws).expect("canonical workspace");
+    let cwd_str = cwd.to_string_lossy().into_owned();
+    let older = "66666666-6666-6666-6666-666666666666";
+    let newer = "77777777-7777-7777-7777-777777777777";
+    common::seed_session_with_cwd(
+        &sessions_dir,
+        older,
+        "model-older",
+        "older prompt",
+        &cwd_str,
+    );
+    common::seed_session_with_cwd(
+        &sessions_dir,
+        newer,
+        "model-newer",
+        "newer prompt",
+        &cwd_str,
+    );
+    stamp_age(&sessions_dir.join(older).join("log.jsonl"), 100);
+    stamp_age(&sessions_dir.join(newer).join("log.jsonl"), 10);
+    let _newer_lock = common::hold_session_lock(&sessions_dir.join(newer).join("session.lock"));
+    let _older_lock = common::hold_session_lock(&sessions_dir.join(older).join("session.lock"));
+
+    let mut s = PtySession::launch_with_sessions_dir(
+        None,
+        None,
+        None,
+        Some(ws.clone()),
+        &["--continue".to_string()],
+        sessions_dir.clone(),
+    );
+    assert!(
+        s.wait_for_plain("no free session", RENDER_TIMEOUT),
+        "--continue should refuse instead of starting an empty session:\n{}",
+        s.output()
+    );
+    for sid in [older, newer] {
+        let hint = format!("houyi --resume {sid} --fork-session");
+        assert!(
+            s.wait_for_plain(&hint, RENDER_TIMEOUT),
+            "the refusal should name this session's fork command:\n{}",
+            s.output()
+        );
+    }
+    assert!(
+        s.wait_for_exit(RENDER_TIMEOUT),
+        "the refused launch should exit:\n{}",
+        s.output()
+    );
+    remove_dir_all(ws).ok();
 }
 
 /// Resuming a session whose recorded cwd no longer exists does not crash:

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::lock::SessionLock;
 use houyicoder_context::session_class::session_page;
 use houyicoder_context::{
     EventId, NameSource, PromptCoverage, PromptRecord, SessionDescriptor, SessionDescriptorStore,
@@ -305,6 +306,42 @@ fn test_basename_takes_last_segment() {
     assert_eq!(cwd_basename("/"), "?");
 }
 
+/// A session another process holds stays in the catalog and is marked, so an
+/// explicit lookup by name still finds it and reaches the refusal that says
+/// what blocks it. The picker, not the catalog, leaves those rows out; the
+/// marker is what tells it which. A catalog that dropped them would answer a
+/// name search with no match.
+#[tokio::test]
+async fn test_catalog_marks_held() {
+    let root = temp_root();
+    let cur = SessionId::new();
+    let free = SessionId::new();
+    let held = SessionId::new();
+    write_descriptor(&root, free, &base("/repo/free", 1));
+    write_descriptor(&root, held, &base("/repo/held", 1));
+    let store = SessionStore::new(Box::new(LocalFileBackend::new(root.clone())));
+    append_log(&store, free, "free prompt").await;
+    append_log(&store, held, "held prompt").await;
+    age(&root.join(free.to_string()).join("log.jsonl"), 100);
+    age(&root.join(held.to_string()).join("log.jsonl"), 10);
+
+    let _lock = SessionLock::acquire(&held.to_string(), &root).expect("hold the session");
+    let catalog = DescriptorSessionCatalog::new(root.clone());
+    let rows = catalog.sessions(&cur.to_string());
+    assert_eq!(rows.len(), 2, "both sessions stay listed: {rows:?}");
+    let held_row = rows
+        .iter()
+        .find(|row| row.sid_str == held.to_string())
+        .expect("the held session is listed");
+    assert!(held_row.unavailable, "the held row carries the mark");
+    let free_row = rows
+        .iter()
+        .find(|row| row.sid_str == free.to_string())
+        .expect("the free session is listed");
+    assert!(!free_row.unavailable, "the free row carries no mark");
+    let _r = remove_dir_all(&root);
+}
+
 /// What the picker's first frame costs over ten thousand sessions, and what
 /// one backfill page costs over the same store. A measurement rather than a
 /// gate: it reports its numbers and asserts only the row bounds, and it stays
@@ -336,7 +373,11 @@ fn test_listing_scale_cost() {
     let started = Instant::now();
     let rows = catalog.sessions(&SessionId::new().to_string());
     let listing = started.elapsed();
-    assert_eq!(rows.len(), 100, "the listing stops at its visible limit");
+    assert_eq!(
+        rows.len(),
+        VISIBLE_LIMIT + EXTRA_LISTING_ROWS,
+        "the listing stops at the visible limit plus its extra rows"
+    );
     let started = Instant::now();
     let page = session_page(&root, None, 400);
     let paging = started.elapsed();

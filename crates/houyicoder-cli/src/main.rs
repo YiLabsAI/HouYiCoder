@@ -53,9 +53,10 @@ pub(crate) use cli_args::{CliCommand, parse_args, print_help};
 pub(crate) use composition::{WiredBundle, assemble_bundle, build_bundle, build_bundle_for_resume};
 pub(crate) use local_host::{HostLease, HostLeaseScope, HostLeaseSlot, LeaseScopeGuard};
 
+use crate::session::admission::{admit_existing_sid, continue_target, unavailable_lines};
 use crate::session::cleanup::run_cleanup;
 use crate::session::housekeeping::fire_after_bundle;
-use crate::session::lock::{LockError, SessionLock, StoreIdentity};
+use crate::session::lock::{SessionLock, StoreIdentity};
 use crate::session::resume_bundle::build_bundle_for_fork;
 use crate::session::resume_bundle::build_bundle_for_resume_sid;
 use futures::StreamExt;
@@ -80,8 +81,9 @@ use houyicoder_service::composition::ProviderResolution;
 #[cfg(unix)]
 use houyicoder_service::composition::SessionHost;
 use houyicoder_service::composition::build_runner;
-use houyicoder_service::composition::latest_session_sid;
 use houyicoder_service::composition::resolve_provider;
+use houyicoder_service::composition::resume_candidates;
+use houyicoder_service::composition::resume_candidates_all;
 use houyicoder_service::composition::workspace_cwd;
 use houyicoder_service::diagnostics::install;
 use houyicoder_service::lifecycle::SessionLeaseStore;
@@ -220,19 +222,42 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
 }
 
 /// --continue: resolve the most-recently-active session on disk and resume
-/// it (no sid needed). --fork-session creates a new sid seeded from that
-/// session instead of continuing it. Errors if no session exists on disk.
+/// it (no sid needed). A session another process holds is skipped, so a second
+/// process continues the newest free one. When every session the bounded
+/// listing returned is held, the whole store is searched once before giving
+/// up, and the refusal then carries one line per session saying what the user
+/// can do about that holder. --fork-session creates a new sid seeded from the
+/// newest session instead, held or not, because a fork never locks the
+/// source. Errors if no session exists on disk.
 fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error>> {
     #[cfg(unix)]
     {
         let _ = detach::cleanup_stale();
     }
     let sessions_root = session_log_root();
-    let Some(sid) = latest_session_sid(&sessions_root) else {
+    let candidates = resume_candidates(&sessions_root);
+    if candidates.is_empty() {
         let cwd = workspace_cwd(None);
         eprintln!(
             "no session in {cwd} to continue\n  --resume <sid>   continue a session by id\n  houyi            start a fresh one"
         );
+        exit(2);
+    }
+    let (selected, skipped) = if fork {
+        // A fork creates a new session and never locks the source, so a session
+        // another process holds is still forkable.
+        (candidates.first().copied(), Vec::new())
+    } else {
+        continue_target(candidates, &sessions_root, || {
+            resume_candidates_all(&sessions_root)
+        })
+    };
+    let Some(sid) = selected else {
+        let cwd = workspace_cwd(None);
+        eprintln!("no free session in {cwd}:");
+        for line in unavailable_lines(&skipped, &sessions_root) {
+            eprintln!("  {line}");
+        }
         exit(2);
     };
     let provider = resolve_provider(project.as_deref());
@@ -244,45 +269,6 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
         build_lease_for_existing_sid(sid, project.clone(), provider.clone())?
     };
     run_tui_loop(bundle, startup, lease, project, provider)
-}
-
-/// Refuse a session id that is live elsewhere or already locked before any
-/// writer or host for it is built. Returns the held lock on success. Every
-/// existing-sid entry passes through this ahead of its build, so a held
-/// session is refused before a writer or a host task is constructed. The live
-/// check precedes the lock, so a live detached process gets the friendlier
-/// refusal.
-fn admit_existing_sid(
-    sid: &SessionId,
-    sessions_root: &Path,
-) -> Result<SessionLock, Box<dyn Error>> {
-    let sid_str = sid.to_string();
-    #[cfg(unix)]
-    if detach::is_session_live(&sid_str) {
-        return Err(Box::<dyn Error>::from(format!(
-            "session {sid_str} is live in another process; attach to it \
-             (houyi attach) or fork (--fork-session)"
-        )));
-    }
-    match SessionLock::acquire(&sid_str, sessions_root) {
-        Ok(lock) => Ok(lock),
-        // A holder inside this process is work this process started -- a host
-        // that has not finished closing, or a background pass still reading
-        // the session -- so the lock frees itself shortly. Telling the user to
-        // attach would send them to a process that is going away.
-        Err(LockError::Held(_)) if SessionLock::held_in_this_process(&sid_str, sessions_root) => {
-            Err(Box::<dyn Error>::from(format!(
-                "session {sid_str} is in use in this process; retry in a moment"
-            )))
-        }
-        // A held lock is the same refusal as a live process: the user can
-        // attach or fork, so present that guidance instead of a raw enum.
-        Err(LockError::Held(_)) => Err(Box::<dyn Error>::from(format!(
-            "session {sid_str} is held by another live process; attach to it \
-             (houyi attach) or fork (--fork-session)"
-        ))),
-        Err(e) => Err(Box::new(e)),
-    }
 }
 
 /// Acquire the lock for a freshly-built bundle and return its lease. Called

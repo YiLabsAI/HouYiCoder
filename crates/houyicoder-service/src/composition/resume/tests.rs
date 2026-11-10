@@ -815,15 +815,14 @@ fn test_fork_proceeds_unverified_source() {
     remove_dir_all(&sessions).ok();
 }
 
-/// latest_session_sid returns the active in-cwd session (max log.jsonl mtime,
-/// excludes no-log + other-cwd sessions). None when no session matches. Guards
-/// the --continue pick.
-/// --continue resolution path.
+/// resume_candidates returns the active in-cwd session (max log.jsonl mtime,
+/// excludes no-log + other-cwd sessions). Empty when no session matches.
+/// Guards the --continue pick.
 #[test]
-fn test_latest_picks_active_cwd() {
+fn test_candidates_pick_active_cwd() {
     let sessions = temp_root();
-    // No sessions -> None.
-    assert!(super::latest_session_sid(&sessions).is_none());
+    // No sessions -> empty.
+    assert!(super::resume_candidates(&sessions).is_empty());
 
     // A: an active session in the test workspace (seeded via export -> has a
     // log + descriptor, cwd = workspace_cwd(None) the same way --continue sees).
@@ -838,7 +837,7 @@ fn test_latest_picks_active_cwd() {
         ProviderResolution::stub(),
     )
     .unwrap();
-    let minted_a = resumed.assembled.session;
+    let resumed_a = resumed.assembled.session;
 
     // B: a descriptor-only session in the SAME workspace but with no durable log
     // (zero turns -- e.g. a session opened + immediately quit). --continue
@@ -882,15 +881,19 @@ fn test_latest_picks_active_cwd() {
         ProviderResolution::stub(),
     )
     .unwrap();
-    let minted_c = resumed.assembled.session;
+    let resumed_c = resumed.assembled.session;
 
     // --continue picks A: B is excluded (no log), C is excluded (other cwd).
-    let latest = super::latest_session_sid(&sessions).expect("A is pickable");
+    let candidates = super::resume_candidates(&sessions);
     assert_eq!(
-        latest, minted_a,
-        "latest_session_sid picks the active in-cwd session, not the no-log or other-cwd ones"
+        candidates,
+        vec![resumed_a],
+        "the active in-cwd session is the only candidate"
     );
-    assert_ne!(latest, minted_c, "must not pick the other-cwd session");
+    assert_ne!(
+        candidates[0], resumed_c,
+        "must not pick the other-cwd session"
+    );
     remove_dir_all(&sessions).ok();
     remove_dir_all(&other_ws).ok();
 }

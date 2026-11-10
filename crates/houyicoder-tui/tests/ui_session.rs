@@ -357,12 +357,57 @@ fn test_resume_picker_swaps_process() {
     );
 }
 
+/// The /resume picker hides a session another process holds: offering the
+/// row would end in a lock refusal after the user picked it. The free session
+/// stays listed, so the held row is removed rather than the list emptied.
+#[test]
+#[ignore]
+fn test_picker_hides_held() {
+    let sessions_dir = common::fresh_temp_dir("sessions-picker-held");
+    let free = "55555555-5555-5555-5555-555555555555";
+    let held = "66666666-6666-6666-6666-666666666666";
+    common::seed_session_on_disk(&sessions_dir, free, "free-model", "free prompt");
+    common::seed_session_on_disk(&sessions_dir, held, "held-model", "held prompt");
+
+    // Hold the session from this process, a different process from the
+    // binary under test, which is the exclusivity the picker honors.
+    let lock = common::hold_session_lock(&sessions_dir.join(held).join("session.lock"));
+
+    let mut s =
+        PtySession::launch_with_sessions_dir(None, None, None, None, &[], sessions_dir.clone());
+    assert!(s.wait_for("sign in to houyicoder", RENDER_TIMEOUT));
+    s.send_key(&Key::Char('3'));
+    assert!(
+        s.wait_for("let's build, or / for commands", RENDER_TIMEOUT),
+        "working screen after local login:\n{}",
+        s.output()
+    );
+
+    common::run_slash_command(&mut s, "resume");
+    assert!(
+        s.wait_for_plain("Resume a session", RENDER_TIMEOUT),
+        "picker should open:\n{}",
+        s.output()
+    );
+    assert!(
+        s.wait_for_screen("free prompt", RENDER_TIMEOUT),
+        "the free session stays listed:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        !s.screen().contents().contains("held prompt"),
+        "the held session must not be offered:\n{}",
+        s.screen().contents()
+    );
+    drop(lock);
+}
+
 /// Two processes resume the same sid: the second --resume <sid> is rejected
 /// at the file lock (the hash chain's single-writer invariant). The second
-/// binary surfaces a "held by another live process" error + exits, not a
-/// silent double-write. Proves the run_tui_loop lock acquisition path the
-/// unit tier cannot reach (the loop is in the binary). The SessionLock unit
-/// test covers the lock semantics; this test covers the wiring.
+/// binary reports an "open in another process" error + exits, not a silent
+/// double-write. Proves the run_tui_loop lock acquisition path the unit tier
+/// cannot reach (the loop is in the binary). The SessionLock unit test covers
+/// the lock semantics; this test covers the startup sequence.
 #[test]
 #[ignore]
 fn test_resume_lock_rejects_second() {
@@ -398,9 +443,18 @@ fn test_resume_lock_rejects_second() {
         sessions_dir.clone(),
     );
     assert!(
-        s2.wait_for_plain("held by another live process", RENDER_TIMEOUT)
-            || s2.wait_for_plain("fork a new session", RENDER_TIMEOUT),
+        s2.wait_for_plain("open in another process", RENDER_TIMEOUT),
         "second resume should be rejected at the lock:\n{}",
+        s2.output()
+    );
+    // The refusal names the session so the fork command branches from this
+    // session, not from whichever session the workspace used last.
+    assert!(
+        s2.wait_for_plain(
+            &format!("houyi --resume {sid_a} --fork-session"),
+            RENDER_TIMEOUT
+        ),
+        "the refusal should offer the sid-bearing fork:\n{}",
         s2.output()
     );
 }
@@ -672,7 +726,7 @@ fn test_continue_no_session_errors() {
     );
 }
 
-/// --resume <sid> --fork-session mints a new sid seeded from the source; the
+/// --resume <sid> --fork-session creates a new sid seeded from the source; the
 /// source's log is untouched by the fork's continued turn. Seed A, fork it,
 /// drive a turn, assert the new turn lands in a DIFFERENT log file (the new
 /// sid), not A's.

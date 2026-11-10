@@ -25,6 +25,7 @@ use std::fs::remove_dir_all;
 #[cfg(test)]
 use std::fs::write;
 use std::io;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
@@ -226,6 +227,61 @@ impl SessionLock {
 /// rule. None for a string that names no session.
 fn resolve_dir(sid_str: &str, sessions_root: &Path) -> Option<PathBuf> {
     SessionId::from_display_string(sid_str).map(|sid| session_dir(sessions_root, sid))
+}
+
+/// Probe an existing lock file without creating it: take the lock and drop
+/// the guard immediately. Some means nothing holds the file. None means held
+/// or unopenable, and both count as held, since an ambiguous lock state must
+/// never lead a caller to treat the file as free.
+///
+/// The probe walks session directories, so it never creates a missing file.
+/// A missing file already means no holder, because taking a lock creates it
+/// first.
+pub(crate) fn probe_session_lock(lock_path: &Path) -> Option<FileLock> {
+    let file = open_lock_file(lock_path, false).ok()?;
+    FileLock::try_acquire(file).ok()
+}
+
+/// What one probe of a session's lock finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockProbe {
+    /// No process holds the session.
+    Free,
+    /// Another process holds the session, so opening it now would be
+    /// refused.
+    Held,
+    /// The lock file could not be read, so its state is unknown and counted
+    /// as taken. This names no holder the user can act on, which is why it
+    /// is reported apart from a held lock.
+    Unreadable,
+}
+
+/// The state of a session's lock right now. A session with no lock file has
+/// never been opened by a holder, so absence reads as free; nothing in the
+/// product deletes a held lock file, and a hand deletion falls back to the
+/// same answer a fresh session gives.
+///
+/// This answers a moment, not a reservation. The caller still takes the lock
+/// for real before it writes, so a holder that arrives in between is refused
+/// there.
+pub(crate) fn probe_lock_state(sid: SessionId, sessions_root: &Path) -> LockProbe {
+    let path = session_dir(sessions_root, sid).join(LOCK_FILE);
+    match open_lock_file(&path, false) {
+        Ok(file) => lock_probe(FileLock::try_acquire(file).map(|_| ())),
+        Err(e) if e.kind() == ErrorKind::NotFound => LockProbe::Free,
+        Err(_) => LockProbe::Unreadable,
+    }
+}
+
+/// The probe's answer for one lock attempt. A would-block means another
+/// holder. Any other lock error says the state is unknown, which is neither
+/// free nor a holder the user could go looking for.
+fn lock_probe(attempt: Result<(), TryLockError>) -> LockProbe {
+    match attempt {
+        Ok(()) => LockProbe::Free,
+        Err(TryLockError::WouldBlock) => LockProbe::Held,
+        Err(TryLockError::Error(_)) => LockProbe::Unreadable,
+    }
 }
 
 /// The session directories this process holds, with the store each stands

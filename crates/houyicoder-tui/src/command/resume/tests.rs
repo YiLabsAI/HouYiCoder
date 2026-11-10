@@ -293,3 +293,155 @@ fn test_many_sessions_all_visible() {
         "every named session stays listed"
     );
 }
+
+/// A catalog where the first row is unavailable to this process.
+struct BusyCatalog;
+impl SessionCatalog for BusyCatalog {
+    fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+        vec![
+            SessionRow {
+                sid_str: "held1111".into(),
+                title: "busy elsewhere".into(),
+                cwd_basename: "app".into(),
+                last_active: 2,
+                unavailable: true,
+                ..Default::default()
+            },
+            SessionRow {
+                sid_str: "free2222".into(),
+                title: "open the repo".into(),
+                cwd_basename: "app".into(),
+                last_active: 1,
+                ..Default::default()
+            },
+        ]
+    }
+}
+
+/// The picker leaves out a session this process cannot open and counts it in
+/// the pane state, so the row's absence is stated where the listing is. The
+/// free row is still offered and opening the pane writes no transcript line.
+#[test]
+fn test_picker_skips_unavailable() {
+    let mut app = connected_app();
+    app.sessions.catalog = Some(Arc::new(BusyCatalog));
+    app.run_resume(None);
+    assert!(app.ui.navigation.resume_picker.open);
+    let rows = &app.ui.navigation.resume_picker.rows;
+    assert_eq!(rows.len(), 1, "the unavailable row leaves the listing");
+    assert_eq!(rows[0].sid_str, "free2222");
+    assert_eq!(app.ui.navigation.resume_picker.hidden, 1);
+}
+
+/// Every left-out session is counted, not just the first, because the pane
+/// header reports the total.
+#[test]
+fn test_picker_counts_hidden() {
+    struct TwoBusy;
+    impl SessionCatalog for TwoBusy {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            vec![
+                SessionRow {
+                    sid_str: "held1111".into(),
+                    unavailable: true,
+                    ..Default::default()
+                },
+                SessionRow {
+                    sid_str: "held2222".into(),
+                    unavailable: true,
+                    ..Default::default()
+                },
+                SessionRow {
+                    sid_str: "free3333".into(),
+                    ..Default::default()
+                },
+            ]
+        }
+    }
+    let mut app = connected_app();
+    app.sessions.catalog = Some(Arc::new(TwoBusy));
+    app.run_resume(None);
+    assert_eq!(app.ui.navigation.resume_picker.hidden, 2);
+}
+
+/// An explicit lookup by name reaches an unavailable row: the switch then
+/// reports the real refusal with its options, instead of claiming no session
+/// matches.
+#[test]
+fn test_lookup_finds_unavailable() {
+    let mut app = connected_app();
+    app.sessions.catalog = Some(Arc::new(BusyCatalog));
+    app.run_resume(Some("busy elsewhere"));
+    assert_eq!(queued_target(&app).as_deref(), Some("held1111"));
+}
+
+/// When every other session is unavailable the picker does not open, and
+/// the line names the reason and the way to reach the refusal for one of
+/// them.
+#[test]
+fn test_all_unavailable_names_reason() {
+    struct AllBusy;
+    impl SessionCatalog for AllBusy {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            vec![SessionRow {
+                sid_str: "held1111".into(),
+                title: "busy elsewhere".into(),
+                unavailable: true,
+                ..Default::default()
+            }]
+        }
+    }
+    let mut app = connected_app();
+    app.sessions.catalog = Some(Arc::new(AllBusy));
+    app.run_resume(None);
+    assert!(!app.ui.navigation.resume_picker.open);
+    assert!(
+        last_line(&app)
+            .expect("a line lands")
+            .contains("no other recent session is available from this process"),
+        "the empty state names the blockers, not the disk"
+    );
+}
+
+/// The picker keeps at most the visible limit, so a large store never hands
+/// the pane more rows than it renders.
+#[test]
+fn test_picker_caps_rows() {
+    let mut app = connected_app();
+    app.sessions.catalog = Some(Arc::new(ManyRowCatalog(VISIBLE_LIMIT + 40)));
+    app.run_resume(None);
+    assert_eq!(app.ui.navigation.resume_picker.rows.len(), VISIBLE_LIMIT);
+}
+
+/// The listing is complete after skipping unavailable rows, because the
+/// skip happens before the cap. Capping first would let an unavailable row
+/// consume a slot, leaving the pane a row short.
+#[test]
+fn test_picker_keeps_full_limit() {
+    struct TwoBusyCatalog(usize);
+    impl SessionCatalog for TwoBusyCatalog {
+        fn sessions(&self, _current: &str) -> Vec<SessionRow> {
+            (0..self.0)
+                .map(|i| SessionRow {
+                    sid_str: format!("sid{i:04}"),
+                    title: format!("named {i}"),
+                    unavailable: i == 7 || i == 57,
+                    ..Default::default()
+                })
+                .collect()
+        }
+    }
+    let mut app = connected_app();
+    app.sessions.catalog = Some(Arc::new(TwoBusyCatalog(VISIBLE_LIMIT + 40)));
+    app.run_resume(None);
+    let rows = &app.ui.navigation.resume_picker.rows;
+    assert_eq!(
+        rows.len(),
+        VISIBLE_LIMIT,
+        "free rows fill the limit after the unavailable ones leave"
+    );
+    assert!(
+        rows.iter().all(|row| !row.unavailable),
+        "no unavailable row survives the skip"
+    );
+}

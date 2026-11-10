@@ -92,6 +92,18 @@ fn test_topic_shares_title_column() {
     );
 }
 
+/// The pane header states how many sessions this process cannot open now, so
+/// a hidden row is not a silent absence.
+#[test]
+fn test_header_counts_hidden() {
+    let buf = render_with_hidden(two_rows(), 0, 3, 80, 8);
+    let header = row_text(&buf, 0);
+    assert!(
+        header.contains("3 unavailable"),
+        "the header counts the hidden rows: {header}"
+    );
+}
+
 fn two_rows() -> Vec<SessionRow> {
     vec![
         SessionRow {
@@ -103,6 +115,7 @@ fn two_rows() -> Vec<SessionRow> {
             last_prompt: Some("wire the cache table".into()),
             last_active: 120,
             log_size: 4096,
+            unavailable: false,
         },
         SessionRow {
             sid_str: "sid-b".into(),
@@ -117,11 +130,22 @@ fn two_rows() -> Vec<SessionRow> {
 }
 
 fn render_picker(rows: Vec<SessionRow>, sel: usize, width: u16, height: u16) -> Buffer {
+    render_with_hidden(rows, sel, 0, width, height)
+}
+
+fn render_with_hidden(
+    rows: Vec<SessionRow>,
+    sel: usize,
+    hidden: usize,
+    width: u16,
+    height: u16,
+) -> Buffer {
     let mut app: App = working_app();
     let picker = &mut app.ui.navigation.resume_picker;
     picker.open = true;
     picker.rows = rows;
     picker.sel = sel;
+    picker.hidden = hidden;
     let backend = TestBackend::new(width, height);
     let mut term = Terminal::new(backend).expect("test backend");
     term.draw(|f| draw_content(f, f.area(), &app))

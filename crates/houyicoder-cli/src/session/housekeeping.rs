@@ -45,6 +45,7 @@ use crate::session::lock::FileLock;
 #[cfg(test)]
 use crate::session::lock::SessionLock;
 use crate::session::lock::open_lock_file;
+use crate::session::lock::probe_session_lock;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::lifecycle::prune::EMPTY_TTL_SECS;
 use std::env::current_dir;
@@ -327,21 +328,6 @@ pub(crate) fn scan_lock_held_sessions(sessions_root: &Path) -> Vec<SessionId> {
         }
     }
     held
-}
-
-/// Probe an existing session.lock without creating it: take the lock, and
-/// the caller drops the guard immediately. Some means no live process held
-/// it. None means held or unopenable (permissions, IO); both count as
-/// protected, since an ambiguous lock state must never allow deleting the
-/// session.
-///
-/// Deliberately does NOT create a missing lock file, unlike the acquire the
-/// delete path uses. This probe walks every directory under the sessions
-/// root, so creating on the way would write a lock file into tens of
-/// thousands of directories it has no intention of touching.
-fn probe_session_lock(lock_path: &Path) -> Option<FileLock> {
-    let file = open_lock_file(lock_path, false).ok()?;
-    FileLock::try_acquire(file).ok()
 }
 
 /// Acquire the session lock for a directory the caller is about to delete,

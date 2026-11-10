@@ -2,6 +2,7 @@ use super::*;
 use std::fs::read_dir;
 #[cfg(unix)]
 use std::fs::{Permissions, metadata};
+use std::io::Error;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -203,4 +204,17 @@ fn test_acquire_resolves_legacy_dir() {
         "one session does not get a second directory"
     );
     remove_dir_all(&root).ok();
+}
+
+/// A lock attempt that fails for any reason other than contention leaves the
+/// state unknown, so the probe reports an unreadable lock rather than a
+/// holder the user could go looking for.
+#[test]
+fn test_lock_probe_separates_errors() {
+    assert_eq!(lock_probe(Ok(())), LockProbe::Free);
+    assert_eq!(lock_probe(Err(TryLockError::WouldBlock)), LockProbe::Held);
+    assert_eq!(
+        lock_probe(Err(TryLockError::Error(Error::other("lock failed")))),
+        LockProbe::Unreadable
+    );
 }

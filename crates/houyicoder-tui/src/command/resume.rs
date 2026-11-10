@@ -3,6 +3,7 @@
 
 use crate::input::queue::InputItem;
 use crate::state::{App, Pane};
+use crate::view::resume_picker::state::VISIBLE_LIMIT;
 use std::path::Path;
 
 impl App {
@@ -28,11 +29,26 @@ impl App {
         let current_sid = self.sessions.current.identity.session_id.0.clone();
         match arg {
             None => {
-                let rows = catalog.sessions(&current_sid);
+                let mut rows = catalog.sessions(&current_sid);
+                // A session this process cannot open now stays out of the
+                // picker; the row stays in the catalog so an explicit lookup
+                // still finds it and reaches the real refusal, which says
+                // what blocks it.
+                let unavailable = rows.iter().filter(|r| r.unavailable).count();
+                rows.retain(|r| !r.unavailable);
                 if rows.is_empty() {
-                    self.system_line("resume: no other sessions on disk");
+                    let line = if unavailable == 0 {
+                        "resume: no other sessions on disk".to_string()
+                    } else {
+                        "resume: no other recent session is available from this process; \
+                         /resume <name> reports what you can do about one"
+                            .to_string()
+                    };
+                    self.system_line(line);
                     return;
                 }
+                rows.truncate(VISIBLE_LIMIT);
+                self.ui.navigation.resume_picker.hidden = unavailable;
                 self.ui.navigation.resume_picker.rows = rows;
                 self.ui.navigation.resume_picker.open();
                 self.ui.navigation.pane = Pane::Resume;

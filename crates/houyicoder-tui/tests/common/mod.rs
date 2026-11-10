@@ -3,6 +3,8 @@
 
 use std::env;
 use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
@@ -12,6 +14,20 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::cmdbuilder::CommandBuilder;
 use portable_pty::{Child, MasterPty, PtySize};
+
+/// Hold a session lock from this test process, which is a different process
+/// from the binary under test. The returned file keeps the lock until it is
+/// dropped.
+pub fn hold_session_lock(path: &Path) -> File {
+    let lock = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .expect("open the session lock");
+    lock.lock().expect("hold the session lock");
+    lock
+}
 
 /// A real TUI process with writable input and accumulated terminal output.
 /// Drop stops the child; the reader exits when the pseudo-terminal closes.

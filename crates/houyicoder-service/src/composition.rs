@@ -42,7 +42,7 @@ pub use session_host::SessionHost;
 
 pub use resume::{
     ResumeError, build_runner_for_fork, build_runner_for_resume_export,
-    build_runner_for_resume_sid, latest_session_sid,
+    build_runner_for_resume_sid, resume_candidates, resume_candidates_all,
 };
 use std::sync::Arc;
 

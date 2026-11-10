@@ -38,8 +38,9 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             Constraint::Length(1),
         ])
         .split(inner);
-    // Header: title + live filter query.
-    let header = Paragraph::new(Line::from(vec![
+    // Header: title + live filter query + how many sessions this process
+    // cannot open now, so a hidden row is not a silent absence.
+    let mut spans = vec![
         Span::styled(
             "Resume a session",
             Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
@@ -48,8 +49,14 @@ pub fn draw_content(f: &mut Frame, inner: Rect, app: &App) {
             format!(" | filter: {}", app.ui.navigation.resume_picker.query),
             Style::new().fg(Color::DarkGray),
         ),
-    ]));
-    f.render_widget(header, chunks[0]);
+    ];
+    if app.ui.navigation.resume_picker.hidden > 0 {
+        spans.push(Span::styled(
+            format!(" | {} unavailable", app.ui.navigation.resume_picker.hidden),
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
     let filtered = app.ui.navigation.resume_picker.filtered();
     if filtered.is_empty() {
         f.render_widget(

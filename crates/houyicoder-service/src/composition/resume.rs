@@ -12,6 +12,7 @@ use houyicoder_context::{
 };
 use houyicoder_memory::{FileDescriptorStore, LocalFileBackend};
 use houyicoder_session::{ChainVerdict, SessionStore};
+use std::cmp::Reverse;
 use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -21,42 +22,63 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::runtime::Builder;
 
-/// The most-recently-active session id in the current workspace, or None when
-/// no session of the user's matches. Drives --continue: the session is picked
-/// by log.jsonl mtime (last append = last activity), the only signal that
-/// reflects real usage. Only the user's own sessions are candidates -- a
-/// sub-agent session is a sidechain of a parent and a shell has nothing to
-/// continue, so landing in one is not a continuation. Converges strictly to
-/// the current workspace (descriptor.cwd match); no cross-workspace fallback
-/// -- a silent jump into another repo's session is the hazard cwd convergence
-/// exists to prevent.
-pub fn latest_session_sid(sessions_root: &Path) -> Option<SessionId> {
+/// How many of the most recently active sessions the cwd walk reads before
+/// falling back to a full scan. Bounds descriptor reads on a store holding
+/// thousands of sub-agent directories.
+const RECENT_WINDOW: usize = 200;
+
+/// The user's own sessions in the current workspace that something can be
+/// continued from, most recently active first. A session with no log has
+/// nothing to continue, a child session is a sidechain of a parent, and a
+/// session recorded in another workspace belongs to that repository, so none
+/// of them is a candidate. Activity is the log's last append, the only signal
+/// that reflects real usage.
+///
+/// The caller decides which candidates it can open. Lock state belongs to a
+/// process, not to the store, so a session another terminal holds is filtered
+/// where the lock is visible.
+pub fn resume_candidates(sessions_root: &Path) -> Vec<SessionId> {
     let cwd = workspace_cwd(None);
-    // Take the 200 most recently active of the user's sessions, then walk them
-    // for the cwd match. The window bounds both the walk and the descriptor reads
-    // behind it: the listing stops reading once it holds that many sessions, so
-    // a store with thousands of sub-agent directories is not parsed for rows
-    // this window would drop.
-    let recent = recent_user_sessions(sessions_root, 200);
-    let found = recent
+    // Take the most recently active of the user's sessions, then walk them
+    // for the cwd match. The window bounds both the walk and the descriptor
+    // reads behind it: the listing stops reading once it holds that many
+    // sessions, so a store with thousands of sub-agent directories is not
+    // parsed for rows this window would drop.
+    let recent = recent_user_sessions(sessions_root, RECENT_WINDOW);
+    let in_cwd: Vec<SessionId> = recent
         .iter()
-        .find(|session| session.descriptor.as_ref().is_some_and(|d| d.cwd == cwd))
-        .map(|session| session.sid);
-    if found.is_some() {
-        return found;
+        .filter(|session| session.descriptor.as_ref().is_some_and(|d| d.cwd == cwd))
+        .map(|session| session.sid)
+        .collect();
+    if !in_cwd.is_empty() {
+        return in_cwd;
     }
-    // Fallback: the cwd's session is outside the top 200 (old but still
-    // the only one in this cwd). Do the full scan — rare, and the 200
-    // window can be raised if it fires often enough to matter.
-    scan_sessions(sessions_root)
+    // Fallback: the cwd's sessions are outside the recent window (old but
+    // still the workspace's own). Do the full scan, which is rare and keeps
+    // the newest activity first, so the caller's pick does not depend on
+    // which listing answered.
+    resume_candidates_all(sessions_root)
+}
+
+/// Every continuable session of the current workspace, most recently active
+/// first, found by scanning the whole store. The bounded listing answers the
+/// common case; this one exists for the case where that listing came back all
+/// held, so a free session older than the window can still be reached. The
+/// scan reads a descriptor per user session and keeps the same filter and
+/// order as the bounded listing, which is what lets the caller fall back
+/// without reordering its pick.
+pub fn resume_candidates_all(sessions_root: &Path) -> Vec<SessionId> {
+    let cwd = workspace_cwd(None);
+    let mut older: Vec<(SessionId, u64)> = scan_sessions(sessions_root)
         .into_iter()
         .filter(|session| session.is_user_session())
         .filter_map(|session| {
             let descriptor = session.descriptor.as_ref()?;
             (descriptor.cwd == cwd).then_some((session.sid, session.last_active))
         })
-        .max_by_key(|(_, last_active)| *last_active)
-        .map(|(sid, _)| sid)
+        .collect();
+    older.sort_by_key(|(_, last_active)| Reverse(*last_active));
+    older.into_iter().map(|(sid, _)| sid).collect()
 }
 
 /// The minimal slice of an export document the resume path consumes. The

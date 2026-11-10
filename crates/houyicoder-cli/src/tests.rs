@@ -32,7 +32,6 @@ use std::thread;
 use std::time::Duration;
 
 use houyicoder_context::SessionId;
-#[cfg(unix)]
 use houyicoder_context::session_class::LOCK_FILE;
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::{
@@ -54,8 +53,12 @@ use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot};
 
 #[cfg(unix)]
 use crate::detach::{is_session_live, session_socket, sessions_dir};
+use crate::session::admission::{
+    admit_existing_sid, continue_target, select_free, unavailable_lines,
+};
 #[cfg(unix)]
-use crate::session::lock::{LockError, SessionLock};
+use crate::session::lock::LockError;
+use crate::session::lock::SessionLock;
 
 // ── parse_args: default + mode flags ──────────────────────────────
 
@@ -501,7 +504,6 @@ fn test_held_target_keeps_host() {
 /// An existing-sid resume refuses a sid whose lock another process holds,
 /// before the build is reached. The friendly held refusal returns, not the
 /// "no session log" the builder would emit for a sid with no on-disk log.
-#[cfg(unix)]
 #[test]
 fn test_resume_refuses_held() {
     let root = temp_root();
@@ -556,9 +558,18 @@ fn test_resume_refuses_live() {
         Err(e) => e,
         Ok(_) => panic!("a live target must refuse, not build"),
     };
+    // The hint names the socket the attach needs, spelled so the user can run
+    // it as printed; a hint that only says "another process" sends them
+    // looking for a socket path they were never given.
+    let socket = session_socket(&target_str);
+    let hint = format!(
+        "is live in another process; attach with houyi attach {} {target_str}, \
+         or branch with houyi --resume {target_str} --fork-session",
+        socket.display()
+    );
     assert!(
-        err.to_string().contains("is live in another process"),
-        "the live check fired before the build, got: {err}"
+        err.to_string().contains(&hint),
+        "the live check fires before the build with a runnable attach hint, got: {err}"
     );
 }
 
@@ -767,5 +778,177 @@ fn test_held_refusal_builds_nothing() {
         vec![LOCK_FILE.to_string()],
         "no writer artifact may exist for a refused sid"
     );
+    remove_dir_all(&root).ok();
+}
+
+/// --continue takes the newest session no other process holds and reports
+/// the ones it skipped, so a second process continues the older session
+/// instead of refusing to start.
+#[test]
+fn test_select_skips_held() {
+    let root = temp_root();
+    let held = SessionId::new();
+    let free = SessionId::new();
+    let lock = SessionLock::acquire(&held.to_string(), &root).expect("hold the session");
+
+    let (picked, skipped) = select_free(vec![held, free], &root);
+    assert_eq!(picked, Some(free), "the newest free session is taken");
+    assert_eq!(
+        skipped,
+        vec![held],
+        "the held session is reported, not hidden"
+    );
+
+    drop(lock);
+    let (picked, skipped) = select_free(vec![held], &root);
+    assert_eq!(picked, Some(held), "a released session is available again");
+    assert!(skipped.is_empty());
+    remove_dir_all(&root).ok();
+}
+
+/// When every candidate is held, the selection names all of them so the
+/// refusal can list the sessions to close or fork.
+#[test]
+fn test_select_all_held() {
+    let root = temp_root();
+    let first = SessionId::new();
+    let second = SessionId::new();
+    let first_lock = SessionLock::acquire(&first.to_string(), &root).expect("hold the first");
+    let second_lock = SessionLock::acquire(&second.to_string(), &root).expect("hold the second");
+
+    let (picked, held) = select_free(vec![first, second], &root);
+    assert_eq!(picked, None);
+    assert_eq!(
+        held,
+        vec![first, second],
+        "the refusal can name every held session"
+    );
+    drop(first_lock);
+    drop(second_lock);
+    remove_dir_all(&root).ok();
+}
+
+/// A free candidate answers --continue without a whole-store rescan, so the
+/// common path walks the store once.
+#[test]
+fn test_continue_picks_first_free() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    let (picked, skipped) = continue_target(vec![sid], &root, || {
+        panic!("the whole store must not be scanned while a candidate is free")
+    });
+    assert_eq!(picked, Some(sid));
+    assert!(skipped.is_empty());
+    remove_dir_all(&root).ok();
+}
+
+/// A bounded listing whose sessions are all held falls back to scanning the
+/// rest of the store, so an older free session outranks refusing to start.
+#[test]
+fn test_continue_scans_whole_store() {
+    let root = temp_root();
+    let held = SessionId::new();
+    let older = SessionId::new();
+    let lock = SessionLock::acquire(&held.to_string(), &root).expect("hold the session");
+    let mut scans = 0;
+    let (picked, _) = continue_target(vec![held], &root, || {
+        scans += 1;
+        vec![older]
+    });
+    assert_eq!(
+        picked,
+        Some(older),
+        "the free session the scan finds is taken"
+    );
+    assert_eq!(scans, 1, "the fallback runs once");
+    drop(lock);
+    remove_dir_all(&root).ok();
+}
+
+/// A session another process holds gets a line naming a process and the two
+/// ways forward. The copy must not say terminal: a detached process or a
+/// stdio client holds the same lock with no terminal at all, and a user told
+/// to look for one would search for something that does not exist. The fork
+/// hint names this session, because --continue --fork-session would copy
+/// whichever session is newest instead.
+#[test]
+fn test_unavailable_line_names_process() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    let lock = SessionLock::acquire(&sid.to_string(), &root).expect("hold the session");
+    let lines = unavailable_lines(&[sid], &root);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].contains("open in another process"),
+        "got: {}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains(&format!("houyi --resume {sid} --fork-session")),
+        "the line names the way forward for this session: {}",
+        lines[0]
+    );
+    assert!(
+        !lines[0].contains("terminal"),
+        "a holder is not necessarily a terminal: {}",
+        lines[0]
+    );
+    drop(lock);
+    // The holder released before the refusal rendered; the caller retries.
+    let lines = unavailable_lines(&[sid], &root);
+    assert!(lines[0].contains("is free now"), "got: {}", lines[0]);
+    remove_dir_all(&root).ok();
+}
+
+/// A lock path that cannot be opened reports that, rather than claiming a
+/// holder: the state is unknown, so the user is told what to check instead of
+/// being sent after a process that may not exist.
+#[test]
+fn test_unavailable_line_unreadable() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    let dir = root.join(sid.to_string());
+    create_dir_all(dir.join(LOCK_FILE)).expect("a directory where the lock file belongs");
+    let lines = unavailable_lines(&[sid], &root);
+    assert!(lines[0].contains("could not be read"), "got: {}", lines[0]);
+    remove_dir_all(&root).ok();
+}
+
+/// An existing-sid switch whose lock file cannot be opened reports the same
+/// unknown state as the listing, with the fork as a way forward, instead of
+/// an io error that names no move the user can make.
+#[test]
+fn test_resume_unreadable_reports_unknown() {
+    let root = temp_root();
+    let sid = SessionId::new();
+    let dir = root.join(sid.to_string());
+    create_dir_all(dir.join(LOCK_FILE)).expect("a directory where the lock file belongs");
+    let err = match admit_existing_sid(&sid, &root) {
+        Ok(_) => panic!("an unreadable lock must refuse, not admit"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("could not be read"), "got: {err}");
+    assert!(
+        err.to_string()
+            .contains(&format!("houyi --resume {sid} --fork-session")),
+        "got: {err}"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// The refusal listing stops at a bounded number of sessions and counts the
+/// rest in one line, so a store full of unreadable locks cannot scroll the
+/// terminal before the interface starts.
+#[test]
+fn test_refusal_caps_listing() {
+    let root = temp_root();
+    let sids: Vec<SessionId> = (0..13).map(|_| SessionId::new()).collect();
+    for sid in &sids {
+        let dir = root.join(sid.to_string());
+        create_dir_all(dir.join(LOCK_FILE)).expect("a directory where the lock file belongs");
+    }
+    let lines = unavailable_lines(&sids, &root);
+    assert_eq!(lines.len(), 11, "ten sessions plus one summary line");
+    assert_eq!(lines[10], "and 3 more sessions, all unavailable");
     remove_dir_all(&root).ok();
 }

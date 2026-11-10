@@ -76,13 +76,15 @@ CRATES = ROOT / "crates"
 # needs to see why the binary refused to start, on the terminal, now).
 #
 # The cli entry point covers argument-parse failures, the session list that
-# is the ls subcommand's whole output, and the id/pid/socket banner the
-# detached and ACP server modes print for a client to read back. The uds
-# listener only runs in detached mode, where this process has no TUI.
+# is the ls subcommand's whole output, the refusals that end a session
+# reopen before the TUI starts, including the per-session lines a continue
+# refusal prints, and the id/pid/socket banner the detached and ACP server
+# modes print for a client to read back. The uds listener only runs in
+# detached mode, where this process has no TUI.
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
     "crates/houyicoder-cli/src/session/cleanup.rs": 15,
-    "crates/houyicoder-cli/src/main.rs": 13,
+    "crates/houyicoder-cli/src/main.rs": 15,
     "crates/houyicoder-loader/src/main.rs": 2,
     "crates/houyicoder-service/src/uds.rs": 2,
     # The fence binary is a separate process the daemon spawns with both

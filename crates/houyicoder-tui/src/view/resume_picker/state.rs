@@ -47,7 +47,18 @@ pub struct SessionRow {
     pub last_active: u64,
     /// Log file size in bytes (log.jsonl), for a compact size column.
     pub log_size: u64,
+    /// The session's lock was held by another process or could not be read
+    /// when the catalog read the listing, so this process cannot open it now.
+    /// The row stays listed so an explicit lookup by name finds the session
+    /// and its switch reaches the refusal that names the blocker; the picker
+    /// skips it.
+    pub unavailable: bool,
 }
+
+/// The most rows the picker keeps after skipping sessions this process
+/// cannot open now. The catalog reads a little past this limit so an
+/// unavailable row cannot cost a free session its place.
+pub const VISIBLE_LIMIT: usize = 100;
 
 impl SessionRow {
     /// Whether a filter query hits this row: the title, either prompt, the
@@ -114,6 +125,10 @@ pub struct SessionPickerState {
     pub sel: usize,
     pub query: String,
     pub rows: Vec<SessionRow>,
+    /// How many sessions the catalog left out of rows because this process
+    /// cannot open them now. The pane header states the count so the absence
+    /// is visible where the listing is.
+    pub hidden: usize,
 }
 
 /// The storage-facing trait the CLI implements: the resumable sessions (with
