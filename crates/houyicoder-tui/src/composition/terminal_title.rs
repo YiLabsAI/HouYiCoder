@@ -12,6 +12,8 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::io::stdout;
 
+use super::terminal_guard::terminal_modes_held;
+
 /// The tab title when no session name is set (the bare app name; a clearer
 /// signal than a blank title). Also the restore-on-teardown title.
 pub(crate) const DEFAULT_TITLE: &str = "houyicoder";
@@ -60,14 +62,27 @@ pub(crate) fn restore() {
 /// effort: a write failure (piped/non-tty stdout) is swallowed. Written
 /// outside the draw call (in the event-dispatch path) so it does not race the
 /// render loop.
+///
+/// Gated on terminal ownership. The title is chrome on the same stream the TUI
+/// owns while it runs, so a caller that never took the modes — a unit test
+/// applying a status snapshot, say — must not retitle the terminal it happens
+/// to be running in.
 pub(crate) fn set_title(title: &str) {
-    let clean = sanitize(title);
-    // ESC ] 0 ; <title> BEL. BEL (0x07) over ST for broader parser support
-    // (OSC 52 makes the same call from the clipboard module).
-    let seq = format!("\x1b]0;{clean}\x07");
+    if !terminal_modes_held() {
+        return;
+    }
+    let seq = title_sequence(title);
     let mut out = stdout();
     let _r = out.write_all(seq.as_bytes());
     let _r = out.flush();
+}
+
+/// The OSC 0/2 sequence a title is published as. ESC ] 0 ; <title> BEL, with
+/// BEL (0x07) over ST for broader parser support (OSC 52 makes the same call
+/// from the clipboard module).
+fn title_sequence(title: &str) -> String {
+    let clean = sanitize(title);
+    format!("\x1b]0;{clean}\x07")
 }
 
 /// Strip C0 + C1 control characters (ESC, BEL, LF, CR, TAB, ...) + truncate.

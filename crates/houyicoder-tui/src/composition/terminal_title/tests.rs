@@ -106,3 +106,34 @@ fn test_sync_resets_when_unnamed() {
     sync(&unnamed, &mut last);
     assert_eq!(last.as_deref(), Some(DEFAULT_TITLE), "reset to default");
 }
+
+/// The sequence a title is published as. It is the OSC 0/2 form, and the
+/// name inside it is the sanitized one: a disk-sourced name must not be able
+/// to close the sequence early and feed the terminal a command.
+#[test]
+fn test_title_sequence_sanitized() {
+    let seq = title_sequence("fix-login");
+    assert_eq!(seq, "\u{1b}]0;fix-login\u{7}");
+
+    let hostile = title_sequence("ok\u{1b}]52;c;cGF3bg==\u{7}");
+    assert_eq!(
+        hostile.matches('\u{1b}').count(),
+        1,
+        "only the sequence's own ESC survives: {hostile:?}"
+    );
+    assert_eq!(
+        hostile.matches('\u{7}').count(),
+        1,
+        "only the sequence's own BEL survives: {hostile:?}"
+    );
+}
+
+/// A caller that never took the terminal modes writes no title. The unit test
+/// applying a status snapshot is that caller: retitling the terminal it runs
+/// in would be a write no session asked for. The ownership flag is a
+/// process-global the terminal guard flips, so this test does not assert the
+/// flag's value here; the held direction is covered where the guard is built.
+#[test]
+fn test_title_skipped_unheld() {
+    set_title("should-not-appear");
+}

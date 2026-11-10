@@ -12,8 +12,18 @@
 //! progress indicator are assertable without a terminal. Only the raw-mode
 //! toggle and the two calls that write to the process terminal stay
 //! terminal-bound.
+//!
+//! Every write to the process terminal goes through an ownership gate. Mouse
+//! reporting, the progress indicator, and the tab title are process-global
+//! state, and they are only ever correct while a guard holds the modes. A
+//! caller that never acquired the guard — a unit test that dispatches a
+//! resize or focus event on a bare app, most of all — would otherwise put the
+//! terminal it happens to run in into mouse-reporting mode, and no guard
+//! would be left to turn it back off. The guard itself sets and clears the
+//! flag, so a test over a recording fake exercises the gate without a tty.
 
 use std::io::{self, Write, stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::{
     cursor::{Hide, SetCursorStyle, Show},
@@ -37,6 +47,17 @@ pub(crate) trait TerminalModes {
 
 /// The process terminal, through crossterm.
 pub(crate) struct CrosstermModes;
+
+/// Whether this process currently owns the terminal's modes. Set when the
+/// guard acquires the modes and cleared when it releases them, so a write to
+/// the process terminal can tell a live session from a caller that never took
+/// the modes.
+static TERMINAL_MODES_HELD: AtomicBool = AtomicBool::new(false);
+
+/// Whether this process currently owns the terminal's modes.
+pub(crate) fn terminal_modes_held() -> bool {
+    TERMINAL_MODES_HELD.load(Ordering::SeqCst)
+}
 
 impl TerminalModes for CrosstermModes {
     fn enter(&mut self) -> io::Result<()> {
@@ -95,8 +116,20 @@ const MOUSE_MODES_CLEAR: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
 
 /// Enable SGR mouse reporting for clicks, drag, hover, and wheel events.
 /// Reasserting these idempotent modes recovers from terminal state resets.
+///
+/// A caller that never took the modes gets nothing written. The sequence would
+/// put the caller's own terminal into mouse-reporting mode, and no guard would
+/// be left to turn it back off, so every motion over that window would print a
+/// coordinate report into whatever reads the stream next.
 pub(crate) fn assert_mouse_modes() -> io::Result<()> {
-    write_mouse_modes(&mut stdout())
+    write_mouse_modes_if_held(&mut stdout(), terminal_modes_held())
+}
+
+fn write_mouse_modes_if_held(out: &mut impl Write, held: bool) -> io::Result<()> {
+    if !held {
+        return Ok(());
+    }
+    write_mouse_modes(out)
 }
 
 fn write_mouse_modes(out: &mut impl Write) -> io::Result<()> {
@@ -108,9 +141,18 @@ fn write_mouse_modes(out: &mut impl Write) -> io::Result<()> {
 const PROGRESS_BUSY: &[u8] = b"\x1b]9;4;3;0\x1b\\";
 const PROGRESS_CLEAR: &[u8] = b"\x1b]9;4;0;0\x1b\\";
 
-/// Publish the progress indicator through OSC 9;4.
+/// Publish the progress indicator through OSC 9;4. Gated on the same ownership
+/// as the mouse modes: an indicator published by a caller that never took the
+/// modes would keep spinning in a terminal no session is driving.
 pub(crate) fn set_terminal_progress(busy: bool) -> io::Result<()> {
-    write_progress(&mut stdout(), busy)
+    write_progress_if_held(&mut stdout(), busy, terminal_modes_held())
+}
+
+fn write_progress_if_held(out: &mut impl Write, busy: bool, held: bool) -> io::Result<()> {
+    if !held {
+        return Ok(());
+    }
+    write_progress(out, busy)
 }
 
 fn write_progress(out: &mut impl Write, busy: bool) -> io::Result<()> {
@@ -129,7 +171,14 @@ fn clear_terminal_progress(out: &mut impl Write) {
 
 /// Restore the terminal chrome that outlives the alternate screen. Both steps
 /// report their own failures, so a teardown never stops halfway.
+///
+/// Gated on ownership: a caller that never took the modes has no chrome to
+/// restore, and retitling the terminal it happens to run in would be a write
+/// no session asked for.
 fn restore_host_chrome() {
+    if !terminal_modes_held() {
+        return;
+    }
     terminal_title::restore();
     clear_terminal_progress(&mut stdout());
 }
@@ -164,6 +213,9 @@ impl<M: TerminalModes> TerminalGuard<M> {
             }
             return Err(e);
         }
+        // The modes are now this process's to restore, so the chrome that
+        // mirrors them may write while the guard holds them.
+        TERMINAL_MODES_HELD.store(true, Ordering::SeqCst);
         Ok(Self {
             modes,
             released: false,
@@ -189,6 +241,9 @@ impl<M: TerminalModes> TerminalGuard<M> {
         if let Err(e) = self.modes.leave() {
             tracing::warn!(error = %e, "terminal restore did not finish");
         }
+        // Cleared after the leave path: the chrome restore inside leave still
+        // runs under ownership, and a later caller sees no terminal held.
+        TERMINAL_MODES_HELD.store(false, Ordering::SeqCst);
     }
 }
 

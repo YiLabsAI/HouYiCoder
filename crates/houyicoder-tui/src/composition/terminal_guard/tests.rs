@@ -2,8 +2,19 @@ use std::cell::Cell;
 use std::io::{self, Error, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::sync::{Mutex, MutexGuard};
 
 use super::*;
+
+/// The ownership flag is process-global, so every test that acquires a guard
+/// (and thus flips it) holds this lock to keep them off each other and off the
+/// tests that read the flag. Without it a release in one test can clear the
+/// flag another test set and is still mid-assertion.
+static OWNERSHIP_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock() -> MutexGuard<'static, ()> {
+    OWNERSHIP_LOCK.lock().unwrap()
+}
 
 /// Records the enter and leave calls the guard makes, and can fail either one
 /// so the setup and teardown failure paths are exercised without a terminal.
@@ -46,6 +57,7 @@ fn modes(fail_enter: bool, fail_leave: bool) -> (RecordingModes, Rc<Cell<u32>>, 
 
 #[test]
 fn test_acquire_enters_once() {
+    let _g = lock();
     let (m, enters, leaves) = modes(false, false);
     let mut guard = TerminalGuard::acquire(m).expect("acquire");
     assert_eq!(enters.get(), 1, "enter runs once on acquire");
@@ -56,6 +68,7 @@ fn test_acquire_enters_once() {
 
 #[test]
 fn test_drop_restores_once() {
+    let _g = lock();
     let (m, _enters, leaves) = modes(false, false);
     {
         let _guard = TerminalGuard::acquire(m).expect("acquire");
@@ -66,6 +79,7 @@ fn test_drop_restores_once() {
 
 #[test]
 fn test_release_then_drop_restores() {
+    let _g = lock();
     let (m, _enters, leaves) = modes(false, false);
     let mut guard = TerminalGuard::acquire(m).expect("acquire");
     guard.release();
@@ -79,6 +93,7 @@ fn test_release_then_drop_restores() {
 /// mode on the alternate screen after the process prints its panic.
 #[test]
 fn test_unwind_restores() {
+    let _g = lock();
     let (m, _enters, leaves) = modes(false, false);
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         let _guard = TerminalGuard::acquire(m).expect("acquire");
@@ -92,6 +107,7 @@ fn test_unwind_restores() {
 /// between acquire and the loop's normal teardown.
 #[test]
 fn test_error_return_restores() {
+    let _g = lock();
     let (m, _enters, leaves) = modes(false, false);
     let run = move || -> io::Result<()> {
         let _guard = TerminalGuard::acquire(m)?;
@@ -105,6 +121,7 @@ fn test_error_return_restores() {
 /// did reach behind.
 #[test]
 fn test_failed_setup_undoes_enter() {
+    let _g = lock();
     let (m, enters, leaves) = modes(true, false);
     let err = TerminalGuard::acquire(m);
     assert!(err.is_err(), "a failed setup returns the error");
@@ -117,6 +134,7 @@ fn test_failed_setup_undoes_enter() {
 /// terminal.
 #[test]
 fn test_failed_restore_is_swallowed() {
+    let _g = lock();
     let (m, _enters, leaves) = modes(false, true);
     {
         let _guard = TerminalGuard::acquire(m).expect("acquire");
@@ -217,6 +235,7 @@ fn test_progress_clear_reports_failure() {
 /// error rather than panicking on the second failure.
 #[test]
 fn test_setup_and_undo_fail() {
+    let _g = lock();
     let (m, enters, leaves) = modes(true, true);
     let err = TerminalGuard::acquire(m);
     assert!(err.is_err(), "the setup error is returned");
@@ -224,14 +243,88 @@ fn test_setup_and_undo_fail() {
     assert_eq!(leaves.get(), 1, "the undo was attempted and swallowed");
 }
 
-/// The chrome that outlives the alternate screen is restored on the way out.
-/// These write to the process stdout, which a test process captures; the
-/// assertion is that neither step panics.
+/// The chrome that outlives the alternate screen is restored on the way out,
+/// and it is written only while the modes are held. A test process never takes
+/// them, so these calls must return without touching the terminal: a raw
+/// escape written here lands in the caller's own terminal and stays there,
+/// because no guard is left to clear it.
 #[test]
-fn test_host_chrome_restored() {
+fn test_chrome_skipped_unheld() {
+    let _g = lock();
+    assert!(!terminal_modes_held(), "a test process owns no terminal");
     restore_host_chrome();
-    set_terminal_progress(true).expect("busy published");
-    set_terminal_progress(false).expect("cleared");
+    set_terminal_progress(true).expect("busy is a no-op");
+    set_terminal_progress(false).expect("cleared is a no-op");
+}
+
+/// The guard owns the flag: acquire sets it and release clears it, so the
+/// chrome gate admits a held caller and shuts again. This is the path a live
+/// session runs under, and the recording fake stands in for the terminal so
+/// the flag flip is observable without a tty.
+#[test]
+fn test_guard_marks_modes_held() {
+    let _g = lock();
+    assert!(!terminal_modes_held(), "nothing holds the modes yet");
+    let (m, _enters, _leaves) = modes(false, false);
+    let mut guard = TerminalGuard::acquire(m).expect("acquire");
+    assert!(terminal_modes_held(), "acquire marks the modes held");
+    guard.release();
+    assert!(!terminal_modes_held(), "release clears the flag");
+}
+
+/// The chrome writes that a held caller runs: the host-chrome restore, the
+/// progress indicator, the mouse modes, and the tab title all write through
+/// the gate while the guard holds it. Each is a best-effort write to stdout,
+/// so the assertion is that none errors under ownership rather than that any
+/// byte lands — coverage of the held branch is what the gate is missing.
+#[test]
+fn test_chrome_written_while_held() {
+    let _g = lock();
+    let (m, _enters, _leaves) = modes(false, false);
+    let mut guard = TerminalGuard::acquire(m).expect("acquire");
+    assert!(terminal_modes_held(), "the guard holds the modes");
+    restore_host_chrome();
+    assert_mouse_modes().expect("mouse modes written under ownership");
+    set_terminal_progress(true).expect("busy written under ownership");
+    set_terminal_progress(false).expect("cleared under ownership");
+    terminal_title::set_title("session");
+    guard.release();
+    assert!(!terminal_modes_held(), "the flag clears on release");
+}
+
+/// The ownership gate itself: a caller that never took the modes writes
+/// nothing, and one that holds them writes the sequence. The second half is
+/// what keeps the gate from silently disabling the feature it guards.
+#[test]
+fn test_mouse_modes_gated() {
+    let mut unheld: Vec<u8> = Vec::new();
+    write_mouse_modes_if_held(&mut unheld, false).expect("write");
+    assert!(unheld.is_empty(), "an unheld caller writes nothing");
+
+    let mut held: Vec<u8> = Vec::new();
+    write_mouse_modes_if_held(&mut held, true).expect("write");
+    let text = String::from_utf8(held).expect("ascii escapes");
+    for mode in ["1000", "1002", "1003", "1006"] {
+        assert!(
+            text.contains(&format!("?{mode}h")),
+            "a held caller enables {mode}: {text:?}"
+        );
+    }
+}
+
+/// The progress indicator follows the same gate, in both directions.
+#[test]
+fn test_progress_gated_on_ownership() {
+    let mut unheld: Vec<u8> = Vec::new();
+    write_progress_if_held(&mut unheld, true, false).expect("write");
+    assert!(unheld.is_empty(), "an unheld caller writes nothing");
+
+    let mut held: Vec<u8> = Vec::new();
+    write_progress_if_held(&mut held, true, true).expect("write");
+    assert!(
+        String::from_utf8(held).expect("ascii").contains("9;4;3"),
+        "a held caller publishes the busy form"
+    );
 }
 
 /// A writer that refuses every write, so the best-effort failure branches run.
