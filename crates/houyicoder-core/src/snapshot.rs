@@ -14,6 +14,7 @@
 //! (self-referential explosion).
 
 use std::path::{Path, PathBuf};
+use std::process::id;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::agent::git_safety::command_triggers_git_snapshot;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use std::fs::copy;
+use std::fs::create_dir;
 use std::fs::create_dir_all;
 use std::fs::read_dir;
 use std::fs::remove_dir;
@@ -242,6 +244,11 @@ const MAX_UNDO_DEPTH: usize = 10;
 /// destructive command.
 const NO_REFLINK_SIZE_THRESHOLD: u64 = 512 * 1024 * 1024;
 
+/// Distinguishes the probe files of concurrent probes in one process. Two
+/// processes already differ by process id; this separates two stores opened
+/// in one process, which would otherwise share one probe path.
+static PROBE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// The snapshot store. Snapshots are whole-tree CoW clones
 /// (reflink per file + create_dir), O(file count). The store directory itself
 /// is pruned from the walk.
@@ -407,8 +414,16 @@ impl SnapshotStore {
             if create_dir_all(&self.store_root).is_err() {
                 return false;
             }
-            let src = self.store_root.join(".reflink-test-src");
-            let dst = self.store_root.join(".reflink-test-dst");
+            // A probe owns its two file names: a shared name would let a
+            // concurrent probe consume the source or find the destination
+            // taken, and report a reflink filesystem as copy-only.
+            let probe = format!(
+                ".reflink-test-{}-{}",
+                id(),
+                PROBE_SEQ.fetch_add(1, Ordering::Relaxed)
+            );
+            let src = self.store_root.join(format!("{probe}-src"));
+            let dst = self.store_root.join(format!("{probe}-dst"));
             if write(&src, b"t").is_err() {
                 return false;
             }
@@ -475,8 +490,7 @@ impl SnapshotStore {
     /// after the workspace crosses the threshold would land a decline here
     /// as if it were a real I/O failure.
     pub fn snapshot_after_probe(&self, additional: &[PathBuf]) -> std::io::Result<UndoEntry> {
-        let id = self.counter.fetch_add(1, Ordering::Relaxed);
-        let snap_dir = self.store_root.join(format!("snap-{id}"));
+        let snap_dir = self.claim_snapshot_dir()?;
         // On a mid-walk failure, remove the partial snapshot so a transient
         // I/O error does not leave an orphan dir (prune would reap it
         // eventually, but only after it ages past TTL or trips the size cap).
@@ -494,8 +508,26 @@ impl SnapshotStore {
         Ok(entry)
     }
 
+    /// Claim the next snapshot directory by creating it exclusively. Two
+    /// processes that seeded their counters from the same scan both reach for
+    /// the same name; the kernel hands the directory to one of them and the
+    /// other takes the following number, so neither walks into a tree the
+    /// other owns.
+    fn claim_snapshot_dir(&self) -> std::io::Result<PathBuf> {
+        create_dir_all(&self.store_root)?;
+        loop {
+            let id = self.counter.fetch_add(1, Ordering::Relaxed);
+            let snap_dir = self.store_root.join(format!("snap-{id}"));
+            match create_dir(&snap_dir) {
+                Ok(()) => return Ok(snap_dir),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     fn snapshot_walk(&self, snap_dir: &Path, additional: &[PathBuf]) -> std::io::Result<()> {
-        create_dir_all(snap_dir)?;
+        // The claim already created the directory, so the walk only fills it.
         // The workspace root maps to snap_dir/<rel>. Each additional writable
         // root (user-added working dir, outside the workspace) maps to
         // snap_dir/__extra/<i>/<rel> so restore can route it back to its

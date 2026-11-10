@@ -21,21 +21,29 @@
 //! so a rule persisted to the project scope is visible alongside user rules.
 
 use std::collections::HashMap;
+use std::env::current_dir;
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::create_dir_all;
+use std::fs::read;
+use std::fs::remove_file;
+use std::fs::rename;
+use std::fs::write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::process::id;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 
 use crate::rule::Rule;
 use houyicoder_api::path::{expand_home, home_directory};
-use std::env::current_dir;
-use std::error::Error;
-use std::fmt::Display;
-use std::fmt::Formatter;
-use std::fs::create_dir_all;
-use std::fs::read;
-use std::fs::rename;
-use std::fs::write;
 
 /// The persistence scopes, ordered by ascending authority breadth. User is
 /// the broadest (one home file shared across projects); Local is the
@@ -110,12 +118,14 @@ impl Error for StoreError {}
 /// single shared dispatcher. The in-memory fast path skips this entirely; an
 /// impl is attached when an always-allow verdict should survive a restart.
 ///
-/// The contract is single-writer: the composition root serializes writes to
-/// a given scope (one interactive verdict at a time owns the gate). A
-/// multi-writer impl needs an external lock and is deferred.
+/// FileRuleStore serializes reads and writes across processes with an
+/// advisory lock, so several terminals may share one scope without losing a
+/// rule. Another impl may still be single-writer: the trait promises only
+/// that a caller need not hold an external lock.
 ///
-/// load returns the union of all scopes; add, remove, and clear operate on
-/// the store's configured write scope only.
+/// load returns the union of all scopes. add and remove write the scope the
+/// rule itself carries; clear empties the store's configured write scope and
+/// leaves the other scopes untouched.
 pub trait RuleStore: Send + Sync {
     /// Read the union of rules across all configured scopes. Missing files
     /// contribute no rules; a corrupt file is skipped (best-effort) so a
@@ -175,6 +185,44 @@ pub trait RuleStore: Send + Sync {
     /// absent. Default no-op.
     fn remove_directory(&self, _dir: &Path, _scope: Scope) -> Result<(), StoreError> {
         Ok(())
+    }
+}
+
+/// Per-process counter separating the temp names one process writes inside
+/// the same instant; the pid separates processes.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// One cross-process claim on a scope file, released when dropped. The lock
+/// file lives beside the scope file, so stores writing different scopes never
+/// serialize on each other, and the kernel drops the claim when the holder
+/// exits, so a dead writer never leaves the store locked.
+struct ScopeLock {
+    /// Held open for as long as the kernel lock is held.
+    _file: File,
+}
+
+impl ScopeLock {
+    /// Claim the lock of the scope file at path, waiting for any current
+    /// holder. A lock that cannot be opened fails the write, because
+    /// continuing without it would let two processes clobber each other's
+    /// envelope.
+    fn acquire(path: &Path) -> Result<Self, StoreError> {
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent).map_err(|_| StoreError::Io)?;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("permissions.json");
+        let mut open = OpenOptions::new();
+        open.create(true).write(true).truncate(false);
+        #[cfg(unix)]
+        open.mode(0o600);
+        let file = open
+            .open(path.with_file_name(format!(".{name}.lock")))
+            .map_err(|_| StoreError::Io)?;
+        file.lock().map_err(|_| StoreError::Io)?;
+        Ok(Self { _file: file })
     }
 }
 
@@ -248,25 +296,51 @@ impl FileRuleStore {
         self.read_envelope(scope).rules
     }
 
-    /// Write the envelope without taking the lock. The caller MUST hold
-    /// self.lock across the read-modify-write so two concurrent writers (a
-    /// rule add from /permissions + a directory add from an approval) do not
-    /// clobber each other's half of the shared file.
-    fn write_envelope_unlocked(
-        &self,
-        scope: Scope,
-        env: &PermissionsFile,
-    ) -> Result<(), StoreError> {
+    /// Compose one read-modify-write of a scope file. The in-process lock and
+    /// the scope's cross-process lock are held for the whole cycle, and the
+    /// edit closure reports whether it changed anything so an unchanged call
+    /// leaves the file untouched. Serializing the read and the write inside
+    /// one call is what keeps two writers from each landing a whole record
+    /// derived from the state they read.
+    fn update_envelope<F>(&self, scope: Scope, edit: F) -> Result<(), StoreError>
+    where
+        F: FnOnce(&mut PermissionsFile) -> bool,
+    {
+        let _guard = self.lock.lock().expect("rule store lock");
         let path = self.path_for(scope);
+        let _scope_lock = ScopeLock::acquire(path)?;
+        let mut env = self.read_envelope(scope);
+        if !edit(&mut env) {
+            return Ok(());
+        }
+        self.write_envelope(path, &env)
+    }
+
+    /// Replace a scope file under the caller-held scope lock. The bytes land
+    /// through a temp file named for this writer, then rename over the target,
+    /// so a reader never sees a half-written envelope and two processes never
+    /// target one temp file.
+    fn write_envelope(&self, path: &Path, env: &PermissionsFile) -> Result<(), StoreError> {
         if let Some(parent) = path.parent() {
             create_dir_all(parent).map_err(|_| StoreError::Io)?;
         }
-        let tmp = path.with_extension("json.tmp");
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("permissions.json");
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_file_name(format!(".{name}.{}.{seq}.tmp", id()));
         let mut persisted = env.clone();
         persisted.version = 2;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| StoreError::Encode)?;
-        write(&tmp, bytes).map_err(|_| StoreError::Io)?;
-        rename(&tmp, path).map_err(|_| StoreError::Io)?;
+        if write(&tmp, bytes).is_err() {
+            drop(remove_file(&tmp));
+            return Err(StoreError::Io);
+        }
+        if rename(&tmp, path).is_err() {
+            drop(remove_file(&tmp));
+            return Err(StoreError::Io);
+        }
         Ok(())
     }
 
@@ -372,63 +446,59 @@ impl RuleStore for FileRuleStore {
         // preserves the directories list so a rule add cannot clobber a
         // prior directory authorization in the same scope file.
         let scope = rule.scope;
-        let _guard = self.lock.lock().expect("rule store lock");
-        let mut env = self.read_envelope(scope);
-        // Idempotent no-op skip: if a Rule::same_as match already exists,
-        // don't touch the file (avoids needless rename churn racing a
-        // concurrent reader — same reasoning as remove's no-op skip).
-        // Rule::same_as is the shared identity judgment, so add and remove
-        // agree on "same rule".
-        if env.rules.iter().all(|r| !r.same_as(rule)) {
+        self.update_envelope(scope, |env| {
+            // A rule already in the file leaves it untouched, which avoids
+            // needless rename churn. The identity judgment is the one remove
+            // uses, so the two operations agree on what counts as the same
+            // rule.
+            if env.rules.iter().any(|r| r.same_as(rule)) {
+                tracing::debug!(
+                    action = %rule.action,
+                    scope = ?rule.scope,
+                    "[permission] store add: duplicate rule skipped (no write)"
+                );
+                return false;
+            }
             env.rules.push(rule.clone());
-            self.write_envelope_unlocked(scope, &env)?;
-        } else {
-            tracing::debug!(
-                action = %rule.action,
-                scope = ?rule.scope,
-                "[permission] store add: duplicate rule skipped (no write)"
-            );
-        }
-        Ok(())
+            true
+        })
     }
 
     fn remove(&self, rule: &Rule) -> Result<(), StoreError> {
         let scope = rule.scope;
-        let _guard = self.lock.lock().expect("rule store lock");
-        let mut env = self.read_envelope(scope);
-        let before = env.rules.len();
-        // Rule::same_as identity match: case-insensitive action + exact
-        // content + effect + scope (the judgment add uses, so the pair stays
-        // symmetric). Deletes every matching rule, not just one — a
-        // pre-existing dup file collapses to zero here (dedup prevents new
-        // dups, not existing ones). Action-only matching would wipe same-
-        // action siblings (bash npm:* + bash git:* share action="bash");
-        // content + effect + scope prevent that.
-        env.rules.retain(|r| !r.same_as(rule));
-        // Skip the write when nothing matched: a no-op remove should not
-        // touch the file (avoids a needless rename churn that could race a
-        // concurrent reader).
-        if env.rules.len() == before {
-            tracing::debug!(
-                action = %rule.action,
-                scope = ?rule.scope,
-                "[permission] store remove: no matching rule (no write)"
-            );
-            return Ok(());
-        }
-        self.write_envelope_unlocked(scope, &env)
+        self.update_envelope(scope, |env| {
+            let before = env.rules.len();
+            // Remove by the identity judgment add uses, so the two agree on
+            // what counts as the same rule. Every match goes, which collapses
+            // a pre-existing duplicate file to nothing. Matching on the action
+            // alone would also delete sibling rules that share that action.
+            env.rules.retain(|r| !r.same_as(rule));
+            // A no-op remove leaves the file untouched.
+            if env.rules.len() == before {
+                tracing::debug!(
+                    action = %rule.action,
+                    scope = ?rule.scope,
+                    "[permission] store remove: no matching rule (no write)"
+                );
+                return false;
+            }
+            true
+        })
     }
 
     fn clear(&self) -> Result<(), StoreError> {
-        let _guard = self.lock.lock().expect("rule store lock");
         // Empty the rules but keep the envelope's other members: the
         // directory authorizations are the user's sandbox grants, and
-        // overwriting the whole file would drop them. The read-modify-write
-        // under the lock is the same shape add and remove use, so a clear
-        // cannot race a concurrent add and lose its rule.
-        let mut env = self.read_envelope(self.write_scope);
-        env.rules.clear();
-        self.write_envelope_unlocked(self.write_scope, &env)
+        // overwriting the whole file would drop them. Running as the same
+        // composed edit add and remove use keeps a clear from racing a
+        // concurrent add and losing its rule.
+        self.update_envelope(self.write_scope, |env| {
+            if env.rules.is_empty() {
+                return false;
+            }
+            env.rules.clear();
+            true
+        })
     }
 
     fn load_directories(&self) -> Vec<PathBuf> {
@@ -440,15 +510,17 @@ impl RuleStore for FileRuleStore {
     }
 
     fn add_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
-        let _guard = self.lock.lock().expect("rule store lock");
-        let mut env = self.read_envelope(scope);
         let canonical = canonical_dir(dir);
-        if env.directories.iter().all(|d| d != &canonical) {
+        self.update_envelope(scope, |env| {
+            if env.directories.iter().any(|path| path == &canonical) {
+                return false;
+            }
+            // A write grant subsumes a pending read grant for the same
+            // directory, so the two lists never carry the same path.
             env.read_directories.retain(|path| path != &canonical);
-            env.directories.push(canonical);
-            self.write_envelope_unlocked(scope, &env)?;
-        }
-        Ok(())
+            env.directories.push(canonical.clone());
+            true
+        })
     }
 
     fn load_read_directories(&self) -> Vec<PathBuf> {
@@ -460,31 +532,28 @@ impl RuleStore for FileRuleStore {
     }
 
     fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
-        let _guard = self.lock.lock().expect("rule store lock");
-        let mut env = self.read_envelope(scope);
         let canonical = canonical_dir(dir);
-        if env.directories.iter().any(|path| path == &canonical) {
-            return Ok(());
-        }
-        if env.read_directories.iter().all(|path| path != &canonical) {
-            env.read_directories.push(canonical);
-            self.write_envelope_unlocked(scope, &env)?;
-        }
-        Ok(())
+        self.update_envelope(scope, |env| {
+            if env.directories.iter().any(|path| path == &canonical) {
+                return false;
+            }
+            if env.read_directories.iter().any(|path| path == &canonical) {
+                return false;
+            }
+            env.read_directories.push(canonical.clone());
+            true
+        })
     }
 
     fn remove_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
-        let _guard = self.lock.lock().expect("rule store lock");
-        let mut env = self.read_envelope(scope);
         let canonical = canonical_dir(dir);
-        let before = env.directories.len() + env.read_directories.len();
-        env.directories.retain(|path| !same_dir(path, &canonical));
-        env.read_directories
-            .retain(|path| !same_dir(path, &canonical));
-        if env.directories.len() + env.read_directories.len() == before {
-            return Ok(());
-        }
-        self.write_envelope_unlocked(scope, &env)
+        self.update_envelope(scope, |env| {
+            let before = env.directories.len() + env.read_directories.len();
+            env.directories.retain(|path| !same_dir(path, &canonical));
+            env.read_directories
+                .retain(|path| !same_dir(path, &canonical));
+            env.directories.len() + env.read_directories.len() != before
+        })
     }
 }
 

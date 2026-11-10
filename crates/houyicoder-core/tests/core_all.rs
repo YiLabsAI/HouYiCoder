@@ -15,6 +15,8 @@ mod cache_prefix_reuse;
 mod cas_records;
 #[path = "compaction_pipeline.rs"]
 mod compaction_pipeline;
+#[path = "concurrent_snapshots.rs"]
+mod concurrent_snapshots;
 #[path = "loop_with_sandbox.rs"]
 mod loop_with_sandbox;
 #[path = "memory_loop.rs"]

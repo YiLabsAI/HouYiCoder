@@ -112,6 +112,46 @@ fn test_clear_preserves_directories() {
     );
 }
 
+/// A clear with no rules to drop is a no-op rather than a rewrite: the file
+/// still carries the directory grants, and it is not touched at all.
+#[test]
+fn test_clear_skips_empty_rules() {
+    let dir = tempdir();
+    let workspace = dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let store = tmp_store(&dir, "clear-empty");
+    store
+        .add_directory(&workspace, Scope::Project)
+        .expect("add_directory");
+    let path = dir.join("clear-empty").join("project.json");
+    let before = fs::read(&path).expect("read the scope file");
+    let modified = fs::metadata(&path)
+        .expect("stat the scope file")
+        .modified()
+        .expect("a file modification time");
+
+    store.clear().expect("clear");
+
+    assert_eq!(
+        fs::read(&path).expect("read the scope file"),
+        before,
+        "the file keeps its bytes"
+    );
+    assert_eq!(
+        fs::metadata(&path)
+            .expect("stat the scope file")
+            .modified()
+            .expect("a file modification time"),
+        modified,
+        "a clear with nothing to drop does not rewrite the file"
+    );
+    assert_eq!(
+        store.load_directories(),
+        vec![dunce::canonicalize(&workspace).unwrap_or(workspace)],
+        "the directory grant survives the clear"
+    );
+}
+
 #[test]
 fn test_clear_wipes_write_scope() {
     let dir = tempdir();
