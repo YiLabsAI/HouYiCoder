@@ -13,6 +13,7 @@
 //! from the walkdir so a snapshot does not clone prior snapshots
 //! (self-referential explosion).
 
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::Arc;
@@ -22,18 +23,30 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::agent::git_safety::command_triggers_git_snapshot;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use std::fs::copy;
-use std::fs::create_dir;
 use std::fs::create_dir_all;
 use std::fs::read_dir;
-use std::fs::remove_dir;
-use std::fs::remove_dir_all;
 use std::fs::remove_file;
-use std::fs::rename;
 use std::fs::write;
 use std::io::Error;
 use std::io::ErrorKind;
 use std::time::SystemTime;
 use walkdir::WalkDir;
+
+use self::lease::LeaseProbe;
+pub use self::lease::SnapshotLease;
+use self::lease::StoreLock;
+use self::lease::StoreProbe;
+use self::lease::claim;
+use self::lease::mark_legacy_sentinel;
+use self::lease::sentinel_path;
+use self::lease::try_store_lock;
+use self::migrate::migrate_store;
+use self::migrate::scan_max_snapshot_id;
+use self::prune::enforce_retention;
+use self::staging::is_complete;
+use self::staging::pause_at_build_barrier;
+use self::staging::publish;
+use self::staging::start_build;
 
 /// Directories excluded from a snapshot: the snapshot store itself (prevents
 /// self-referential explosion) plus large generated trees.
@@ -84,6 +97,9 @@ pub enum UndoEntry {
         /// __extra/<i>/ sub-tree back to its original root. Empty for a
         /// workspace-only snapshot.
         extra_roots: Vec<PathBuf>,
+        /// The store lease that keeps prune away from this snapshot for as
+        /// long as the entry is alive.
+        lease: SnapshotLease,
     },
     BeforeImage {
         path: PathBuf,
@@ -96,11 +112,19 @@ impl UndoEntry {
     /// Does not oversell: says "restored N files from snapshot" (honest about
     /// the full-restore semantics — new files created after the snapshot
     /// are NOT deleted, .git is pruned from snapshots, symlinks are skipped).
+    /// A snapshot without the complete marker is usually older than the
+    /// marker, and a marker lost after publication cannot be told apart from
+    /// that, so the reply says the tree is unverified rather than claiming a
+    /// whole copy.
     pub fn description(&self) -> String {
         match self {
             UndoEntry::CoWSnapshot { store_path, .. } => {
                 let count = count_restored_files(store_path);
-                format!("restored {count} files from snapshot")
+                if is_complete(store_path) {
+                    format!("restored {count} files from snapshot")
+                } else {
+                    format!("restored {count} files from an unverified snapshot")
+                }
             }
             UndoEntry::BeforeImage { .. } => "restored file from before-image".into(),
         }
@@ -143,7 +167,28 @@ impl UndoStack {
         Self::default()
     }
 
+    /// Keep at most MAX_UNDO_DEPTH snapshot entries. Each one holds an open
+    /// lease file for as long as it is alive, so an unbounded stack would
+    /// exhaust the process file table over a long session. The oldest
+    /// snapshot entry is dropped instead, which releases its lease and lets
+    /// prune reclaim the tree. Before-image entries hold no handle and are
+    /// not counted.
     pub fn push(&mut self, entry: UndoEntry) {
+        if matches!(entry, UndoEntry::CoWSnapshot { .. }) {
+            let snapshots = self
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, UndoEntry::CoWSnapshot { .. }))
+                .count();
+            if snapshots >= MAX_UNDO_DEPTH
+                && let Some(oldest) = self
+                    .entries
+                    .iter()
+                    .position(|entry| matches!(entry, UndoEntry::CoWSnapshot { .. }))
+            {
+                let _evicted = self.entries.remove(oldest);
+            }
+        }
         self.entries.push(entry);
     }
 
@@ -188,55 +233,10 @@ impl UndoStack {
     }
 }
 
-/// Move a previous store's snapshots into the current one, then drop the old
-/// directory if it empties out.
-///
-/// A snapshot that cannot be moved stays where it is, which means that undo
-/// entry is no longer reachable: the store only scans its own root. Every such
-/// failure is therefore reported rather than swallowed, and the leftover
-/// directory is left in place so the files are still on disk for a manual
-/// recovery.
-fn migrate_store(legacy: &Path, store_root: &Path) {
-    if legacy == store_root || !legacy.is_dir() {
-        return;
-    }
-    let Ok(entries) = read_dir(legacy) else {
-        return;
-    };
-    let mut ready = false;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name() else {
-            continue;
-        };
-        if !path.is_dir() || !name.to_string_lossy().starts_with("snap-") {
-            continue;
-        }
-        if !ready {
-            if let Err(error) = create_dir_all(store_root) {
-                tracing::warn!(
-                    "snapshot store move: {} cannot be created: {error}",
-                    store_root.display()
-                );
-                return;
-            }
-            ready = true;
-        }
-        let dst = store_root.join(name);
-        if dst.exists() {
-            tracing::warn!("snapshot store move: {} already exists", dst.display());
-            continue;
-        }
-        if let Err(error) = rename(&path, &dst) {
-            tracing::warn!("snapshot store move failed for {}: {error}", path.display());
-        }
-    }
-    let _removed = remove_dir(legacy);
-}
-
-/// Most snapshots a resume re-links onto the undo stack. The stack is a
-/// recovery convenience, not an archive: a resumed session acts on the newest
-/// few, and everything older is left for prune to reclaim.
+/// The most snapshots the undo stack holds. It bounds the window a resume
+/// re-links, so older snapshots stay for prune to reclaim, and it caps the
+/// live stack, because each snapshot entry keeps one lease file open for as
+/// long as it is alive.
 const MAX_UNDO_DEPTH: usize = 10;
 
 /// The default threshold (bytes) above which a full-copy fallback on a
@@ -298,19 +298,49 @@ impl SnapshotStore {
     ) -> std::io::Result<Self> {
         let workspace_root = workspace_root.as_ref().to_path_buf();
         let store_root = store_root.as_ref().to_path_buf();
-        // The store directory is created on first use rather than here: a
-        // session that never takes a snapshot leaves nothing behind, and a test
-        // run that opens one store per workspace does not litter the config
-        // home with a directory each.
         // A store that moved out of the workspace still owes the undo history
-        // it holds: the previous location's snapshots are moved in before the
-        // counter is scanned, so their ids keep their meaning.
+        // it holds: the previous location's snapshots move in before the
+        // counter is scanned, so their ids keep their meaning. Both namespace
+        // locks are claimed without waiting, so two paths naming one
+        // directory count as busy rather than deadlocking.
         let legacy = workspace_root.join(".houyicoder").join("snapshots");
-        migrate_store(&legacy, &store_root);
+        if legacy != store_root && legacy.is_dir() {
+            match try_store_lock(&legacy) {
+                StoreProbe::Claimed(legacy_lock) => match try_store_lock(&store_root) {
+                    StoreProbe::Claimed(destination_lock) => {
+                        migrate_store(&legacy, &store_root, legacy_lock, destination_lock);
+                    }
+                    StoreProbe::Busy => tracing::warn!(
+                        "snapshot store move skipped: {} is in use by another process",
+                        store_root.display()
+                    ),
+                    StoreProbe::Unreadable => tracing::warn!(
+                        "snapshot store move skipped: {} cannot be read",
+                        store_root.display()
+                    ),
+                },
+                StoreProbe::Busy => tracing::warn!(
+                    "snapshot store move skipped: {} is in use by another process",
+                    legacy.display()
+                ),
+                StoreProbe::Unreadable => tracing::warn!(
+                    "snapshot store move skipped: {} cannot be read",
+                    legacy.display()
+                ),
+            }
+        }
         // Scan existing snap-N dirs to avoid id collision across restarts.
-        // The store dir persists across processes; a fresh counter at 0
-        // would land new snap-0 on top of old snap-0.
-        let start = scan_max_snapshot_id(&store_root) + 1;
+        // The previous location counts too, so a snapshot the move left
+        // behind keeps its name reserved and a new build never takes an id
+        // the next start would skip.
+        let legacy_max = if legacy.is_dir() {
+            scan_max_snapshot_id(&legacy)
+        } else {
+            0
+        };
+        let start = scan_max_snapshot_id(&store_root)
+            .max(legacy_max)
+            .saturating_add(1);
         Ok(Self {
             workspace_root,
             store_root,
@@ -355,51 +385,112 @@ impl SnapshotStore {
     /// consider expired would put the two retention decisions on one dataset
     /// out of step.
     pub fn relink_undo_entries_within(&self, ttl_secs: u64) -> Vec<UndoEntry> {
-        let now = SystemTime::now();
-        let mut ids: Vec<u64> = Vec::new();
-        if let Ok(dir) = read_dir(&self.store_root) {
-            for entry in dir.flatten() {
-                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                if !is_dir {
-                    continue;
-                }
-                let file_name = entry.file_name();
-                let Some(name) = file_name.to_str() else {
-                    continue;
-                };
-                let Some(num) = name.strip_prefix("snap-") else {
-                    continue;
-                };
-                let Ok(n) = num.parse::<u64>() else {
-                    continue;
-                };
-                let age = entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| now.duration_since(t).ok())
-                    .unwrap_or_default();
-                if age.as_secs() > ttl_secs {
-                    continue;
-                }
-                let snap_path = self.store_root.join(name);
-                // Skip additional-roots snapshots: the __extra subtree's
-                // root mapping is not on disk, so restore could not remap.
-                if snap_path.join("__extra").exists() {
-                    continue;
-                }
-                ids.push(n);
-            }
+        // A store that was never created holds nothing to re-link, and a
+        // session that never takes a snapshot leaves no directory behind.
+        if !self.store_root.is_dir() {
+            return Vec::new();
         }
-        ids.sort_unstable();
-        let keep_from = ids.len().saturating_sub(MAX_UNDO_DEPTH);
-        ids[keep_from..]
-            .iter()
-            .map(|&n| UndoEntry::CoWSnapshot {
-                store_path: self.store_root.join(format!("snap-{n}")),
+        let Ok(_lock) = StoreLock::acquire(&self.store_root) else {
+            tracing::warn!("snapshot store lock unavailable; re-link skipped");
+            return Vec::new();
+        };
+        let now = SystemTime::now();
+        let mut candidates: Vec<(u64, String, PathBuf)> = Vec::new();
+        let dir = match read_dir(&self.store_root) {
+            Ok(dir) => dir,
+            Err(error) => {
+                tracing::warn!(
+                    "snapshot store {} cannot be listed: {error}",
+                    self.store_root.display()
+                );
+                return Vec::new();
+            }
+        };
+        for entry in dir.flatten() {
+            let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+            if !is_dir {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            let Some(num) = name.strip_prefix("snap-") else {
+                continue;
+            };
+            let Ok(n) = num.parse::<u64>() else {
+                continue;
+            };
+            let age = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|at| now.duration_since(at).ok())
+                .unwrap_or_default();
+            if age.as_secs() > ttl_secs {
+                continue;
+            }
+            let snap_path = self.store_root.join(name);
+            // Skip additional-roots snapshots: the __extra subtree's
+            // root mapping is not on disk, so restore could not remap.
+            if snap_path.join("__extra").exists() {
+                continue;
+            }
+            candidates.push((n, name.to_owned(), snap_path));
+        }
+        // Newest first: claiming stops at the undo depth, so a store holding
+        // many snapshots never opens more leases than the stack can use.
+        candidates.sort_by_key(|(n, _, _)| Reverse(*n));
+        let mut entries: Vec<UndoEntry> = Vec::new();
+        for (_, name, snap_path) in candidates {
+            if entries.len() >= MAX_UNDO_DEPTH {
+                break;
+            }
+            // The claim keeps this process from sharing a snapshot another
+            // live process holds; a busy one is left for that process.
+            let sentinel = sentinel_path(&self.store_root, &name);
+            let complete = is_complete(&snap_path);
+            // A tree with neither a marker nor a sentinel predates both. The
+            // tag is written before the claim, so a death after the claim
+            // never leaves an empty sentinel beside a markerless tree, which
+            // the next start reads as a failed publish.
+            if !complete
+                && !sentinel.exists()
+                && let Err(error) = mark_legacy_sentinel(&sentinel)
+            {
+                tracing::warn!(
+                    "snapshot {} cannot be tagged as a pre-marker snapshot: {error}",
+                    snap_path.display()
+                );
+                continue;
+            }
+            let LeaseProbe::Claimed(lease) = claim(&sentinel) else {
+                continue;
+            };
+            // An empty sentinel beside a markerless tree was written by a
+            // publish that never finished. Its tree may be half written, so
+            // the undo stack must not offer it.
+            if !complete {
+                if !lease.carries_legacy_tag() {
+                    tracing::warn!(
+                        "snapshot {} has a lease but no complete marker; left on disk",
+                        snap_path.display()
+                    );
+                    continue;
+                }
+                tracing::warn!(
+                    "snapshot {} predates the complete marker; re-linked unverified",
+                    snap_path.display()
+                );
+            }
+            entries.push(UndoEntry::CoWSnapshot {
+                store_path: snap_path,
                 extra_roots: Vec::new(),
-            })
-            .collect()
+                lease,
+            });
+        }
+        entries.reverse();
+        entries
     }
 
     /// Whether CoW reflink is available on the workspace's filesystem. Tries
@@ -490,17 +581,20 @@ impl SnapshotStore {
     /// after the workspace crosses the threshold would land a decline here
     /// as if it were a real I/O failure.
     pub fn snapshot_after_probe(&self, additional: &[PathBuf]) -> std::io::Result<UndoEntry> {
-        let snap_dir = self.claim_snapshot_dir()?;
-        // On a mid-walk failure, remove the partial snapshot so a transient
-        // I/O error does not leave an orphan dir (prune would reap it
-        // eventually, but only after it ages past TTL or trips the size cap).
-        if let Err(e) = self.snapshot_walk(&snap_dir, additional) {
-            let _cleanup = remove_dir_all(&snap_dir);
-            return Err(e);
+        // The build fills a private staging tree under a lease, so no other
+        // process can observe it as a snapshot until it is published whole.
+        let staged = start_build(&self.store_root)?;
+        pause_at_build_barrier("staged");
+        if let Err(error) = self.snapshot_walk(staged.path(), additional) {
+            staged.discard();
+            return Err(error);
         }
+        pause_at_build_barrier("copied");
+        let (store_path, lease) = publish(staged, &self.counter, &self.store_root)?;
         let entry = UndoEntry::CoWSnapshot {
-            store_path: snap_dir,
+            store_path,
             extra_roots: additional.to_vec(),
+            lease,
         };
         if let Some(a) = &self.audit {
             a.snapshot_created(&entry);
@@ -508,35 +602,16 @@ impl SnapshotStore {
         Ok(entry)
     }
 
-    /// Claim the next snapshot directory by creating it exclusively. Two
-    /// processes that seeded their counters from the same scan both reach for
-    /// the same name; the kernel hands the directory to one of them and the
-    /// other takes the following number, so neither walks into a tree the
-    /// other owns.
-    fn claim_snapshot_dir(&self) -> std::io::Result<PathBuf> {
-        create_dir_all(&self.store_root)?;
-        loop {
-            let id = self.counter.fetch_add(1, Ordering::Relaxed);
-            let snap_dir = self.store_root.join(format!("snap-{id}"));
-            match create_dir(&snap_dir) {
-                Ok(()) => return Ok(snap_dir),
-                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
     fn snapshot_walk(&self, snap_dir: &Path, additional: &[PathBuf]) -> std::io::Result<()> {
-        // The claim already created the directory, so the walk only fills it.
         // The workspace root maps to snap_dir/<rel>. Each additional writable
         // root (user-added working dir, outside the workspace) maps to
         // snap_dir/__extra/<i>/<rel> so restore can route it back to its
         // original root via the extra_roots vec stored on the entry.
-        self.walk_root_into(snap_dir, &self.workspace_root)?;
+        self.walk_root_into(snap_dir, &self.workspace_root, true)?;
         for (i, root) in additional.iter().enumerate() {
             let extra_dir = snap_dir.join("__extra").join(i.to_string());
             create_dir_all(&extra_dir)?;
-            self.walk_root_into(&extra_dir, root)?;
+            self.walk_root_into(&extra_dir, root, false)?;
         }
         Ok(())
     }
@@ -544,8 +619,10 @@ impl SnapshotStore {
     /// Walk a single root (the workspace or one additional dir) and CoW-copy
     /// its contents into dst preserving the root-relative layout. PRUNE_DIRS
     /// and the snapshot store itself are skipped so a snapshot does not clone
-    /// generated trees or prior snapshots.
-    fn walk_root_into(&self, dst: &Path, root: &Path) -> std::io::Result<()> {
+    /// generated trees or prior snapshots. The workspace pass stops once
+    /// after its first copied file when a test build barrier is armed.
+    fn walk_root_into(&self, dst: &Path, root: &Path, first_root: bool) -> std::io::Result<()> {
+        let mut announced = !first_root;
         for entry in WalkDir::new(root)
             .min_depth(1)
             .into_iter()
@@ -561,6 +638,10 @@ impl SnapshotStore {
                     create_dir_all(parent)?;
                 }
                 reflink_copy::reflink_or_copy(entry.path(), &dst_path)?;
+                if !announced {
+                    announced = true;
+                    pause_at_build_barrier("first-file");
+                }
             }
         }
         Ok(())
@@ -584,6 +665,7 @@ impl SnapshotStore {
             UndoEntry::CoWSnapshot {
                 store_path,
                 extra_roots,
+                ..
             } => {
                 // Restore the workspace tree: entries directly under store_path
                 // map back to workspace_root. The __extra/<i>/ subtree maps to
@@ -623,7 +705,8 @@ impl SnapshotStore {
         for entry in WalkDir::new(snap_src).min_depth(1).into_iter() {
             let entry = entry?;
             let rel = entry.path().strip_prefix(snap_src).unwrap_or(entry.path());
-            // Skip the __extra subtree in the workspace-restore pass.
+            // Skip the __extra subtree in the workspace-restore pass: it belongs
+            // to additional roots and is restored separately.
             if skip_extra
                 && rel
                     .components()
@@ -648,60 +731,15 @@ impl SnapshotStore {
     /// Prune expired snapshots + enforce a size cap. Removes snapshots older
     /// than the TTL, then if the total store size exceeds the cap, removes
     /// the oldest until under. Snapshots whose paths appear in protected
-    /// (entries still referenced by the undo stack) are never removed.
+    /// (entries still referenced by the undo stack) are never removed, and a
+    /// snapshot another process holds a lease on is always kept.
     pub fn prune(&self, ttl_secs: u64, max_size: u64, protected: &[PathBuf]) -> usize {
-        let mut removed = 0;
-        let now = SystemTime::now();
-        let mut snaps: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
-        if let Ok(entries) = read_dir(&self.store_root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-                // Never prune a snapshot the undo stack still references.
-                if protected
-                    .iter()
-                    .any(|p| path.starts_with(p) || p.starts_with(&path))
-                {
-                    continue;
-                }
-                let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(now);
-                let age = now.duration_since(mtime).unwrap_or_default();
-                let size = dir_size(&path);
-                if age.as_secs() > ttl_secs {
-                    let _r3 = remove_dir_all(&path);
-                    removed += 1;
-                } else {
-                    snaps.push((path, mtime, size));
-                }
-            }
-        }
-        snaps.sort_by_key(|(_, mtime, _)| *mtime);
-        let mut total: u64 = snaps.iter().map(|(_, _, s)| s).sum();
-        for (path, _, size) in &snaps {
-            if total <= max_size {
-                break;
-            }
-            let _r4 = remove_dir_all(path);
-            total -= size;
-            removed += 1;
-        }
+        let removed = enforce_retention(&self.store_root, ttl_secs, max_size, protected);
         if let Some(a) = &self.audit {
             a.snapshot_pruned(removed);
         }
         removed
     }
-}
-
-fn dir_size(path: &Path) -> u64 {
-    let mut total: u64 = 0;
-    for entry in WalkDir::new(path).min_depth(1).into_iter().flatten() {
-        if entry.file_type().is_file() {
-            total += entry.metadata().map(|m| m.len()).unwrap_or(0);
-        }
-    }
-    total
 }
 
 /// Pure ext4 fallback policy: when CoW is unavailable, degrade to Ask only if
@@ -725,24 +763,6 @@ fn reflink_policy(can_reflink: bool, workspace_size: u64) -> std::io::Result<()>
     Ok(())
 }
 
-/// Scan the store directory for the highest snap-N id so a fresh process
-/// starts its counter past existing snapshots (avoids collision).
-fn scan_max_snapshot_id(store_root: &Path) -> u64 {
-    let mut max = 0;
-    if let Ok(entries) = read_dir(store_root) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
-                && let Some(name) = entry.file_name().to_str()
-                && let Some(num) = name.strip_prefix("snap-")
-                && let Ok(n) = num.parse::<u64>()
-            {
-                max = max.max(n);
-            }
-        }
-    }
-    max
-}
-
 /// True if the path is a pruned directory: the snapshot store itself (under
 /// <workspace>/the snapshot store) or one of the PRUNE_DIRS at the
 /// workspace root's top level.
@@ -758,6 +778,11 @@ fn is_pruned(path: &Path, workspace_root: &Path, store_root: &Path) -> bool {
     }
     false
 }
+
+mod lease;
+mod migrate;
+mod prune;
+mod staging;
 
 pub mod file_transaction;
 
