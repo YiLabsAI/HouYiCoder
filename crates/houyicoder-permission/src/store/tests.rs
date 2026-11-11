@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 
@@ -34,7 +36,7 @@ fn test_file_store_round_trip() {
 
     // A fresh store pointing at the same paths sees the rule.
     let store2 = tmp_store(&dir, "a");
-    let loaded = store2.load();
+    let loaded = store2.try_load().expect("load");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].action, "bash");
     assert!(matches!(loaded[0].content, Some(RuleContent::Prefix(_))));
@@ -59,7 +61,7 @@ fn test_store_union_across_scopes() {
     store.add(&project_rule).unwrap();
     store.add(&local_rule).unwrap();
 
-    let loaded = store.load();
+    let loaded = store.try_load().expect("load");
     assert_eq!(loaded.len(), 3);
     let actions: Vec<&str> = loaded.iter().map(|r| r.action.as_str()).collect();
     assert!(actions.contains(&"read"));
@@ -81,7 +83,7 @@ fn test_remove_drops_action() {
         .remove(&Rule::new("bash", Effect::Allow).unwrap())
         .expect("remove");
 
-    let loaded = store.load();
+    let loaded = store.try_load().expect("load");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].action, "edit");
 }
@@ -104,9 +106,12 @@ fn test_clear_preserves_directories() {
 
     store.clear().expect("clear");
 
-    assert!(store.load().is_empty(), "the rules are gone");
+    assert!(
+        store.try_load().expect("load").is_empty(),
+        "the rules are gone"
+    );
     assert_eq!(
-        store.load_directories(),
+        store.try_load_directories().expect("directories"),
         vec![dunce::canonicalize(&workspace).unwrap_or(workspace)],
         "the directory grant survives the clear"
     );
@@ -146,7 +151,7 @@ fn test_clear_skips_empty_rules() {
         "a clear with nothing to drop does not rewrite the file"
     );
     assert_eq!(
-        store.load_directories(),
+        store.try_load_directories().expect("directories"),
         vec![dunce::canonicalize(&workspace).unwrap_or(workspace)],
         "the directory grant survives the clear"
     );
@@ -169,7 +174,7 @@ fn test_clear_wipes_write_scope() {
 
     // Clear only the project scope; the user scope keeps its rule.
     store.clear().unwrap();
-    let loaded = store.load();
+    let loaded = store.try_load().expect("load");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].action, "read");
 }
@@ -216,7 +221,7 @@ fn test_gate_persists_deny() {
     // deny rule; load() re-hydrates it on restart.
     gate.add_rule(Rule::new("bash", Effect::Deny).unwrap())
         .expect("saved");
-    assert_eq!(store.load().len(), 1);
+    assert_eq!(store.try_load().expect("load").len(), 1);
 }
 
 #[test]
@@ -235,10 +240,14 @@ fn test_remove_rule_deletes_store() {
             .with_scope(Scope::User),
     )
     .expect("saved");
-    assert_eq!(store.load().len(), 1, "added user-scope rule persists");
+    assert_eq!(
+        store.try_load().expect("load").len(),
+        1,
+        "added user-scope rule persists"
+    );
     assert!(gate.remove_rule(0), "remove by index succeeds");
     assert!(
-        store.load().is_empty(),
+        store.try_load().expect("load").is_empty(),
         "remove must delete the user-scope rule from the store, not just memory"
     );
     // A fresh gate does not re-hydrate the deleted rule.
@@ -268,10 +277,14 @@ fn test_remove_keeps_sibling() {
         Rule::with_content("bash", RuleContent::Prefix("git".into()), Effect::Allow).unwrap(),
     )
     .expect("saved");
-    assert_eq!(store.load().len(), 2, "both same-action rules persist");
+    assert_eq!(
+        store.try_load().expect("load").len(),
+        2,
+        "both same-action rules persist"
+    );
     // Remove index 0 (the npm rule). The git rule must survive.
     assert!(gate.remove_rule(0));
-    let loaded = store.load();
+    let loaded = store.try_load().expect("load");
     assert_eq!(
         loaded.len(),
         1,
@@ -292,8 +305,14 @@ fn test_remove_keeps_sibling() {
 /// re-hydrate on restart — the eprintln surfaces that signal.
 struct FailingStore;
 impl RuleStore for FailingStore {
-    fn load(&self) -> Vec<Rule> {
-        Vec::new()
+    fn try_load(&self) -> Result<Vec<Rule>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn try_load_directories(&self) -> Result<Vec<PathBuf>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn try_load_read_directories(&self) -> Result<Vec<PathBuf>, StoreError> {
+        Ok(Vec::new())
     }
     fn add(&self, _rule: &Rule) -> Result<(), StoreError> {
         Ok(())
@@ -326,8 +345,14 @@ fn test_remove_rule_persist_failure() {
 /// cannot land while the in-memory one can.
 struct RefusingAddStore;
 impl RuleStore for RefusingAddStore {
-    fn load(&self) -> Vec<Rule> {
-        Vec::new()
+    fn try_load(&self) -> Result<Vec<Rule>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn try_load_directories(&self) -> Result<Vec<PathBuf>, StoreError> {
+        Ok(Vec::new())
+    }
+    fn try_load_read_directories(&self) -> Result<Vec<PathBuf>, StoreError> {
+        Ok(Vec::new())
     }
     fn add(&self, _rule: &Rule) -> Result<(), StoreError> {
         Err(StoreError::Io)
@@ -435,7 +460,7 @@ fn test_load_stamps_scope_file() {
     // remove_rule finds it in user.json (not project) + deletes it.
     assert!(gate.remove_rule(0));
     assert!(
-        store.load().is_empty(),
+        store.try_load().expect("load").is_empty(),
         "legacy user-file rule must be removable, not silent-unremovable"
     );
 }
@@ -469,7 +494,7 @@ fn test_directory_persists_and_hydrates() {
         .expect("add_directory");
     // A fresh store pointing at the same files hydrates the directory.
     let store2 = Arc::new(tmp_store(&dir, "dirp")) as Arc<dyn RuleStore>;
-    let dirs = store2.load_directories();
+    let dirs = store2.try_load_directories().expect("directories");
     let canonical = dunce::canonicalize(&target).expect("canonicalize target");
     assert!(
         dirs.iter().any(|d| d == &canonical),
@@ -482,7 +507,10 @@ fn test_directory_persists_and_hydrates() {
         .expect("remove");
     let store3 = Arc::new(tmp_store(&dir, "dirp")) as Arc<dyn RuleStore>;
     assert!(
-        store3.load_directories().is_empty(),
+        store3
+            .try_load_directories()
+            .expect("directories")
+            .is_empty(),
         "removed directory must not re-hydrate"
     );
     fs::remove_dir_all(&target).ok();
@@ -503,7 +531,10 @@ fn test_gate_persists_directory() {
     gate.add_directory(&target, Scope::Local).expect("saved");
     let fresh = tmp_store(&dir, "gate-dir");
     assert!(
-        fresh.load_directories().contains(&canonical),
+        fresh
+            .try_load_directories()
+            .expect("directories")
+            .contains(&canonical),
         "a directory added through the gate must hydrate on the next start"
     );
 
@@ -513,7 +544,10 @@ fn test_gate_persists_directory() {
     gate.remove_directory(Path::new(&spelled)).expect("saved");
     let after = tmp_store(&dir, "gate-dir");
     assert!(
-        after.load_directories().is_empty(),
+        after
+            .try_load_directories()
+            .expect("directories")
+            .is_empty(),
         "a directory removed through the gate must not hydrate on the next start"
     );
 }
@@ -533,7 +567,9 @@ fn test_directory_expands_typed_tilde() {
     let expanded = home.join(&leaf);
 
     store.add_directory(&typed, Scope::Local).expect("add");
-    let stored = tmp_store(&dir, "tilde-dir").load_directories();
+    let stored = tmp_store(&dir, "tilde-dir")
+        .try_load_directories()
+        .expect("directories");
     assert!(
         stored.iter().all(|path| !path.starts_with("~")),
         "a typed tilde must be stored expanded: {stored:?}"
@@ -543,7 +579,10 @@ fn test_directory_expands_typed_tilde() {
         .remove_directory(&expanded, Scope::Local)
         .expect("remove");
     assert!(
-        tmp_store(&dir, "tilde-dir").load_directories().is_empty(),
+        tmp_store(&dir, "tilde-dir")
+            .try_load_directories()
+            .expect("directories")
+            .is_empty(),
         "the expanded spelling must remove the grant the tilde added"
     );
 }
@@ -564,7 +603,7 @@ fn test_verbatim_dir_simplifies() {
     )
     .expect("write legacy envelope");
     let store = tmp_store(&dir, "legacy");
-    let dirs = store.load_directories();
+    let dirs = store.try_load_directories().expect("directories");
     assert_eq!(
         dirs,
         vec![PathBuf::from("C:\\houyi-legacy-dir")],
@@ -580,13 +619,37 @@ fn test_read_directory_round_trip() {
     let store = Arc::new(tmp_store(&dir, "read-dir")) as Arc<dyn RuleStore>;
     store.add_read_directory(&target, Scope::Local).unwrap();
     let reloaded = Arc::new(tmp_store(&dir, "read-dir")) as Arc<dyn RuleStore>;
-    assert_eq!(reloaded.load_read_directories().len(), 1);
-    assert!(reloaded.load_directories().is_empty());
+    assert_eq!(
+        reloaded
+            .try_load_read_directories()
+            .expect("directories")
+            .len(),
+        1
+    );
+    assert!(
+        reloaded
+            .try_load_directories()
+            .expect("directories")
+            .is_empty()
+    );
     reloaded.add_directory(&target, Scope::Local).unwrap();
-    assert!(reloaded.load_read_directories().is_empty());
-    assert_eq!(reloaded.load_directories().len(), 1);
+    assert!(
+        reloaded
+            .try_load_read_directories()
+            .expect("directories")
+            .is_empty()
+    );
+    assert_eq!(
+        reloaded.try_load_directories().expect("directories").len(),
+        1
+    );
     reloaded.remove_directory(&target, Scope::Local).unwrap();
-    assert!(reloaded.load_directories().is_empty());
+    assert!(
+        reloaded
+            .try_load_directories()
+            .expect("directories")
+            .is_empty()
+    );
     fs::remove_dir_all(target).ok();
 }
 
@@ -603,7 +666,7 @@ fn test_add_idempotent_remove_absent() {
     store.add_directory(&target, Scope::Project).unwrap();
     store.add_directory(&target, Scope::Project).unwrap();
     assert_eq!(
-        store.load_directories().len(),
+        store.try_load_directories().expect("directories").len(),
         1,
         "duplicate add is idempotent"
     );
@@ -611,21 +674,32 @@ fn test_add_idempotent_remove_absent() {
     let absent = env::temp_dir().join(format!("houyi-dir-absent-{}", process::id()));
     store.remove_directory(&absent, Scope::Project).unwrap();
     assert_eq!(
-        store.load_directories().len(),
+        store.try_load_directories().expect("directories").len(),
         1,
         "remove-absent is a no-op"
     );
     fs::remove_dir_all(&target).ok();
 }
 
-/// The trait default directory methods (load_directories=empty,
-/// add_directory/remove_directory=Ok) are no-ops on a non-file-backed store
-/// (FailingStore). A store impl that does not override them must not break
-/// the rehydrate path — the defaults must be inert.
+/// A store that persists no directories answers both reads with an empty list
+/// rather than an error, and the write methods a non-file store leaves alone
+/// stay no-ops. Declaring nothing is a valid answer; failing to decode a file
+/// is the only reason a read errors.
 #[test]
-fn test_directory_default_methods_inert() {
+fn test_empty_grants_skip_writes() {
     let store = Arc::new(FailingStore) as Arc<dyn RuleStore>;
-    assert!(store.load_directories().is_empty());
+    assert!(
+        store
+            .try_load_directories()
+            .expect("no write grants")
+            .is_empty()
+    );
+    assert!(
+        store
+            .try_load_read_directories()
+            .expect("no read grants")
+            .is_empty()
+    );
     assert!(store.add_directory(Path::new("/x"), Scope::Project).is_ok());
     assert!(
         store
@@ -634,9 +708,14 @@ fn test_directory_default_methods_inert() {
     );
 }
 
+/// A per-call counter, so two tests that ask for a root in the same
+/// microsecond cannot land in one directory and write over each other.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn tempdir() -> PathBuf {
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = env::temp_dir().join(format!(
-        "houyicoder-permission-{}-{}",
+        "houyicoder-permission-{}-{seq}-{}",
         process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -645,6 +724,223 @@ fn tempdir() -> PathBuf {
     ));
     fs::create_dir_all(&dir).expect("tempdir");
     dir
+}
+
+/// Write the project scope file with the given bytes before the store opens,
+/// returning the store and the path a caller can compare against.
+fn seeded_store(dir: &Path, name: &str, bytes: &[u8]) -> (FileRuleStore, PathBuf) {
+    let store = tmp_store(dir, name);
+    let path = store.path_for(Scope::Project).to_path_buf();
+    fs::create_dir_all(path.parent().expect("the scope directory")).expect("mkdir scope");
+    fs::write(&path, bytes).expect("seed the scope file");
+    (store, path)
+}
+
+/// Every write on a scope file this build cannot decode fails and leaves the
+/// bytes alone. Initializing the file as empty would replace a deny rule the
+/// build merely failed to parse with a set holding nothing.
+#[test]
+fn test_corrupt_store_blocks_writes() {
+    let dir = tempdir();
+    let (store, path) = seeded_store(&dir, "corrupt", b"{ this is not a permissions file");
+    let before = fs::read(&path).expect("read the seeded bytes");
+    let grant = dir.join("grant");
+    fs::create_dir_all(&grant).expect("mkdir grant");
+    let allow = Rule::new("bash", Effect::Allow).unwrap();
+    let attempts = [
+        ("add", store.add(&allow)),
+        ("remove", store.remove(&allow)),
+        ("clear", store.clear()),
+        ("add directory", store.add_directory(&grant, Scope::Project)),
+        (
+            "add read directory",
+            store.add_read_directory(&grant, Scope::Project),
+        ),
+        (
+            "remove directory",
+            store.remove_directory(&grant, Scope::Project),
+        ),
+    ];
+    for (operation, outcome) in attempts {
+        let error = outcome.expect_err("a write on an undecodable file must fail");
+        assert!(
+            matches!(error, StoreError::Unreadable { .. }),
+            "{operation}: the failure names the file: {error}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("read the bytes after the refusal"),
+            before,
+            "{operation}: the file keeps its bytes"
+        );
+    }
+    assert!(store.try_load().is_err(), "the read reports the same file");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A zero-byte file is not an empty rule set. It is what a crashed or
+/// disk-full writer left behind, and the rules it was meant to hold are
+/// unknown, so the store reports it until the user deletes it.
+#[test]
+fn test_empty_store_blocks_writes() {
+    let dir = tempdir();
+    let (store, path) = seeded_store(&dir, "zero", b"");
+    let error = store
+        .add(&Rule::new("bash", Effect::Allow).unwrap())
+        .expect_err("a zero-byte file is not an empty rule set");
+    let message = error.to_string();
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the failure names the file: {message}"
+    );
+    assert!(
+        message.contains("no bytes"),
+        "the failure tells the user what happened to the file: {message}"
+    );
+    assert!(
+        fs::read(&path)
+            .expect("read the bytes after the refusal")
+            .is_empty(),
+        "the file keeps its zero bytes"
+    );
+    assert!(store.try_load().is_err(), "a load of it fails too");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A path that exists but cannot be opened, here a directory where the scope
+/// file belongs, is reported rather than treated as an absent file.
+#[test]
+fn test_directory_path_blocks_writes() {
+    let dir = tempdir();
+    let store = tmp_store(&dir, "dirpath");
+    let path = store.path_for(Scope::Project).to_path_buf();
+    fs::create_dir_all(&path).expect("a directory in the file's place");
+    let error = store
+        .add(&Rule::new("bash", Effect::Allow).unwrap())
+        .expect_err("a directory cannot be read as a permissions file");
+    assert!(
+        matches!(error, StoreError::Unreadable { .. }),
+        "the failure names the path: {error}"
+    );
+    assert!(path.is_dir(), "the path is left as it was");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A version newer than this build reads may carry rules this build cannot
+/// represent. Rewriting it would drop them, so reads and writes both refuse
+/// and the file keeps every member it had.
+#[test]
+fn test_unsupported_version_blocks_writes() {
+    for version in [0u32, 99u32] {
+        let dir = tempdir();
+        let body = format!(
+            r#"{{"version":{version},"rules":[{{"action":"bash","effect":"Deny"}}],"directories":[]}}"#
+        );
+        let (store, path) = seeded_store(&dir, "version", body.as_bytes());
+        let error = store
+            .add(&Rule::new("bash", Effect::Allow).unwrap())
+            .expect_err("an envelope outside the readable range cannot be rewritten");
+        assert!(
+            error.to_string().contains(&version.to_string()),
+            "the failure names the version it read: {error}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("read the bytes after the refusal"),
+            body.as_bytes(),
+            "a file this build cannot read keeps its bytes"
+        );
+        assert!(store.try_load().is_err(), "the read refuses it too");
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// The envelope-less shape older builds wrote is still a rule set: a bare
+/// array decodes, with each rule taking the scope of the file it came from.
+#[test]
+fn test_legacy_rules_still_load() {
+    let dir = tempdir();
+    let (store, _path) = seeded_store(&dir, "legacy", br#"[{"action":"bash","effect":"Deny"}]"#);
+    let loaded = store.try_load().expect("a bare array is readable");
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].effect, Effect::Deny);
+    assert_eq!(loaded[0].scope, Scope::Project);
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A version 1 envelope lacks the read-directory list and is still accepted;
+/// the next write stamps the current version while keeping both rules.
+#[test]
+fn test_old_envelope_loads() {
+    let dir = tempdir();
+    let (store, path) = seeded_store(
+        &dir,
+        "old",
+        br#"{"version":1,"rules":[{"action":"bash","effect":"Deny"}],"directories":[]}"#,
+    );
+    let loaded = store.try_load().expect("a version 1 envelope is readable");
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].effect, Effect::Deny);
+    store
+        .add(&Rule::new("read", Effect::Allow).unwrap())
+        .expect("a write on a readable old file works");
+    let after = store.try_load().expect("load the rewritten file");
+    assert_eq!(after.len(), 2, "the old rule and the new one both survive");
+    let text = fs::read_to_string(&path).expect("read the scope file");
+    assert!(
+        text.contains("\"version\":2"),
+        "the rewrite stamps the current version: {text}"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A member this build does not model belongs to another build's file. A
+/// rewrite for a rule add carries it back unchanged.
+#[test]
+fn test_unknown_member_survives_add() {
+    let dir = tempdir();
+    let (store, path) = seeded_store(
+        &dir,
+        "future-member",
+        br#"{"version":2,"rules":[{"action":"bash","effect":"Deny","from_another_build":{"keep":true}}],"directories":[],"from_another_build":{"keep":true}}"#,
+    );
+    store
+        .add(&Rule::new("read", Effect::Allow).unwrap())
+        .expect("add a rule");
+    let text = fs::read_to_string(&path).expect("read the scope file");
+    let value: Value = serde_json::from_str(&text).expect("the file is JSON");
+    assert_eq!(
+        value["from_another_build"]["keep"], true,
+        "the envelope member this build does not model is written back: {text}"
+    );
+    assert_eq!(
+        value["rules"][0]["from_another_build"]["keep"], true,
+        "the rule member this build does not model is written back: {text}"
+    );
+    assert_eq!(
+        store.try_load().expect("load").len(),
+        2,
+        "both rules are there as well"
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A store whose files are all absent is the first run: it reads as no rules
+/// and the first write creates the file.
+#[test]
+fn test_absent_store_loads_empty() {
+    let dir = tempdir();
+    let store = tmp_store(&dir, "absent");
+    assert!(
+        store
+            .try_load()
+            .expect("no files means no rules")
+            .is_empty(),
+        "an absent store holds nothing"
+    );
+    store
+        .add(&Rule::new("bash", Effect::Allow).unwrap())
+        .expect("the first write creates the file");
+    assert_eq!(store.try_load().expect("load").len(), 1);
+    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -656,7 +952,7 @@ fn test_add_same_rule_dedups() {
     store.add(&rule).expect("add 1");
     store.add(&rule).expect("add 2 (should be no-op)");
     let store2 = tmp_store(&dir, "dedup");
-    let loaded = store2.load();
+    let loaded = store2.try_load().expect("load");
     assert_eq!(loaded.len(), 1, "dedup: file should have 1 rule");
 }
 
@@ -671,7 +967,7 @@ fn test_add_case_dedups() {
         .add(&r2)
         .expect("add bash (should dedup, case-insensitive)");
     let store2 = tmp_store(&dir, "case");
-    let loaded = store2.load();
+    let loaded = store2.try_load().expect("load");
     assert_eq!(loaded.len(), 1, "Bash and bash are the same rule");
 }
 
@@ -685,7 +981,7 @@ fn test_remove_case_insensitive_matches() {
     store
         .remove(&r2)
         .expect("remove bash(npm:*) should match Bash");
-    let loaded = tmp_store(&dir, "rmcase").load();
+    let loaded = tmp_store(&dir, "rmcase").try_load().expect("load");
     assert_eq!(
         loaded.len(),
         0,
@@ -718,7 +1014,7 @@ fn test_remove_absent_is_noop() {
         Rule::with_content("bash", RuleContent::Prefix("git".into()), Effect::Allow).unwrap();
     store.add(&other).expect("add git rule");
     store.remove(&absent).expect("remove absent npm rule is Ok");
-    let loaded = tmp_store(&dir, "rmabsent").load();
+    let loaded = tmp_store(&dir, "rmabsent").try_load().expect("load");
     assert_eq!(
         loaded.len(),
         1,

@@ -60,7 +60,7 @@ fn test_startup_restores_fence() {
         "fence starts empty before the restore"
     );
 
-    restore_directory_grants(session.as_ref(), store.as_ref());
+    restore_directory_grants(session.as_ref(), store.as_ref()).expect("restore");
     let dirs = session.working_dirs();
     assert!(
         dirs.iter().any(|d| Path::new(d.as_str()) == canonical),
@@ -105,7 +105,7 @@ fn test_startup_skips_stale_dir() {
     fs::create_dir_all(&repo).expect("mkdir repo");
     let session: Arc<dyn SandboxSession> =
         Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
-    restore_directory_grants(session.as_ref(), store.as_ref());
+    restore_directory_grants(session.as_ref(), store.as_ref()).expect("restore");
 
     let dirs = session.working_dirs();
     assert!(
@@ -145,7 +145,7 @@ fn test_retargeted_link_not_restored() {
     fs::create_dir_all(&repo).expect("mkdir repo");
     let session: Arc<dyn SandboxSession> =
         Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
-    restore_directory_grants(session.as_ref(), store.as_ref());
+    restore_directory_grants(session.as_ref(), store.as_ref()).expect("restore");
 
     let dirs = session.working_dirs();
     assert!(
@@ -498,12 +498,72 @@ fn test_refused_grant_keeps_starting() {
         .expect("add_read_directory");
     let session = CapableSession;
 
-    restore_directory_grants(&session, store.as_ref());
+    restore_directory_grants(&session, store.as_ref()).expect("restore");
 
     assert!(
         session.working_dirs().is_empty(),
         "a fence that refuses the grant reports nothing granted: {:?}",
         session.working_dirs()
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A store that cannot be read fails the restore rather than reporting no
+/// grants. The fence starts empty either way, but the caller has to know the
+/// file it must repair, and a silent empty answer would look like a user who
+/// granted nothing.
+#[test]
+fn test_corrupt_store_fails_restore() {
+    let root = temp_root("houyi-restore-corrupt");
+    let store = temp_store(&root);
+    fs::write(root.join("project.json"), b"{ not a permissions file")
+        .expect("write a corrupt scope file");
+    let session = CapableSession;
+
+    let error = restore_directory_grants(&session, store.as_ref())
+        .expect_err("a store that cannot be read must fail the restore");
+
+    assert!(
+        error.to_string().contains("project.json"),
+        "the failure names the file to repair: {error}"
+    );
+    assert!(
+        session.working_dirs().is_empty(),
+        "the fence starts without listings it could not verify: {:?}",
+        session.working_dirs()
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A store that cannot be read still yields a usable session, but no grant it
+/// could not verify is re-attached: a listing the user may have revoked stays
+/// out of the fence, and the gate names the file the restore failed on.
+#[test]
+fn test_corrupt_store_starts_bare() {
+    let root = temp_root("houyi-fences-corrupt");
+    let store = temp_store(&root);
+    let target = root.join("authorized-dir");
+    fs::create_dir_all(&target).expect("mkdir target");
+    store
+        .add_directory(&target, Scope::Project)
+        .expect("record a grant");
+    fs::write(root.join("project.json"), b"{ not a permissions file")
+        .expect("corrupt the scope file after the grant was written");
+    let canonical = dunce::canonicalize(&target).expect("canonicalize target");
+
+    let fences = build_session_fences(Some(root.to_string_lossy().into_owned()), Some(store));
+
+    let session = fences
+        .sandbox_session
+        .expect("the fence still starts a session");
+    let dirs = session.working_dirs();
+    assert!(
+        dirs.iter().all(|dir| Path::new(dir.as_str()) != canonical),
+        "a grant that cannot be verified is not re-attached: {dirs:?}"
+    );
+    assert!(
+        fences.gate.store_failure().is_some(),
+        "the gate reports the file the fence could not restore from"
     );
     fs::remove_dir_all(&root).ok();
 }

@@ -206,7 +206,7 @@ fn test_stores_keep_both() {
     write(root.join(RELEASE_MARKER), b"").expect("release the child");
     store.add(&rule("parent")).expect("parent add");
     wait_child(&mut child);
-    let loaded = crate::store(&root).load();
+    let loaded = crate::store(&root).try_load().expect("load");
     let contents: Vec<String> = loaded
         .iter()
         .filter_map(|r| match &r.content {
@@ -231,6 +231,55 @@ fn test_stores_keep_both() {
     assert!(
         leftovers.is_empty(),
         "a completed write must leave no temp files: {leftovers:?}"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// Both processes add one rule to a scope file that also carries a member this
+/// build does not model. Each add is a read-modify-write under the store lock,
+/// so both rules survive and the member the other build wrote is carried back
+/// unchanged rather than dropped by the rewrite.
+#[test]
+fn test_stores_keep_unknown_field() {
+    if run_child_role() {
+        return;
+    }
+    let root = temp_root("unknown-member");
+    write(
+        root.join("project.json"),
+        r#"{"version":2,"rules":[],"directories":[],"from_another_build":"kept"}"#,
+    )
+    .expect("seed the scope file");
+    let mut child = start_child("test_stores_keep_unknown_field", "write", &root);
+    assert!(
+        wait_for_file(&root.join(READY_MARKER)),
+        "the child must be ready before the race starts"
+    );
+    let store = store(&root);
+    write(root.join(RELEASE_MARKER), b"").expect("release the child");
+    store.add(&rule("parent")).expect("parent add");
+    wait_child(&mut child);
+    let text = read_to_string(root.join("project.json")).expect("read the scope file");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("the file is JSON");
+    assert_eq!(
+        value["from_another_build"], "kept",
+        "the member this build does not model survives both writers:\n{text}"
+    );
+    let loaded = crate::store(&root).try_load().expect("load");
+    let contents: Vec<String> = loaded
+        .iter()
+        .filter_map(|r| match &r.content {
+            Some(RuleContent::Prefix(p)) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        contents.iter().any(|p| p == "parent"),
+        "the parent rule must survive: {contents:?}"
+    );
+    assert!(
+        contents.iter().any(|p| p == "child"),
+        "the child rule must survive: {contents:?}"
     );
     remove_dir_all(&root).ok();
 }
@@ -271,7 +320,7 @@ fn test_add_keeps_locked_rule() {
         .expect("the add completes once the lock is free");
     assert!(outcome.is_ok(), "the add must land after the release");
     writer.join().expect("the writer thread ends");
-    let loaded = crate::store(&root).load();
+    let loaded = crate::store(&root).try_load().expect("load");
     let contents: Vec<String> = loaded
         .iter()
         .filter_map(|r| match &r.content {

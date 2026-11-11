@@ -12,7 +12,9 @@ use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, Server};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::{NameSource, SessionDescriptor, SessionProvenance};
-use houyicoder_permission::{Decision, ModeGate, ToolRequest};
+use houyicoder_core::agent::multi_agent::registry::BuiltInRegistry;
+use houyicoder_core::agent::multi_agent::registry::built_in_general_purpose;
+use houyicoder_permission::{Decision, FileRuleStore, ModeGate, ToolRequest};
 use houyicoder_protocol::frontend::FrontendEvent;
 use houyicoder_provider::FakeProvider;
 use std::env::temp_dir;
@@ -51,6 +53,66 @@ fn test_degrade_reports_absence() {
         "a failed attempt must degrade to None so the caller can substitute or \
          withhold, rather than proceeding with something half-built"
     );
+}
+
+/// The list of agent types the user denied lives in the rule file, so a file
+/// this build cannot read leaves every type's status unknown. The resolver
+/// then denies every registered type: offering one would offer a type the user
+/// may have denied, and the delegate list empties instead.
+#[test]
+fn test_unreadable_store_denies_agents() {
+    let root = temp_dir().join(format!("houyi-denied-agents-{}", id()));
+    remove_dir_all(&root).ok();
+    create_dir_all(&root).expect("create the store root");
+    let user = root.join("user.json");
+    write(&user, b"{ not a permissions file").expect("write a corrupt user file");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        user,
+        root.join("project.json"),
+        root.join("local.json"),
+    ));
+    let registry = BuiltInRegistry::from_agents(vec![built_in_general_purpose()]);
+
+    let denied = resolve_denied_agents(Some(store.as_ref()), &registry);
+
+    assert!(
+        denied.contains("general-purpose"),
+        "every registered type is denied while the list is unknown: {denied:?}"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// The gate records a failed load, and the assembled runner carries the
+/// repair instruction into the warnings it hands the front end. A notice that
+/// never reaches the user would be the same as no notice.
+#[test]
+fn test_corrupt_store_warns_startup() {
+    let root = temp_dir().join(format!("houyi-startup-warning-{}-{}", id(), line!()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("mkdir root");
+    let user = root.join("user.json");
+    write(&user, b"{ not a permissions file").expect("write a corrupt user file");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        user,
+        root.join("project.json"),
+        root.join("local.json"),
+    ));
+
+    let bundle = super::build_runner(BuildRunnerOptions {
+        project: Some(root.to_string_lossy().into_owned()),
+        home: Some(root.clone()),
+        rule_store: Some(store),
+        ..Default::default()
+    });
+
+    let warnings = bundle.runner.drain_startup_warnings();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("user.json") && warning.contains("Repair or delete")),
+        "the startup notice must name the file and the repair: {warnings:?}"
+    );
+    drop(remove_dir_all(&root));
 }
 
 /// Build a minimal runner for host-level tests: a stub provider, an empty

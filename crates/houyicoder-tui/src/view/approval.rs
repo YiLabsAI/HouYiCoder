@@ -486,6 +486,12 @@ fn source_label(a: &Approval) -> &'static str {
     if a.is_entitlement() {
         return "Deny-log discovery";
     }
+    // A rule file the gate could not read escalates the same way a protected
+    // path does, but what the user must repair is the file, not a path
+    // policy, so the card names that instead of the source's usual label.
+    if a.validator.as_deref() == Some("store_unreadable") {
+        return "Rule file unreadable";
+    }
     match a.source {
         Some(AskSource::SystemSafety) => "Protected path",
         Some(AskSource::Detection) => "Detection",

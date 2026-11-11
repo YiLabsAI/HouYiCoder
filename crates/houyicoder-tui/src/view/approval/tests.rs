@@ -433,6 +433,38 @@ fn test_read_card_compact() {
     );
 }
 
+/// A gate that could not read its stored rules escalates with the same safety
+/// source a protected path uses, but the file, not a path policy, is what the
+/// user must repair, so the card names the file.
+#[test]
+fn test_unreadable_rule_file_label() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.prompt = Some(PendingPrompt::approval_card(
+        RequestId(0),
+        Approval {
+            tool: "read".into(),
+            args: r#"{"path":"/repo/src/lib.rs"}"#.into(),
+            reason: "the user permission file /repo/user.json cannot be read".into(),
+            source: Some(AskSource::SystemSafety),
+            validator: Some("store_unreadable".into()),
+            selected: 0,
+            call_id: String::new(),
+            options: Vec::new(),
+            ..Default::default()
+        },
+    ));
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains("Rule file unreadable:"),
+        "the card names the unreadable rule file:\n{out}"
+    );
+    assert!(
+        !out.contains("Protected path:"),
+        "a rule file is not a path policy:\n{out}"
+    );
+}
+
 /// A long command keeps both ends and wraps before the reason and options.
 #[test]
 fn test_long_command_wraps() {

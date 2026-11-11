@@ -12,6 +12,8 @@
 use glob::{MatchOptions, Pattern};
 use houyicoder_api::tool::{is_shell_tool, writes_files};
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
+use serde_json::Value;
 
 use crate::compound::is_attestable;
 use crate::compound::normalize_shell_command;
@@ -129,7 +131,7 @@ impl RuleContent {
 /// the input string satisfies the pattern. The scope is a persistence concern
 /// only — the evaluator reads the union across scopes; it never inspects
 /// scope at decision time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     pub action: String,
     pub content: Option<RuleContent>,
@@ -138,6 +140,11 @@ pub struct Rule {
     /// constructed by name-only callers lands in the default write scope.
     #[serde(default)]
     pub scope: Scope,
+    /// Members of a stored rule this build does not model. They ride along
+    /// and are written back unchanged, so a file produced by another build
+    /// keeps the data its writer put there.
+    #[serde(flatten)]
+    pub unknown_members: Map<String, Value>,
 }
 
 impl Rule {
@@ -153,6 +160,7 @@ impl Rule {
             content: None,
             effect,
             scope: Scope::default(),
+            unknown_members: Map::new(),
         })
     }
 
@@ -171,6 +179,7 @@ impl Rule {
             content: Some(content),
             effect,
             scope: Scope::default(),
+            unknown_members: Map::new(),
         })
     }
 
@@ -268,6 +277,7 @@ pub fn builtin_rules() -> Vec<Rule> {
                 content: Some(content),
                 effect: Effect::Ask,
                 scope: Scope::Builtin,
+                unknown_members: Map::new(),
             }
         })
         .collect()

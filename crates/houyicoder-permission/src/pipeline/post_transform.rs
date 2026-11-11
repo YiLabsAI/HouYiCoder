@@ -1,6 +1,6 @@
 use crate::decision::FenceProof;
 use crate::decision::{AllowReason, AskReason, Decision, DenyReason, DenySource};
-use crate::gate::mode_default;
+use crate::gate::mode_policy::mode_default;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::detection::NETWORK_EGRESS;
 use crate::pipeline::mode_default::MODE_DEFAULT;

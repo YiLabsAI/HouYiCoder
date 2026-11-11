@@ -53,6 +53,8 @@ mod shell_policy;
 #[cfg(test)]
 mod shell_scan;
 #[cfg(test)]
+mod store_failure;
+#[cfg(test)]
 mod workdir_rule;
 #[cfg(test)]
 mod wrapped_shell;

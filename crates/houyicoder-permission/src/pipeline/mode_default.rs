@@ -12,7 +12,7 @@ use houyicoder_api::tool::is_shell_tool;
 use crate::compound::is_readonly_compound;
 use crate::decision::{AllowReason, Decision};
 use crate::egress::http_origin;
-use crate::gate::mode_default;
+use crate::gate::mode_policy::mode_default;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 

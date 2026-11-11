@@ -328,7 +328,7 @@ async fn test_consent_reaches_both_layers() {
         dirs.iter().any(|d| Path::new(d) == coutside),
         "fence (additional_dirs) has the granted dir: {dirs:?}"
     );
-    let stored = store.load_read_directories();
+    let stored = store.try_load_read_directories().expect("directories");
     assert!(
         stored.iter().any(|d| d == &coutside),
         "durable store persisted the granted dir: {stored:?}"
@@ -362,7 +362,8 @@ async fn test_consent_reaches_both_layers() {
     );
     assert!(
         !store
-            .load_directories()
+            .try_load_directories()
+            .expect("directories")
             .iter()
             .any(|dir| dir == &canonical_config),
         "once grants the live fence without persisting the directory"
@@ -376,16 +377,14 @@ async fn test_consent_reaches_both_layers() {
     fs::remove_dir_all(&root).ok();
 }
 
-/// The directory grant follows the approved target, not the ask reason: a
-/// call whose resolved path sits outside the fence widens it whichever
-/// validator asked, because an approval that cannot execute is not an
-/// approval. The reason selects the rule path: a non-path-bounds ask
-/// answered with scope always persists a tool rule, while a path-bounds
-/// answer persists the directory instead. An inside target grants no
-/// directory. macOS-only: widening a live fence is Seatbelt-only.
+/// A path-bounds answer grants the directory the approved call targets: the
+/// read directory is recorded for a workspace lifetime, and an outside target
+/// widens the live fence even for a one-time answer. The target decides, not
+/// the validator that asked. macOS-only: widening a live fence is
+/// Seatbelt-only.
 #[cfg(target_os = "macos")]
 #[test]
-fn test_consent_grants_by_location() {
+fn test_path_ask_grants_directory() {
     let root = env::temp_dir().join(format!("route-{}-{}", process::id(), line!()));
     drop(fs::remove_dir_all(&root));
     fs::create_dir_all(&root).expect("mkdir root");
@@ -428,11 +427,19 @@ fn test_consent_grants_by_location() {
         .expect("route path-bounds consent");
     let coutside = dunce::canonicalize(&outside).unwrap();
     assert!(
-        store.load_read_directories().iter().any(|d| d == &coutside),
+        store
+            .try_load_read_directories()
+            .expect("directories")
+            .iter()
+            .any(|d| d == &coutside),
         "a path-bounds answer grants the read directory"
     );
     assert!(
-        store.load().iter().all(|r| r.action != "grep"),
+        store
+            .try_load()
+            .expect("load")
+            .iter()
+            .all(|r| r.action != "grep"),
         "a path-bounds answer persists the directory, not a tool rule"
     );
 
@@ -458,16 +465,63 @@ fn test_consent_grants_by_location() {
         "an outside target widens the live fence whichever validator asked"
     );
     assert!(
-        !store.load_read_directories().iter().any(|d| d == &csecond),
+        !store
+            .try_load_read_directories()
+            .expect("directories")
+            .iter()
+            .any(|d| d == &csecond),
         "scope once grants the live fence without persisting"
     );
     assert!(
-        store.load().iter().all(|r| r.action != "grep"),
+        store
+            .try_load()
+            .expect("load")
+            .iter()
+            .all(|r| r.action != "grep"),
         "scope once persists no rule"
     );
 
-    // An inside target with a rule ask: nothing to widen, so no directory
-    // grant; scope always persists the tool rule the answer chose.
+    fs::remove_dir_all(&root).ok();
+}
+
+/// A rule ask answered with always persists the tool rule, and an inside
+/// target grants no directory. An answer scoped once keeps the rule in the
+/// running gate and writes nothing to a store.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_rule_ask_persists_rule() {
+    let root = env::temp_dir().join(format!("rule-route-{}-{}", process::id(), line!()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root).expect("mkdir root");
+    let outside = root.join("outside");
+    fs::create_dir_all(&outside).expect("mkdir outside");
+    let store: Arc<dyn RuleStore> = Arc::new(FileRuleStore::new(
+        root.join("user.json"),
+        root.join("project.json"),
+        root.join("local.json"),
+    ));
+    let gate = Arc::new(DefaultModeGate::new().with_store(store.clone()));
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).expect("mkdir repo");
+    let session: Arc<dyn SandboxSession> =
+        Arc::new(PlatformSession::new_in_cwd(&repo).expect("sandbox"));
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("test")),
+        ToolRegistry::new(),
+        RunnerConfig::default(),
+    );
+    let server =
+        Server::new(Arc::new(runner), SessionId::new(), gate).with_session(session.clone());
+    let user_ask = AskReason {
+        source: AskSource::UserRule,
+        validator: "some-rule".to_string(),
+        detail: "user rule fired".into(),
+        containment_note: None,
+    };
+
+    // An inside target has nothing to widen, so an always answer persists the
+    // tool rule the answer chose.
     let inner = repo.join("inner.txt");
     fs::write(&inner, b"x").expect("write inner");
     let inner_input = json!({"path": inner.to_string_lossy(), "pattern": "x"});
@@ -479,14 +533,44 @@ fn test_consent_grants_by_location() {
             Some(&user_ask),
         )
         .expect("route inside consent");
-    assert_eq!(
-        store.load_read_directories(),
-        vec![coutside],
+    assert!(
+        store
+            .try_load_read_directories()
+            .expect("directories")
+            .is_empty(),
         "an inside target grants no directory"
     );
     assert!(
-        store.load().iter().any(|r| r.action == "grep"),
+        store
+            .try_load()
+            .expect("load")
+            .iter()
+            .any(|r| r.action == "grep"),
         "a non-path-bounds always answer persists the tool rule"
+    );
+
+    // An outside target answered once widens the fence and stores no rule.
+    let second_input = json!({"path": outside.to_string_lossy(), "pattern": "x"});
+    server
+        .route_consent("grep", &second_input, ApprovalScope::Once, Some(&user_ask))
+        .expect("route one-time consent");
+    let coutside = dunce::canonicalize(&outside).unwrap();
+    assert!(
+        session
+            .working_dirs()
+            .iter()
+            .any(|d| Path::new(d) == coutside),
+        "the outside target widens the live fence"
+    );
+    assert_eq!(
+        store
+            .try_load()
+            .expect("load")
+            .iter()
+            .filter(|r| r.action == "grep")
+            .count(),
+        1,
+        "the one-time answer adds no stored rule"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -536,7 +620,7 @@ fn test_session_rule_not_stored() {
         "the session answer takes effect in the running gate"
     );
     assert!(
-        store.load().is_empty(),
+        store.try_load().expect("load").is_empty(),
         "a session-lifetime rule reaches no store"
     );
 
@@ -593,11 +677,18 @@ fn test_session_grant_not_stored() {
         "the session answer widens this session's fence"
     );
     assert!(
-        store.load_read_directories().is_empty(),
+        store
+            .try_load_read_directories()
+            .expect("directories")
+            .is_empty(),
         "a session-lifetime directory grant reaches no store"
     );
     assert!(
-        store.load().iter().all(|rule| rule.action != "grep"),
+        store
+            .try_load()
+            .expect("load")
+            .iter()
+            .all(|rule| rule.action != "grep"),
         "a path-bounds answer persists no tool rule at any lifetime"
     );
 
@@ -657,10 +748,19 @@ fn test_safety_persists_nothing() {
         "the frozen call can reach the directory it was approved for"
     );
     assert!(
-        store.load_directories().is_empty(),
+        store
+            .try_load_directories()
+            .expect("directories")
+            .is_empty(),
         "a system-safety ask keeps no durable directory grant"
     );
-    assert!(store.load().iter().all(|rule| rule.action != "edit"));
+    assert!(
+        store
+            .try_load()
+            .expect("load")
+            .iter()
+            .all(|rule| rule.action != "edit")
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -771,13 +871,14 @@ fn test_none_reason_no_rule() {
         .expect("route nested consent");
 
     let blanket_grep_allow = store
-        .load()
+        .try_load()
+        .expect("load")
         .iter()
         .any(|r| r.action == "grep" && r.content.is_none() && r.effect == Effect::Allow);
     assert!(
         !blanket_grep_allow,
         "a None-reason grep must not install a contentless blanket allow rule: {:?}",
-        store.load()
+        store.try_load().expect("load")
     );
 
     // The fence remembers the first grant, so the second call's nested path is

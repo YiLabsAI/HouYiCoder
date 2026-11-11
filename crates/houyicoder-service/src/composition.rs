@@ -346,7 +346,7 @@ pub(crate) fn assemble(
     );
     let config = build_runner_config(model.clone(), &runner_settings);
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
-    let denied_agents = resolve_denied_agents(rule_store.as_deref());
+    let denied_agents = resolve_denied_agents(rule_store.as_deref(), agent_registry.as_ref());
     let bus = Arc::new(AgentBus::new());
     // The compaction components are built before the spawn port, because a
     // delegated child compresses its own log and must reach the same ones the
@@ -421,6 +421,9 @@ pub(crate) fn assemble(
         &provider_cfg_warnings,
         &recap_warnings,
     );
+    if let Some(failure) = fences.gate.store_failure() {
+        startup.push(failure);
+    }
     finish_startup_warnings(
         &mut startup,
         &runner_settings_warnings,
@@ -510,12 +513,32 @@ fn build_runner_config(model: String, settings: &RunnerSettings) -> RunnerConfig
     }
 }
 
-/// Extract denied sub-agent types from the rule store.
-fn resolve_denied_agents(rule_store: Option<&dyn RuleStore>) -> Arc<HashSet<String>> {
-    Arc::new(match rule_store {
-        Some(rules) => houyicoder_permission::denied_agent_types(&rules.load()),
-        None => HashSet::new(),
-    })
+/// Extract denied sub-agent types from the rule store. A store that cannot be
+/// read denies every registered type instead: the deny list lives in the file
+/// that could not be read, so offering any type would offer one the user may
+/// have denied.
+fn resolve_denied_agents(
+    rule_store: Option<&dyn RuleStore>,
+    registry: &dyn AgentRegistry,
+) -> Arc<HashSet<String>> {
+    let Some(rules) = rule_store else {
+        return Arc::new(HashSet::new());
+    };
+    match rules.try_load() {
+        Ok(loaded) => Arc::new(houyicoder_permission::denied_agent_types(&loaded)),
+        Err(error) => {
+            tracing::warn!(
+                "[permission] agent deny rules cannot be read, so no agent type may be delegated: {error}"
+            );
+            Arc::new(
+                registry
+                    .list()
+                    .into_iter()
+                    .map(|definition| definition.subagent_type)
+                    .collect(),
+            )
+        }
+    }
 }
 
 /// Append runner-settings warnings, unfenced sandbox notices, and retention backlog notices.

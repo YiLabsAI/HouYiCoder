@@ -5,19 +5,18 @@
 //! lock-free against the snapshot, then applies the post-ladder transform so
 //! no early return inside the ladder can skip the headless fallback.
 //!
-//! The per-mode policies (Manual / Auto) live here too: they are the
+//! The per-mode policies (Manual / Auto) live in mode_policy: they are the
 //! mode-default verdict the registry's final validator delegates to when
 //! nothing else decided. They are pure functions of the request and its
-//! side-effect level — no I/O, no mutable state, no classifier — so the
-//! autonomous loop's relaxation of Exec and Filesystem is isolated and
-//! testable apart from the gate's state.
+//! side-effect level, so the autonomous loop's relaxation of Exec and
+//! Filesystem is isolated and testable apart from the gate's state.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::compound::{normalize_shell_command, split_compound};
 use crate::consent::ConsentStore;
-use crate::decision::{AllowReason, AskReason, AskSource, Decision};
+use crate::decision::Decision;
 use crate::egress::trusted_egress_scopes;
 use crate::git_safety::collect_git_ask_ops;
 use crate::metrics::DecisionBucket;
@@ -25,13 +24,11 @@ use crate::metrics::DecisionCounter;
 use crate::metrics::decision_labels;
 use crate::metrics::outcome_label;
 use crate::mode::{ModeChange, ModeError, PermissionMode, ToolRequest};
-use crate::pipeline::mode_default::MODE_DEFAULT;
 use crate::pipeline::post_transform::post_transform;
 use crate::pipeline::{GateCtx, Pipeline};
 use crate::rule::builtin_rule_id;
 use crate::rule::builtin_rules;
 use crate::rule::{Effect, Rule, evaluate, input_content, root_relative_content, strictest};
-use crate::side_effect::side_effect_for;
 use crate::store::RuleStore;
 use crate::store::Scope;
 use crate::store::StoreError;
@@ -41,6 +38,12 @@ use houyicoder_api::tool::is_shell_tool;
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::field::Empty;
+
+pub(crate) mod mode_policy;
+mod store_failure;
+
+pub use mode_policy::{AutoPolicy, DefaultPolicy, ModePolicy, mode_default};
+use store_failure::StoreFailure;
 
 /// The single entry point for mode state. Implementors hold the current mode,
 /// the rule set, and the switch history. GuardedTool holds an Arc<dyn ModeGate>
@@ -113,6 +116,7 @@ pub struct DefaultModeGate {
     history: Mutex<Vec<ModeChange>>,
     consent: Option<Arc<dyn ConsentStore>>,
     store: Option<Arc<dyn RuleStore>>,
+    store_failure: StoreFailure,
     /// The ordered validator registry. Built once at construction and never
     /// mutated, so the gate can share it across decide calls without a lock.
     /// The validators are stateless: every per-call input they need is packed
@@ -155,6 +159,7 @@ impl DefaultModeGate {
             history: Mutex::new(Vec::new()),
             consent: None,
             store: None,
+            store_failure: StoreFailure::default(),
             pipeline: Pipeline::standard(),
             headless: AtomicBool::new(false),
             containment: None,
@@ -172,6 +177,7 @@ impl DefaultModeGate {
             history: Mutex::new(Vec::new()),
             consent: None,
             store: None,
+            store_failure: StoreFailure::default(),
             pipeline: Pipeline::standard(),
             headless: AtomicBool::new(false),
             containment: None,
@@ -193,6 +199,7 @@ impl DefaultModeGate {
             history: Mutex::new(Vec::new()),
             consent: None,
             store: None,
+            store_failure: StoreFailure::default(),
             pipeline: Pipeline::standard(),
             headless: AtomicBool::new(false),
             containment: None,
@@ -218,16 +225,31 @@ impl DefaultModeGate {
     /// Subsequent add_rule calls persist every effect (allow/deny/ask) to
     /// the rule's chosen scope; remove_rule deletes from that scope too, so
     /// a deleted rule does not re-hydrate on restart.
+    ///
+    /// A store that cannot be read leaves the rules already seeded here in
+    /// place and records the failure. The gate then refuses to allow anything
+    /// on a rule set it could not read: see store_failure.
     pub fn with_store(mut self, store: Arc<dyn RuleStore>) -> Self {
-        let persisted = store.load();
-        if !persisted.is_empty() {
-            self.rules
-                .lock()
-                .expect("mode gate mutex")
-                .extend(persisted);
+        match store.try_load() {
+            Ok(persisted) => {
+                if !persisted.is_empty() {
+                    self.rules
+                        .lock()
+                        .expect("mode gate mutex")
+                        .extend(persisted);
+                }
+            }
+            Err(error) => self.store_failure.record(&error),
         }
         self.store = Some(store);
         self
+    }
+
+    /// The reason the persisted rule set could not be read, for a startup
+    /// notice that names the file to repair. None when the store was read or
+    /// no store is attached.
+    pub fn store_failure(&self) -> Option<String> {
+        self.store_failure.reason()
     }
 
     /// Set whether the session is non-interactive (headless / CI). When true,
@@ -321,7 +343,9 @@ impl DefaultModeGate {
             egress_allow: &egress_allow,
             git_checkpoint_enabled: self.git_checkpoint_enabled(),
         };
-        (self.pipeline.decide(req, &ctx), mode)
+        let decided = self.pipeline.decide(req, &ctx);
+        let decided = self.store_failure.escalate(decided);
+        (decided, mode)
     }
 }
 
@@ -632,107 +656,6 @@ pub fn classify_git_op(tool_name: &str, content: &str) -> Option<&'static str> {
         Some(first)
     } else {
         Some("mixed")
-    }
-}
-
-/// A per-mode strategy that decides Allow / Ask / Deny for a tool request when
-/// no rule, safety check, or consent matched. Each mode has its own policy
-/// struct so the behavior is isolated and testable. The dispatch in mode_default
-/// picks the struct for the current mode.
-///
-/// The policy is a pure function of the request and its pre-computed
-/// side-effect level — no I/O, no mutable state, no classifier. The pipeline
-/// (rules, safety, compound, destructive, consent) runs before the policy;
-/// the policy only handles the residual case where nothing else decided.
-pub trait ModePolicy {
-    /// The verdict for a request with the given side-effect level.
-    fn decide(&self, req: &ToolRequest, se: SideEffect) -> Decision;
-}
-
-/// Manual mode: least-privilege. A pure read auto-allows; every other call
-/// escalates to Ask. A tool name the side-effect table does not know is
-/// judged by what the tool declares: only a call the tool marks read-only
-/// and non-destructive is treated as a pure read, so an unknown remote tool
-/// asks instead of inheriting the read row.
-pub struct DefaultPolicy;
-
-impl ModePolicy for DefaultPolicy {
-    fn decide(&self, req: &ToolRequest, se: SideEffect) -> Decision {
-        match se {
-            SideEffect::None => {
-                if req.native_requires_approval {
-                    Decision::Ask(mode_ask_reason("tool declares it needs approval"))
-                } else if req.is_destructive || !req.is_read_only {
-                    Decision::Ask(mode_ask_reason(
-                        "manual mode asks before a tool that may change state",
-                    ))
-                } else {
-                    Decision::Allow(AllowReason::ModeDefault)
-                }
-            }
-            _ => Decision::Ask(mode_ask_reason("manual mode asks before this side effect")),
-        }
-    }
-}
-
-/// Auto mode: execution and filesystem writes are allowed (the destructive
-/// and compound gates in the pipeline already caught dangerous commands);
-/// network still escalates to Ask. A name the side-effect table does not
-/// know is allowed only when the tool declares its effects reversible and
-/// does not itself ask: a tool that keeps the trait's destructive default
-/// asks, because no pipeline stage classified it.
-pub struct AutoPolicy;
-
-impl ModePolicy for AutoPolicy {
-    fn decide(&self, req: &ToolRequest, se: SideEffect) -> Decision {
-        match se {
-            SideEffect::Exec => Decision::Allow(AllowReason::ModeDefault),
-            SideEffect::Filesystem => Decision::Allow(AllowReason::ModeDefault),
-            SideEffect::None => {
-                if req.native_requires_approval {
-                    Decision::Ask(mode_ask_reason("tool declares it needs approval"))
-                } else if req.is_destructive {
-                    Decision::Ask(mode_ask_reason("auto mode asks before a destructive tool"))
-                } else {
-                    Decision::Allow(AllowReason::ModeDefault)
-                }
-            }
-            _ => Decision::Ask(mode_ask_reason("auto mode asks before network egress")),
-        }
-    }
-}
-
-/// Build the reason the mode-default validator attaches to an Ask it produces.
-/// Every mode-default ask shares the same source and validator name; only the
-/// one-sentence detail varies.
-fn mode_ask_reason(detail: &str) -> AskReason {
-    AskReason {
-        source: AskSource::ToolNative,
-        validator: MODE_DEFAULT,
-        detail: detail.into(),
-        containment_note: None,
-    }
-}
-
-/// The per-mode default policy when no rule matches, no safety check fires,
-/// and no consent is stored. Dispatches to the ModePolicy struct for the
-/// given mode. The side-effect level is computed from the tool name and
-/// drives the baseline: under Manual, Exec, Network, and Filesystem escalate
-/// to Ask, and a name the table leaves unclassified asks unless the tool
-/// declares itself read-only and non-destructive; Auto relaxes Exec and
-/// Filesystem to Allow so the autonomous edit loop is usable (the pipeline's
-/// destructive and compound gates already caught dangerous commands), asks
-/// before Network, and asks before an unclassified name the tool declares
-/// destructive or must approve. The trait defaults assume a tool mutates and
-/// is destructive, so an unknown remote tool asks rather than running silently.
-pub fn mode_default(mode: PermissionMode, req: &ToolRequest) -> Decision {
-    let se = side_effect_for(req.tool_name);
-    match mode {
-        // Manual: ask unless the call is read-only and non-destructive.
-        PermissionMode::Manual => DefaultPolicy.decide(req, se),
-        // Auto: allow classified exec and filesystem; ask network and an
-        // unclassified destructive or native-approval call.
-        PermissionMode::Auto => AutoPolicy.decide(req, se),
     }
 }
 

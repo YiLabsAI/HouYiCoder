@@ -23,7 +23,7 @@ pub struct Approval {
     pub reason: String,
     /// The source of the ask, when the wire carried a reason. Drives the
     /// card: a SystemSafety source hides the "remember" option because
-    /// consent cannot override a protected-path check.
+    /// consent cannot override a safety check.
     pub source: Option<AskSource>,
     /// The gate validator that produced the ask, when the wire carried a
     /// reason. Drives the auto-approve countdown: a card from a validator
@@ -81,12 +81,13 @@ impl Approval {
             .filter(|name| !name.is_empty())
     }
 
-    /// Whether the "Yes, and don't ask again" option is hidden. A protected-
-    /// path check (source SystemSafety) is authoritative: a stored consent
-    /// rule cannot override it, so persisting a yes-always would be a no-op
-    /// at best and misleading at worst. A server that sent an explicit option
-    /// set is equally authoritative: when it offered no remember option, it
-    /// can install no scope for this call.
+    /// Whether the "Yes, and don't ask again" option is hidden. A safety
+    /// check (source SystemSafety: a protected path or an unreadable rule
+    /// file) is authoritative: a stored consent rule cannot override it, so
+    /// persisting a yes-always would be a no-op at best and misleading at
+    /// worst. A server that sent an explicit option set is equally
+    /// authoritative: when it offered no remember option, it can install no
+    /// scope for this call.
     pub fn remember_hidden(&self) -> bool {
         if matches!(self.source, Some(AskSource::SystemSafety)) {
             return true;
@@ -100,15 +101,15 @@ impl Approval {
         self.tool == ENTITLEMENT_TOOL
     }
 
-    /// Whether the card renders a two-option form: a protected-path ask
-    /// hides persistence, while an entitlement ask offers a persistent
-    /// allow or a decline.
+    /// Whether the card renders a two-option form: a safety ask hides
+    /// persistence, while an entitlement ask offers a persistent allow or a
+    /// decline.
     pub fn two_option_card(&self) -> bool {
         self.remember_hidden() || self.is_entitlement()
     }
 
     /// Whether this card may auto-approve in Auto mode after the countdown.
-    /// Level 2 asks never do: a protected path, a request to widen the
+    /// Level 2 asks never do: a safety check, a request to widen the
     /// workspace bounds, a network call, a forced push, or a native tool call
     /// the user did not flag as discarding all need a human press. The rest
     /// (a fenced compound command, a destructive command, a local git

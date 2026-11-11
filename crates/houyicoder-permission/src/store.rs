@@ -17,7 +17,7 @@
 //! Write scope: add, remove, and clear operate on ONE scope at a time (the
 //! store's configured write scope, project by default). A write never edits
 //! a higher-authority scope out from under the caller — a project context
-//! never silently edits the user's home file. Load still returns the union,
+//! never silently edits the user's home file. A read still returns the union,
 //! so a rule persisted to the project scope is visible alongside user rules.
 
 use std::collections::HashMap;
@@ -32,6 +32,7 @@ use std::fs::read;
 use std::fs::remove_file;
 use std::fs::rename;
 use std::fs::write;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
+use serde_json::Value;
 
 use crate::rule::Rule;
 use houyicoder_api::path::{expand_home, home_directory};
@@ -93,10 +96,17 @@ impl Default for Scope {
     }
 }
 
-/// Failures a rule store can report. Io covers read, write, rename, and
-/// directory creation failures; Decode and Encode cover serialization.
+/// Failures a rule store can report. Unreadable names the scope and file that
+/// exist but cannot be decoded, so the user can repair the right file; Io
+/// covers write, rename, and directory creation failures; Decode and Encode
+/// cover serialization.
 #[derive(Debug)]
 pub enum StoreError {
+    Unreadable {
+        scope: Scope,
+        path: PathBuf,
+        reason: String,
+    },
     Io,
     Decode,
     Encode,
@@ -105,6 +115,16 @@ pub enum StoreError {
 impl Display for StoreError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Unreadable {
+                scope,
+                path,
+                reason,
+            } => write!(
+                f,
+                "the {} permission file {} cannot be read: {reason}",
+                scope.label(),
+                path.display()
+            ),
             Self::Io => f.write_str("rule store I/O failure"),
             Self::Decode => f.write_str("rule store decode failure"),
             Self::Encode => f.write_str("rule store encode failure"),
@@ -123,14 +143,20 @@ impl Error for StoreError {}
 /// rule. Another impl may still be single-writer: the trait promises only
 /// that a caller need not hold an external lock.
 ///
-/// load returns the union of all scopes. add and remove write the scope the
-/// rule itself carries; clear empties the store's configured write scope and
-/// leaves the other scopes untouched.
+/// try_load returns the union of all scopes. add and remove write the scope
+/// the rule itself carries; clear empties the store's configured write scope
+/// and leaves the other scopes untouched.
+///
+/// Every write refuses before changing a byte when the scope file it would
+/// edit exists and cannot be read or decoded: the unread file may hold a
+/// deny rule, so rewriting it would delete a directive the user wrote.
 pub trait RuleStore: Send + Sync {
-    /// Read the union of rules across all configured scopes. Missing files
-    /// contribute no rules; a corrupt file is skipped (best-effort) so a
-    /// single bad scope cannot brick the gate on startup.
-    fn load(&self) -> Vec<Rule>;
+    /// Read the union of rules across all configured scopes. A missing file
+    /// contributes no rules. A file that exists but cannot be read or decoded
+    /// fails the call with an error naming the scope, the path, and the
+    /// reason, so a caller never treats a deny rule it could not read as a
+    /// rule that was never written.
+    fn try_load(&self) -> Result<Vec<Rule>, StoreError>;
 
     /// Append a rule to the rule's own scope's file (the rule carries its
     /// destination, not the store's configured write_scope). The file is
@@ -159,16 +185,13 @@ pub trait RuleStore: Send + Sync {
     /// Read the union of directory authorizations across all configured
     /// scopes. Directories are 1:1 with the sandbox fence's additional_dirs:
     /// the startup path rehydrates them into the fence so a directory the user
-    /// authorized survives restart. Default returns empty so a non-file impl
-    /// (a test mock) is unchanged.
-    fn load_directories(&self) -> Vec<PathBuf> {
-        Vec::new()
-    }
+    /// authorized survives restart. A file that exists but cannot be decoded
+    /// fails the call, like try_load.
+    fn try_load_directories(&self) -> Result<Vec<PathBuf>, StoreError>;
 
-    /// Read the union of read-only directory authorizations.
-    fn load_read_directories(&self) -> Vec<PathBuf> {
-        Vec::new()
-    }
+    /// Read the union of read-only directory authorizations, failing the same
+    /// way try_load_directories does.
+    fn try_load_read_directories(&self) -> Result<Vec<PathBuf>, StoreError>;
 
     /// Append a directory authorization to the given scope's envelope. Atomic
     /// (tmp + rename) like add. Default no-op so non-file impls stay unchanged.
@@ -292,16 +315,14 @@ impl FileRuleStore {
             .expect("every scope has a path at construction")
     }
 
-    fn read_scope(&self, scope: Scope) -> Vec<Rule> {
-        self.read_envelope(scope).rules
-    }
-
     /// Compose one read-modify-write of a scope file. The in-process lock and
     /// the scope's cross-process lock are held for the whole cycle, and the
     /// edit closure reports whether it changed anything so an unchanged call
     /// leaves the file untouched. Serializing the read and the write inside
     /// one call is what keeps two writers from each landing a whole record
-    /// derived from the state they read.
+    /// derived from the state they read. A read that fails ends the call
+    /// before the edit runs, so a file this build cannot decode is never
+    /// replaced by a whole envelope derived from an empty one.
     fn update_envelope<F>(&self, scope: Scope, edit: F) -> Result<(), StoreError>
     where
         F: FnOnce(&mut PermissionsFile) -> bool,
@@ -309,7 +330,7 @@ impl FileRuleStore {
         let _guard = self.lock.lock().expect("rule store lock");
         let path = self.path_for(scope);
         let _scope_lock = ScopeLock::acquire(path)?;
-        let mut env = self.read_envelope(scope);
+        let mut env = self.read_envelope(scope)?;
         if !edit(&mut env) {
             return Ok(());
         }
@@ -331,7 +352,7 @@ impl FileRuleStore {
         let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp = path.with_file_name(format!(".{name}.{}.{seq}.tmp", id()));
         let mut persisted = env.clone();
-        persisted.version = 2;
+        persisted.version = CURRENT_VERSION;
         let bytes = serde_json::to_vec(&persisted).map_err(|_| StoreError::Encode)?;
         if write(&tmp, bytes).is_err() {
             drop(remove_file(&tmp));
@@ -344,26 +365,43 @@ impl FileRuleStore {
         Ok(())
     }
 
-    fn read_envelope(&self, scope: Scope) -> PermissionsFile {
+    /// Read one scope file, treating only a missing file as the empty
+    /// envelope. A path that exists and cannot be opened, is a directory, or
+    /// holds no bytes is an error: an unreadable file may still carry a deny
+    /// rule, so initializing it as empty would silently drop that rule both
+    /// for this decision and for the rewrite that follows.
+    fn read_envelope(&self, scope: Scope) -> Result<PermissionsFile, StoreError> {
         let path = self.path_for(scope);
-        if !path.exists() {
-            return PermissionsFile::empty();
-        }
         let bytes = match read(path) {
-            Ok(b) => b,
-            Err(_) => return PermissionsFile::empty(),
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok(PermissionsFile::empty());
+            }
+            Err(error) => return Err(unreadable_error(scope, path, error.to_string())),
         };
-        // An empty file is treated as no rules (a fresh touch), not a decode
-        // error, so a hand-created empty file does not brick startup.
         if bytes.is_empty() {
-            return PermissionsFile::empty();
+            return Err(unreadable_error(
+                scope,
+                path,
+                "the file holds no bytes; delete it to start from no rules".into(),
+            ));
         }
-        decode_envelope(&bytes, scope)
+        decode_envelope(&bytes, scope, path)
     }
 }
 
+/// The envelope version this build writes. Readers accept every version from
+/// the first envelope shape up to this one; a newer number may carry members
+/// this build would drop on rewrite, so it is refused and left as written.
+const CURRENT_VERSION: u32 = 2;
+
+/// The oldest envelope version that carried the same member names read here.
+const FIRST_VERSION: u32 = 1;
+
 /// Versioned permissions envelope with rules and separate read-only and
-/// read-write directory grants.
+/// read-write directory grants. Members this build does not model ride along
+/// in unknown_members and are written back unchanged, so a file produced by
+/// another build keeps its data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PermissionsFile {
     pub version: u32,
@@ -371,72 +409,112 @@ pub(crate) struct PermissionsFile {
     pub directories: Vec<PathBuf>,
     #[serde(default)]
     pub read_directories: Vec<PathBuf>,
+    #[serde(flatten)]
+    pub unknown_members: Map<String, Value>,
 }
 
 impl PermissionsFile {
     fn empty() -> Self {
         Self {
-            version: 2,
+            version: CURRENT_VERSION,
             rules: Vec::new(),
             directories: Vec::new(),
             read_directories: Vec::new(),
+            unknown_members: Map::new(),
         }
+    }
+}
+
+/// Name the scope file that could not be read, so the message a user sees
+/// points at the file to repair.
+fn unreadable_error(scope: Scope, path: &Path, reason: String) -> StoreError {
+    StoreError::Unreadable {
+        scope,
+        path: path.to_path_buf(),
+        reason,
     }
 }
 
 /// Decode a scope file's envelope, stamping each rule's scope from the FILE it
 /// was read from (the single source of truth for scope) — not the serialized
-/// field. A legacy file written before the envelope existed is a bare JSON
-/// array of rules (the prior shape); read it as an envelope with empty
-/// directories so a hand-edited or pre-envelope file still loads. A corrupt
-/// file is skipped (best-effort) so one bad scope cannot brick startup.
-fn decode_envelope(bytes: &[u8], scope: Scope) -> PermissionsFile {
-    if let Ok(mut env) = serde_json::from_slice::<PermissionsFile>(bytes) {
-        for r in &mut env.rules {
-            r.scope = scope;
+/// field. A file written before the envelope existed is a bare JSON array of
+/// rules; it is read as an envelope with no directories so it still loads.
+/// Anything else is bad data and is reported with the path: a decode failure
+/// must never become the empty rule set, because the empty set would be
+/// written back over the original bytes.
+fn decode_envelope(bytes: &[u8], scope: Scope, path: &Path) -> Result<PermissionsFile, StoreError> {
+    let mut envelope = match serde_json::from_slice::<PermissionsFile>(bytes) {
+        Ok(envelope) => envelope,
+        Err(object_error) => {
+            return match legacy_rules(bytes, scope) {
+                Some(rules) => Ok(PermissionsFile {
+                    version: CURRENT_VERSION,
+                    rules,
+                    directories: Vec::new(),
+                    read_directories: Vec::new(),
+                    unknown_members: Map::new(),
+                }),
+                None => Err(unreadable_error(
+                    scope,
+                    path,
+                    format!("not a permissions file: {object_error}"),
+                )),
+            };
         }
-        // Entries an older writer persisted may carry the Windows verbatim
-        // prefix; reduce them to the plain drive-letter form so removal
-        // matches them and a fence comparison holds. A no-op elsewhere.
-        for d in env
-            .directories
-            .iter_mut()
-            .chain(env.read_directories.iter_mut())
-        {
-            *d = dunce::simplified(d).to_path_buf();
-        }
-        return env;
+    };
+    if !(FIRST_VERSION..=CURRENT_VERSION).contains(&envelope.version) {
+        return Err(unreadable_error(
+            scope,
+            path,
+            format!(
+                "envelope version {} is outside the versions this build reads, {FIRST_VERSION} through {CURRENT_VERSION}",
+                envelope.version
+            ),
+        ));
     }
-    // Legacy bare-array shape (pre-envelope): migrate in place.
-    let rules = serde_json::from_slice::<Vec<Rule>>(bytes)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|mut r| {
-            r.scope = scope;
-            r
-        })
-        .collect();
-    PermissionsFile {
-        version: 2,
-        rules,
-        directories: Vec::new(),
-        read_directories: Vec::new(),
+    for rule in &mut envelope.rules {
+        rule.scope = scope;
     }
+    // Entries an older writer persisted may carry the Windows verbatim
+    // prefix; reduce them to the plain drive-letter form so removal matches
+    // them and a fence comparison holds. A no-op elsewhere.
+    for dir in envelope
+        .directories
+        .iter_mut()
+        .chain(envelope.read_directories.iter_mut())
+    {
+        *dir = dunce::simplified(dir).to_path_buf();
+    }
+    Ok(envelope)
+}
+
+/// The bare-array shape an envelope-less file used, if the bytes carry it.
+fn legacy_rules(bytes: &[u8], scope: Scope) -> Option<Vec<Rule>> {
+    let rules = serde_json::from_slice::<Vec<Rule>>(bytes).ok()?;
+    Some(
+        rules
+            .into_iter()
+            .map(|mut rule| {
+                rule.scope = scope;
+                rule
+            })
+            .collect(),
+    )
 }
 
 impl RuleStore for FileRuleStore {
-    fn load(&self) -> Vec<Rule> {
+    fn try_load(&self) -> Result<Vec<Rule>, StoreError> {
         let mut all = Vec::new();
         // Stable order: user, then project, then local. Last-match-wins in
         // the evaluator means a later scope's rule shadows an earlier one
         // for the same action; this matches the intuitive layering (local
-        // overrides project overrides user at decision time). read_scope
-        // stamps each rule's scope from its file location (the single source
-        // of truth), so a legacy/hand-edited rule lands in the right scope.
+        // overrides project overrides user at decision time). The read stamps
+        // each rule's scope from its file location (the single source of
+        // truth), so a legacy or hand-edited rule lands in the right scope.
         for scope in [Scope::User, Scope::Project, Scope::Local] {
-            all.extend(self.read_scope(scope));
+            all.extend(self.read_envelope(scope)?.rules);
         }
-        all
+        Ok(all)
     }
 
     fn add(&self, rule: &Rule) -> Result<(), StoreError> {
@@ -501,12 +579,12 @@ impl RuleStore for FileRuleStore {
         })
     }
 
-    fn load_directories(&self) -> Vec<PathBuf> {
+    fn try_load_directories(&self) -> Result<Vec<PathBuf>, StoreError> {
         let mut all = Vec::new();
         for scope in [Scope::User, Scope::Project, Scope::Local] {
-            all.extend(self.read_envelope(scope).directories);
+            all.extend(self.read_envelope(scope)?.directories);
         }
-        all
+        Ok(all)
     }
 
     fn add_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {
@@ -523,12 +601,12 @@ impl RuleStore for FileRuleStore {
         })
     }
 
-    fn load_read_directories(&self) -> Vec<PathBuf> {
+    fn try_load_read_directories(&self) -> Result<Vec<PathBuf>, StoreError> {
         let mut all = Vec::new();
         for scope in [Scope::User, Scope::Project, Scope::Local] {
-            all.extend(self.read_envelope(scope).read_directories);
+            all.extend(self.read_envelope(scope)?.read_directories);
         }
-        all
+        Ok(all)
     }
 
     fn add_read_directory(&self, dir: &Path, scope: Scope) -> Result<(), StoreError> {

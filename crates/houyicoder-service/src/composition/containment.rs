@@ -11,7 +11,7 @@ use super::resolve_project_workspace;
 use super::worktree::git_common_dir;
 use crate::sandbox_policy::{SandboxWarnings, network_policy_from, shell_program_from};
 use houyicoder_api::sandbox::{Containment, Coverage, FenceCapability, SandboxSession, SideEffect};
-use houyicoder_permission::{DefaultModeGate, RuleStore};
+use houyicoder_permission::{DefaultModeGate, RuleStore, StoreError};
 use houyicoder_resilience::resource_breaker::{ResourceBreaker, ResourceBreakerConfig};
 use houyicoder_sandbox::PlatformSession;
 use houyicoder_skill::discover::{MANAGED_DIR, user_skill_roots};
@@ -76,8 +76,15 @@ pub(super) fn build_session_fences(
     };
     let sandbox_session: Option<Arc<dyn SandboxSession>> =
         sandbox.map(|s| Arc::new(s) as Arc<dyn SandboxSession>);
-    if let (Some(session), Some(store)) = (&sandbox_session, &rule_store) {
-        restore_directory_grants(session.as_ref(), store.as_ref());
+    if let (Some(session), Some(store)) = (&sandbox_session, &rule_store)
+        && let Err(error) = restore_directory_grants(session.as_ref(), store.as_ref())
+    {
+        // The fence keeps its base roots, so the tool refuses those paths
+        // until the file is repaired; the gate reports the same file in its
+        // startup notice.
+        tracing::warn!(
+            "startup: persistent directory authorizations did not re-attach ({error}); the fence starts without them"
+        );
     }
     if let (Some(session), Some(ws)) = (&sandbox_session, workspace.as_deref()) {
         attach_git_common_dir(session.as_ref(), ws);
@@ -208,9 +215,17 @@ fn fence_temp_dirs(session: &dyn SandboxSession) -> Vec<PathBuf> {
 /// leads through a different link — names a directory the user never
 /// approved, and attaching it would hand over whatever it points at today.
 /// Skipping is also why a deleted directory cannot brick startup.
-pub(crate) fn restore_directory_grants(session: &dyn SandboxSession, store: &dyn RuleStore) {
-    let write_dirs = store.load_directories();
-    let read_dirs = store.load_read_directories();
+///
+/// A store that cannot be read fails the restore rather than returning no
+/// grants: the fence keeps its base roots either way, but the caller has to
+/// report the file the user needs to repair instead of presenting the fence
+/// without those grants as the whole list.
+pub(crate) fn restore_directory_grants(
+    session: &dyn SandboxSession,
+    store: &dyn RuleStore,
+) -> Result<(), StoreError> {
+    let write_dirs = store.try_load_directories()?;
+    let read_dirs = store.try_load_read_directories()?;
     let mut stale = 0;
     let mut refused = 0;
     for dir in &write_dirs {
@@ -234,6 +249,7 @@ pub(crate) fn restore_directory_grants(session: &dyn SandboxSession, store: &dyn
             stale + refused
         );
     }
+    Ok(())
 }
 
 /// Whether a stored directory grant still resolves to itself. Both sides of
