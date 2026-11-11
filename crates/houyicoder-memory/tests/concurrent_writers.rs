@@ -11,8 +11,10 @@
 
 use std::env;
 use std::env::current_exe;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::fs::create_dir_all;
+use std::fs::metadata;
 use std::fs::read_dir;
 use std::fs::read_to_string;
 use std::fs::remove_dir_all;
@@ -22,6 +24,7 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
+use std::process::abort;
 use std::process::id;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc::channel;
@@ -104,6 +107,35 @@ fn run_child_role() -> bool {
                     .expect("child write");
             }
         }
+        "crash" => {
+            // Leave the state a writer leaves when it dies between the topic
+            // change and the index publish, under the root lock it never
+            // releases. The topic carries the index's own timestamp, so no
+            // modification-time check can see the missing row.
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(root.join(LOCK_NAME))
+                .expect("open the root lock");
+            file.lock().expect("hold the root lock");
+            let topic =
+                "---\nname: alpha\ndescription: alpha body\nsource: user\n---\nalpha body\n";
+            write(root.join("alpha.md"), topic).expect("land the topic");
+            let index_time = metadata(root.join("MEMORY.md"))
+                .expect("the index metadata")
+                .modified()
+                .expect("the index mtime");
+            File::options()
+                .write(true)
+                .open(root.join("alpha.md"))
+                .expect("open the landed topic")
+                .set_modified(index_time)
+                .expect("date the topic at the index");
+            write(root.join(INDEX_DIRTY_NAME), b"").expect("leave the marker");
+            write(root.join(READY_MARKER), b"").expect("signal ready");
+            abort();
+        }
         other => panic!("unknown child role {other}"),
     }
     true
@@ -142,6 +174,17 @@ fn wait_child(child: &mut Child) {
         status.success(),
         "the child failed after {:?}",
         started.elapsed()
+    );
+}
+
+/// Wait for a child that is expected to die rather than finish. The exit
+/// also closes its descriptors, so the root lock it held is free when this
+/// returns.
+fn wait_crashed_child(child: &mut Child) {
+    let status = child.wait().expect("the child exits");
+    assert!(
+        !status.success(),
+        "the crash role must die instead of exiting cleanly"
     );
 }
 
@@ -268,6 +311,36 @@ fn assert_waits_for_lock<F>(
     wait_child(&mut child);
 }
 
+/// The marker a writer leaves when it dies before publishing the index. Its
+/// name is part of the on-disk contract between runs, so this suite spells it
+/// out rather than importing the writing process's private constant.
+const INDEX_DIRTY_NAME: &str = ".memory.index-dirty";
+
+/// A starting session checks and rebuilds under the same root lock a writer
+/// takes. The marker forces the rebuild path, so a check that skips the lock
+/// returns inside the probe instead of waiting for the child to release it.
+#[test]
+fn test_heal_waits_for_lock() {
+    if run_child_role() {
+        return;
+    }
+    let root = temp_root("heal-lock");
+    MarkdownMemoryProvider::new(root.clone())
+        .add(entry("alpha", "alpha body"))
+        .expect("seed the topic");
+    let marker = root.join(INDEX_DIRTY_NAME);
+    write(&marker, b"").expect("leave the marker a dying writer leaves");
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    assert_waits_for_lock("test_heal_waits_for_lock", "heal", provider, &root, |p| {
+        p.rebuild_if_stale()
+    });
+    assert!(
+        !marker.exists(),
+        "the released heal rebuilds and clears the marker"
+    );
+    remove_dir_all(&root).ok();
+}
+
 /// A prune waits for the root lock rather than removing a topic while
 /// another process rewrites the store.
 #[test]
@@ -369,6 +442,47 @@ fn test_rebuild_waits_for_lock() {
     assert!(
         root.join("MEMORY.md").exists(),
         "the release lets the rebuild land"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A writer that dies holding the root lock and a marker leaves a store the
+/// next process must repair: the kernel releases the lock when the process
+/// dies, and the marker alone says the index is missing a topic whose
+/// timestamp matches the index.
+#[test]
+fn test_crash_state_heals() {
+    if run_child_role() {
+        return;
+    }
+    let root = temp_root("crash-heal");
+    MarkdownMemoryProvider::new(root.clone())
+        .add(entry("seed", "seed body"))
+        .expect("seed the store and its index");
+    let mut child = start_child("test_crash_state_heals", "crash", &root, "alpha");
+    assert!(
+        wait_for_file(&root.join(READY_MARKER)),
+        "the child must leave the crash state before it dies"
+    );
+    wait_crashed_child(&mut child);
+    let provider = MarkdownMemoryProvider::new(root.clone());
+
+    provider
+        .rebuild_if_stale()
+        .expect("a fresh process heals the dead writer's store");
+
+    assert!(
+        !root.join(INDEX_DIRTY_NAME).exists(),
+        "the heal clears the marker the dead writer left"
+    );
+    let index = read_to_string(root.join("MEMORY.md")).expect("the index is readable");
+    assert!(
+        index.contains("- alpha ["),
+        "the healed index names the topic the dead writer landed:\n{index}"
+    );
+    assert!(
+        index.contains("- seed ["),
+        "the heal keeps the row that was already published:\n{index}"
     );
     remove_dir_all(&root).ok();
 }

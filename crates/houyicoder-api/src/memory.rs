@@ -139,11 +139,12 @@ pub trait MemoryProvider: Send + Sync {
     fn rebuild_index(&self) -> Result<(), MemoryError> {
         Ok(())
     }
-    /// Rebuild the derived index only when it is stale (a topic file is newer
-    /// than the index, or the index is missing). The self-healing check run
-    /// on session start and on file-changed events so a crash or external
-    /// edit between runs cannot leave a drifted index. No-op default for
-    /// backends without a derived index.
+    /// Rebuild the derived index only when it no longer describes the store: a
+    /// writer left a marker, a topic is newer than the index, the index is
+    /// missing, a published row names a topic that is gone, or a complete
+    /// index omits a topic. The self-healing check runs on session start and
+    /// before the dream, so a crash or external edit between runs cannot leave
+    /// a drifted index. No-op default for backends without a derived index.
     fn rebuild_if_stale(&self) -> Result<(), MemoryError> {
         Ok(())
     }

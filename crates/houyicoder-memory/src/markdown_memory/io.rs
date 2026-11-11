@@ -10,6 +10,8 @@ use houyicoder_context::{
 use std::path::Path;
 
 use super::MarkdownMemoryProvider;
+#[cfg(test)]
+use std::cell::Cell;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 use std::fs::read;
@@ -179,9 +181,37 @@ pub(super) fn sanitize_key(key: &str) -> Result<String, MemoryError> {
     Ok(key)
 }
 
+/// Reject a new key containing the sequence that separates a row's key from
+/// its source label. One index row cannot carry such a key unambiguously, so
+/// a later read would attribute part of the key to the neighboring field.
+/// A legacy key already on disk stays readable and deletable; writing one
+/// again is refused like any other key that carries the sequence.
+pub(super) fn validate_index_key(key: &str) -> Result<(), MemoryError> {
+    if key.contains(" [") {
+        return Err(MemoryError::InvalidPath(
+            "index row separator in key".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Per-process counter separating the temp names one process writes inside
 /// the same instant; the pid separates processes.
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// Whether the next index write on this thread fails. A test uses it to
+    /// hold a store in the state a writer that dies between a topic change
+    /// and its index publish leaves behind.
+    static FAIL_INDEX_WRITE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Make the next index write on this thread fail.
+#[cfg(test)]
+pub(super) fn fail_next_index_write() {
+    FAIL_INDEX_WRITE.with(|flag| flag.set(true));
+}
 
 /// Write bytes to a path atomically. The bytes land in a sibling temp file
 /// named for this writer, which is then renamed over the target, so a reader
@@ -202,6 +232,14 @@ pub(super) fn write_bytes_advisory(path: &Path, bytes: &[u8]) -> Result<(), Memo
 }
 
 fn write_bytes(path: &Path, bytes: &[u8], durable: bool) -> Result<(), MemoryError> {
+    // A test can fail the next index write to hold the state a writer leaves
+    // when it dies between the topic change and the index publish.
+    #[cfg(test)]
+    if path.file_name().is_some_and(|name| name == INDEX_FILE)
+        && FAIL_INDEX_WRITE.with(|flag| flag.replace(false))
+    {
+        return Err(MemoryError::Io);
+    }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
         .file_name()
@@ -285,7 +323,8 @@ pub(super) fn cap_index_content(raw: &str, max_lines: usize) -> String {
             .unwrap_or(boundary);
         truncated.truncate(cut);
     }
-    truncated.push_str("\n> WARNING: index too long, move detail to topic files.");
+    truncated.push('\n');
+    truncated.push_str(INDEX_TRUNCATION_WARNING);
     truncated
 }
 
@@ -305,6 +344,11 @@ pub(super) const MAX_KEY_BYTES: usize = 200;
 
 /// Reserved index filename (excluded from the topic scan).
 pub(super) const INDEX_FILE: &str = "MEMORY.md";
+
+/// Tail line a capped index carries. Its presence says the index omits
+/// topics on purpose, so the omitted rows are not drift.
+pub(super) const INDEX_TRUNCATION_WARNING: &str =
+    "> WARNING: index too long, move detail to topic files.";
 
 /// List every topic across all roots as a summary (key + description +
 /// source + scope + mtime). The provider impl delegates here so the

@@ -55,6 +55,11 @@ impl MarkdownMemoryProvider {
         // the project root. When only the project copy exists, the move
         // changes nothing, which makes a repeated promote idempotent.
         fs::create_dir_all(&project_root).map_err(|_| MemoryError::Io)?;
+        // Both indexes describe this key and both change now. Mark them before
+        // the topic moves, so a publish that fails leaves the next session a
+        // reason to repair both roots instead of one stale row each way.
+        Self::mark_index_dirty(&auto_root)?;
+        Self::mark_index_dirty(&project_root)?;
         if exists_in_auto && exists_in_project {
             if fs::remove_file(&src_topic).is_err() {
                 tracing::warn!("memory promote: auto copy of {key} left in place");
@@ -99,6 +104,11 @@ impl MarkdownMemoryProvider {
         // auto copy exists, the move changes nothing, which makes a repeated
         // demote idempotent.
         fs::create_dir_all(&auto_root).map_err(|_| MemoryError::Io)?;
+        // The project index loses this row and the automatic index gains it.
+        // Both markers go down before the move, so a failed publish is
+        // repaired on the next start.
+        Self::mark_index_dirty(&auto_root)?;
+        Self::mark_index_dirty(&project_root)?;
         if exists_in_project && exists_in_auto {
             if fs::remove_file(&src_topic).is_err() {
                 tracing::warn!("memory demote: project copy of {key} left in place");

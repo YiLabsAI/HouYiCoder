@@ -3,11 +3,9 @@
 //! Topic files are the source of truth; MEMORY.md is a bounded derived index.
 //! Recall ranks frontmatter by keyword overlap and reads selected bodies only.
 //! Writes compare and replace a topic under a cross-process root lock, then
-//! reconcile the index. A failed index update leaves the topic in place: the
-//! index is derived and the next rebuild heals it. Rendering never performs
-//! synchronous reads.
-//!
-//! Each root contains key.md topic records and a derived MEMORY.md index.
+//! reconcile the index. A writer marks the index dirty before changing a topic
+//! and clears the marker after publishing, so a failed update heals on the
+//! next rebuild. Rendering never performs synchronous reads.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -23,6 +21,7 @@ use houyicoder_context::{
     MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
 };
 
+mod index_health;
 mod io;
 mod lock;
 mod roots;
@@ -30,8 +29,8 @@ mod scope_flow;
 use io::{
     Frontmatter, INDEX_BYTE_CAP, INDEX_FILE, ScannedTopic, StatRecord, cap_index_content,
     count_new_since_impl, first_line, list_memories_impl, parse_topic_file, sanitize_key,
-    scopes_for_key_impl, serialize_topic_file, show_memory_in_scope_impl, write_bytes_advisory,
-    write_bytes_atomic,
+    scopes_for_key_impl, serialize_topic_file, show_memory_in_scope_impl, validate_index_key,
+    write_bytes_advisory, write_bytes_atomic,
 };
 use lock::RootLock;
 use roots::canonical_identity;
@@ -290,13 +289,23 @@ impl MarkdownMemoryProvider {
     fn rebuild_index_impl_locked(&self) -> Result<(), MemoryError> {
         for root in &self.roots {
             fs::create_dir_all(root).map_err(|_| MemoryError::Io)?;
+            // The marker goes down before this root's index is replaced, and
+            // comes off only after the new index landed. A failure part way
+            // through the roots therefore leaves the root being rebuilt
+            // marked for the next session; a root not reached is untouched.
+            Self::mark_index_dirty(root)?;
             let topics = Self::scan_root(root);
             let mut out = String::from("# Memory index\n\n");
             for t in topics.iter().take(SCAN_FILE_CAP) {
+                // A key no row can address stays out of the index rather
+                // than publishing a row that reads back as another key.
+                if !Self::index_key_representable(&t.key) {
+                    continue;
+                }
                 let line = match self.read_frontmatter(&t.path) {
                     Ok(fm) => format!(
                         "- {} [{}]: {}\n",
-                        fm.name,
+                        t.key,
                         fm.source.as_label(),
                         fm.description
                     ),
@@ -309,6 +318,7 @@ impl MarkdownMemoryProvider {
             }
             out = cap_index_content(&out, self.max_lines);
             write_bytes_atomic(&Self::index_path_for(root), out.as_bytes())?;
+            Self::clear_index_dirty(root);
         }
         Ok(())
     }
@@ -380,12 +390,17 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.rebuild_index_impl()
     }
 
-    /// Rebuild only when a root's index is stale (a topic newer than the
-    /// index, or the index missing). Run on session start + file-changed so a
-    /// crash or external edit cannot leave a drifted index across runs.
+    /// Rebuild only when a root's index no longer describes its topic set:
+    /// a writer left its marker, the index is missing or older than a topic,
+    /// or a row names a deleted topic. Run on session start and before the
+    /// dream. The check and the rebuild run under the locks a writer takes,
+    /// and the check is repeated inside them, so a write that lands while a
+    /// session starts cannot be judged against a state already gone.
     fn rebuild_if_stale(&self) -> Result<(), MemoryError> {
-        if self.roots.iter().any(|r| Self::root_is_stale(r)) {
-            self.rebuild_index_impl()?;
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let _root_locks = self.lock_roots()?;
+        if self.roots.iter().any(|root| self.index_needs_rebuild(root)) {
+            self.rebuild_index_impl_locked()?;
         }
         Ok(())
     }
@@ -450,10 +465,22 @@ impl MemoryProvider for MarkdownMemoryProvider {
     /// derived indexes.
     fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
-        let topic_path = self.root_for_scope(scope).join(format!("{key}.md"));
+        let topic_root = self.root_for_scope(scope).to_path_buf();
+        let topic_path = topic_root.join(format!("{key}.md"));
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let _root_locks = self.lock_roots()?;
-        match fs::remove_file(&topic_path) {
+        // The marker goes down before the topic does. A delete whose index
+        // rebuild then fails leaves the marker for the next session, rather
+        // than a row naming a file already gone.
+        let index_was_dirty = Self::index_marked_dirty(&topic_root);
+        Self::mark_index_dirty(&topic_root)?;
+        let removed = fs::remove_file(&topic_path);
+        if removed.is_err() && !index_was_dirty {
+            // Nothing changed, so the marker this call added would only cost
+            // the next session a rebuild it does not need.
+            Self::clear_index_dirty(&topic_root);
+        }
+        match removed {
             Ok(()) => {}
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 return Err(MemoryError::NotFound);
@@ -498,14 +525,17 @@ impl MemoryProvider for MarkdownMemoryProvider {
     }
 
     /// Record recall hits under the write lock so delete cannot leave orphan
-    /// stats. Sidecar corruption degrades to empty counters. The root is
-    /// claimed without waiting: these counters are advisory, so a writer
-    /// busy elsewhere skips this update rather than stalling the turn.
+    /// stats. Sidecar corruption degrades to empty counters. Lock and root are
+    /// claimed without waiting: these counters are advisory, so a writer or
+    /// healer busy elsewhere skips this update rather than stalling the turn.
     fn record_recall_hits(&self, keys: &[String]) {
         if keys.is_empty() {
             return;
         }
-        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let Ok(_guard) = self.write_lock.try_lock() else {
+            tracing::debug!("memory recall stats write skipped: writer busy (advisory)");
+            return;
+        };
         let _root_lock = match RootLock::try_acquire(self.write_root()) {
             Ok(Some(lock)) => lock,
             Ok(None) => {
@@ -531,13 +561,16 @@ impl MemoryProvider for MarkdownMemoryProvider {
     }
 
     /// Record one gate violation under the write lock using the canonical key.
-    /// Sidecar corruption degrades to empty counters. The root is claimed
+    /// Sidecar corruption degrades to empty counters. Lock and root are claimed
     /// without waiting: the counter is advisory and must not stall the gate.
     fn record_gate_violation(&self, key: &str) {
         let Ok(key) = sanitize_key(key) else {
             return;
         };
-        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let Ok(_guard) = self.write_lock.try_lock() else {
+            tracing::debug!("memory gate stats write skipped: writer busy (advisory)");
+            return;
+        };
         let _root_lock = match RootLock::try_acquire(self.write_root()) {
             Ok(Some(lock)) => lock,
             Ok(None) => {
@@ -610,6 +643,7 @@ impl MemoryProvider for MarkdownMemoryProvider {
     fn add_if_changed(&self, mut entry: MemoryEntry) -> Result<MemoryWriteOutcome, MemoryError> {
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         entry.key = sanitize_key(&entry.key)?;
+        validate_index_key(&entry.key)?;
         let root = self.write_root().to_path_buf();
         self.add_if_changed_in_root(&root, &entry)
     }
@@ -630,6 +664,7 @@ impl MemoryProvider for MarkdownMemoryProvider {
     ) -> Result<MemoryWriteOutcome, MemoryError> {
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         entry.key = sanitize_key(&entry.key)?;
+        validate_index_key(&entry.key)?;
         let root = self.root_for_scope(scope).to_path_buf();
         self.add_if_changed_in_root(&root, &entry)
     }
@@ -674,12 +709,20 @@ impl MarkdownMemoryProvider {
         } else {
             MemoryWriteOutcome::Created
         };
+        // A marker already present names an earlier index update this store
+        // never published. This write appends only its own row, so it must
+        // not clear that marker: the earlier gap would otherwise become
+        // invisible to the next session's checks.
+        let index_was_dirty = Self::index_marked_dirty(root);
+        Self::mark_index_dirty(root)?;
         write_bytes_atomic(&topic_path, &payload)?;
-        if let Err(error) = self.append_index_pointer_in(root, entry) {
-            tracing::warn!(
+        match self.append_index_pointer_in(root, entry) {
+            Ok(()) if !index_was_dirty => Self::clear_index_dirty(root),
+            Ok(()) => {}
+            Err(error) => tracing::warn!(
                 "memory index update failed for {}: {error} (heals on the next rebuild)",
                 topic_path.display()
-            );
+            ),
         }
         Ok(outcome)
     }
