@@ -99,9 +99,13 @@ fn test_view_re_search_bar() {
         s.send_key(&Key::Char(c));
     }
     s.send_key(&Key::Enter);
+    // The row already carried the previous match count, so a repaint writes
+    // only the cells this commit changed and the byte stream can hold a
+    // fragment. The rebuilt screen is what the user reads.
     assert!(
-        s.wait_for_plain("no match", RENDER_TIMEOUT),
-        "committing a no-match query should show the no-match chrome"
+        s.wait_for_screen("no match", RENDER_TIMEOUT),
+        "committing a no-match query should show the no-match chrome:\n{}",
+        s.screen().contents()
     );
     // q exits the view back to the working surface.
     s.send_key(&Key::Char('q'));

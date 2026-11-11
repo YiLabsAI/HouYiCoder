@@ -34,12 +34,11 @@ const QUEUED_TOKEN: &str = "zzqueued";
 #[ignore]
 fn test_esc_restores_input() {
     let mut s = pty_session_slow(RUN_DELAY_MS);
-    s.send_str("hi");
-    s.send_key(&Key::Enter);
-    // Esc immediately: the run is in-flight, the submit cleared the input, so
-    // the busy+empty branch aborts. Lands before the first delta (RUN_DELAY_MS
-    // away), so the run produced no real content -> rewind + restore.
-    s.send_key(&Key::Esc);
+    // One write puts the submit and the abort in the same input burst, the
+    // tightest ordering a user can produce: the Esc follows the Enter with no
+    // frame in between, so the abort has to find the run the submit just
+    // started.
+    s.send_bytes(b"hi\r\x1b");
     assert!(
         s.wait_for("input restored", RENDER_TIMEOUT),
         "Esc before any content should abort + restore the input:\n{}",

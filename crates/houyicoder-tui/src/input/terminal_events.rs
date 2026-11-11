@@ -19,8 +19,8 @@ use std::io::stdin;
 use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Mutex, OnceLock};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::Builder;
 use std::time::Duration;
 
@@ -28,12 +28,19 @@ use crossterm::event::{self, Event};
 #[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
-/// How long the reader waits before looking at the channel again.
+use crate::app::wake::{UiWake, ui_wake};
+use crate::input::paste::burst::coalesce_with;
+
+/// How long one event-source wait lasts before the reader checks the terminal
+/// again.
 ///
-/// The wait is long because the reader has nothing else to do: an event is what
-/// it exists for. It is finite so the loop can notice a closed channel and
-/// leave rather than blocking on a thread that will never send again.
-const READ_WAIT: Duration = Duration::from_secs(3600);
+/// The reader is parked inside the event source for this long, so it cannot
+/// look at the terminal while it waits. The run loop probes the descriptor on
+/// every drain and ends the session on a hangup, but that only covers a loop
+/// that is already awake. The wait stays short so the reader re-checks the
+/// descriptor on its own at a human-scale cadence rather than sleeping through
+/// a dead terminal.
+const READ_WAIT: Duration = Duration::from_secs(2);
 
 /// The process-wide reader.
 ///
@@ -41,23 +48,6 @@ const READ_WAIT: Duration = Duration::from_secs(3600);
 /// from the same reader: a second one would take the keystrokes meant for the
 /// first.
 static READER: OnceLock<EventReader> = OnceLock::new();
-
-/// What one turn of the run loop found.
-pub(crate) enum Input {
-    /// One event arrived.
-    Event(Event),
-    /// Nothing arrived before the deadline, or the reader is gone. The loop
-    /// keeps its cadence either way; a session with no reader is unusable for
-    /// typing but can still be quit, which is the safe direction.
-    Idle,
-    /// The terminal itself is gone: its other end closed.
-    ///
-    /// This is reported rather than left to a signal, because the kernel sends
-    /// one only when the session owns the terminal. A session started under a
-    /// pipe or a supervisor that never sent the hangup would otherwise keep
-    /// running with nothing to draw on.
-    Gone,
-}
 
 /// The terminal descriptor the event reader actually reads.
 ///
@@ -135,13 +125,21 @@ pub(crate) struct EventReader {
     events: Mutex<Receiver<Event>>,
 }
 
+/// Every event one non-blocking drain found.
+pub(crate) struct Drained {
+    /// The events the channel held, in arrival order.
+    pub(crate) events: Vec<Event>,
+    /// The reader is gone: no event will arrive again.
+    pub(crate) gone: bool,
+}
+
 impl EventReader {
     /// The shared reader, started on first use.
     pub(crate) fn shared() -> &'static Self {
         // The source is the terminal itself: a bounded wait, then the event the
         // readiness promised. Only a real terminal can answer it, which is why
         // the loop it feeds is the part the tests drive.
-        READER.get_or_init(|| start(read_event))
+        READER.get_or_init(|| start(read_events))
     }
 
     /// A reader over a channel the caller owns, for tests that drive the
@@ -153,39 +151,73 @@ impl EventReader {
         }
     }
 
-    /// Wait up to the deadline for the next event.
-    pub(crate) fn next(&self, deadline: Duration) -> Input {
-        self.next_with(deadline, terminal_hung_up)
+    /// Take every event the reader already delivered, without blocking. The
+    /// loop calls this once per wake, so a burst of arrivals costs one frame
+    /// rather than one frame each.
+    pub(crate) fn drain(&self) -> Drained {
+        self.drain_with(terminal_hung_up)
     }
 
-    /// The wait, with the hangup check supplied, so the two answers a deadline
-    /// can give are driven without a terminal.
-    fn next_with(&self, deadline: Duration, hung_up: fn() -> bool) -> Input {
+    /// The drain, with the hangup probe supplied so both answers it can give
+    /// are driven without a terminal.
+    pub(crate) fn drain_with(&self, hung_up: fn() -> bool) -> Drained {
         let Ok(events) = self.events.lock() else {
-            return Input::Idle;
+            // A poisoned lock means a panic while consuming. The receiver's
+            // queue state is unknown, so the session ends through its normal
+            // teardown instead of running with input nobody can read.
+            return Drained {
+                events: Vec::new(),
+                gone: true,
+            };
         };
-        match events.recv_timeout(deadline) {
-            Ok(event) => Input::Event(event),
-            // The deadline is where the loop gets control back, so it is also
-            // where a terminal that went away is noticed. Checking here rather
-            // than in the reader is deliberate: a reader stuck inside the
-            // event source never reaches its own check.
-            Err(RecvTimeoutError::Timeout) => match hung_up() {
-                true => Input::Gone,
-                false => Input::Idle,
-            },
-            // The reader is gone, so no event will ever arrive. Waiting on a
-            // closed channel returns at once, so reporting idle here would spin
-            // the loop at a full core with no way to type into it. This is the
-            // end of the session, and the loop must leave through its teardown.
-            Err(RecvTimeoutError::Disconnected) => Input::Gone,
+        let mut drained = Vec::new();
+        loop {
+            match events.try_recv() {
+                Ok(event) => drained.push(event),
+                // An empty queue is exactly the state in which the reader is
+                // parked inside the event source. A terminal that hung up
+                // while it waits leaves the descriptor readable with nothing
+                // to read, so the reader never returns and never notices. The
+                // descriptor is the only place that state is visible, and the
+                // loop probes it here on every empty drain.
+                Err(TryRecvError::Empty) => {
+                    return Drained {
+                        events: drained,
+                        gone: hung_up(),
+                    };
+                }
+                Err(TryRecvError::Disconnected) => {
+                    return Drained {
+                        events: drained,
+                        gone: true,
+                    };
+                }
+            }
         }
     }
 }
 
 /// Read one terminal event, retrying quiet timeouts and signal interruptions.
-fn read_event() -> Option<Event> {
-    read_event_with(terminal_hung_up, || event::poll(READ_WAIT), event::read)
+///
+/// One console record can carry a whole clipboard paste, so the read hands
+/// back every event that run produced.
+fn read_events() -> Option<Vec<Event>> {
+    let event = read_event_with(terminal_hung_up, || event::poll(READ_WAIT), event::read)?;
+    Some(coalesce_with(event, burst_pending, event::read))
+}
+
+/// Whether the console already holds another record. A typed key leaves the
+/// queue empty; a paste leaves the next record waiting, which is what lets the
+/// burst collector tell the two apart.
+#[cfg(windows)]
+fn burst_pending(window: Duration) -> bool {
+    event::poll(window).unwrap_or(false)
+}
+
+/// A platform that reports a paste as its own event has no burst to collect.
+#[cfg(not(windows))]
+fn burst_pending(_window: Duration) -> bool {
+    false
 }
 
 /// The event read loop, with the readiness poll and reader supplied for tests.
@@ -230,14 +262,14 @@ fn read_event_with(
 
 /// Start the reader thread and hand back the channel it feeds.
 ///
-/// The source is a parameter so the wiring can be driven without a terminal:
-/// the thread, the channel, and the loop are one unit, and only the source
-/// itself needs a real terminal.
-fn start(source: fn() -> Option<Event>) -> EventReader {
+/// The source is a parameter so the thread and the loop it wakes can be
+/// exercised without a terminal: only the source itself needs one.
+fn start(source: fn() -> Option<Vec<Event>>) -> EventReader {
     let (events, incoming) = channel();
+    let signal = Arc::clone(ui_wake());
     let spawned = Builder::new()
         .name("terminal-input".to_string())
-        .spawn(move || forward(events, source));
+        .spawn(move || forward(events, signal, source));
     if let Err(e) = spawned {
         // Without a reader the loop never sees a keystroke. Say so rather than
         // leaving a session that silently ignores input.
@@ -249,17 +281,33 @@ fn start(source: fn() -> Option<Event>) -> EventReader {
 }
 
 /// Forward every event the source yields until it yields none or the loop is
-/// gone.
+/// gone, waking the loop once per batch.
+///
+/// The wake follows the send, so the loop that wakes finds the event already
+/// in the channel. A source that ends wakes the loop too, because the closed
+/// channel is how the loop learns the session can no longer be typed into.
 ///
 /// The source is a parameter so the channel behaviour can be driven without a
 /// terminal: the loop is the part that must not lose an event or outlive its
 /// receiver.
-fn forward(events: Sender<Event>, mut source: impl FnMut() -> Option<Event>) {
-    while let Some(event) = source() {
-        if events.send(event).is_err() {
-            return;
+fn forward(
+    events: Sender<Event>,
+    signal: Arc<UiWake>,
+    mut source: impl FnMut() -> Option<Vec<Event>>,
+) {
+    while let Some(batch) = source() {
+        let mut sent = false;
+        for event in batch {
+            if events.send(event).is_err() {
+                return;
+            }
+            sent = true;
+        }
+        if sent {
+            signal.wake();
         }
     }
+    signal.wake();
 }
 
 #[cfg(test)]

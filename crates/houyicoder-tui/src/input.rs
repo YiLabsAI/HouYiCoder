@@ -646,6 +646,17 @@ impl Input {
             None
         }
     }
+
+    /// Take the pending paste whatever its age, returning the token to route.
+    ///
+    /// A key that arrives after pasted text belongs after it, so the text must
+    /// reach the input field before the key acts. Waiting out the rest of the
+    /// gap would let an Enter submit the draft without the pasted text in it.
+    pub(crate) fn take_pending_paste(&mut self) -> Option<String> {
+        let buf = self.pending_paste.buffer.take()?;
+        self.pending_paste.last = None;
+        Some(self.pasted.ingest(&buf))
+    }
 }
 
 #[cfg(test)]

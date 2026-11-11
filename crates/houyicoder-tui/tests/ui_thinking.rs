@@ -63,9 +63,13 @@ fn test_no_live_thinking_block() {
     );
     // The reasoning reached the transcript as a collapsed line, so the
     // absence above is a real fold rather than an item that never streamed.
+    // The fold line can land a frame after the text that ends the run, so the
+    // read waits on the rebuilt screen instead of sampling the byte stream at
+    // one instant.
     assert!(
-        s.output_compact().contains("✻Thoughtfor"),
-        "the reasoning should land as a collapsed transcript line:\n{}",
-        s.output()
+        s.wait_for_screen_compact("✻Thoughtfor", RENDER_TIMEOUT),
+        "the reasoning should land as a collapsed transcript line:\n{}\nscreen:\n{}",
+        s.output(),
+        s.screen().contents()
     );
 }

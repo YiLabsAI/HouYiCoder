@@ -40,6 +40,12 @@ fn test_ctrl_c_idle_noop() {
 
 /// q with an empty box types instead of quitting: backspace clears it back
 /// to the placeholder (the app is alive to process the backspace).
+///
+/// The two keys are typed into one input burst, which the app drains and
+/// draws once, so the pair leaves the box exactly as it found it and paints
+/// no bytes for the edit at all. A later character is the observable that
+/// tells the two outcomes apart: it shows on a live app, and with the q left
+/// in the box it would follow that q.
 #[test]
 #[ignore]
 fn test_q_empty_types() {
@@ -47,10 +53,16 @@ fn test_q_empty_types() {
     s.clear_output();
     s.send_key(&Key::Char('q'));
     s.send_key(&Key::Backspace);
+    s.send_str("alive");
     assert!(
-        s.wait_for_compact("let'sbuild,or/forcommands", RENDER_TIMEOUT),
-        "q should type (not quit); backspace should clear it back to the placeholder:\n{}",
+        s.wait_for_plain("alive", RENDER_TIMEOUT),
+        "q should type (not quit); backspace should clear the box:\n{}",
         s.output()
+    );
+    assert!(
+        !s.screen().contents().contains("qalive"),
+        "backspace should clear the typed q before the next text:\n{}",
+        s.screen().contents()
     );
     drop(s);
 }

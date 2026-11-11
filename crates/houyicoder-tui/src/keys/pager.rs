@@ -10,9 +10,16 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::{fold_chord, handle_ctrl_o};
 use crate::state::App;
 
 pub(super) fn handle_scroll(app: &mut App, k: KeyEvent) {
+    // The fold chord acts on the row under the cursor in every view, so it is
+    // answered here before the scroll view takes the rest of the keys.
+    if fold_chord(app, k) {
+        handle_ctrl_o(app);
+        return;
+    }
     if app.ui.transcript_view.search_input_mode() {
         handle_search_input(app, k);
         return;

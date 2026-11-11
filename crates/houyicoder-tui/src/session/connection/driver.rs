@@ -3,7 +3,8 @@
 //! SessionConnection; durable history remains owned by the event loop.
 
 use std::collections::VecDeque;
-use std::sync::mpsc;
+
+use super::AgentSender;
 
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::{
@@ -104,7 +105,7 @@ impl DriverDeath {
 pub(crate) async fn drive_client(
     client: houyicoder_client::Client,
     cmd_rx: UnboundedReceiver<ClientCommand>,
-    agent_tx: mpsc::Sender<SessionMessage>,
+    agent_tx: AgentSender,
 ) {
     let death = drive_connection(client, cmd_rx, &agent_tx).await;
     // The command receiver dropped with the driver body's frame, so by the
@@ -129,7 +130,7 @@ pub(crate) async fn drive_client(
 async fn drive_connection(
     mut client: houyicoder_client::Client,
     mut cmd_rx: UnboundedReceiver<ClientCommand>,
-    agent_tx: &mpsc::Sender<SessionMessage>,
+    agent_tx: &AgentSender,
 ) -> Option<DriverDeath> {
     if let Err(e) = client.connect().await {
         return Some(DriverDeath::from_cause(format!("connect failed: {e}")));

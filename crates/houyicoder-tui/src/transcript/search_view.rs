@@ -7,6 +7,7 @@
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
+use crate::app::wake::ui_wake;
 use crate::composition::shared_runtime;
 use crate::notifications::{NotifKind, Notification};
 use crate::records::TranscriptLine;
@@ -341,6 +342,7 @@ impl App {
         let (tx, rx) = channel();
         shared_runtime().spawn_blocking(move || {
             tx.send(snap.scan_chunk()).ok();
+            ui_wake().wake();
         });
         *self
             .sessions

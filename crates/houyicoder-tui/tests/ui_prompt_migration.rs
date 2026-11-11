@@ -40,10 +40,13 @@ fn test_picker_titles_legacy_session() {
         fs::read_to_string(&record).unwrap_or_default()
     );
     run_slash_command(&mut s, "resume");
+    // The picker header is a rendered row: a repaint writes only the cells
+    // that changed, so the byte stream can splice words. The rebuilt screen
+    // is what the user reads.
     assert!(
-        s.wait_for_plain("Resume a session", RENDER_TIMEOUT),
+        s.wait_for_screen("Resume a session", RENDER_TIMEOUT),
         "picker should open:\n{}",
-        s.output()
+        s.screen().contents()
     );
     assert!(
         s.wait_for_screen("fix the flaky login test", RENDER_TIMEOUT),

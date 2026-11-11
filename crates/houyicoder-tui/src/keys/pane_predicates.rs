@@ -4,7 +4,7 @@
 //! in-progress artifact edit is not derailed and an action only fires in the
 //! pane + stage where it is meaningful.
 
-use crate::state::{App, Pane, Stage};
+use crate::state::{App, Pane, Screen, Stage, ViewportMode};
 
 /// True when the current pane has a focusable list (Up/Down do something).
 pub(crate) fn pane_navigable(app: &App) -> bool {
@@ -93,4 +93,56 @@ pub(crate) fn pane_reworkable(app: &App) -> bool {
 /// and printable chars act.
 pub(crate) fn artifact_editing(app: &App) -> bool {
     app.ui.navigation.pane == Pane::Artifact && !app.workflow.artifact.mode().is_normal()
+}
+
+/// True when the keyboard currently types into a text field or the composer,
+/// so a held character repeats and its editing keys keep repeating.
+///
+/// One predicate for every text field: the key filter reads it to decide
+/// whether a repeat types, and a field missing from the list silently loses
+/// its key repeat. The teammate view keeps the composer, and the artifact pane
+/// keeps it while editing, so both count as typing.
+pub(crate) fn types_text(app: &App) -> bool {
+    // A decision card owns the keyboard: only the question's Other row is a
+    // text field there, and a letter on the option list is a shortcut or
+    // nothing at all.
+    if app.pending_trust().is_some() || app.approval().is_some() {
+        return false;
+    }
+    if let Some(question) = app.ask_question() {
+        return question.cursor_on_other();
+    }
+    app.ui.navigation.palette.open
+        || app.ui.navigation.resume_picker.open
+        || app.ui.navigation.skill_picker.open
+        || app.ui.transcript_view.search_input_mode()
+        || app.ui.navigation.status_pane.name_edit.is_some()
+        || app.ui.permission_pane.input.is_active()
+        // The /memory pane keeps its text filter in the input box: while the
+        // box holds text the letters edit the filter, and only an empty box
+        // makes them pane shortcuts. A held letter must type into that filter.
+        || (app.ui.navigation.pane == Pane::Memory && !app.ui.input.editor.is_empty())
+        || artifact_editing(app)
+        || (app.ui.navigation.screen == Screen::Working
+            && app.ui.navigation.viewport == ViewportMode::Working
+            && app.ui.navigation.pane == Pane::Transcript)
+}
+
+/// True when the plain-letter child actions (kill, background, confirm kill
+/// all) have a running child to act on. A held action key must fire once, so
+/// the key filter refuses its repeat under this state rather than killing one
+/// child after another.
+pub(crate) fn child_action_pending(app: &App) -> bool {
+    app.ui.navigation.pane == Pane::Transcript
+        && app.ui.navigation.viewport == ViewportMode::Working
+        && app.ui.input.editor.is_empty()
+        && app.ui.teammate_view.is_none()
+        && app
+            .sessions
+            .current
+            .capabilities
+            .fleet
+            .entries
+            .iter()
+            .any(|entry| entry.outcome.is_none())
 }

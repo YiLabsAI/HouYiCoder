@@ -140,6 +140,15 @@ impl StatusCapability {
             .unwrap_or(true)
     }
 
+    /// How long until the next periodic poll is due, zero when it is due now.
+    /// The run loop uses this to sleep exactly to the poll instead of waking
+    /// early and finding nothing to send.
+    pub(crate) fn poll_remaining(&self) -> Duration {
+        self.last_status_poll
+            .map(|t| Self::POLL_INTERVAL.saturating_sub(t.elapsed()))
+            .unwrap_or_default()
+    }
+
     /// Absorb a status reply: cache the snapshot and clear the pending-command
     /// flag together, so a command poll cannot stay pending past its reply.
     pub(crate) fn record_snapshot(&mut self, snapshot: StatusSnapshot) {

@@ -39,6 +39,8 @@ mod connection;
 pub(crate) mod identity;
 pub(crate) mod persistence;
 
+#[cfg(test)]
+pub(crate) use connection::AgentSender;
 pub use connection::{
     ConnectionStatus, EnqueueError, PollOutcome, RequestIdExhausted, SessionConnection,
 };

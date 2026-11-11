@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use super::LOG_ROW_BUDGET;
 use crate::app::state::App;
+use crate::app::wake::ui_wake;
 use crate::composition::shared_runtime;
 use crate::session::turn_driver::history_read::{LookbackFrom, OVERLAP_FRONT_ROWS, ReadJob};
 use crate::transcript::history_state::{
@@ -115,6 +116,9 @@ impl App {
         let lease = history_reads.dispatch(stamp, rx);
         shared_runtime().spawn_blocking(move || {
             job.run_and_send(tx, lease.stop());
+            // The result sits in the channel now; wake the loop so it drains
+            // the read instead of waiting for a frame timer.
+            ui_wake().wake();
         });
         true
     }

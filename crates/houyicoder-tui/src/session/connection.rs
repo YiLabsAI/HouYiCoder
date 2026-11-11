@@ -18,7 +18,10 @@ use std::error::Error;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
+mod agent_sender;
 mod driver;
+
+pub(crate) use agent_sender::AgentSender;
 
 #[cfg(test)]
 pub(crate) use driver::{
@@ -130,7 +133,11 @@ impl SessionConnection {
         runtime: &Runtime,
     ) -> Self {
         let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
-        let driver = runtime.spawn(driver::drive_client(client, cmd_rx, agent_tx));
+        let driver = runtime.spawn(driver::drive_client(
+            client,
+            cmd_rx,
+            AgentSender::new(agent_tx),
+        ));
         Self {
             cmd_tx,
             agent_rx,

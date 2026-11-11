@@ -9,7 +9,7 @@ use std::time::Duration;
 #[ignore]
 fn test_multi_expand_teammate() {
     let script = r#"[
-        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth"}}],
+        [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"open the auth module","description":"find auth"}}],
         [{"type":"Text","text":"auth is in src/auth"}],
         [{"type":"Text","text":"done"}]
     ]"#;
@@ -40,19 +40,18 @@ fn test_multi_expand_teammate() {
         "the parent run should finish before the toggle:\n{}",
         s.output()
     );
-    // Assert on the expanded BODY, not on the summary. The summary is the
-    // child's answer, so it is on screen collapsed too, and matching it
-    // proves nothing about the toggle. Clearing first makes the match
-    // evidence of this repaint rather than of an earlier one -- the stream
-    // accumulates, and ratatui repaints only the cells that changed, so the
-    // head's unchanged prefix is not re-emitted and only the flipped tail of
-    // the hint arrives.
+    // Assert on the expanded body through the row only it can show. The head
+    // carries the child's answer, so the answer is on screen collapsed too and
+    // matching it proves nothing about the toggle; the child's own prompt is
+    // drawn only by the open body. The reconstructed screen is what to read,
+    // because a repaint writes only the cells that changed and can split a row
+    // wherever a cell happens to match what was underneath it.
     s.clear_output();
     s.send_key(&Key::Ctrl('o'));
     assert!(
-        s.wait_for_compact("childtranscript", RENDER_TIMEOUT),
+        s.wait_for_screen("open the auth module", RENDER_TIMEOUT),
         "expanding should open the delegation's body:\n{}",
-        s.output()
+        s.screen().contents()
     );
     s.clear_output();
     s.send_key(&Key::Ctrl('o'));
@@ -62,9 +61,9 @@ fn test_multi_expand_teammate() {
         s.output()
     );
     assert!(
-        !s.output_compact().contains("childtranscript"),
+        !s.screen().contents().contains("open the auth module"),
         "collapsing should drop the body it opened:\n{}",
-        s.output()
+        s.screen().contents()
     );
     s.send_str("\r");
     assert!(
@@ -460,10 +459,14 @@ fn test_hop_expansion_isolation() {
     // child the standing view already shows, so step down to the older child
     // to make the hop happen between two children.
     s.send_key(&Key::Down);
+    // The cursor marker plus the row's type cell: the marker moves to the
+    // older row as a single cell, so the byte stream alongside it carries no
+    // more than the changed cells, while the reconstructed screen states the
+    // row the user actually sees selected.
     assert!(
-        s.wait_for_compact("▶·first-child-result", RENDER_TIMEOUT),
+        s.wait_for_screen("▶ ✓ explore", RENDER_TIMEOUT),
         "the older delegation is selected before Enter:\n{}",
-        s.output()
+        s.screen().contents()
     );
     // Enter opens the row's detail inside the pane, and Enter in the detail
     // enters that child's own view.

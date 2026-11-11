@@ -16,6 +16,7 @@ use ratatui::style::Color;
 
 use crate::app::handle_event;
 use crate::composition;
+use crate::keys::filter::KeyFilter;
 use crate::keys::handle_working;
 use crate::records::{ToolOutcome, TranscriptLine};
 use crate::state::{App, Screen, ViewportMode};
@@ -240,7 +241,7 @@ fn test_focus_lost_hides_caret() {
         "draw publishes the hidden cursor position for input methods"
     );
     // FocusLost event hides the caret.
-    assert!(handle_event(&mut app, Event::FocusLost).unwrap());
+    assert!(handle_event(&mut app, Event::FocusLost, &mut KeyFilter::default()).unwrap());
     assert!(
         !app.ui.terminal_focused,
         "FocusLost clears terminal_focused"
@@ -248,7 +249,7 @@ fn test_focus_lost_hides_caret() {
     let buf = render_buffer(&app, 80, 24);
     assert!(!has_white(&buf), "no inverted caret when focus lost");
     // FocusGained re-inverts.
-    assert!(handle_event(&mut app, Event::FocusGained).unwrap());
+    assert!(handle_event(&mut app, Event::FocusGained, &mut KeyFilter::default()).unwrap());
     assert!(app.ui.terminal_focused, "FocusGained sets terminal_focused");
     let buf = render_buffer(&app, 80, 24);
     assert!(has_white(&buf), "caret re-inverted on refocus");
@@ -260,7 +261,7 @@ fn test_focus_lost_hides_caret() {
 /// arms.
 #[test]
 fn test_handle_event_dispatches_each() {
-    let mk = |ev: Event| handle_event(&mut working(), ev).unwrap();
+    let mk = |ev: Event| handle_event(&mut working(), ev, &mut KeyFilter::default()).unwrap();
     assert!(mk(Event::Key(KeyEvent::new(
         KeyCode::Char('a'),
         KeyModifiers::NONE

@@ -20,9 +20,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 ACTIVE_OWNERS = {
     "crates/houyicoder-tui/src/app/state.rs:App": {
-        # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it. The broad-access budget grew by one for the sandbox pane's key dispatcher, which fans out across the pane state and the session like every other pane handler. It grew by one more for submit_direct_shell, a submit verb that enqueues a DirectShellRun command the same way spawn_run enqueues SendMessage, so it reads the session connection and routes through enqueue.
+        # The shell: the Ui, the sessions aggregate, and the workflow. The budget guards against a new field landing here instead of on the owner that changes with it. The broad-access budget grew by one for the sandbox pane's key dispatcher, which fans out across the pane state and the session like every other pane handler. It grew by one more for submit_direct_shell, a submit verb that enqueues a DirectShellRun command the same way spawn_run enqueues SendMessage, so it reads the session connection and routes through enqueue. It grew by three when the run loop became its own module: the loop, the frame writer trait declaration, and the terminal writer each drive the whole App the way the loop body that used to sit inside run_with_runner did, and none of them reads one owner's state alone.
         "fields": 3,
-        "mut_app": 29,
+        "mut_app": 32,
     },
     "crates/houyicoder-tui/src/ui.rs:Ui": {
         # The frontend's presentation and interaction state, including the draw pass's quit flag, renderer, and prepared frame. The sandbox pane's tab and cursor are where the user is looking, so they sit beside the other pane states rather than on the session. The tasks pane's cursor and open detail join them for the same reason: where the user is looking is view state, while the task records it indexes belong to the session. Grew by one for the notification wake pacing, which is interaction cadence (debounce window and consecutive budget), not a session fact.

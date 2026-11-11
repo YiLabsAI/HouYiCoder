@@ -7,6 +7,7 @@ use crate::app::handle_key;
 use crate::composition;
 use crate::composition::app;
 use crate::evidence::Verdict;
+use crate::input::InputField;
 use crate::input::queue::InputItem;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::TeammateView;
@@ -839,6 +840,65 @@ fn test_paste_routes_palette_open() {
     app.apply_paste_token("hello");
     let text = app.ui.input.editor.value();
     assert_eq!(text, "hello", "input paste appends to the box");
+}
+
+/// The fields that own the keyboard ahead of the draft box take a paste
+/// themselves: the in-view search bar edits its buffer, the status-name
+/// editor edits the name, and the resume picker appends to its query. Text
+/// pasted into any of them must not fall through to the draft box underneath,
+/// which the user cannot see.
+#[test]
+fn test_paste_routes_typing_fields() {
+    // The in-view search bar is open over the transcript.
+    let mut app = working_app();
+    app.enter_search_view("needle");
+    app.enter_search_input();
+    app.apply_paste_token(" hay");
+    assert_eq!(
+        app.ui.transcript_view.search_input_value(),
+        "needle hay",
+        "the search bar takes the pasted text"
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "",
+        "the draft box stays empty while the search bar owns the keyboard"
+    );
+
+    // The status-name editor is open on the /status pane.
+    let mut app = working_app();
+    app.ui.navigation.status_pane.name_edit = Some(InputField::new());
+    app.apply_paste_token("shiny");
+    assert_eq!(
+        app.ui
+            .navigation
+            .status_pane
+            .name_edit
+            .as_ref()
+            .expect("the editor stays open")
+            .value(),
+        "shiny",
+        "the name editor takes the pasted text"
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "",
+        "the draft box stays empty while the name editor owns the keyboard"
+    );
+
+    // The resume picker is open, narrowing its rows by query.
+    let mut app = working_app();
+    app.ui.navigation.resume_picker.open = true;
+    app.apply_paste_token("fix\nlogin");
+    assert_eq!(
+        app.ui.navigation.resume_picker.query, "fixlogin",
+        "the picker takes the pasted text and drops its control characters"
+    );
+    assert_eq!(
+        app.ui.input.editor.value(),
+        "",
+        "the draft box stays empty while the picker owns the keyboard"
+    );
 }
 
 /// The /status pane Left / Right keys cycle the sub-tab (Status → Config →

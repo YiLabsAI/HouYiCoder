@@ -11,14 +11,26 @@ use crate::paste::PasteStore;
 use crate::state::{App, Pane, Stage};
 
 impl App {
-    /// Route a pasted token to the active input surface: the palette query when
-    /// the palette is open (so pasting an argument into the hint-after-space
-    /// popup lands in the query, not the input bar), else the input box. The
-    /// palette query is the arg surface once a command is selected; routing a
-    /// paste there lets the user paste a file path / sid into the popup.
+    /// Route a pasted token to the text field that owns the keyboard: the
+    /// in-view search bar while it is open, the status-name editor while it is open, the
+    /// palette query when the palette is open (so pasting an argument into the
+    /// hint-after-space popup lands in the query, not the input bar), the
+    /// resume picker query while the picker is open, else the input box. Each
+    /// of the first four owns the keyboard while it is up, so text pasted then
+    /// must land in that field rather than in a draft nobody can see.
     pub(crate) fn apply_paste_token(&mut self, token: &str) {
-        if self.ui.navigation.palette.open {
+        if self.ui.transcript_view.search_input_mode() {
+            self.ui.transcript_view.paste_search_input(token);
+        } else if let Some(field) = self.ui.navigation.status_pane.name_edit.as_mut() {
+            field.insert_str(token);
+        } else if self.ui.navigation.palette.open {
             self.ui.navigation.palette.query.push_str(token);
+        } else if self.ui.navigation.resume_picker.open {
+            // The picker narrows by character, so control characters from a
+            // multi-line paste would never match a row and are dropped.
+            for c in token.chars().filter(|c| !c.is_control()) {
+                self.ui.navigation.resume_picker.push(c);
+            }
         } else {
             self.ui.input.editor.insert_str(token);
             // A pasted dollar plus a space enters DirectShell like a typed one,
@@ -34,6 +46,20 @@ impl App {
     /// whether a paste was ingested.
     pub(crate) fn flush_pending_paste(&mut self) -> bool {
         if let Some(token) = self.ui.input.drain_pending_paste(Instant::now()) {
+            self.apply_paste_token(&token);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Route the pending paste without waiting out its gap.
+    ///
+    /// The run loop flushes on the gap so a large paste arriving in chunks is
+    /// ingested once. A key ends that stream: it acts on the draft as it stands,
+    /// so the text must land first. Input owns the accumulator, App the routing.
+    pub(crate) fn flush_pending_paste_now(&mut self) -> bool {
+        if let Some(token) = self.ui.input.take_pending_paste() {
             self.apply_paste_token(&token);
             true
         } else {

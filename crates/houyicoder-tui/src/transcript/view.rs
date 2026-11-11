@@ -264,6 +264,11 @@ impl TranscriptViewState {
         }
     }
 
+    /// Insert pasted text into the in-view search bar buffer, at the caret.
+    pub(crate) fn paste_search_input(&mut self, text: &str) {
+        self.search.input.insert_str(text);
+    }
+
     /// Dispatch editing key codes to the in-view search bar input buffer.
     pub(crate) fn handle_search_input_key(&mut self, code: KeyCode) {
         match code {

@@ -1,6 +1,6 @@
+use crossterm::event::KeyCode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::permission::{PermissionEffect, RuleDestination};
-use ratatui::crossterm::event::KeyCode;
 
 use super::PermissionDecision;
 use crate::permission_pane_state::PermissionPaneState;

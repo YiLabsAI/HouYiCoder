@@ -1,4 +1,4 @@
-//! The reader's deadline, driven without a terminal.
+//! The reader's drain contract, driven without a terminal.
 
 use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -6,46 +6,49 @@ use std::io::Error;
 #[cfg(unix)]
 use std::os::fd::AsFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread::yield_now;
 use std::time::Instant;
 
 fn press(c: char) -> Event {
     Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
 }
 
-/// A quiet channel answers on the deadline rather than blocking.
+/// A quiet channel drains at once rather than blocking.
 ///
-/// This is the property the run loop depends on: the wait must always give the
-/// loop back, because that is where the exit decision is made. A wait that
-/// never returns is what let a session outlive its terminal.
+/// This is the property the run loop depends on: the drain must always give
+/// the loop back, because that is where the exit decision is made. A drain
+/// that never returns is what let a session outlive its terminal.
 #[test]
-fn test_reader_honors_deadline() {
+fn test_drain_returns_when_quiet() {
     let (_events, incoming) = channel::<Event>();
     let reader = EventReader::over(incoming);
     let started = Instant::now();
-    let input = reader.next_with(Duration::from_millis(50), || false);
+    let drained = reader.drain_with(|| false);
     assert!(
-        matches!(input, Input::Idle),
-        "a quiet channel reports no input"
+        drained.events.is_empty(),
+        "a quiet channel reports no event"
     );
+    assert!(!drained.gone, "a live terminal is not reported as gone");
     assert!(
-        started.elapsed() >= Duration::from_millis(40),
-        "the wait used its deadline instead of returning at once"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "the wait returned within its deadline"
+        started.elapsed() < Duration::from_secs(1),
+        "the drain returned without waiting on a deadline"
     );
 }
 
-/// An event that arrives before the deadline is handed over as it is.
+/// An event that arrives before the drain is handed over as it is.
 #[test]
-fn test_reader_forwards_event() {
+fn test_drain_forwards_event() {
     let (events, incoming) = channel::<Event>();
     let reader = EventReader::over(incoming);
     events.send(press('a')).expect("the reader is listening");
-    let input = reader.next_with(Duration::from_millis(50), || false);
+    let drained = reader.drain_with(|| false);
     assert!(
-        matches!(&input, Input::Event(Event::Key(key)) if key.code == KeyCode::Char('a')),
+        matches!(
+            drained.events.as_slice(),
+            [Event::Key(key)] if key.code == KeyCode::Char('a')
+        ),
         "the event reaches the loop unchanged"
     );
 }
@@ -119,16 +122,15 @@ fn test_reader_survives_read_error() {
     assert_eq!(reads, 2, "the failed read was retried");
 }
 
-/// A reader whose thread is gone reports no input rather than blocking, so a
-/// session can still be quit when its input source died.
+/// A reader whose thread is gone reports it rather than draining forever, so
+/// a session can still be quit when its input source died.
 #[test]
 fn test_dead_reader_ends() {
     let (events, incoming) = channel::<Event>();
     drop(events);
     let reader = EventReader::over(incoming);
-    let input = reader.next_with(Duration::from_millis(50), || false);
     assert!(
-        matches!(input, Input::Gone),
+        reader.drain_with(|| false).gone,
         "a reader that is gone ends the session instead of reporting quiet"
     );
 }
@@ -137,9 +139,11 @@ fn test_dead_reader_ends() {
 #[test]
 fn test_forward_keeps_order() {
     let (events, incoming) = channel::<Event>();
-    let script = vec![press('a'), press('b'), press('c')];
-    let mut remaining = script.into_iter();
-    forward(events, move || remaining.next());
+    let queued = vec![press('a'), press('b'), press('c')];
+    let mut remaining = queued.into_iter();
+    forward(events, UiWake::new(), move || {
+        remaining.next().map(|event| vec![event])
+    });
     let seen: Vec<char> = incoming
         .try_iter()
         .map(|event| match event {
@@ -162,14 +166,14 @@ fn test_forward_keeps_order() {
 fn test_forward_stops_when_closed() {
     let (events, incoming) = channel::<Event>();
     drop(incoming);
-    let yielded = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counter = std::sync::Arc::clone(&yielded);
-    forward(events, move || {
-        let seen = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        (seen <= 3).then(|| press('x'))
+    let yielded = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&yielded);
+    forward(events, UiWake::new(), move || {
+        let seen = counter.fetch_add(1, Ordering::Relaxed) + 1;
+        (seen <= 3).then(|| vec![press('x')])
     });
     assert_eq!(
-        yielded.load(std::sync::atomic::Ordering::Relaxed),
+        yielded.load(Ordering::Relaxed),
         1,
         "the loop stopped at the first undeliverable event"
     );
@@ -182,19 +186,23 @@ fn test_forward_stops_when_closed() {
 #[test]
 fn test_start_wires_a_reader() {
     let reader = start(|| None);
-    assert!(
-        matches!(
-            reader.next_with(Duration::from_millis(50), || false),
-            Input::Gone
-        ),
-        "a source that ended ends the session, not blocks it"
-    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let gone = loop {
+        if reader.drain_with(|| false).gone {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        yield_now();
+    };
+    assert!(gone, "a source that ended ends the session, not blocks it");
 }
 
-/// A reader whose lock was poisoned reports no input instead of panicking in
+/// A reader whose lock was poisoned ends the session instead of panicking in
 /// the loop: a session must stay quittable even after a panic touched it.
 #[test]
-fn test_poisoned_reader_idles() {
+fn test_poisoned_reader_ends() {
     let (_events, incoming) = channel::<Event>();
     let reader = EventReader::over(incoming);
     let poisoned = catch_unwind(AssertUnwindSafe(|| {
@@ -202,9 +210,11 @@ fn test_poisoned_reader_idles() {
         panic!("a holder panicked, which poisons the lock");
     }));
     assert!(poisoned.is_err(), "the lock was poisoned");
+    let drained = reader.drain_with(|| false);
+    assert!(drained.events.is_empty(), "no event is invented");
     assert!(
-        matches!(reader.next(Duration::from_millis(10)), Input::Idle),
-        "a poisoned reader idles rather than panicking in the loop"
+        drained.gone,
+        "a poisoned reader ends the session rather than panicking in the loop"
     );
 }
 
@@ -212,42 +222,27 @@ fn test_poisoned_reader_idles() {
 /// terminal.
 ///
 /// This is the only case that touches the real source: it starts the reader on
-/// the test process's terminal and asks it for one turn. Nothing types during
-/// the run, so the turn idles; the thread ends with the test's process.
+/// the test process's terminal and asks it for one drain. What matters is that
+/// the call returns instead of blocking; the thread ends with the test process.
 #[test]
 fn test_shared_reader_starts() {
-    let reader = EventReader::shared();
-    // A test process has no terminal of its own, so either answer is right
-    // here; what matters is that the call returns instead of blocking.
-    assert!(
-        matches!(
-            reader.next(Duration::from_millis(10)),
-            Input::Idle | Input::Gone
-        ),
-        "the shared reader answers its deadline"
-    );
+    let drained = EventReader::shared().drain();
+    assert!(drained.events.is_empty(), "nothing typed during the run");
 }
 
-/// A deadline that finds the terminal gone reports it, so the loop ends.
-///
-/// The check is a parameter here because the answer only comes from a real
-/// descriptor: what the loop does with the answer is the part worth pinning.
+/// An empty drain that finds the terminal gone reports it, so the session
+/// ends. The probe is a parameter because its answer only comes from a real
+/// descriptor; what the loop does with that answer is what this test asserts.
 #[test]
-fn test_deadline_reports_gone() {
+fn test_drain_reports_hangup() {
     let (_events, incoming) = channel::<Event>();
     let reader = EventReader::over(incoming);
     assert!(
-        matches!(
-            reader.next_with(Duration::from_millis(10), || true),
-            Input::Gone
-        ),
+        reader.drain_with(|| true).gone,
         "a hung-up terminal is reported, not mistaken for quiet"
     );
     assert!(
-        matches!(
-            reader.next_with(Duration::from_millis(10), || false),
-            Input::Idle
-        ),
+        !reader.drain_with(|| false).gone,
         "a quiet terminal stays quiet"
     );
 }
@@ -282,4 +277,39 @@ fn test_probe_reports_live_descriptor() {
         !probe(None),
         "no descriptor to watch is not a hangup either"
     );
+}
+
+/// One drain takes every event the reader already holds, so a burst costs a
+/// single frame instead of one frame per event.
+#[test]
+fn test_drain_takes_whole_burst() {
+    let (events, incoming) = channel::<Event>();
+    let reader = EventReader::over(incoming);
+    for c in ['a', 'b', 'c'] {
+        events.send(press(c)).expect("the reader is listening");
+    }
+    let drained = reader.drain();
+    assert_eq!(drained.events.len(), 3, "every queued event is taken");
+    assert!(!drained.gone, "the reader is still alive");
+    assert!(
+        reader.drain().events.is_empty(),
+        "the channel is empty after one drain"
+    );
+}
+
+/// A drain reports a reader that ended, so the loop leaves even when no wake
+/// announced the close.
+#[test]
+fn test_drain_reports_closed() {
+    let (events, incoming) = channel::<Event>();
+    let reader = EventReader::over(incoming);
+    events.send(press('a')).expect("the reader is listening");
+    drop(events);
+    let drained = reader.drain();
+    assert_eq!(
+        drained.events.len(),
+        1,
+        "events delivered before the close are kept"
+    );
+    assert!(drained.gone, "the closed reader ends the session");
 }

@@ -315,9 +315,9 @@ fn test_resume_picker_swaps_process() {
     // Open the /resume picker: it lists A (B is excluded as current).
     common::run_slash_command(&mut s, "resume");
     assert!(
-        s.wait_for_plain("Resume a session", RENDER_TIMEOUT),
+        s.wait_for_screen("Resume a session", RENDER_TIMEOUT),
         "picker should open with the session list:\n{}",
-        s.output()
+        s.screen().contents()
     );
     assert!(
         s.wait_for_screen("seeded prompt a", RENDER_TIMEOUT),
@@ -385,9 +385,9 @@ fn test_picker_hides_held() {
 
     common::run_slash_command(&mut s, "resume");
     assert!(
-        s.wait_for_plain("Resume a session", RENDER_TIMEOUT),
+        s.wait_for_screen("Resume a session", RENDER_TIMEOUT),
         "picker should open:\n{}",
-        s.output()
+        s.screen().contents()
     );
     assert!(
         s.wait_for_screen("free prompt", RENDER_TIMEOUT),

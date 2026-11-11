@@ -302,10 +302,16 @@ fn test_context_reports_measured_cost() {
     // cannot be an anchor here; the first drill section stands in for "the
     // block rendered".
     assert!(
-        s.wait_for("Agents", RENDER_TIMEOUT) || s.wait_for("Subagent", RENDER_TIMEOUT),
+        s.wait_for_screen("Agents", RENDER_TIMEOUT)
+            || s.wait_for_screen("Subagent", RENDER_TIMEOUT),
         "the agents section missing:\n{}",
-        s.output()
+        s.screen().contents()
     );
+    // Each row is a rendered line. A repaint writes only the cells that
+    // changed, so the byte stream can drop a letter the previous frame
+    // already held; the rebuilt screen is what the user reads. None of these
+    // markers was on screen before the clear above, so the screen cannot
+    // satisfy the wait from a stale frame.
     for marker in [
         "Bash results using",
         "File reads using",
@@ -314,17 +320,17 @@ fn test_context_reports_measured_cost() {
         "Subagent work:",
     ] {
         assert!(
-            s.wait_for(marker, RENDER_TIMEOUT),
+            s.wait_for_screen(marker, RENDER_TIMEOUT),
             "the measured cost is missing {marker}:\n{}",
-            s.output()
+            s.screen().contents()
         );
     }
     // The child reported 900 input + 100 output, so the row reports that total
     // rather than reading unknown.
     assert!(
-        !s.output().contains("Subagent work: unknown"),
+        !s.screen().contents().contains("Subagent work: unknown"),
         "a child that reported its totals is not unknown:\n{}",
-        s.output()
+        s.screen().contents()
     );
 }
 

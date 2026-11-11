@@ -7,10 +7,10 @@
 
 use std::ptr::eq;
 
+use crossterm::event::{KeyCode, KeyEvent};
 use houyicoder_protocol::frontend::permission::{
     PermissionEffect, PermissionRule, PermissionRuleContent, RuleDestination,
 };
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use crate::agent_message::ClientCommand;
 use crate::command::render::permission_effect_label;

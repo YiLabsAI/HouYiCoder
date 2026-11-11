@@ -85,8 +85,11 @@ fn test_strip_finished_after_completion() {
         "fold should render:\n{}",
         s.output()
     );
+    // The fold group and the strip row are driven by separate host updates, so
+    // the fold rendering does not mean the ending word has painted yet. Wait
+    // on the row this test is about instead of assuming the same frame.
     assert!(
-        s.output_compact().contains("findauth·finished"),
+        s.wait_for_compact("findauth·finished", RENDER_TIMEOUT * 2),
         "strip should show the finished row after completion:\n{}",
         s.output()
     );
@@ -114,9 +117,10 @@ fn test_strip_two_children_rows() {
         "both children should complete:\n{}",
         s.output()
     );
-    let pc = s.output_compact();
+    let both = s.wait_for_compact("first·finished", RENDER_TIMEOUT * 2)
+        && s.wait_for_compact("second·finished", RENDER_TIMEOUT * 2);
     assert!(
-        pc.contains("first·finished") && pc.contains("second·finished"),
+        both,
         "both child strip rows should render with their own type:\n{}",
         s.output()
     );

@@ -217,13 +217,17 @@ fn test_foreground_parent_after_fold() {
     s.send_str("find auth");
     s.send_str("\r");
     assert!(s.wait_for_compact("ctrl+otoexpand", RENDER_TIMEOUT * 2));
+    // The delegation head appears when the child's trace lands, before the
+    // parent's resumed turn and before the fold's summary text exists, so the
+    // two markers are polled rather than read once from the accumulated
+    // stream.
     assert!(
-        s.output_compact().contains("parentfinalanswer"),
+        s.wait_for_compact("parentfinalanswer", RENDER_TIMEOUT),
         "parent final answer should render after the fold:\n{}",
         s.output()
     );
     assert!(
-        s.output_compact().contains("childfoundauth"),
+        s.wait_for_compact("childfoundauth", RENDER_TIMEOUT),
         "child result should render in the fold:\n{}",
         s.output()
     );

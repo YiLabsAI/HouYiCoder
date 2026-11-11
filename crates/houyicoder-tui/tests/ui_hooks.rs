@@ -33,10 +33,14 @@ fn test_hooks_pane_subtitle_hint() {
         "hooks pane subtitle should render:\n{}",
         s.output()
     );
+    // The hint shares its row with the read-only subtitle. A repaint writes
+    // only the cells whose content changed, so the byte stream can carry the
+    // tail without the whole phrase; the rebuilt screen is what the user
+    // reads.
     assert!(
-        s.output().contains("edit settings.json"),
+        s.wait_for_screen("edit settings.json", RENDER_TIMEOUT),
         "the read-only hint should point at settings.json:\n{}",
-        s.output()
+        s.screen().contents()
     );
     // Esc dismisses the pane back to the working screen.
     s.send_key(&Key::Esc);

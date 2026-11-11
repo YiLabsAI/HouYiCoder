@@ -18,6 +18,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::app::state::App;
+use crate::app::wake::ui_wake;
 use crate::composition::shared_runtime;
 use crate::notifications::{NotifKind, Notification};
 use crate::transcript::search_read::{
@@ -96,7 +97,12 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let lease = self.sessions.current.search_reads.dispatch(job.clone(), rx);
         if self.sessions.current.connection.is_some() {
-            shared_runtime().spawn_blocking(move || job.run_and_send(source, tx, lease.stop()));
+            shared_runtime().spawn_blocking(move || {
+                job.run_and_send(source, tx, lease.stop());
+                // The result sits in the channel now; wake the loop so it
+                // drains the read instead of waiting for a frame timer.
+                ui_wake().wake();
+            });
             false
         } else {
             // A source with no connection is not a live session's log: the

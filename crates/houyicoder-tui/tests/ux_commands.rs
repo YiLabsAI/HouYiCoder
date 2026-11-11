@@ -195,8 +195,11 @@ fn test_status_usage_renders_tokens() {
     );
 }
 
-/// /model opens the model selector Pane with the Default sentinel row + the
-/// empty-state guide when no catalog is configured (the stub/local path).
+/// /model opens the model selector Pane over the catalog the host reports.
+/// With no settings file the host ships the default catalog, so the pane is
+/// usable out of the box: the Default sentinel row comes first, then one row
+/// per shipped entry. The empty-catalog guide is exercised by the inline unit
+/// layer, where the catalog is built empty on purpose.
 #[test]
 #[ignore]
 fn test_model_opens_selector_pane() {
@@ -211,19 +214,26 @@ fn test_model_opens_selector_pane() {
         "working screen"
     );
     run_slash_command(&mut s, "model");
+    // The header is a rendered row: a repaint writes only the cells that
+    // changed, so the byte stream can splice words. The rebuilt screen is
+    // what the user reads.
     assert!(
-        s.wait_for_plain("Select a model", RENDER_TIMEOUT),
+        s.wait_for_screen("Select a model", RENDER_TIMEOUT),
         "/model should render the model selector header:\n{}",
-        s.output_plain()
+        s.screen().contents()
     );
-    // An empty catalog has no rows to pick from (a Default row would resolve
-    // through the same missing chain); the guide names the settings file,
-    // which has no internal space so ratatui's cell-diff render cannot drop
-    // an inter-word space from the accumulated stream.
-    let out = s.output_plain();
+    // The row numbers identify the rows themselves: the sentinel is row one,
+    // and row two is the first shipped catalog entry with the label its
+    // display name gives it.
     assert!(
-        out.contains("settings.json"),
-        "empty-state guide should render when no catalog:\n{out}"
+        s.wait_for_screen("1. Default (recommended)", RENDER_TIMEOUT),
+        "the Default sentinel should be the first row:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.screen().contents().contains("2. Max"),
+        "the shipped catalog should fill the rows below it:\n{}",
+        s.screen().contents()
     );
 }
 
@@ -313,9 +323,9 @@ fn test_resume_picker_disambiguates_empty() {
     );
     run_slash_command(&mut s, "resume");
     assert!(
-        s.wait_for_plain("Resume a session", RENDER_TIMEOUT),
+        s.wait_for_screen("Resume a session", RENDER_TIMEOUT),
         "resume picker should open:\n{}",
-        s.output_plain()
+        s.screen().contents()
     );
     // Wait for the second session to render before reading the buffer —
     // the picker lists sessions asynchronously and under load (e.g. parallel

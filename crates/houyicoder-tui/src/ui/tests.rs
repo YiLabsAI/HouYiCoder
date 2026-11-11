@@ -3,9 +3,9 @@
 
 use std::io::{self, Error, Write};
 
-use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::{Terminal, TerminalOptions, Viewport};
+use ratatui_crossterm::CrosstermBackend;
 
 use crate::composition;
 use crate::rows::row_set::RowSet;

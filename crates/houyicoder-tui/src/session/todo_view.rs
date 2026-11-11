@@ -209,6 +209,24 @@ impl TodoState {
         true
     }
 
+    /// How long until the completed list clears itself, or None when the list
+    /// is not waiting on that timer.
+    ///
+    /// The run loop schedules a wake from this so a session with nothing else
+    /// live still hides a finished checklist on time.
+    pub(crate) fn clear_delay(&self, now: Instant) -> Option<Duration> {
+        if self.items.is_empty()
+            || self
+                .items
+                .iter()
+                .any(|item| item.status != TodoStatus::Completed)
+        {
+            return None;
+        }
+        let latest = self.completion_at.values().max()?;
+        Some(COMPLETED_LIST_TTL.saturating_sub(now.saturating_duration_since(*latest)))
+    }
+
     /// Reset checklist content, expansion, timestamps, and frame cursor.
     pub(crate) fn clear(&mut self) {
         *self = Self::default();

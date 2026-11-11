@@ -659,7 +659,7 @@ impl FakeEngine {
         let _keep_alive = cmd_tx;
         let _ = timeout(
             Duration::from_millis(300),
-            drive_client(client, cmd_rx, agent_tx),
+            drive_client(client, cmd_rx, AgentSender::new(agent_tx)),
         )
         .await;
         let mut msgs = Vec::new();
@@ -1528,7 +1528,7 @@ async fn test_drop_reclaims_driver() {
     let client = Client::new(Box::new(StuckTransport));
     let (cmd_tx, cmd_rx) = unbounded_channel::<ClientCommand>();
     let (agent_tx, _agent_rx) = channel::<SessionMessage>();
-    let handle = runtime.spawn(drive_client(client, cmd_rx, agent_tx));
+    let handle = runtime.spawn(drive_client(client, cmd_rx, AgentSender::new(agent_tx)));
     // The driver is stuck in connect().await (recv_frame never resolves).
     // Drop the command sender (what SessionConnection Drop does) and abort
     // the handle (what SessionConnection Drop does next).

@@ -3,36 +3,40 @@
 
 pub mod state;
 
-use crossterm::{
-    cursor::{Hide, MoveTo},
-    event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
-    execute,
+mod event_loop;
+pub(crate) mod frame_clock;
+pub(crate) mod wake;
+
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use ratatui::{Frame, Terminal, backend::CrosstermBackend, layout::Rect};
+use ratatui::{Frame, Terminal, layout::Rect};
+use ratatui_crossterm::CrosstermBackend;
 use std::cmp;
 use std::error::Error;
-use std::io::{self, stdout};
+use std::io::{self, BufWriter, stdout};
 use std::time::{Duration, Instant};
 
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::agent_message::ClientCommand;
+use crate::app::event_loop::{FRAME_BUFFER_BYTES, TerminalWriter};
+use crate::app::wake::ui_wake;
 use crate::composition::{FrontendStartup, RunnerBundle, build_app};
-use crate::input::terminal_events::{EventReader, Input};
+use crate::input::terminal_events::EventReader;
 use crate::keys;
+use crate::keys::filter::KeyFilter;
+use crate::keys::pane_predicates::child_action_pending;
 use crate::notifications::{NotifKind, Notification, copy_toast};
 use crate::selection::get_clipboard_path;
 use crate::selection::region::{
     ApprovalSelection, PaneRegion, Region, RegionIntent, RegionView, StatusRegion,
-    TranscriptRegion, clear_stale_click, edge_scroll_if_at_edge, edge_scroll_intent, paint_overlay,
+    TranscriptRegion, clear_stale_click, edge_scroll_intent, paint_overlay,
 };
 use crate::state::{App, Pane, Screen, ViewportMode};
-use crate::terminal_guard::{
-    CrosstermModes, TerminalGuard, assert_mouse_modes, set_terminal_progress,
-};
+use crate::terminal_guard::{CrosstermModes, TerminalGuard, assert_mouse_modes};
 use crate::termination::{TerminationWatch, watch_termination};
 use crate::ui::selection::paint_regions;
-use crate::view;
 use crate::view::working::fleet_strip::{FleetClick, click_route};
 
 /// Run the alternate-screen TUI and restore terminal state on exit.
@@ -50,102 +54,22 @@ pub fn run_with_runner(
     // modes and hearing a signal still reaches the loop's teardown path.
     let termination = watch_termination()?;
     let mut guard = TerminalGuard::acquire(CrosstermModes)?;
-    let backend = CrosstermBackend::new(stdout());
+    // One write per frame: the buffer is flushed by the draw, and the cursor
+    // escape that follows it is ordered after the frame bytes.
+    let backend = CrosstermBackend::new(BufWriter::with_capacity(FRAME_BUFFER_BYTES, stdout()));
     let mut terminal = Terminal::new(backend)?;
     let mut app = build_app(bundle, startup);
     app.startup_handshake(Duration::from_secs(2));
-    let mut dirty = true;
-    // Tracks the last busy state reported to the terminal emulator via the
-    // OSC 9;4 progress sequence, so the escape is written only on transitions.
-    let mut reported_busy = false;
-
-    // A termination signal is answered by leaving through the normal
-    // teardown, so every terminal mode the guard took is restored. The loop
-    // reads the same exit decision the user's quit sets.
-    while !termination.should_exit(app.ui.quit) {
-        // Apply startup and streaming messages before drawing so a trust prompt
-        // never flashes the screen it is about to replace.
-        if app.poll_agent() {
-            dirty = true;
-        }
-        // Mirror busy transitions to supporting terminal chrome.
-        if app.agent_busy() != reported_busy {
-            if let Err(e) = set_terminal_progress(app.agent_busy()) {
-                tracing::warn!(error = %e, "terminal progress update failed");
-            }
-            reported_busy = app.agent_busy();
-        }
-        // Idle drain consumes queued work only after a clean run; interrupted
-        // work stays available for editing. Idle frames render on state
-        // changes; busy frames keep the spinner live.
-        app.idle_drain(resume_builder.as_deref(), &mut dirty);
-        if app.drop_completed_fleet() {
-            dirty = true;
-        }
-        let now = Instant::now();
-        if app.tick_fleet_elapsed(now) {
-            dirty = true;
-        }
-        if app.ui.notifications.tick(now) {
-            dirty = true;
-        }
-        if app.tick_auto_approve(now) {
-            dirty = true;
-        }
-        // The /tasks pane asks the host for a fresh list and, below it, a
-        // fresh record for the open detail: the host computes run times when
-        // it answers, so a pane that stopped asking would freeze its clocks.
-        app.tick_tasks(now);
-        if app.sessions.current.todos.prune(now) {
-            dirty = true;
-        }
-        // Drain a background history read outside the dirty gate: an idle
-        // loop still picks the result up, and a landed result sets dirty so
-        // the redraw that renders the prepended rows follows immediately.
-        if app.pump_background_reads() {
-            dirty = true;
-        }
-        if dirty || app.agent_busy() || app.compacting() {
-            // Load older history before rendering its scroll position.
-            app.load_older_frames();
-            // Stage the frame: the draw writes into a fresh value, held aside
-            // until the draw reports success.
-            let published = app.ui.stage_frame();
-            let drawn = terminal.draw(|f| {
-                view::draw(f, &app);
-                apply_selection_overlay(f, &app);
-            });
-            // A failed draw puts the last published frame back before the
-            // error unwinds to the terminal guard, so nothing reads a
-            // half-written one.
-            app.ui.settle_frame(published, drawn)?;
-            if let Some((x, y)) = app.ui.frame.feedback.native_cursor_position.get()
-                && let Err(e) = execute!(stdout(), MoveTo(x, y), Hide)
-            {
-                tracing::warn!(error = %e, "cursor positioning failed");
-            }
-            dirty = false;
-        }
-        // The wait runs on the reader thread, so a terminal that closed under
-        // us cannot hold this loop inside the event reader: the deadline always
-        // returns control here, where the exit decision is made.
-        match EventReader::shared().next(Duration::from_millis(100)) {
-            Input::Event(event) => dirty |= handle_event(&mut app, event)?,
-            // Nothing left to draw on or type: leaving restores what the
-            // guard took before the descriptor closed.
-            Input::Gone => {
-                tracing::warn!("terminal input channel closed (Input::Gone), quitting");
-                app.ui.quit = true;
-            }
-            Input::Idle => {}
-        }
-        if edge_scroll_if_at_edge(&mut app) {
-            dirty = true;
-        }
-        // Flush accumulated paste chunks after a 50ms gap (paste ended).
-        if app.flush_pending_paste() {
-            dirty = true;
-        }
+    {
+        let mut writer = TerminalWriter::new(&mut terminal);
+        event_loop::run(
+            &mut app,
+            EventReader::shared(),
+            ui_wake(),
+            &termination,
+            &mut writer,
+            resume_builder.as_deref(),
+        )?;
     }
 
     // Restore the terminal modes the guard owns. The tab title and the
@@ -174,9 +98,23 @@ impl App {
 }
 
 /// Apply one terminal event and report whether the view changed.
-pub(crate) fn handle_event(app: &mut App, event: Event) -> io::Result<bool> {
+pub(crate) fn handle_event(
+    app: &mut App,
+    event: Event,
+    filter: &mut KeyFilter,
+) -> io::Result<bool> {
     match event {
         Event::Key(k) => {
+            // A release, a held action key, and the second press of one
+            // non-BMP character change nothing and need no redraw.
+            if !filter.admit(app, &k, Instant::now()) {
+                return Ok(false);
+            }
+            // Text pasted just before this key belongs before it. The run loop
+            // waits out the paste gap before routing, so a key pressed within
+            // that gap must route the buffered text first or it would act on a
+            // draft without it (an Enter would submit an empty box).
+            app.flush_pending_paste_now();
             handle_key(app, k);
             Ok(true)
         }
@@ -680,12 +618,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     let plain_key = !k
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    if plain_key
-        && app.ui.navigation.pane == Pane::Transcript
-        && app.ui.navigation.viewport == ViewportMode::Working
-        && app.ui.input.editor.is_empty()
-        && app.ui.teammate_view.is_none()
-    {
+    if plain_key && child_action_pending(app) {
         let entries = &app.sessions.current.capabilities.fleet.entries;
         let running = entries.iter().filter(|e| e.outcome.is_none()).count();
         if k.code == KeyCode::Char('K') && running > 0 {

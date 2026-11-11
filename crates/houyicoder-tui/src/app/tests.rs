@@ -1,11 +1,15 @@
 //! The app module's own tests. A child of app, so use super::* reaches the
 //! private items the inline test module reached before.
 use super::*;
+
+mod lifecycle;
+
 use crate::agent_message::fleet::FleetEntry;
 use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::app::handle_key;
 use crate::composition::app;
 use crate::composition::shared_runtime;
+use crate::keys::filter::KeyFilter;
 use crate::keys::handle_working;
 use crate::records::TranscriptLine;
 use crate::selection::RecordingClipboard;
@@ -944,14 +948,20 @@ fn test_ready_reports_focus() {
 #[test]
 fn test_focus_change_reports_host() {
     let (mut app, events) = connected_app_events();
-    assert!(handle_event(&mut app, Event::FocusLost).expect("focus loss handled"));
+    assert!(
+        handle_event(&mut app, Event::FocusLost, &mut KeyFilter::default())
+            .expect("focus loss handled")
+    );
     let params = wait_for_notification(&events, "session/focus");
     assert_eq!(
         params.get("focused"),
         Some(&serde_json::json!(false)),
         "losing focus must tell the host this terminal is not watching"
     );
-    assert!(handle_event(&mut app, Event::FocusGained).expect("focus gain handled"));
+    assert!(
+        handle_event(&mut app, Event::FocusGained, &mut KeyFilter::default())
+            .expect("focus gain handled")
+    );
     let params = wait_for_notification(&events, "session/focus");
     assert_eq!(
         params.get("focused"),

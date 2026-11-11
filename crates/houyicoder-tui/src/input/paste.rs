@@ -2,7 +2,10 @@
 //! the input box while the full text lives in a side table; on submit the
 //! placeholders are expanded back to the real text. Keeps the input box
 //! readable for a huge paste and avoids pushing megabytes through the layout
-//! wrap math.
+//! wrap math. A console that reports a paste as ordinary key events folds the
+//! run back into one paste in the burst submodule.
+
+pub(crate) mod burst;
 
 use std::time::Instant;
 

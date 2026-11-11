@@ -415,6 +415,11 @@ impl PtySession {
     }
 
     /// Poll until marker appears in the ANSI-stripped output stream.
+    ///
+    /// These waiters read the byte stream only. The reconstructed screen keeps
+    /// its content after clear_output, so falling back to it would let an old
+    /// screen satisfy a wait for something the current render never produced.
+    /// A case that means to read the live screen waits with wait_for_screen.
     pub fn wait_for_plain(&mut self, marker: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -434,9 +439,9 @@ impl PtySession {
             .collect()
     }
 
-    /// Poll until the compact (whitespace-stripped) output contains marker,
-    /// or timeout elapses. The marker itself must be whitespace-free so it
-    /// matches the compacted form (e.g. "ctrl+otoexpand").
+    /// Poll until the compact (whitespace-stripped) output stream contains the
+    /// marker, or timeout elapses. The marker itself must be whitespace-free so
+    /// it matches the compacted form (e.g. "ctrl+otoexpand").
     pub fn wait_for_compact(&mut self, marker: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -448,6 +453,25 @@ impl PtySession {
         self.output_compact().contains(marker)
     }
 
+    /// Poll until the live screen, with whitespace removed, contains the
+    /// marker. The screen form of wait_for_compact, for a row the frame diff
+    /// leaves out of the byte stream because its cells did not change.
+    pub fn wait_for_screen_compact(&mut self, marker: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let compact = |text: &str| {
+            text.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        };
+        while Instant::now() < deadline {
+            if compact(&self.screen().contents()).contains(marker) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        compact(&self.screen().contents()).contains(marker)
+    }
+
     /// Clear accumulated bytes before an assertion about the current render.
     #[allow(dead_code)]
     pub fn clear_output(&mut self) {
@@ -456,9 +480,10 @@ impl PtySession {
         }
     }
 
-    /// Poll until marker appears in the output, or timeout elapses.
-    /// Returns true on hit. Replaces sleeps — deterministic on the render
-    /// arriving, not on a fixed delay.
+    /// Poll until marker appears in the raw output stream, or timeout elapses.
+    /// Returns true on hit. Replaces sleeps — deterministic on the bytes
+    /// arriving, not on a fixed delay. A case that means to read the live
+    /// screen waits with wait_for_screen.
     pub fn wait_for(&mut self, marker: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {

@@ -5,7 +5,7 @@
 
 #![cfg(test)]
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 use crate::composition;
 use crate::keys::handle_working;

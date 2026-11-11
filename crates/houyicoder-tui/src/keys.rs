@@ -1,6 +1,7 @@
 //! Key routing for screens, overlays, panes, and text input.
 //! Higher-priority surfaces consume a key before the working input handler.
 
+pub(crate) mod filter;
 mod fleet;
 mod login;
 mod skill_picker;
@@ -14,7 +15,7 @@ use crate::state::Stage;
 use crate::state::{App, Pane, TrustChoice, ViewportMode};
 
 mod input;
-mod pane_predicates;
+pub(crate) mod pane_predicates;
 pub(crate) use pane_predicates::pane_replaces_input;
 use pane_predicates::{
     pane_approvable, pane_navigable, pane_owns_esc, pane_rejectable, pane_reworkable,
@@ -44,7 +45,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     if handle_permission_key(app, k) {
         return;
     }
-    if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('o') {
+    if fold_chord(app, k) {
         handle_ctrl_o(app);
         return;
     }
@@ -178,6 +179,16 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
         }
     }
     input::handle_input(app, k);
+}
+
+/// The fold chord: expand or collapse the row under the cursor. The row is
+/// acted on wherever it is shown, the scroll and search views included, so
+/// opening a folded block never costs the reader their place. The search box
+/// is the exception: while it owns the keyboard the chord is text for the box.
+fn fold_chord(app: &App, k: KeyEvent) -> bool {
+    k.modifiers.contains(KeyModifiers::CONTROL)
+        && k.code == KeyCode::Char('o')
+        && !app.ui.transcript_view.search_input_mode()
 }
 
 /// Keys for the startup workspace-trust card. Enter or y trusts the project
