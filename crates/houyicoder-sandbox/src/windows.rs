@@ -57,14 +57,16 @@ use tokio::time::timeout;
 use windows::Win32::Foundation::HANDLE;
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 use windows::Win32::System::JobObjects::{
-    JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
 };
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 use windows::Win32::System::Threading::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
 /// A Windows sandbox session. The workspace is the user's project dir (Guarded
+/// The creation flag that suppresses the console window a tool command would
+/// otherwise allocate, avoiding the conhost flash on every spawn.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
 /// Under windows plus the enforce feature, construction creates a Job Object
 /// and applies the resource fence; otherwise the session is a no-op fence.
@@ -221,23 +223,13 @@ fn apply_fence() -> (Option<usize>, FenceStatus) {
 
     let result = (|| {
         let job = ffi::create_job_object().map_err(|e| format!("create job object: {e}"))?;
-        let cfg = ExecConfig::default();
-        // Per-process user-time cap in 100-nanosecond units. A CPU-second is
-        // 10_000_000 such units. Reaching the cap terminates the process
-        // outright; there is no soft signal phase. The caps are fixed here at
-        // session construction, so a per-call ExecConfig override of cpu_secs
-        // or as_bytes does not retune the job — only the wall timeout is
-        // per-call on this backend.
-        let cpu_100ns = (cfg.cpu_secs as i64).saturating_mul(10_000_000);
-        let mem = cfg.as_bytes as usize;
+        // A single limit: the job dies with its last handle, so a tree a
+        // command started cannot outlive the session. The CPU and memory caps
+        // the previous default carried killed compile and test runs that
+        // legitimately need more than thirty seconds or two gigabytes, so they
+        // are removed rather than raised; the wall timeout stays per-call.
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = Default::default();
-        info.BasicLimitInformation.PerProcessUserTimeLimit = cpu_100ns;
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            | JOB_OBJECT_LIMIT_PROCESS_TIME
-            | JOB_OBJECT_LIMIT_PROCESS_MEMORY
-            | JOB_OBJECT_LIMIT_JOB_MEMORY;
-        info.ProcessMemoryLimit = mem;
-        info.JobMemoryLimit = mem;
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         ffi::set_extended_limits(job, &info).map_err(|e| format!("set job limits: {e}"))?;
         // Carry the handle as the raw pointer value so the session stays
         // Send + Sync without an unsafe impl. Reconstructing the wrapper at
@@ -425,6 +417,10 @@ impl WindowsJobSession {
         let mut cmd = Command::new(shell.executable());
         cmd.args(shell.arguments(&command))
             .current_dir(&self.workspace);
+        // A tool command never needs a console window of its own; the flag
+        // also avoids the conhost allocation that flashes a black box.
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
         pipe_streams(&mut cmd);
         cmd.kill_on_drop(true);
         let child = cmd

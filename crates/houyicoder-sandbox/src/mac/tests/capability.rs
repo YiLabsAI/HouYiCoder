@@ -1,10 +1,10 @@
 //! What the seatbelt fence declares it enforces, per axis, and the revision
 //! counter a directory install reads before and after.
 
+use super::super::fence::capability_for;
 use super::super::*;
 use houyicoder_api::sandbox::{
-    Containment, Egress, FenceAxis, NetworkPolicy, SandboxSession, is_within_bounds,
-    normalize_tool_path,
+    Containment, FenceAxis, SandboxSession, is_within_bounds, normalize_tool_path,
 };
 use std::env::temp_dir;
 use std::fs::create_dir_all;
@@ -13,29 +13,42 @@ use std::process::id;
 
 /// The filesystem axes are enforced by the profile itself; the network axis
 /// follows the session policy, because a contained policy emits the deny and
-/// an open one leaves every destination reachable.
+/// an open one leaves every destination reachable. Read through the pure
+/// function so the decision is tested without the process-wide no-enforce
+/// hatch the gate runner sets.
 #[test]
 fn test_capability_follows_network() {
-    let contained = MacSeatbeltSession::new()
-        .expect("session")
-        .with_network(NetworkPolicy::contained());
-    let capability = contained.capability();
-    assert!(capability.confines(FenceAxis::Writes));
-    assert!(capability.confines(FenceAxis::Reads));
+    let contained = capability_for(false, false);
+    assert!(contained.confines(FenceAxis::Writes));
+    assert!(contained.confines(FenceAxis::Reads));
     assert!(
-        capability.confines(FenceAxis::Network),
+        contained.confines(FenceAxis::Network),
         "a contained policy makes the kernel decide egress"
     );
 
-    let mut open_policy = NetworkPolicy::contained();
-    open_policy.egress = Egress::Unrestricted;
-    let open = MacSeatbeltSession::new()
-        .expect("session")
-        .with_network(open_policy);
+    let open = capability_for(false, true);
     assert!(
-        !open.capability().confines(FenceAxis::Network),
+        !open.confines(FenceAxis::Network),
         "an open policy contains nothing on the network axis"
     );
+}
+
+/// When the fence is not enforced, no axis is contained, so a shell write is
+/// not downgraded by a claim the kernel is not backing.
+#[test]
+fn test_unfenced_claims_no_axis() {
+    let capability = capability_for(true, false);
+    assert!(!capability.confines(FenceAxis::Writes));
+    assert!(!capability.confines(FenceAxis::Reads));
+    assert!(!capability.confines(FenceAxis::Network));
+}
+
+/// An enforced fence claims the file axes regardless of the network policy.
+#[test]
+fn test_enforced_claims_file_axes() {
+    let capability = capability_for(false, true);
+    assert!(capability.confines(FenceAxis::Writes));
+    assert!(capability.confines(FenceAxis::Reads));
 }
 
 /// A directory grant that changes the fence advances the revision; a repeated

@@ -28,6 +28,24 @@ pub(super) fn fence_status_for(unfenced: bool) -> FenceStatus {
     }
 }
 
+/// The capability for a session given whether the fence is enforced and whether
+/// the network policy allows egress. Separated from the trait method so the
+/// unfenced branch is testable without toggling the process-wide hatch.
+pub(super) fn capability_for(unfenced: bool, network_allows_egress: bool) -> FenceCapability {
+    if unfenced {
+        return FenceCapability {
+            writes: false,
+            reads: false,
+            network: false,
+        };
+    }
+    FenceCapability {
+        writes: true,
+        reads: true,
+        network: !network_allows_egress,
+    }
+}
+
 impl MacSeatbeltSession {
     /// Record that the fence now contains a different set of paths. Only a
     /// grant that actually changed the set advances the counter, so a
@@ -63,12 +81,10 @@ impl Containment for MacSeatbeltSession {
     /// The network axis follows the session policy: a contained policy emits
     /// the deny, so the kernel decides egress; an open policy leaves every
     /// destination reachable and therefore contains nothing on that axis.
+    /// When the fence is not enforced, no axis is contained, so a shell write
+    /// is not downgraded by a claim the kernel is not backing.
     fn capability(&self) -> FenceCapability {
-        FenceCapability {
-            writes: true,
-            reads: true,
-            network: !self.network.allows_egress(),
-        }
+        capability_for(crate::is_unfenced(), self.network.allows_egress())
     }
 
     fn capability_revision(&self) -> u64 {
