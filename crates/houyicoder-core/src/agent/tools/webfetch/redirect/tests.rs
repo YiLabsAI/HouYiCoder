@@ -4,6 +4,11 @@
 //! network: the client maps the public-looking name onto that server, so the
 //! URL keeps the shape the follower screens while the socket stays local.
 
+use std::error::Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -22,6 +27,7 @@ use super::MAX_REDIRECTS;
 use super::Redirect;
 use super::fetch_following;
 use super::is_connection_refused;
+use super::is_local_proxy_refusal;
 use super::next_redirect;
 use super::send_request;
 use crate::agent::tools::webfetch::{ProxyClient, read_body};
@@ -39,6 +45,47 @@ fn test_client(addr: SocketAddr) -> Client {
 
 fn proxy_client(source: ProxySource, client: Client, loopback: bool) -> ProxyClient {
     ProxyClient::new(client, source, loopback)
+}
+
+/// A wrapper whose source is an I/O error, so a test can build the nested
+/// chain a real transport error carries without constructing a reqwest error.
+#[derive(Debug)]
+struct WrappedIo(IoError);
+
+impl Display for WrappedIo {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "wrapped io error")
+    }
+}
+
+impl Error for WrappedIo {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// A loopback system proxy falls back when the connection was refused or when
+/// it timed out on connect, because Windows surfaces a loopback refusal as a
+/// connect timeout rather than a refusal. A TLS handshake failure stays
+/// non-refusal so it never falls back. The wrapped chain proves the kind is
+/// read past the top error.
+#[test]
+fn test_loopback_timeout_is_refusal() {
+    let refused = IoError::from(ErrorKind::ConnectionRefused);
+    assert!(is_local_proxy_refusal(&refused));
+    assert!(is_connection_refused(&refused));
+
+    let timed_out = IoError::from(ErrorKind::TimedOut);
+    assert!(is_local_proxy_refusal(&timed_out));
+    assert!(!is_connection_refused(&timed_out));
+
+    let handshake = IoError::new(ErrorKind::UnexpectedEof, "tls handshake");
+    assert!(!is_local_proxy_refusal(&handshake));
+    assert!(!is_connection_refused(&handshake));
+
+    let wrapped = WrappedIo(IoError::from(ErrorKind::TimedOut));
+    assert!(is_local_proxy_refusal(&wrapped));
+    assert!(!is_connection_refused(&wrapped));
 }
 
 /// A redirect is followed only while the count is under the cap and the target
@@ -378,8 +425,8 @@ fn test_proxy_tls_no_fallback() {
         .await
         {
             Err(FetchError::Transport(error)) => {
-                // The failure is connect-class; only the refusal check keeps
-                // it from falling back.
+                // The failure is connect-class; the local-proxy-refusal
+                // check keeps it from falling back.
                 assert!(
                     error.is_connect(),
                     "the handshake failure must stay connect-class for this test to discriminate"
@@ -393,7 +440,10 @@ fn test_proxy_tls_no_fallback() {
                 panic!("the TLS handshake failure must surface as a transport error: {other:?}")
             }
         }
-        assert!(!fell_back, "only a connection refusal may fall back");
+        assert!(
+            !fell_back,
+            "a connect refusal or loopback timeout may fall back, not a TLS handshake failure"
+        );
         assert!(
             direct
                 .received_requests()

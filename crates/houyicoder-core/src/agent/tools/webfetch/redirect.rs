@@ -128,7 +128,7 @@ async fn send_request(
             Err(error)
                 if proxy_client.may_fall_back()
                     && error.is_connect()
-                    && is_connection_refused(&error) =>
+                    && is_local_proxy_refusal(&error) =>
             {
                 *fell_back = true;
             }
@@ -140,20 +140,37 @@ async fn send_request(
         .map_err(FetchError::Transport)
 }
 
-/// Whether the transport chain reached an actual connection refusal. A proxy
-/// fails closed on every other transport fault, including a timeout and a TLS
-/// handshake failure.
-fn is_connection_refused(error: &reqwest::Error) -> bool {
-    let mut source: Option<&(dyn Error + 'static)> = error.source();
-    while let Some(current) = source {
-        if let Some(io) = current.downcast_ref::<IoError>()
-            && io.kind() == ErrorKind::ConnectionRefused
-        {
-            return true;
+/// The first I/O error kind buried in a transport chain, if the chain carries
+/// one. Walking the sources lets a test classify a synthetic chain without
+/// constructing a reqwest error.
+fn connect_error_kind(error: &(dyn Error + 'static)) -> Option<ErrorKind> {
+    let mut cursor: Option<&(dyn Error + 'static)> = Some(error);
+    while let Some(current) = cursor {
+        if let Some(io) = current.downcast_ref::<IoError>() {
+            return Some(io.kind());
         }
-        source = current.source();
+        cursor = current.source();
     }
-    false
+    None
+}
+
+/// Whether the transport chain reached an actual connection refusal. A remote
+/// proxy fails closed on every other transport fault, including a timeout and
+/// a TLS handshake failure. Kept for tests that discriminate a refusal from a
+/// TLS handshake failure.
+#[cfg(test)]
+fn is_connection_refused(error: &(dyn Error + 'static)) -> bool {
+    connect_error_kind(error).is_some_and(|kind| kind == ErrorKind::ConnectionRefused)
+}
+
+/// Whether a loopback system proxy is absent. A refused connection is one
+/// sign; a connect timeout is the other, because Windows surfaces a loopback
+/// refusal as a connect timeout rather than a refusal. Used only in the
+/// loopback fallback arm, so a remote proxy that merely times out still fails
+/// closed.
+fn is_local_proxy_refusal(error: &(dyn Error + 'static)) -> bool {
+    connect_error_kind(error)
+        .is_some_and(|kind| matches!(kind, ErrorKind::ConnectionRefused | ErrorKind::TimedOut))
 }
 
 /// Send direct, retrying one connect failure once after a short pause.
