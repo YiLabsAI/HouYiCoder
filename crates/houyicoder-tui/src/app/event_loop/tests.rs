@@ -1,7 +1,10 @@
 //! The run loop's wake behavior: one message produces a frame promptly, a
 //! burst of input produces one frame, and an empty canvas produces none.
 
+use std::io::Write;
+use std::mem::take;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,10 +17,12 @@ use houyicoder_protocol::frontend::tasks::{
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui_crossterm::CrosstermBackend;
 
-use super::{FrameWriter, TerminalWriter, run};
+use super::{BracketedWriter, FrameWriter, TerminalWriter, run};
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::app::wake::UiWake;
+use crate::app::{SYNC_BEGIN, SYNC_END};
 use crate::input::terminal_events::EventReader;
 use crate::session::{AgentSender, SessionConnection};
 use crate::state::App;
@@ -294,5 +299,98 @@ fn test_empty_canvas_skips_draw() {
     assert!(
         app.ui.frame.feedback.native_cursor_position.get().is_some(),
         "a drawn frame publishes the composer cursor"
+    );
+}
+
+/// The bracket placement rides the frame stream of the backends the session
+/// drives, which are writers: the begin marker orders ahead of the frame
+/// bytes and the end marker behind them, on the one stream the frame rides.
+/// The run loop writes the markers only for a terminal that accepted
+/// synchronized output; the placement is exercised here directly because
+/// the test environment's terminal reports none.
+#[test]
+fn test_bracket_placement_writes_stream() {
+    let shared = Stream::default();
+    let backend = CrosstermBackend::new(shared.clone());
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut app = working_app();
+    app.ui.input.editor.set("hello".to_string());
+    let mut writer = TerminalWriter::new(&mut terminal);
+    writer
+        .place_ahead(SYNC_BEGIN)
+        .expect("the begin marker rides the stream");
+    writer.write_frame(&mut app).expect("frame");
+    writer
+        .place_behind(SYNC_END)
+        .expect("the end marker rides the stream");
+    terminal.backend_mut().flush().expect("the stream flushes");
+    let bytes = shared.take();
+    assert!(
+        bytes.starts_with(SYNC_BEGIN),
+        "the begin marker orders ahead of the frame bytes: {bytes:?}"
+    );
+    assert!(
+        bytes.ends_with(SYNC_END),
+        "the end marker orders behind the frame bytes: {bytes:?}"
+    );
+    assert!(
+        app.ui.frame.feedback.native_cursor_position.get().is_some(),
+        "a drawn frame publishes the composer cursor"
+    );
+}
+
+/// A byte sink the test shares with the backend, so the stream a frame
+/// writes is the stream the assertion reads.
+#[derive(Default, Clone)]
+struct Stream(Arc<Mutex<Vec<u8>>>);
+
+impl Stream {
+    /// The bytes written so far, taken out.
+    fn take(&self) -> Vec<u8> {
+        take(&mut *self.0.lock().expect("stream"))
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut inner = self.0.lock().expect("stream");
+        inner.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The bracketed writer forwards the frame to the writer it wraps and the
+/// markers to the placement the stream owns: one wrapped frame draws, and
+/// the markers a bracketed frame carries ride the same stream in order.
+#[test]
+fn test_bracketed_writer_forwards() {
+    let shared = Stream::default();
+    let backend = CrosstermBackend::new(shared.clone());
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut app = working_app();
+    app.ui.input.editor.set("hello".to_string());
+    {
+        let mut writer = TerminalWriter::new(&mut terminal);
+        let mut bracketed = BracketedWriter::new(&mut writer);
+        bracketed
+            .write_ahead(SYNC_BEGIN)
+            .expect("the marker forwards");
+        bracketed.write_frame(&mut app).expect("frame forwards");
+        bracketed
+            .write_behind(SYNC_END)
+            .expect("the marker forwards");
+    }
+    assert!(
+        app.ui.frame.feedback.native_cursor_position.get().is_some(),
+        "the wrapped frame draws through the bracketed writer"
+    );
+    let bytes = shared.take();
+    assert!(
+        bytes.starts_with(SYNC_BEGIN) && bytes.ends_with(SYNC_END),
+        "the markers ride the stream in order: {bytes:?}"
     );
 }

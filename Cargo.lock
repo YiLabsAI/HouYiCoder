@@ -1415,6 +1415,8 @@ name = "houyicoder-platform"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "nix 0.31.3",
+ "signal-hook",
  "tracing",
  "windows",
 ]
@@ -1547,6 +1549,7 @@ dependencies = [
  "houyicoder-core",
  "houyicoder-memory",
  "houyicoder-permission",
+ "houyicoder-platform",
  "houyicoder-protocol",
  "houyicoder-provider",
  "houyicoder-service",
@@ -1559,7 +1562,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "signal-hook",
  "similar",
  "syntect",
  "tokio",

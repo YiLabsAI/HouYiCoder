@@ -31,6 +31,10 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use houyicoder_platform::desktop::terminal::ConsoleOwner;
+use houyicoder_platform::desktop::terminal::TerminalCaps;
+use houyicoder_platform::desktop::terminal::console_owner;
+use houyicoder_platform::desktop::terminal::pipe_input;
 
 use crate::terminal_title;
 
@@ -46,7 +50,12 @@ pub(crate) trait TerminalModes {
 }
 
 /// The process terminal, through crossterm.
-pub(crate) struct CrosstermModes;
+#[derive(Default)]
+pub(crate) struct CrosstermModes {
+    /// The console mode ownership, taken on enter and released on leave. A
+    /// platform with no console modes holds None for the whole session.
+    console: Option<ConsoleOwner>,
+}
 
 /// Whether this process currently owns the terminal's modes. Set when the
 /// guard acquires the modes and cleared when it releases them, so a write to
@@ -61,7 +70,17 @@ pub(crate) fn terminal_modes_held() -> bool {
 
 impl TerminalModes for CrosstermModes {
     fn enter(&mut self) -> io::Result<()> {
-        enable_raw_mode()?;
+        // The console mode ownership is taken first so the quick-edit clear
+        // holds before any mode the reader depends on: a click during setup
+        // must not freeze the reader the modes are for. A platform with no
+        // console modes answers None and this step is a no-op.
+        self.console = console_owner();
+        // A terminal that hands the process a pipe answers no console API,
+        // so the raw-mode toggle would error on a handle it cannot read.
+        // Skip it there; the escape sequences still go to the stream.
+        if !pipe_input() {
+            enable_raw_mode()?;
+        }
         enter_sequences(&mut stdout())
     }
 
@@ -71,8 +90,15 @@ impl TerminalModes for CrosstermModes {
         // reporting which step went wrong, so the restore never stops
         // halfway. The first failure is what the caller sees.
         restore_host_chrome();
-        let raw = disable_raw_mode();
+        let raw = if pipe_input() {
+            Ok(())
+        } else {
+            disable_raw_mode()
+        };
         let modes = leave_sequences(&mut stdout());
+        // The console modes go back last: the quick-edit clear the platform
+        // applied is what kept the reader alive through the steps above.
+        self.console = None;
         raw.and(modes)
     }
 }
@@ -143,13 +169,16 @@ const PROGRESS_CLEAR: &[u8] = b"\x1b]9;4;0;0\x1b\\";
 
 /// Publish the progress indicator through OSC 9;4. Gated on the same ownership
 /// as the mouse modes: an indicator published by a caller that never took the
-/// modes would keep spinning in a terminal no session is driving.
+/// modes would keep spinning in a terminal no session is driving. Gated on the
+/// terminal's capabilities too: the indicator is a terminal-chrome feature,
+/// and a terminal that never said it understands the sequence ignores it, so
+/// the bytes only ride the stream of one that does.
 pub(crate) fn set_terminal_progress(busy: bool) -> io::Result<()> {
     write_progress_if_held(&mut stdout(), busy, terminal_modes_held())
 }
 
 fn write_progress_if_held(out: &mut impl Write, busy: bool, held: bool) -> io::Result<()> {
-    if !held {
+    if !held || !TerminalCaps::detect().progress_indicator {
         return Ok(());
     }
     write_progress(out, busy)

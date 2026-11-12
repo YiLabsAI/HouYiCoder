@@ -14,12 +14,22 @@ workspace = true
 dunce = "1"
 tracing = "0.1.44"
 
+# The termination registration and the hangup probe read the terminal's own
+# descriptors and the signals a parent delivers. Both crates are already in
+# the workspace graph through the terminal layer; the poll feature is what
+# nix adds. Safe API only, so the workspace unsafe ban holds.
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+nix = { version = "0.31", features = ["poll"] }
+
 # The Windows proxy reader calls the WinHttp helper that reads the live
 # configuration flags, so a disabled automatic script does not leave a stale
-# address read as enabled. The string-freeing primitive lives in Foundation,
-# so Memory is not needed. Gated so other targets never pull the bindings in.
+# address read as enabled. The console modules add the input and output mode
+# calls and the control event registration. Gated so other targets never
+# pull the bindings in.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Networking_WinHttp",
     "Win32_Foundation",
+    "Win32_System_Console",
 ] }

@@ -2,9 +2,8 @@
 
 use super::*;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_platform::desktop::terminal::terminal_gone;
 use std::io::Error;
-#[cfg(unix)]
-use std::os::fd::AsFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -255,27 +254,8 @@ fn test_drain_reports_hangup() {
 #[test]
 fn test_hangup_probe_answers() {
     assert!(
-        !terminal_hung_up(),
+        !terminal_gone(),
         "a descriptor with no hangup is not reported as one"
-    );
-}
-
-/// A descriptor that is open and quiet is not a hangup.
-///
-/// This drives the probe over a descriptor the test owns, so the answer a
-/// closed terminal gives is decided by the same code the session uses rather
-/// than by the test process's own terminal.
-#[cfg(unix)]
-#[test]
-fn test_probe_reports_live_descriptor() {
-    let quiet = std::fs::File::open("/dev/null").expect("open a quiet descriptor");
-    assert!(
-        !probe(Some(quiet.as_fd())),
-        "a quiet descriptor must not end the session"
-    );
-    assert!(
-        !probe(None),
-        "no descriptor to watch is not a hangup either"
     );
 }
 
@@ -312,4 +292,132 @@ fn test_drain_reports_closed() {
         "events delivered before the close are kept"
     );
     assert!(drained.gone, "the closed reader ends the session");
+}
+
+/// The decoded fold chord maps to the event the run loop routes: the letter
+/// carries the control modifier, so the chord a pipe-mode terminal sends
+/// reaches the same dispatch a console keystroke does.
+#[test]
+fn test_pipe_ctrl_o_maps() {
+    let event = vt_event(VtEvent::Ctrl('o')).expect("a control key maps");
+    assert!(
+        matches!(
+            event,
+            Event::Key(key)
+                if key.code == KeyCode::Char('o')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+        ),
+        "the stream chord maps to the console chord: {event:?}"
+    );
+}
+
+/// The decoded arrow keys keep their direction, and a paste marker carries
+/// no event of its own: the text between is what the collector folds.
+#[test]
+fn test_pipe_arrows_map() {
+    let up = vt_event(VtEvent::Arrow(true)).expect("an arrow maps");
+    assert!(matches!(up, Event::Key(key) if key.code == KeyCode::Up));
+    let down = vt_event(VtEvent::Arrow(false)).expect("an arrow maps");
+    assert!(matches!(down, Event::Key(key) if key.code == KeyCode::Down));
+    assert!(vt_event(VtEvent::PasteMark(true)).is_none());
+}
+
+/// The pipe reader decodes the bytes a pipe-mode terminal delivers into the
+/// events the loop routes. One read returns one batch: the fold chord
+/// arrives as its batch, and a sequence a chunk ends halfway through holds
+/// its bytes for the read that completes it.
+#[test]
+fn test_pipe_read_decodes_events() {
+    let fold = read_pipe_with(scripted(vec![vec![0x0f]])).expect("events from the chord batch");
+    assert!(
+        fold.iter().any(|event| {
+            matches!(
+                event,
+                Event::Key(key)
+                    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL)
+            )
+        }),
+        "the fold chord decodes: {fold:?}"
+    );
+}
+
+/// A sequence split across reads completes on the read that brings its
+/// last bytes: a read ending inside the escape sequence produces no event
+/// and holds its bytes, and the reader continues rather than ending, so
+/// the next read decodes the whole sequence at once.
+#[test]
+fn test_pipe_read_split_sequence() {
+    // One queue shared across the reads the loop makes.
+    let mut queue: Vec<Vec<u8>> = vec![b"A".to_vec(), b"\x1b[".to_vec()];
+    let read = move |buffer: &mut [u8]| -> Result<usize, Error> {
+        match queue.pop() {
+            Some(chunk) => {
+                buffer[..chunk.len()].copy_from_slice(&chunk);
+                Ok(chunk.len())
+            }
+            None => Ok(0),
+        }
+    };
+    let events = read_pipe_with(read).expect("the split sequence completes");
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Key(key) if key.code == KeyCode::Up)),
+        "the arrow the two reads carried together decodes: {events:?}"
+    );
+}
+
+/// The read over a fixed list of chunks, ending after the list does. The
+/// reader is called once per read, so a shared counter walks the list.
+fn scripted(chunks: Vec<Vec<u8>>) -> impl FnMut(&mut [u8]) -> Result<usize, Error> {
+    let mut queue = chunks;
+    move |buffer: &mut [u8]| {
+        if queue.is_empty() {
+            return Ok(0);
+        }
+        let chunk = queue.remove(0);
+        buffer[..chunk.len()].copy_from_slice(&chunk);
+        Ok(chunk.len())
+    }
+}
+
+/// A read that fails ends the reader: a pipe that errors is a source the
+/// session can no longer be typed into, and the reader says so rather than
+/// spinning on the error.
+#[test]
+fn test_pipe_read_error_ends() {
+    let read = |_: &mut [u8]| -> Result<usize, Error> { Err(Error::other("pipe broken")) };
+    assert!(
+        read_pipe_with(read).is_none(),
+        "a failed read ends the pipe reader"
+    );
+}
+
+/// Every decoded event maps to the crossterm event the loop routes: the
+/// full key set the decoder can produce, each with the right code.
+#[test]
+fn test_vt_event_maps_keys() {
+    fn is_key(ev: Option<Event>, code: KeyCode) -> bool {
+        matches!(ev, Some(Event::Key(k)) if k.code == code)
+    }
+    for (input, code) in [
+        (VtEvent::Tab, KeyCode::Tab),
+        (VtEvent::Left, KeyCode::Left),
+        (VtEvent::Right, KeyCode::Right),
+        (VtEvent::Home, KeyCode::Home),
+        (VtEvent::End, KeyCode::End),
+        (VtEvent::PageUp, KeyCode::PageUp),
+        (VtEvent::PageDown, KeyCode::PageDown),
+        (VtEvent::Delete, KeyCode::Delete),
+        (VtEvent::BackTab, KeyCode::BackTab),
+    ] {
+        assert!(
+            is_key(vt_event(input.clone()), code),
+            "the key maps: {input:?}"
+        );
+    }
+    assert!(
+        matches!(vt_event(VtEvent::Paste(String::from("x"))), Some(Event::Paste(s)) if s == "x")
+    );
+    assert!(vt_event(VtEvent::PasteMark(true)).is_none());
 }

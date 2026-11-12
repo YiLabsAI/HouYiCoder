@@ -9,11 +9,13 @@
 //! timer blocks without one, and any producer ends that block.
 
 use std::error::Error as StdError;
-use std::io::{self, Error};
+use std::io::{self, Error, Write};
 use std::time::{Duration, Instant};
 
+use houyicoder_platform::desktop::terminal::TerminalCaps;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use ratatui_crossterm::CrosstermBackend;
 
 use super::{apply_selection_overlay, handle_event};
 use crate::app::frame_clock::FrameClock;
@@ -48,6 +50,19 @@ const EDGE_SCROLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) trait FrameWriter {
     /// Draw the current state of the app.
     fn write_frame(&mut self, app: &mut App) -> io::Result<()>;
+
+    /// Write bytes ahead of the frame they belong to, on the frame stream.
+    /// The default is a no-op: a writer whose backend is not a writer cannot
+    /// place the bytes, and its frames draw unbracketed.
+    fn write_ahead(&mut self, _bytes: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Write bytes behind a frame and flush them with it. Same default
+    /// reasoning as write_ahead.
+    fn write_behind(&mut self, _bytes: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// A frame writer that draws to the terminal through a frame-sized buffer.
@@ -64,7 +79,7 @@ impl<'a, B: Backend> TerminalWriter<'a, B> {
 
 /// Every backend error is reported as an io error, so the writer accepts any
 /// ratatui backend instead of only those whose error already converts.
-impl<B: Backend> FrameWriter for TerminalWriter<'_, B>
+impl<'a, B: Backend> FrameWriter for TerminalWriter<'a, B>
 where
     B::Error: StdError + Send + Sync + 'static,
 {
@@ -99,6 +114,65 @@ where
             tracing::warn!(error = %e, "cursor positioning failed");
         }
         Ok(())
+    }
+}
+
+/// The frame writer with the synchronized-output bracket applied. The
+/// backend the session drives is a crossterm backend over a writer, so the
+/// marker bytes ride the frame stream instead of racing a second one; a
+/// test double keeps the plain frame writer.
+pub(crate) struct BracketedWriter<'a, 'b, W: Write> {
+    writer: &'b mut TerminalWriter<'a, CrosstermBackend<W>>,
+}
+
+impl<'a, 'b, W> BracketedWriter<'a, 'b, W>
+where
+    W: Write,
+{
+    /// Wrap the session's writer so the frames it draws are bracketed.
+    pub(crate) fn new(writer: &'b mut TerminalWriter<'a, CrosstermBackend<W>>) -> Self {
+        BracketedWriter { writer }
+    }
+}
+
+impl<W> FrameWriter for BracketedWriter<'_, '_, W>
+where
+    W: Write,
+{
+    fn write_frame(&mut self, app: &mut App) -> io::Result<()> {
+        // The frame itself is the wrapped writer's; this writer adds only
+        // the bracket when the terminal accepts one.
+        self.writer.write_frame(app)
+    }
+
+    fn write_ahead(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.writer.place_ahead(bytes)
+    }
+
+    fn write_behind(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.writer.place_behind(bytes)
+    }
+}
+
+/// The marker placement for the backend the session actually drives, which
+/// is a crossterm backend over a writer: the marker bytes ride the frame
+/// stream through the backend's own writer. A generic backend keeps the
+/// trait defaults, which place nothing.
+impl<'a, W> TerminalWriter<'a, CrosstermBackend<W>>
+where
+    W: Write,
+{
+    /// Write bytes ahead of the frame they bracket, on the frame stream.
+    pub(crate) fn place_ahead(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let backend = self.terminal.backend_mut();
+        backend.write_all(bytes)
+    }
+
+    /// Write bytes behind the frame they bracket, and flush with it.
+    pub(crate) fn place_behind(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let backend = self.terminal.backend_mut();
+        backend.write_all(bytes)?;
+        Write::flush(backend)
     }
 }
 
@@ -185,7 +259,20 @@ pub(crate) fn run(
                 wait_out_frame(wake, app, termination, left);
                 continue;
             }
-            writer.write_frame(app)?;
+            // A terminal that accepts synchronized frames gets the frame
+            // bracket: the begin marker orders ahead of the frame bytes and
+            // the end marker behind them, so the terminal presents the whole
+            // frame as one update and a partial frame never shows. A writer
+            // that cannot place the bytes draws unbracketed.
+            let bracket = TerminalCaps::detect().sync_output;
+            if bracket {
+                writer.write_ahead(super::SYNC_BEGIN)?;
+            }
+            let drawn = writer.write_frame(app);
+            if bracket {
+                writer.write_behind(super::SYNC_END)?;
+            }
+            drawn?;
             clock.note_frame(Instant::now());
             dirty = false;
         }

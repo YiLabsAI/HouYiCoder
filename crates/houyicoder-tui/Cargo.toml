@@ -64,6 +64,9 @@ similar = { version = "3", features = ["unicode", "inline"] }
 regex = "1"
 tracing = "0.1.44"
 unicode-linebreak = "0.1.5"
+# The terminal boundary this crate's guard and event reader stand on: the
+# termination registration, the hangup probe, and the output capabilities.
+houyicoder-platform = { path = "../houyicoder-platform" }
 
 [dev-dependencies]
 # Plain-form canonicalization for workspace-walk test assertions.
@@ -91,19 +94,11 @@ criterion = { version = "0.8", default-features = false }
 # the offline advisory gate reports only the pre-existing yanked chacha20 dependency.
 vt100 = "0.16.2"
 
+# The integration harness delivers a real signal to a spawned session, so
+# the teardown a termination signal drives is exercised end to end. Already
+# in the workspace graph through the platform terminal boundary.
 [target.'cfg(unix)'.dev-dependencies]
-
-# A termination signal ends the process without unwinding, so the terminal
-# guard's Drop never runs and the emulator keeps reporting mouse motion. The
-# crate is already in the graph through crossterm, which uses it to read
-# events; registering a flag handler here adds no crate to the build. Safe API
-# only (no signal-handler closures), so the workspace's unsafe ban holds.
-[target.'cfg(unix)'.dependencies]
-signal-hook = "0.3"
-# The terminal's own readiness is read here, so a session whose terminal went
-# away ends instead of spinning. Already in the workspace graph; the poll
-# feature is what this crate adds.
-nix = { version = "0.31", features = ["poll"] }
+nix = { version = "0.31", features = ["signal", "poll"] }
 
 [lints]
 workspace = true

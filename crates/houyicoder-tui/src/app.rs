@@ -7,6 +7,10 @@ mod event_loop;
 pub(crate) mod frame_clock;
 pub(crate) mod wake;
 
+/// The synchronized-frame markers the frame writer brackets a draw with.
+pub(crate) use houyicoder_platform::desktop::terminal::SYNC_BEGIN;
+pub(crate) use houyicoder_platform::desktop::terminal::SYNC_END;
+
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -20,7 +24,7 @@ use std::time::{Duration, Instant};
 use houyicoder_protocol::frontend::SlashCommand;
 
 use crate::agent_message::ClientCommand;
-use crate::app::event_loop::{FRAME_BUFFER_BYTES, TerminalWriter};
+use crate::app::event_loop::{BracketedWriter, FRAME_BUFFER_BYTES, TerminalWriter};
 use crate::app::wake::ui_wake;
 use crate::composition::{FrontendStartup, RunnerBundle, build_app};
 use crate::input::terminal_events::EventReader;
@@ -52,8 +56,11 @@ pub fn run_with_runner(
     // a panic unwinding past this loop restores the console. The watch is
     // installed before the guard so a termination signal between taking the
     // modes and hearing a signal still reaches the loop's teardown path.
-    let termination = watch_termination()?;
-    let mut guard = TerminalGuard::acquire(CrosstermModes)?;
+    let termination = {
+        let wake = ui_wake();
+        watch_termination(move || wake.wake())?
+    };
+    let mut guard = TerminalGuard::acquire(CrosstermModes::default())?;
     // One write per frame: the buffer is flushed by the draw, and the cursor
     // escape that follows it is ordered after the frame bytes.
     let backend = CrosstermBackend::new(BufWriter::with_capacity(FRAME_BUFFER_BYTES, stdout()));
@@ -62,12 +69,13 @@ pub fn run_with_runner(
     app.startup_handshake(Duration::from_secs(2));
     {
         let mut writer = TerminalWriter::new(&mut terminal);
+        let mut bracketed = BracketedWriter::new(&mut writer);
         event_loop::run(
             &mut app,
             EventReader::shared(),
             ui_wake(),
             &termination,
-            &mut writer,
+            &mut bracketed,
             resume_builder.as_deref(),
         )?;
     }
@@ -578,8 +586,9 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     }
     // ctrl+C copies a selection (with a toast); interrupts a running turn or
     // a running direct shell command; otherwise no-op. It never quits -- the
-    // panic key is not an exit.
-    if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
+    // panic key is not an exit. Either case of the letter matches: a layout
+    // can deliver the capitalized form with control held.
+    if k.modifiers.contains(KeyModifiers::CONTROL) && matches!(k.code, KeyCode::Char('c' | 'C')) {
         if !app.copy_active_selection() && (app.agent_busy() || app.shell_run_active()) {
             app.abort_run();
         }
@@ -588,7 +597,7 @@ pub(crate) fn handle_key(app: &mut App, k: KeyEvent) {
     // A second ctrl+D while its short confirmation is visible exits from the
     // base working surface.
     if k.modifiers.contains(KeyModifiers::CONTROL)
-        && k.code == KeyCode::Char('d')
+        && matches!(k.code, KeyCode::Char('d' | 'D'))
         && app.ui.navigation.pane == Pane::Transcript
         && app.ui.navigation.viewport == ViewportMode::Working
     {

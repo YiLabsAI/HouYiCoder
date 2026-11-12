@@ -111,7 +111,7 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
     // ability without putting it under a key people press to go back.
     if app.ui.teammate_view.is_some()
         && k.modifiers.contains(KeyModifiers::CONTROL)
-        && k.code == KeyCode::Char('x')
+        && matches!(k.code, KeyCode::Char('x' | 'X'))
         && !pane_owns_esc(app.ui.navigation.pane)
     {
         app.kill_viewed_child();
@@ -184,10 +184,12 @@ pub fn handle_working(app: &mut App, k: KeyEvent) {
 /// The fold chord: expand or collapse the row under the cursor. The row is
 /// acted on wherever it is shown, the scroll and search views included, so
 /// opening a folded block never costs the reader their place. The search box
-/// is the exception: while it owns the keyboard the chord is text for the box.
+/// is the exception: while it owns the keyboard the chord is text for the
+/// box. The letter matches either case because the console reports the key
+/// through a layout that can deliver the capitalized form with control held.
 fn fold_chord(app: &App, k: KeyEvent) -> bool {
     k.modifiers.contains(KeyModifiers::CONTROL)
-        && k.code == KeyCode::Char('o')
+        && matches!(k.code, KeyCode::Char('o' | 'O'))
         && !app.ui.transcript_view.search_input_mode()
 }
 

@@ -1916,3 +1916,15 @@ fn test_shift_down_enters_strip() {
 }
 
 mod fold_chord;
+
+/// The expand chord answers the capitalized letter the same as the lowercase
+/// one: the console reports a key through a layout that can deliver the
+/// capitalized form with control held, and a layout-follower here would drop
+/// the chord on those keyboards.
+#[test]
+fn test_ctrl_o_uppercase_toggles() {
+    let mut app = approval_app(0);
+    let toggle = KeyEvent::new(KeyCode::Char('O'), KeyModifiers::CONTROL);
+    handle_working(&mut app, toggle);
+    assert!(app.approval().expect("approval").expanded, "ctrl+O expands");
+}
