@@ -30,6 +30,7 @@ workspace = true
 [dependencies]
 houyicoder-context = { path = "../houyicoder-context" }
 houyicoder-api = { path = "../houyicoder-api" }
+houyicoder-platform = { path = "../houyicoder-platform" }
 houyicoder-async = { path = "../houyicoder-async" }
 houyicoder-resilience = { path = "../houyicoder-resilience" }
 dunce = "1"

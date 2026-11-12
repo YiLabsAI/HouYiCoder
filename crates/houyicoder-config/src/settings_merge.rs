@@ -66,7 +66,7 @@ pub fn merge_json(base: Value, override_: Value) -> Value {
 /// provider.base_url is merged and honored with a notice; these are refused.
 /// Putting a refused field next to merged ones invites the next reader to
 /// read it from the merged value, which is exactly the bypass.
-const SECRET_SOURCE_FIELDS: &[&str] = &["apiKeyHelper", "keychain"];
+const SECRET_SOURCE_FIELDS: &[&str] = &["apiKeyHelper", "apiKeyHelperShell", "keychain"];
 
 /// Load the provider settings from merged settings (user < project < local).
 /// When a workspace is given, project-local + local settings layer over the

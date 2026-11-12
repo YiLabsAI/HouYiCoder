@@ -11,6 +11,8 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+dunce = "1"
+tracing = "0.1.44"
 
 # The Windows proxy reader calls the WinHttp helper that reads the live
 # configuration flags, so a disabled automatic script does not leave a stale

@@ -1251,6 +1251,7 @@ dependencies = [
  "dunce",
  "houyicoder-async",
  "houyicoder-context",
+ "houyicoder-platform",
  "houyicoder-protocol",
  "nix 0.31.3",
  "serde_json",
@@ -1308,6 +1309,7 @@ dependencies = [
 name = "houyicoder-config"
 version = "0.1.0"
 dependencies = [
+ "houyicoder-platform",
  "houyicoder-protocol",
  "serde",
  "serde_json",
@@ -1412,6 +1414,8 @@ dependencies = [
 name = "houyicoder-platform"
 version = "0.1.0"
 dependencies = [
+ "dunce",
+ "tracing",
  "windows",
 ]
 
@@ -1459,6 +1463,7 @@ dependencies = [
  "houyicoder-api",
  "houyicoder-async",
  "houyicoder-context",
+ "houyicoder-platform",
  "houyicoder-resilience",
  "landlock",
  "nix 0.31.3",

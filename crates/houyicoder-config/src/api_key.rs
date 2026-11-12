@@ -6,13 +6,20 @@
 //! the chokepoint policy from a layer this leaf cannot reach, so the
 //! composition root resolves it.
 
+use houyicoder_platform::host::shell::HelperShell;
+
 /// A configured source for the api key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiKeySource {
     /// An operating-system keychain item, addressed by service and account.
     Keychain { service: String, account: String },
-    /// A shell command whose stdout is the key.
-    Helper(String),
+    /// A shell command whose stdout is the key, and the interpreter it runs
+    /// through. A None interpreter is the default POSIX shell a helper command
+    /// was written for.
+    Helper {
+        command: String,
+        shell: Option<HelperShell>,
+    },
 }
 
 impl ApiKeySource {
@@ -26,7 +33,7 @@ impl ApiKeySource {
     pub fn display_label(&self) -> String {
         match self {
             Self::Keychain { service, account } => format!("keychain {service}/{account}"),
-            Self::Helper(_) => "helper".to_string(),
+            Self::Helper { .. } => "helper".to_string(),
         }
     }
 }
@@ -59,7 +66,38 @@ pub(crate) fn key_source_from_value(
     if helper.is_empty() {
         return None;
     }
-    Some(ApiKeySource::Helper(helper.to_string()))
+    let shell = match v.get("apiKeyHelperShell").and_then(|s| s.as_str()) {
+        None => None,
+        Some(value) => match parse_helper_shell(value) {
+            Some(shell) => Some(shell),
+            None => {
+                warnings.push(crate::ConfigWarning {
+                    field: "apiKeyHelperShell".into(),
+                    reason: format!(
+                        "the value {value} is not a recognized shell, so the helper \
+                         runs through the default shell"
+                    ),
+                });
+                None
+            }
+        },
+    };
+    Some(ApiKeySource::Helper {
+        command: helper.to_string(),
+        shell,
+    })
+}
+
+/// Parse a helper shell name. The recognized values name the interpreters a
+/// helper command can ask for by name.
+fn parse_helper_shell(value: &str) -> Option<HelperShell> {
+    match value.trim() {
+        "sh" => Some(HelperShell::Sh),
+        "git_bash" => Some(HelperShell::GitBash),
+        "cmd" => Some(HelperShell::Cmd),
+        "powershell" => Some(HelperShell::PowerShell),
+        _ => None,
+    }
 }
 
 /// Build a keychain source from the settings entry, or say what is wrong with

@@ -20,7 +20,10 @@ fn test_helper_command_is_named() {
     let v = serde_json::json!({"apiKeyHelper":"echo test-key-123"});
     assert_eq!(
         source(&v),
-        Some(ApiKeySource::Helper("echo test-key-123".into())),
+        Some(ApiKeySource::Helper {
+            command: "echo test-key-123".into(),
+            shell: None
+        }),
         "the source carries the command, not its output"
     );
 }
@@ -91,7 +94,13 @@ fn test_broken_keychain_keeps_helper() {
         "apiKeyHelper": "echo fallback"
     });
     let (s, warnings) = source_and_warnings(&v);
-    assert_eq!(s, Some(ApiKeySource::Helper("echo fallback".into())));
+    assert_eq!(
+        s,
+        Some(ApiKeySource::Helper {
+            command: "echo fallback".into(),
+            shell: None
+        })
+    );
     assert!(warnings.iter().any(|w| w.field == "keychain"));
 }
 
@@ -119,7 +128,10 @@ fn test_keychain_label_names_item() {
 /// it.
 #[test]
 fn test_helper_label_drops_command() {
-    let source = ApiKeySource::Helper("sk-live-secret-123".into());
+    let source = ApiKeySource::Helper {
+        command: "sk-live-secret-123".into(),
+        shell: None,
+    };
     let label = source.display_label();
     assert_eq!(label, "helper");
     assert!(
@@ -132,7 +144,10 @@ fn test_helper_label_drops_command() {
 /// helper scripts apart is not worth a label that can print a key.
 #[test]
 fn test_helper_label_keeps_path() {
-    let source = ApiKeySource::Helper("/Users/me/.houyicoder/key.sh --tier team".into());
+    let source = ApiKeySource::Helper {
+        command: "/Users/me/.houyicoder/key.sh --tier team".into(),
+        shell: None,
+    };
     assert_eq!(source.display_label(), "helper");
 }
 
@@ -140,5 +155,39 @@ fn test_helper_label_keeps_path() {
 /// helper ever contributes.
 #[test]
 fn test_helper_label_blank_command() {
-    assert_eq!(ApiKeySource::Helper("   ".into()).display_label(), "helper");
+    assert_eq!(
+        ApiKeySource::Helper {
+            command: "   ".into(),
+            shell: None
+        }
+        .display_label(),
+        "helper"
+    );
+}
+
+#[test]
+fn test_helper_shell_parsed() {
+    let v = serde_json::json!({"apiKeyHelper":"echo k","apiKeyHelperShell":"powershell"});
+    let source = source(&v).expect("a helper source");
+    match source {
+        ApiKeySource::Helper {
+            shell: Some(HelperShell::PowerShell),
+            ..
+        } => {}
+        other => panic!("powershell parses: {other:?}"),
+    }
+}
+
+#[test]
+fn test_helper_shell_invalid_warns() {
+    let v = serde_json::json!({"apiKeyHelper":"echo k","apiKeyHelperShell":"fish"});
+    let (source, warnings) = source_and_warnings(&v);
+    match source {
+        Some(ApiKeySource::Helper { shell: None, .. }) => {}
+        other => panic!("an unknown shell falls back to None: {other:?}"),
+    }
+    assert!(
+        warnings.iter().any(|w| w.field == "apiKeyHelperShell"),
+        "an unknown shell warns: {warnings:?}"
+    );
 }

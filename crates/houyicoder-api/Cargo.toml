@@ -11,6 +11,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+houyicoder-platform = { path = "../houyicoder-platform" }
 houyicoder-protocol = { path = "../houyicoder-protocol" }
 houyicoder-context = { path = "../houyicoder-context" }
 houyicoder-async = { path = "../houyicoder-async" }

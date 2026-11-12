@@ -96,10 +96,47 @@ fn test_user_helper_survives() {
     let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
     assert_eq!(
         cfg.key_source,
-        Some(ApiKeySource::Helper("echo user-key-ok".into())),
+        Some(ApiKeySource::Helper {
+            command: "echo user-key-ok".into(),
+            shell: None
+        }),
         "the user's own helper is the key source"
     );
     assert!(warnings.is_empty(), "no project helper present, no warning");
+    drop(remove_dir_all(&dir));
+}
+
+#[test]
+fn test_project_helper_shell_ignored() {
+    // A repository-controlled settings file names the interpreter a helper
+    // runs through. The helper shell is a secret-source field, so a project
+    // value must not reach the key source: changing the interpreter changes
+    // what a command means, and a repo value landing here would run on clone
+    // open. The skip must also warn.
+    let dir = temp_dir().join(format!("houyi-proj-helper-shell-{}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(dir.join(".houyicoder")).unwrap();
+    write(
+        dir.join(".houyicoder").join("settings.json"),
+        r#"{"apiKeyHelperShell":"cmd"}"#,
+    )
+    .unwrap();
+    write(
+        dir.join("user.json"),
+        r#"{"apiKeyHelper":"echo user-key-ok"}"#,
+    )
+    .unwrap();
+    let (cfg, warnings) = load_provider_settings_from(&dir.join("user.json"), Some(&dir));
+    let source = cfg.key_source.as_ref().expect("the user helper survives");
+    assert!(
+        matches!(source, ApiKeySource::Helper { shell: None, .. }),
+        "the project helper shell must not reach the key source: {:?}",
+        cfg.key_source
+    );
+    assert!(
+        warnings.iter().any(|w| w.field == "apiKeyHelperShell"),
+        "the ignored helper shell must warn: {warnings:?}"
+    );
     drop(remove_dir_all(&dir));
 }
 

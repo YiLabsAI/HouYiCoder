@@ -14,6 +14,8 @@ use houyicoder_api::launcher::{
     FenceConfig, ProcessLauncher, SpawnPolicy, SpawnRequest, StdProcessLauncher,
 };
 use houyicoder_config::{ApiKeySource, ConfigWarning};
+use houyicoder_platform::host::helper_program;
+use houyicoder_platform::host::shell::{HelperShell, ShellProgram};
 
 /// How long a key helper may run before it is killed. Wide enough for one that
 /// reaches a password manager over the network, finite because startup blocks
@@ -66,7 +68,9 @@ pub(crate) fn resolve_api_key(
 ) -> ResolvedKey {
     let mut warnings = Vec::new();
     let from_source = source.and_then(|s| match s {
-        ApiKeySource::Helper(command) => run_helper(command, launcher, &mut warnings),
+        ApiKeySource::Helper { command, shell } => {
+            run_helper(command, *shell, launcher, &mut warnings)
+        }
         ApiKeySource::Keychain { service, account } => {
             read_keychain(service, account, launcher, &mut warnings)
         }
@@ -174,6 +178,7 @@ fn read_keychain(
 /// non-zero exit, a timeout kill, and blank output all mean no key.
 fn run_helper(
     command: &str,
+    shell: Option<HelperShell>,
     launcher: Option<&dyn ProcessLauncher>,
     warnings: &mut Vec<ConfigWarning>,
 ) -> Option<String> {
@@ -188,13 +193,20 @@ fn run_helper(
         });
         None
     };
+    // A None shell is the default a helper command was written for: the POSIX
+    // shell. An explicit shell names the interpreter the command asks for, and
+    // one the host cannot run is reported rather than silently replaced.
+    let program = match shell {
+        None => ShellProgram::Posix,
+        Some(helper) => match helper_program(helper) {
+            Some(program) => program,
+            None => return failed(warnings, "the declared shell is not available on this host"),
+        },
+    };
     let default_launcher = StdProcessLauncher::new();
     let launcher: &dyn ProcessLauncher = launcher.unwrap_or(&default_launcher);
-    // A shell, not a split argv: the field exists so a user can write a
-    // pipeline. Running an arbitrary string is acceptable only because the
-    // merge refuses a repository-supplied value.
-    let req = SpawnRequest::new("sh")
-        .with_args(["-c", command])
+    let req = SpawnRequest::new(program.executable().to_string_lossy().into_owned())
+        .with_args(program.arguments(command))
         .piped_output();
     let policy = SpawnPolicy::default().with_fence(FenceConfig {
         wall_timeout_ms: HELPER_TIMEOUT_MS,

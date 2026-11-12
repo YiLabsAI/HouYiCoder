@@ -6,7 +6,10 @@ use houyicoder_api::launcher::{LauncherChild, LauncherExit, SpawnError};
 use std::sync::Mutex;
 
 /// Resolve and keep only the key, for the cases that assert on it alone.
-fn key_of(source: Option<&ApiKeySource>, launcher: Option<&dyn ProcessLauncher>) -> Option<String> {
+fn resolved_key(
+    source: Option<&ApiKeySource>,
+    launcher: Option<&dyn ProcessLauncher>,
+) -> Option<String> {
     resolve_api_key(source, None, launcher).key
 }
 
@@ -60,9 +63,36 @@ impl ProcessLauncher for RecordingLauncher {
 #[test]
 fn test_stdout_is_key() {
     let launcher = RecordingLauncher::ok_stdout("secret-from-helper\n");
-    let source = ApiKeySource::Helper("print-my-key".into());
-    let key = key_of(Some(&source), Some(&launcher));
+    let source = ApiKeySource::Helper {
+        command: "print-my-key".into(),
+        shell: None,
+    };
+    let key = resolved_key(Some(&source), Some(&launcher));
     assert_eq!(key.as_deref(), Some("secret-from-helper"));
+}
+
+/// A helper that names a shell the host cannot run is reported and falls back
+/// to the environment, with no spawn attempted.
+#[cfg(unix)]
+#[test]
+fn test_unavailable_helper_shell() {
+    let launcher = RecordingLauncher::ok_stdout("k");
+    let source = ApiKeySource::Helper {
+        command: "echo k".into(),
+        shell: Some(HelperShell::Cmd),
+    };
+    let resolved = resolve_api_key(Some(&source), None, Some(&launcher));
+    assert!(resolved.key.is_none(), "an unavailable shell yields no key");
+    assert_eq!(
+        launcher.spawn_count(),
+        0,
+        "no spawn when the shell cannot resolve"
+    );
+    assert!(
+        resolved.warnings.iter().any(|w| w.field == "apiKeyHelper"),
+        "the unavailable shell is reported: {:?}",
+        resolved.warnings
+    );
 }
 
 /// One shell argument, not a split argv: splitting would break every helper
@@ -70,8 +100,26 @@ fn test_stdout_is_key() {
 #[test]
 fn test_runs_under_shell() {
     let launcher = RecordingLauncher::ok_stdout("k\n");
-    let source = ApiKeySource::Helper("cat /tmp/key | tr -d x".into());
-    drop(key_of(Some(&source), Some(&launcher)));
+    let source = ApiKeySource::Helper {
+        command: "cat /tmp/key | tr -d x".into(),
+        shell: None,
+    };
+    drop(resolved_key(Some(&source), Some(&launcher)));
+    let (req, _policy) = launcher.last();
+    assert_eq!(req.program, "sh");
+    assert_eq!(req.args, vec!["-c", "cat /tmp/key | tr -d x"]);
+}
+
+/// An explicit sh shell resolves to the POSIX shell and runs the command
+/// through it, the same as the default.
+#[test]
+fn test_explicit_sh_shell_runs() {
+    let launcher = RecordingLauncher::ok_stdout("k\n");
+    let source = ApiKeySource::Helper {
+        command: "cat /tmp/key | tr -d x".into(),
+        shell: Some(HelperShell::Sh),
+    };
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (req, _policy) = launcher.last();
     assert_eq!(req.program, "sh");
     assert_eq!(req.args, vec!["-c", "cat /tmp/key | tr -d x"]);
@@ -82,8 +130,11 @@ fn test_runs_under_shell() {
 #[test]
 fn test_spawn_time_bounded() {
     let launcher = RecordingLauncher::ok_stdout("k\n");
-    let source = ApiKeySource::Helper("sleep-forever".into());
-    drop(key_of(Some(&source), Some(&launcher)));
+    let source = ApiKeySource::Helper {
+        command: "sleep-forever".into(),
+        shell: None,
+    };
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (_req, policy) = launcher.last();
     let fence = policy.fence.expect("a fence carries the wall timeout");
     assert_eq!(fence.wall_timeout_ms, HELPER_TIMEOUT_MS);
@@ -98,8 +149,11 @@ fn test_spawn_time_bounded() {
 #[test]
 fn test_spawn_skips_audit() {
     let launcher = RecordingLauncher::ok_stdout("k\n");
-    let source = ApiKeySource::Helper("echo sk-inline-secret".into());
-    drop(key_of(Some(&source), Some(&launcher)));
+    let source = ApiKeySource::Helper {
+        command: "echo sk-inline-secret".into(),
+        shell: None,
+    };
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (_req, policy) = launcher.last();
     assert!(
         !policy.audit,
@@ -115,8 +169,11 @@ fn test_failed_helper_no_key() {
         stdout: Some("usage: vault read ...\n".into()),
         stderr: None,
     }));
-    let source = ApiKeySource::Helper("vault read".into());
-    assert_eq!(key_of(Some(&source), Some(&launcher)), None);
+    let source = ApiKeySource::Helper {
+        command: "vault read".into(),
+        shell: None,
+    };
+    assert_eq!(resolved_key(Some(&source), Some(&launcher)), None);
 }
 
 /// A timeout surfaces as a wait error, which must yield None.
@@ -124,23 +181,29 @@ fn test_failed_helper_no_key() {
 fn test_timeout_no_key() {
     let launcher =
         RecordingLauncher::with_exit(Err(SpawnError::Io("wall timeout exceeded".into())));
-    let source = ApiKeySource::Helper("sleep 600".into());
-    assert_eq!(key_of(Some(&source), Some(&launcher)), None);
+    let source = ApiKeySource::Helper {
+        command: "sleep 600".into(),
+        shell: None,
+    };
+    assert_eq!(resolved_key(Some(&source), Some(&launcher)), None);
 }
 
 /// Blank output yields no key; an empty string would fail at the provider.
 #[test]
 fn test_blank_output_no_key() {
     let launcher = RecordingLauncher::ok_stdout("   \n");
-    let source = ApiKeySource::Helper("true".into());
-    assert_eq!(key_of(Some(&source), Some(&launcher)), None);
+    let source = ApiKeySource::Helper {
+        command: "true".into(),
+        shell: None,
+    };
+    assert_eq!(resolved_key(Some(&source), Some(&launcher)), None);
 }
 
 /// With no source there is no command, so the env fallback costs no process.
 #[test]
 fn test_no_source_no_spawn() {
     let launcher = RecordingLauncher::ok_stdout("should-not-run\n");
-    drop(key_of(None, Some(&launcher)));
+    drop(resolved_key(None, Some(&launcher)));
     assert_eq!(
         launcher.spawn_count(),
         0,
@@ -152,8 +215,11 @@ fn test_no_source_no_spawn() {
 #[test]
 fn test_one_spawn_per_resolve() {
     let launcher = RecordingLauncher::ok_stdout("k\n");
-    let source = ApiKeySource::Helper("print-my-key".into());
-    drop(key_of(Some(&source), Some(&launcher)));
+    let source = ApiKeySource::Helper {
+        command: "print-my-key".into(),
+        shell: None,
+    };
+    drop(resolved_key(Some(&source), Some(&launcher)));
     assert_eq!(launcher.spawn_count(), 1);
 }
 
@@ -167,7 +233,7 @@ fn test_keychain_tool_absolute() {
         service: "houyicoder".into(),
         account: "dashscope".into(),
     };
-    drop(key_of(Some(&source), Some(&launcher)));
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (req, _policy) = launcher.last();
     assert_eq!(req.program, "/usr/bin/security");
 }
@@ -183,7 +249,7 @@ fn test_keychain_argv_names_item() {
         service: "houyicoder".into(),
         account: "dashscope".into(),
     };
-    drop(key_of(Some(&source), Some(&launcher)));
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (req, _policy) = launcher.last();
     assert_eq!(
         req.args,
@@ -208,7 +274,7 @@ fn test_keychain_password_is_key() {
         account: "a".into(),
     };
     assert_eq!(
-        key_of(Some(&source), Some(&launcher)).as_deref(),
+        resolved_key(Some(&source), Some(&launcher)).as_deref(),
         Some("kc-secret")
     );
 }
@@ -224,7 +290,7 @@ fn test_keychain_spawn_is_audited() {
         service: "s".into(),
         account: "a".into(),
     };
-    drop(key_of(Some(&source), Some(&launcher)));
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (req, policy) = launcher.last();
     assert!(
         policy.audit,
@@ -246,7 +312,7 @@ fn test_keychain_spawn_time_bounded() {
         service: "s".into(),
         account: "a".into(),
     };
-    drop(key_of(Some(&source), Some(&launcher)));
+    drop(resolved_key(Some(&source), Some(&launcher)));
     let (_req, policy) = launcher.last();
     let fence = policy.fence.expect("a fence carries the wall timeout");
     assert_eq!(fence.wall_timeout_ms, KEYCHAIN_TIMEOUT_MS);
@@ -405,7 +471,10 @@ fn test_failed_source_no_origin() {
         stdout: Some(String::new()),
         stderr: Some("could not be found".into()),
     }));
-    let source = ApiKeySource::Helper("missing-key-helper".into());
+    let source = ApiKeySource::Helper {
+        command: "missing-key-helper".into(),
+        shell: None,
+    };
     let resolved = resolve_api_key(Some(&source), None, Some(&launcher));
     assert_eq!(resolved.key, None, "the helper yielded nothing");
     assert_eq!(

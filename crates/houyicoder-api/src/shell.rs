@@ -12,22 +12,12 @@
 pub mod heredoc;
 pub mod interpreter;
 
-/// The shell a sandbox backend starts for one command.
-///
-/// The value is a property of the backend, not of the caller: a backend
-/// reports the shell it will actually start, and the command translation reads
-/// that answer. A caller cannot ask for a shell the host does not run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Shell {
-    /// A POSIX shell (bash or sh), on every unix host.
-    Posix,
-    /// The bash that ships with Git for Windows: a POSIX shell, so its null
-    /// device is the POSIX one rather than the interpreter's device name.
-    GitBash,
-    /// The Windows command interpreter, whose redirect targets are Windows
-    /// paths and device names.
-    Cmd,
-}
+// The shell dialect, program, and helper-shell enum live in the platform crate,
+// the single source for cross-platform value types. Re-exported here so callers
+// that read them through the api keep compiling.
+pub use houyicoder_platform::host::shell::{
+    HelperShell, PwshEdition, Shell, ShellPreference, ShellProgram,
+};
 
 /// A command in the spelling the caller wrote and in the spelling the host
 /// will run.
@@ -49,7 +39,7 @@ impl ShellCommand {
     pub fn for_shell(command: &str, shell: Shell) -> Self {
         let actual = match shell {
             Shell::GitBash => rewrite_null_redirects(command).unwrap_or_else(|| command.to_owned()),
-            Shell::Posix | Shell::Cmd => command.to_owned(),
+            Shell::Posix | Shell::Cmd | Shell::PowerShell(_) => command.to_owned(),
         };
         Self {
             original: command.to_owned(),
