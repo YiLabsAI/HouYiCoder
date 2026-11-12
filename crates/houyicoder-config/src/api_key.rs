@@ -15,11 +15,17 @@ pub enum ApiKeySource {
     Keychain { service: String, account: String },
     /// A shell command whose stdout is the key, and the interpreter it runs
     /// through. A None interpreter is the default POSIX shell a helper command
-    /// was written for.
+    /// was written for. An unknown name in settings yields no source at all,
+    /// so the command is never handed to a different interpreter.
     Helper {
         command: String,
         shell: Option<HelperShell>,
     },
+    /// A helper whose interpreter name was not recognized. Carries the text of
+    /// the failed match so the warning can name it, and never runs: the command
+    /// was written for one interpreter, and running it through another could
+    /// turn a benign line into something else entirely.
+    UnknownHelperShell { command: String, named: String },
 }
 
 impl ApiKeySource {
@@ -33,7 +39,7 @@ impl ApiKeySource {
     pub fn display_label(&self) -> String {
         match self {
             Self::Keychain { service, account } => format!("keychain {service}/{account}"),
-            Self::Helper { .. } => "helper".to_string(),
+            Self::Helper { .. } | Self::UnknownHelperShell { .. } => "helper".to_string(),
         }
     }
 }
@@ -48,7 +54,10 @@ impl ApiKeySource {
 ///
 /// A field present but unusable warns rather than reading as absent -- a
 /// keychain entry missing its account is a mistake to report, not a
-/// preference to honor.
+/// preference to honor. An unrecognized shell name is the same class of
+/// mistake, but it also refuses the source: a command written for one
+/// interpreter must not run through another, so the environment becomes the
+/// fallback and the warning names the refusal.
 pub(crate) fn key_source_from_value(
     v: &serde_json::Value,
     warnings: &mut Vec<crate::ConfigWarning>,
@@ -66,26 +75,31 @@ pub(crate) fn key_source_from_value(
     if helper.is_empty() {
         return None;
     }
-    let shell = match v.get("apiKeyHelperShell").and_then(|s| s.as_str()) {
-        None => None,
+    match v.get("apiKeyHelperShell").and_then(|s| s.as_str()) {
+        None => Some(ApiKeySource::Helper {
+            command: helper.to_string(),
+            shell: None,
+        }),
         Some(value) => match parse_helper_shell(value) {
-            Some(shell) => Some(shell),
+            Some(shell) => Some(ApiKeySource::Helper {
+                command: helper.to_string(),
+                shell: Some(shell),
+            }),
             None => {
                 warnings.push(crate::ConfigWarning {
                     field: "apiKeyHelperShell".into(),
                     reason: format!(
-                        "the value {value} is not a recognized shell, so the helper \
-                         runs through the default shell"
+                        "the value {value} is not a recognized shell, so the configured \
+                         helper is not run; the environment key is used instead"
                     ),
                 });
-                None
+                Some(ApiKeySource::UnknownHelperShell {
+                    command: helper.to_string(),
+                    named: value.to_string(),
+                })
             }
         },
-    };
-    Some(ApiKeySource::Helper {
-        command: helper.to_string(),
-        shell,
-    })
+    }
 }
 
 /// Parse a helper shell name. The recognized values name the interpreters a

@@ -95,6 +95,34 @@ fn test_unavailable_helper_shell() {
     );
 }
 
+/// A helper whose named shell was not recognized is refused before any spawn,
+/// and the environment answers instead. The command text never reaches another
+/// interpreter.
+#[test]
+fn test_unknown_shell_refuses_spawn() {
+    let launcher = RecordingLauncher::ok_stdout("k");
+    let source = ApiKeySource::UnknownHelperShell {
+        command: "Get-Secret".into(),
+        named: "pwsh7".into(),
+    };
+    let resolved = resolve_api_key(
+        Some(&source),
+        Some(("DASHSCOPE_API_KEY", "env-key".into())),
+        Some(&launcher),
+    );
+    assert_eq!(launcher.spawn_count(), 0, "an unknown shell never runs");
+    assert_eq!(resolved.key.as_deref(), Some("env-key"));
+    assert_eq!(resolved.origin.as_deref(), Some("env DASHSCOPE_API_KEY"));
+    assert!(
+        resolved
+            .warnings
+            .iter()
+            .any(|w| w.field == "apiKeyHelperShell"),
+        "the refusal is reported: {:?}",
+        resolved.warnings
+    );
+}
+
 /// One shell argument, not a split argv: splitting would break every helper
 /// that uses a pipe or a redirect.
 #[test]

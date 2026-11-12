@@ -178,13 +178,16 @@ fn test_helper_shell_parsed() {
     }
 }
 
+/// An unknown shell name refuses the helper rather than swapping in another
+/// interpreter: the command text was written for one shell, and the settings
+/// failed to name it, so the source is reported unusable.
 #[test]
 fn test_helper_shell_invalid_warns() {
     let v = serde_json::json!({"apiKeyHelper":"echo k","apiKeyHelperShell":"fish"});
     let (source, warnings) = source_and_warnings(&v);
     match source {
-        Some(ApiKeySource::Helper { shell: None, .. }) => {}
-        other => panic!("an unknown shell falls back to None: {other:?}"),
+        Some(ApiKeySource::UnknownHelperShell { .. }) => {}
+        other => panic!("an unknown shell refuses the helper: {other:?}"),
     }
     assert!(
         warnings.iter().any(|w| w.field == "apiKeyHelperShell"),

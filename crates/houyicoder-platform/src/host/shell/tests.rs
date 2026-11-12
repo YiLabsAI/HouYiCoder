@@ -202,3 +202,86 @@ fn test_unavailable_helper_shells_none() {
     assert!(helper_program(HelperShell::PowerShell).is_none());
     assert!(helper_program(HelperShell::GitBash).is_none());
 }
+
+/// A variable naming a bash directly is kept as it stands, so a relocated
+/// install is found through one setting.
+#[test]
+fn test_locations_env_direct_kept() {
+    let out = locations_from_env(Some(Path::new("D:\\tools\\git\\bin\\bash.exe")), None);
+    assert_eq!(out, vec![PathBuf::from("D:\\tools\\git\\bin\\bash.exe")]);
+}
+
+/// A variable naming an install root contributes both layouts an install
+/// uses, bin first and then the deeper usr bin. The tails are compared after
+/// folding the separator because joining appends the host one.
+#[test]
+fn test_locations_env_root_layouts() {
+    let fold = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let out = locations_from_env(None, Some(Path::new("E:\\Git")));
+    assert_eq!(out.len(), 2);
+    assert!(
+        fold(&out[0]).ends_with("bin/bash.exe"),
+        "bin layout: {out:?}"
+    );
+    assert!(
+        fold(&out[1]).ends_with("usr/bin/bash.exe"),
+        "usr bin: {out:?}"
+    );
+}
+
+/// Both variables together keep their order: the direct path outranks the
+/// root layouts because a user who names the executable meant exactly it.
+#[test]
+fn test_locations_env_order() {
+    let out = locations_from_env(
+        Some(Path::new("D:\\a\\bash.exe")),
+        Some(Path::new("D:\\Git")),
+    );
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[0], PathBuf::from("D:\\a\\bash.exe"));
+    assert!(out[1].ends_with("bash.exe"));
+}
+
+/// A git program under cmd names an install two levels up: the parents of
+/// the cmd directory hold the install, and the search keeps the bash paths
+/// that exist there. A second disk install with only cmd on PATH is found
+/// this way. The exists closure folds the separator so a host that joins
+/// with the other one still matches.
+#[test]
+fn test_bash_from_git_cmd() {
+    let known = [
+        "D:/Program Files/Git/bin/bash.exe",
+        "D:/Program Files/Git/usr/bin/bash.exe",
+    ];
+    let exists = |path: &Path| {
+        let folded = path.to_string_lossy().replace('\\', "/");
+        known.contains(&folded.as_str())
+    };
+    let out = bash_from_git(Path::new("D:\\Program Files\\Git\\cmd\\git.exe"), exists);
+    assert_eq!(out.len(), 2, "both layouts under the install root: {out:?}");
+}
+
+/// The deeper mingw64 layout names the same install: walking its parents
+/// finds the same root, and one install contributes one bash pair.
+#[test]
+fn test_bash_from_git_mingw() {
+    let known = ["E:/Git/bin/bash.exe", "E:/Git/usr/bin/bash.exe"];
+    let exists = |path: &Path| {
+        let folded = path.to_string_lossy().replace('\\', "/");
+        known.contains(&folded.as_str())
+    };
+    let out = bash_from_git(Path::new("E:\\Git\\mingw64\\bin\\git.exe"), exists);
+    assert_eq!(
+        out.len(),
+        2,
+        "one install contributes one bash pair: {out:?}"
+    );
+}
+
+/// A git path whose parents hold no bash contributes nothing rather than a
+/// guess, so the search falls through to the next candidate.
+#[test]
+fn test_bash_from_git_missing() {
+    let out = bash_from_git(Path::new("C:\\Windows\\System32\\git.exe"), |_| false);
+    assert!(out.is_empty());
+}

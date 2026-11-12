@@ -75,3 +75,16 @@ fn test_coverage_unfenced() {
     session.remove_working_dir(granted_str);
     let _cleanup = remove_dir_all(&granted);
 }
+
+/// A session the no-sandbox flag disables reports not enforced, so the
+/// status a user reads names the run they actually get. The global override
+/// is restored even when an assertion fails, so later tests see the cleared
+/// state.
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+#[test]
+fn test_unfenced_reports_not_enforced() {
+    crate::set_unfenced(true);
+    let session = WindowsJobSession::new().expect("session");
+    assert!(matches!(session.fence_status(), FenceStatus::NotEnforced));
+    crate::set_unfenced(false);
+}

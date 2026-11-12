@@ -259,6 +259,57 @@ pub fn under_any(path: &Path, roots: &[PathBuf]) -> bool {
     })
 }
 
+/// The install locations an installer writes, derived from the environment a
+/// user can set. Each entry of the returned list names a bash the search
+/// should try, in the order the variables outrank the fixed paths.
+///
+/// A variable naming a bash directly is pushed as it stands. A variable naming
+/// an install root contributes the two layouts an install uses, bin and the
+/// deeper usr bin, because either one may hold the only bash a relocated
+/// install left on its disk.
+pub fn locations_from_env(direct: Option<&Path>, roots: Option<&Path>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(path) = direct {
+        out.push(path.to_path_buf());
+    }
+    if let Some(root) = roots {
+        out.push(root.join("bin").join("bash.exe"));
+        out.push(root.join("usr").join("bin").join("bash.exe"));
+    }
+    out
+}
+
+/// The bash paths an install of Git for Windows holds, derived from a path to
+/// its git program. The install root sits two or three levels above the file
+/// that PATH names, so the search walks the parents of the git path and keeps
+/// every candidate that could hold the install's bash.
+///
+/// The separator is folded before the walk, because a path from a Windows
+/// search carries the backslash form and the parents must split on it wherever
+/// this code runs. The git path itself is only a starting point: a path under
+/// cmd or the deeper mingw64 bin names the same install once its parents are
+/// walked.
+pub fn bash_from_git(git: &Path, exists: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let folded = PathBuf::from(git.to_string_lossy().replace('\\', "/"));
+    let mut out = Vec::new();
+    // Walk at most three parents: cmd, mingw64 bin, and usr bin each sit two
+    // or three levels below the install root, and a deeper walk would leave
+    // the install's own directories.
+    let mut parent = folded.parent().map(Path::to_path_buf);
+    for _ in 0..3 {
+        let Some(step) = parent else { break };
+        let root = step;
+        for sub in ["bin", "usr/bin"] {
+            let path = root.join(sub).join("bash.exe");
+            if !out.contains(&path) && exists(&path) {
+                out.push(path);
+            }
+        }
+        parent = root.parent().map(Path::to_path_buf);
+    }
+    out
+}
+
 /// Every candidate in trust order: settings first, then the standard install
 /// locations, then what the system search named.
 fn trust_order(candidates: &Candidates<'_>) -> impl Iterator<Item = PathBuf> {

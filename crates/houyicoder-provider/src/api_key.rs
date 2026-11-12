@@ -71,6 +71,23 @@ pub(crate) fn resolve_api_key(
         ApiKeySource::Helper { command, shell } => {
             run_helper(command, *shell, launcher, &mut warnings)
         }
+        ApiKeySource::UnknownHelperShell { named, .. } => {
+            // The command was written for an interpreter the settings did not
+            // name recognizably, so it never runs: a different interpreter
+            // could give the same text a different meaning. The warning says
+            // the helper was refused, and the environment answers instead.
+            tracing::warn!(
+                "api key helper shell {named} is not recognized; not running the helper"
+            );
+            warnings.push(ConfigWarning {
+                field: "apiKeyHelperShell".into(),
+                reason: format!(
+                    "the named shell {named} is not recognized, so the helper is not run; \
+                     the environment key is used instead"
+                ),
+            });
+            None
+        }
         ApiKeySource::Keychain { service, account } => {
             read_keychain(service, account, launcher, &mut warnings)
         }

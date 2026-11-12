@@ -1,30 +1,9 @@
-//! Windows sandbox session. Two mutually exclusive cfg paths:
-//!
-//! - windows plus the enforce feature: a real Job Object fence — a
-//!   kernel-level process group with enforceable resource limits. Each exec
-//!   assigns the spawned child to the job so the fence covers the whole
-//!   child tree; Drop closes the handle and KILL_ON_JOB_CLOSE reaps
-//!   survivors.
-//! - otherwise (non-Windows, or the enforce feature off): a no-op fence.
-//!   Each operation logs an unfenced audit line via tracing so a log
-//!   scanner can see the gap; the user-visible notice fires once at startup
-//!   via FenceStatus (see composition root).
-//!
-//! Why a Job Object and not a restricted token or AppContainer: a Job Object
-//! gives the three fences this backend needs in one kernel primitive — tree
-//! grouping, CPU/memory caps, and a per-process kill surface. A restricted
-//! token is stronger on the security side but needs unsafe FFI, which the
-//! workspace lint denies; the Job Object path keeps every unsafe call inside
-//! the ffi submodule below so the rest of the module stays safe.
-//!
-//! Resource vocabulary: the macOS backend fences CPU seconds and address
-//! space; this backend does the same. Windows extended limits express CPU as
-//! a per-process user-time limit in 100-nanosecond units, so cpu_secs maps
-//! directly; memory is a process and job commit cap in bytes.
-//!
-//! Graceful degradation: if Job Object creation or limit application fails,
-//! the session stays a no-op fence — exec runs unfenced and the
-//! application-level path resolver remains the only boundary.
+//! Windows sandbox session: one kernel job per command. Each exec creates an
+//! unnamed job, assigns the child to it, and ends the whole tree when the
+//! call finishes, the wall timeout trips, or the capture refuses output — so
+//! a grandchild cannot outlive the command that started it. With the enforce
+//! feature off, or on another platform, the session is a no-op fence whose
+//! methods log the gap.
 
 use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
 use crate::runtime_dirs::RuntimeDirs;
@@ -40,8 +19,6 @@ use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::env::temp_dir;
-#[cfg(all(target_os = "windows", feature = "enforce", debug_assertions))]
-use std::env::var;
 #[cfg(all(target_os = "windows", feature = "enforce"))]
 use std::ffi::c_void;
 use std::fs::{create_dir_all, remove_dir_all};
@@ -63,25 +40,17 @@ use windows::Win32::System::JobObjects::{
 use windows::Win32::System::Threading::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
 /// A Windows sandbox session. The workspace is the user's project dir (Guarded
-/// The creation flag that suppresses the console window a tool command would
-/// otherwise allocate, avoiding the conhost flash on every spawn.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
-/// Under windows plus the enforce feature, construction creates a Job Object
-/// and applies the resource fence; otherwise the session is a no-op fence.
+/// Under windows plus the enforce feature, each exec creates a per-command Job
+/// Object that bounds exactly that command's tree; otherwise the session is a
+/// no-op fence and each command runs with the wall timeout alone.
 pub struct WindowsJobSession {
     workspace: PathBuf,
     owned: bool,
-    /// Kernel job-object handle, carried as the raw pointer value so the
-    /// struct stays Send + Sync without an unsafe impl. The handle is a
-    /// process-wide reference to a kernel object that is safe to share
-    /// across threads. None when construction degraded to a no-op fence.
-    job_handle: Option<usize>,
     fence: FenceStatus,
     /// Runtime directory grants. The job object carries no path primitive,
     /// so these widen the resolver only: the kernel fence stays limited to
-    /// resources and the coverage answer remains honest about that.
+    /// process lifetime and the coverage answer remains honest about that.
     dirs: RuntimeDirs,
     /// The shell every command in this session is passed to. None until the
     /// composition root has chosen one, which reads as the command
@@ -90,21 +59,23 @@ pub struct WindowsJobSession {
     program: Option<ShellProgram>,
 }
 
+/// The creation flag that suppresses the console window a tool command would
+/// otherwise allocate, avoiding the conhost flash on every spawn.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 impl WindowsJobSession {
     /// Create a session rooted at the user's project dir. The dir is
     /// canonicalized through dunce so the UNC prefix std canonicalize yields
     /// on Windows does not break downstream string ops. The user's directory
-    /// is never removed on Drop. Construction creates the Job Object and
-    /// applies the resource fence (real under windows plus enforce, no-op
-    /// otherwise).
+    /// is never removed on Drop. The kernel fence is per command, so
+    /// construction only settles the fence status.
     pub fn new_in_cwd(cwd: &Path) -> Result<Self, SandboxError> {
         let workspace = dunce::canonicalize(cwd)
             .map_err(|e| SandboxError::Io(format!("cwd canonicalize: {e}")))?;
-        let (job_handle, fence) = apply_fence();
+        let fence = apply_fence();
         Ok(Self {
             workspace,
             owned: false,
-            job_handle,
             fence,
             dirs: RuntimeDirs::default(),
             program: None,
@@ -124,19 +95,18 @@ impl WindowsJobSession {
                 .unwrap_or(0)
         ));
         create_dir_all(&workspace)?;
-        let (job_handle, fence) = apply_fence();
+        let fence = apply_fence();
         Ok(Self {
             workspace,
             owned: true,
-            job_handle,
             fence,
             dirs: RuntimeDirs::default(),
             program: None,
         })
     }
 
-    /// No-op: the job applies its own CPU and memory caps in the kernel.
-    /// Present for PlatformSession parity.
+    /// No-op: a per-command job needs no breaker. Present for
+    /// PlatformSession parity.
     #[must_use]
     pub fn with_breaker(self, _breaker: Arc<ResourceBreaker>) -> Self {
         self
@@ -189,12 +159,8 @@ impl Default for WindowsJobSession {
 
 impl Drop for WindowsJobSession {
     fn drop(&mut self) {
-        // Close the kernel job handle first. KILL_ON_JOB_CLOSE trips here if
-        // any child of the job is still alive, reaping the whole tree before
-        // the workspace is touched. Best-effort; never panic in Drop.
-        if let Some(raw) = self.job_handle.take() {
-            close_job_handle(raw);
-        }
+        // Each command owns its job, and the command guard already closed it,
+        // so Drop only removes the workspace this session created.
         if self.owned {
             let _result = remove_dir_all(&self.workspace);
         }
@@ -208,59 +174,22 @@ impl Drop for WindowsJobSession {
 // ----------------------------------------------------------------------------
 
 #[cfg(all(target_os = "windows", feature = "enforce"))]
-fn apply_fence() -> (Option<usize>, FenceStatus) {
-    // Test-suite escape hatch, debug builds only (see the linux backend). The
-    // job caps CPU and memory for assigned children and reaps the tree on handle
-    // close, so a test spawning helpers can be killed by a fence it never asked
-    // for. One env var covers every platform fence.
-    #[cfg(debug_assertions)]
-    if var("HOUYICODER_SANDBOX_NO_ENFORCE").is_ok_and(|v| v == "1") {
-        tracing::warn!(
-            "sandbox audit: job object enforcement skipped via HOUYICODER_SANDBOX_NO_ENFORCE (test builds only); running unfenced"
-        );
-        return (None, FenceStatus::Unavailable);
+fn apply_fence() -> FenceStatus {
+    // The no-sandbox flag and the test hatch both mean the session claims no
+    // kernel fence: no job is created, so the status reports not enforced and
+    // every exec runs with the wall timeout and path resolver alone.
+    if crate::is_unfenced() {
+        tracing::warn!("sandbox audit: job object enforcement skipped; running unfenced");
+        return FenceStatus::NotEnforced;
     }
-
-    let result = (|| {
-        let job = ffi::create_job_object().map_err(|e| format!("create job object: {e}"))?;
-        // A single limit: the job dies with its last handle, so a tree a
-        // command started cannot outlive the session. The CPU and memory caps
-        // the previous default carried killed compile and test runs that
-        // legitimately need more than thirty seconds or two gigabytes, so they
-        // are removed rather than raised; the wall timeout stays per-call.
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = Default::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        ffi::set_extended_limits(job, &info).map_err(|e| format!("set job limits: {e}"))?;
-        // Carry the handle as the raw pointer value so the session stays
-        // Send + Sync without an unsafe impl. Reconstructing the wrapper at
-        // the call site is a safe struct construction (pub field), not a
-        // pointer dereference.
-        Ok::<usize, String>(job.0 as usize)
-    })();
-    match result {
-        Ok(raw) => (Some(raw), FenceStatus::Enforced),
-        Err(e) => {
-            tracing::warn!("sandbox audit: windows job object apply failed: {e}; running unfenced");
-            (None, FenceStatus::Failed(e))
-        }
-    }
+    FenceStatus::Enforced
 }
 
 #[cfg(not(all(target_os = "windows", feature = "enforce")))]
-fn apply_fence() -> (Option<usize>, FenceStatus) {
+fn apply_fence() -> FenceStatus {
     // No-op: the stub session methods emit their own unfenced audit lines.
-    (None, FenceStatus::Unavailable)
+    FenceStatus::Unavailable
 }
-
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-fn close_job_handle(raw: usize) {
-    let handle = HANDLE(raw as *mut c_void);
-    // Best-effort; never propagate a kernel close failure into Drop panic.
-    drop(ffi::close_handle(handle));
-}
-
-#[cfg(not(all(target_os = "windows", feature = "enforce")))]
-fn close_job_handle(_raw: usize) {}
 
 // ----------------------------------------------------------------------------
 // Safe wrappers over the Win32 Job Object FFI. The windows crate exposes
@@ -283,12 +212,12 @@ fn close_job_handle(_raw: usize) {}
 )]
 mod ffi {
     use std::ffi::c_void;
-    use std::mem::{size_of, zeroed};
+    use std::mem::size_of;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOBOBJECTINFOCLASS, JobObjectExtendedLimitInformation, QueryInformationJobObject,
-        SetInformationJobObject,
+        JOBOBJECTINFOCLASS, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        TerminateJobObject,
     };
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_ACCESS_RIGHTS};
     use windows::core::PCWSTR;
@@ -313,6 +242,12 @@ mod ffi {
         unsafe { AssignProcessToJobObject(job, child) }
     }
 
+    /// End every process in the job. The kernel walks the whole tree, so a
+    /// grandchild that outlived its parent is included.
+    pub fn terminate_job(job: HANDLE, exit_code: u32) -> windows::core::Result<()> {
+        unsafe { TerminateJobObject(job, exit_code) }
+    }
+
     pub fn open_process(
         access: PROCESS_ACCESS_RIGHTS,
         inherit: bool,
@@ -324,80 +259,99 @@ mod ffi {
     pub fn close_handle(handle: HANDLE) -> windows::core::Result<()> {
         unsafe { CloseHandle(handle) }
     }
-
-    pub fn query_extended_limits(
-        job: HANDLE,
-    ) -> windows::core::Result<JOBOBJECT_EXTENDED_LIMIT_INFORMATION> {
-        let info_class: JOBOBJECTINFOCLASS = JobObjectExtendedLimitInformation;
-        // zeroed is safe here: the struct is plain old data and the kernel
-        // overwrites every field on a successful query.
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-        let len = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
-        unsafe {
-            QueryInformationJobObject(
-                Some(job),
-                info_class,
-                &mut info as *mut _ as *mut c_void,
-                len,
-                None,
-            )
-        }?;
-        Ok(info)
-    }
-}
-
-/// A snapshot of the limits the kernel reports on the job object. Read back
-/// through QueryInformationJobObject so a test or smoke binary can verify the
-/// fence landed on the kernel object, not just on the in-memory config.
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct JobLimits {
-    /// True when KILL_ON_JOB_CLOSE is set: closing the job handle reaps the
-    /// whole child tree, the orphan-process fix.
-    pub kill_on_close: bool,
-    /// Per-process user-time cap in 100-nanosecond units.
-    pub cpu_100ns: i64,
-    /// Per-process commit cap in bytes.
-    pub process_memory: usize,
-    /// Per-job commit cap in bytes.
-    pub job_memory: usize,
-}
-
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-impl WindowsJobSession {
-    /// Query the limits the kernel currently reports on the job. Returns None
-    /// when construction degraded to a no-op fence (no job handle). Used by
-    /// the smoke binary to assert the fence landed on the kernel object.
-    pub fn job_limits(&self) -> Option<Result<JobLimits, String>> {
-        let raw = self.job_handle?;
-        let job = HANDLE(raw as *mut c_void);
-        Some(
-            ffi::query_extended_limits(job)
-                .map(|info| JobLimits {
-                    kill_on_close: (info.BasicLimitInformation.LimitFlags
-                        & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
-                        == JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                    cpu_100ns: info.BasicLimitInformation.PerProcessUserTimeLimit,
-                    process_memory: info.ProcessMemoryLimit,
-                    job_memory: info.JobMemoryLimit,
-                })
-                .map_err(|e| format!("query job limits: {e}")),
-        )
-    }
 }
 
 // ----------------------------------------------------------------------------
-// SandboxSession impl. One impl for both fence outcomes: the job handle is
-// an Option, so a degraded session runs the same spawn path with an audit
-// line and no assignment, and the resolver and grant behavior are identical
-// whether or not the kernel fence engaged.
+// Per-command job. One command, one kernel job: the wall timeout, a cancel,
+// or the capture refusing output ends the whole tree at once, because
+// TerminateJobObject walks every descendant. The guard closes the handle in
+// Drop, so a tree never outlives the call even when the error path forgets.
 // ----------------------------------------------------------------------------
+
+/// The kernel job bound to exactly one exec call. The handle is carried as
+/// the raw pointer value so the guard moves into async futures without an
+/// unsafe impl. Dropping it ends the job: terminate first, then close, so a
+/// process still running is killed rather than left to the last-handle rule.
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+struct CommandJob {
+    handle: Option<usize>,
+}
+
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+impl CommandJob {
+    /// Create a job that dies with its last handle, and assign the child to
+    /// it. A child that cannot be assigned is killed through its own handle
+    /// and the error names the child, because a command the kernel cannot
+    /// group is a command the fence cannot bound.
+    fn holding(child: &Child) -> Result<Self, String> {
+        let job = ffi::create_job_object().map_err(|e| format!("create job object: {e}"))?;
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = Default::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        ffi::set_extended_limits(job, &info).map_err(|e| format!("set job limits: {e}"))?;
+        let raw = job.0 as usize;
+        let pid = child.id().ok_or_else(|| {
+            drop(ffi::close_handle(job));
+            "the child exited before it could be grouped".to_string()
+        })?;
+        // Set quota is what AssignProcessToJobObject needs, and terminate is
+        // what TerminateJobObject reaches the child through. The child handle
+        // is closed after the assignment; the job holds its own reference.
+        let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
+        let opened = ffi::open_process(access, false, pid)
+            .map_err(|e| format!("open child process {pid}: {e}"))?;
+        let assigned = ffi::assign_process(job, opened);
+        let closed = ffi::close_handle(opened);
+        if let Err(e) = assigned {
+            drop(ffi::terminate_job(job, 1));
+            drop(ffi::close_handle(job));
+            drop(closed);
+            return Err(format!("assign pid {pid} to job: {e}"));
+        }
+        drop(closed);
+        Ok(Self { handle: Some(raw) })
+    }
+
+    /// End the tree now. Used when the wall timeout trips or the capture
+    /// refuses output, so the whole command tree stops instead of only the
+    /// direct child the wall timeout would reach.
+    fn terminate(&mut self) {
+        if let Some(raw) = self.handle.take() {
+            let job = HANDLE(raw as *mut c_void);
+            drop(ffi::terminate_job(job, 1));
+            drop(ffi::close_handle(job));
+        }
+    }
+
+    /// A guard that owns no job, for an exec whose session is not enforced.
+    fn none() -> Self {
+        Self { handle: None }
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "enforce"))]
+impl Drop for CommandJob {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+#[cfg(not(all(target_os = "windows", feature = "enforce")))]
+struct CommandJob;
+
+#[cfg(not(all(target_os = "windows", feature = "enforce")))]
+impl CommandJob {
+    fn none() -> Self {
+        Self
+    }
+
+    fn terminate(&mut self) {}
+}
 
 impl WindowsJobSession {
     /// Run one command, feeding its raw output to a capture when one is
-    /// given. The job object bounds the tree; the drain feeds the receiver as
-    /// bytes arrive, so a capture that refuses a chunk ends the command before
-    /// it runs to its wall budget.
+    /// given. The per-command job bounds the tree; the drain feeds the
+    /// receiver as bytes arrive, so a capture that refuses a chunk ends the
+    /// command before it runs to its wall budget.
     #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
     async fn exec_inner(
         &self,
@@ -407,7 +361,7 @@ impl WindowsJobSession {
     ) -> Result<ExecResult, SandboxError> {
         let wall = Duration::from_millis(config.wall_timeout_ms);
         let _ = (config.cpu_secs, config.as_bytes, config.nproc);
-        if self.job_handle.is_none() {
+        if self.fence.is_unfenced() {
             tracing::warn!(
                 "sandbox audit: windows job object NOT enforced; running unfenced (wall={}s)",
                 config.wall_timeout_ms
@@ -423,19 +377,39 @@ impl WindowsJobSession {
         cmd.creation_flags(CREATE_NO_WINDOW);
         pipe_streams(&mut cmd);
         cmd.kill_on_drop(true);
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-        assign_if_fenced(self.job_handle, &child);
-        // The bytes land in collected as they arrive, so a wall-clock
-        // stop still reports what the command printed before the job
-        // object killed the tree.
+        // The job exists only when the fence is enforced: an unfenced run
+        // holds the wall timeout and kill_on_drop alone, and a session whose
+        // fence failed says so once at startup rather than per command.
+        let mut job = if matches!(self.fence, FenceStatus::Enforced) {
+            CommandJob::holding(&child).map_err(|e| {
+                // A child the kernel cannot group is a command the fence
+                // cannot bound, so it is killed before the error returns and
+                // the caller learns the command never ran fenced.
+                drop(child.start_kill());
+                SandboxError::SandboxUnavailable(format!("job fence: {e}"))
+            })?
+        } else {
+            CommandJob::none()
+        };
+        // The bytes land in collected as they arrive, so a wall-clock stop
+        // still reports what the command printed before the job killed the
+        // tree.
         let collected = CapturedOutput::default();
         let outcome = timeout(
             wall,
             capture(child, None, &collected, DRAIN_GRACE, receiver.as_deref()),
         )
         .await;
+        // The tree ends with the call in every outcome: the timeout kills the
+        // whole job rather than the direct child only, and the guard drops on
+        // the return path even when the capture itself errored.
+        if matches!(outcome, Err(ref _elapsed)) {
+            job.terminate();
+        }
+        drop(job);
         match outcome {
             Ok(Ok(output)) => Ok(ExecResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -522,39 +496,6 @@ impl SandboxSession for WindowsJobSession {
             .map(|path| path.to_string_lossy().into_owned())
             .collect()
     }
-}
-
-/// Hand the spawned child to the job so the kernel fence (CPU/memory caps
-/// plus KILL_ON_JOB_CLOSE tree teardown) covers the child and every
-/// descendant. Best-effort: a failed assignment leaves the child running
-/// under the wall-timeout plus kill_on_drop only, with an audit line so the
-/// gap is visible.
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-fn assign_if_fenced(job_raw: Option<usize>, child: &Child) {
-    let Some(raw) = job_raw else { return };
-    let Some(pid) = child.id() else { return };
-    if let Err(e) = assign_child_to_job(raw, pid) {
-        tracing::warn!("sandbox audit: assign child to job failed: {e}");
-    }
-}
-
-#[cfg(not(all(target_os = "windows", feature = "enforce")))]
-fn assign_if_fenced(_job_raw: Option<usize>, _child: &Child) {}
-
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-fn assign_child_to_job(job_raw: usize, pid: u32) -> Result<(), String> {
-    // Open the child by pid with the access rights AssignProcessToJobObject
-    // needs (PROCESS_SET_QUOTA) plus PROCESS_TERMINATE so a future
-    // TerminateJobObject path can kill the child through the job. The handle
-    // is closed below after the assignment; the job keeps its own reference.
-    let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
-    let child = ffi::open_process(access, false, pid)
-        .map_err(|e| format!("open child process {pid}: {e}"))?;
-    let job = HANDLE(job_raw as *mut c_void);
-    let result =
-        ffi::assign_process(job, child).map_err(|e| format!("assign pid {pid} to job: {e}"));
-    drop(ffi::close_handle(child));
-    result
 }
 
 impl Containment for WindowsJobSession {

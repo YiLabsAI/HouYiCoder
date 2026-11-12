@@ -15,7 +15,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::host::shell::{
     Candidates, HelperShell, PwshEdition, SearchOutcome, ShellPreference, ShellProgram,
-    ShellSelection, select, under_any, untrusted_roots,
+    ShellSelection, bash_from_git, locations_from_env, select, under_any, untrusted_roots,
 };
 
 /// The no-window flag passed to every probe the search starts.
@@ -101,8 +101,17 @@ pub(crate) fn command_interpreter() -> PathBuf {
 
 /// The install locations a Git for Windows installer writes, the environment
 /// variables first so a relocated install is found before the fixed paths.
+///
+/// A user can name the bash directly, name the install root, or install to a
+/// disk the fixed paths never cover with only the cmd directory on PATH. The
+/// variables answer the first two; the fixed paths cover the standard install.
 fn standard_locations() -> Vec<PathBuf> {
     let mut out = Vec::new();
+    let direct = var_os("HOUYICODER_GIT_BASH_PATH")
+        .or_else(|| var_os("CLAUDE_CODE_GIT_BASH_PATH"))
+        .map(PathBuf::from);
+    let roots = var_os("GIT_INSTALL_ROOT").map(PathBuf::from);
+    out.extend(locations_from_env(direct.as_deref(), roots.as_deref()));
     for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
         if let Some(base) = var_os(variable) {
             out.push(PathBuf::from(base).join("Git").join("bin").join("bash.exe"));
@@ -123,18 +132,22 @@ fn standard_locations() -> Vec<PathBuf> {
 }
 
 /// What the system's own search names for bash, and whether the search ran.
+///
+/// The search asks for bash and for the git program: an install on a second
+/// disk often puts only its cmd directory on PATH, so the search for bash
+/// misses it while the search for git names the install, and the parents of
+/// the git path hold the bash the install shipped.
 fn search_path(roots: &[PathBuf]) -> (Vec<PathBuf>, SearchOutcome) {
     let Some(search) = search_tool(roots) else {
         return (Vec::new(), SearchOutcome::Unavailable);
     };
-    let output = match run_bounded(&search, &["bash.exe"]) {
-        Some(output) => output,
-        None => return (Vec::new(), SearchOutcome::Unavailable),
+    let Some(bash) = run_bounded(&search, &["bash.exe"]) else {
+        return (Vec::new(), SearchOutcome::Unavailable);
     };
-    if !matches!(output.status, Some(0) | Some(1)) {
+    if !matches!(bash.status, Some(0) | Some(1)) {
         return (Vec::new(), SearchOutcome::Unavailable);
     }
-    let found = output
+    let mut found: Vec<PathBuf> = bash
         .stdout
         .lines()
         .map(str::trim)
@@ -142,6 +155,28 @@ fn search_path(roots: &[PathBuf]) -> (Vec<PathBuf>, SearchOutcome) {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .collect();
+    // The git program search is best effort: when it cannot run the bash
+    // entries already collected stand, so the outcome stays Ran.
+    if let Some(git) = run_bounded(&search, &["git.exe"]) {
+        if matches!(git.status, Some(0) | Some(1)) {
+            for path in git
+                .stdout
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                let git_path = PathBuf::from(path);
+                if !git_path.is_absolute() {
+                    continue;
+                }
+                for candidate in bash_from_git(&git_path, is_file) {
+                    if !found.contains(&candidate) {
+                        found.push(candidate);
+                    }
+                }
+            }
+        }
+    }
     (found, SearchOutcome::Ran)
 }
 
