@@ -3,7 +3,10 @@
 
 use super::*;
 use reqwest::Url;
+use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::net::IpAddr;
+use std::time::Duration;
 use tokio::time::sleep;
 
 /// Maximum redirect hops followed. Guards against redirect loops. A hop may
@@ -12,24 +15,24 @@ use tokio::time::sleep;
 pub(crate) const MAX_REDIRECTS: usize = 10;
 
 /// What a response means for the redirect chain.
-pub(crate) enum Hop {
+pub(crate) enum Redirect {
     /// The response is the answer.
     Done,
     /// The next target to request.
     Follow(String),
-    /// The payload that refuses the hop.
+    /// The payload that refuses the redirect.
     Refuse(Value),
 }
 
-/// Decide the next hop from a response. The hop count is capped and the target
-/// passes the same URL rule as the first request; its resolved addresses are
-/// screened by the client resolver.
-pub(crate) fn redirect_hop(current: &str, location: Option<&str>, hops: usize) -> Hop {
+/// Decide the next redirect from a response. The redirect count is capped and
+/// the target passes the same URL rule as the first request; its resolved
+/// addresses are screened by the client resolver.
+pub(crate) fn next_redirect(current: &str, location: Option<&str>, redirects: usize) -> Redirect {
     let Some(location) = location else {
-        return Hop::Done;
+        return Redirect::Done;
     };
-    if hops >= MAX_REDIRECTS {
-        return Hop::Refuse(json!({
+    if redirects >= MAX_REDIRECTS {
+        return Redirect::Refuse(json!({
             "error": "webfetch: too many redirects",
             "error_kind": "redirect",
         }));
@@ -37,7 +40,7 @@ pub(crate) fn redirect_hop(current: &str, location: Option<&str>, hops: usize) -
     let base = match Url::parse(current) {
         Ok(base) => base,
         Err(e) => {
-            return Hop::Refuse(json!({
+            return Redirect::Refuse(json!({
                 "error": format!("webfetch: bad redirect base: {e}"),
                 "error_kind": "redirect",
             }));
@@ -46,19 +49,19 @@ pub(crate) fn redirect_hop(current: &str, location: Option<&str>, hops: usize) -
     let next = match base.join(location) {
         Ok(next) => next,
         Err(e) => {
-            return Hop::Refuse(json!({
+            return Redirect::Refuse(json!({
                 "error": format!("webfetch: bad redirect target: {e}"),
                 "error_kind": "redirect",
             }));
         }
     };
     if !validate_url(next.as_str()) {
-        return Hop::Refuse(json!({
+        return Redirect::Refuse(json!({
             "error": format!("webfetch: redirect target rejected: {next}"),
             "error_kind": "redirect",
         }));
     }
-    Hop::Follow(next.to_string())
+    Redirect::Follow(next.to_string())
 }
 
 /// Why a screened request stopped: a refusal the model reads as a payload, or
@@ -69,69 +72,102 @@ pub(crate) enum FetchError {
     Transport(reqwest::Error),
 }
 
-/// Request a target, following redirects by hand so every hop passes the URL
-/// rule and the resolved-address screen before it is sent.
+/// Request a target, following redirects by hand so every request passes the
+/// URL rule and the resolved-address screen before it is sent.
 ///
-/// An explicit environment route (RouteClient::Env) is authoritative and
-/// never falls back to direct. A desktop system route (RouteClient::System)
-/// falls back to the direct client only when the local proxy port fails at
-/// connect time (for example when a desktop proxy client was closed).
+/// An explicit environment proxy is authoritative and never falls back. A
+/// desktop system proxy falls back only when a local proxy refused the
+/// connection itself, and the caller learns that a fallback happened through
+/// fell_back so it can warn and bound the window.
 pub(crate) async fn fetch_following(
     direct: &Client,
-    routed: Option<&RouteClient>,
+    proxy: Option<&ProxyClient>,
     resolver: Option<&PublicResolver>,
     start: &str,
+    fell_back: &mut bool,
 ) -> Result<reqwest::Response, FetchError> {
     let mut target = start.to_string();
-    let mut hops = 0usize;
+    let mut redirects = 0usize;
     loop {
         if let Some(res) = resolver {
             res.screen_target(&target)
                 .await
                 .map_err(FetchError::Refused)?;
         }
-        let response = send_hop(direct, routed, &target)
-            .await
-            .map_err(FetchError::Transport)?;
+        let response = send_request(direct, proxy, &target, fell_back).await?;
         let location = response
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok())
             .filter(|_| response.status().is_redirection());
-        match redirect_hop(&target, location, hops) {
-            Hop::Done => return Ok(response),
-            Hop::Follow(next) => {
+        match next_redirect(&target, location, redirects) {
+            Redirect::Done => return Ok(response),
+            Redirect::Follow(next) => {
                 target = next;
-                hops += 1;
+                redirects += 1;
             }
-            Hop::Refuse(payload) => return Err(FetchError::Refused(payload)),
+            Redirect::Refuse(payload) => return Err(FetchError::Refused(payload)),
         }
     }
 }
 
-/// Send one GET request according to the route policy, with connect-only
-/// fallback for desktop system routes and a single connect retry on direct.
-async fn send_hop(
+/// Send one GET request according to the proxy policy. A proxy client routes
+/// each scheme through its configured endpoint and sends an unconfigured
+/// scheme direct, so a target whose scheme has no endpoint is never refused
+/// here. The direct client is used only when no proxy exists, or after a local
+/// system proxy refused the connection.
+async fn send_request(
     direct: &Client,
-    routed: Option<&RouteClient>,
+    proxy: Option<&ProxyClient>,
+    target: &str,
+    fell_back: &mut bool,
+) -> Result<reqwest::Response, FetchError> {
+    if let Some(proxy_client) = proxy {
+        match send_once(&proxy_client.client, target).await {
+            Ok(response) => return Ok(response),
+            Err(error)
+                if proxy_client.may_fall_back()
+                    && error.is_connect()
+                    && is_connection_refused(&error) =>
+            {
+                *fell_back = true;
+            }
+            Err(error) => return Err(FetchError::Transport(error)),
+        }
+    }
+    direct_with_retry(direct, target)
+        .await
+        .map_err(FetchError::Transport)
+}
+
+/// Whether the transport chain reached an actual connection refusal. A proxy
+/// fails closed on every other transport fault, including a timeout and a TLS
+/// handshake failure.
+fn is_connection_refused(error: &reqwest::Error) -> bool {
+    let mut source: Option<&(dyn Error + 'static)> = error.source();
+    while let Some(current) = source {
+        if let Some(io) = current.downcast_ref::<IoError>()
+            && io.kind() == ErrorKind::ConnectionRefused
+        {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
+
+/// Send direct, retrying one connect failure once after a short pause.
+async fn direct_with_retry(
+    direct: &Client,
     target: &str,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    match routed {
-        Some(RouteClient::Env(client)) => return send_once(client, target).await,
-        Some(RouteClient::System(client)) => match send_once(client, target).await {
-            Ok(resp) => return Ok(resp),
-            Err(err) if !err.is_connect() => return Err(err),
-            Err(_) => {}
-        },
-        None => {}
-    }
     match send_once(direct, target).await {
-        Ok(resp) => Ok(resp),
-        Err(err) if err.is_connect() => {
+        Ok(response) => Ok(response),
+        Err(error) if error.is_connect() => {
             sleep(Duration::from_millis(50)).await;
             send_once(direct, target).await
         }
-        Err(err) => Err(err),
+        Err(error) => Err(error),
     }
 }
 

@@ -142,3 +142,20 @@ pub(super) fn fetch_failure_payload(kind: &'static str, message: &str) -> Value 
         "error_kind": kind,
     })
 }
+
+/// The payload for a proxy configuration that cannot be used. The fetch never
+/// left the process, so the message is the whole result.
+pub(super) fn proxy_config_payload(message: &str) -> Value {
+    json!({
+        "error": format!("webfetch: {message}"),
+        "error_kind": "proxy_config",
+    })
+}
+
+/// Attach a visible warning to whatever payload the fetch produced.
+pub(super) fn with_warning(mut payload: Value, warning: Option<String>) -> Value {
+    if let Some(warning) = warning {
+        payload["warning"] = json!(warning);
+    }
+    payload
+}

@@ -36,15 +36,17 @@ CRATES = ROOT / "crates"
 # api foundation for the lexical shell scans and path names, which make no
 # trust decision on their own.
 WHITELIST: dict[str, set[str]] = {
+    "houyicoder-platform": set(),
     "houyicoder-protocol": set(),
     "houyicoder-async": set(),
     "houyicoder-resilience": set(),
-    "houyicoder-config": {"houyicoder-protocol"},
-    "houyicoder-context": {"houyicoder-async"},
+    "houyicoder-config": {"houyicoder-protocol", "houyicoder-platform"},
+    "houyicoder-context": {"houyicoder-async", "houyicoder-platform"},
     "houyicoder-api": {
         "houyicoder-protocol",
         "houyicoder-context",
         "houyicoder-async",
+        "houyicoder-platform",
     },
     "houyicoder-session": {
         "houyicoder-api",
@@ -68,6 +70,7 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-context",
         "houyicoder-async",
         "houyicoder-resilience",
+        "houyicoder-platform",
     },
     "houyicoder-provider": {
         "houyicoder-api",
@@ -75,6 +78,7 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-config",
         "houyicoder-async",
         "houyicoder-resilience",
+        "houyicoder-platform",
     },
     "houyicoder-core": {
         "houyicoder-api",
@@ -82,6 +86,7 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-context",
         "houyicoder-async",
         "houyicoder-resilience",
+        "houyicoder-platform",
     },
     # service is the composition root: may depend on core + every L1 + L0.
     "houyicoder-service": {
@@ -100,12 +105,14 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-sandbox",
         "houyicoder-provider",
         "houyicoder-skill",
+        "houyicoder-platform",
     },
-    "houyicoder-client": {"houyicoder-protocol", "houyicoder-async"},
+    "houyicoder-client": {"houyicoder-protocol", "houyicoder-async", "houyicoder-platform"},
     "houyicoder-tui": {
         "houyicoder-client",
         "houyicoder-protocol",
         "houyicoder-api",
+        "houyicoder-platform",
     },
     # cli is the binary entry point, above service in the stack. service owns
     # the composition logic (build_runner lives in service::composition); cli
@@ -124,6 +131,7 @@ WHITELIST: dict[str, set[str]] = {
         "houyicoder-permission",
         "houyicoder-core",
         "houyicoder-api",
+        "houyicoder-platform",
     },
     # The loader is a leaf: it only reads the context crate's event types +
     # writes a session dir. No runtime, no TUI, no server -- a standalone

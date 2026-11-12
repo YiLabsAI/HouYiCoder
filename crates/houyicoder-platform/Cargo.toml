@@ -1,0 +1,23 @@
+[package]
+name = "houyicoder-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+# The Windows proxy reader calls the WinHttp helper that reads the live
+# configuration flags, so a disabled automatic script does not leave a stale
+# address read as enabled. The string-freeing primitive lives in Foundation,
+# so Memory is not needed. Gated so other targets never pull the bindings in.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Networking_WinHttp",
+    "Win32_Foundation",
+] }

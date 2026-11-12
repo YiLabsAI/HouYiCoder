@@ -18,15 +18,16 @@
 //! attempt.
 
 use houyicoder_async::PFut;
+use houyicoder_platform::host::net::ProxyConfigCache;
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
 
 mod cache;
+mod proxy;
 mod redirect;
 mod resolver;
 mod response;
-mod route;
 
 #[cfg(test)]
 pub(crate) use cache::CACHE_MAX_ENTRIES;
@@ -39,8 +40,9 @@ pub(crate) use cache::FailedUrl;
 pub(crate) use cache::FetchCache;
 #[cfg(test)]
 pub(crate) use cache::PAGE_TTL;
+use proxy::FetchClient;
+pub(crate) use proxy::ProxyClient;
 pub(crate) use redirect::FetchError;
-pub(crate) use redirect::fetch_following;
 #[cfg(test)]
 pub(crate) use redirect::is_private_host;
 #[cfg(test)]
@@ -48,7 +50,6 @@ pub(crate) use redirect::is_private_ip;
 pub(crate) use redirect::upgrade_to_https;
 pub(crate) use redirect::validate_url;
 use reqwest::Client;
-use reqwest::redirect::Policy;
 use resolver::PRIVATE_TARGET;
 use resolver::PublicResolver;
 #[cfg(test)]
@@ -65,12 +66,11 @@ use response::page_payload;
 use response::read_body;
 #[cfg(test)]
 use response::read_error;
-pub(crate) use route::RouteClient;
+use response::with_warning;
 use std::error::Error;
 #[cfg(test)]
 pub(crate) use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 #[cfg(test)]
 pub(crate) use std::time::Instant;
 
@@ -156,41 +156,22 @@ fn classify_failure(timed_out: bool, connect: bool, message: &str) -> &'static s
 /// A web content fetch tool. Fetches a URL, converts HTML to plain text,
 /// truncates, and returns the content for the model to process.
 ///
-/// The tool stores a reusable HTTP client (connection pool) behind a cheap
-/// Arc clone, plus a bounded per-tool reuse cache shared across calls.
-/// Construction is infallible unless the TLS backend cannot be initialized
-/// (a system-level failure).
+/// The tool holds one transport that owns its connection pool, resolver, and
+/// timeouts. The proxy configuration is read from the shared cache at fetch
+/// time and the client is rebuilt only when the configuration generation
+/// moves, so a proxy a user starts or stops later is picked up without
+/// restarting the session.
 pub struct WebFetchTool {
-    direct: Client,
-    routed: Option<RouteClient>,
-    resolver: Arc<PublicResolver>,
+    client: FetchClient,
     cache: Arc<Mutex<FetchCache>>,
-}
-
-/// The builder every direct fetch client starts from. The system route is
-/// turned off on this client so it serves as the clean fallback whenever the
-/// mediated client is absent or unreachable.
-fn direct_client(resolver: Arc<PublicResolver>) -> Client {
-    Client::builder()
-        .redirect(Policy::none())
-        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
-        .no_proxy()
-        .dns_resolver(resolver)
-        .build()
-        .expect("HTTP client construction failed (TLS backend error)")
 }
 
 impl WebFetchTool {
     pub fn new() -> Self {
         let resolver = Arc::new(PublicResolver::new());
-        let direct = direct_client(Arc::clone(&resolver));
-        let routed = route::resolve_route_client(Arc::clone(&resolver));
+        let client = FetchClient::new(Arc::clone(&resolver), ProxyConfigCache::global());
         Self {
-            direct,
-            routed,
-            resolver,
+            client,
             cache: Arc::new(Mutex::new(FetchCache::default())),
         }
     }
@@ -198,10 +179,18 @@ impl WebFetchTool {
     /// Build a tool whose names resolve through the given resolver.
     #[cfg(test)]
     pub(crate) fn with_resolver(resolver: Arc<PublicResolver>) -> Self {
+        Self::with_proxy_cache(resolver, ProxyConfigCache::direct())
+    }
+
+    /// Build a tool over an explicit proxy cache, so a test states the proxy
+    /// instead of reading the host settings.
+    #[cfg(test)]
+    pub(crate) fn with_proxy_cache(
+        resolver: Arc<PublicResolver>,
+        proxy_cache: Arc<ProxyConfigCache>,
+    ) -> Self {
         Self {
-            direct: direct_client(Arc::clone(&resolver)),
-            routed: None,
-            resolver,
+            client: FetchClient::new(resolver, proxy_cache),
             cache: Arc::new(Mutex::new(FetchCache::default())),
         }
     }
@@ -237,9 +226,6 @@ impl Tool for WebFetchTool {
         })
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
-        let direct = self.direct.clone();
-        let routed = self.routed.clone();
-        let resolver = Arc::clone(&self.resolver);
         let cache = Arc::clone(&self.cache);
         Box::pin(async move {
             let url = input
@@ -271,11 +257,9 @@ impl Tool for WebFetchTool {
                 return Ok(cached_failure_payload(kind, &message));
             }
 
-            let result =
-                fetch_following(&direct, routed.as_ref(), Some(&resolver), &fetch_url).await;
-
-            match result {
-                Ok(resp) => {
+            let result = self.client.send(&fetch_url).await;
+            let payload = match result {
+                Ok((resp, warning)) => {
                     let status = resp.status();
                     let content_type = resp
                         .headers()
@@ -283,39 +267,40 @@ impl Tool for WebFetchTool {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("")
                         .to_string();
-                    let body = match read_body(resp).await {
-                        Ok(body) => body,
-                        Err(payload) => return Ok(payload),
+                    // A server that answered with an error status is a failure
+                    // the model must see as one: the body is an error page, not
+                    // content, and the failure rows read this same field.
+                    let inner = match read_body(resp).await {
+                        Ok(body) => {
+                            if status.is_success() {
+                                finish_page(&cache, url, prompt, body, content_type)
+                            } else {
+                                http_failure_payload(
+                                    url,
+                                    status.as_u16(),
+                                    status.canonical_reason().unwrap_or(""),
+                                )
+                            }
+                        }
+                        Err(payload) => payload,
                     };
-
-                    // A server that answered with an error status is a
-                    // failure the model must see as one: the body is an error
-                    // page, not content, and the transcript's failure count
-                    // and the trajectory's failure rows read this same field.
-                    if !status.is_success() {
-                        return Ok(http_failure_payload(
-                            url,
-                            status.as_u16(),
-                            status.canonical_reason().unwrap_or(""),
-                        ));
-                    }
-
-                    Ok(finish_page(&cache, url, prompt, body, content_type))
+                    with_warning(inner, warning)
                 }
-                Err(FetchError::Refused(payload)) => Ok(payload),
+                Err(FetchError::Refused(payload)) => payload,
                 Err(FetchError::Transport(e)) => {
                     let kind = classify_fetch_error(&e);
                     let message = error_chain_text(&e);
-                    // Only a transport failure is worth remembering: a
-                    // request the server rejected may succeed next time.
+                    // Only a transport failure is worth remembering: a request
+                    // the server rejected may succeed next time.
                     if matches!(kind, "connect" | "connect_timeout" | "tls")
                         && let Ok(mut c) = cache.lock()
                     {
                         c.store_failure(url, kind, message.clone());
                     }
-                    Ok(fetch_failure_payload(kind, &message))
+                    fetch_failure_payload(kind, &message)
                 }
-            }
+            };
+            Ok(payload)
         })
     }
     fn is_concurrency_safe(&self) -> bool {

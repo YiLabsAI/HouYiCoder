@@ -22,7 +22,6 @@
 //! the same protocol. Stateless (full history each call) ⇒ replay is always
 //! server-safe, so Retry only honors ProviderError::retryable.
 
-use std::time::Duration;
 use std::time::Instant;
 
 use crate::served_models::write_cache;
@@ -34,45 +33,58 @@ use crate::{
 use futures::StreamExt;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
+use houyicoder_platform::host::net::ProxyConfigCache;
 use houyicoder_protocol::cache_policy::{BreakpointKind, PromptCacheFormat};
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, EffortLevel, InputItem, LlmEvent, ModelCapabilities,
     OutputItem, ProviderError, SpeedMode,
 };
-use reqwest::Client;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+
+mod proxy;
+
+use proxy::HttpTransport;
 
 /// An OpenAI-compatible chat/completions provider. Configure with base_url
 /// (e.g. https://api.openai.com/v1) and api_key; the model is per-request.
 /// The composition root resolves the key + base_url via the config layer and
 /// hands them to new(); this type does no config resolution itself.
+///
+/// The proxy configuration comes from a shared cache; the client is rebuilt
+/// only when the configuration generation moves, and the provider keeps its
+/// own connection pool that is never shared with the web fetch tool.
 pub struct OpenAiCompatibleProvider {
     base_url: String,
     api_key: String,
-    http: Client,
+    http: HttpTransport,
 }
 
 impl OpenAiCompatibleProvider {
-    /// Construct a provider over an OpenAI-compatible endpoint.
+    /// Construct a provider over an OpenAI-compatible endpoint with no proxy.
+    /// The test and tool paths use this; production passes the process proxy
+    /// cache explicitly.
     pub fn new(base_url: String, api_key: String) -> Self {
-        let http = Client::builder()
-            .read_timeout(Duration::from_secs(90))
-            .connect_timeout(Duration::from_secs(10))
-            .pool_idle_timeout(Duration::from_secs(30))
-            .tcp_keepalive(Duration::from_secs(30))
-            .build()
-            .expect("reqwest client build");
+        Self::with_proxy_cache(base_url, api_key, ProxyConfigCache::direct())
+    }
+
+    /// Construct a provider whose requests follow the given proxy cache.
+    pub fn with_proxy_cache(
+        base_url: String,
+        api_key: String,
+        proxy_cache: Arc<ProxyConfigCache>,
+    ) -> Self {
         Self {
             base_url,
             api_key,
-            http,
+            http: HttpTransport::new(proxy_cache),
         }
     }
 
@@ -89,8 +101,9 @@ impl OpenAiCompatibleProvider {
     ) -> PFut<'_, Result<(), ProviderError>> {
         let base_url = self.base_url.clone();
         let api_key = self.api_key.clone();
-        let http = self.http.clone();
+        let http = self.http.client();
         Box::pin(async move {
+            let http = http?;
             let url = format!("{}/models", base_url.trim_end_matches('/'));
             let resp = http
                 .get(&url)
@@ -129,8 +142,9 @@ impl ModelProvider for OpenAiCompatibleProvider {
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
         let base_url = self.base_url.clone();
         let api_key = self.api_key.clone();
-        let http = self.http.clone();
+        let http = self.http.client();
         Box::pin(async move {
+            let http = http?;
             let body = build_request_body(&req);
             let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
             let resp = http
@@ -160,8 +174,15 @@ impl ModelProvider for OpenAiCompatibleProvider {
     ) -> houyicoder_async::PStream<'_, Result<LlmEvent, ProviderError>> {
         let base_url = self.base_url.clone();
         let api_key = self.api_key.clone();
-        let http = self.http.clone();
+        let http = self.http.client();
         let stream = async_stream::stream! {
+            let http = match http {
+                Ok(client) => client,
+                Err(error) => {
+                    yield Err(error);
+                    return;
+                }
+            };
             let mut body = build_request_body(&req);
             body["stream"] = json!(true);
             body["stream_options"] = json!({"include_usage": true});

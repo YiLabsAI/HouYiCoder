@@ -16,6 +16,7 @@ use houyicoder_config::{
     ConfigWarning, DEFAULT_MODEL, ENV_HOUYICODER_TEST_STUB_RESPONSE_SCRIPT, api_key_env_with_name,
     resolve_base_url,
 };
+use houyicoder_platform::host::net::ProxyConfigCache;
 use houyicoder_protocol::llm::OutputItem;
 
 use crate::FakeProvider;
@@ -128,7 +129,11 @@ pub fn resolve(workspace: Option<&Path>) -> ProviderResolution {
         key_origin: resolved_key.origin,
     };
     let provider: Arc<dyn ModelProvider> = match resolved_key.key {
-        Some(key) => Arc::new(OpenAiCompatibleProvider::new(settings.base_url, key)),
+        Some(key) => Arc::new(OpenAiCompatibleProvider::with_proxy_cache(
+            settings.base_url,
+            key,
+            ProxyConfigCache::global(),
+        )),
         None => {
             let reply = format!(
                 "stub mode: no api key resolved, model {DEFAULT_MODEL} not called. \
