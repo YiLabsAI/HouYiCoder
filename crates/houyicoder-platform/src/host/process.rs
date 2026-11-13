@@ -11,7 +11,10 @@ mod tests;
 ///
 /// The program is the first token; every argument follows it, separated by a
 /// space. The kernel rewrites a quoted program path to the executable it names,
-/// so a path with spaces is wrapped rather than rejected.
+/// so a path with spaces is wrapped rather than rejected. This is the form a
+/// child that reads its command line through the C runtime expects -- a posix
+/// shell port, a powershell process -- and not the form the command interpreter
+/// itself takes, which has its own parser.
 pub fn build_command_line(program: &str, args: &[&str]) -> String {
     let mut out = quote_argument(program);
     for arg in args {
@@ -19,6 +22,18 @@ pub fn build_command_line(program: &str, args: &[&str]) -> String {
         out.push_str(&quote_argument(arg));
     }
     out
+}
+
+/// Build the command line for the Windows command interpreter, which does not
+/// parse its command line through the C runtime.
+///
+/// The interpreter path is wrapped in one pair of quotes, and the raw command
+/// runs behind the disable-autorun, strip-quotes, and run flags inside a single
+/// pair of quotes whose inner quotes are never backslash-escaped -- the
+/// interpreter has its own quote parser, and a backslash before a quote would
+/// reach the command as a literal backslash rather than disappearing.
+pub fn build_cmd_line(cmd_exe: &str, raw_command: &str) -> String {
+    format!("\"{cmd_exe}\" /d /s /c \"{raw_command}\"")
 }
 
 /// Quote one argument under the Windows command-line rules.

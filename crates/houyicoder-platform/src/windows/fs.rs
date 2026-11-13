@@ -58,16 +58,29 @@ pub fn atomic_replace(target: &Path, bytes: &[u8]) -> IoResult<()> {
     let temp_name = temp_name_for(&file_name, id(), seq);
     let temp_path = parent.join(&temp_name);
     let temp_wide = wide(&temp_path.to_string_lossy());
+    // The no-null form is for the POSIX rename, which carries a length. The
+    // path-based fallback takes null-terminated strings, so it builds its own.
     let target_wide: Vec<u16> = target_text.encode_utf16().collect();
     // The handle carries DELETE so the POSIX rename can act on it, and the
     // share-delete so a path-based move in the fallback is not blocked by it.
     let temp = create_temp(&temp_wide)?;
+    let mut handle_open = true;
     let outcome = write_all(temp, bytes).and_then(|()| match posix_rename(temp, &target_wide) {
         Ok(()) => Ok(()),
-        Err(RenameError::Unsupported) => move_file(&temp_wide, &target_wide),
+        Err(RenameError::Unsupported) => {
+            // A filesystem without the POSIX flag cannot rename through the
+            // handle. Close it so the path-based move is not held by it, then
+            // move with null-terminated paths.
+            drop(unsafe { CloseHandle(temp) });
+            handle_open = false;
+            let target_nul = wide(&target_text);
+            move_file(&temp_wide, &target_nul)
+        }
         Err(RenameError::Failed(error)) => Err(error),
     });
-    drop(unsafe { CloseHandle(temp) });
+    if handle_open {
+        drop(unsafe { CloseHandle(temp) });
+    }
     if outcome.is_err() {
         drop(delete_file(&temp_wide));
     }
