@@ -2,6 +2,7 @@
 //! that fills them from the live desktop configuration.
 
 pub mod net;
+pub mod secrets;
 pub mod shell;
 
 use std::env::{current_dir, temp_dir};

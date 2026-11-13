@@ -6,7 +6,6 @@
 //! second chance to report one.
 
 use std::env::var_os;
-use std::io::Error;
 use std::io::Result;
 use std::io::Write as _;
 use std::io::stdout;
@@ -16,9 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-
-#[cfg(target_os = "linux")]
-use super::linux::linux_clipboard_tool;
+use houyicoder_platform::desktop::clipboard::{
+    copy_to_native_clipboard, native_clipboard_preferred,
+};
 
 /// Pluggable clipboard sink so adversarial selection tests can capture what a
 /// drag-to-copy would write, without touching the real OS clipboard or
@@ -28,8 +27,9 @@ pub trait ClipboardWriter: Send + Sync {
     fn write(&self, text: &str);
 }
 
-/// The production clipboard writer: pbcopy on macOS (reliable even when the
-/// terminal disables OSC 52), OSC 52 elsewhere for SSH/remote sessions.
+/// The production clipboard writer: the host's native utility where the
+/// platform offers one, since it works even when the terminal refuses the
+/// escape; OSC 52 carries the text over a remote session either way.
 pub struct SystemClipboard;
 impl ClipboardWriter for SystemClipboard {
     fn write(&self, text: &str) {
@@ -54,12 +54,11 @@ impl ClipboardWriter for RecordingClipboard {
 }
 
 /// Write text to the clipboard via the most robust path available. The
-/// strategy: (1) a native safety net fired FIRST in a
-/// detached thread (pbcopy / wl-copy / xclip / xsel / clip.exe), gated on
-/// SSH_CONNECTION so it never writes to a remote clipboard over SSH; (2)
-/// inside tmux, load-buffer -w propagates to the outer terminal, and a
-/// DCS-passthrough-wrapped OSC 52 is also emitted; (3) raw OSC 52 (BEL
-/// terminator) as the final fallback. Fire-and-forget; failures are silent.
+/// strategy: (1) the host's native utility fired first in a detached thread,
+/// gated on SSH_CONNECTION so it never writes to a remote clipboard over
+/// SSH; (2) inside tmux, load-buffer -w propagates to the outer terminal,
+/// and a passthrough-wrapped OSC 52 is also emitted; (3) raw OSC 52 as the
+/// final fallback. Fire-and-forget; failures are silent.
 pub fn write_clipboard(text: &str) {
     let b64 = STANDARD.encode(text.as_bytes());
     // Native net fires first in a thread so OSC 52 is not delayed by a
@@ -67,7 +66,7 @@ pub fn write_clipboard(text: &str) {
     // clipboard, not the local one.
     if var_os("SSH_CONNECTION").is_none() {
         let owned = text.to_string();
-        spawn(move || copy_native(&owned));
+        spawn(move || copy_to_native_clipboard(&owned));
     }
     // tmux fast path: load-buffer reaches the outer terminal via the
     // multiplexer own clipboard bridge (-w, dropped for iTerm2). On
@@ -80,11 +79,12 @@ pub fn write_clipboard(text: &str) {
 }
 
 /// Which path write_clipboard will take, based on env state. Sync so a
-/// caller can show an honest toast without running the copy. Native is only
-/// claimed on macOS without an SSH session; the Linux probe is lazy.
+/// caller can show an honest toast without running the copy. The native
+/// answer comes from the platform, and an SSH session rules it out because
+/// the utility would write to the remote clipboard.
 pub fn get_clipboard_path() -> &'static str {
     clipboard_path_for(
-        cfg!(target_os = "macos") && var_os("SSH_CONNECTION").is_none(),
+        native_clipboard_preferred() && var_os("SSH_CONNECTION").is_none(),
         var_os("TMUX").is_some(),
     )
 }
@@ -142,53 +142,6 @@ fn tmux_load_buffer(text: &str) -> bool {
             child.wait().map(|s| s.success()).unwrap_or(false)
         }
         Err(_) => false,
-    }
-}
-
-/// Shell out to a native clipboard utility as a safety net for OSC 52. Only
-/// called when not in an SSH session; failures are silent. The Linux winner
-/// is cached after the first probe so repeated mouse-ups skip the chain.
-fn copy_native(text: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let _r = run_native("pbcopy", &[], text);
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(tool) = linux_clipboard_tool(text) {
-            let args: &[&str] = match tool {
-                "wl-copy" => &[],
-                "xclip" => &["-selection", "clipboard"],
-                "xsel" => &["--clipboard", "--input"],
-                _ => &[],
-            };
-            let _r = run_native(tool, args, text);
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let _r = run_native("clip", &[], text);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        let _ = text;
-    }
-}
-
-/// Run a native clipboard binary, feeding text via stdin. Ok on a clean
-/// (exit-0) run so the Linux probe can pick a winner.
-#[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-pub(super) fn run_native(bin: &str, args: &[&str], text: &str) -> Result<()> {
-    let mut child = Command::new(bin).args(args).stdin(Stdio::piped()).spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(text.as_bytes())?;
-        drop(stdin);
-    }
-    let status = child.wait()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::other("non-zero exit"))
     }
 }
 

@@ -452,7 +452,6 @@ use crate::state::App;
 mod anchor;
 mod clipboard;
 pub(crate) mod composer;
-mod linux;
 pub mod region;
 #[cfg(test)]
 mod tests;

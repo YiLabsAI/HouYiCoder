@@ -2,11 +2,13 @@
 //! parsing its dictionary output.
 
 use std::io::Read;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::host::net::{ProxyConfig, ProxyResolution};
+
+use super::wait_bounded;
 
 /// How long the probe may run before it is killed and treated as no proxy.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -51,22 +53,6 @@ fn run_probe() -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// Poll the child until it exits or the deadline passes.
-fn wait_bounded(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) => {}
-            Err(_) => return None,
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
 }
 
 /// A configuration from the probe dictionary output. The parser is pure so its

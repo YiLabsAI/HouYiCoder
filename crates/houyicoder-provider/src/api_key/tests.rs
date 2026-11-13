@@ -251,172 +251,62 @@ fn test_one_spawn_per_resolve() {
     assert_eq!(launcher.spawn_count(), 1);
 }
 
-/// The keychain lookup addresses the tool by absolute path. Resolving it
-/// through PATH would let anything earlier on the path answer for a keychain.
-#[cfg(target_os = "macos")]
+/// A store that answers supplies the key, so the caller gets it and no
+/// warning is recorded.
 #[test]
-fn test_keychain_tool_absolute() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "houyicoder".into(),
-        account: "dashscope".into(),
-    };
-    drop(resolved_key(Some(&source), Some(&launcher)));
-    let (req, _policy) = launcher.last();
-    assert_eq!(req.program, "/usr/bin/security");
-}
-
-/// The lookup names the item by service and account, and asks for the password
-/// alone. Dropping the account would return whichever one the keychain answers
-/// with; dropping the password flag would return a description instead.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_keychain_argv_names_item() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "houyicoder".into(),
-        account: "dashscope".into(),
-    };
-    drop(resolved_key(Some(&source), Some(&launcher)));
-    let (req, _policy) = launcher.last();
-    assert_eq!(
-        req.args,
-        vec![
-            "find-generic-password",
-            "-s",
-            "houyicoder",
-            "-a",
-            "dashscope",
-            "-w"
-        ]
+fn test_keychain_value_is_key() {
+    let mut warnings = Vec::new();
+    let key = keychain_key(
+        "houyicoder",
+        "dashscope",
+        SecretRead::Value("kc-secret".into()),
+        &mut warnings,
     );
+    assert_eq!(key.as_deref(), Some("kc-secret"));
+    assert!(warnings.is_empty(), "a resolved key is quiet: {warnings:?}");
 }
 
-/// The keychain item's password is the key.
-#[cfg(target_os = "macos")]
+/// Every outcome but a value records a notice naming the item, so the user
+/// can tell a missing entry from an unreadable store and fix the right one.
 #[test]
-fn test_keychain_password_is_key() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "s".into(),
-        account: "a".into(),
-    };
-    assert_eq!(
-        resolved_key(Some(&source), Some(&launcher)).as_deref(),
-        Some("kc-secret")
-    );
+fn test_keychain_misses_warn() {
+    let outcomes = [
+        SecretRead::NotFound,
+        SecretRead::InvalidValue,
+        SecretRead::UnsupportedPlatform,
+        SecretRead::Unavailable,
+    ];
+    for outcome in outcomes {
+        let mut warnings = Vec::new();
+        let key = keychain_key("houyicoder", "dashscope", outcome, &mut warnings);
+        assert!(key.is_none(), "an outcome other than a value yields no key");
+        let warning = warnings
+            .first()
+            .expect("a store read that yields no key says so");
+        assert_eq!(warning.field, "keychain");
+        assert!(
+            warning.reason.contains("houyicoder") && warning.reason.contains("dashscope"),
+            "the notice names the item: {}",
+            warning.reason
+        );
+    }
 }
 
-/// This spawn IS audited, unlike the helper: argv carries the item's service
-/// and account, never the password, and reading a user's keychain is an event
-/// an operator should be able to see.
-#[cfg(target_os = "macos")]
+/// A platform with no keychain says that, rather than reporting the item as
+/// missing: the user cannot fix a keychain that the host does not have.
 #[test]
-fn test_keychain_spawn_is_audited() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "s".into(),
-        account: "a".into(),
-    };
-    drop(resolved_key(Some(&source), Some(&launcher)));
-    let (req, policy) = launcher.last();
+fn test_keychain_platform_warns() {
+    let mut warnings = Vec::new();
+    drop(keychain_key(
+        "s",
+        "a",
+        SecretRead::UnsupportedPlatform,
+        &mut warnings,
+    ));
     assert!(
-        policy.audit,
-        "a keychain read must be visible to an operator"
-    );
-    assert!(
-        !req.args.iter().any(|a| a.contains("kc-secret")),
-        "argv must not carry the password"
-    );
-}
-
-/// The lookup is time bounded, and given longer than the helper because the
-/// keychain can put an authorization dialog in front of a human.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_keychain_spawn_time_bounded() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "s".into(),
-        account: "a".into(),
-    };
-    drop(resolved_key(Some(&source), Some(&launcher)));
-    let (_req, policy) = launcher.last();
-    let fence = policy.fence.expect("a fence carries the wall timeout");
-    assert_eq!(fence.wall_timeout_ms, KEYCHAIN_TIMEOUT_MS);
-}
-
-/// A missing item or a denied authorization warns rather than falling back in
-/// silence: stub mode with no explanation leaves the user with no way to tell
-/// that their keychain entry is the reason.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_keychain_failure_warns() {
-    let launcher = RecordingLauncher::with_exit(Ok(LauncherExit {
-        exit_code: Some(44),
-        stdout: Some(String::new()),
-        stderr: Some("could not be found".into()),
-    }));
-    let source = ApiKeySource::Keychain {
-        service: "houyicoder".into(),
-        account: "dashscope".into(),
-    };
-    let warnings = resolve_api_key(Some(&source), None, Some(&launcher)).warnings;
-    let w = warnings
-        .iter()
-        .find(|w| w.field == "keychain")
-        .expect("a failed lookup warns");
-    assert!(
-        w.reason.contains("houyicoder") && w.reason.contains("dashscope"),
-        "the notice must name the item so the user can fix it: {}",
-        w.reason
-    );
-}
-
-/// A successful lookup is quiet: a warning on the happy path would train the
-/// user to ignore the channel.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_keychain_success_is_quiet() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "s".into(),
-        account: "a".into(),
-    };
-    let warnings = resolve_api_key(Some(&source), None, Some(&launcher)).warnings;
-    assert!(warnings.is_empty(), "no warning on success: {warnings:?}");
-}
-
-/// Away from macOS the entry is reported and skipped, and no lookup is
-/// attempted: a shared settings file must not look broken on a platform that
-/// cannot honor it.
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn test_keychain_off_mac_warns() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "s".into(),
-        account: "a".into(),
-    };
-    let warnings = resolve_api_key(Some(&source), None, Some(&launcher)).warnings;
-    assert_eq!(launcher.spawn_count(), 0, "no lookup off macOS");
-    assert!(warnings.iter().any(|w| w.field == "keychain"));
-}
-
-/// A configured source that answers is the origin the status line reports, so
-/// a user can tell which keychain account is live.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_origin_names_source() {
-    let launcher = RecordingLauncher::ok_stdout("kc-secret\n");
-    let source = ApiKeySource::Keychain {
-        service: "houyicoder".into(),
-        account: "dashscope-team".into(),
-    };
-    let resolved = resolve_api_key(Some(&source), None, Some(&launcher));
-    assert_eq!(
-        resolved.origin.as_deref(),
-        Some("keychain houyicoder/dashscope-team")
+        warnings[0].reason.contains("no keychain"),
+        "the notice names the cause: {}",
+        warnings[0].reason
     );
 }
 
@@ -455,6 +345,21 @@ fn test_origin_env_only() {
     assert_eq!(
         key_origin(true, None, Some("OPENAI_API_KEY")).as_deref(),
         Some("env OPENAI_API_KEY")
+    );
+}
+
+/// A keychain source that supplied the key is named as the origin, so the
+/// status line tells the user where their key came from.
+#[test]
+fn test_origin_names_keychain() {
+    let source = ApiKeySource::Keychain {
+        service: "houyicoder".into(),
+        account: "dashscope".into(),
+    };
+    assert_eq!(
+        key_origin(true, Some(&source), None).as_deref(),
+        Some("keychain houyicoder/dashscope"),
+        "a successful keychain read names the item as the origin"
     );
 }
 

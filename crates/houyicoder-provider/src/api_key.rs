@@ -1,13 +1,7 @@
 //! Turning a configured api key source into a key. The config layer names the
 //! source; obtaining it runs a command, which belongs here where the spawn
-//! chokepoint is reachable, and where the provider that will spend the key is
-//! built.
-//!
-//! The two sources differ on the argv audit. A helper command may hold the key
-//! inline, so auditing argv would copy the secret into a log; a redacted line
-//! records that resolution instead. A keychain lookup carries only the item's
-//! service and account in argv, and reading a user's keychain is precisely the
-//! event an operator should be able to see, so that spawn is audited.
+//! chokepoint is reachable. A keychain item is read by the platform module,
+//! which owns the store and the encoding each host writes.
 
 use futures::executor::block_on;
 use houyicoder_api::launcher::{
@@ -15,25 +9,13 @@ use houyicoder_api::launcher::{
 };
 use houyicoder_config::{ApiKeySource, ConfigWarning};
 use houyicoder_platform::host::helper_program;
+use houyicoder_platform::host::secrets::{SecretRead, read_secret};
 use houyicoder_platform::host::shell::{HelperShell, ShellProgram};
 
 /// How long a key helper may run before it is killed. Wide enough for one that
 /// reaches a password manager over the network, finite because startup blocks
 /// on it.
 const HELPER_TIMEOUT_MS: u64 = 10_000;
-
-/// How long a keychain lookup may run. Longer than the helper because the
-/// keychain can put an authorization dialog in front of a human, and still
-/// finite because a session with no one watching would otherwise wait forever.
-const KEYCHAIN_TIMEOUT_MS: u64 = 20_000;
-
-/// A dialog waiting on a human needs more room than a script, so the ordering
-/// of the two budgets is an invariant rather than a coincidence.
-const _: () = assert!(KEYCHAIN_TIMEOUT_MS > HELPER_TIMEOUT_MS);
-
-/// Absolute path, never a bare program name: resolving this through PATH would
-/// let anything earlier on it answer for the keychain.
-const SECURITY_TOOL: &str = "/usr/bin/security";
 
 /// A resolved key together with where it came from.
 pub(crate) struct ResolvedKey {
@@ -88,9 +70,12 @@ pub(crate) fn resolve_api_key(
             });
             None
         }
-        ApiKeySource::Keychain { service, account } => {
-            read_keychain(service, account, launcher, &mut warnings)
-        }
+        ApiKeySource::Keychain { service, account } => keychain_key(
+            service,
+            account,
+            read_secret(service, account),
+            &mut warnings,
+        ),
     });
     let (key, env_name) = match from_source {
         Some(key) => (Some(key), None),
@@ -132,63 +117,32 @@ fn key_origin(
     }
 }
 
-/// Read a keychain item's password. macOS only: the lookup shells out to the
-/// system keychain tool, and no other platform has an equivalent this addresses
-/// the same way. Elsewhere the entry is reported and skipped rather than
-/// ignored, so a shared settings file does not look broken on the platform that
-/// cannot honor it.
-fn read_keychain(
+/// The key a store read yields, or the notice recorded in its place.
+///
+/// The read is a parameter so every outcome is exercised without a system
+/// store. A read that yields nothing has to say why: without the notice the
+/// user sees stub mode with no hint that their keychain entry is the reason.
+fn keychain_key(
     service: &str,
     account: &str,
-    launcher: Option<&dyn ProcessLauncher>,
+    read: SecretRead,
     warnings: &mut Vec<ConfigWarning>,
 ) -> Option<String> {
-    if !cfg!(target_os = "macos") {
-        warnings.push(ConfigWarning {
-            field: "keychain".into(),
-            reason: "keychain lookup is macOS only; falling back to the \
-                     environment on this platform"
-                .into(),
-        });
-        return None;
-    }
-    let default_launcher = StdProcessLauncher::new();
-    let launcher: &dyn ProcessLauncher = launcher.unwrap_or(&default_launcher);
-    let req = SpawnRequest::new(SECURITY_TOOL)
-        .with_args(["find-generic-password", "-s", service, "-a", account, "-w"])
-        .piped_output();
-    let policy = SpawnPolicy::default().audited().with_fence(FenceConfig {
-        wall_timeout_ms: KEYCHAIN_TIMEOUT_MS,
-        ..FenceConfig::default()
+    let reason = match read {
+        SecretRead::Value(key) => return Some(key),
+        SecretRead::NotFound => "the item is missing or access was denied",
+        SecretRead::InvalidValue => "the item holds a value that is not a usable key",
+        SecretRead::UnsupportedPlatform => "this platform has no keychain",
+        SecretRead::Unavailable => "the keychain could not be read",
+    };
+    warnings.push(ConfigWarning {
+        field: "keychain".into(),
+        reason: format!(
+            "no key from keychain service {service} account {account} \
+             ({reason}); falling back to the environment"
+        ),
     });
-    let failed = |warnings: &mut Vec<ConfigWarning>, detail: String| {
-        warnings.push(ConfigWarning {
-            field: "keychain".into(),
-            reason: format!(
-                "no key from keychain service {service} account {account} \
-                 ({detail}); falling back to the environment"
-            ),
-        });
-        None
-    };
-    let child = match launcher.spawn(req, policy) {
-        Ok(child) => child,
-        Err(e) => return failed(warnings, e.to_string()),
-    };
-    let exit = match block_on(child.wait()) {
-        Ok(exit) => exit,
-        Err(e) => return failed(warnings, e.to_string()),
-    };
-    if exit.exit_code != Some(0) {
-        // The tool reports a missing item and a denied authorization the same
-        // way, with a non-zero exit, so the notice names neither.
-        return failed(warnings, "item missing or access denied".into());
-    }
-    let key = exit.stdout.unwrap_or_default().trim().to_string();
-    if key.is_empty() {
-        return failed(warnings, "the item holds no password".into());
-    }
-    Some(key)
+    None
 }
 
 /// Run a helper command and take its stdout as the key. A spawn failure, a
