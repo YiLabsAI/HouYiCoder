@@ -71,7 +71,7 @@ pub struct SessionHost {
 impl SessionHost {
     /// In-memory host with no persisted backing. The single-process
     /// fast path: a new process cannot reload sessions (cross-process
-    /// reconnect is the UDS cut).
+    /// reconnect belongs to the local endpoint layer).
     pub fn new(store: SessionLeaseStore) -> Self {
         Self {
             runners: Mutex::new(HashMap::new()),

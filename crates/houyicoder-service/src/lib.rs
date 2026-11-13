@@ -21,11 +21,10 @@ pub mod agent_registry;
 pub mod composition;
 pub mod diagnostics;
 pub mod lifecycle;
+pub mod local_ipc;
 pub mod protocol_adapter;
 pub mod sandbox_policy;
 pub mod server;
-#[cfg(unix)]
-pub mod uds;
 
 /// Re-exported so the binary entry can mint a cancel token for the serve
 /// path without a direct dependency on the async foundation crate.

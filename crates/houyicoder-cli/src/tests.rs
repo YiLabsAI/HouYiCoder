@@ -52,7 +52,7 @@ use crate::composition::start_local_server;
 use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot};
 
 #[cfg(unix)]
-use crate::detach::{is_session_live, session_socket, sessions_dir};
+use crate::detach::{endpoint_file, is_session_live, read_endpoint, sessions_dir};
 use crate::session::admission::{
     admit_existing_sid, continue_target, select_free, unavailable_lines,
 };
@@ -192,47 +192,45 @@ fn test_parse_serve_missing() {
     assert!(err.contains("--serve requires"), "got: {err}");
 }
 
-// ── parse_args: unix subcommands + flags ──────────────────────────
+// ── parse_args: detached subcommands + flags ──────────────────────
 
-#[cfg(unix)]
 #[test]
 fn test_parse_serve_custom() {
     let cmd = parse_args(vec!["--serve".into(), "/tmp/s.sock".into()]).expect("must parse");
     match cmd {
         CliCommand::Serve {
-            project, socket, ..
+            project, endpoint, ..
         } => {
             assert!(project.is_none());
-            assert_eq!(socket.as_deref(), Some("/tmp/s.sock"));
+            assert_eq!(endpoint.as_deref(), Some("/tmp/s.sock"));
         }
         other => panic!("expected Serve, got {other:?}"),
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn test_parse_detached() {
     let cmd = parse_args(vec!["--detached".into()]).expect("must parse");
     match cmd {
         CliCommand::Serve {
-            project, socket, ..
+            project, endpoint, ..
         } => {
             assert!(project.is_none());
-            assert!(socket.is_none(), "--detached means conventional path");
+            assert!(endpoint.is_none(), "--detached means conventional path");
         }
         other => panic!("expected Serve, got {other:?}"),
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn test_parse_detached_project() {
     let cmd =
         parse_args(vec!["--detached".into(), "-p".into(), "/tmp".into()]).expect("must parse");
-    assert!(matches!(cmd, CliCommand::Serve { project: Some(p), socket: None, .. } if p == "/tmp"));
+    assert!(
+        matches!(cmd, CliCommand::Serve { project: Some(p), endpoint: None, .. } if p == "/tmp")
+    );
 }
 
-#[cfg(unix)]
 #[test]
 fn test_parse_attach() {
     let cmd = parse_args(vec![
@@ -242,22 +240,20 @@ fn test_parse_attach() {
     ])
     .expect("must parse");
     match cmd {
-        CliCommand::Attach { socket, session } => {
-            assert_eq!(socket, "/tmp/s.sock");
+        CliCommand::Attach { endpoint, session } => {
+            assert_eq!(endpoint, "/tmp/s.sock");
             assert_eq!(session, "abc-123");
         }
         other => panic!("expected Attach, got {other:?}"),
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn test_parse_attach_missing() {
     let err = parse_args(vec!["attach".into(), "/tmp/s.sock".into()]).unwrap_err();
     assert!(err.contains("session id"), "got: {err}");
 }
 
-#[cfg(unix)]
 #[test]
 fn test_parse_ps() {
     let cmd = parse_args(vec!["ps".into()]).expect("must parse");
@@ -445,26 +441,26 @@ fn test_cross_spelling_noop() {
 fn test_held_target_keeps_host() {
     // The target sid must parse as a real SessionId (the sid-resume branch
     // gates on from_display_string), so it cannot carry a test- prefix.
-    // A Drop guard removes the staged socket + pidfile even on a panic, and
-    // writing the socket too lets cleanup_stale reclaim the pair if the guard
-    // never runs (a kill between write and drop).
+    // A Drop guard removes the staged endpoint record + pidfile even on a
+    // panic, and writing the record too lets cleanup_stale reclaim the pair if
+    // the guard never runs (a kill between write and drop).
     struct LiveSessionGuard {
         sid: String,
     }
     impl Drop for LiveSessionGuard {
         fn drop(&mut self) {
-            remove_file(session_socket(&self.sid)).ok();
+            remove_file(endpoint_file(&self.sid)).ok();
             remove_file(sessions_dir().join(format!("{}.pid", self.sid))).ok();
         }
     }
     let target_sid = SessionId::new();
     let target_str = target_sid.to_string();
-    // Stage a live pidfile + socket so is_session_live reports the target held
-    // by the current process (which is alive by definition).
+    // Stage a live pidfile + endpoint record so is_session_live reports the
+    // target held by the current process (which is alive by definition).
     let _guard = LiveSessionGuard {
         sid: target_str.clone(),
     };
-    write(session_socket(&target_str), b"").expect("write test socket");
+    write(endpoint_file(&target_str), "staged-endpoint").expect("write the endpoint record");
     write(
         sessions_dir().join(format!("{target_str}.pid")),
         process_id().to_string(),
@@ -534,7 +530,7 @@ fn test_resume_refuses_live() {
     }
     impl Drop for LiveSessionGuard {
         fn drop(&mut self) {
-            remove_file(session_socket(&self.sid)).ok();
+            remove_file(endpoint_file(&self.sid)).ok();
             remove_file(sessions_dir().join(format!("{}.pid", self.sid))).ok();
         }
     }
@@ -543,7 +539,7 @@ fn test_resume_refuses_live() {
     let _guard = LiveSessionGuard {
         sid: target_str.clone(),
     };
-    write(session_socket(&target_str), b"").expect("write test socket");
+    write(endpoint_file(&target_str), "staged-endpoint").expect("write the endpoint record");
     write(
         sessions_dir().join(format!("{target_str}.pid")),
         process_id().to_string(),
@@ -558,14 +554,13 @@ fn test_resume_refuses_live() {
         Err(e) => e,
         Ok(_) => panic!("a live target must refuse, not build"),
     };
-    // The hint names the socket the attach needs, spelled so the user can run
-    // it as printed; a hint that only says "another process" sends them
-    // looking for a socket path they were never given.
-    let socket = session_socket(&target_str);
+    // The hint names the endpoint the attach needs, spelled so the user can
+    // run it as printed; a hint that only says "another process" sends them
+    // looking for an endpoint they were never given.
+    let endpoint = read_endpoint(&target_str).expect("the endpoint record names one");
     let hint = format!(
-        "is live in another process; attach with houyi attach {} {target_str}, \
-         or branch with houyi --resume {target_str} --fork-session",
-        socket.display()
+        "is live in another process; attach with houyi attach {endpoint} {target_str}, \
+         or branch with houyi --resume {target_str} --fork-session"
     );
     assert!(
         err.to_string().contains(&hint),

@@ -12,6 +12,11 @@ workspace = true
 
 [dependencies]
 dunce = "1"
+# The local IPC listener is an asynchronous stream on both targets, and each
+# platform's stream type is its own. Owning that here is what keeps every upper
+# crate free of an operating-system conditional; the runtime is already in the
+# workspace graph, so this adds an edge rather than a download.
+tokio = { version = "1", features = ["net"] }
 tracing = "0.1.44"
 
 # The termination registration and the hangup probe read the terminal's own
@@ -20,7 +25,7 @@ tracing = "0.1.44"
 # nix adds. Safe API only, so the workspace unsafe ban holds.
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
-nix = { version = "0.31", features = ["poll"] }
+nix = { version = "0.31", features = ["poll", "signal"] }
 
 # The Windows proxy reader calls the WinHttp helper that reads the live
 # configuration flags, so a disabled automatic script does not leave a stale
@@ -31,9 +36,19 @@ nix = { version = "0.31", features = ["poll"] }
 windows = { version = "0.62", features = [
     "Win32_Networking_WinHttp",
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_IO",
+    "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
+
+[dev-dependencies]
+# The local endpoint tests bind a listener and drive it on a small runtime, so
+# the test build needs the runtime and the test macro; the library itself only
+# needs the network types.
+tokio = { version = "1", features = ["rt", "macros", "io-util"] }

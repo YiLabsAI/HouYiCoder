@@ -78,15 +78,14 @@ CRATES = ROOT / "crates"
 # The cli entry point covers argument-parse failures, the session list that
 # is the ls subcommand's whole output, the refusals that end a session
 # reopen before the TUI starts, including the per-session lines a continue
-# refusal prints, and the id/pid/socket banner the detached and ACP server
-# modes print for a client to read back. The uds listener only runs in
-# detached mode, where this process has no TUI.
+# refusal prints, and the id/pid/endpoint banner the detached and ACP server
+# modes print for a client to read back. The local listener runs behind the
+# cli entry point, which prints its exit line for the same reason.
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
     "crates/houyicoder-cli/src/session/cleanup.rs": 15,
-    "crates/houyicoder-cli/src/main.rs": 15,
+    "crates/houyicoder-cli/src/main.rs": 14,
     "crates/houyicoder-loader/src/main.rs": 2,
-    "crates/houyicoder-service/src/uds.rs": 2,
     # The fence binary is a separate process the daemon spawns with both
     # pipes attached: its stdout carries the probe status word and its
     # stderr audit lines land in the captured command output, never on

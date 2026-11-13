@@ -1,9 +1,9 @@
-//! Transports — the carriers the wire frames flow over. One trait, three
-//! implementations: an in-memory channel for mode A; pipes for mode B and a
-//! domain socket for detached sessions are not wired yet. A transport
-//! moves newline-terminated NDJSON frames as owned strings; encode and decode
-//! sit one layer above in protocol, so the transport is carrier mechanics only
-//! and stays ignorant of message shape.
+//! Transports — the carriers the wire frames flow over. One trait, two
+//! implementations: an in-memory channel for the in-process mode, and a stdio
+//! carrier that serves both a pipe-attached frontend and a detached session's
+//! local endpoint. A transport moves newline-terminated NDJSON frames as owned
+//! strings; encode and decode sit one layer above in protocol, so the
+//! transport is carrier mechanics only and stays ignorant of message shape.
 //! The contract test runs the same protocol behavior through each transport
 //! to assert wire equivalence: a frame the in-memory carrier moves is the
 //! same bytes a pipe would move, so a peer cannot tell which carrier
@@ -22,10 +22,6 @@ use std::io::empty;
 #[cfg(test)]
 use std::io::sink;
 use std::io::{BufRead, BufReader, Read, Write};
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
-#[cfg(unix)]
-use std::path::Path;
 #[cfg(test)]
 use std::pin::pin;
 #[cfg(test)]
@@ -120,14 +116,15 @@ impl Transport for InProcTransport {
     }
 }
 
-/// A duplex transport over a process's stdin/stdout (the mode-B carrier). A
-/// dedicated thread blocks on stdin reads — the async stdin readers have a
-/// known event-loop blocking hazard on some platforms, so a blocking reader on
-/// its own thread is the robust shape. Complete frames surface on the async
-/// recv_frame via an unbounded futures channel; sends block-write stdout
-/// (frame-level, short). The carrier honors the same newline-delimited NDJSON
-/// contract as the in-memory transport, so a peer cannot tell which carrier
-/// delivered a frame.
+/// A duplex transport over a readable stream and a writable stream: the
+/// process's stdin and stdout for the pipe mode, or the two directions of a
+/// local endpoint for a detached session. A dedicated thread blocks on reads —
+/// the async stdin readers have a known event-loop blocking hazard on some
+/// platforms, so a blocking reader on its own thread is the robust shape.
+/// Complete frames surface on the async recv_frame via an unbounded futures
+/// channel; sends block-write the writable stream (frame-level, short). The
+/// carrier honors the same newline-delimited NDJSON contract as the in-memory
+/// transport, so a peer cannot tell which carrier delivered a frame.
 ///
 /// The read thread is detached: it exits when stdin hits EOF or errors, and
 /// drops the channel sender so recv_frame reads a clean close. The line
@@ -216,46 +213,6 @@ impl Transport for StdioTransport {
                 Some(Err(e)) => Err(e),
             }
         })
-    }
-}
-
-/// A domain-socket transport for a detached session. The client connects to
-/// a UnixListener a background agent process bound; frames flow over the
-/// socket as NDJSON lines. The carrier mechanics (a thread blocking on
-/// line reads + direct writes) are identical to the stdio carrier, so this
-/// delegates to a StdioTransport over the socket's read + write halves.
-/// Unix-only.
-#[cfg(unix)]
-pub struct UdsTransport {
-    inner: StdioTransport,
-}
-
-#[cfg(unix)]
-impl UdsTransport {
-    /// Connect to a detached session's listening socket. The stream is split
-    /// into a cloned read half (the reader thread owns it) and the write half
-    /// (sends go through it). max_line is the per-frame byte cap.
-    pub fn connect(path: impl AsRef<Path>, max_line: usize) -> std::io::Result<Self> {
-        let stream = UnixStream::connect(path)?;
-        Ok(Self::from_stream(stream, max_line))
-    }
-
-    /// Wrap an already-connected UnixStream. Factored out so a test can drive
-    /// the carrier over a stream pair without binding a listener.
-    pub fn from_stream(stream: UnixStream, max_line: usize) -> Self {
-        let read = stream.try_clone().expect("clone uds read half");
-        let inner = StdioTransport::new(Box::new(read), Box::new(stream), max_line);
-        Self { inner }
-    }
-}
-
-#[cfg(unix)]
-impl Transport for UdsTransport {
-    fn send_frame(&mut self, frame: &str) -> PFut<'_, Result<(), ProtocolError>> {
-        self.inner.send_frame(frame)
-    }
-    fn recv_frame(&mut self) -> PFut<'_, Result<Option<String>, ProtocolError>> {
-        self.inner.recv_frame()
     }
 }
 

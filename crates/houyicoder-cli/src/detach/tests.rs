@@ -16,67 +16,54 @@ fn isolated_base() -> PathBuf {
     PathBuf::from(base)
 }
 
-/// list_sessions reads back a session id we wrote a socket + pidfile for,
-/// including the pid.
+/// The listing reads back a session id we recorded an endpoint for, including
+/// the pid.
 #[test]
 fn test_list_sessions_reads_pid() {
     let base = isolated_base();
     let session = format!("test-list-{}", id());
-    let sock = session_socket(&session);
+    let record = endpoint_file(&session);
     assert!(
-        sock.starts_with(&base),
-        "the socket lands under the injected base, not the real home: {sock:?}"
+        record.starts_with(&base),
+        "the record lands under the injected base, not the real home: {record:?}"
     );
-    write(&sock, b"").expect("write test socket");
+    write(&record, "staged-endpoint").expect("write the endpoint record");
     write(session_pidfile(&session), "4242\n").expect("write test pid");
     let sessions = list_sessions();
     let found = sessions.iter().find(|s| s.id == session);
-    let found = found.expect("list_sessions must find the written id");
+    let found = found.expect("list_sessions must find the recorded id");
     assert_eq!(found.pid, Some(4242), "pid must be read from the pidfile");
-    remove_file(&sock).ok();
+    remove_file(&record).ok();
     remove_file(session_pidfile(&session)).ok();
 }
 
-/// list_sessions omits the pid when the pidfile is absent (a predecessor
-/// crashed without writing one, or the socket is stale).
+/// The listing omits the pid when the pidfile is absent (a predecessor
+/// crashed without writing one, or the record is stale).
 #[test]
 fn test_list_sessions_pid_optional() {
     let _base = isolated_base();
     let session = format!("test-nopid-{}", id());
-    let sock = session_socket(&session);
-    write(&sock, b"").expect("write test socket");
+    let record = endpoint_file(&session);
+    write(&record, "staged-endpoint").expect("write the endpoint record");
     drop(remove_file(session_pidfile(&session)));
     let sessions = list_sessions();
     let found = sessions
         .iter()
         .find(|s| s.id == session)
-        .expect("list_sessions must find the written id");
+        .expect("list_sessions must find the recorded id");
     assert_eq!(found.pid, None, "no pidfile means no pid");
     assert!(!found.live, "no pid means not live");
-    remove_file(&sock).ok();
+    remove_file(&record).ok();
 }
 
-/// pid_alive: the current process is alive; a pid certain to not exist
-/// (a high sentinel) is not.
-#[test]
-fn test_pid_alive_self_dead() {
-    let self_pid = id() as i32;
-    assert!(pid_alive(self_pid), "the current process is alive");
-    // A sentinel pid certain to not exist. PIDs are positive; pick one
-    // in a range the OS is vanishingly unlikely to have allocated, and
-    // accept ESRCH (no such pid) as the not-alive verdict.
-    let sentinel = 1_000_000_000;
-    assert!(!pid_alive(sentinel), "a non-existent pid is not alive");
-}
-
-/// is_session_live: a session whose pidfile points at the current
-/// process is live; a session whose pidfile points at a dead pid is not.
+/// A session whose pidfile points at the current process is live; a session
+/// whose pidfile points at a dead pid is not.
 #[test]
 fn test_session_live_checks_pid() {
     let _base = isolated_base();
     let session = format!("test-live-{}", id());
-    let sock = session_socket(&session);
-    write(&sock, b"").expect("write test socket");
+    let record = endpoint_file(&session);
+    write(&record, "staged-endpoint").expect("write the endpoint record");
     // Live: the pidfile points at this test process.
     write(session_pidfile(&session), id().to_string()).expect("write pid");
     assert!(
@@ -89,20 +76,27 @@ fn test_session_live_checks_pid() {
         !is_session_live(&session),
         "a dead pid means the session is not live"
     );
-    remove_file(&sock).ok();
+    remove_file(&record).ok();
     remove_file(session_pidfile(&session)).ok();
 }
 
-/// cleanup_stale removes the socket + pidfile for a session whose pid is
-/// dead, leaving live sessions alone.
+/// cleanup_stale removes the endpoint, its record, and the pidfile for a
+/// session whose pid is dead, leaving live sessions alone.
 #[test]
 fn test_cleanup_stale_reaps_dead() {
-    let _base = isolated_base();
+    let base = isolated_base();
     let live_session = format!("test-cleanup-live-{}", id());
     let dead_session = format!("test-cleanup-dead-{}", id());
-    write(session_socket(&live_session), b"").expect("write live sock");
+    let dead_endpoint = base.join(format!("{dead_session}.sock"));
+    #[cfg(unix)]
+    write(&dead_endpoint, b"").expect("stage the dead endpoint file");
+    write(endpoint_file(&live_session), "staged-endpoint").expect("write live record");
     write(session_pidfile(&live_session), id().to_string()).expect("write live pid");
-    write(session_socket(&dead_session), b"").expect("write dead sock");
+    write(
+        endpoint_file(&dead_session),
+        dead_endpoint.to_string_lossy().as_bytes(),
+    )
+    .expect("write dead record");
     write(session_pidfile(&dead_session), "1000000000").expect("write dead pid");
     let reaped = cleanup_stale();
     assert!(reaped >= 1, "the dead session must be reaped");
@@ -111,32 +105,37 @@ fn test_cleanup_stale_reaps_dead() {
         "the live session is untouched"
     );
     assert!(
-        !session_socket(&dead_session).exists(),
-        "the dead session socket is removed"
+        !endpoint_file(&dead_session).exists(),
+        "the dead session record is removed"
     );
     assert!(
         !session_pidfile(&dead_session).exists(),
         "the dead session pidfile is removed"
     );
-    remove_file(session_socket(&live_session)).ok();
+    #[cfg(unix)]
+    assert!(
+        !dead_endpoint.exists(),
+        "the dead session endpoint file is removed"
+    );
+    remove_file(endpoint_file(&live_session)).ok();
     remove_file(session_pidfile(&live_session)).ok();
 }
 
-/// The override names the base the sockets land under: with it set, every
-/// socket path starts inside the injected directory, so the suite never
-/// reads or reaps the user's real sessions even when a test forgets its
-/// own cleanup.
+/// The override names the base the records land under: with it set, every
+/// endpoint record starts inside the injected directory, so the suite never
+/// reads or reaps the user's real sessions even when a test forgets its own
+/// cleanup.
 #[test]
 fn test_runtime_dir_redirects() {
     let base = isolated_base();
     let session = format!("test-redirect-{}", id());
-    let sock = session_socket(&session);
-    write(&sock, b"").expect("write test socket");
+    let record = endpoint_file(&session);
+    write(&record, "staged-endpoint").expect("write the endpoint record");
     assert!(
-        sock.starts_with(&base),
-        "the socket lands under the injected base, not the real home: {sock:?}"
+        record.starts_with(&base),
+        "the record lands under the injected base, not the real home: {record:?}"
     );
-    remove_file(&sock).ok();
+    remove_file(&record).ok();
 }
 
 /// The home fallback joins the dotted configuration directory, the prefix

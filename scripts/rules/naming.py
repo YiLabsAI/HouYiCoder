@@ -48,7 +48,7 @@ ALLOWED_TOP_MODULES: dict[str, frozenset[str]] = {
     }),
     "crates/houyicoder-service/src": frozenset({
         "lib", "acp", "agent_registry", "composition", "diagnostics",
-        "lifecycle", "protocol_adapter", "sandbox_policy", "server", "uds",
+        "lifecycle", "local_ipc", "protocol_adapter", "sandbox_policy", "server",
     }),
     "crates/houyicoder-cli/src": frozenset({
         "main", "cli_args", "composition", "detach", "export_view",

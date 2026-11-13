@@ -108,23 +108,3 @@ async fn test_stdio_oversize_frame_errors() {
         "a peer contract violation keeps its own category rather than reading as a broken stream"
     );
 }
-
-/// A frame round-trips over a Unix domain socket pair: a send on the
-/// transport lands as bytes on the peer end, and bytes written on the
-/// peer end arrive as a frame (newline stripped) on the transport. This
-/// proves the UDS carrier reuses the stdio read-thread + write path.
-#[cfg(unix)]
-#[tokio::test]
-async fn test_uds_round_trips_frame() {
-    let (mut peer, client) = UnixStream::pair().expect("pair");
-    let mut t = UdsTransport::from_stream(client, 1024);
-    // client -> peer: send via transport, read raw on the peer end.
-    t.send_frame("{\"hi\":1}\n").await.expect("send");
-    let mut buf = [0u8; 32];
-    let n = peer.read(&mut buf).expect("peer read");
-    assert_eq!(&buf[..n], b"{\"hi\":1}\n");
-    // peer -> client: write raw, recv via transport (newline stripped).
-    peer.write_all(b"{\"ok\":2}\n").expect("peer write");
-    let frame = t.recv_frame().await.expect("recv").expect("a frame");
-    assert_eq!(frame, "{\"ok\":2}");
-}

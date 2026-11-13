@@ -7,7 +7,6 @@ use std::path::Path;
 
 use houyicoder_context::SessionId;
 
-#[cfg(unix)]
 use crate::detach;
 use crate::session::lock::LockError;
 use crate::session::lock::LockProbe;
@@ -56,9 +55,9 @@ const REFUSAL_LINE_LIMIT: usize = 10;
 /// One refusal line per session that cannot be opened here, saying what the
 /// user can do about that particular holder, capped so a large store does
 /// not scroll the terminal before the interface starts. The lines differ
-/// because the holders differ: a detached process has a socket to attach to,
-/// a lock held by some other process has no socket at all, and a lock that
-/// cannot be read names no holder.
+/// because the holders differ: a detached process has a local endpoint to
+/// attach to, a lock held by some other process has no endpoint at all, and a
+/// lock that cannot be read names no holder.
 pub(crate) fn unavailable_lines(sids: &[SessionId], sessions_root: &Path) -> Vec<String> {
     let mut lines: Vec<String> = sids
         .iter()
@@ -76,10 +75,14 @@ pub(crate) fn unavailable_lines(sids: &[SessionId], sessions_root: &Path) -> Vec
 
 fn unavailable_line(sid: &SessionId, sessions_root: &Path) -> String {
     let sid_str = sid.to_string();
-    #[cfg(unix)]
     if detach::is_session_live(&sid_str) {
-        let socket = detach::session_socket(&sid_str);
-        return attach_hint(&sid_str, &socket);
+        if let Some(endpoint) = detach::read_endpoint(&sid_str) {
+            return attach_hint(&sid_str, &endpoint);
+        }
+        return format!(
+            "{sid_str} is live in another process; close that process, or {}",
+            fork_hint(&sid_str)
+        );
     }
     match probe_lock_state(*sid, sessions_root) {
         LockProbe::Held => format!(
@@ -104,14 +107,12 @@ fn fork_hint(sid_str: &str) -> String {
     format!("branch with houyi --resume {sid_str} --fork-session")
 }
 
-/// The line that names the socket a detached process listens on, spelled so
+/// The line that names the endpoint a detached process listens on, spelled so
 /// the command can be run as printed.
-#[cfg(unix)]
-fn attach_hint(sid_str: &str, socket: &Path) -> String {
+fn attach_hint(sid_str: &str, endpoint: &str) -> String {
     format!(
         "{sid_str} is live in another process; attach with \
-         houyi attach {} {sid_str}, or {}",
-        socket.display(),
+         houyi attach {endpoint} {sid_str}, or {}",
         fork_hint(sid_str)
     )
 }
@@ -126,12 +127,16 @@ pub(crate) fn admit_existing_sid(
     sessions_root: &Path,
 ) -> Result<SessionLock, Box<dyn Error>> {
     let sid_str = sid.to_string();
-    #[cfg(unix)]
     if detach::is_session_live(&sid_str) {
-        // A live pidfile means a detached process, whose socket the attach
+        // A live pidfile means a detached process, whose endpoint the attach
         // needs; name it so the hint is a command the user can run.
-        let socket = detach::session_socket(&sid_str);
-        return Err(Box::<dyn Error>::from(attach_hint(&sid_str, &socket)));
+        if let Some(endpoint) = detach::read_endpoint(&sid_str) {
+            return Err(Box::<dyn Error>::from(attach_hint(&sid_str, &endpoint)));
+        }
+        return Err(Box::<dyn Error>::from(format!(
+            "session {sid_str} is live in another process; close that process, or {}",
+            fork_hint(&sid_str)
+        )));
     }
     match SessionLock::acquire(&sid_str, sessions_root) {
         Ok(lock) => Ok(lock),
@@ -145,7 +150,7 @@ pub(crate) fn admit_existing_sid(
             )))
         }
         // A held lock with no live detached process belongs to a process with
-        // no socket to attach to, which is a foreground terminal or a stdio
+        // no endpoint to attach to, which is a foreground terminal or a stdio
         // client. The refusal offers closing that process or branching from
         // this session instead of a raw enum.
         Err(LockError::Held(_)) => Err(Box::<dyn Error>::from(format!(

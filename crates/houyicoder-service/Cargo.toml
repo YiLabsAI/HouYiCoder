@@ -50,6 +50,7 @@ houyicoder-provider = { path = "../houyicoder-provider" }
 houyicoder-sandbox = { path = "../houyicoder-sandbox" }
 houyicoder-resilience = { path = "../houyicoder-resilience" }
 houyicoder-skill = { path = "../houyicoder-skill" }
+houyicoder-platform = { path = "../houyicoder-platform" }
 dunce = "1"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "sync", "net", "io-util", "time"] }

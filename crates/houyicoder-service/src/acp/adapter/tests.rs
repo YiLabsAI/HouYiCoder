@@ -151,7 +151,8 @@ fn test_take_control_grants_lease() {
 /// pending_resent: true so the new lease holder knows a pending permission
 /// ask exists to re-emit. This exercises the detection mechanism at the
 /// adapter boundary; the actual re-send over a persistent transport is the
-/// activation step (lands when a UDS+ACP serve path drives this adapter).
+/// activation step (lands when an ACP client reaches this adapter over a
+/// persistent local transport).
 #[test]
 fn test_take_control_reports_pending() {
     let store = SessionLeaseStore::new();

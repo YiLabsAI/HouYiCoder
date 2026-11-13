@@ -19,20 +19,17 @@ pub(crate) enum CliCommand {
         model: Option<String>,
         no_sandbox: bool,
     },
-    /// Run a detached session bound to a Unix domain socket.
-    #[cfg(unix)]
+    /// Run a detached session bound to a local endpoint.
     Serve {
         project: Option<String>,
-        /// Custom socket path; None means the conventional per-user path.
-        socket: Option<String>,
+        /// Custom endpoint; None means the conventional per-user one.
+        endpoint: Option<String>,
         model: Option<String>,
         no_sandbox: bool,
     },
     /// Attach a TUI to a detached session.
-    #[cfg(unix)]
-    Attach { socket: String, session: String },
+    Attach { endpoint: String, session: String },
     /// List detached session ids + pids.
-    #[cfg(unix)]
     Ps,
     /// Resume a session. --resume <file> resumes from an exported transcript
     /// (a one-time bootstrap); --resume <sid> resumes a session already on
@@ -75,7 +72,6 @@ impl CliCommand {
             | Self::Acp { no_sandbox, .. }
             | Self::Resume { no_sandbox, .. }
             | Self::Continue { no_sandbox, .. } => *no_sandbox,
-            #[cfg(unix)]
             Self::Serve { no_sandbox, .. } => *no_sandbox,
             _ => false,
         }
@@ -93,7 +89,6 @@ struct Flags {
     fork: bool,
     model: Option<String>,
     no_sandbox: bool,
-    #[cfg(unix)]
     serve: Option<Option<String>>,
 }
 
@@ -107,29 +102,12 @@ fn parse_flag(iter: &mut IntoIter<String>, arg: &str, flags: &mut Flags) -> Resu
     } else if arg == "--acp" {
         flags.acp = true;
     } else if arg == "--detached" {
-        #[cfg(unix)]
-        {
-            flags.serve = Some(None);
-        }
-        #[cfg(not(unix))]
-        {
-            return Err(
-                "--detached is unix-only; detached sessions need a Unix domain socket".into(),
-            );
-        }
+        flags.serve = Some(None);
     } else if arg == "--serve" {
-        let path = iter.next().ok_or(
-            "--serve requires a socket path (or use --detached for the conventional path)",
-        )?;
-        #[cfg(unix)]
-        {
-            flags.serve = Some(Some(path));
-        }
-        #[cfg(not(unix))]
-        {
-            drop(path);
-            return Err("--serve is unix-only; detached sessions need a Unix domain socket".into());
-        }
+        let endpoint = iter
+            .next()
+            .ok_or("--serve requires an endpoint (or use --detached for the conventional one)")?;
+        flags.serve = Some(Some(endpoint));
     } else if arg == "-h" || arg == "--help" {
         return Ok(false);
     } else if arg == "--resume" {
@@ -143,7 +121,7 @@ fn parse_flag(iter: &mut IntoIter<String>, arg: &str, flags: &mut Flags) -> Resu
         flags.fork = true;
     } else {
         return Err(format!(
-            "unknown argument: {arg} (use --project <path>, --model <id>, --no-sandbox, --acp, --detached, --serve <socket>, --resume <file|sid>, --continue, --fork-session, attach, or ps)"
+            "unknown argument: {arg} (use --project <path>, --model <id>, --no-sandbox, --acp, --detached, --serve <endpoint>, --resume <file|sid>, --continue, --fork-session, attach, or ps)"
         ));
     }
     Ok(true)
@@ -176,11 +154,10 @@ fn validate_and_build(flags: Flags) -> Result<CliCommand, String> {
             no_sandbox: flags.no_sandbox,
         });
     }
-    #[cfg(unix)]
-    if let Some(socket_opt) = flags.serve {
+    if let Some(endpoint) = flags.serve {
         return Ok(CliCommand::Serve {
             project: flags.project,
-            socket: socket_opt,
+            endpoint,
             model: flags.model,
             no_sandbox: flags.no_sandbox,
         });
@@ -204,13 +181,11 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
     let mut iter = args.into_iter();
     let first = iter.next();
 
-    #[cfg(unix)]
     if first.as_deref() == Some("attach") {
-        let socket = iter.next().ok_or("-- attach needs a socket path")?;
+        let endpoint = iter.next().ok_or("-- attach needs an endpoint")?;
         let session = iter.next().ok_or("-- attach needs a session id")?;
-        return Ok(CliCommand::Attach { socket, session });
+        return Ok(CliCommand::Attach { endpoint, session });
     }
-    #[cfg(unix)]
     if first.as_deref() == Some("ps") {
         return Ok(CliCommand::Ps);
     }
@@ -250,7 +225,6 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
         fork: false,
         model: None,
         no_sandbox: false,
-        #[cfg(unix)]
         serve: None,
     };
 
@@ -265,7 +239,7 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
 /// Usage help text printed to stderr on -h / --help.
 pub(crate) fn print_help() {
     eprintln!(
-        "houyi [--project <path>] [--model <id>] [--no-sandbox] [--acp | --detached | --serve <socket> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --no-sandbox      run without operating system sandbox fence\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind a conventional per-user socket (prints\n                    session_id + pid to stderr); ps lists detached sessions.\n  --serve <socket>  run detached at a custom socket path (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <socket> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)\n  cleanup [--apply] [--verbose] [--yes]
+        "houyi [--project <path>] [--model <id>] [--no-sandbox] [--acp | --detached | --serve <endpoint> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --no-sandbox      run without operating system sandbox fence\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind the conventional per-user endpoint\n                    (prints session_id + pid to stderr); ps lists sessions.\n  --serve <endpoint>  run detached at a custom endpoint (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <endpoint> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)\n  cleanup [--apply] [--verbose] [--yes]
                    review (or --apply to execute) the prune plan; --verbose lists
                    every entry; --yes skips the prompt (non-interactive)"
     );

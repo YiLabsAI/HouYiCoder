@@ -9,6 +9,7 @@
 pub mod desktop;
 pub mod host;
 pub mod ipc;
+pub mod process;
 
 #[cfg(target_os = "linux")]
 mod linux;

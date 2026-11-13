@@ -28,13 +28,11 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::Mutex;
-#[cfg(unix)]
 use std::sync::mpsc::channel;
 
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
-#[cfg(unix)]
 use {
     houyicoder_service::composition::notification_drain,
     houyicoder_tui::agent_message::SessionMessage,
@@ -42,7 +40,6 @@ use {
 
 mod cli_args;
 mod composition;
-#[cfg(unix)]
 mod detach;
 mod export_view;
 mod local_host;
@@ -61,24 +58,22 @@ use crate::session::resume_bundle::build_bundle_for_fork;
 use crate::session::resume_bundle::build_bundle_for_resume_sid;
 use futures::StreamExt;
 use futures::channel::mpsc;
-#[cfg(unix)]
-use houyicoder_client::{Client, UdsTransport};
+use houyicoder_client::Client;
+use houyicoder_client::StdioTransport;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_permission::FileRuleStore;
-#[cfg(unix)]
 use houyicoder_permission::ModeGate;
+use houyicoder_platform::ipc;
+use houyicoder_platform::ipc::LocalListener;
 use houyicoder_protocol::acpx::AcpxCapabilities;
-#[cfg(unix)]
 use houyicoder_protocol::framing::MAX_MESSAGE_BYTES;
-#[cfg(unix)]
 use houyicoder_service::CancellationToken;
 use houyicoder_service::acp::adapter::AcpAdapter;
 use houyicoder_service::acp::carrier::AcpIo;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::ProviderResolution;
-#[cfg(unix)]
 use houyicoder_service::composition::SessionHost;
 use houyicoder_service::composition::build_runner;
 use houyicoder_service::composition::resolve_provider;
@@ -87,17 +82,12 @@ use houyicoder_service::composition::resume_candidates_all;
 use houyicoder_service::composition::workspace_cwd;
 use houyicoder_service::diagnostics::install;
 use houyicoder_service::lifecycle::SessionLeaseStore;
-#[cfg(unix)]
+use houyicoder_service::local_ipc;
 use houyicoder_service::server::EventSequencer;
-#[cfg(unix)]
-use houyicoder_service::uds;
 use houyicoder_tui::app::run_with_runner;
-#[cfg(unix)]
-use std::fs::remove_file;
 use std::io::stdin;
 use std::io::stdout;
 use std::io::{BufRead, Write};
-#[cfg(unix)]
 use std::process::id;
 use tokio::runtime::Builder;
 
@@ -126,7 +116,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             print_help();
             Ok(())
         }
-        #[cfg(unix)]
         CliCommand::Ps => {
             // Reap crashed-session leftovers before listing so ps does not
             // show dead sessions as live.
@@ -143,16 +132,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        #[cfg(unix)]
-        CliCommand::Attach { socket, session } => run_attach(socket, session),
-        #[cfg(unix)]
+        CliCommand::Attach { endpoint, session } => run_attach(endpoint, session),
         CliCommand::Serve {
             project,
-            socket,
+            endpoint,
             model,
             ..
         } => {
-            run_serve(project, socket, model)?;
+            run_serve(project, endpoint, model)?;
             Ok(())
         }
         CliCommand::Acp { project, model, .. } => {
@@ -190,10 +177,7 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
     // Reap crashed-session pid markers before resolving the value, so a sid
     // whose process died is not falsely treated as live (the hash chain
     // single-writer check in is_session_live reads the pid marker).
-    #[cfg(unix)]
-    {
-        let _ = detach::cleanup_stale();
-    }
+    let _ = detach::cleanup_stale();
     let provider = resolve_provider(project.as_deref());
     let path = PathBuf::from(&value);
     if path.exists() {
@@ -230,10 +214,7 @@ fn run_resume(value: String, project: Option<String>, fork: bool) -> Result<(), 
 /// newest session instead, held or not, because a fork never locks the
 /// source. Errors if no session exists on disk.
 fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error>> {
-    #[cfg(unix)]
-    {
-        let _ = detach::cleanup_stale();
-    }
+    let _ = detach::cleanup_stale();
     let sessions_root = session_log_root();
     let candidates = resume_candidates(&sessions_root);
     if candidates.is_empty() {
@@ -345,16 +326,15 @@ fn production_runner(project: Option<String>, provider: ProviderResolution) -> B
 
 /// The detached-session entry. Builds the runner through the composition
 /// root, registers it under a fresh session in a SessionHost, and binds a
-/// Unix domain socket. With a custom socket path, binds there; with None,
-/// binds at the conventional per-user path derived from the session id
-/// (so ps and stop can discover and control it) and writes a pidfile.
-/// Each connecting client reattaches the same session via serve_session;
-/// the session survives a client disconnect. The session id is printed to
-/// stderr so an attaching client knows the target.
-#[cfg(unix)]
+/// local endpoint. With a custom endpoint, binds there; with None, binds at
+/// the conventional endpoint derived from the session id and records it, so
+/// the listing can discover the session and an attaching client can reach it.
+/// Each connecting client reattaches the same session via serve_session; the
+/// session survives a client disconnect. The session id is printed to stderr
+/// so an attaching client knows the target.
 fn run_serve(
     project: Option<String>,
-    socket: Option<String>,
+    endpoint: Option<String>,
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let provider = resolve_provider(project.as_deref());
@@ -370,19 +350,6 @@ fn run_serve(
     }
     eprintln!("session_id={}", bundle.session);
     eprintln!("pid={}", id());
-    let socket_path = match socket {
-        Some(p) => {
-            eprintln!("uds={p}");
-            p
-        }
-        None => {
-            let p = detach::session_socket(&bundle.session.to_string());
-            detach::write_pidfile(&bundle.session.to_string());
-            eprintln!("uds={}", p.display());
-            p.to_string_lossy().into_owned()
-        }
-    };
-    remove_file(&socket_path).ok();
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     let background_tasks = bundle.background_tasks.clone();
     let host = Arc::new(
@@ -423,8 +390,22 @@ fn run_serve(
     );
     runtime.block_on(async move {
         fire_after_bundle(session);
-        if let Err(e) = uds::listen_uds(host, session, &socket_path).await {
-            eprintln!("uds listener exited: {e}");
+        let listener = match endpoint {
+            Some(endpoint) => {
+                ipc::remove_endpoint(&endpoint).ok();
+                LocalListener::bind(&endpoint)?
+            }
+            None => {
+                let session_id = session.to_string();
+                let listener = ipc::bind_session(&detach::sessions_dir(), &session_id)?;
+                detach::write_pidfile(&session_id);
+                detach::record_endpoint(&session_id, listener.endpoint())?;
+                listener
+            }
+        };
+        eprintln!("endpoint={}", listener.endpoint());
+        if let Err(e) = local_ipc::listen_local(host, session, listener).await {
+            eprintln!("local listener exited: {e}");
         }
         background_tasks.shutdown();
         relay_cancel.cancel();
@@ -435,18 +416,19 @@ fn run_serve(
         if let Some(handle) = drain_handle {
             drop(handle.await);
         }
-    });
+        Ok::<(), Box<dyn Error>>(())
+    })?;
     Ok(())
 }
 
-/// Attach a TUI to a detached session. Connects to the session's listening
-/// socket, builds a protocol client over the connection, and runs the TUI
+/// Attach a TUI to a detached session. Connects to the session's local
+/// endpoint, builds a protocol client over the connection, and runs the TUI
 /// against the session id the detached process printed to stderr. The TUI
 /// holds no runner; the detached process owns it. Disconnecting the TUI
 /// leaves the session alive for a later reattach.
-#[cfg(unix)]
-fn run_attach(socket: String, session_id: String) -> Result<(), Box<dyn Error>> {
-    let transport = UdsTransport::connect(&socket, MAX_MESSAGE_BYTES)?;
+fn run_attach(endpoint: String, session_id: String) -> Result<(), Box<dyn Error>> {
+    let streams = ipc::connect_local_streams(&endpoint)?;
+    let transport = StdioTransport::new(streams.read, streams.write, MAX_MESSAGE_BYTES);
     let client = Client::new(Box::new(transport));
     let (tx, rx) = channel::<SessionMessage>();
     let wire_session = houyicoder_protocol::frontend::SessionId(session_id);
@@ -667,10 +649,7 @@ fn run_tui_loop(
     project: Option<String>,
     provider: ProviderResolution,
 ) -> Result<(), Box<dyn Error>> {
-    #[cfg(unix)]
-    {
-        let _ = detach::cleanup_stale();
-    }
+    let _ = detach::cleanup_stale();
     let host_slot: HostLeaseSlot = Arc::new(Mutex::new(HostLeaseScope::with_current(lease)));
     // The guard's drop releases the scope on every exit path, including a
     // panic unwinding past the loop.
