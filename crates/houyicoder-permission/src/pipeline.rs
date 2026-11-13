@@ -31,6 +31,7 @@ use detection::{
     NetworkEgressValidator, PathBoundsValidator, SignalCommandValidator,
 };
 use houyicoder_api::sandbox::Containment;
+use houyicoder_api::shell::Shell;
 use protected_path::ProtectedPathValidator;
 use std::sync::Arc;
 
@@ -98,6 +99,11 @@ pub struct GateCtx<'a> {
     pub mode: PermissionMode,
     pub content: &'a str,
     pub segments: &'a [String],
+    /// The dialect the session runs commands in. A PowerShell session parses
+    /// its commands through the PowerShell classifier, not the POSIX compound
+    /// split, so the mode-default stage reads this to pick the right read-only
+    /// proof.
+    pub shell: Shell,
     pub rules: &'a [Rule],
     pub consent: Option<&'a dyn ConsentStore>,
     /// The pre-computed rule effect for this request, evaluated once at the

@@ -102,18 +102,22 @@ impl ShellProgram {
 /// Wrap a PowerShell command so the process exits with the command's own exit
 /// code rather than the shell's.
 ///
-/// A native command the user runs sets $LASTEXITCODE; a cmdlet sets $?.  The
-/// wrapper resets $LASTEXITCODE first so a value a prior command left does not
-/// leak, runs the command, and exits with the native code when one was set, or
-/// with one when a cmdlet failed, or with zero. Pure so the wrapping is
-/// testable without a PowerShell process; the four-quadrant exit behavior is
-/// pinned by an ignored suite that runs where the shell is installed.
+/// A native command sets $LASTEXITCODE; a cmdlet sets $?.  The wrapper resets
+/// $LASTEXITCODE first so a value a prior command left does not leak, runs the
+/// command, and captures $? into $__ok before anything else can overwrite it.
+/// When the command failed, a native code that is set and non-zero wins,
+/// otherwise the failure exits one; when the command succeeded, a native code
+/// that is set wins, otherwise zero. Capturing $? first closes the quadrant
+/// where a native succeeded ($LASTEXITCODE zero) and a later cmdlet failed --
+/// the old form saw the non-null zero and exited zero, swallowing the failure.
+/// Pure so the wrapping is testable without a PowerShell process; the
+/// four-quadrant exit behavior is pinned by an ignored suite that runs where the
+/// shell is installed.
 pub fn pwsh_command(command: &str) -> String {
     format!(
-        "& {{ $global:LASTEXITCODE = $null; {command}; \
-         if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }} \
-         elseif (-not $?) {{ exit 1 }} \
-         else {{ exit 0 }} }}"
+        "& {{ $global:LASTEXITCODE = $null; {command}; $__ok = $?; \
+         if (-not $__ok) {{ if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} exit 1 }} \
+         if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }} exit 0 }}"
     )
 }
 
@@ -127,9 +131,11 @@ pub enum ShellPreference {
     GitBash,
     /// The command interpreter, never replaced by a search result.
     Cmd,
-    /// PowerShell, resolved by absolute path. A host without it falls back to
-    /// the command interpreter and the report says so.
-    PowerShell,
+    /// PowerShell, resolved by absolute path. None asks for either edition,
+    /// preferring Core and falling back to Desktop; a specific edition is locked
+    /// to it and a host without that edition falls back with a report rather
+    /// than running the other silently.
+    PowerShell(Option<PwshEdition>),
 }
 
 /// The interpreter a configured helper command runs through. Explicit so a

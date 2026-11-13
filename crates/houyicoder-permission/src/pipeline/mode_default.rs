@@ -7,6 +7,7 @@
 //! every earlier stage, so the mode adds no question of its own.
 
 use houyicoder_api::sandbox::names_credential_path;
+use houyicoder_api::shell::Shell;
 use houyicoder_api::tool::is_shell_tool;
 
 use crate::compound::is_readonly_compound;
@@ -15,6 +16,7 @@ use crate::egress::http_origin;
 use crate::gate::mode_policy::mode_default;
 use crate::mode::{PermissionMode, ToolRequest};
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
+use crate::shell::powershell::read_only as powershell_read_only;
 
 /// The fallback verdict. Always returns a concrete Allow / Ask, so the ladder
 /// never falls off the end. Reads the mode from the shared context.
@@ -74,6 +76,12 @@ impl Validator for ModeDefaultValidator {
 fn readonly_shell(req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> bool {
     if !is_shell_tool(req.tool_name) {
         return false;
+    }
+    // A PowerShell session parses its commands through the PowerShell
+    // read-only classifier, not the POSIX compound split, which would misread
+    // its syntax. The credential check runs on the content either way.
+    if matches!(ctx.shell, Shell::PowerShell(_)) {
+        return powershell_read_only(ctx.content) && !names_credential_path(ctx.content);
     }
     let segments: Vec<&str> = ctx.segments.iter().map(String::as_str).collect();
     is_readonly_compound(&segments) && !names_credential_path(ctx.content)

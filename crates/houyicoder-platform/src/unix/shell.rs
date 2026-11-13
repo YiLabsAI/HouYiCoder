@@ -18,11 +18,13 @@ pub(crate) fn discover(
              this host keeps its own shell",
             path.display()
         )),
-        (ShellPreference::GitBash | ShellPreference::Cmd | ShellPreference::PowerShell, _) => Some(
-            "the shell setting only selects a shell on Windows; this host keeps \
+        (ShellPreference::GitBash | ShellPreference::Cmd | ShellPreference::PowerShell(_), _) => {
+            Some(
+                "the shell setting only selects a shell on Windows; this host keeps \
              its own shell"
-                .to_owned(),
-        ),
+                    .to_owned(),
+            )
+        }
     };
     ShellSelection {
         program: None,

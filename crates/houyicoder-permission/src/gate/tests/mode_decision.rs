@@ -4,6 +4,7 @@ use crate::consent::args_key;
 use crate::decision::{Decision, Outcome};
 use crate::rule::{Effect, RuleContent};
 use houyicoder_api::sandbox::{Containment, Coverage, SideEffect};
+use houyicoder_api::shell::{PwshEdition, Shell};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,6 +76,37 @@ fn test_manual_readonly_allows() {
             g.decide(&bash_req(command)).outcome(),
             Outcome::Allow,
             "{command}"
+        );
+    }
+}
+
+/// A PowerShell session routes its read-only proof through the PowerShell
+/// classifier: a read-only cmdlet is allowed, a dynamic one asks, and a
+/// parenthesized subexpression never slips past.
+#[test]
+fn test_manual_powershell_session_readonly() {
+    let g = fenced_manual();
+    g.set_shell(Shell::PowerShell(PwshEdition::Core));
+    for command in [
+        "Get-ChildItem -Path src",
+        "Get-Content -LiteralPath README.md",
+        "Test-Path src",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(command)).outcome(),
+            Outcome::Allow,
+            "a read-only cmdlet is allowed: {command}"
+        );
+    }
+    for command in [
+        "Get-Content (Remove-Item foo -PassThru)",
+        "Get-ChildItem | Select-Object Name",
+        "Remove-Item file",
+    ] {
+        assert_eq!(
+            g.decide(&bash_req(command)).outcome(),
+            Outcome::Ask,
+            "a dynamic or write command asks: {command}"
         );
     }
 }

@@ -10,7 +10,7 @@ use houyicoder_api::shell::interpreter::is_read_only_program;
 
 use super::ShellCommand;
 use super::ShellScan;
-use super::powershell::read_only as pwsh_read_only;
+use super::powershell::read_only as powershell_read_only;
 use super::program_name;
 use super::scan_text;
 
@@ -29,7 +29,7 @@ pub(super) fn classify_interpreter_input(
     let name = program_name(program).to_ascii_lowercase();
     if name == "powershell" || name == "pwsh" {
         scan.codes.push(code.to_string());
-        if !pwsh_read_only(code) {
+        if !powershell_read_only(code) {
             scan.opaque_code = true;
         }
         return;

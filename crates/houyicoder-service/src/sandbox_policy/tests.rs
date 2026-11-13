@@ -5,6 +5,8 @@
 //! one surfaces later as an unexplained failure from an unrelated tool.
 
 use super::*;
+use houyicoder_api::shell::PwshEdition;
+use houyicoder_config::ShellSetting;
 
 fn settings() -> SandboxNetworkConfig {
     SandboxNetworkConfig::default()
@@ -170,4 +172,22 @@ fn test_shell_settings_reported() {
         w.iter().any(|m| m.contains("git_bash_path")),
         "a path the mode ignores must be reported: {w:?}"
     );
+}
+
+/// Each PowerShell mode maps to the edition it names, so a host asked for 5.1
+/// does not silently run 7, and one asked for 7 does not silently run 5.1.
+#[test]
+fn test_powershell_modes_pick_edition() {
+    let cases = [
+        (ShellSetting::PowerShell, None),
+        (ShellSetting::PowerShell7, Some(PwshEdition::Core)),
+        (ShellSetting::PowerShell51, Some(PwshEdition::Desktop)),
+    ];
+    for (mode, edition) in cases {
+        assert_eq!(
+            shell_preference(&mode),
+            ShellPreference::PowerShell(edition),
+            "mode {mode:?} maps to edition {edition:?}"
+        );
+    }
 }

@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use houyicoder_api::sandbox::{Egress, NetworkPolicy, UnixSockets};
+use houyicoder_api::shell::PwshEdition;
 use houyicoder_config::{NetworkMode, SandboxNetworkConfig, SandboxShellConfig, ShellSetting};
 use houyicoder_sandbox::{ShellPreference, ShellSelection, select_shell};
 
@@ -95,9 +96,9 @@ fn shell_preference(mode: &ShellSetting) -> ShellPreference {
         ShellSetting::Auto => ShellPreference::Auto,
         ShellSetting::GitBash => ShellPreference::GitBash,
         ShellSetting::Cmd | ShellSetting::Unsupported(_) => ShellPreference::Cmd,
-        ShellSetting::PowerShell | ShellSetting::PowerShell7 | ShellSetting::PowerShell51 => {
-            ShellPreference::PowerShell
-        }
+        ShellSetting::PowerShell => ShellPreference::PowerShell(None),
+        ShellSetting::PowerShell7 => ShellPreference::PowerShell(Some(PwshEdition::Core)),
+        ShellSetting::PowerShell51 => ShellPreference::PowerShell(Some(PwshEdition::Desktop)),
     }
 }
 

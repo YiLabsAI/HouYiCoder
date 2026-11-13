@@ -14,10 +14,10 @@ mod tests;
 /// run without approval.
 ///
 /// The command must be a single statement (no pipeline or sequence), carry no
-/// redirect, substitution, or type reference, and name a read-only cmdlet with
-/// only safe flags. A path argument must be a literal, not an expression; the
-/// authorized-area check the gate already runs decides whether that path is one
-/// the user meant to expose.
+/// redirect, substitution, parenthesized subexpression, or type reference, and
+/// name a read-only cmdlet with only safe flags. A path argument must be a
+/// literal, not an expression; the authorized-area check the gate already runs
+/// decides whether that path is one the user meant to expose.
 pub fn read_only(command: &str) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty() || has_dynamic_construct(trimmed) {
@@ -28,11 +28,16 @@ pub fn read_only(command: &str) -> bool {
 
 /// Whether the text carries a construct that makes a command dynamic rather than
 /// a literal read. Each of these turns a read-only-looking cmdlet into one whose
-/// effect the gate cannot bound from the text alone.
+/// effect the gate cannot bound from the text alone. A parenthesized
+/// subexpression is the form an arbitrary command hides behind a read-only
+/// cmdlet name, so both parentheses are rejected alongside the rest.
 fn has_dynamic_construct(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(c, ';' | '|' | '&' | '>' | '`' | '$' | '{' | '}' | '[' | ']'))
-        || has_dynamic_parameter(text)
+    text.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '|' | '&' | '>' | '<' | '`' | '$' | '(' | ')' | '{' | '}' | '[' | ']'
+        )
+    }) || has_dynamic_parameter(text)
 }
 
 /// Whether a parameter is given an expression value, the form a colon binds a

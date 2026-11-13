@@ -34,6 +34,7 @@ use crate::store::Scope;
 use crate::store::StoreError;
 use houyicoder_api::sandbox::SideEffect;
 use houyicoder_api::sandbox::{Containment, FenceCapability};
+use houyicoder_api::shell::Shell;
 use houyicoder_api::tool::is_shell_tool;
 use std::collections::HashSet;
 use std::path::Path;
@@ -149,6 +150,10 @@ pub struct DefaultModeGate {
     /// host allowlist is a larger decision than one approval, and nothing here
     /// survives a restart.
     egress_allow: Mutex<Vec<String>>,
+    /// The dialect the session runs commands in. A PowerShell session routes
+    /// its read-only proof through the PowerShell classifier rather than the
+    /// POSIX compound split.
+    shell: Mutex<Shell>,
 }
 
 impl DefaultModeGate {
@@ -167,6 +172,7 @@ impl DefaultModeGate {
             metrics: DecisionCounter::new(),
             disabled_builtins: Mutex::new(HashSet::new()),
             egress_allow: Mutex::new(Vec::new()),
+            shell: Mutex::new(Shell::Posix),
         }
     }
 
@@ -185,6 +191,7 @@ impl DefaultModeGate {
             metrics: DecisionCounter::new(),
             disabled_builtins: Mutex::new(HashSet::new()),
             egress_allow: Mutex::new(Vec::new()),
+            shell: Mutex::new(Shell::Posix),
         }
     }
 
@@ -207,6 +214,7 @@ impl DefaultModeGate {
             metrics: DecisionCounter::new(),
             disabled_builtins: Mutex::new(HashSet::new()),
             egress_allow: Mutex::new(Vec::new()),
+            shell: Mutex::new(Shell::Posix),
         }
     }
 
@@ -305,6 +313,14 @@ impl DefaultModeGate {
         self.headless.store(headless, Ordering::Relaxed);
     }
 
+    /// Post-construction setter for the session shell dialect. The composition
+    /// root calls this once it has chosen the shell the session runs commands
+    /// in, so the mode-default stage routes a PowerShell session through the
+    /// PowerShell read-only proof rather than the POSIX compound split.
+    pub fn set_shell(&self, shell: Shell) {
+        *self.shell.lock().expect("shell gate mutex") = shell;
+    }
+
     pub fn consent(&self) -> Option<Arc<dyn ConsentStore>> {
         self.consent.clone()
     }
@@ -337,6 +353,7 @@ impl DefaultModeGate {
             mode,
             content: &content,
             segments: &segments,
+            shell: *self.shell.lock().expect("shell gate mutex"),
             rules: &rules,
             consent: self.consent.as_deref(),
             effect,

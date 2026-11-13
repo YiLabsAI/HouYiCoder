@@ -13,7 +13,7 @@ use crate::compound::{split_compound, strip_safe_redirects};
 
 mod interpreter;
 mod launcher;
-mod powershell;
+pub(crate) mod powershell;
 mod reader;
 mod unwrapper;
 

@@ -144,17 +144,20 @@ fn test_arguments_per_program() {
     );
 }
 
-/// The PowerShell wrapper resets the exit code before the command and exits with
-/// the command's own code after it, so a stale code does not leak and a failed
-/// cmdlet reports failure.
+/// The PowerShell wrapper resets the exit code before the command, captures $?
+/// into a local right after it, and routes a native code or a cmdlet failure to
+/// the right exit. Capturing $? first closes the quadrant where a native
+/// succeeded ($LASTEXITCODE zero) and a later cmdlet failed -- the old form saw
+/// the non-null zero and exited zero, swallowing the failure.
 #[test]
 fn test_pwsh_command_resets_exit() {
     let wrapped = super::pwsh_command("Get-Location");
     assert!(
         wrapped.contains("$global:LASTEXITCODE = $null")
-            && wrapped.contains("Get-Location")
+            && wrapped.contains("$__ok = $?")
+            && wrapped.contains("if (-not $__ok)")
             && wrapped.contains("exit $LASTEXITCODE"),
-        "the wrapper resets and exits with the code: {wrapped}"
+        "the wrapper captures success and routes the code: {wrapped}"
     );
 }
 

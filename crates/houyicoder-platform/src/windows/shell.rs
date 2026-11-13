@@ -41,8 +41,12 @@ pub(crate) fn discover(
         };
         return select(preference, &candidates, missing, no_real_path);
     }
-    if preference == ShellPreference::PowerShell {
+    if let ShellPreference::PowerShell(wanted) = preference {
         return resolve_pwsh()
+            .and_then(|(path, edition)| match wanted {
+                Some(requested) if requested != edition => None,
+                _ => Some((path, edition)),
+            })
             .map(|(path, edition)| {
                 let program = ShellProgram::PowerShell { path, edition };
                 tracing::info!("shell: commands run with PowerShell");
@@ -51,13 +55,20 @@ pub(crate) fn discover(
                     notice: None,
                 }
             })
-            .unwrap_or_else(|| ShellSelection {
-                program: None,
-                notice: Some(
-                    "PowerShell was asked for but neither pwsh nor powershell was \
-                     found, so commands run with the Windows command interpreter"
-                        .to_owned(),
-                ),
+            .unwrap_or_else(|| {
+                let not_found = match wanted {
+                    Some(PwshEdition::Core) => "PowerShell 7 was asked for but pwsh was not found",
+                    Some(PwshEdition::Desktop) => {
+                        "Windows PowerShell 5.1 was asked for but powershell was not found"
+                    }
+                    None => "PowerShell was asked for but neither pwsh nor powershell was found",
+                };
+                ShellSelection {
+                    program: None,
+                    notice: Some(format!(
+                        "{not_found}, so commands run with the Windows command interpreter"
+                    )),
+                }
             });
     }
     let standard = standard_locations();

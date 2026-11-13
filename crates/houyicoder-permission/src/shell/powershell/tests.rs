@@ -40,6 +40,14 @@ fn test_dynamic_construct_rejected() {
         "a sequence is not read-only"
     );
     assert!(
+        !read_only("Get-Content (Remove-Item foo -PassThru)"),
+        "a parenthesized subexpression is not read-only"
+    );
+    assert!(
+        !read_only("Test-Path (Start-Process calc)"),
+        "a subexpression behind a read-only cmdlet is not read-only"
+    );
+    assert!(
         !read_only("Get-Content file > out.txt"),
         "a redirect is not read-only"
     );
