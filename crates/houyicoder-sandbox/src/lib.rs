@@ -9,9 +9,10 @@
 //!   boundary. The binary must be installed beside the daemon;
 //!   HOUYICODER_SANDBOX_HELPER overrides discovery, and a missing one
 //!   reports a failed fence.
-//! - Windows Job Object: fences the spawned tree's CPU time, memory commit
-//!   and lifetime (kill on close), but carries no path primitive, so its
-//!   coverage stays Unfenced and the resolver remains the boundary.
+//! - Windows Job Object: fences the started tree's lifetime (kill on close).
+//!   It applies no CPU, memory, or process-count limit yet, and carries no
+//!   path primitive, so its coverage stays Unfenced and the resolver remains
+//!   the boundary.
 //!
 //! Path canonicalization goes through dunce so the Windows UNC prefix std
 //! canonicalize yields does not break downstream string ops; on unix it

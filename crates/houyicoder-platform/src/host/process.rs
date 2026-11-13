@@ -1,10 +1,14 @@
 //! The native process launcher: the command line a Windows spawn hands the
-//! kernel, built under the quoting rules the kernel applies. The FFI that
-//! drives the spawn lives in the windows module; the command-line assembly is
-//! pure so every quoting edge runs on a host with no Windows kernel.
+//! kernel, built under the quoting rules the kernel applies, and the launcher
+//! that runs the command inside its job. The FFI that drives the spawn lives
+//! in the windows module; the command-line assembly is pure so every quoting
+//! edge runs on a host with no Windows kernel.
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(target_os = "windows")]
+pub use crate::windows::process::{NativeChild, spawn_fenced, spawn_unfenced};
 
 /// Build the command line a Windows CreateProcessW call takes, with each
 /// argument quoted and escaped the way the Microsoft C runtime parses it.

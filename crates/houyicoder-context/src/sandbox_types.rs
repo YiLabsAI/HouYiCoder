@@ -106,11 +106,12 @@ impl ExecResult {
 /// is reserved for a future per-tree process budget.
 #[derive(Debug, Clone, Copy)]
 pub struct ExecConfig {
-    /// CPU seconds budget. Enforced by the Windows job object; macOS and
-    /// Linux rely on wall_timeout_ms.
+    /// CPU seconds budget. The Windows job object is the per-tree primitive
+    /// this belongs on and does not carry it yet; macOS and Linux rely on
+    /// wall_timeout_ms.
     pub cpu_secs: u64,
-    /// Memory cap in bytes. Enforced by the Windows job object as a commit
-    /// charge cap; not applied on macOS or Linux.
+    /// Memory cap in bytes. Not applied on any backend; the Windows job
+    /// object's commit-charge cap is the intended carrier.
     pub as_bytes: u64,
     /// Per-tree process budget. Not enforced on any backend yet; kept as the
     /// configuration point for a process-count fence.

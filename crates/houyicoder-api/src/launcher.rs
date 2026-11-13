@@ -82,12 +82,13 @@ impl StdioConfig {
 /// worktree op) may spawn with no fence, while a tool exec always carries one.
 #[derive(Debug, Clone, Copy)]
 pub struct FenceConfig {
-    /// CPU seconds budget. Enforced where a per-tree kernel primitive exists
-    /// (the Windows job object); not applied through rlimits, whose unix
-    /// semantics are per process or per user rather than per tree.
+    /// CPU seconds budget. The Windows job object is the per-tree primitive
+    /// such a limit belongs on, and the launcher does not set it yet; rlimits
+    /// are not used because their unix semantics are per process or per user
+    /// rather than per tree.
     pub cpu_secs: u64,
-    /// Memory budget in bytes. Enforced by the Windows job object as a
-    /// commit-charge cap; not applied on the unix backends.
+    /// Memory budget in bytes. Not applied on any backend yet; the Windows
+    /// job object's commit-charge cap is the intended carrier.
     pub as_bytes: u64,
     /// Per-tree process budget. Not enforced on any backend yet; kept as the
     /// configuration point for a process-count fence.

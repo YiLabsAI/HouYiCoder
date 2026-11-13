@@ -1,11 +1,11 @@
-//! Windows sandbox session: one kernel job per command. Each exec creates an
-//! unnamed job, assigns the child to it, and ends the whole tree when the
-//! call finishes, the wall timeout trips, or the capture refuses output — so
-//! a grandchild cannot outlive the command that started it. With the enforce
-//! feature off, or on another platform, the session is a no-op fence whose
-//! methods log the gap.
+//! Windows sandbox session: one kernel job per command. The command enters
+//! the job at creation, so no instruction of it runs outside the fence, and
+//! the job ends with the call -- on completion, on the wall timeout, or when
+//! the capture refuses output -- so a grandchild cannot outlive the command
+//! that started it. With the enforce feature off, or on another platform, the
+//! session is a no-op fence whose methods log the gap.
 
-use crate::output_capture::{CapturedOutput, DRAIN_GRACE, capture, pipe_streams};
+use crate::output_capture::{CaptureChild, CapturedOutput, DRAIN_GRACE, capture_streams};
 use crate::runtime_dirs::RuntimeDirs;
 use crate::shell_selection::ShellProgram;
 use crate::timeout::message;
@@ -17,27 +17,23 @@ use houyicoder_api::sandbox::{
 use houyicoder_api::shell::Shell;
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_platform::host::process::{
+    NativeChild, build_cmd_line, build_command_line, spawn_fenced, spawn_unfenced,
+};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::env::temp_dir;
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-use std::ffi::c_void;
 use std::fs::{create_dir_all, remove_dir_all};
+use std::future::Future;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::process::ExitStatus;
 use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::process::Child;
-use tokio::process::Command;
+use tokio::fs::File;
 use tokio::time::timeout;
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-use windows::Win32::Foundation::HANDLE;
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-use windows::Win32::System::JobObjects::{
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-};
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-use windows::Win32::System::Threading::{PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
 /// A Windows sandbox session. The workspace is the user's project dir (Guarded
 /// mode) or a temp dir. Drop leaves the workspace untouched when not owned.
@@ -58,10 +54,6 @@ pub struct WindowsJobSession {
     /// never translates for a shell the session does not use.
     program: Option<ShellProgram>,
 }
-
-/// The creation flag that suppresses the console window a tool command would
-/// otherwise allocate, avoiding the conhost flash on every spawn.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 impl WindowsJobSession {
     /// Create a session rooted at the user's project dir. The dir is
@@ -168,9 +160,10 @@ impl Drop for WindowsJobSession {
 }
 
 // ----------------------------------------------------------------------------
-// Fence construction. Under windows plus the enforce feature this creates a
-// Job Object and applies the extended limits; otherwise it is a no-op (the
-// stub session logs the unfenced gap from each method).
+// Fence status. The launcher creates the job per command, so construction
+// only settles whether this session claims the fence at all; with the
+// enforce feature off the stub session logs the unfenced gap from each
+// method.
 // ----------------------------------------------------------------------------
 
 #[cfg(all(target_os = "windows", feature = "enforce"))]
@@ -191,168 +184,36 @@ fn apply_fence() -> FenceStatus {
     FenceStatus::Unavailable
 }
 
-// ----------------------------------------------------------------------------
-// Safe wrappers over the Win32 Job Object FFI. The windows crate exposes
-// these calls as unsafe functions (raw pointers and kernel handles), so this
-// module is the ONLY place unsafe_code is allowed in the sandbox crate. The
-// allow is scoped to this submodule; the rest of the crate keeps the
-// workspace deny. Each wrapper takes owned or borrowed safe inputs, performs
-// the one FFI call, and returns the windows::core::Result so callers map
-// errors without touching unsafe themselves.
-//
-// The Job Object handle is a process-wide kernel reference that is safe to
-// share across threads; the wrappers below do not dereference the pointer
-// the handle wraps, only hand it to the kernel.
-// ----------------------------------------------------------------------------
-
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-#[expect(
-    unsafe_code,
-    reason = "Windows FFI: Job Object kernel handle + raw pointer calls"
-)]
-mod ffi {
-    use std::ffi::c_void;
-    use std::mem::size_of;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOBOBJECTINFOCLASS, JobObjectExtendedLimitInformation, SetInformationJobObject,
-        TerminateJobObject,
-    };
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_ACCESS_RIGHTS};
-    use windows::core::PCWSTR;
-
-    pub fn create_job_object() -> windows::core::Result<HANDLE> {
-        // A null name yields an unnamed job — the standard form for a
-        // single-owner job that is never opened by name from elsewhere.
-        let name: PCWSTR = PCWSTR::null();
-        unsafe { CreateJobObjectW(None, name) }
+impl CaptureChild for NativeChild {
+    fn wait(&mut self) -> Pin<Box<dyn Future<Output = io::Result<ExitStatus>> + Send + '_>> {
+        Box::pin(NativeChild::wait(self))
     }
 
-    pub fn set_extended_limits(
-        job: HANDLE,
-        info: &JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    ) -> windows::core::Result<()> {
-        let info_class: JOBOBJECTINFOCLASS = JobObjectExtendedLimitInformation;
-        let len = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
-        unsafe { SetInformationJobObject(job, info_class, info as *const _ as *const c_void, len) }
-    }
-
-    pub fn assign_process(job: HANDLE, child: HANDLE) -> windows::core::Result<()> {
-        unsafe { AssignProcessToJobObject(job, child) }
-    }
-
-    /// End every process in the job. The kernel walks the whole tree, so a
-    /// grandchild that outlived its parent is included.
-    pub fn terminate_job(job: HANDLE, exit_code: u32) -> windows::core::Result<()> {
-        unsafe { TerminateJobObject(job, exit_code) }
-    }
-
-    pub fn open_process(
-        access: PROCESS_ACCESS_RIGHTS,
-        inherit: bool,
-        pid: u32,
-    ) -> windows::core::Result<HANDLE> {
-        unsafe { OpenProcess(access, inherit, pid) }
-    }
-
-    pub fn close_handle(handle: HANDLE) -> windows::core::Result<()> {
-        unsafe { CloseHandle(handle) }
+    fn start_kill(&mut self) -> io::Result<()> {
+        self.end_tree();
+        Ok(())
     }
 }
 
-// ----------------------------------------------------------------------------
-// Per-command job. One command, one kernel job: the wall timeout, a cancel,
-// or the capture refusing output ends the whole tree at once, because
-// TerminateJobObject walks every descendant. The guard closes the handle in
-// Drop, so a tree never outlives the call even when the error path forgets.
-// ----------------------------------------------------------------------------
-
-/// The kernel job bound to exactly one exec call. The handle is carried as
-/// the raw pointer value so the guard moves into async futures without an
-/// unsafe impl. Dropping it ends the job: terminate first, then close, so a
-/// process still running is killed rather than left to the last-handle rule.
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-struct CommandJob {
-    handle: Option<usize>,
-}
-
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-impl CommandJob {
-    /// Create a job that dies with its last handle, and assign the child to
-    /// it. A child that cannot be assigned is killed through its own handle
-    /// and the error names the child, because a command the kernel cannot
-    /// group is a command the fence cannot bound.
-    fn holding(child: &Child) -> Result<Self, String> {
-        let job = ffi::create_job_object().map_err(|e| format!("create job object: {e}"))?;
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = Default::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        ffi::set_extended_limits(job, &info).map_err(|e| format!("set job limits: {e}"))?;
-        let raw = job.0 as usize;
-        let pid = child.id().ok_or_else(|| {
-            drop(ffi::close_handle(job));
-            "the child exited before it could be grouped".to_string()
-        })?;
-        // Set quota is what AssignProcessToJobObject needs, and terminate is
-        // what TerminateJobObject reaches the child through. The child handle
-        // is closed after the assignment; the job holds its own reference.
-        let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
-        let opened = ffi::open_process(access, false, pid)
-            .map_err(|e| format!("open child process {pid}: {e}"))?;
-        let assigned = ffi::assign_process(job, opened);
-        let closed = ffi::close_handle(opened);
-        if let Err(e) = assigned {
-            drop(ffi::terminate_job(job, 1));
-            drop(ffi::close_handle(job));
-            drop(closed);
-            return Err(format!("assign pid {pid} to job: {e}"));
-        }
-        drop(closed);
-        Ok(Self { handle: Some(raw) })
+/// Build the command line for the shell this session runs, in the form that
+/// shell parses. The command interpreter has its own parser; every other
+/// program reads its command line through the C runtime rules.
+fn command_line(shell: &ShellProgram, command: &str) -> String {
+    let program = shell.executable();
+    let program = program.to_string_lossy();
+    if matches!(shell, ShellProgram::Cmd) {
+        return build_cmd_line(&program, command);
     }
-
-    /// End the tree now. Used when the wall timeout trips or the capture
-    /// refuses output, so the whole command tree stops instead of only the
-    /// direct child the wall timeout would reach.
-    fn terminate(&mut self) {
-        if let Some(raw) = self.handle.take() {
-            let job = HANDLE(raw as *mut c_void);
-            drop(ffi::terminate_job(job, 1));
-            drop(ffi::close_handle(job));
-        }
-    }
-
-    /// A guard that owns no job, for an exec whose session is not enforced.
-    fn none() -> Self {
-        Self { handle: None }
-    }
-}
-
-#[cfg(all(target_os = "windows", feature = "enforce"))]
-impl Drop for CommandJob {
-    fn drop(&mut self) {
-        self.terminate();
-    }
-}
-
-#[cfg(not(all(target_os = "windows", feature = "enforce")))]
-struct CommandJob;
-
-#[cfg(not(all(target_os = "windows", feature = "enforce")))]
-impl CommandJob {
-    fn none() -> Self {
-        Self
-    }
-
-    fn terminate(&mut self) {}
+    let arguments = shell.arguments(command);
+    let references: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    build_command_line(&program, &references)
 }
 
 impl WindowsJobSession {
     /// Run one command, feeding its raw output to a capture when one is
-    /// given. The per-command job bounds the tree; the drain feeds the
-    /// receiver as bytes arrive, so a capture that refuses a chunk ends the
-    /// command before it runs to its wall budget.
-    #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
+    /// given. The launcher creates the job and starts the command inside it;
+    /// the drain feeds the receiver as bytes arrive, so a capture that
+    /// refuses a chunk ends the command before it runs to its wall budget.
     async fn exec_inner(
         &self,
         command: String,
@@ -360,6 +221,9 @@ impl WindowsJobSession {
         receiver: Option<Arc<dyn RawOutputReceiver>>,
     ) -> Result<ExecResult, SandboxError> {
         let wall = Duration::from_millis(config.wall_timeout_ms);
+        // The job bounds the tree's lifetime and nothing else: no CPU, memory,
+        // or process-count limit is applied, so those budget fields reach no
+        // kernel limit on this target.
         let _ = (config.cpu_secs, config.as_bytes, config.nproc);
         if self.fence.is_unfenced() {
             tracing::warn!(
@@ -368,48 +232,44 @@ impl WindowsJobSession {
             );
         }
         let shell = self.program.clone().unwrap_or(ShellProgram::Cmd);
-        let mut cmd = Command::new(shell.executable());
-        cmd.args(shell.arguments(&command))
-            .current_dir(&self.workspace);
-        // A tool command never needs a console window of its own; the flag
-        // also avoids the conhost allocation that flashes a black box.
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        pipe_streams(&mut cmd);
-        cmd.kill_on_drop(true);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
-        // The job exists only when the fence is enforced: an unfenced run
-        // holds the wall timeout and kill_on_drop alone, and a session whose
-        // fence failed says so once at startup rather than per command.
-        let mut job = if matches!(self.fence, FenceStatus::Enforced) {
-            CommandJob::holding(&child).map_err(|e| {
-                // A child the kernel cannot group is a command the fence
-                // cannot bound, so it is killed before the error returns and
-                // the caller learns the command never ran fenced.
-                drop(child.start_kill());
-                SandboxError::SandboxUnavailable(format!("job fence: {e}"))
-            })?
+        let line = command_line(&shell, &command);
+        // A fenced session gets the job; an unfenced or unavailable one runs
+        // the command with the wall timeout alone.
+        let started = if matches!(self.fence, FenceStatus::Enforced) {
+            spawn_fenced(&line, &self.workspace)
         } else {
-            CommandJob::none()
+            spawn_unfenced(&line, &self.workspace)
         };
+        let mut child =
+            started.map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
+        let stdout = child.take_stdout().ok_or_else(|| {
+            SandboxError::SandboxUnavailable("the command's output is not piped".to_string())
+        })?;
+        let stderr = child.take_stderr().ok_or_else(|| {
+            SandboxError::SandboxUnavailable("the command's error stream is not piped".to_string())
+        })?;
         // The bytes land in collected as they arrive, so a wall-clock stop
-        // still reports what the command printed before the job killed the
-        // tree.
+        // still reports what the command printed before the tree ended.
         let collected = CapturedOutput::default();
         let outcome = timeout(
             wall,
-            capture(child, None, &collected, DRAIN_GRACE, receiver.as_deref()),
+            capture_streams(
+                &mut child,
+                File::from_std(stdout),
+                File::from_std(stderr),
+                None,
+                &collected,
+                DRAIN_GRACE,
+                receiver.as_deref(),
+            ),
         )
         .await;
-        // The tree ends with the call in every outcome: the timeout kills the
-        // whole job rather than the direct child only, and the guard drops on
-        // the return path even when the capture itself errored.
+        // The tree ends with the call in every outcome: the timeout ends the
+        // whole job rather than the direct process only, and the child guard
+        // drops on the return path even when the capture itself errored.
         if matches!(outcome, Err(ref _elapsed)) {
-            job.terminate();
+            child.end_tree();
         }
-        drop(job);
         match outcome {
             Ok(Ok(output)) => Ok(ExecResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

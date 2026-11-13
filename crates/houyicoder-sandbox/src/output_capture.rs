@@ -7,21 +7,25 @@
 //! future on a wall-clock stop loses nothing already read.
 
 use houyicoder_api::capture::{CaptureVerdict, CapturedStream, RawOutputReceiver};
-use houyicoder_api::launcher::{StdioConfig, StdioMode};
 use houyicoder_context::SandboxError;
 use std::future::Future;
 use std::io::{Error, Result};
 use std::pin::Pin;
-use std::process::{ExitStatus, Output, Stdio};
+use std::process::{ExitStatus, Output};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
-use tokio::process::Child;
-use tokio::process::Command;
 use tokio::sync::Notify;
 use tokio::time::timeout;
+
+#[cfg(not(target_os = "windows"))]
+use {
+    houyicoder_api::launcher::{StdioConfig, StdioMode},
+    std::process::Stdio,
+    tokio::process::{Child, Command},
+};
 
 /// How long the pipes keep draining once the direct child has exited. A
 /// descendant that inherited the write ends holds them open for as long as it
@@ -84,11 +88,13 @@ impl CapturedOutput {
 /// is not interactive, so a command that reads stdin (cat, a reader outside a
 /// heredoc) finishes at once instead of waiting on the terminal the host is
 /// drawing into.
+#[cfg(not(target_os = "windows"))]
 fn shell_streams() -> StdioConfig {
     StdioConfig::piped_output()
 }
 
 /// Point a spawn at the sandbox shell's stream disposition.
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn pipe_streams(cmd: &mut Command) {
     let streams = shell_streams();
     cmd.stdin(stdio(streams.stdin))
@@ -96,6 +102,7 @@ pub(crate) fn pipe_streams(cmd: &mut Command) {
         .stderr(stdio(streams.stderr));
 }
 
+#[cfg(not(target_os = "windows"))]
 fn stdio(mode: StdioMode) -> Stdio {
     match mode {
         StdioMode::Inherit => Stdio::inherit(),
@@ -136,6 +143,7 @@ pub(crate) trait CaptureChild {
     fn start_kill(&mut self) -> Result<()>;
 }
 
+#[cfg(not(target_os = "windows"))]
 impl CaptureChild for Child {
     fn wait(&mut self) -> Pin<Box<dyn Future<Output = Result<ExitStatus>> + Send + '_>> {
         Box::pin(Child::wait(self))
@@ -149,6 +157,7 @@ impl CaptureChild for Child {
 /// stdout and stderr are taken out and the child is handed to the generic
 /// pipeline, which drains both streams while it waits and reports what the
 /// command printed before a stop or an exit.
+#[cfg(not(target_os = "windows"))]
 pub(crate) async fn capture(
     mut child: Child,
     lines: Option<&AtomicI64>,

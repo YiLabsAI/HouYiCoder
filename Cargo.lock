@@ -1471,10 +1471,8 @@ dependencies = [
  "houyicoder-resilience",
  "landlock",
  "nix 0.31.3",
- "pollster",
  "tokio",
  "tracing",
- "windows",
 ]
 
 [[package]]
