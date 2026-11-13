@@ -1,6 +1,7 @@
 //! The host domain: platform-agnostic value types plus a per-target reader
 //! that fills them from the live desktop configuration.
 
+pub mod fs;
 pub mod net;
 pub mod secrets;
 pub mod shell;

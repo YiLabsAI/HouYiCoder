@@ -13,10 +13,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::sleep;
 
 use crate::host::fs::{LexicalRejection, backoff_schedule, reject, temp_name_for};
-use windows::Win32::Foundation::{CloseHandle, ERROR_SHARING_VIOLATION, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_SHARING_VIOLATION, HANDLE,
+};
 use windows::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_READ,
-    FileRenameInfoEx, SetFileInformationByHandle, WriteFile,
+    CREATE_ALWAYS, CreateFileW, DELETE, DeleteFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FileRenameInfoEx, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, SetFileInformationByHandle, WriteFile,
 };
 use windows::core::{HRESULT, PCWSTR};
 
@@ -29,12 +32,14 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 ///
 /// A uniquely-named temp file is written beside the target and renamed over it
 /// with POSIX semantics, so a reader holding the target open does not block the
-/// replace and a half-written file is never what a reader sees. A sharing
-/// violation the rename meets retries through the backoff schedule before the
-/// call gives up.
+/// replace and a half-written file is never what a reader sees. A filesystem
+/// that does not understand the POSIX flag falls back to a path-based move, and
+/// a sharing violation either path meets retries through the backoff schedule
+/// before the call gives up. A failed replace deletes the temp, so no transient
+/// file is left behind.
 #[expect(
     unsafe_code,
-    reason = "creates and closes the temp file through the kernel API"
+    reason = "creates, writes, renames, and deletes the temp through the kernel API"
 )]
 pub fn atomic_replace(target: &Path, bytes: &[u8]) -> IoResult<()> {
     let target_text = target.to_string_lossy();
@@ -53,44 +58,61 @@ pub fn atomic_replace(target: &Path, bytes: &[u8]) -> IoResult<()> {
     let temp_name = temp_name_for(&file_name, id(), seq);
     let temp_path = parent.join(&temp_name);
     let temp_wide = wide(&temp_path.to_string_lossy());
-    let temp = unsafe {
+    let target_wide: Vec<u16> = target_text.encode_utf16().collect();
+    // The handle carries DELETE so the POSIX rename can act on it, and the
+    // share-delete so a path-based move in the fallback is not blocked by it.
+    let temp = create_temp(&temp_wide)?;
+    let outcome = write_all(temp, bytes).and_then(|()| match posix_rename(temp, &target_wide) {
+        Ok(()) => Ok(()),
+        Err(RenameError::Unsupported) => move_file(&temp_wide, &target_wide),
+        Err(RenameError::Failed(error)) => Err(error),
+    });
+    drop(unsafe { CloseHandle(temp) });
+    if outcome.is_err() {
+        drop(delete_file(&temp_wide));
+    }
+    outcome
+}
+
+/// Create the temp file, opened for write and delete and shared for read and
+/// delete, so the rename and the fallback move both reach it.
+#[expect(unsafe_code, reason = "creates the temp through the kernel API")]
+fn create_temp(temp_wide: &[u16]) -> IoResult<HANDLE> {
+    let handle = unsafe {
         CreateFileW(
             PCWSTR(temp_wide.as_ptr()),
-            FILE_GENERIC_WRITE.0,
-            FILE_SHARE_READ,
+            FILE_GENERIC_WRITE.0 | DELETE.0,
+            FILE_SHARE_READ | FILE_SHARE_DELETE,
             None,
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
             None,
         )
-    }
-    .map_err(|e| IoError::other(e.to_string()))?;
-    let outcome = write_and_rename(temp, bytes, &target_text);
-    drop(unsafe { CloseHandle(temp) });
-    outcome
+    };
+    handle.map_err(|e| IoError::other(e.to_string()))
 }
 
-/// Write the bytes to the temp handle and rename it over the target. The handle
-/// stays open across the rename because the rename acts on it.
+/// Write the full payload to the temp handle.
 #[expect(unsafe_code, reason = "writes the temp through the kernel API")]
-fn write_and_rename(temp: HANDLE, bytes: &[u8], target_text: &str) -> IoResult<()> {
-    unsafe { WriteFile(temp, Some(bytes), None, None) }
-        .map_err(|e| IoError::other(e.to_string()))?;
-    let target_wide: Vec<u16> = target_text.encode_utf16().collect();
-    rename_over(temp, &target_wide)
+fn write_all(temp: HANDLE, bytes: &[u8]) -> IoResult<()> {
+    unsafe { WriteFile(temp, Some(bytes), None, None) }.map_err(|e| IoError::other(e.to_string()))
 }
 
-/// Rename the open temp handle over the target, retrying a sharing violation
-/// through the backoff schedule. The replace flag lets the rename overwrite an
-/// existing target, and POSIX semantics let it replace one a reader holds open
-/// with a share-delete, which the old delete-then-rename path could not.
+/// Rename the open temp handle over the target through the POSIX-semantics
+/// flag, retrying a sharing violation through the backoff schedule. A
+/// filesystem that does not understand the flag answers with a parameter or
+/// not-supported error, which the caller turns into a path-based fallback.
 #[expect(
     unsafe_code,
     reason = "renames the temp over the target through the kernel API"
 )]
-fn rename_over(temp: HANDLE, target_wide: &[u16]) -> IoResult<()> {
+fn posix_rename(temp: HANDLE, target_wide: &[u16]) -> Result<(), RenameError> {
     let info = build_rename_info(target_wide);
     let sharing = HRESULT::from_win32(ERROR_SHARING_VIOLATION.0);
+    let unsupported = [
+        HRESULT::from_win32(ERROR_INVALID_PARAMETER.0),
+        HRESULT::from_win32(ERROR_NOT_SUPPORTED.0),
+    ];
     for step in backoff_schedule() {
         match unsafe {
             SetFileInformationByHandle(
@@ -105,12 +127,61 @@ fn rename_over(temp: HANDLE, target_wide: &[u16]) -> IoResult<()> {
                 sleep(step);
                 continue;
             }
+            Err(error) if unsupported.contains(&error.code()) => {
+                return Err(RenameError::Unsupported);
+            }
+            Err(error) => return Err(RenameError::Failed(IoError::other(error.to_string()))),
+        }
+    }
+    Err(RenameError::Failed(IoError::other(
+        "the replace could not rename past a sharing lock after the full backoff",
+    )))
+}
+
+/// Move the temp over the target by path, the fallback a filesystem without the
+/// POSIX flag takes. The replace flag lets it overwrite an existing target; a
+/// sharing violation retries through the backoff schedule.
+#[expect(
+    unsafe_code,
+    reason = "moves the temp over the target through the kernel API"
+)]
+fn move_file(temp_wide: &[u16], target_wide: &[u16]) -> IoResult<()> {
+    let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+    let sharing = HRESULT::from_win32(ERROR_SHARING_VIOLATION.0);
+    for step in backoff_schedule() {
+        match unsafe {
+            MoveFileExW(
+                PCWSTR(temp_wide.as_ptr()),
+                PCWSTR(target_wide.as_ptr()),
+                flags,
+            )
+        } {
+            Ok(()) => return Ok(()),
+            Err(error) if error.code() == sharing => {
+                sleep(step);
+                continue;
+            }
             Err(error) => return Err(IoError::other(error.to_string())),
         }
     }
     Err(IoError::other(
-        "the replace could not rename past a sharing lock after the full backoff",
+        "the replace could not move past a sharing lock after the full backoff",
     ))
+}
+
+/// Delete the temp file left behind by a failed replace.
+#[expect(unsafe_code, reason = "deletes the temp through the kernel API")]
+fn delete_file(temp_wide: &[u16]) -> IoResult<()> {
+    unsafe { DeleteFileW(PCWSTR(temp_wide.as_ptr())) }.map_err(|e| IoError::other(e.to_string()))
+}
+
+/// The outcome of a POSIX-semantics rename attempt: done, unsupported by the
+/// filesystem, or failed for any other reason.
+enum RenameError {
+    /// The filesystem rejected the POSIX flag; the caller falls back to a move.
+    Unsupported,
+    /// The rename failed for a reason the fallback cannot help with.
+    Failed(IoError),
 }
 
 /// Build the byte buffer the rename call takes: the replace and POSIX flags, a

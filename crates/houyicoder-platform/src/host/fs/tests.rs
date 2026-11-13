@@ -87,14 +87,52 @@ fn test_local_path_passes() {
 #[test]
 fn test_drive_letter_passes() {
     assert_eq!(
-        reject(r"C:file"),
+        reject(r"C:\file"),
         None,
-        "a drive-relative path is not a stream"
+        "a drive letter followed by a separator is not a stream"
     );
     assert_eq!(
         reject("CC:file"),
         Some(LexicalRejection::AlternateDataStream),
         "two letters before the colon is not a drive"
+    );
+}
+
+/// A Windows extended-length local path is not a network share: the prefix
+/// names a local path or a local device, so only the network form under it is.
+#[test]
+fn test_allows_extended_drive_path() {
+    assert_eq!(
+        reject(r"\\?\C:\Users\houyicoder\file.rs"),
+        None,
+        "an extended-length local path is not a share"
+    );
+    assert_eq!(
+        reject(r"\\.\C:\pipe"),
+        None,
+        "a device-namespace local path is not a share"
+    );
+    assert_eq!(
+        reject(r"\\?\UNC\evil\share\a"),
+        Some(LexicalRejection::UncShare),
+        "the UNC form under the prefix is still a share"
+    );
+}
+
+/// A single-letter file name with a stream is caught: the colon at the second
+/// byte is a stream fork, not a drive letter, because a drive letter is exactly
+/// two bytes.
+#[test]
+fn test_rejects_one_letter_ads() {
+    assert_eq!(
+        reject("a:secret"),
+        Some(LexicalRejection::AlternateDataStream),
+        "a single-letter name with a stream is not a drive"
+    );
+    assert_eq!(
+        reject(r"C:\dir\a:secret"),
+        Some(LexicalRejection::AlternateDataStream),
+        "a stream on a single-letter name under a drive is still a stream"
     );
 }
 
@@ -250,5 +288,25 @@ fn test_atomic_replace_writes_whole() {
         })
         .collect();
     assert!(leftover.is_empty(), "no temp file is left behind");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A replace that fails the rename deletes the temp it wrote, so a failed write
+/// leaves no transient file behind. The target is a directory, so a file cannot
+/// rename over it.
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn test_failed_replace_cleans_temp() {
+    let dir = temp_dir().join(format!("houyi-fs-fail-{}", id()));
+    fs::create_dir_all(&dir).expect("a temp dir for the failed replace");
+    let target = dir.join("target");
+    fs::create_dir_all(&target).expect("the target is a directory");
+    drop(super::atomic_replace(&target, b"x"));
+    let leftover: Vec<_> = fs::read_dir(&dir)
+        .expect("list the dir")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".target."))
+        .collect();
+    assert!(leftover.is_empty(), "no temp file is left on failure");
     fs::remove_dir_all(&dir).ok();
 }

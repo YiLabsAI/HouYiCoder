@@ -12,10 +12,6 @@ use houyicoder_config::ServedModels;
 use houyicoder_platform::host::fs::atomic_replace;
 use serde_json::Value;
 use std::fs::create_dir_all;
-#[cfg(unix)]
-use std::fs::{Permissions, set_permissions};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -75,15 +71,6 @@ pub(crate) fn write_cache(path: &Path, ids: &[String]) {
     let replaced = atomic_replace(path, json.as_bytes());
     if let Err(e) = replaced {
         tracing::warn!("served-models cache: atomic replace failed: {e}");
-        return;
-    }
-    // The cache holds model ids the provider serves; restrict it to the owner.
-    #[cfg(unix)]
-    {
-        let locked = set_permissions(path, Permissions::from_mode(0o600));
-        if let Err(e) = locked {
-            tracing::warn!("served-models cache: set_permissions failed: {e}");
-        }
     }
 }
 

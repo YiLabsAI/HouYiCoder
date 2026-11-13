@@ -12,7 +12,9 @@ use std::path::Path;
 use std::time::Duration;
 #[cfg(not(target_os = "windows"))]
 use std::{
-    fs::{rename, write},
+    fs::{OpenOptions, remove_file, rename},
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
     process::id,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -96,11 +98,30 @@ pub fn temp_name_for(name: &str, pid: u32, seq: u64) -> String {
     }
 }
 
-/// Whether a path is a UNC share path: two leading separators of either kind.
+/// Whether a path is a UNC share path: a network share, not a local path
+/// behind an extended-length or device prefix.
+///
+/// The backslash and forward-slash double leaders name a network share only
+/// when they are not the local path prefix. The prefixes that name a local
+/// path or a local device are not a share, with the one exception of the
+/// network form under that prefix.
 fn is_unc(path: &str) -> bool {
     let bytes = path.as_bytes();
-    bytes.len() >= 2
-        && ((bytes[0] == b'\\' && bytes[1] == b'\\') || (bytes[0] == b'/' && bytes[1] == b'/'))
+    if !((bytes.len() >= 2 && bytes[0] == b'\\' && bytes[1] == b'\\')
+        || (bytes.len() >= 2 && bytes[0] == b'/' && bytes[1] == b'/'))
+    {
+        return false;
+    }
+    let rest = &path[2..];
+    // The prefix forms name a local path or a local device, not a share, with
+    // the one exception of the network form under that prefix.
+    if rest.starts_with('?') || rest.starts_with('.') {
+        return rest.starts_with("?\\UNC\\")
+            || rest.starts_with("?/UNC/")
+            || rest.starts_with(".\\UNC\\")
+            || rest.starts_with("./UNC/");
+    }
+    true
 }
 
 /// The path components, split on either separator and with empties dropped.
@@ -112,16 +133,15 @@ fn components(path: &str) -> Vec<String> {
 }
 
 /// Whether a component is an alternate data stream: a colon that does not belong
-/// to a drive letter. A drive letter is exactly one alphabetic byte followed by
-/// a colon at the start of the first component, and only that form is allowed.
+/// to a drive letter. A drive letter is exactly two bytes, one alphabetic and
+/// one colon; anything longer with a colon is a stream fork or a drive-relative
+/// path the transaction does not open, so it is rejected rather than guessed at.
 fn is_alternate_data_stream(component: &str) -> bool {
     let bytes = component.as_bytes();
-    match bytes.iter().position(|&b| b == b':') {
-        Some(0) => true,
-        Some(1) => !bytes[0].is_ascii_alphabetic(),
-        Some(_) => true,
-        None => false,
+    if !bytes.contains(&b':') {
+        return false;
     }
+    !(bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
 }
 
 /// Whether a component names a DOS reserved device. The stem before the first
@@ -223,9 +243,11 @@ pub fn atomic_replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 }
 
-/// The posix replace: write a uniquely-named temp beside the target and rename
-/// it over. The rename is atomic and overwrites on a posix host, which is the
-/// guarantee the Windows kernel needs the POSIX-semantics flag for.
+/// The posix replace: write a uniquely-named temp beside the target, opened with
+/// owner-only permissions, and rename it over. The rename is atomic and
+/// overwrites on a posix host, which is the guarantee the Windows kernel needs
+/// the POSIX-semantics flag for. A failed write or rename deletes the temp so no
+/// transient file is left behind.
 #[cfg(not(target_os = "windows"))]
 fn atomic_replace_std(target: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = target
@@ -239,6 +261,22 @@ fn atomic_replace_std(target: &Path, bytes: &[u8]) -> io::Result<()> {
     let seq = POSIX_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let temp_name = temp_name_for(&file_name, id(), seq);
     let temp_path = parent.join(&temp_name);
-    write(&temp_path, bytes)?;
-    rename(&temp_path, target)
+    // The temp is opened owner-only so the value never sits on disk in a file a
+    // later reader could open before the rename completes.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temp_path)?;
+    if let Err(error) = file.write_all(bytes) {
+        drop(remove_file(&temp_path));
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = rename(&temp_path, target) {
+        drop(remove_file(&temp_path));
+        return Err(error);
+    }
+    Ok(())
 }
