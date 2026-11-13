@@ -1,0 +1,12 @@
+{
+  "houyicoder-api": 27,
+  "houyicoder-cli": 42,
+  "houyicoder-client": 6,
+  "houyicoder-config": 3,
+  "houyicoder-context": 2,
+  "houyicoder-core": 30,
+  "houyicoder-memory": 29,
+  "houyicoder-permission": 3,
+  "houyicoder-service": 9,
+  "houyicoder-tui": 7
+}

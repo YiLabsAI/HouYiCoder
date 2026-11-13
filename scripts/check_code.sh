@@ -131,10 +131,12 @@ SCRIPT_TESTS=(
   test_orphan_modules.py
   test_pre_push_chain.py
   test_measure_turn_dispatch.py
+  test_platform_pal.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
   run_check "script-tests:$script_test" python3 "scripts/$script_test"
 done
+run_check "platform-pal" python3 scripts/check_platform_pal.py
 run_check "orphan-modules" python3 scripts/check_orphan_modules.py
 run_check "rust-naming" python3 scripts/check_rust_naming.py $RS_FILES
 run_check "struct-fields" python3 scripts/check_struct_fields.py
