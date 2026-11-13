@@ -3,6 +3,7 @@
 
 pub mod fs;
 pub mod net;
+pub mod process;
 pub mod secrets;
 pub mod shell;
 
