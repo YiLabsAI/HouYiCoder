@@ -1,0 +1,147 @@
+//! The Windows atomic file replace: write a uniquely-named temp beside the
+//! target, then rename it over it with POSIX semantics, retrying a sharing
+//! violation through a backoff. The lexical guard, the temp name, and the
+//! backoff come from the host layer; this is the thin unsafe shell.
+
+use std::ffi::c_void;
+use std::io::Error as IoError;
+use std::io::Result as IoResult;
+use std::iter::once;
+use std::path::Path;
+use std::process::id;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::sleep;
+
+use crate::host::fs::{LexicalRejection, backoff_schedule, reject, temp_name_for};
+use windows::Win32::Foundation::{CloseHandle, ERROR_SHARING_VIOLATION, HANDLE};
+use windows::Win32::Storage::FileSystem::{
+    CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_READ,
+    FileRenameInfoEx, SetFileInformationByHandle, WriteFile,
+};
+use windows::core::{HRESULT, PCWSTR};
+
+/// The per-writer counter that names one temp file after another, so two
+/// replaces in the same process never share the temp path one truncates while
+/// the other writes.
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Replace the target file's contents atomically.
+///
+/// A uniquely-named temp file is written beside the target and renamed over it
+/// with POSIX semantics, so a reader holding the target open does not block the
+/// replace and a half-written file is never what a reader sees. A sharing
+/// violation the rename meets retries through the backoff schedule before the
+/// call gives up.
+#[expect(
+    unsafe_code,
+    reason = "creates and closes the temp file through the kernel API"
+)]
+pub fn atomic_replace(target: &Path, bytes: &[u8]) -> IoResult<()> {
+    let target_text = target.to_string_lossy();
+    if let Some(reason) = reject(&target_text) {
+        return Err(IoError::other(lexical_message(reason)));
+    }
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let temp_name = temp_name_for(&file_name, id(), seq);
+    let temp_path = parent.join(&temp_name);
+    let temp_wide = wide(&temp_path.to_string_lossy());
+    let temp = unsafe {
+        CreateFileW(
+            PCWSTR(temp_wide.as_ptr()),
+            FILE_GENERIC_WRITE.0,
+            FILE_SHARE_READ,
+            None,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    }
+    .map_err(|e| IoError::other(e.to_string()))?;
+    let outcome = write_and_rename(temp, bytes, &target_text);
+    drop(unsafe { CloseHandle(temp) });
+    outcome
+}
+
+/// Write the bytes to the temp handle and rename it over the target. The handle
+/// stays open across the rename because the rename acts on it.
+#[expect(unsafe_code, reason = "writes the temp through the kernel API")]
+fn write_and_rename(temp: HANDLE, bytes: &[u8], target_text: &str) -> IoResult<()> {
+    unsafe { WriteFile(temp, Some(bytes), None, None) }
+        .map_err(|e| IoError::other(e.to_string()))?;
+    let target_wide: Vec<u16> = target_text.encode_utf16().collect();
+    rename_over(temp, &target_wide)
+}
+
+/// Rename the open temp handle over the target, retrying a sharing violation
+/// through the backoff schedule. The replace flag lets the rename overwrite an
+/// existing target, and POSIX semantics let it replace one a reader holds open
+/// with a share-delete, which the old delete-then-rename path could not.
+#[expect(
+    unsafe_code,
+    reason = "renames the temp over the target through the kernel API"
+)]
+fn rename_over(temp: HANDLE, target_wide: &[u16]) -> IoResult<()> {
+    let info = build_rename_info(target_wide);
+    let sharing = HRESULT::from_win32(ERROR_SHARING_VIOLATION.0);
+    for step in backoff_schedule() {
+        match unsafe {
+            SetFileInformationByHandle(
+                temp,
+                FileRenameInfoEx,
+                info.as_ptr() as *const c_void,
+                info.len() as u32,
+            )
+        } {
+            Ok(()) => return Ok(()),
+            Err(error) if error.code() == sharing => {
+                sleep(step);
+                continue;
+            }
+            Err(error) => return Err(IoError::other(error.to_string())),
+        }
+    }
+    Err(IoError::other(
+        "the replace could not rename past a sharing lock after the full backoff",
+    ))
+}
+
+/// Build the byte buffer the rename call takes: the replace and POSIX flags, a
+/// null root directory, the wide name length in bytes, and the wide name. Built
+/// from bytes rather than a struct so the variable-length name and the
+/// union-field layout are explicit and the buffer is one allocation.
+fn build_rename_info(target_wide: &[u16]) -> Vec<u8> {
+    const REPLACE_IF_EXISTS: u32 = 0x1;
+    const POSIX_SEMANTICS: u32 = 0x2;
+    const HEADER: usize = 20;
+    let name_bytes = target_wide.len() * 2;
+    let mut buf = vec![0u8; HEADER + name_bytes];
+    buf[0..4].copy_from_slice(&(REPLACE_IF_EXISTS | POSIX_SEMANTICS).to_le_bytes());
+    buf[16..20].copy_from_slice(&(name_bytes as u32).to_le_bytes());
+    for (index, unit) in target_wide.iter().enumerate() {
+        buf[HEADER + index * 2..][..2].copy_from_slice(&unit.to_le_bytes());
+    }
+    buf
+}
+
+/// A null-terminated wide string, the form the file API takes.
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(once(0)).collect()
+}
+
+/// The message for a lexical rejection, so the caller sees which guard refused
+/// the path rather than a generic error.
+fn lexical_message(reason: LexicalRejection) -> &'static str {
+    match reason {
+        LexicalRejection::UncShare => "the path names a network share",
+        LexicalRejection::ReservedDevice => "the path names a reserved device",
+        LexicalRejection::AlternateDataStream => "the path names an alternate data stream",
+    }
+}

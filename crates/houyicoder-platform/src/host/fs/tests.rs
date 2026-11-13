@@ -1,6 +1,14 @@
-//! The lexical guard and the temp name, over the inputs the transaction sees.
+//! The lexical guard, the temp name, and the retry schedule, over the inputs
+//! the transaction sees.
 
-use super::{LexicalRejection, reject, temp_name_for, translate_posix_drive};
+use std::time::Duration;
+
+#[cfg(not(target_os = "windows"))]
+use std::{env::temp_dir, fs, process::id};
+
+use super::{
+    FileIdentity, LexicalRejection, backoff_schedule, reject, temp_name_for, translate_posix_drive,
+};
 
 /// A UNC path is rejected before any handle reaches the network.
 #[test]
@@ -154,4 +162,93 @@ fn test_temp_name_without_extension() {
 fn test_temp_name_dotfile() {
     let name = temp_name_for(".bashrc", 7, 3);
     assert_eq!(name, "..bashrc.7.3.tmp");
+}
+
+/// The backoff doubles each step and caps at 32 milliseconds, so a sharing
+/// violation a reader or an antivirus holds clears without a long stall and
+/// without retrying forever.
+#[test]
+fn test_backoff_doubles_and_caps() {
+    let schedule = backoff_schedule();
+    assert_eq!(schedule.len(), 5, "the schedule is five steps");
+    assert_eq!(
+        schedule[0],
+        Duration::from_millis(2),
+        "the first step is short"
+    );
+    assert_eq!(
+        schedule[4],
+        Duration::from_millis(32),
+        "the last step is the cap"
+    );
+    for window in schedule.windows(2) {
+        assert!(
+            window[1] >= window[0],
+            "each step is at least as long as the one before it"
+        );
+    }
+}
+
+/// Two file identities are equal only when both the volume and the id match, so
+/// a replace that swapped the file for another on the same volume is detected.
+#[test]
+fn test_file_identity_equality() {
+    let a = FileIdentity {
+        volume: 1,
+        file_id: 10,
+    };
+    assert_eq!(
+        a,
+        FileIdentity {
+            volume: 1,
+            file_id: 10
+        }
+    );
+    assert_ne!(
+        a,
+        FileIdentity {
+            volume: 1,
+            file_id: 11
+        },
+        "a different id is a different file"
+    );
+    assert_ne!(
+        a,
+        FileIdentity {
+            volume: 2,
+            file_id: 10
+        },
+        "a different volume is a different file"
+    );
+}
+
+/// The atomic replace writes the whole value at once and leaves no temp behind,
+/// so a reader between two writes sees one version or the other, never a
+/// half-written file. The posix path is exercised here; the Windows path runs
+/// the same contract through the kernel rename.
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn test_atomic_replace_writes_whole() {
+    let dir = temp_dir().join(format!("houyi-fs-test-{}", id()));
+    fs::create_dir_all(&dir).expect("a temp dir for the replace");
+    let target = dir.join("target.txt");
+    fs::write(&target, b"old").expect("seed the target");
+    super::atomic_replace(&target, b"new contents").expect("the replace succeeds");
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"new contents",
+        "the target holds the new value"
+    );
+    let leftover: Vec<_> = fs::read_dir(&dir)
+        .expect("list the dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".target.txt.")
+        })
+        .collect();
+    assert!(leftover.is_empty(), "no temp file is left behind");
+    fs::remove_dir_all(&dir).ok();
 }

@@ -7,6 +7,16 @@
 //! over their inputs so a host with no Windows kernel can still exercise every
 //! branch.
 
+use std::io;
+use std::path::Path;
+use std::time::Duration;
+#[cfg(not(target_os = "windows"))]
+use std::{
+    fs::{rename, write},
+    process::id,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 #[cfg(test)]
 mod tests;
 
@@ -169,4 +179,66 @@ fn split_extension(name: &str) -> (&str, Option<&str>) {
         Some(0) | None => (name, None),
         Some(index) => (&name[..index], Some(&name[index + 1..])),
     }
+}
+
+/// The backoff schedule a sharing violation retries through before the replace
+/// gives up. Each step doubles, capped at 32 milliseconds, so a transient lock
+/// a reader or an antivirus scan holds clears without a long stall.
+pub fn backoff_schedule() -> [Duration; 5] {
+    [2, 4, 8, 16, 32].map(Duration::from_millis)
+}
+
+/// The identity of a file on a volume, the pair an atomic replace checks to
+/// tell the file it replaced from one a concurrent writer swapped underneath
+/// it. The volume serial and the 128-bit file id are the pair the kernel
+/// reports, which lines up with the device and inode pair on a posix host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    /// The serial number of the volume the file lives on.
+    pub volume: u64,
+    /// The 128-bit file id the volume reports for the file.
+    pub file_id: u128,
+}
+
+/// The per-writer counter that names one temp file after another on a posix
+/// host, so two replaces in the same process never share the temp path.
+#[cfg(not(target_os = "windows"))]
+static POSIX_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Replace the target file's contents atomically, so a reader never sees the
+/// file half-written and two writers cannot truncate one another's bytes.
+///
+/// On Windows the replace renames a temp over the target with POSIX semantics,
+/// so a reader holding the target open does not block it. On a posix host the
+/// rename is already atomic and overwriting, so the same temp-and-rename runs
+/// through the standard library.
+pub fn atomic_replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows::atomic_replace(target, bytes)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        atomic_replace_std(target, bytes)
+    }
+}
+
+/// The posix replace: write a uniquely-named temp beside the target and rename
+/// it over. The rename is atomic and overwrites on a posix host, which is the
+/// guarantee the Windows kernel needs the POSIX-semantics flag for.
+#[cfg(not(target_os = "windows"))]
+fn atomic_replace_std(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let seq = POSIX_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let temp_name = temp_name_for(&file_name, id(), seq);
+    let temp_path = parent.join(&temp_name);
+    write(&temp_path, bytes)?;
+    rename(&temp_path, target)
 }
