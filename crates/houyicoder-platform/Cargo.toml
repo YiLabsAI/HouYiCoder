@@ -25,11 +25,12 @@ nix = { version = "0.31", features = ["poll"] }
 # The Windows proxy reader calls the WinHttp helper that reads the live
 # configuration flags, so a disabled automatic script does not leave a stale
 # address read as enabled. The console modules add the input and output mode
-# calls and the control event registration. Gated so other targets never
-# pull the bindings in.
+# calls, the input wait, and the control event registration. Gated so other
+# targets never pull the bindings in.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Networking_WinHttp",
     "Win32_Foundation",
     "Win32_System_Console",
+    "Win32_System_Threading",
 ] }

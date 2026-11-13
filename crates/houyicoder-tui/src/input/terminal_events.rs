@@ -14,14 +14,16 @@ use std::thread::Builder;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_platform::desktop::terminal::console_ctrl_pending;
 use houyicoder_platform::desktop::terminal::paste_arrives_as_keystrokes;
 use houyicoder_platform::desktop::terminal::pipe_input;
-#[cfg(not(unix))]
-use houyicoder_platform::desktop::terminal::read_console_event;
+use houyicoder_platform::desktop::terminal::take_console_ctrl_key;
 use houyicoder_platform::desktop::terminal::terminal_gone;
 use houyicoder_platform::desktop::terminal::vt::VtDecoder;
 use houyicoder_platform::desktop::terminal::vt::VtEvent;
 use houyicoder_platform::desktop::terminal::vt::read_pipe_bytes;
+use houyicoder_platform::desktop::terminal::wait_console_input;
+use houyicoder_platform::desktop::terminal::wait_consumes_record;
 
 use crate::app::wake::{UiWake, ui_wake};
 use crate::input::paste::burst::coalesce_with;
@@ -125,12 +127,42 @@ fn read_events() -> Option<Vec<Event>> {
     if pipe_input() {
         return read_pipe_events();
     }
-    #[cfg(not(unix))]
-    if read_console_events_supported() {
-        return read_console_events();
-    }
-    let event = read_event_with(terminal_gone, || event::poll(READ_WAIT), event::read)?;
+    let event = read_event_with(
+        terminal_gone,
+        wait_for_input,
+        || take_console_ctrl_key().and_then(vt_event),
+        ready_to_read,
+        event::read,
+    )?;
     Some(coalesce_with(event, burst_pending, event::read))
+}
+
+/// Wait up to the read deadline for an event.
+///
+/// A host whose event source consumes a console record while it waits gets
+/// the wait taken on the input queue itself, so the record that ends the
+/// wait is still there for the control take to inspect. Every other host
+/// waits inside its event source, which reports readiness without taking
+/// anything.
+fn wait_for_input() -> io::Result<bool> {
+    if wait_consumes_record() {
+        return wait_console_input(READ_WAIT);
+    }
+    event::poll(READ_WAIT)
+}
+
+/// Whether the event source can hand back an event now.
+///
+/// A host that consumed a record during its own wait has already decided the
+/// record's fate, and its readiness answer means the event is held; the
+/// source here is asked with a zero deadline, which consumes at most one
+/// record, so a control record behind it is still inspected by the take. A
+/// host whose wait only reported readiness already holds the event.
+fn ready_to_read() -> io::Result<bool> {
+    if wait_consumes_record() {
+        return event::poll(Duration::ZERO);
+    }
+    Ok(true)
 }
 
 /// Read the byte stream a pipe-mode terminal delivers and decode it. The
@@ -140,35 +172,6 @@ fn read_events() -> Option<Vec<Event>> {
 /// one.
 fn read_pipe_events() -> Option<Vec<Event>> {
     read_pipe_with(read_pipe_bytes)
-}
-
-/// Whether the platform exposes a console record reader. The Windows
-/// backend reads the input records itself so the control keys the console
-/// reports with a zero virtual key are not lost; a unix terminal uses the
-/// event source directly.
-#[cfg(not(unix))]
-fn read_console_events_supported() -> bool {
-    // The platform answers true when standard input is a real console; a
-    // pipe-mode terminal takes the VT path instead.
-    !pipe_input()
-}
-
-/// Read events from the platform's console record reader. The Windows
-/// backend maps the control block that the layout resolver drops to the
-/// letters it carries, so a Ctrl+O survives the ConPTY bridge.
-#[cfg(not(unix))]
-fn read_console_events() -> Option<Vec<Event>> {
-    let mut events = Vec::new();
-    while let Some(decoded) = read_console_event() {
-        if let Some(event) = vt_event(decoded) {
-            events.push(event);
-        }
-    }
-    if events.is_empty() {
-        None
-    } else {
-        Some(events)
-    }
 }
 
 /// The pipe reader over a supplied read: bytes in, events out, until the
@@ -242,13 +245,28 @@ fn burst_pending(window: Duration) -> bool {
     if !paste_arrives_as_keystrokes() {
         return false;
     }
+    // A control record waiting at the head is not part of a paste, and the
+    // look-ahead below would consume it into an event the source drops.
+    // Stop the run here and leave the record for the reader to take.
+    if console_ctrl_pending() {
+        return false;
+    }
     event::poll(window).unwrap_or(false)
 }
 
-/// The event read loop, with the readiness poll and reader supplied for tests.
+/// Why a wait or poll ended without an event, when that is the ordinary quiet
+/// state rather than a source that ended.
+fn quiet(error: &io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock)
+}
+
+/// The event read loop, with the wait, the control take, the readiness check
+/// and the reader supplied for tests.
 fn read_event_with(
     hung_up: impl Fn() -> bool,
-    mut poll: impl FnMut() -> io::Result<bool>,
+    mut wait: impl FnMut() -> io::Result<bool>,
+    mut take_ctrl_key: impl FnMut() -> Option<Event>,
+    mut ready: impl FnMut() -> io::Result<bool>,
     mut read: impl FnMut() -> io::Result<Event>,
 ) -> Option<Event> {
     loop {
@@ -258,7 +276,29 @@ fn read_event_with(
             tracing::warn!("terminal hung up");
             return None;
         }
-        match poll() {
+        // A control record already queued is taken before anything waits: a
+        // wait would hand it to an event source that cannot resolve it, and
+        // the record would be gone.
+        if let Some(event) = take_ctrl_key() {
+            return Some(event);
+        }
+        match wait() {
+            Ok(true) => {}
+            // A deadline that expired and a wait a signal interrupted both
+            // mean no event yet. Returning here would end the reader.
+            Ok(false) => continue,
+            Err(e) if quiet(&e) => continue,
+            Err(e) => {
+                tracing::warn!(error = %e, "terminal event wait failed");
+                return None;
+            }
+        }
+        // The record that ended the wait is still queued, so it is inspected
+        // before the event source is asked for an event.
+        if let Some(event) = take_ctrl_key() {
+            return Some(event);
+        }
+        match ready() {
             // A ready poll does not promise a complete event. Treating a
             // partial read as the end of the source kills the reader thread
             // on a transient blip, and a session whose reader is gone can
@@ -267,12 +307,8 @@ fn read_event_with(
                 Ok(event) => return Some(event),
                 Err(_) => continue,
             },
-            // A deadline that expired and a wait a signal interrupted both
-            // mean no event yet. Returning here would end the reader.
             Ok(false) => continue,
-            Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => {
-                continue;
-            }
+            Err(e) if quiet(&e) => continue,
             Err(e) => {
                 tracing::warn!(error = %e, "terminal event poll failed");
                 return None;

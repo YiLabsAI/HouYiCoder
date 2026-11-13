@@ -14,6 +14,10 @@ fn press(c: char) -> Event {
     Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
 }
 
+fn ctrl(c: char) -> Event {
+    Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+}
+
 /// A quiet channel drains at once rather than blocking.
 ///
 /// This is the property the run loop depends on: the drain must always give
@@ -65,10 +69,12 @@ fn test_read_retries_when_unready() {
             attempts += 1;
             match attempts {
                 1 => Ok(false),
-                2 => Err(io::Error::from(ErrorKind::Interrupted)),
+                2 => Err(Error::from(ErrorKind::Interrupted)),
                 _ => Ok(true),
             }
         },
+        || None,
+        || Ok(true),
         || Ok(press('x')),
     );
     assert!(
@@ -84,6 +90,8 @@ fn test_read_retries_when_unready() {
             polled = true;
             Ok(true)
         },
+        || None,
+        || Ok(true),
         || Ok(press('x')),
     );
     assert!(hung.is_none(), "hung up returns None");
@@ -91,10 +99,99 @@ fn test_read_retries_when_unready() {
 
     let err = read_event_with(
         || false,
-        || Err(io::Error::from(ErrorKind::Other)),
+        || Err(Error::from(ErrorKind::Other)),
+        || None,
+        || Ok(true),
         || Ok(press('x')),
     );
-    assert!(err.is_none(), "other error returns None");
+    assert!(err.is_none(), "an event source error returns None");
+
+    let unready = read_event_with(
+        || false,
+        || Ok(true),
+        || None,
+        || Err(Error::from(ErrorKind::Other)),
+        || Ok(press('x')),
+    );
+    assert!(unready.is_none(), "a readiness error returns None");
+}
+
+/// A control key the console reports in the form the event source cannot
+/// resolve is taken before anything waits. Waiting first would hand that
+/// record to an event source that drops it, losing the key for good.
+#[test]
+fn test_ctrl_key_before_wait() {
+    let mut waits = 0;
+    let mut reads = 0;
+    let event = read_event_with(
+        || false,
+        || {
+            waits += 1;
+            Ok(true)
+        },
+        || Some(ctrl('o')),
+        || Ok(true),
+        || {
+            reads += 1;
+            Ok(press('x'))
+        },
+    );
+    assert!(
+        matches!(event, Some(Event::Key(key)) if key.code == KeyCode::Char('o')),
+        "the control key reaches the loop"
+    );
+    assert_eq!(waits, 0, "the queued record was taken without a wait");
+    assert_eq!(reads, 0, "the event source never read that record");
+}
+
+/// A control record that ends the wait is still in the queue, so the take
+/// inspects it before the event source is asked for an event. This is the
+/// case a user produces: the key arrives while the reader waits.
+#[test]
+fn test_ctrl_key_after_wait() {
+    let mut takes = 0;
+    let mut reads = 0;
+    let event = read_event_with(
+        || false,
+        || Ok(true),
+        || {
+            takes += 1;
+            (takes == 2).then(|| ctrl('o'))
+        },
+        || Ok(true),
+        || {
+            reads += 1;
+            Ok(press('x'))
+        },
+    );
+    assert!(
+        matches!(event, Some(Event::Key(key)) if key.code == KeyCode::Char('o')),
+        "the record that woke the wait reaches the loop"
+    );
+    assert_eq!(takes, 2, "the queue was inspected again after the wait");
+    assert_eq!(reads, 0, "the event source never read that record");
+}
+
+/// An ordinary record is left to the event source: the take answers none and
+/// the read returns the key that was actually typed.
+#[test]
+fn test_ordinary_record_reads() {
+    let mut taken = 0;
+    let event = read_event_with(
+        || false,
+        || Ok(true),
+        || {
+            taken += 1;
+            None
+        },
+        || Ok(true),
+        || Ok(press('q')),
+    );
+    assert!(
+        matches!(event, Some(Event::Key(key)) if key.code == KeyCode::Char('q')),
+        "the typed key reaches the loop"
+    );
+    assert_eq!(taken, 2, "the take ran before the wait and after it");
 }
 
 /// A ready poll whose read fails on a signal or a partial sequence retries
@@ -105,6 +202,8 @@ fn test_reader_survives_read_error() {
     let mut reads = 0;
     let event = read_event_with(
         || false,
+        || Ok(true),
+        || None,
         || Ok(true),
         || {
             reads += 1;

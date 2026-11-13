@@ -1,8 +1,14 @@
 //! Tests for the terminal boundary module.
 
+#[cfg(unix)]
+use std::time::Duration;
+
 use super::{
-    SYNC_BEGIN, SYNC_END, TerminalCaps, TerminationWatch, caps_for, paste_arrives_as_keystrokes,
+    SYNC_BEGIN, SYNC_END, TerminalCaps, TerminationWatch, caps_for, control_letter,
+    paste_arrives_as_keystrokes,
 };
+#[cfg(unix)]
+use super::{wait_console_input, wait_consumes_record};
 
 /// The frame markers are the protocol contract: a terminal that accepts
 /// synchronized output turns it on with the set form and off with the reset
@@ -100,4 +106,71 @@ fn test_progress_gated() {
 #[test]
 fn test_paste_keystroke_fact_returns() {
     let _ = paste_arrives_as_keystrokes();
+}
+
+/// A terminal that delivers bytes has no record queue, so the wait answers no
+/// and the event source keeps owning the wait. The take and the wait are one
+/// decision: a host that takes records must also report the queue wait.
+#[cfg(unix)]
+#[test]
+fn test_stream_wait_declines() {
+    assert!(
+        !wait_consumes_record(),
+        "a byte stream is consumed by its event source, not by the reader"
+    );
+    assert!(
+        !wait_console_input(Duration::ZERO).expect("a stream wait answers"),
+        "a byte stream has no queue that reports readiness"
+    );
+}
+
+/// The control-letter classifier is the decision the take rides on, so every
+/// shape it must reject and the one shape it accepts are pinned here. A key
+/// the event source can resolve on its own must answer none, or the take
+/// would steal it; a control byte with no virtual key must answer its letter,
+/// or the chord would be lost.
+#[test]
+fn test_control_letter_classifies_record() {
+    const KEY_EVENT: u16 = 0x0001;
+    const OTHER_EVENT: u16 = 0x0002;
+    // The accepted shape: a key press whose whole content is a control byte.
+    assert_eq!(control_letter(KEY_EVENT, true, 0, 0x0F, 1), Some('o'));
+    assert_eq!(control_letter(KEY_EVENT, true, 0, 0x01, 1), Some('a'));
+    assert_eq!(control_letter(KEY_EVENT, true, 0, 0x1A, 1), Some('z'));
+    // An empty queue, a non-key record, a release, and a record with a
+    // virtual key are all the event source's business.
+    assert_eq!(
+        control_letter(KEY_EVENT, true, 0, 0x0F, 0),
+        None,
+        "an empty queue is none"
+    );
+    assert_eq!(
+        control_letter(OTHER_EVENT, true, 0, 0x0F, 1),
+        None,
+        "a non-key record is none"
+    );
+    assert_eq!(
+        control_letter(KEY_EVENT, false, 0, 0x0F, 1),
+        None,
+        "a release is none"
+    );
+    assert_eq!(
+        control_letter(KEY_EVENT, true, 0x4F, 0x0F, 1),
+        None,
+        "a record with a virtual key is none"
+    );
+    // The codes that carry their own virtual keys are resolved already.
+    for code in [0x08, 0x09, 0x0A, 0x0D, 0x1B] {
+        assert_eq!(
+            control_letter(KEY_EVENT, true, 0, code, 1),
+            None,
+            "the code {code:#04x} carries its own virtual key"
+        );
+    }
+    // A control byte above the range is not a chord the resolver drops.
+    assert_eq!(
+        control_letter(KEY_EVENT, true, 0, 0x20, 1),
+        None,
+        "a space is none"
+    );
 }

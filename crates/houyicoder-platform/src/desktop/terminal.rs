@@ -6,13 +6,17 @@
 use std::env::var;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 #[cfg(unix)]
 use crate::unix::terminal::{probe_hangup, watch_signals};
-#[cfg(not(unix))]
-pub use crate::windows::terminal::read_console_event;
-#[cfg(not(unix))]
-use crate::windows::terminal::{ConsoleGuard, console_gone, input_is_pipe, watch_close_event};
+#[cfg(target_os = "windows")]
+use crate::windows::terminal::{
+    ConsoleGuard, console_gone, ctrl_record_pending, input_is_pipe, take_ctrl_record, wait_input,
+    watch_close_event,
+};
+
+use self::vt::VtEvent;
 
 /// The begin marker of a synchronized output frame.
 pub const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
@@ -283,6 +287,101 @@ pub fn pipe_input() -> bool {
 /// terminal reports its own paste event, so no folding is needed there.
 pub fn paste_arrives_as_keystrokes() -> bool {
     cfg!(target_os = "windows")
+}
+
+/// Take one control key that the console queue holds in the form the event
+/// source cannot resolve, or None when the head of the queue is an ordinary
+/// record.
+///
+/// A console reports some control keys with no virtual key code, and the
+/// event source resolves every key through the layout table, so that shape is
+/// dropped. Only that record is consumed here. Every other record -- a typed
+/// character, a key release, a mouse move, a resize -- stays in the queue for
+/// the event source, which owns input in every other case.
+pub fn take_console_ctrl_key() -> Option<VtEvent> {
+    #[cfg(unix)]
+    {
+        // A terminal that delivers bytes has no record queue to inspect, and
+        // its event source resolves the control keys itself.
+        None
+    }
+    #[cfg(target_os = "windows")]
+    {
+        take_ctrl_record()
+    }
+}
+
+/// Whether the console queue's head is a control record the event source
+/// cannot resolve. The answer costs one peek and consumes nothing, so a
+/// caller that collects a run of keystrokes can stop at that record rather
+/// than let a readiness check take it.
+pub fn console_ctrl_pending() -> bool {
+    #[cfg(unix)]
+    {
+        false
+    }
+    #[cfg(target_os = "windows")]
+    {
+        ctrl_record_pending()
+    }
+}
+
+/// Whether the event source consumes the record that ends its wait. A host
+/// that does must have the wait taken on its input instead, so a control
+/// record can be inspected before anything consumes it; the answer lives
+/// here so the reader above asks one boundary rather than branching on a
+/// platform itself.
+pub fn wait_consumes_record() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Wait until the console input queue holds a record, up to the timeout.
+///
+/// The wait reports readiness without consuming anything, which is what lets
+/// a control record be taken before the event source reads it. A host whose
+/// input is a byte stream has no queue to wait on and answers no; its event
+/// source does the waiting.
+pub fn wait_console_input(timeout: Duration) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        let _ = timeout;
+        Ok(false)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        wait_input(timeout)
+    }
+}
+
+/// The control letter a console input record carries, or None when the record
+/// is not one the event source drops.
+///
+/// A key press whose whole content is a control byte in the first half of the
+/// control range, with no virtual key code, is the form a console bridge
+/// delivers for a control chord and the form the layout resolver cannot name.
+/// The keys that carry their own virtual codes are resolved already and left
+/// to the event source. Pure over the record's scalar fields so the decision
+/// is testable without a console.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn control_letter(
+    event_type: u16,
+    key_down: bool,
+    virtual_key: u16,
+    char_code: u16,
+    seen: u32,
+) -> Option<char> {
+    const KEY_EVENT_TYPE: u16 = 0x0001;
+    if seen == 0 || event_type != KEY_EVENT_TYPE {
+        return None;
+    }
+    if !key_down || virtual_key != 0 {
+        return None;
+    }
+    if !(0x01..=0x1A).contains(&char_code) || matches!(char_code, 0x08 | 0x09 | 0x0A | 0x0D | 0x1B)
+    {
+        return None;
+    }
+    Some((char_code + b'a' as u16 - 1) as u8 as char)
 }
 
 /// True when the environment says the terminal is one that hands the

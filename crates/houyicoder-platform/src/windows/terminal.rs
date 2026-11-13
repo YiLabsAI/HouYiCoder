@@ -8,6 +8,7 @@
 //! console.
 
 use std::io::Error as IoError;
+use std::io::Result as IoResult;
 use std::slice::from_mut;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -16,13 +17,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::yield_now;
 use std::time::{Duration, Instant};
 
+use crate::desktop::terminal::control_letter;
 use crate::desktop::terminal::vt::VtEvent;
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Console::{
     CONSOLE_MODE, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, GetConsoleMode,
-    GetStdHandle, INPUT_RECORD, KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-    SetConsoleCtrlHandler, SetConsoleMode,
+    GetStdHandle, INPUT_RECORD, PeekConsoleInputW, ReadConsoleInputW, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, SetConsoleCtrlHandler, SetConsoleMode,
 };
+use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::core::BOOL;
 use windows::core::Error;
 use windows::core::HRESULT;
@@ -103,36 +106,76 @@ pub(crate) fn input_is_pipe() -> bool {
     unsafe { GetConsoleMode(handle, &mut mode) }.is_err()
 }
 
-/// Read one console input record and map it to a decoded event. The control
-/// keys the console reports with a zero virtual key code -- the ones a
-/// ConPTY bridge delivers for the control block -- are mapped to their
-/// letters here, so a Ctrl+O is not lost to the layout's failure to
-/// resolve it through the keyboard layout table.
-#[expect(unsafe_code, reason = "reads console input records through the API")]
-pub fn read_console_event() -> Option<VtEvent> {
-    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }.ok()?;
+/// Wait until the console input queue holds a record, up to the timeout.
+///
+/// The console input handle is signaled while its queue is not empty, so this
+/// wait answers readiness without consuming the record. That is what lets the
+/// control-record take inspect the queue head before the event source reads
+/// it: a record that arrives during this wait is still in the queue when the
+/// wait returns.
+#[expect(unsafe_code, reason = "waits on the console input handle")]
+pub(crate) fn wait_input(timeout: Duration) -> IoResult<bool> {
+    let handle =
+        unsafe { GetStdHandle(STD_INPUT_HANDLE) }.map_err(|e| IoError::other(e.to_string()))?;
+    let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+    match unsafe { WaitForSingleObject(handle, millis) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        _ => Err(IoError::last_os_error()),
+    }
+}
+
+/// Whether the queue's head is a control record the event source cannot
+/// resolve. Answers without consuming anything, so a caller collecting a run
+/// of keystrokes can stop at that record and leave it for the take.
+pub(crate) fn ctrl_record_pending() -> bool {
+    ctrl_letter_at_head().is_some()
+}
+
+/// Take one console record that carries a control key with no virtual key
+/// code, or None when the queue's head is any other record.
+///
+/// The head is peeked at, never read blind: the console queues one record
+/// per keystroke, release, mouse move and resize, and taking a record the
+/// event source would have resolved loses that input for good. Only the
+/// unpaired control code is consumed, which is the shape the layout
+/// resolver drops and the reason a control key would otherwise disappear.
+#[expect(unsafe_code, reason = "peeks and reads console input records")]
+pub(crate) fn take_ctrl_record() -> Option<VtEvent> {
+    let letter = ctrl_letter_at_head()?;
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }
+        .map_err(|e| IoError::other(e.to_string()))
+        .ok()?;
     let mut record: INPUT_RECORD = INPUT_RECORD::default();
-    let buf = from_mut(&mut record);
-    unsafe { ReadConsoleInputW(handle, buf, &mut 0) }.ok()?;
-    if record.EventType as u32 != KEY_EVENT {
+    if let Err(e) = unsafe { ReadConsoleInputW(handle, from_mut(&mut record), &mut 0) } {
+        tracing::debug!(error = %e, "console record read failed");
+        return None;
+    }
+    Some(VtEvent::Ctrl(letter))
+}
+
+/// The letter the queue's head carries when it is one of those records. The
+/// classification is a pure call into the desktop layer; this is the thin
+/// unsafe read of the record's scalar fields.
+#[expect(unsafe_code, reason = "peeks at the console input queue")]
+fn ctrl_letter_at_head() -> Option<char> {
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) }
+        .map_err(|e| IoError::other(e.to_string()))
+        .ok()?;
+    let mut record: INPUT_RECORD = INPUT_RECORD::default();
+    let mut seen = 0u32;
+    if let Err(e) = unsafe { PeekConsoleInputW(handle, from_mut(&mut record), &mut seen) } {
+        tracing::debug!(error = %e, "console record peek failed");
         return None;
     }
     let key = unsafe { record.Event.KeyEvent };
-    if !key.bKeyDown.as_bool() {
-        return None;
-    }
-    let uchar = unsafe { key.uChar.UnicodeChar };
-    let vk = key.wVirtualKeyCode;
-    // The control block: a byte in 0x01..=0x1A with no virtual key is the
-    // control form. The console layout resolver returns zero for these under
-    // ConPTY, so crossterm drops them; map them here instead. Tab (0x09),
-    // Enter (0x0D), Backspace (0x08) and Esc (0x1B) have their own virtual
-    // keys and arrive as normal events, so they are left to the caller.
-    if (0x01..=0x1A).contains(&uchar) && vk == 0 {
-        let letter = (uchar + (b'a' as u16) - 1) as u8 as char;
-        return Some(VtEvent::Ctrl(letter));
-    }
-    None
+    control_letter(
+        record.EventType,
+        key.bKeyDown.as_bool(),
+        key.wVirtualKeyCode,
+        unsafe { key.uChar.UnicodeChar },
+        seen,
+    )
 }
 
 /// The handler the console calls with no context; the flags it writes are
