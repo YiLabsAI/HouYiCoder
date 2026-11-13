@@ -93,10 +93,28 @@ impl ShellProgram {
                 "-NoProfile".to_owned(),
                 "-NonInteractive".to_owned(),
                 "-Command".to_owned(),
-                command.to_owned(),
+                pwsh_command(command),
             ],
         }
     }
+}
+
+/// Wrap a PowerShell command so the process exits with the command's own exit
+/// code rather than the shell's.
+///
+/// A native command the user runs sets $LASTEXITCODE; a cmdlet sets $?.  The
+/// wrapper resets $LASTEXITCODE first so a value a prior command left does not
+/// leak, runs the command, and exits with the native code when one was set, or
+/// with one when a cmdlet failed, or with zero. Pure so the wrapping is
+/// testable without a PowerShell process; the four-quadrant exit behavior is
+/// pinned by an ignored suite that runs where the shell is installed.
+pub fn pwsh_command(command: &str) -> String {
+    format!(
+        "& {{ $global:LASTEXITCODE = $null; {command}; \
+         if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }} \
+         elseif (-not $?) {{ exit 1 }} \
+         else {{ exit 0 }} }}"
+    )
 }
 
 /// Which shell a host was asked to run commands with.
@@ -109,6 +127,9 @@ pub enum ShellPreference {
     GitBash,
     /// The command interpreter, never replaced by a search result.
     Cmd,
+    /// PowerShell, resolved by absolute path. A host without it falls back to
+    /// the command interpreter and the report says so.
+    PowerShell,
 }
 
 /// The interpreter a configured helper command runs through. Explicit so a

@@ -139,8 +139,22 @@ fn test_arguments_per_program() {
             "-NoProfile".to_owned(),
             "-NonInteractive".to_owned(),
             "-Command".to_owned(),
-            "echo hi".to_owned(),
+            super::pwsh_command("echo hi"),
         ]
+    );
+}
+
+/// The PowerShell wrapper resets the exit code before the command and exits with
+/// the command's own code after it, so a stale code does not leak and a failed
+/// cmdlet reports failure.
+#[test]
+fn test_pwsh_command_resets_exit() {
+    let wrapped = super::pwsh_command("Get-Location");
+    assert!(
+        wrapped.contains("$global:LASTEXITCODE = $null")
+            && wrapped.contains("Get-Location")
+            && wrapped.contains("exit $LASTEXITCODE"),
+        "the wrapper resets and exits with the code: {wrapped}"
     );
 }
 

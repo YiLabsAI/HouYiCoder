@@ -65,15 +65,31 @@ fn test_path_with_spaces_parses() {
 #[test]
 fn test_unknown_mode_reported() {
     let dir = tempdir();
-    let path = write_settings(&dir, r#"{"sandbox":{"shell":{"mode":"powershell"}}}"#);
+    let path = write_settings(&dir, r#"{"sandbox":{"shell":{"mode":"fish"}}}"#);
     let c = load_sandbox_shell_from(&path);
-    assert_eq!(c.mode, ShellSetting::Unsupported("powershell".into()));
+    assert_eq!(c.mode, ShellSetting::Unsupported("fish".into()));
     let w = c.deferred_warnings();
     assert_eq!(w.len(), 1, "got {w:?}");
-    assert!(
-        w[0].contains("powershell"),
-        "the warning names the value: {w:?}"
-    );
+    assert!(w[0].contains("fish"), "the warning names the value: {w:?}");
+}
+
+/// PowerShell is a supported mode: each spelling parses to its variant rather
+/// than landing as an unsupported value.
+#[test]
+fn test_powershell_modes_parse() {
+    let dir = tempdir();
+    for (text, expected) in [
+        ("powershell", ShellSetting::PowerShell),
+        ("powershell_7", ShellSetting::PowerShell7),
+        ("powershell_51", ShellSetting::PowerShell51),
+    ] {
+        let path = write_settings(
+            &dir,
+            &format!("{{\"sandbox\":{{\"shell\":{{\"mode\":\"{text}\"}}}}}}"),
+        );
+        let c = load_sandbox_shell_from(&path);
+        assert_eq!(c.mode, expected, "mode {text:?} parses");
+    }
 }
 
 /// A path under an explicit command interpreter does not take effect, so the

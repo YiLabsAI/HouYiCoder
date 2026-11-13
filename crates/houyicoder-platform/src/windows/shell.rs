@@ -41,6 +41,25 @@ pub(crate) fn discover(
         };
         return select(preference, &candidates, missing, no_real_path);
     }
+    if preference == ShellPreference::PowerShell {
+        return resolve_pwsh()
+            .map(|(path, edition)| {
+                let program = ShellProgram::PowerShell { path, edition };
+                tracing::info!("shell: commands run with PowerShell");
+                ShellSelection {
+                    program: Some(program),
+                    notice: None,
+                }
+            })
+            .unwrap_or_else(|| ShellSelection {
+                program: None,
+                notice: Some(
+                    "PowerShell was asked for but neither pwsh nor powershell was \
+                     found, so commands run with the Windows command interpreter"
+                        .to_owned(),
+                ),
+            });
+    }
     let standard = standard_locations();
     let settle = |searched: &[PathBuf], search: SearchOutcome| {
         let candidates = Candidates {

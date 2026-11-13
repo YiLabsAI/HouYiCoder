@@ -31,6 +31,16 @@ pub enum ShellSetting {
     /// The command interpreter, never replaced by a search result.
     #[serde(rename = "cmd")]
     Cmd,
+    /// PowerShell 7 or later, started as pwsh. A host without it falls back and
+    /// the report says so.
+    #[serde(rename = "powershell")]
+    PowerShell,
+    /// PowerShell 7 or later, the explicit spelling of the edition above.
+    #[serde(rename = "powershell_7")]
+    PowerShell7,
+    /// Windows PowerShell 5.1, started as powershell.
+    #[serde(rename = "powershell_51")]
+    PowerShell51,
     /// A value this version does not implement, kept verbatim.
     #[serde(untagged)]
     Unsupported(String),
@@ -85,7 +95,8 @@ impl SandboxShellConfig {
             out.push(format!(
                 "mode {value:?} is not implemented, so the Windows command \
                  interpreter runs commands. Supported values are \"auto\", \
-                 \"git_bash\" and \"cmd\""
+                 \"git_bash\", \"cmd\", \"powershell\", \"powershell_7\", and \
+                 \"powershell_51\""
             ));
         }
         if self.mode == ShellSetting::Cmd && self.git_bash_path.is_some() {

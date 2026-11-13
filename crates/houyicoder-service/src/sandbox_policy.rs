@@ -95,6 +95,9 @@ fn shell_preference(mode: &ShellSetting) -> ShellPreference {
         ShellSetting::Auto => ShellPreference::Auto,
         ShellSetting::GitBash => ShellPreference::GitBash,
         ShellSetting::Cmd | ShellSetting::Unsupported(_) => ShellPreference::Cmd,
+        ShellSetting::PowerShell | ShellSetting::PowerShell7 | ShellSetting::PowerShell51 => {
+            ShellPreference::PowerShell
+        }
     }
 }
 
