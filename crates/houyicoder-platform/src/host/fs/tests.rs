@@ -1,0 +1,157 @@
+//! The lexical guard and the temp name, over the inputs the transaction sees.
+
+use super::{LexicalRejection, reject, temp_name_for, translate_posix_drive};
+
+/// A UNC path is rejected before any handle reaches the network.
+#[test]
+fn test_unc_rejected() {
+    assert_eq!(
+        reject(r"\\evil\share\a"),
+        Some(LexicalRejection::UncShare),
+        "a backslash UNC is a network path"
+    );
+    assert_eq!(
+        reject("//evil/share/a"),
+        Some(LexicalRejection::UncShare),
+        "a forward-slash UNC is still a network path"
+    );
+}
+
+/// A reserved device name is rejected whether or not it carries an extension,
+/// because the kernel reads the device from the stem the way this does.
+#[test]
+fn test_reserved_device_rejected() {
+    assert_eq!(
+        reject("NUL"),
+        Some(LexicalRejection::ReservedDevice),
+        "NUL is a device, not a file"
+    );
+    assert_eq!(
+        reject("NUL.txt"),
+        Some(LexicalRejection::ReservedDevice),
+        "the extension does not rescue a device name"
+    );
+    assert_eq!(
+        reject(r"C:\path\COM1"),
+        Some(LexicalRejection::ReservedDevice),
+        "a device under directories is still a device"
+    );
+    assert_eq!(
+        reject("con"),
+        Some(LexicalRejection::ReservedDevice),
+        "the check is case-insensitive"
+    );
+}
+
+/// An alternate data stream names a fork the transaction does not replace.
+#[test]
+fn test_data_stream_rejected() {
+    assert_eq!(
+        reject("a.txt:stream"),
+        Some(LexicalRejection::AlternateDataStream),
+        "a colon after the name is a stream fork"
+    );
+    assert_eq!(
+        reject(r"C:\logs\app.log:$DATA"),
+        Some(LexicalRejection::AlternateDataStream),
+        "a stream under a drive is still a stream"
+    );
+}
+
+/// A plain local path, with a drive letter, passes the lexical gate.
+#[test]
+fn test_local_path_passes() {
+    assert_eq!(
+        reject(r"C:\projects\houyicoder\file.rs"),
+        None,
+        "a local path is not rejected"
+    );
+    assert_eq!(reject("file.rs"), None, "a bare name is not rejected");
+    assert_eq!(
+        reject(r"D:\work\NUL backup.txt"),
+        None,
+        "NUL as a word inside a name is not the device"
+    );
+}
+
+/// The drive letter is allowed because it is exactly one alphabetic byte before
+/// the colon; a second colon, or a colon behind a name, is the stream form.
+#[test]
+fn test_drive_letter_passes() {
+    assert_eq!(
+        reject(r"C:file"),
+        None,
+        "a drive-relative path is not a stream"
+    );
+    assert_eq!(
+        reject("CC:file"),
+        Some(LexicalRejection::AlternateDataStream),
+        "two letters before the colon is not a drive"
+    );
+}
+
+/// The MSYS single-slash and cygdrive forms become the Windows path they name.
+#[test]
+fn test_posix_drive_translated() {
+    assert_eq!(
+        translate_posix_drive("/c/projects/app"),
+        Some(r"C:\projects\app".to_string()),
+        "the single-slash form lifts the drive"
+    );
+    assert_eq!(
+        translate_posix_drive("/cygdrive/d/work"),
+        Some(r"D:\work".to_string()),
+        "the cygdrive form lifts the drive"
+    );
+    assert_eq!(
+        translate_posix_drive("/c"),
+        Some(r"C:".to_string()),
+        "a drive alone keeps its bare form"
+    );
+}
+
+/// A path that is not an MSYS drive form is left for the caller to handle.
+#[test]
+fn test_non_drive_not_translated() {
+    assert_eq!(
+        translate_posix_drive("/usr/local/bin"),
+        None,
+        "a unix path is not a drive"
+    );
+    assert_eq!(
+        translate_posix_drive(r"C:\already\windows"),
+        None,
+        "a windows path is not translated"
+    );
+}
+
+/// Each writer gets its own temp name, so two writers never share the file one
+/// truncates.
+#[test]
+fn test_temp_name_unique() {
+    let a = temp_name_for("served_models.json", 100, 1);
+    let b = temp_name_for("served_models.json", 101, 1);
+    let c = temp_name_for("served_models.json", 100, 2);
+    assert_ne!(a, b, "different pids name different files");
+    assert_ne!(a, c, "different counters name different files");
+    assert!(
+        a.starts_with(".served_models.") && a.ends_with(".json"),
+        "the name keeps its stem and extension: {a}"
+    );
+}
+
+/// A name with no extension gets the tmp extension so a reader that filters by
+/// extension still sees the transient file.
+#[test]
+fn test_temp_name_without_extension() {
+    let name = temp_name_for("manifest", 7, 3);
+    assert_eq!(name, ".manifest.7.3.tmp");
+}
+
+/// A dotfile keeps its leading dot as part of the stem, not as the extension
+/// split, so the temp name does not invent an extension from it.
+#[test]
+fn test_temp_name_dotfile() {
+    let name = temp_name_for(".bashrc", 7, 3);
+    assert_eq!(name, "..bashrc.7.3.tmp");
+}
