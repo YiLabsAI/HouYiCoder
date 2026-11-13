@@ -9,12 +9,14 @@
 use houyicoder_api::capture::{CaptureVerdict, CapturedStream, RawOutputReceiver};
 use houyicoder_api::launcher::{StdioConfig, StdioMode};
 use houyicoder_context::SandboxError;
-use std::io::Error;
-use std::process::Output;
-use std::process::Stdio;
+use std::future::Future;
+use std::io::{Error, Result};
+use std::pin::Pin;
+use std::process::{ExitStatus, Output, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::process::Command;
@@ -126,19 +128,61 @@ fn take(buffer: &Mutex<Vec<u8>>) -> Vec<u8> {
 /// exits, the reads get the given window (grace) and then stop. A background
 /// subshell inherits the write ends, and without the window a command that
 /// starts one never looks finished, however quickly the shell itself returns.
+pub(crate) trait CaptureChild {
+    /// Wait for the child to exit, answering its status. The future is boxed so
+    /// it is unpin and can sit behind the select the capture polls.
+    fn wait(&mut self) -> Pin<Box<dyn Future<Output = Result<ExitStatus>> + Send + '_>>;
+    /// End the child now, without waiting.
+    fn start_kill(&mut self) -> Result<()>;
+}
+
+impl CaptureChild for Child {
+    fn wait(&mut self) -> Pin<Box<dyn Future<Output = Result<ExitStatus>> + Send + '_>> {
+        Box::pin(Child::wait(self))
+    }
+    fn start_kill(&mut self) -> Result<()> {
+        Child::start_kill(self)
+    }
+}
+
+/// Capture a tokio Child's output through the shared pipeline. The child's
+/// stdout and stderr are taken out and the child is handed to the generic
+/// pipeline, which drains both streams while it waits and reports what the
+/// command printed before a stop or an exit.
 pub(crate) async fn capture(
     mut child: Child,
     lines: Option<&AtomicI64>,
     captured: &CapturedOutput,
     grace: Duration,
     receiver: Option<&dyn RawOutputReceiver>,
-) -> std::io::Result<Output> {
-    let Some(mut stdout) = child.stdout.take() else {
-        return Err(Error::other("child stdout is not piped"));
-    };
-    let Some(mut stderr) = child.stderr.take() else {
-        return Err(Error::other("child stderr is not piped"));
-    };
+) -> Result<Output> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::other("child stdout is not piped"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::other("child stderr is not piped"))?;
+    capture_streams(&mut child, stdout, stderr, lines, captured, grace, receiver).await
+}
+
+/// Drain two output streams while a child runs, reporting what it printed
+/// before a stop or an exit.
+///
+/// Reading is bounded by the child, not only by the pipes: once the child
+/// exits, the reads get the given window (grace) and then stop. A background
+/// subshell inherits the write ends, and without the window a command that
+/// starts one never looks finished, however quickly the shell itself returns.
+pub(crate) async fn capture_streams(
+    child: &mut impl CaptureChild,
+    mut stdout: impl AsyncRead + Unpin,
+    mut stderr: impl AsyncRead + Unpin,
+    lines: Option<&AtomicI64>,
+    captured: &CapturedOutput,
+    grace: Duration,
+    receiver: Option<&dyn RawOutputReceiver>,
+) -> Result<Output> {
     // Raised when the capture refuses the next chunk. The command then has to
     // stop: its output is going nowhere it can be kept, and a reader that
     // keeps draining would let a runaway command run to its wall budget while
@@ -194,7 +238,7 @@ pub(crate) async fn capture(
         err
     };
     let mut reads = Box::pin(reads);
-    let mut wait = Box::pin(child.wait());
+    let mut wait = child.wait();
     let mut read_result = None;
     let mut status = None;
     let mut stop_early = false;
