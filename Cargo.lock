@@ -1309,6 +1309,7 @@ dependencies = [
 name = "houyicoder-config"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "houyicoder-platform",
  "houyicoder-protocol",
  "serde",
