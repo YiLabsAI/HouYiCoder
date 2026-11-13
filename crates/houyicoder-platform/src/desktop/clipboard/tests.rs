@@ -1,6 +1,21 @@
 //! The utility runner, driven by a trivial child.
 
+#[cfg(target_os = "macos")]
+use super::MACOS_CLIP_TOOL;
 use super::{native_clipboard_preferred, run_utility};
+
+/// The macOS tool is an absolute path, never a bare name a directory earlier
+/// on the search path could answer for. A regression to a bare name is a
+/// working-directory hijack on copy.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_macos_tool_is_absolute() {
+    assert!(
+        MACOS_CLIP_TOOL.starts_with('/'),
+        "the macOS tool is an absolute path"
+    );
+    assert_eq!(MACOS_CLIP_TOOL, "/usr/bin/pbcopy");
+}
 
 /// The host that carries a native utility is the one whose terminal may
 /// refuse the escape a copy also emits.

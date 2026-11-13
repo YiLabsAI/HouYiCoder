@@ -6,10 +6,14 @@
 //! fire and forget, so a failure here is silent by design: the escape the
 //! caller also emits is the fallback.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::env::var_os;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::io::{Error, Result, Write};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::process::{Command, Stdio};
 #[cfg(target_os = "linux")]
@@ -17,6 +21,17 @@ use std::sync::Mutex;
 
 #[cfg(test)]
 mod tests;
+
+/// The creation flag that suppresses the console window a utility spawn would
+/// otherwise allocate, avoiding the conhost flash on every copy.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// The absolute path to the macOS clipboard utility, never a bare name: a bare
+/// name is resolved through the search path, and a directory earlier on it
+/// could answer with a program the copy never meant to run.
+#[cfg(target_os = "macos")]
+const MACOS_CLIP_TOOL: &str = "/usr/bin/pbcopy";
 
 /// The Linux utility that answered last, cached so a copy costs no probe.
 #[cfg(target_os = "linux")]
@@ -39,7 +54,7 @@ pub fn native_clipboard_preferred() -> bool {
 pub fn copy_to_native_clipboard(text: &str) {
     #[cfg(target_os = "macos")]
     {
-        drop(run_utility("pbcopy", &[], text));
+        drop(run_utility(MACOS_CLIP_TOOL, &[], text));
     }
     #[cfg(target_os = "linux")]
     {
@@ -54,12 +69,27 @@ pub fn copy_to_native_clipboard(text: &str) {
     }
     #[cfg(target_os = "windows")]
     {
-        drop(run_utility("clip", &[], text));
+        if let Some(program) = windows_clip_program() {
+            drop(run_utility(&program, &[], text));
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = text;
     }
+}
+
+/// The absolute path to the Windows clipboard utility, resolved from the system
+/// root so a bare name cannot be answered by a program in the working
+/// directory. None when the system root is unset, in which case the terminal
+/// escape the caller also emits is the fallback.
+#[cfg(target_os = "windows")]
+fn windows_clip_program() -> Option<String> {
+    let root = var_os("SystemRoot")?;
+    let mut path = PathBuf::from(root);
+    path.push("System32");
+    path.push("clip.exe");
+    Some(path.to_string_lossy().into_owned())
 }
 
 /// The Linux utility that answers, cached after the first copy. The probe
@@ -97,12 +127,16 @@ fn linux_clipboard_tool(text: &str) -> Option<&'static str> {
     reason = "L0 clipboard utility below the ProcessLauncher port; no runtime dependency"
 )]
 fn run_utility(program: &str, args: &[&str], text: &str) -> Result<()> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    // A tool command never needs a console window of its own; the flag also
+    // avoids the conhost allocation that flashes a black box on every copy.
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = cmd.spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(text.as_bytes())?;
         drop(stdin);
