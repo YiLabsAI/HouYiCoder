@@ -9,15 +9,13 @@
 use std::collections::HashSet;
 
 use houyicoder_config::ServedModels;
+use houyicoder_platform::host::fs::atomic_replace;
 use serde_json::Value;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::fs::create_dir_all;
-use std::fs::remove_file;
-use std::fs::rename;
-use std::io::Write;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::{Permissions, set_permissions};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -53,10 +51,10 @@ fn sort_longest_first(mut ids: Vec<String>) -> Vec<String> {
     ids
 }
 
-/// Write the cache atomically (temp + rename, 0o600) so a crash mid-write
-/// leaves either the old cache or the new one, never a torn file.
-/// Best-effort: a write failure is logged and swallowed — the cache is
-/// advisory, the process still runs without it.
+/// Write the cache atomically so a crash mid-write leaves either the old cache
+/// or the new one, never a torn file, and two writers never share the temp path
+/// one truncates while the other writes. Best-effort: a write failure is logged
+/// and swallowed — the cache is advisory, the process still runs without it.
 pub(crate) fn write_cache(path: &Path, ids: &[String]) {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     if let Err(e) = create_dir_all(dir) {
@@ -74,43 +72,19 @@ pub(crate) fn write_cache(path: &Path, ids: &[String]) {
     let Ok(json) = serde_json::to_string(&payload) else {
         return;
     };
-    let tmp = path.with_extension("json.tmp");
-    match open_cache_file(&tmp) {
-        Ok(mut f) => {
-            if let Err(e) = f.write_all(json.as_bytes()) {
-                tracing::warn!("served-models cache: write failed: {e}");
-                drop(remove_file(&tmp));
-                return;
-            }
-            drop(f);
-            if let Err(e) = rename(&tmp, path) {
-                tracing::warn!("served-models cache: rename failed: {e}");
-                drop(remove_file(&tmp));
-            }
-        }
-        Err(e) => tracing::warn!("served-models cache: open tmp failed: {e}"),
+    let replaced = atomic_replace(path, json.as_bytes());
+    if let Err(e) = replaced {
+        tracing::warn!("served-models cache: atomic replace failed: {e}");
+        return;
     }
-}
-
-/// Open the cache temp file with restrictive permissions on Unix (0o600).
-/// On non-Unix platforms the default permissions are used.
-#[cfg(unix)]
-fn open_cache_file(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_cache_file(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
+    // The cache holds model ids the provider serves; restrict it to the owner.
+    #[cfg(unix)]
+    {
+        let locked = set_permissions(path, Permissions::from_mode(0o600));
+        if let Err(e) = locked {
+            tracing::warn!("served-models cache: set_permissions failed: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
