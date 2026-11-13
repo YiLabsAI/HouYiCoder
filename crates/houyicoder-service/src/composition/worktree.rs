@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use dunce::canonicalize;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::SessionId;
@@ -19,7 +20,6 @@ use houyicoder_sandbox::PlatformSession;
 use houyicoder_session::SessionStore;
 #[cfg(test)]
 use std::env::temp_dir;
-use std::fs::canonicalize;
 #[cfg(test)]
 use std::fs::create_dir_all;
 #[cfg(test)]

@@ -75,9 +75,11 @@ fn read_trusted_map(settings_path: &Path) -> Map<String, Value> {
 }
 
 /// Canonicalize a path for use as a trusted_projects key, so the same
-/// directory is keyed consistently regardless of how the user typed it.
+/// directory is keyed consistently regardless of how the user typed it. dunce
+/// drops the verbatim prefix a Windows canonicalize adds, so the key matches
+/// the form callers compare against.
 fn canonicalize(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path).ok()
+    dunce::canonicalize(path).ok()
 }
 
 #[cfg(test)]

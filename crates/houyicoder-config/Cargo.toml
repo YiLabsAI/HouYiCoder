@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 houyicoder-platform = { path = "../houyicoder-platform" }
 houyicoder-protocol = { path = "../houyicoder-protocol" }
+dunce = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1.44"

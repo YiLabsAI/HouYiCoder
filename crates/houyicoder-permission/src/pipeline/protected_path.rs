@@ -30,7 +30,7 @@ use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
 use crate::safety::{marker_hit, safety_check};
-use std::fs::canonicalize;
+use dunce::canonicalize;
 
 /// Protected paths: the version-control directory, the agent's own config
 /// directory, and shell rc files. Always asks; never silently allowed; never
