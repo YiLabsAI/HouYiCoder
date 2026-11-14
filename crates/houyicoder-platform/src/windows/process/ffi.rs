@@ -181,12 +181,18 @@ pub(super) fn terminate_job(job: RawHandle) {
 }
 
 /// The attribute list a command starts under: the job it enters at creation
-/// and the only handles it may inherit. The allocation is released on every
-/// path out, including an error before the process starts.
+/// and the only handles it may inherit. The system records the address of a
+/// value rather than a copy and reads it again when the process starts and
+/// when the list is deleted, so every value lives in a heap allocation this
+/// type owns: an inline array would move with this struct and leave the list
+/// pointing at the bytes the struct used to occupy. The allocations drop
+/// after the drop body below, which is the order the system needs.
 struct AttributeList {
     list: LPPROC_THREAD_ATTRIBUTE_LIST,
     heap: HANDLE,
     initialized: bool,
+    job_handles: Option<Box<[HANDLE]>>,
+    stdio_handles: Box<[HANDLE]>,
 }
 
 impl AttributeList {
@@ -209,17 +215,24 @@ impl AttributeList {
             list: LPPROC_THREAD_ATTRIBUTE_LIST(raw),
             heap,
             initialized: false,
+            job_handles: None,
+            stdio_handles: Vec::from(stdio.map(as_handle)).into_boxed_slice(),
         };
         unsafe { InitializeProcThreadAttributeList(Some(list.list), count, None, &mut size) }
             .map_err(io_error)?;
         list.initialized = true;
+        // Each buffer is owned before the call that records its address, so a
+        // failed call still leaves the list referring to memory this type
+        // holds until the list is deleted.
         if let Some(job) = job {
-            set_attribute(list.list, PROC_THREAD_ATTRIBUTE_JOB_LIST, &[as_handle(job)])?;
+            list.job_handles = Some(vec![as_handle(job)].into_boxed_slice());
+            let handles = list.job_handles.as_deref().unwrap_or_default();
+            set_attribute(list.list, PROC_THREAD_ATTRIBUTE_JOB_LIST, handles)?;
         }
         set_attribute(
             list.list,
             PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            &stdio.map(as_handle),
+            &list.stdio_handles,
         )?;
         Ok(list)
     }
@@ -238,8 +251,9 @@ impl Drop for AttributeList {
     }
 }
 
-/// Record one attribute on the list. The system copies the value, so the
-/// slice only has to outlive this call.
+/// Record one attribute on the list. The system keeps the pointer rather than
+/// a copy, so the buffer must stay alive and unmoved until the list is
+/// deleted.
 fn set_attribute(
     list: LPPROC_THREAD_ATTRIBUTE_LIST,
     attribute: u32,

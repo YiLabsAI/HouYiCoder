@@ -187,22 +187,22 @@ fn search_path(roots: &[PathBuf]) -> (Vec<PathBuf>, SearchOutcome) {
         .collect();
     // The git program search is best effort: when it cannot run the bash
     // entries already collected stand, so the outcome stays Ran.
-    if let Some(git) = run_bounded(&search, &["git.exe"]) {
-        if matches!(git.status, Some(0) | Some(1)) {
-            for path in git
-                .stdout
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                let git_path = PathBuf::from(path);
-                if !git_path.is_absolute() {
-                    continue;
-                }
-                for candidate in bash_from_git(&git_path, is_file) {
-                    if !found.contains(&candidate) {
-                        found.push(candidate);
-                    }
+    if let Some(git) = run_bounded(&search, &["git.exe"])
+        && matches!(git.status, Some(0) | Some(1))
+    {
+        for path in git
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let git_path = PathBuf::from(path);
+            if !git_path.is_absolute() {
+                continue;
+            }
+            for candidate in bash_from_git(&git_path, is_file) {
+                if !found.contains(&candidate) {
+                    found.push(candidate);
                 }
             }
         }

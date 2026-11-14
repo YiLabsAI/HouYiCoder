@@ -568,6 +568,26 @@ fn test_corrupt_store_starts_bare() {
     fs::remove_dir_all(&root).ok();
 }
 
+/// The gate routes a command by the dialect the session actually runs, so a
+/// session that starts PowerShell is not judged by the POSIX rules. The two
+/// values agree on a host whose session runs POSIX; on Windows the session
+/// reports the interpreter it starts, which the gate must follow.
+#[test]
+fn test_gate_takes_session_shell() {
+    let root = temp_root("houyi-fences-shell");
+    let fences = build_session_fences(Some(root.to_string_lossy().into_owned()), None);
+    let session = fences
+        .sandbox_session
+        .as_ref()
+        .expect("the fence starts a session");
+    assert_eq!(
+        fences.gate.shell(),
+        session.shell(),
+        "the gate judges commands by the session's shell"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
 /// A skill discovered under the user's home is read through the same fence as
 /// any other file, so the trees holding them are granted read-only at start.
 /// Only trees that exist are granted: naming a missing directory would make

@@ -19,7 +19,9 @@ use crate::linux::read_system_proxy as platform_proxy;
 #[cfg(target_os = "macos")]
 use crate::macos::read_system_proxy as platform_proxy;
 #[cfg(target_os = "windows")]
-use crate::windows::read_system_proxy as platform_proxy;
+use crate::windows::{
+    read_system_proxy as platform_proxy, shell::helper_program as windows_helper_program,
+};
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn platform_proxy() -> ProxyResolution {
     ProxyResolution::direct()
@@ -77,7 +79,7 @@ pub fn default_shell() -> ShellSelection {
 pub fn helper_program(shell: HelperShell) -> Option<ShellProgram> {
     #[cfg(target_os = "windows")]
     {
-        return crate::windows::shell::helper_program(shell);
+        windows_helper_program(shell)
     }
     #[cfg(not(target_os = "windows"))]
     {

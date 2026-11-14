@@ -4,11 +4,10 @@
 //! caller needs to run and reap one.
 
 use std::ffi::c_void;
-use std::fs::File;
-use std::io::{Error, Result};
+use std::io::{Error, Read, Result, Write};
 use std::iter::once;
 use std::mem::{replace, size_of};
-use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -17,16 +16,20 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tracing::warn;
 use windows::Win32::Foundation::{
-    ERROR_PIPE_BUSY, FALSE, GENERIC_READ, GENERIC_WRITE, HLOCAL, LocalFree, WIN32_ERROR,
+    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_NOT_CONNECTED, FALSE,
+    GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL, LocalFree, WIN32_ERROR,
 };
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING, ReadFile, WriteFile,
 };
+use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Pipes::WaitNamedPipeW;
+use windows::Win32::System::Threading::{CreateEventW, ResetEvent};
 use windows::core::PCWSTR;
 
 use super::{
@@ -145,14 +148,135 @@ pub fn session_endpoint(_sessions_dir: &Path, session_id: &str) -> Result<String
 }
 
 /// Connect a client to a session endpoint, as the two directions a carrier
-/// that reads on its own thread owns separately.
+/// that reads on its own thread owns separately. Each direction waits on its
+/// own completion event, so a read waiting for the host never holds a write
+/// back.
 pub fn connect_local_streams(endpoint: &str) -> Result<LocalStreams> {
     let pipe = open_pipe(endpoint)?;
     let read = pipe.try_clone()?;
     Ok(LocalStreams {
-        read: Box::new(read),
-        write: Box::new(pipe),
+        read: Box::new(OverlappedPipe::new(read)?),
+        write: Box::new(OverlappedPipe::new(pipe)?),
     })
+}
+
+/// One direction of the client end, driven from its own thread.
+///
+/// A handle opened without the overlapped flag serializes every read and
+/// write on its file object, so a client waiting for the host's next message
+/// holds the lock its next keystroke needs: writing while a read is pending
+/// waits until a message arrives, which is never if the host is waiting for
+/// that keystroke. Each direction here owns a completion event instead, so
+/// the two proceed at the same time.
+struct OverlappedPipe {
+    handle: OwnedHandle,
+    event: OwnedHandle,
+}
+
+impl OverlappedPipe {
+    #[expect(unsafe_code, reason = "creates the completion event for a direction")]
+    fn new(handle: OwnedHandle) -> Result<Self> {
+        let event =
+            unsafe { CreateEventW(None, true, false, PCWSTR::null()) }.map_err(Error::other)?;
+        let event = unsafe { OwnedHandle::from_raw_handle(event.0.cast()) };
+        Ok(Self { handle, event })
+    }
+
+    /// Clear this direction's event and hand the system the record it
+    /// completes the operation into. The event is manual-reset, so clearing
+    /// it is what attaches the wait below to this operation rather than one
+    /// that finished earlier.
+    #[expect(unsafe_code, reason = "clears the completion event")]
+    fn begin(&self) -> Result<OVERLAPPED> {
+        unsafe { ResetEvent(as_handle(self.event.as_raw_handle())) }.map_err(Error::other)?;
+        Ok(OVERLAPPED {
+            hEvent: as_handle(self.event.as_raw_handle()),
+            ..OVERLAPPED::default()
+        })
+    }
+
+    /// Wait for the operation and answer its byte count. A peer that closed
+    /// its end is the end of a read; a write reports it as a failure.
+    #[expect(unsafe_code, reason = "waits on the kernel transfer")]
+    fn finish(&self, overlapped: &OVERLAPPED, end_on_close: bool) -> Result<usize> {
+        let mut transferred = 0u32;
+        let waited = unsafe {
+            GetOverlappedResult(
+                as_handle(self.handle.as_raw_handle()),
+                overlapped,
+                &mut transferred,
+                true,
+            )
+        };
+        match waited {
+            Ok(()) => Ok(transferred as usize),
+            Err(error)
+                if end_on_close
+                    && matches!(
+                        WIN32_ERROR::from_error(&error),
+                        Some(ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED)
+                    ) =>
+            {
+                Ok(0)
+            }
+            Err(error) => Err(Error::other(error)),
+        }
+    }
+}
+
+impl Read for OverlappedPipe {
+    #[expect(unsafe_code, reason = "issues the kernel read")]
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
+        // One call carries what the byte count field expresses; a larger
+        // buffer takes another call.
+        let length = buffer.len().min(u32::MAX as usize);
+        let mut overlapped = self.begin()?;
+        let issued = unsafe {
+            ReadFile(
+                as_handle(self.handle.as_raw_handle()),
+                Some(&mut buffer[..length]),
+                None,
+                Some(&mut overlapped),
+            )
+        };
+        if let Err(error) = issued
+            && WIN32_ERROR::from_error(&error) != Some(ERROR_IO_PENDING)
+        {
+            return Err(Error::other(error));
+        }
+        self.finish(&overlapped, true)
+    }
+}
+
+impl Write for OverlappedPipe {
+    #[expect(unsafe_code, reason = "issues the kernel write")]
+    fn write(&mut self, buffer: &[u8]) -> Result<usize> {
+        let length = buffer.len().min(u32::MAX as usize);
+        let mut overlapped = self.begin()?;
+        let issued = unsafe {
+            WriteFile(
+                as_handle(self.handle.as_raw_handle()),
+                Some(&buffer[..length]),
+                None,
+                Some(&mut overlapped),
+            )
+        };
+        if let Err(error) = issued
+            && WIN32_ERROR::from_error(&error) != Some(ERROR_IO_PENDING)
+        {
+            return Err(Error::other(error));
+        }
+        self.finish(&overlapped, false)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        // A pipe holds no buffer of its own to empty.
+        Ok(())
+    }
+}
+
+fn as_handle(raw: RawHandle) -> HANDLE {
+    HANDLE(raw)
 }
 
 /// A pipe disappears when its last handle closes, so there is nothing on disk
@@ -227,9 +351,11 @@ fn create_instance(
 
 /// Open the client end of the named pipe, waiting while every instance is
 /// serving another client. The listener creates a replacement instance as
-/// soon as one is taken, so the wait ends once that instance exists.
+/// soon as one is taken, so the wait ends once that instance exists. The
+/// handle is opened for overlapped I/O, which is what lets a read and a write
+/// run at the same time.
 #[expect(unsafe_code, reason = "opens the pipe by name")]
-fn open_pipe(endpoint: &str) -> Result<File> {
+fn open_pipe(endpoint: &str) -> Result<OwnedHandle> {
     let name: Vec<u16> = endpoint.encode_utf16().chain(once(0)).collect();
     let name = PCWSTR(name.as_ptr());
     loop {
@@ -240,12 +366,12 @@ fn open_pipe(endpoint: &str) -> Result<File> {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 None,
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
                 None,
             )
         };
         match opened {
-            Ok(handle) => return Ok(unsafe { File::from_raw_handle(handle.0.cast()) }),
+            Ok(handle) => return Ok(unsafe { OwnedHandle::from_raw_handle(handle.0.cast()) }),
             Err(e) if WIN32_ERROR::from_error(&e) == Some(ERROR_PIPE_BUSY) => {
                 if !unsafe { WaitNamedPipeW(name, BUSY_WAIT_MS) }.as_bool() {
                     return Err(Error::last_os_error());

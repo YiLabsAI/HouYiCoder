@@ -321,6 +321,11 @@ impl DefaultModeGate {
         *self.shell.lock().expect("shell gate mutex") = shell;
     }
 
+    /// The shell dialect the gate routes commands by.
+    pub fn shell(&self) -> Shell {
+        *self.shell.lock().expect("shell gate mutex")
+    }
+
     pub fn consent(&self) -> Option<Arc<dyn ConsentStore>> {
         self.consent.clone()
     }

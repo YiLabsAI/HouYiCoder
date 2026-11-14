@@ -95,6 +95,12 @@ pub(super) fn build_session_fences(
     if let Some(ref session) = sandbox_session {
         gate_builder = gate_builder.with_containment(Arc::new(ContainmentAdapter(session.clone())));
     }
+    let gate = Arc::new(gate_builder);
+    if let Some(ref session) = sandbox_session {
+        // The gate routes a command by the dialect the session runs, so a
+        // session that starts PowerShell is not judged by the POSIX rules.
+        gate.set_shell(session.shell());
+    }
     SessionFences {
         workspace,
         sandbox_session,
@@ -103,7 +109,7 @@ pub(super) fn build_session_fences(
             network: network_warnings,
             shell: shell_warnings,
         },
-        gate: Arc::new(gate_builder),
+        gate,
     }
 }
 
