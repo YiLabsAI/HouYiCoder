@@ -61,13 +61,19 @@ fn test_overlay_covers_diff() {
 fn test_clear_stale_click_only() {
     // Stale click-only: drag marked active but never moved.
     let mut sel = sel_with((5, 5), (5, 5));
-    clear_stale_click(&mut sel);
+    assert!(
+        clear_stale_click(&mut sel),
+        "erasing the selection is a change the screen shows"
+    );
     assert!(!sel.is_dragging, "stale click cleared");
     assert!(!sel.has_selection());
 
     // A real drag must survive a scroll.
     let mut sel = sel_with((5, 5), (5, 8));
-    clear_stale_click(&mut sel);
+    assert!(
+        !clear_stale_click(&mut sel),
+        "a real drag leaves the screen as it was"
+    );
     assert!(sel.is_dragging, "real drag preserved");
     assert!(sel.has_selection());
 }

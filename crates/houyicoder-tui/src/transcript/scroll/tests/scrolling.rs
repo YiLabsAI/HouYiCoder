@@ -256,9 +256,9 @@ fn test_focus_lost_hides_caret() {
 }
 
 /// handle_event dispatches every terminal event variant without panic and
-/// reports dirty. Covers the extracted match arms so the focus-gate
-/// extraction does not regress coverage of the moved Key/Mouse/Paste/Resize
-/// arms.
+/// reports a change only when the frame can show one. Covers the extracted
+/// match arms so the focus-gate extraction does not regress coverage of the
+/// moved Key/Mouse/Paste/Resize arms.
 #[test]
 fn test_handle_event_dispatches_each() {
     let mk = |ev: Event| handle_event(&mut working(), ev, &mut KeyFilter::default()).unwrap();
@@ -266,12 +266,15 @@ fn test_handle_event_dispatches_each() {
         KeyCode::Char('a'),
         KeyModifiers::NONE
     ))));
-    assert!(mk(Event::Mouse(MouseEvent {
-        kind: MouseEventKind::Moved,
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::NONE
-    })));
+    assert!(
+        !mk(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE
+        })),
+        "pointer motion with nothing dragging changes no frame"
+    );
     assert!(mk(Event::Paste("x".into())));
     assert!(mk(Event::Resize(80, 24)));
     assert!(mk(Event::FocusGained));

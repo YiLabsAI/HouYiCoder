@@ -4,13 +4,13 @@
 //! and the semicolon key-value form the desktop settings share, so no test
 //! names a platform.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::cache::REFRESH_BOUND;
 use super::*;
 
 #[test]
@@ -111,24 +111,66 @@ fn test_cache_reuses_within_lifetime() {
     );
 }
 
+/// Wait until the query has run the given number of times. The wait polls the
+/// counter the query raises, so it ends as soon as the read runs and fails
+/// rather than hanging when the read never starts.
+fn wait_for_calls(calls: &AtomicU32, count: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.load(Ordering::SeqCst) < count {
+        assert!(Instant::now() < deadline, "the query ran {count} times");
+        thread::yield_now();
+    }
+}
+
+/// Wait for a background read to replace the snapshot, failing rather than
+/// hanging when it never does.
+fn wait_for_generation(cache: &ProxyConfigCache, above: u64) -> Arc<ProxySnapshot> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = cache.snapshot_at(Instant::now());
+        if snapshot.generation() > above {
+            return snapshot;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the background read replaced the snapshot"
+        );
+        thread::yield_now();
+    }
+}
+
+/// A caller past the lifetime gets the snapshot already held, and the read
+/// that replaces it runs behind the call.
 #[test]
-fn test_cache_refreshes_after_lifetime() {
+fn test_expired_snapshot_kept() {
     let calls = Arc::new(AtomicU32::new(0));
     let counter = Arc::clone(&calls);
-    let cache = ProxyConfigCache::with_query(
-        Duration::from_secs(30),
-        Arc::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
+    let query: ProxyQuery = Arc::new(move || {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
             ProxyResolution::direct()
-        }),
-    );
+        } else {
+            ProxyResolution::system(ProxyConfig::new(
+                Some("http://proxy:8080".into()),
+                Some("http://proxy:8080".into()),
+                String::new(),
+            ))
+        }
+    });
+    let cache = ProxyConfigCache::with_query(Duration::from_secs(30), query);
     let now = Instant::now();
-    cache.snapshot_at(now);
-    cache.snapshot_at(now + Duration::from_secs(31));
+    let first = cache.snapshot_at(now);
+    let stale = cache.snapshot_at(now + Duration::from_secs(31));
+    assert!(
+        stale.proxy().is_none(),
+        "the call past the lifetime returns the snapshot already held"
+    );
+    assert_eq!(stale.generation(), first.generation());
+    let refreshed = wait_for_generation(&cache, first.generation());
     assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "the system proxy is read again past the lifetime"
+        refreshed.source(),
+        ProxySource::System,
+        "the read behind the call replaces the snapshot"
     );
 }
 
@@ -146,7 +188,7 @@ fn test_cache_generation_stable() {
     );
     let now = Instant::now();
     let first = cache.snapshot_at(now);
-    let second = cache.snapshot_at(now + Duration::from_secs(31));
+    let second = cache.snapshot_at(now + Duration::from_secs(10));
     assert_eq!(
         first.generation(),
         second.generation(),
@@ -169,7 +211,13 @@ fn test_cache_generation_rises() {
         Some("http://proxy:8080".into()),
         String::new(),
     ));
-    let second = cache.snapshot_at(now + Duration::from_secs(31));
+    let stale = cache.snapshot_at(now + Duration::from_secs(31));
+    assert_eq!(
+        stale.generation(),
+        first.generation(),
+        "the expired call returns the snapshot already held"
+    );
+    let second = wait_for_generation(&cache, first.generation());
     assert!(
         second.generation() > first.generation(),
         "a changed proxy raises the generation"
@@ -224,46 +272,47 @@ fn test_proxy_config_debug_redacts() {
     );
 }
 
+/// Two callers past the lifetime start one read between them: the first gets
+/// the snapshot already held and starts the read, and the second finds that
+/// read in flight and gets the same snapshot.
 #[test]
-fn test_single_flight_serves_stale() {
+fn test_single_flight_reuses_stale() {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let release_rx = Mutex::new(release_rx);
     let calls = Arc::new(AtomicU32::new(0));
     let counter = Arc::clone(&calls);
     let query: ProxyQuery = Arc::new(move || {
-        counter.fetch_add(1, Ordering::SeqCst);
-        let _ = release_rx.lock().unwrap().recv();
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        if n > 0 {
+            // A read past the first waits for the test, so the window a
+            // second caller lands in stays open for as long as it takes.
+            let _ = release_rx.lock().unwrap().recv();
+        }
         ProxyResolution::system(ProxyConfig::new(
-            Some("http://127.0.0.1:1".into()),
-            Some("http://127.0.0.1:1".into()),
+            Some(format!("http://127.0.0.1:{}", n + 1)),
+            Some(format!("http://127.0.0.1:{}", n + 1)),
             String::new(),
         ))
     });
     let cache = ProxyConfigCache::with_query(Duration::from_secs(30), query);
     let now = Instant::now();
-
-    let cache_cold = Arc::clone(&cache);
-    let cold = thread::spawn(move || cache_cold.snapshot_at(now));
-    while calls.load(Ordering::SeqCst) == 0 {
-        thread::yield_now();
-    }
-    release_tx.send(()).unwrap();
-    let first = cold.join().unwrap();
+    let first = cache.snapshot_at(now);
     assert_eq!(first.source(), ProxySource::System);
 
     let expired = now + Duration::from_secs(31);
-    let cache_refresh = Arc::clone(&cache);
-    let refresh = thread::spawn(move || cache_refresh.snapshot_at(expired));
-    while calls.load(Ordering::SeqCst) == 1 {
-        thread::yield_now();
-    }
-
-    let cache_stale = Arc::clone(&cache);
-    let stale = cache_stale.snapshot_at(expired);
+    let stale = cache.snapshot_at(expired);
     assert_eq!(
         stale.generation(),
         first.generation(),
-        "a second caller serves stale while one refreshes"
+        "the expired call returns the snapshot already held"
+    );
+    wait_for_calls(&calls, 2);
+
+    let stale_again = cache.snapshot_at(expired);
+    assert_eq!(
+        stale_again.generation(),
+        first.generation(),
+        "a second caller gets the same snapshot while a read runs"
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -272,13 +321,48 @@ fn test_single_flight_serves_stale() {
     );
 
     release_tx.send(()).unwrap();
-    let refreshed = refresh.join().unwrap();
-    assert_eq!(refreshed.source(), ProxySource::System);
+    let refreshed = wait_for_generation(&cache, first.generation());
+    assert_eq!(
+        refreshed.proxy().and_then(|proxy| proxy.http.as_deref()),
+        Some("http://127.0.0.1:2"),
+        "the read started by the first caller replaces the snapshot"
+    );
+}
+
+/// A read that never returns stops holding the refresh slot after its bound,
+/// so a settings call that hangs costs freshness rather than freezing the
+/// cache.
+#[test]
+fn test_refresh_recovers_after_hang() {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let calls = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&calls);
+    let query: ProxyQuery = Arc::new(move || {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        if n > 0 {
+            let _ = release_rx.lock().unwrap().recv();
+        }
+        ProxyResolution::direct()
+    });
+    let cache = ProxyConfigCache::with_query(Duration::from_secs(30), query);
+    let now = Instant::now();
+    cache.snapshot_at(now);
+    let expired = now + Duration::from_secs(31);
+    cache.snapshot_at(expired);
+    wait_for_calls(&calls, 2);
+
+    // The read that never returned held the slot past its bound, so a later
+    // caller starts another instead of keeping stale forever.
+    cache.snapshot_at(expired + REFRESH_BOUND + Duration::from_secs(1));
+    wait_for_calls(&calls, 3);
+    release_tx.send(()).unwrap();
+    release_tx.send(()).unwrap();
 }
 
 /// A query that panics during a refresh must not leave the cache stuck: the
-/// next refresh past the lifetime runs the query again rather than serving
-/// stale with the refreshing flag held true.
+/// next refresh past the lifetime runs the query again rather than keeping
+/// stale with the refresh slot held.
 #[test]
 fn test_refresh_after_query_panic() {
     let calls = Arc::new(AtomicU32::new(0));
@@ -294,15 +378,101 @@ fn test_refresh_after_query_panic() {
     let t0 = Instant::now();
     cache.snapshot_at(t0);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // The failed read unwinds on its own thread, so the caller that started
+    // it gets the snapshot already held and never sees the panic.
     let expired = t0 + Duration::from_secs(31);
-    let panicked = catch_unwind(AssertUnwindSafe(|| cache.snapshot_at(expired)));
-    assert!(panicked.is_err(), "the second call panics inside the query");
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    cache.snapshot_at(expired);
+    wait_for_calls(&calls, 2);
+    // The failed read releases the refresh slot as it unwinds, which can
+    // trail the counter this test waits on, so the next caller is tried until
+    // it finds the slot free and starts the read.
     let later = t0 + Duration::from_secs(62);
-    cache.snapshot_at(later);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.load(Ordering::SeqCst) < 3 {
+        cache.snapshot_at(later);
+        assert!(
+            Instant::now() < deadline,
+            "the panic released the refresh slot so the next refresh runs"
+        );
+        thread::yield_now();
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+/// A lifetime of zero is a caller asking for no reuse, so every call reads on
+/// the calling thread.
+#[test]
+fn test_zero_lifetime_reads() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&calls);
+    let cache = ProxyConfigCache::with_query(
+        Duration::ZERO,
+        Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            ProxyResolution::direct()
+        }),
+    );
+    let now = Instant::now();
+    cache.snapshot_at(now);
+    cache.snapshot_at(now);
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        3,
-        "the panic reset the refreshing flag so the next refresh runs"
+        2,
+        "a zero lifetime reads on every call"
     );
+}
+
+/// A background read that started before another one and finishes after it
+/// does not replace the newer snapshot: the newer read already answered.
+#[test]
+fn test_late_refresh_discarded() {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let calls = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&calls);
+    let query: ProxyQuery = Arc::new(move || {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        match n {
+            0 => ProxyResolution::direct(),
+            1 => {
+                // The older read is held until the newer one has landed, so
+                // it returns second with the answer it read first.
+                let _ = release_rx.lock().unwrap().recv();
+                ProxyResolution::direct()
+            }
+            _ => ProxyResolution::system(ProxyConfig::new(
+                Some("http://proxy:8080".into()),
+                Some("http://proxy:8080".into()),
+                String::new(),
+            )),
+        }
+    });
+    let cache = ProxyConfigCache::with_query(Duration::from_secs(30), query);
+    let now = Instant::now();
+    let first = cache.snapshot_at(now);
+    let expired = now + Duration::from_secs(31);
+    cache.snapshot_at(expired);
+    wait_for_calls(&calls, 2);
+
+    let rearmed = expired + REFRESH_BOUND + Duration::from_secs(1);
+    cache.snapshot_at(rearmed);
+    let newer = wait_for_generation(&cache, first.generation());
+    assert_eq!(
+        newer.source(),
+        ProxySource::System,
+        "the read that took the slot past its bound replaced the snapshot"
+    );
+
+    release_tx.send(()).unwrap();
+    // The older read returns after the newer snapshot landed; the window
+    // gives it time to finish and fails the moment it applies.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        assert_eq!(
+            cache.snapshot_at(Instant::now()).generation(),
+            newer.generation(),
+            "a read that started earlier does not replace the newer snapshot"
+        );
+        thread::yield_now();
+    }
 }

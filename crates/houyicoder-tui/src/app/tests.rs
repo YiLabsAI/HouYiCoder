@@ -20,7 +20,9 @@ use crate::test_harness::{
     wait_for_notification, wait_for_request,
 };
 use crate::todo_view::{TodoStatus, TodoView};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use houyicoder_client::Client;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
@@ -1523,6 +1525,94 @@ fn test_composer_drag_motion_closes() {
     assert!(
         !app.ui.selection.input.is_dragging,
         "motion without a button closes the drag"
+    );
+}
+
+/// A pointer that only moves over an idle window changes nothing on screen.
+/// The terminal reports motion per cell, so a redraw per report would repaint
+/// the transcript at the frame cap while the user is not acting.
+#[test]
+fn test_mouse_move_keeps_view() {
+    let mut app = working_app();
+    drop(render_text(&app, 80, 24));
+    let moved = Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: 10,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    });
+    let changed = handle_event(&mut app, moved, &mut KeyFilter::default()).expect("the event runs");
+    assert!(
+        !changed,
+        "motion with nothing dragging must not ask for a frame"
+    );
+}
+
+/// A drag that repeats the cell the last report landed on moves no end of the
+/// selection. A frame for it would rebuild the layout for no change.
+#[test]
+fn test_repeated_drag_keeps_view() {
+    let mut app = working_app();
+    app.ui.input.editor.set("hello world".to_string());
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    let press = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse(&mut app, press);
+    assert!(
+        app.ui.selection.input.is_dragging,
+        "the press started a drag"
+    );
+
+    let repeat = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: rect.x,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(
+        !handle_mouse(&mut app, repeat),
+        "a drag that repeats the last cell moves nothing"
+    );
+
+    let forward = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: rect.x + 4,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(
+        handle_mouse(&mut app, forward),
+        "a drag to a new cell extends the selection"
+    );
+}
+
+/// A wheel step at the top of the transcript has nowhere to scroll, so it
+/// must not ask for a frame either.
+#[test]
+fn test_wheel_at_top_stays() {
+    let mut app = working_app();
+    drop(render_text(&app, 80, 24));
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(
+        !handle_mouse(&mut app, wheel),
+        "a wheel with no room to scroll changes nothing"
+    );
+    // A left-down the terminal never released leaves a one-cell selection;
+    // erasing it is a change even though the view cannot scroll.
+    app.ui.selection.transcript.start(5, 0);
+    assert!(
+        handle_mouse(&mut app, wheel),
+        "erasing the stale click is a change the frame has to show"
     );
 }
 

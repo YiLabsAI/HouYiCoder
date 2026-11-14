@@ -6,11 +6,14 @@
 //! Each consumer builds its own client from a credential-free snapshot, and
 //! the generation rises only when the resolution changes.
 
+mod cache;
+
 use std::env::var;
 use std::fmt::{self, Formatter};
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+pub use self::cache::{ProxyConfigCache, ProxyQuery};
 
 /// How long a resolved proxy configuration is reused before the system
 /// settings are read again.
@@ -196,125 +199,6 @@ impl ProxySnapshot {
     /// Rises when the resolution changes, so a consumer knows to rebuild.
     pub fn generation(&self) -> u64 {
         self.generation
-    }
-}
-
-/// Reads the current proxy configuration from the environment or the system
-/// settings.
-pub type ProxyQuery = Arc<dyn Fn() -> ProxyResolution + Send + Sync>;
-
-struct CacheState {
-    fetched_at: Option<Instant>,
-    snapshot: Arc<ProxySnapshot>,
-    refreshing: bool,
-}
-
-impl CacheState {
-    fn is_fresh(&self, now: Instant, ttl: Duration) -> bool {
-        self.fetched_at
-            .is_some_and(|at| now.saturating_duration_since(at) < ttl)
-    }
-}
-
-/// Resets the refreshing flag when dropped, so a query that panics during a
-/// refresh does not leave the cache stuck and unable to refresh again.
-struct RefreshGuard<'a> {
-    state: &'a Mutex<CacheState>,
-}
-
-impl Drop for RefreshGuard<'_> {
-    fn drop(&mut self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .refreshing = false;
-    }
-}
-
-/// A proxy configuration cache with a fixed lifetime.
-///
-/// The query runs outside the lock, so a slow system read never blocks another
-/// thread's snapshot. When the lifetime has expired, only one caller refreshes
-/// while the rest take the stale snapshot, so a burst of concurrent requests
-/// at the expiry instant starts one system read rather than one per caller.
-/// The cold start, with no snapshot yet, is the one case that may run parallel
-/// reads, since serving a default direct snapshot then could send a proxied
-/// request direct for the few milliseconds the first read takes.
-pub struct ProxyConfigCache {
-    ttl: Duration,
-    query: ProxyQuery,
-    state: Mutex<CacheState>,
-}
-
-impl ProxyConfigCache {
-    /// A cache over the given query and lifetime.
-    pub fn with_query(ttl: Duration, query: ProxyQuery) -> Arc<Self> {
-        Arc::new(Self {
-            ttl,
-            query,
-            state: Mutex::new(CacheState {
-                fetched_at: None,
-                snapshot: Arc::new(ProxySnapshot::direct()),
-                refreshing: false,
-            }),
-        })
-    }
-
-    /// A cache that always answers with no proxy, for a consumer that must
-    /// never consult the system settings and for tests.
-    pub fn direct() -> Arc<Self> {
-        Self::with_query(PROXY_CONFIG_TTL, Arc::new(ProxyResolution::direct))
-    }
-
-    /// The process-wide cache shared by every consumer.
-    pub fn global() -> Arc<Self> {
-        static GLOBAL: OnceLock<Arc<ProxyConfigCache>> = OnceLock::new();
-        Arc::clone(
-            GLOBAL
-                .get_or_init(|| Self::with_query(PROXY_CONFIG_TTL, Arc::new(super::system_proxy))),
-        )
-    }
-
-    /// The current snapshot, refreshing it when the lifetime has elapsed.
-    pub fn snapshot(&self) -> Arc<ProxySnapshot> {
-        self.snapshot_at(Instant::now())
-    }
-
-    /// The snapshot as of a given moment, so the lifetime is testable without
-    /// sleeping.
-    pub fn snapshot_at(&self, now: Instant) -> Arc<ProxySnapshot> {
-        {
-            let mut state = self.lock();
-            if state.is_fresh(now, self.ttl) {
-                return Arc::clone(&state.snapshot);
-            }
-            if state.refreshing && state.fetched_at.is_some() {
-                return Arc::clone(&state.snapshot);
-            }
-            state.refreshing = true;
-        }
-        let _guard = RefreshGuard { state: &self.state };
-        let resolution = (self.query)();
-        let mut state = self.lock();
-        let generation = if state.snapshot.resolution == resolution {
-            state.snapshot.generation
-        } else {
-            state.snapshot.generation.saturating_add(1)
-        };
-        let snapshot = Arc::new(ProxySnapshot {
-            resolution,
-            generation,
-        });
-        state.snapshot = Arc::clone(&snapshot);
-        state.fetched_at = Some(now);
-        state.refreshing = false;
-        snapshot
-    }
-
-    fn lock(&self) -> MutexGuard<'_, CacheState> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

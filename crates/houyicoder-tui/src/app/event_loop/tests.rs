@@ -1,5 +1,6 @@
 //! The run loop's wake behavior: one message produces a frame promptly, a
-//! burst of input produces one frame, and an empty canvas produces none.
+//! burst of input produces one frame, a burst that changes nothing produces
+//! none, and an empty canvas draws nothing.
 
 use std::io::Write;
 use std::mem::take;
@@ -19,15 +20,20 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui_crossterm::CrosstermBackend;
 
-use super::{BracketedWriter, FrameWriter, TerminalWriter, run};
+use super::{
+    ANIMATION_INTERVAL, BracketedWriter, FrameWriter, TerminalWriter, animation_due, run,
+    wait_timeout, wake_needed,
+};
 use crate::agent_message::{ServerEvent, SessionMessage};
+use crate::app::frame_clock::FrameClock;
 use crate::app::wake::UiWake;
 use crate::app::{SYNC_BEGIN, SYNC_END};
 use crate::input::terminal_events::EventReader;
 use crate::session::{AgentSender, SessionConnection};
-use crate::state::App;
+use crate::state::{App, Pane};
 use crate::termination::TerminationWatch;
 use crate::test_harness::working_app;
+use crate::ui::notifications::{NotifKind, Notification};
 
 /// A writer that records when each frame was drawn and how many background
 /// tasks the app held at the moment, then tells the test a frame landed.
@@ -132,16 +138,20 @@ fn test_agent_message_reaches_frame() {
     );
 }
 
-/// A run of pointer events the reader delivers together costs one frame.
+/// Fifty pointer reports the reader delivers together change nothing on
+/// screen, so they draw no frame. The message that follows proves the loop
+/// is still drawing when the state does change.
 #[test]
-fn test_mouse_burst_draws_once() {
+fn test_motion_draws_none() {
     let signal = UiWake::new();
+    let (agent_tx, agent_rx) = channel();
+    let sender = AgentSender::with_wake(agent_tx, Arc::clone(&signal));
     let (reader_tx, reader_rx) = channel();
     let reader = EventReader::over(reader_rx);
     let termination = TerminationWatch::for_test(false);
     let (drawn_tx, drawn_rx) = channel();
     let mut writer = RecordingWriter::new(drawn_tx);
-    let mut app = working_app();
+    let mut app = app_reading(agent_rx);
     let wake = Arc::clone(&signal);
     let pusher = after_first_frame(drawn_rx, move |drawn| {
         for column in 0..50 {
@@ -155,10 +165,14 @@ fn test_mouse_burst_draws_once() {
                 .expect("the loop holds the reader");
         }
         wake.wake();
-        // Latch on the burst's frame, then end the session.
+        sender
+            .send(task_changed())
+            .expect("the loop holds the channel");
+        wake.wake();
+        // Latch on the frame the message drew, then end the session.
         drawn
             .recv_timeout(Duration::from_secs(5))
-            .expect("the burst reaches a frame");
+            .expect("the pushed message reaches a frame");
         drop(reader_tx);
         wake.wake();
         Instant::now()
@@ -166,12 +180,12 @@ fn test_mouse_burst_draws_once() {
     run(&mut app, &reader, &signal, &termination, &mut writer, None)
         .expect("the loop ends cleanly");
     pusher.join().expect("the pushing thread ends");
-    // The first frame is the loop settling; the burst is the frame after it.
+    // The first frame settles the loop and the second is the message's; a
+    // frame for the burst would make this three.
     assert_eq!(
         writer.frames.len(),
         2,
-        "fifty pointer events drawn as {} frames",
-        writer.frames.len()
+        "the settling frame and the message frame, with no frame for the burst"
     );
 }
 
@@ -302,9 +316,9 @@ fn test_empty_canvas_skips_draw() {
     );
 }
 
-/// The bracket placement rides the frame stream of the backends the session
-/// drives, which are writers: the begin marker orders ahead of the frame
-/// bytes and the end marker behind them, on the one stream the frame rides.
+/// The bracket placement uses the frame stream of the backends the session
+/// drives, which are writers: the begin marker is written before the frame
+/// bytes and the end marker after them, on the one stream the frame uses.
 /// The run loop writes the markers only for a terminal that accepted
 /// synchronized output; the placement is exercised here directly because
 /// the test environment's terminal reports none.
@@ -318,20 +332,20 @@ fn test_bracket_placement_writes_stream() {
     let mut writer = TerminalWriter::new(&mut terminal);
     writer
         .place_ahead(SYNC_BEGIN)
-        .expect("the begin marker rides the stream");
+        .expect("the begin marker is written to the stream");
     writer.write_frame(&mut app).expect("frame");
     writer
         .place_behind(SYNC_END)
-        .expect("the end marker rides the stream");
+        .expect("the end marker is written to the stream");
     terminal.backend_mut().flush().expect("the stream flushes");
     let bytes = shared.take();
     assert!(
         bytes.starts_with(SYNC_BEGIN),
-        "the begin marker orders ahead of the frame bytes: {bytes:?}"
+        "the begin marker is written before the frame bytes: {bytes:?}"
     );
     assert!(
         bytes.ends_with(SYNC_END),
-        "the end marker orders behind the frame bytes: {bytes:?}"
+        "the end marker is written after the frame bytes: {bytes:?}"
     );
     assert!(
         app.ui.frame.feedback.native_cursor_position.get().is_some(),
@@ -365,7 +379,7 @@ impl Write for Stream {
 
 /// The bracketed writer forwards the frame to the writer it wraps and the
 /// markers to the placement the stream owns: one wrapped frame draws, and
-/// the markers a bracketed frame carries ride the same stream in order.
+/// the markers a bracketed frame carries are written to the same stream in order.
 #[test]
 fn test_bracketed_writer_forwards() {
     let shared = Stream::default();
@@ -391,6 +405,64 @@ fn test_bracketed_writer_forwards() {
     let bytes = shared.take();
     assert!(
         bytes.starts_with(SYNC_BEGIN) && bytes.ends_with(SYNC_END),
-        "the markers ride the stream in order: {bytes:?}"
+        "the markers are written to the stream in order: {bytes:?}"
+    );
+}
+
+/// A session waiting for the model wakes for many reasons that change nothing
+/// on screen. The spinner advances on its own cadence, so a wake inside that
+/// cadence asks for no frame and the boundary does; a pane that only polls the
+/// server needs the wake but draws nothing until the answer lands.
+#[test]
+fn test_animation_follows_cadence() {
+    let mut app = working_app();
+    assert!(!wake_needed(&app), "an idle session wakes for nothing");
+    app.start_run_for_test(0);
+    assert!(wake_needed(&app), "a run in flight is live");
+
+    let now = Instant::now();
+    assert!(
+        animation_due(&app, None, now),
+        "the first animation frame is due at once"
+    );
+    assert!(
+        !animation_due(&app, Some(now), now + Duration::from_millis(10)),
+        "a wake inside the cadence redraws nothing"
+    );
+    assert!(
+        animation_due(&app, Some(now), now + ANIMATION_INTERVAL),
+        "the cadence boundary redraws"
+    );
+
+    let mut polling = working_app();
+    polling.ui.navigation.pane = Pane::Tasks;
+    assert!(
+        wake_needed(&polling),
+        "the tasks poll keeps the loop waking"
+    );
+    assert!(
+        !animation_due(&polling, Some(now), now + ANIMATION_INTERVAL),
+        "a pane that only polls draws no frame on the cadence"
+    );
+}
+
+/// A live state that draws nothing on the cadence still has to wake the loop,
+/// and its wait is the full interval: pacing it by a paint it never caused
+/// would leave a zero wait, and a zero wait turns the loop into a spin.
+#[test]
+fn test_live_state_waits_interval() {
+    let mut app = working_app();
+    app.ui.notifications.add(Notification::immediate(
+        "cadence-wait",
+        NotifKind::text("copied"),
+        Duration::from_secs(8),
+    ));
+    assert!(wake_needed(&app), "a notice keeps the loop waking");
+    let now = Instant::now();
+    let clock = FrameClock::default();
+    let waited = wait_timeout(&app, &clock, false, Some(now - Duration::from_secs(1)), now);
+    assert!(
+        waited.is_some_and(|wait| wait > Duration::ZERO),
+        "a notice that never repaints waits a real interval instead of zero"
     );
 }

@@ -104,15 +104,18 @@ pub(crate) fn finish_release(
     None
 }
 
-/// Cancel a click-only drag before a scroll. A left-down always starts a drag
-/// so the focus follows the cursor; if the terminal never delivers a clean Up
-/// the stale one-cell selection would otherwise extend into scrolled content.
-/// A real drag (anchor != focus) is left alone so the user can scroll while
-/// holding an active selection.
-pub(crate) fn clear_stale_click(sel: &mut Selection) {
+/// Cancel a click-only drag before a scroll, answering whether a selection
+/// was erased. A left-down always starts a drag so the focus follows the
+/// cursor; if the terminal never delivers a clean Up the stale one-cell
+/// selection would otherwise extend into scrolled content. A real drag
+/// (anchor != focus) is left alone so the user can scroll while holding an
+/// active selection.
+pub(crate) fn clear_stale_click(sel: &mut Selection) -> bool {
     if sel.is_dragging && sel.is_click_only() && sel.span_origin.is_none() {
         sel.clear();
+        return true;
     }
+    false
 }
 
 // ---- mouse → content mapping (per surface) ------------------------------

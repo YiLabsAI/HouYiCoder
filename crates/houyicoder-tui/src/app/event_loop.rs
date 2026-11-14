@@ -119,8 +119,8 @@ where
 
 /// The frame writer with the synchronized-output bracket applied. The
 /// backend the session drives is a crossterm backend over a writer, so the
-/// marker bytes ride the frame stream instead of racing a second one; a
-/// test double keeps the plain frame writer.
+/// marker bytes are written to the same stream as the frame instead of
+/// racing a second one; a test double keeps the plain frame writer.
 pub(crate) struct BracketedWriter<'a, 'b, W: Write> {
     writer: &'b mut TerminalWriter<'a, CrosstermBackend<W>>,
 }
@@ -155,8 +155,8 @@ where
 }
 
 /// The marker placement for the backend the session actually drives, which
-/// is a crossterm backend over a writer: the marker bytes ride the frame
-/// stream through the backend's own writer. A generic backend keeps the
+/// is a crossterm backend over a writer: the marker bytes are written to the
+/// frame stream through the backend's own writer. A generic backend keeps the
 /// trait defaults, which place nothing.
 impl<'a, W> TerminalWriter<'a, CrosstermBackend<W>>
 where
@@ -191,6 +191,10 @@ pub(crate) fn run(
     let mut reported_busy = false;
     let mut filter = KeyFilter::default();
     let mut clock = FrameClock::default();
+    // The instant the last frame was painted. A busy session wakes for many
+    // reasons that change nothing on the screen, and only the animation
+    // cadence, not the wake rate, says when the spinner advances.
+    let mut last_animation: Option<Instant> = None;
     let mut last_edge_scroll: Option<Instant> = None;
     while !termination.should_exit(app.ui.quit) {
         // One wake serves every producer: drain the whole terminal burst and
@@ -253,7 +257,14 @@ pub(crate) fn run(
         if termination.should_exit(app.ui.quit) {
             break;
         }
-        if dirty || app.agent_busy() || app.compacting() || app.shell_run_active() {
+        // A live indicator redraws on its own cadence. Marking the frame here,
+        // rather than drawing on every wake, keeps a session that is only
+        // waiting for the model from repainting at the wake rate.
+        let frame_now = Instant::now();
+        if animation_due(app, last_animation, frame_now) {
+            dirty = true;
+        }
+        if dirty {
             let now = Instant::now();
             if let Some(left) = clock.cooldown(now) {
                 wait_out_frame(wake, app, termination, left);
@@ -273,10 +284,12 @@ pub(crate) fn run(
                 writer.write_behind(super::SYNC_END)?;
             }
             drawn?;
-            clock.note_frame(Instant::now());
+            let painted = Instant::now();
+            clock.note_frame(painted);
+            last_animation = Some(painted);
             dirty = false;
         }
-        let timeout = wait_timeout(app, &clock, dirty, Instant::now());
+        let timeout = wait_timeout(app, &clock, dirty, last_animation, Instant::now());
         wake.wait(timeout);
     }
     Ok(())
@@ -305,7 +318,13 @@ fn wait_out_frame(wake: &UiWake, app: &App, termination: &TerminationWatch, left
 /// How long the loop may block before a live timer needs the screen again.
 /// None means nothing is live, so a quiet session sleeps until a producer
 /// wakes it.
-fn wait_timeout(app: &App, clock: &FrameClock, dirty: bool, now: Instant) -> Option<Duration> {
+fn wait_timeout(
+    app: &App,
+    clock: &FrameClock,
+    dirty: bool,
+    last_animation: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
     if dirty {
         return Some(clock.cooldown(now).unwrap_or_default());
     }
@@ -313,14 +332,15 @@ fn wait_timeout(app: &App, clock: &FrameClock, dirty: bool, now: Instant) -> Opt
     let mut within = |wait: Duration| {
         timeout = Some(timeout.map_or(wait, |current| current.min(wait)));
     };
-    if app.agent_busy() || app.compacting() || app.shell_run_active() {
-        within(ANIMATION_INTERVAL);
-    }
-    if app.ui.notifications.current().is_some()
-        || app.approval().is_some()
-        || app.ask_question().is_some()
-        || app.pending_trust().is_some()
-    {
+    // A live state changes without an event, so the loop has to come back on
+    // a cadence even when nothing wakes it. Only a spinner repaints on that
+    // cadence and so moves the last paint forward; every other live state
+    // marks the frame when its own value moves, and subtracting an elapsed
+    // paints it never caused would leave a zero wait that spins the loop.
+    if animated(app) {
+        let elapsed = last_animation.map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
+        within(ANIMATION_INTERVAL.saturating_sub(elapsed));
+    } else if wake_needed(app) {
         within(ANIMATION_INTERVAL);
     }
     // The idle wake batches near-simultaneous child completions. Nothing else
@@ -333,9 +353,6 @@ fn wait_timeout(app: &App, clock: &FrameClock, dirty: bool, now: Instant) -> Opt
     // for the visibility window.
     if let Some(left) = app.sessions.current.todos.clear_delay(now) {
         within(left);
-    }
-    if app.ui.navigation.pane == Pane::Tasks {
-        within(ANIMATION_INTERVAL);
     }
     if app
         .sessions
@@ -363,6 +380,37 @@ fn wait_timeout(app: &App, clock: &FrameClock, dirty: bool, now: Instant) -> Opt
         within(PASTE_FLUSH_GAP.saturating_sub(now.saturating_duration_since(last)));
     }
     timeout
+}
+
+/// Whether the loop must come back on a cadence at all: a spinner advances, a
+/// notice clears itself, a card waits on a countdown, or the tasks pane polls
+/// the server. None of these needs an event to change, so the loop schedules
+/// a wake instead of sleeping until a producer arrives.
+fn wake_needed(app: &App) -> bool {
+    animated(app)
+        || app.ui.notifications.current().is_some()
+        || app.approval().is_some()
+        || app.ask_question().is_some()
+        || app.pending_trust().is_some()
+        || app.ui.navigation.pane == Pane::Tasks
+}
+
+/// Whether something on screen advances on a clock of its own, so a frame has
+/// to be drawn at the animation cadence rather than only when an event
+/// changes state. The other live states above need a wake as well, but each
+/// marks the frame dirty when its own visible value moves: a countdown steps
+/// a second at a time, a notice clears at its deadline, and the tasks pane
+/// draws when the server's answer arrives.
+fn animated(app: &App) -> bool {
+    app.agent_busy() || app.compacting() || app.shell_run_active()
+}
+
+/// Whether the next animation frame is due. A spinner advances at the
+/// animation cadence, not on every wake: a token stream and a busy model wake
+/// the loop far more often than the screen needs to change, and a frame drawn
+/// on each of those wakes rebuilds a layout nothing on it moved.
+fn animation_due(app: &App, last: Option<Instant>, now: Instant) -> bool {
+    animated(app) && last.is_none_or(|at| now.saturating_duration_since(at) >= ANIMATION_INTERVAL)
 }
 
 /// Whether a pointer drag is in progress in any region. A drag scrolls at
