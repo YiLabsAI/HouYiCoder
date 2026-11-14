@@ -15,8 +15,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tracing::warn;
 use windows::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, WIN32_ERROR,
+    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_NOT_CONNECTED,
+    GENERIC_READ, GENERIC_WRITE, HANDLE, WIN32_ERROR,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -25,7 +25,7 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Pipes::WaitNamedPipeW;
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent};
-use windows::core::PCWSTR;
+use windows::core::{Error as WindowsError, PCWSTR};
 
 use super::{LocalConnection, LocalStreams, current_user_scope, new_nonce, session_pipe_name};
 use crate::windows::pipe::{
@@ -209,18 +209,21 @@ impl OverlappedPipe {
         };
         match waited {
             Ok(()) => Ok(transferred as usize),
-            Err(error)
-                if end_on_close
-                    && matches!(
-                        WIN32_ERROR::from_error(&error),
-                        Some(ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED)
-                    ) =>
-            {
-                Ok(0)
-            }
+            Err(error) if end_on_close && peer_closed(&error) => Ok(0),
             Err(error) => Err(Error::other(error)),
         }
     }
+}
+
+/// Whether an error says the pipe's other end has gone, which on a read is the
+/// end of the stream rather than a failure. The system reports it through any
+/// of three codes depending on whether the read was issued before or after the
+/// peer closed and how far the disconnect progressed.
+fn peer_closed(error: &WindowsError) -> bool {
+    matches!(
+        WIN32_ERROR::from_error(error),
+        Some(ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED | ERROR_NO_DATA)
+    )
 }
 
 impl Read for OverlappedPipe {
@@ -241,6 +244,12 @@ impl Read for OverlappedPipe {
         if let Err(error) = issued
             && WIN32_ERROR::from_error(&error) != Some(ERROR_IO_PENDING)
         {
+            // A read issued after the peer already closed completes at once
+            // with a peer-gone code rather than pending, so it is the end of
+            // the stream here too.
+            if peer_closed(&error) {
+                return Ok(0);
+            }
             return Err(Error::other(error));
         }
         self.finish(&overlapped, true)
