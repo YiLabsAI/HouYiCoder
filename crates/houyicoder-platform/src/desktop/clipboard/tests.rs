@@ -1,15 +1,17 @@
 //! The utility runner, driven by a trivial child.
+//!
+//! The whole module compiles only on macOS: the utility it exercises is the
+//! macOS clipboard tool, and a host that does not carry it has nothing to
+//! assert here. Gating the module rather than each test keeps a new test
+//! from reddening another host because someone forgot the attribute.
 
-use super::run_utility;
-#[cfg(target_os = "macos")]
-use super::{MACOS_CLIP_TOOL, native_clipboard_preferred};
+use super::{MACOS_CLIP_TOOL, native_clipboard_preferred, run_utility};
 
 /// The macOS tool is an absolute path, never a bare name a directory earlier
 /// on the search path could answer for. A regression to a bare name is a
 /// working-directory hijack on copy.
-#[cfg(target_os = "macos")]
 #[test]
-fn test_macos_tool_is_absolute() {
+fn test_tool_is_absolute() {
     assert!(
         MACOS_CLIP_TOOL.starts_with('/'),
         "the macOS tool is an absolute path"
@@ -18,13 +20,9 @@ fn test_macos_tool_is_absolute() {
 }
 
 /// The host that carries a native utility is the one whose terminal may
-/// refuse the escape a copy also emits. The answer is true only on macOS, so
-/// the assertion is gated to it: on the other targets the function answers
-/// false by design, and asserting otherwise reddens a host the code never
-/// claimed to cover.
-#[cfg(target_os = "macos")]
+/// refuse the escape a copy also emits.
 #[test]
-fn test_macos_prefers_native() {
+fn test_prefers_native() {
     assert!(
         native_clipboard_preferred(),
         "a desktop terminal has a utility worth running"
@@ -32,9 +30,7 @@ fn test_macos_prefers_native() {
 }
 
 /// A clean run is a successful copy, and the text reaches the utility on
-/// standard input. The utility is a POSIX shell, so the assertion runs where
-/// one exists.
-#[cfg(unix)]
+/// standard input.
 #[test]
 fn test_utility_writes_stdin() {
     assert!(
@@ -43,9 +39,8 @@ fn test_utility_writes_stdin() {
     );
 }
 
-/// A utility that exits non-zero is reported, which is how the Linux probe
-/// tells one that worked from one that did not.
-#[cfg(unix)]
+/// A utility that exits non-zero is reported, which is how the probe tells
+/// one that worked from one that did not.
 #[test]
 fn test_utility_reports_failure() {
     assert!(

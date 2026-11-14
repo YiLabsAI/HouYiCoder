@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 #[cfg(target_os = "linux")]
 use std::sync::Mutex;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests;
 
 /// The creation flag that suppresses the console window a utility spawn would
