@@ -265,6 +265,34 @@ async fn test_exec_round_trip() {
     );
 }
 
+/// A command writing more than one pipe buffer proves each stream arrives
+/// whole and in order: the read runs as repeated overlapped operations, and
+/// the writer waits whenever the reader has not drained the buffer yet, so a
+/// lost, torn, or reordered chunk would show in the line sequence.
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn test_exec_stream_arrives_whole() {
+    if !can_bind_own_fence() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
+    let s = session();
+    let body = "a".repeat(1000);
+    let command = format!("for /L %i in (1,1,64) do @(echo %i-{body} & echo err-%i 1>&2)");
+    let r = s.exec(&command).await.expect("large exec");
+    assert!(r.is_success(), "stderr: {}", r.stderr);
+    let lines: Vec<&str> = r.stdout.lines().collect();
+    assert_eq!(lines.len(), 64, "every line must arrive");
+    for (index, line) in lines.iter().enumerate() {
+        assert_eq!(*line, format!("{}-{body}", index + 1), "line order");
+    }
+    let errors: Vec<&str> = r.stderr.lines().collect();
+    assert_eq!(errors.len(), 64, "the error stream must arrive too");
+    for (index, line) in errors.iter().enumerate() {
+        assert_eq!(*line, format!("err-{}", index + 1), "error line order");
+    }
+}
+
 #[tokio::test]
 async fn test_exec_wall_timeout() {
     if !can_bind_own_fence() {

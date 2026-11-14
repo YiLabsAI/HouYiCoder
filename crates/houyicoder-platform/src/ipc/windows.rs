@@ -3,26 +3,21 @@
 //! refused, plus the endpoint naming, the client connection, and the removal a
 //! caller needs to run and reap one.
 
-use std::ffi::c_void;
 use std::io::{Error, Read, Result, Write};
 use std::iter::once;
-use std::mem::{replace, size_of};
+use std::mem::replace;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::NamedPipeServer;
 use tracing::warn;
 use windows::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_NOT_CONNECTED, FALSE,
-    GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL, LocalFree, WIN32_ERROR,
+    ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ,
+    GENERIC_WRITE, HANDLE, WIN32_ERROR,
 };
-use windows::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-};
-use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE,
     OPEN_EXISTING, ReadFile, WriteFile,
@@ -32,9 +27,9 @@ use windows::Win32::System::Pipes::WaitNamedPipeW;
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent};
 use windows::core::PCWSTR;
 
-use super::{
-    LocalConnection, LocalStreams, current_user_scope, new_nonce, owner_only_sddl,
-    session_pipe_name,
+use super::{LocalConnection, LocalStreams, current_user_scope, new_nonce, session_pipe_name};
+use crate::windows::pipe::{
+    PipeDirection, SecurityDescriptor, create_instance, owner_only_descriptor,
 };
 
 /// How long a client waits for an instance to become free before giving up.
@@ -53,9 +48,8 @@ impl LocalListener {
     /// Create the pipe with first-instance exclusivity, so a name already
     /// held by another process fails here rather than silently sharing it.
     pub fn bind(endpoint: &str) -> Result<Self> {
-        let scope = current_user_scope()?;
-        let descriptor = SecurityDescriptor::parse(&owner_only_sddl(&scope))?;
-        let next = create_instance(endpoint, &descriptor, true)?;
+        let descriptor = owner_only_descriptor()?;
+        let next = create_instance(endpoint, &descriptor, true, PipeDirection::Duplex)?;
         Ok(Self {
             endpoint: endpoint.to_string(),
             descriptor,
@@ -75,7 +69,12 @@ impl LocalListener {
     /// so the loop takes the next client instead of failing the listener.
     pub async fn accept(&mut self) -> Result<LocalConnection> {
         loop {
-            let next = create_instance(&self.endpoint, &self.descriptor, false)?;
+            let next = create_instance(
+                &self.endpoint,
+                &self.descriptor,
+                false,
+                PipeDirection::Duplex,
+            )?;
             let connected = replace(&mut self.next, next);
             match connected.connect().await {
                 Ok(()) => return Ok(Box::new(Connection { inner: connected })),
@@ -283,70 +282,6 @@ fn as_handle(raw: RawHandle) -> HANDLE {
 /// to remove.
 pub fn remove_endpoint(_endpoint: &str) -> Result<()> {
     Ok(())
-}
-
-/// A security descriptor parsed from its string form, freed as it drops. The
-/// descriptor outlives every instance created with it, because each instance
-/// carries its own copy of the access list.
-///
-/// The pointer is held as an address rather than as the raw pointer type the
-/// interface takes, because a raw pointer would make the listener unusable
-/// across threads. The descriptor is heap memory allocated here and never
-/// shared with another process, so moving it between threads is sound.
-struct SecurityDescriptor(usize);
-
-impl SecurityDescriptor {
-    #[expect(unsafe_code, reason = "parses a descriptor from its text form")]
-    fn parse(sddl: &str) -> Result<Self> {
-        let text: Vec<u16> = sddl.encode_utf16().chain(once(0)).collect();
-        let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                PCWSTR(text.as_ptr()),
-                SDDL_REVISION_1,
-                &mut descriptor,
-                None,
-            )
-        }
-        .map_err(|e| Error::other(e.to_string()))?;
-        Ok(Self(descriptor.0 as usize))
-    }
-
-    /// The descriptor as the creation call takes it.
-    fn pointer(&self) -> *mut c_void {
-        self.0 as *mut c_void
-    }
-}
-
-impl Drop for SecurityDescriptor {
-    fn drop(&mut self) {
-        #[expect(unsafe_code, reason = "releases the descriptor allocated above")]
-        let _ = unsafe { LocalFree(Some(HLOCAL(self.pointer()))) };
-    }
-}
-
-/// Create one pipe instance under the given name and access list.
-#[expect(unsafe_code, reason = "passes the parsed access list to the creation")]
-fn create_instance(
-    endpoint: &str,
-    descriptor: &SecurityDescriptor,
-    first: bool,
-) -> Result<NamedPipeServer> {
-    let mut attributes = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.pointer(),
-        bInheritHandle: FALSE,
-    };
-    let mut options = ServerOptions::new();
-    options
-        .first_pipe_instance(first)
-        .reject_remote_clients(true);
-    unsafe {
-        options.create_with_security_attributes_raw(
-            endpoint,
-            (&mut attributes as *mut SECURITY_ATTRIBUTES).cast::<c_void>(),
-        )
-    }
 }
 
 /// Open the client end of the named pipe, waiting while every instance is

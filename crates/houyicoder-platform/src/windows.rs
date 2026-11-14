@@ -5,6 +5,7 @@
 
 mod fs;
 mod net;
+pub(crate) mod pipe;
 pub(crate) mod process;
 mod secrets;
 pub(crate) mod shell;

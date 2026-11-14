@@ -23,27 +23,27 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::ptr::null_mut;
+use std::sync::Mutex;
 
 use windows::Win32::Foundation::{
-    CloseHandle, GENERIC_READ, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
-    WAIT_FAILED, WAIT_OBJECT_0,
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::Memory::{GetProcessHeap, HEAP_FLAGS, HeapAlloc, HeapFree};
-use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
     GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    RegisterWaitForSingleObject, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UnregisterWaitEx, UpdateProcThreadAttribute, WT_EXECUTEONLYONCE,
 };
 use windows::core::{PCWSTR, PWSTR};
 
@@ -66,19 +66,26 @@ fn apply_job_limits(job: HANDLE) -> Result<()> {
         .map_err(io_error)
 }
 
-/// Create an anonymous pipe and answer its read end and its inheritable write
-/// end. Only the write end is offered to the command, so this process is the
-/// sole reader.
-pub(super) fn create_pipe() -> Result<(OwnedHandle, OwnedHandle)> {
+/// Open the write end of a named pipe instance for the command to inherit.
+/// Sharing is refused, so no second handle to the same stream exists, and the
+/// open connects to the instance the caller already created.
+pub(super) fn open_pipe_write_end(name: &str) -> Result<OwnedHandle> {
     let attributes = inheritable();
-    let mut read = HANDLE::default();
-    let mut write = HANDLE::default();
-    unsafe { CreatePipe(&mut read, &mut write, Some(&attributes), 0) }.map_err(io_error)?;
-    let read = HeldHandle(read);
-    let write = HeldHandle(write);
-    unsafe { SetHandleInformation(read.0, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) }
-        .map_err(io_error)?;
-    Ok((adopt(read), adopt(write)))
+    let name = wide(name);
+    let opened = unsafe {
+        CreateFileW(
+            PCWSTR(name.as_ptr()),
+            GENERIC_WRITE.0,
+            FILE_SHARE_MODE(0),
+            Some(&attributes),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    }
+    .map_err(io_error)?;
+    let opened = HeldHandle(opened);
+    Ok(adopt(opened))
 }
 
 /// Open the null device as the command's input, so a command that reads input
@@ -148,19 +155,110 @@ pub(super) fn spawn(
     Ok(adopt(process))
 }
 
-/// Wait for a process to end and answer its exit code.
-pub(super) fn wait(process: RawHandle) -> Result<u32> {
-    let process = as_handle(process);
-    let waited = unsafe { WaitForSingleObject(process, INFINITE) };
-    if waited == WAIT_FAILED {
-        return Err(Error::last_os_error());
+/// A wait registered on a process handle that reports the exit code once,
+/// from the system's thread pool. No thread of this process parks on the
+/// command, so awaiting a long command costs no worker.
+///
+/// The handle and the callback context are held as addresses rather than as
+/// pointer types, because the wait itself moves between threads while the
+/// system calls back on a thread of its own. Soundness rests on the removal
+/// below: the blocking form of unregistration returns only once no callback
+/// can still reach the context, so freeing it afterwards is safe.
+pub(super) struct ExitWait {
+    wait: usize,
+    context: usize,
+}
+
+/// The one receiver waiting for a command's exit code.
+type ExitReport = Box<dyn FnOnce(u32) + Send>;
+
+/// What the callback reports through: the process to read the code from and
+/// the one receiver waiting for it.
+struct ExitContext {
+    process: usize,
+    wake: Mutex<Option<ExitReport>>,
+}
+
+impl ExitWait {
+    /// Register a wait on the process that calls the given closure with its
+    /// exit code once the process ends.
+    pub(super) fn register(process: RawHandle, wake: ExitReport) -> Result<Self> {
+        let context = Box::into_raw(Box::new(ExitContext {
+            process: process as usize,
+            wake: Mutex::new(Some(wake)),
+        }));
+        let mut wait = HANDLE::default();
+        let registered = unsafe {
+            RegisterWaitForSingleObject(
+                &mut wait,
+                as_handle(process),
+                Some(exit_reached),
+                Some(context.cast::<c_void>() as *const c_void),
+                INFINITE,
+                WT_EXECUTEONLYONCE,
+            )
+        };
+        match registered {
+            Ok(()) => Ok(Self {
+                wait: wait.0 as usize,
+                context: context as usize,
+            }),
+            Err(error) => {
+                // The context never reached the system, so this is the only
+                // owner and the callback cannot run.
+                drop(unsafe { Box::from_raw(context) });
+                Err(io_error(error))
+            }
+        }
     }
-    if waited != WAIT_OBJECT_0 {
-        return Err(Error::other(format!("unexpected wait result {waited:?}")));
+}
+
+impl Drop for ExitWait {
+    fn drop(&mut self) {
+        unsafe {
+            let wait = as_handle(self.wait as RawHandle);
+            // The blocking form returns once no callback can still run and
+            // closes the wait handle itself, so neither is closed here. It is
+            // a short system call on this thread, bounded by one callback
+            // that only takes a mutex and sends on a channel.
+            let removed = UnregisterWaitEx(wait, Some(INVALID_HANDLE_VALUE));
+            if removed.is_err() {
+                // A wait that did not unregister may still call back into the
+                // context, so the wait and its context are leaked on purpose
+                // rather than freed under a running callback. This only
+                // happens for a handle the system already considers invalid.
+                tracing::warn!("the command exit wait did not unregister");
+                return;
+            }
+            drop(Box::from_raw(self.context as *mut ExitContext));
+        }
     }
+}
+
+/// The callback the thread pool runs once the process ends. A failed exit
+/// code read reports nothing, and the receiver sees its channel closed.
+///
+/// The context is the value ExitWait registered, and ExitWait frees it only
+/// after the blocking unregistration, so it outlives this call.
+unsafe extern "system" fn exit_reached(context: *mut c_void, _fired: bool) {
+    let context = unsafe { &*context.cast::<ExitContext>() };
+    let process = as_handle(context.process as RawHandle);
+    let wake = context
+        .wake
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
     let mut code = 0u32;
-    unsafe { GetExitCodeProcess(process, &mut code) }.map_err(io_error)?;
-    Ok(code)
+    let read = unsafe { GetExitCodeProcess(process, &mut code) };
+    if read.is_err() {
+        // Dropping the closure closes the channel, so the waiting caller
+        // learns the report was lost instead of awaiting a wait that already
+        // fired and will never report again.
+        return;
+    }
+    if let Some(wake) = wake {
+        wake(code);
+    }
 }
 
 /// End one process, used when no job groups the tree. A refusal is reported:

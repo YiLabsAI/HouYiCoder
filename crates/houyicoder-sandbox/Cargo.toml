@@ -54,12 +54,6 @@ nix = { version = "0.31", features = ["signal", "process"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
 
-# The Windows command launcher belongs to the platform crate, so this crate
-# carries no binding to the Win32 API. The launcher's output pipes are read
-# as asynchronous files, and only the Windows backend takes that path.
-[target.'cfg(target_os = "windows")'.dependencies]
-tokio = { version = "1", features = ["fs"] }
-
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "process", "time"] }
 

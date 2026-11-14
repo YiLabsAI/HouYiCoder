@@ -35,9 +35,9 @@ nix = { version = "0.31", features = ["poll", "signal"] }
 # inside its job as it starts. Gated so other targets never pull the
 # bindings in.
 [target.'cfg(target_os = "windows")'.dependencies]
-# The launcher waits for its process on the runtime's blocking pool, which
-# only the Windows target reaches.
-tokio = { version = "1", features = ["rt"] }
+# The launcher reports a command exit through a one-shot channel, which only
+# the Windows target reaches.
+tokio = { version = "1", features = ["sync"] }
 windows = { version = "0.62", features = [
     "Win32_Networking_WinHttp",
     "Win32_Foundation",

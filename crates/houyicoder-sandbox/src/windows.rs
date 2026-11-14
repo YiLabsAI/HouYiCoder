@@ -32,7 +32,6 @@ use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::fs::File;
 use tokio::time::timeout;
 
 /// A Windows sandbox session. The workspace is the user's project dir (Guarded
@@ -236,9 +235,9 @@ impl WindowsJobSession {
         // A fenced session gets the job; an unfenced or unavailable one runs
         // the command with the wall timeout alone.
         let started = if matches!(self.fence, FenceStatus::Enforced) {
-            spawn_fenced(&line, &self.workspace)
+            spawn_fenced(&line, &self.workspace).await
         } else {
-            spawn_unfenced(&line, &self.workspace)
+            spawn_unfenced(&line, &self.workspace).await
         };
         let mut child =
             started.map_err(|e| SandboxError::SandboxUnavailable(format!("spawn: {e}")))?;
@@ -255,8 +254,8 @@ impl WindowsJobSession {
             wall,
             capture_streams(
                 &mut child,
-                File::from_std(stdout),
-                File::from_std(stderr),
+                stdout,
+                stderr,
                 None,
                 &collected,
                 DRAIN_GRACE,

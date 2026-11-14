@@ -102,13 +102,18 @@ pub fn create_owner_only_dir(path: &Path) -> Result<()> {
 /// the session it was given, and the nonce keeps the name from being guessed
 /// by a process that never read the recorded endpoint.
 pub fn session_pipe_name(scope: &str, session_id: &str, nonce: &[u8]) -> String {
-    let nonce = nonce
+    format!(r"\\.\pipe\{scope}-{session_id}-{}", hex_digits(nonce))
+}
+
+/// The lowercase hexadecimal spelling of a value, used to put a nonce into a
+/// pipe name.
+pub(crate) fn hex_digits(bytes: &[u8]) -> String {
+    bytes
         .iter()
-        .fold(String::with_capacity(nonce.len() * 2), |mut hex, byte| {
+        .fold(String::with_capacity(bytes.len() * 2), |mut hex, byte| {
             hex.push_str(&format!("{byte:02x}"));
             hex
-        });
-    format!(r"\\.\pipe\{scope}-{session_id}-{nonce}")
+        })
 }
 
 /// The security descriptor a session pipe is created with: a protected
