@@ -322,6 +322,7 @@ fn test_empty_canvas_skips_draw() {
 /// The run loop writes the markers only for a terminal that accepted
 /// synchronized output; the placement is exercised here directly because
 /// the test environment's terminal reports none.
+#[ignore = "CrosstermBackend probes the controlling terminal for its size, which a headless CI runner lacks; run under make verify where a terminal is present"]
 #[test]
 fn test_bracket_placement_writes_stream() {
     let shared = Stream::default();
@@ -380,6 +381,7 @@ impl Write for Stream {
 /// The bracketed writer forwards the frame to the writer it wraps and the
 /// markers to the placement the stream owns: one wrapped frame draws, and
 /// the markers a bracketed frame carries are written to the same stream in order.
+#[ignore = "CrosstermBackend probes the controlling terminal for its size, which a headless CI runner lacks; run under make verify where a terminal is present"]
 #[test]
 fn test_bracketed_writer_forwards() {
     let shared = Stream::default();

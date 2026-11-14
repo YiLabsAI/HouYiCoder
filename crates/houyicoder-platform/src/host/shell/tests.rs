@@ -189,7 +189,15 @@ fn test_under_any_contains() {
 #[test]
 fn test_executable_per_program() {
     assert_eq!(ShellProgram::Posix.executable(), PathBuf::from("sh"));
-    assert_eq!(ShellProgram::Cmd.executable(), PathBuf::from("cmd"));
+    // The command interpreter resolves to a bare name on POSIX hosts and to
+    // the system's absolute path on Windows, so the assertion holds on the
+    // file name rather than the whole path.
+    let cmd = ShellProgram::Cmd.executable();
+    let name = cmd.file_name().map(|f| f.to_string_lossy().into_owned());
+    assert!(
+        matches!(name.as_deref(), Some("cmd") | Some("cmd.exe")),
+        "the command interpreter is cmd, got {cmd:?}"
+    );
     let path = PathBuf::from("C:\\bash.exe");
     assert_eq!(ShellProgram::GitBash(path.clone()).executable(), path);
     assert_eq!(

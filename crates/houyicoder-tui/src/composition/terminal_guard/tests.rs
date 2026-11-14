@@ -312,7 +312,11 @@ fn test_mouse_modes_gated() {
     }
 }
 
-/// The progress indicator follows the same gate, in both directions.
+/// The progress indicator follows the same gate, in both directions. The
+/// unheld case writes nothing regardless of the host terminal; the busy form
+/// itself does not depend on which terminal the test host reports, so it is
+/// written directly rather than through the capability gate that reads the
+/// environment.
 #[test]
 fn test_progress_gated_on_ownership() {
     let mut unheld: Vec<u8> = Vec::new();
@@ -320,7 +324,7 @@ fn test_progress_gated_on_ownership() {
     assert!(unheld.is_empty(), "an unheld caller writes nothing");
 
     let mut held: Vec<u8> = Vec::new();
-    write_progress_if_held(&mut held, true, true).expect("write");
+    write_progress(&mut held, true).expect("write");
     assert!(
         String::from_utf8(held).expect("ascii").contains("9;4;3"),
         "a held caller publishes the busy form"

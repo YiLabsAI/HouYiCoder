@@ -1,8 +1,8 @@
 //! The utility runner, driven by a trivial child.
 
+use super::run_utility;
 #[cfg(target_os = "macos")]
-use super::MACOS_CLIP_TOOL;
-use super::{native_clipboard_preferred, run_utility};
+use super::{MACOS_CLIP_TOOL, native_clipboard_preferred};
 
 /// The macOS tool is an absolute path, never a bare name a directory earlier
 /// on the search path could answer for. A regression to a bare name is a
@@ -18,7 +18,11 @@ fn test_macos_tool_is_absolute() {
 }
 
 /// The host that carries a native utility is the one whose terminal may
-/// refuse the escape a copy also emits.
+/// refuse the escape a copy also emits. The answer is true only on macOS, so
+/// the assertion is gated to it: on the other targets the function answers
+/// false by design, and asserting otherwise reddens a host the code never
+/// claimed to cover.
+#[cfg(target_os = "macos")]
 #[test]
 fn test_macos_prefers_native() {
     assert!(
@@ -28,7 +32,9 @@ fn test_macos_prefers_native() {
 }
 
 /// A clean run is a successful copy, and the text reaches the utility on
-/// standard input.
+/// standard input. The utility is a POSIX shell, so the assertion runs where
+/// one exists.
+#[cfg(unix)]
 #[test]
 fn test_utility_writes_stdin() {
     assert!(
@@ -39,6 +45,7 @@ fn test_utility_writes_stdin() {
 
 /// A utility that exits non-zero is reported, which is how the Linux probe
 /// tells one that worked from one that did not.
+#[cfg(unix)]
 #[test]
 fn test_utility_reports_failure() {
     assert!(
