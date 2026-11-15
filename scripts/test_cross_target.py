@@ -99,6 +99,27 @@ def test_nonzero_exit_without_error_code_still_counts():
         assert crate_error_count("example", "x86_64-unknown-linux-gnu", Path(".")) == 2
 
 
+def test_per_crate_pass_runs_clippy_with_no_deps():
+    # Per-crate cross-target runs (e.g. Linux on macOS) must also run clippy
+    # rather than bare check, so Linux-only lint warnings are caught locally.
+    import subprocess
+    from unittest.mock import patch
+
+    calls = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with patch("check_cross_target.subprocess.run", side_effect=fake_run):
+        total = crate_error_count("houyicoder-platform", "x86_64-unknown-linux-gnu", Path("."))
+    assert total == 0
+    assert len(calls) == 2
+    for cmd in calls:
+        assert cmd[1] == "clippy"
+        assert "--no-deps" in cmd
+
+
 def test_workspace_pass_runs_clippy_with_no_deps():
     # The workspace pass counts lint diagnostics, which a bare check never
     # produces, so a Windows-only lint the macOS gate cannot see is caught

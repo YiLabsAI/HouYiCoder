@@ -115,19 +115,29 @@ def gated_crates(root: Path) -> list[str]:
 
 
 def crate_error_count(crate: str, target: str, root: Path) -> int | None:
-    """Diagnostics from a library and test check of one crate, or None when
-    the target cannot be built here at all (a dependency's build script needs
-    a linker the toolchain does not have).
+    """Diagnostics from a library and test clippy run of one crate, or None
+    when the target cannot be built here at all (a dependency's build script
+    needs a linker the toolchain does not have).
 
-    Both scopes are compiled: a cfg-gated break lives in a library as often as
-    in a test module, and a test-only one is invisible to `--lib`.
+    Both scopes are linted: a cfg-gated break or unused import lives in a
+    library as often as in a test module, and a test-only one is invisible to
+    `--lib`.
     """
     total = 0
     has_lib = (root / "crates" / crate / "src" / "lib.rs").is_file()
     first_scope = ["--lib"] if has_lib else ["--bins"]
     for scope in (first_scope, ["--tests"]):
         out = subprocess.run(
-            ["cargo", "check", "-p", crate, *scope, "--target", target],
+            [
+                "cargo",
+                "clippy",
+                "-p",
+                crate,
+                *scope,
+                "--target",
+                target,
+                "--no-deps",
+            ],
             capture_output=True,
             text=True,
             cwd=root,
