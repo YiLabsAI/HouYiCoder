@@ -1,5 +1,7 @@
-//! macOS system readers: the desktop proxy settings and the login keychain.
+//! macOS system readers: the desktop proxy settings, the login keychain, and
+//! the clipboard utility.
 
+pub(crate) mod clipboard;
 mod net;
 mod secrets;
 
@@ -9,7 +11,6 @@ use std::time::{Duration, Instant};
 
 pub(crate) use net::read_system_proxy;
 pub(crate) use secrets::read_secret;
-
 #[cfg(test)]
 mod tests;
 

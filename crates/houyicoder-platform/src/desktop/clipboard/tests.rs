@@ -5,7 +5,9 @@
 //! assert here. Gating the module rather than each test keeps a new test
 //! from reddening another host because someone forgot the attribute.
 
-use super::{MACOS_CLIP_TOOL, native_clipboard_preferred, run_utility};
+use crate::macos::clipboard::CLIP_TOOL as MACOS_CLIP_TOOL;
+
+use super::{native_clipboard_preferred, run_utility};
 
 /// The macOS tool is an absolute path, never a bare name a directory earlier
 /// on the search path could answer for. A regression to a bare name is a
@@ -39,8 +41,8 @@ fn test_utility_writes_stdin() {
     );
 }
 
-/// A utility that exits non-zero is reported, which is how the probe tells
-/// one that worked from one that did not.
+/// A utility that exits non-zero is reported, which is how the Linux probe
+/// tells one that worked from one that did not.
 #[test]
 fn test_utility_reports_failure() {
     assert!(
