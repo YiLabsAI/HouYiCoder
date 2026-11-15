@@ -110,13 +110,19 @@ quick-check:
 check:
 	@./scripts/check_code.sh
 
-# Full gate: make check + the workspace coverage total. One instrumented
-# unit-suite pass, whose lcov the diff gate in make check reuses rather than
-# compiling a second instrumented build. Integration tests are deliberately
-# outside the number: they validate end-to-end journeys, which are reviewed as
-# story coverage rather than as a line percentage. Run before a merge or push.
+# Full gate: make check + the workspace coverage total + the cross-target
+# compile. One instrumented unit-suite pass, whose lcov the diff gate in make
+# check reuses rather than compiling a second instrumented build. Integration
+# tests are deliberately outside the number: they validate end-to-end
+# journeys, which are reviewed as story coverage rather than as a line
+# percentage. The cross-target pass keeps a push from carrying a cfg-gated
+# module that only the other platforms' CI compiles, which the macOS gate
+# cannot see; it is here rather than in make check because it compiles the
+# whole workspace for another target and would multiply every commit's gate
+# time. Run before a merge or push.
 check-full: check
 	@./scripts/check_coverage.sh
+	@python3 scripts/check_cross_target.py
 
 # Verify combines deterministic gates with ignored PTY and sandbox suites.
 # Real-provider tests, expected-failure reproductions, and benchmarks remain

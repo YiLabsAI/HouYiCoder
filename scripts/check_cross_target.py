@@ -146,17 +146,25 @@ def crate_error_count(crate: str, target: str, root: Path) -> int | None:
 
 
 def workspace_error_count(target: str, root: Path) -> int | None:
-    """Diagnostics from one workspace-wide cargo-xwin check for the target, or
-    None when the run failed for a reason other than the code."""
+    """Diagnostics from one workspace-wide cargo-xwin clippy run for the
+    target, or None when the run failed for a reason other than the code.
+
+    Clippy rather than a bare check, because a gate that compiles is weaker
+    than the CI job that builds it: a lint the macOS gate cannot see, such as
+    an unused import in a Windows-only module, is green everywhere a check
+    runs and red on the first Windows clippy. The same diagnostics regex
+    counts lint warnings, which the workspace lints deny.
+    """
     out = subprocess.run(
         [
             "cargo",
             "xwin",
-            "check",
+            "clippy",
             "--target",
             target,
             "--workspace",
             "--all-targets",
+            "--no-deps",
         ],
         capture_output=True,
         text=True,

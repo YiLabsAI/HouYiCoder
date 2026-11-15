@@ -99,6 +99,28 @@ def test_nonzero_exit_without_error_code_still_counts():
         assert crate_error_count("example", "x86_64-unknown-linux-gnu", Path(".")) == 2
 
 
+def test_workspace_pass_runs_clippy_with_no_deps():
+    # The workspace pass counts lint diagnostics, which a bare check never
+    # produces, so a Windows-only lint the macOS gate cannot see is caught
+    # before the push rather than by the Windows CI job.
+    import subprocess
+    from unittest.mock import patch
+
+    captured = {}
+
+    def fake_run(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with patch("check_cross_target.subprocess.run", side_effect=fake_run):
+        from check_cross_target import workspace_error_count
+
+        total = workspace_error_count("x86_64-pc-windows-msvc", Path("."))
+    assert total == 0
+    assert captured["cmd"][2] == "clippy"
+    assert "--no-deps" in captured["cmd"]
+
+
 if __name__ == "__main__":
     from test_runner import run
 
