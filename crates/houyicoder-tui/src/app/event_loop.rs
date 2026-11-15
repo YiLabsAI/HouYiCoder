@@ -84,12 +84,6 @@ where
     B::Error: StdError + Send + Sync + 'static,
 {
     fn write_frame(&mut self, app: &mut App) -> io::Result<()> {
-        let size = self.terminal.size().map_err(Error::other)?;
-        // A window that reports no cells has nothing to paint; drawing into a
-        // zero-area layout only fails the backend write.
-        if size.width == 0 || size.height == 0 {
-            return Ok(());
-        }
         app.load_older_frames();
         // Stage the frame: the draw writes into a fresh value, held aside
         // until the draw reports success.
@@ -104,10 +98,9 @@ where
         // A failed draw puts the last published frame back before the error
         // unwinds to the terminal guard, so nothing reads a half-written one.
         app.ui.settle_frame(published, drawn)?;
-        // The draw above reports no frame cursor, so it has already hidden the
-        // cursor and flushed the frame bytes. Moving the hidden caret through
-        // the same backend keeps the frame and the escape in one ordered
-        // sequence instead of two writers racing for the terminal.
+        // A canvas that reported no cells published no frame and has no
+        // cursor to move; the draw call is the single size read, so a probe
+        // the terminal cannot answer fails the frame there rather than here.
         if let Some((x, y)) = app.ui.frame.feedback.native_cursor_position.get()
             && let Err(e) = self.terminal.set_cursor_position((x, y))
         {

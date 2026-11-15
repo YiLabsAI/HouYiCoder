@@ -147,6 +147,18 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines), inner);
+    publish_native_cursor(app, inner, crow, ccol);
+}
+
+/// Move the terminal's hidden caret to the composer's cursor. A zero-area
+/// canvas leaves no cell for a caret, so none is published: positioning to a
+/// cell no canvas backs would park the caret in a region another widget or
+/// the terminal itself owns.
+fn publish_native_cursor(app: &App, inner: Rect, crow: usize, ccol: usize) {
+    if inner.width == 0 || inner.height == 0 {
+        app.ui.frame.feedback.native_cursor_position.set(None);
+        return;
+    }
     let row = (crow as u16).min(inner.height.saturating_sub(1));
     app.ui.frame.feedback.native_cursor_position.set(Some((
         inner.x.saturating_add(2).saturating_add(ccol as u16),

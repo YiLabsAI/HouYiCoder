@@ -18,6 +18,8 @@ use houyicoder_protocol::frontend::tasks::{
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::layout::Rect;
+use ratatui::{TerminalOptions, Viewport};
 use ratatui_crossterm::CrosstermBackend;
 
 use super::{
@@ -287,7 +289,9 @@ fn painted(backend: &TestBackend) -> String {
 }
 
 /// A canvas with no cells publishes no frame; the same writer over a canvas
-/// with cells paints the draft and publishes the composer cursor.
+/// with cells paints the draft and publishes the composer cursor. The draw
+/// call is the single size read, so a canvas that reports no cells draws
+/// nothing rather than failing a probe first.
 #[test]
 fn test_empty_canvas_skips_draw() {
     let mut app = working_app();
@@ -299,6 +303,11 @@ fn test_empty_canvas_skips_draw() {
         app.ui.frame.feedback.native_cursor_position.get(),
         None,
         "no frame is published for a canvas with no cells"
+    );
+    assert_eq!(
+        empty.backend().buffer().area.area(),
+        0,
+        "nothing was painted into a zero-area canvas"
     );
 
     app.ui.input.editor.set("hello".to_string());
@@ -322,12 +331,11 @@ fn test_empty_canvas_skips_draw() {
 /// The run loop writes the markers only for a terminal that accepted
 /// synchronized output; the placement is exercised here directly because
 /// the test environment's terminal reports none.
-#[ignore = "CrosstermBackend probes the controlling terminal for its size, which a headless CI runner lacks; run under make verify where a terminal is present"]
 #[test]
 fn test_bracket_placement_writes_stream() {
     let shared = Stream::default();
     let backend = CrosstermBackend::new(shared.clone());
-    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut terminal = fixed_terminal(backend);
     let mut app = working_app();
     app.ui.input.editor.set("hello".to_string());
     let mut writer = TerminalWriter::new(&mut terminal);
@@ -359,6 +367,19 @@ fn test_bracket_placement_writes_stream() {
 #[derive(Default, Clone)]
 struct Stream(Arc<Mutex<Vec<u8>>>);
 
+/// A crossterm terminal pinned to a fixed canvas, so the test never asks the
+/// host terminal for a size: a constructor without a fixed viewport probes
+/// the controlling terminal, which a headless run lacks.
+fn fixed_terminal<W: Write>(backend: CrosstermBackend<W>) -> Terminal<CrosstermBackend<W>> {
+    Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 80, 24)),
+        },
+    )
+    .expect("a fixed terminal needs no size probe")
+}
+
 impl Stream {
     /// The bytes written so far, taken out.
     fn take(&self) -> Vec<u8> {
@@ -381,12 +402,11 @@ impl Write for Stream {
 /// The bracketed writer forwards the frame to the writer it wraps and the
 /// markers to the placement the stream owns: one wrapped frame draws, and
 /// the markers a bracketed frame carries are written to the same stream in order.
-#[ignore = "CrosstermBackend probes the controlling terminal for its size, which a headless CI runner lacks; run under make verify where a terminal is present"]
 #[test]
 fn test_bracketed_writer_forwards() {
     let shared = Stream::default();
     let backend = CrosstermBackend::new(shared.clone());
-    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut terminal = fixed_terminal(backend);
     let mut app = working_app();
     app.ui.input.editor.set("hello".to_string());
     {

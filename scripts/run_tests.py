@@ -220,6 +220,25 @@ env = {
     "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
     "HOUYICODER_RUNTIME_DIR": str(runtime_dir),
 }
+# A terminal-capability or size probe must not see the developer's own
+# terminal: CI runs headless and the probes behave differently there, so a
+# test that reads TERM_PROGRAM or asks crossterm for a size is green locally
+# and red in CI. Scrubbing the terminal identity here makes the unit gate
+# fail on the developer's machine instead, where the fix is cheaper. TERM
+# itself is unset rather than set to a dumb profile: crossterm's size probe
+# falls back to tput, which reads the terminal description named by TERM and
+# answers a size on a host with a rich terminfo even with no terminal --
+# exactly the false pass this scrub exists to remove.
+for var in (
+    "TERM",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TMUX",
+    "WT_SESSION",
+    "WezTerm",
+    "GHOSTTY_RESOURCES_DIR",
+):
+    env.pop(var, None)
 # The instrumented build's cache-friendly environment (target dir, sccache,
 # path remap, no incremental, no debug info) is assembled in one place so
 # every gate that runs one agrees. Plain cargo test (the clean-tree branch)
@@ -257,6 +276,7 @@ if plain_test:
 proc = subprocess.Popen(
     cmd, env=env,
     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    stdin=subprocess.DEVNULL,
     start_new_session=True,
 )
 try:
