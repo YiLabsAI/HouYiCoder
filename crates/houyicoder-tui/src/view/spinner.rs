@@ -11,10 +11,19 @@ use std::f32::consts::TAU;
 use std::time::Duration;
 use std::time::Instant;
 
-/// Spinner glyph bounce (6 frames forward + 6 reverse = 12), 120 ms per
-/// frame, a standard 12-frame bounce. The live row is rebuilt each draw
-/// from the run-start Instant so the animation needs no mutable tick state.
-const SPINNER_FRAMES: [&str; 12] = ["·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·"];
+/// Spinner glyph rotation (8 frames), 120 ms per frame. The braille block
+/// glyphs are Neutral width on every terminal and ship in Cascadia Code,
+/// Consolas, and every modern monospace font, so the spinner never pushes
+/// the verb text or renders as a missing-glyph box. The live row is rebuilt
+/// each draw from the run-start Instant so the animation needs no mutable
+/// tick state.
+const SPINNER_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// The spinner glyph for a point in time, rotating through the braille
+/// frames at 120 ms each.
+fn spinner_glyph(elapsed: Duration) -> &'static str {
+    SPINNER_FRAMES[((elapsed.as_millis() / 120) % 8) as usize]
+}
 
 /// Build the full spinner row text for one draw: animated glyph, live-phase
 /// verb (Thinking while the reasoning block is the active stream — held for
@@ -24,8 +33,7 @@ const SPINNER_FRAMES: [&str; 12] = ["·", "✢", "✳", "✶", "✻", "✽", "�
 /// toward the actual value ~25% of the gap per draw so the meter climbs
 /// smoothly instead of jumping.
 pub fn spinner_row_text(app: &App, elapsed: Duration, width: u16) -> String {
-    let frame = (elapsed.as_millis() / 120) % 12;
-    let glyph = SPINNER_FRAMES[frame as usize];
+    let glyph = spinner_glyph(elapsed);
     let prog = app.run_progress();
     let reasoning_active = prog.is_some_and(|p| p.live_block == LiveBlock::Thinking);
     let thinking_min_active = prog
@@ -196,7 +204,7 @@ pub fn spinner_line(
     };
     let after_glyph = &row[glyph.len_utf8()..];
     let glyph_text = if row.contains("compact: compacting...") {
-        SPINNER_FRAMES[((elapsed.as_millis() / 120) % 12) as usize].to_string()
+        spinner_glyph(elapsed).to_string()
     } else {
         glyph.to_string()
     };

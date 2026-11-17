@@ -3,7 +3,44 @@
 
 use std::time::{Duration, Instant};
 
+use unicode_width::UnicodeWidthStr;
+
 use super::*;
+
+/// A compaction row gets the animated braille glyph rather than its static
+/// first character, so the spinner keeps rotating while the session
+/// compacts.
+#[test]
+fn test_compaction_uses_spinner() {
+    let line = spinner_line(
+        "• compact: compacting...",
+        Duration::from_millis(240),
+        0.0,
+        false,
+    );
+    // The first span of the line is the glyph; at 240ms (frame 2) the
+    // braille glyph is the third frame in the rotation.
+    let glyph = &line.spans[0].content;
+    assert_eq!(glyph, SPINNER_FRAMES[2]);
+}
+/// and the CJK width rules. A glyph that widened on either would push the
+/// verb text on every frame it appeared, which is the jitter the braille
+/// rotation replaced.
+#[test]
+fn test_spinner_glyphs_width_one() {
+    for glyph in SPINNER_FRAMES {
+        assert_eq!(
+            UnicodeWidthStr::width(glyph),
+            1,
+            "a spinner glyph must be one column: {glyph:?}"
+        );
+        assert_eq!(
+            UnicodeWidthStr::width_cjk(glyph),
+            1,
+            "a spinner glyph must be one column under CJK rules: {glyph:?}"
+        );
+    }
+}
 
 #[test]
 fn test_suffix_k() {
