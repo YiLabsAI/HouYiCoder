@@ -29,7 +29,6 @@ use crate::keys;
 use crate::keys::filter::KeyFilter;
 use crate::keys::pane_predicates::child_action_pending;
 use crate::notifications::{NotifKind, Notification, copy_toast};
-use crate::selection::get_clipboard_path;
 use crate::selection::region::{Region, RegionIntent, RegionView, TranscriptRegion, paint_overlay};
 use crate::state::{App, Pane, Screen, ViewportMode};
 use crate::terminal_guard::{CrosstermModes, TerminalGuard, assert_mouse_modes};
@@ -256,10 +255,8 @@ impl App {
             }
             RegionIntent::ScrollUp => self.scroll_transcript_line_up(1),
             RegionIntent::ScrollDown => self.scroll_transcript_line_down(1),
-            RegionIntent::Copied(text) => {
-                self.ui
-                    .notifications
-                    .add(copy_toast(&text, get_clipboard_path()));
+            RegionIntent::Copied(text, outcome) => {
+                self.ui.notifications.add(copy_toast(&text, outcome));
             }
         }
     }

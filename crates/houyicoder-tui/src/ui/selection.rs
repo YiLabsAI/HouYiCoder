@@ -461,7 +461,7 @@ pub use anchor::LinePoint;
 pub(crate) use anchor::anchor_row;
 #[cfg(test)]
 pub use clipboard::RecordingClipboard;
-pub use clipboard::{ClipboardWriter, SystemClipboard, get_clipboard_path, write_clipboard};
+pub use clipboard::{ClipboardWriter, CopyOutcome, SystemClipboard, write_clipboard};
 pub use text::extract_text;
 
 /// Paint every region's held selection over the frame.

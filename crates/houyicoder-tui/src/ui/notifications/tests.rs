@@ -108,34 +108,45 @@ fn test_tick_keeps_before_expiry() {
 
 #[test]
 fn test_copy_toast_pins_config() {
-    let native = copy_toast("hello", "native");
+    let native = copy_toast("hello", CopyOutcome::NativeCopied);
     assert_eq!(native.key, "selection-copied");
     assert_eq!(native.priority, Priority::Immediate);
     assert_eq!(native.timeout, Duration::from_millis(2000));
     match &native.kind {
         NotifKind::Text { text, color } => {
-            assert_eq!(text, "copied 5 chars to clipboard");
+            assert_eq!(text, "copied 5 chars");
             assert_eq!(*color, Some(Color::Green));
         }
     }
-    let tmux = copy_toast("abc", "tmux-buffer");
+    let tmux = copy_toast("abc", CopyOutcome::TmuxBufferCopied);
     assert_eq!(tmux.timeout, Duration::from_millis(4000));
     match &tmux.kind {
         NotifKind::Text { text, .. } => {
-            assert_eq!(
-                text,
-                "copied 3 chars to tmux buffer · paste with prefix + ]"
-            )
+            assert_eq!(text, "copied 3 chars to tmux buffer · prefix + ]")
         }
     }
-    let osc = copy_toast("xy", "osc52");
-    assert_eq!(osc.timeout, Duration::from_millis(4000));
+    let osc = copy_toast("xy", CopyOutcome::TerminalRequested);
+    assert_eq!(osc.timeout, Duration::from_millis(3000));
     match &osc.kind {
-        NotifKind::Text { text, .. } => {
-            assert_eq!(
-                text,
-                "sent 2 chars via OSC 52 · check terminal clipboard settings if paste fails"
-            )
+        NotifKind::Text { text, color } => {
+            assert_eq!(text, "copy requested via terminal (2 chars)");
+            assert_eq!(*color, Some(Color::Yellow));
+        }
+    }
+    let failed_native = copy_toast("hi", CopyOutcome::NativeFailedTerminalRequested);
+    assert_eq!(failed_native.timeout, Duration::from_millis(4000));
+    match &failed_native.kind {
+        NotifKind::Text { text, color } => {
+            assert_eq!(text, "native copy failed; requested via terminal (2 chars)");
+            assert_eq!(*color, Some(Color::Yellow));
+        }
+    }
+    let failed = copy_toast("hi", CopyOutcome::CopyFailed);
+    assert_eq!(failed.timeout, Duration::from_millis(3000));
+    match &failed.kind {
+        NotifKind::Text { text, color } => {
+            assert_eq!(text, "copy failed · selection kept (2 chars)");
+            assert_eq!(*color, Some(Color::Red));
         }
     }
 }

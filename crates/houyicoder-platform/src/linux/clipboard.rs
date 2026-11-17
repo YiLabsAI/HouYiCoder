@@ -2,6 +2,7 @@
 //! first copy.
 
 use std::env::var_os;
+use std::io::{Error, Result};
 use std::sync::Mutex;
 
 use crate::desktop::clipboard::run_utility;
@@ -9,11 +10,13 @@ use crate::desktop::clipboard::run_utility;
 /// The utility that answered last, cached so a copy costs no probe.
 static ANSWERING_TOOL: Mutex<Option<Option<&'static str>>> = Mutex::new(None);
 
-/// Copy through the utility that answers, if any. The caller also emits the
-/// terminal escape, so a host with no utility costs nothing.
-pub(crate) fn copy(text: &str) {
+/// Copy through the utility that answers, if any. The caller uses the result
+/// to decide whether to also emit the terminal escape.
+pub(crate) fn copy(text: &str) -> Result<()> {
     if let Some((tool, args)) = answering_tool(text) {
-        drop(run_utility(tool, args, text));
+        run_utility(tool, args, text)
+    } else {
+        Err(Error::other("no clipboard utility answered"))
     }
 }
 

@@ -14,7 +14,7 @@ use crate::records::{ToolOutcome, TranscriptLine};
 use crate::selection::region::{
     RegionIntent, clear_stale_click, edge_scroll_if_at_edge, paint_overlay,
 };
-use crate::selection::{Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN};
+use crate::selection::{CopyOutcome, Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN};
 use crate::state::App;
 use crate::test_harness::{render_text, working_app};
 
@@ -139,7 +139,7 @@ fn test_scroll_intents_move() {
 fn test_copied_raises_notice() {
     let mut app = rendered_working();
 
-    app.apply_region_intent(RegionIntent::Copied("hi".into()));
+    app.apply_region_intent(RegionIntent::Copied("hi".into(), CopyOutcome::NativeCopied));
 
     let out = render_text(&app, 80, 24);
     assert!(out.contains("2 chars"), "the copy notice is shown:\n{out}");

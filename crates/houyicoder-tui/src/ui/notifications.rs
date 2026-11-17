@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use ratatui::style::Color;
 
+use crate::selection::CopyOutcome;
+
 /// Default on-screen lifetime when a notification does not name its own.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(8000);
 
@@ -59,30 +61,45 @@ impl Notification {
     }
 }
 
-/// The copy-confirmation toast: "copied N chars to <path>". Timeout is short
-/// for native (reliable), longer for tmux/osc52 (paste may need a nudge).
-/// Green = success.
-pub fn copy_toast(text: &str, path: &str) -> Notification {
+/// The copy-confirmation toast, driven by the outcome the clipboard write
+/// reported. Green marks a reliable success (native or tmux buffer); yellow
+/// marks an uncertain or fallback path (terminal escape, or a native failure
+/// that fell back to one); red marks a total failure where the selection is
+/// kept for a retry.
+pub fn copy_toast(text: &str, outcome: CopyOutcome) -> Notification {
     let n = text.chars().count();
-    let (msg, timeout) = match path {
-        "tmux-buffer" => (
-            format!("copied {n} chars to tmux buffer · paste with prefix + ]"),
-            Duration::from_millis(4000),
-        ),
-        "osc52" => (
-            format!("sent {n} chars via OSC 52 · check terminal clipboard settings if paste fails"),
-            Duration::from_millis(4000),
-        ),
-        _ => (
-            format!("copied {n} chars to clipboard"),
+    let (msg, timeout, color) = match outcome {
+        CopyOutcome::NativeCopied => (
+            format!("copied {n} chars"),
             Duration::from_millis(2000),
+            Color::Green,
+        ),
+        CopyOutcome::TmuxBufferCopied => (
+            format!("copied {n} chars to tmux buffer · prefix + ]"),
+            Duration::from_millis(4000),
+            Color::Green,
+        ),
+        CopyOutcome::TerminalRequested => (
+            format!("copy requested via terminal ({n} chars)"),
+            Duration::from_millis(3000),
+            Color::Yellow,
+        ),
+        CopyOutcome::NativeFailedTerminalRequested => (
+            format!("native copy failed; requested via terminal ({n} chars)"),
+            Duration::from_millis(4000),
+            Color::Yellow,
+        ),
+        CopyOutcome::CopyFailed => (
+            format!("copy failed · selection kept ({n} chars)"),
+            Duration::from_millis(3000),
+            Color::Red,
         ),
     };
     Notification::immediate(
         "selection-copied",
         NotifKind::Text {
             text: msg,
-            color: Some(Color::Green),
+            color: Some(color),
         },
         timeout,
     )

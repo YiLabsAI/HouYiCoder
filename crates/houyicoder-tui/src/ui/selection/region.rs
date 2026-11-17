@@ -26,7 +26,7 @@ use ratatui::{
 };
 
 use crate::renderer::PreparedFrame;
-use crate::selection::{self, ClipboardWriter, Selection, anchor_row, extract_text};
+use crate::selection::{self, ClipboardWriter, CopyOutcome, Selection, anchor_row, extract_text};
 use crate::selections::Selections;
 use crate::state::App;
 
@@ -80,7 +80,7 @@ pub(crate) fn finish_release(
     rows: &[(u8, String)],
     clipboard: &dyn ClipboardWriter,
     persist: bool,
-) -> Option<String> {
+) -> Option<(String, CopyOutcome)> {
     sel.finish();
     sel.cursor = None;
     if sel.drag_moved {
@@ -92,11 +92,11 @@ pub(crate) fn finish_release(
     }
     let text = extract_text(rows, rect, sel);
     if !text.trim().is_empty() {
-        clipboard.write(&text);
+        let outcome = clipboard.write(&text);
         if !persist {
             sel.clear();
         }
-        return Some(text);
+        return Some((text, outcome));
     }
     if !persist {
         sel.clear();
@@ -221,8 +221,9 @@ pub(crate) enum RegionIntent {
     ScrollUp,
     /// Scroll one line down.
     ScrollDown,
-    /// Raise the copy notice for the text a release copied.
-    Copied(String),
+    /// Raise the copy notice for the text a release copied, with the
+    /// outcome the clipboard write reported.
+    Copied(String, CopyOutcome),
 }
 
 /// A draggable, copyable text surface. The transcript and each slash-command
@@ -277,7 +278,7 @@ pub(crate) trait Region {
         let persist = self.persist();
         let p = self.parts();
         match finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist) {
-            Some(text) => RegionIntent::Copied(text),
+            Some((text, outcome)) => RegionIntent::Copied(text, outcome),
             None => RegionIntent::None,
         }
     }
@@ -302,8 +303,8 @@ pub(crate) trait Region {
         if text.trim().is_empty() {
             return RegionIntent::None;
         }
-        p.clipboard.write(&text);
-        RegionIntent::Copied(text)
+        let outcome = p.clipboard.write(&text);
+        RegionIntent::Copied(text, outcome)
     }
 }
 
@@ -316,7 +317,7 @@ fn down_body<S: Region + ?Sized>(s: &mut S, x: u16, y: u16) {
     let (col, cr) = s.to_content(x, y);
     let p = s.parts();
     if was_dragging {
-        let _text = finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist);
+        drop(finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist));
     }
     let count = p.sel.on_click(x, y);
     p.sel.cursor = Some((x, y));
