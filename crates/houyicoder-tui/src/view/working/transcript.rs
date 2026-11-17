@@ -257,31 +257,26 @@ fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
     if label_visible {
         let new = app.new_message_count();
         let label = if new.count > 0 {
-            // Past two digits the exact number stops informing the reader and
-            // starts competing with the transcript for width: what they need
-            // to know is that much has landed, not how much. A count that
-            // only covers part of the window carries the same at-least marker.
             let shown = new.count.min(MESSAGE_COUNT_CAP);
             let floor = if new.count > MESSAGE_COUNT_CAP || new.is_lower_bound {
                 "+"
             } else {
                 ""
             };
-            let count = format!("{shown}{floor}");
-            let plural = if new.count == 1 { "" } else { "s" };
-            format!(" {count} new message{plural} ↓")
+            format!(" {shown}{floor} new | End ")
         } else {
-            " Jump to bottom (click) ↓".to_string()
+            " Bottom | End ".to_string()
         };
         let row = inner.y.saturating_add(inner.height.saturating_sub(1));
-        let label_w = (label.chars().count() as u16).min(inner.width);
-        // Align toward the right edge (with a 2-col margin) instead of centering,
-        // so it never overlaps centered inline affordances such as "ctrl+o to expand".
-        let x = inner.x + inner.width.saturating_sub(label_w + 2);
+        let label_w = UnicodeWidthStr::width(label.as_str()).min(inner.width as usize) as u16;
+        // Center the label at the transcript bottom, yielding 2 cols left of
+        // the exact center so it does not overlap a centered inline
+        // affordance such as the expand hint.
+        let x = (inner.x + inner.width.saturating_sub(label_w) / 2)
+            .saturating_sub(2)
+            .max(inner.x);
         let rect = Rect::new(x, row, label_w, 1);
         f.render_widget(Clear, rect);
-        // Bright text on the user-message bg so the label reads as a clickable
-        // affordance rather than dim text that vanishes into the transcript.
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 label,

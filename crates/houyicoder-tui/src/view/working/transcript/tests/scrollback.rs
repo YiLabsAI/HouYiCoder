@@ -151,7 +151,7 @@ fn test_count_rises_per_reply() {
     );
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("3 new messages"),
+        out.contains("3 new | End"),
         "the label states the count:\n{out}"
     );
 }
@@ -174,7 +174,7 @@ fn test_count_caps_label() {
     assert_eq!(app.new_message_count().count, 120, "every reply counts");
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("99+ new messages"),
+        out.contains("99+ new | End"),
         "the label caps the stated count:\n{out}"
     );
 }
@@ -198,11 +198,11 @@ fn test_label_cap_boundary() {
     assert_eq!(app.new_message_count().count, 99);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("99 new messages"),
+        out.contains("99 new | End"),
         "the label states the exact count at the cap:\n{out}"
     );
     assert!(
-        !out.contains("99+ new messages"),
+        !out.contains("99+ new | End"),
         "no at-least marker while the count is exactly the cap:\n{out}"
     );
     for frame in [
@@ -215,7 +215,7 @@ fn test_label_cap_boundary() {
     assert_eq!(app.new_message_count().count, 100);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("99+ new messages"),
+        out.contains("99+ new | End"),
         "one past the cap reads as a floor:\n{out}"
     );
 }
@@ -240,7 +240,7 @@ fn test_label_fits_narrow_width() {
         "the label must stay inside the transcript: label={rect:?} transcript={t:?}"
     );
     assert!(
-        out.contains("Jump to"),
+        out.contains("End"),
         "the label still names its action when clipped:\n{out}"
     );
     let px = rect.x + rect.width / 2;
@@ -360,11 +360,11 @@ fn test_rescroll_keeps_count() {
 #[test]
 fn test_click_label_jumps() {
     let mut app = app_scrolled_back();
-    // The idle-state text names the click affordance so the label reads as
-    // clickable, not just as a status hint.
+    // The idle-state text names the bottom so the label reads as a
+    // clickable affordance, not just a status hint.
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("Jump to bottom (click)"),
+        out.contains("Bottom | End"),
         "idle label should carry the (click) hint:\n{out}"
     );
     let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
@@ -530,7 +530,7 @@ fn test_floor_count_after_drain() {
     app.park_scroll_at(0);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("+ new message"),
+        out.contains("+ new | End"),
         "a floor count renders with the + marker:\n{out}"
     );
 }
