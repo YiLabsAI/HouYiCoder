@@ -8,8 +8,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
+
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 use super::command_state;
 use super::compaction_rows::push_compaction_rows;
@@ -27,8 +29,8 @@ use crate::selection::{
     TAG_AGENT_FIRST, TAG_DIFF_ADD, TAG_DIFF_CTX, TAG_DIFF_DEL, TAG_DIFF_HUNK, TAG_FOLD, TAG_PLAIN,
     TAG_SPINNER, TAG_SYSTEM, TAG_USER,
 };
+use crate::state::App;
 use crate::state::enums::LiveBlock;
-use crate::state::{App, Pane, ViewportMode};
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view;
 use crate::view::line_wrap::truncate_width;
@@ -42,6 +44,8 @@ use unicode_width::UnicodeWidthStr;
 /// The highest message count the jump-to-bottom label states. Past it the
 /// label reads "99+" and the exact number is left to the transcript.
 const MESSAGE_COUNT_CAP: usize = 99;
+
+mod jump_label;
 
 pub(crate) fn ensure_cached_slots(area: Rect, app: &App) {
     // The slot rows depend on the source and its revisions, the wrap width,
@@ -108,7 +112,7 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     render_transcript_lines(f, inner, app, &visible);
-    draw_jump_to_bottom(f, inner, app);
+    jump_label::draw(f, inner, app);
 }
 
 fn compute_spinner_params(app: &App) -> (Duration, f32, bool) {
@@ -240,58 +244,6 @@ fn render_transcript_lines(f: &mut Frame, inner: Rect, app: &App, visible: &RowS
         inner,
     );
     refresh_wide_cells(f, inner);
-}
-
-fn draw_jump_to_bottom(f: &mut Frame, inner: Rect, app: &App) {
-    // Jump-to-bottom label: a bright centered overlay on the transcript's
-    // bottom row while the user is scrolled back, showing the agent messages
-    // that landed since the scroll-away snapshot. Clicking it returns to the
-    // tail. Hidden while following the tail, with a search or queue overlay
-    // open, or in Scroll mode, whose status bar already advertises Esc=tail.
-    // The hit rect is the label span, not the full row, so a click beside the
-    // label falls through to the transcript surface and starts a drag-select.
-    let label_visible = app.ui.navigation.viewport != ViewportMode::Scroll
-        && app.ui.navigation.pane == Pane::Transcript
-        && !app.active_scroll().is_following_tail()
-        && !app.ui.transcript_view.search_active();
-    if label_visible {
-        let new = app.new_message_count();
-        let label = if new.count > 0 {
-            let shown = new.count.min(MESSAGE_COUNT_CAP);
-            let floor = if new.count > MESSAGE_COUNT_CAP || new.is_lower_bound {
-                "+"
-            } else {
-                ""
-            };
-            format!(" {shown}{floor} new | End ")
-        } else {
-            " Bottom | End ".to_string()
-        };
-        let row = inner.y.saturating_add(inner.height.saturating_sub(1));
-        let label_w = UnicodeWidthStr::width(label.as_str()).min(inner.width as usize) as u16;
-        // Center the label at the transcript bottom, yielding 2 cols left of
-        // the exact center so it does not overlap a centered inline
-        // affordance such as the expand hint.
-        let x = (inner.x + inner.width.saturating_sub(label_w) / 2)
-            .saturating_sub(2)
-            .max(inner.x);
-        let rect = Rect::new(x, row, label_w, 1);
-        f.render_widget(Clear, rect);
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                label,
-                Style::new().fg(Color::White).bg(Color::Indexed(238)),
-            ))),
-            rect,
-        );
-        app.ui.frame.layout.jump_to_bottom_rect.set(rect);
-    } else {
-        app.ui
-            .frame
-            .layout
-            .jump_to_bottom_rect
-            .set(Rect::new(0, 0, 0, 0));
-    }
 }
 
 fn rendered_tool_rows(
@@ -652,16 +604,16 @@ pub(crate) fn refresh_wide_cells(f: &mut Frame, area: Rect) {
 }
 
 fn fold_hint_row(hint: &str, width: u16) -> String {
-    const PREFIX: &str = "  \u{23bf}  ";
+    let prefix = format!("  {}  ", detect_glyph_set().result_gutter());
     let avail = (width as usize).saturating_sub(5);
     let mut lines = hint.lines();
     let first = lines.next().unwrap_or_default();
     let preview = if lines.next().is_some() {
-        format!("{first}\u{2026}")
+        format!("{first}{}", detect_glyph_set().ellipsis())
     } else {
         first.to_string()
     };
-    format!("{PREFIX}{}", truncate_width(&preview, avail))
+    format!("{prefix}{}", truncate_width(&preview, avail))
 }
 
 fn build_slots_rows(area: Rect, app: &App) -> RowSet {

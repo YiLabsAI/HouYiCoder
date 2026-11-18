@@ -12,6 +12,7 @@ use crate::rows::row_set::RowSet;
 use crate::rows::slots_key::SlotsKey;
 use crate::test_harness::{attach_connection, render_text, working_app};
 use crate::transcript::frame::TranscriptFrame;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 use super::super::tail_rows::build_tail_rows;
 use super::push_line_rows;
@@ -66,7 +67,9 @@ fn test_result_follows_call() {
     assert!(push_line_rows(&result, None, 60, &app, &mut sink));
     let rows = sink.rows();
     assert!(
-        rows[call_rows].1.starts_with("  \u{23bf}"),
+        rows[call_rows]
+            .1
+            .starts_with(&format!("  {}  ", detect_glyph_set().result_gutter())),
         "the result row comes right after the call row: {:?}",
         rows.iter().map(|row| row.1.as_str()).collect::<Vec<_>>()
     );
@@ -116,11 +119,11 @@ fn test_hint_single_line() {
     let hint = rows
         .iter()
         .map(|(_, row)| row)
-        .find(|row| row.contains('\u{23bf}'))
+        .find(|row| row.contains(detect_glyph_set().result_gutter()))
         .expect("fold hint");
     assert!(!hint.contains('\n'), "hint must occupy one row: {hint:?}");
     assert!(
-        hint.ends_with('\u{2026}'),
+        hint.ends_with(detect_glyph_set().ellipsis()),
         "hidden body needs an ellipsis: {hint}"
     );
     assert!(

@@ -8,6 +8,7 @@ use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
+use ratatui::layout::Rect;
 
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::app::handle_mouse;
@@ -62,6 +63,48 @@ fn app_scrolled_back() -> App {
     app.scroll_transcript_line_up(3);
     let _out = render_text(&app, 80, 24);
     app
+}
+
+/// The label sits at the transcript's true center, not at a guessed offset
+/// that would read as off-center in every ordinary scrollback.
+#[test]
+fn test_label_sits_at_center() {
+    let app = app_scrolled_back();
+    let _out = render_text(&app, 80, 24);
+    let t = app.ui.frame.layout.transcript_rect.get();
+    let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
+    let centered = t.x + t.width.saturating_sub(rect.width) / 2;
+    assert_eq!(
+        rect.x, centered,
+        "the label centers in the transcript: label={rect:?} transcript={t:?}"
+    );
+}
+
+/// Returning to the tail leaves no click target behind: the hit rectangle
+/// zeroes so a later click lands on the transcript surface.
+#[test]
+fn test_label_rect_clears() {
+    let mut app = app_scrolled_back();
+    let _out = render_text(&app, 80, 24);
+    assert!(
+        app.ui.frame.layout.jump_to_bottom_rect.get().width > 0,
+        "the label shows while scrolled back"
+    );
+    let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
+    handle_mouse(
+        &mut app,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x + rect.width / 2,
+            rect.y,
+        ),
+    );
+    let _out = render_text(&app, 80, 24);
+    assert_eq!(
+        app.ui.frame.layout.jump_to_bottom_rect.get(),
+        Rect::new(0, 0, 0, 0),
+        "a hidden label keeps no hit rectangle"
+    );
 }
 
 /// Agent text arriving while scrolled back counts once per visible message.
