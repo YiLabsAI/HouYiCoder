@@ -25,7 +25,7 @@ const GBK_CHAR: [u8; 2] = [0xd6, 0xd0];
 /// here, and every character of the page would decode shifted; the window
 /// resumes after the last single-byte character instead.
 #[tokio::test]
-async fn test_legacy_page_stays_aligned() {
+async fn test_code_page_stays_aligned() {
     let log = store();
     let session = SessionId::new();
     // A newline anchors the stream, then a run of one double-byte character
