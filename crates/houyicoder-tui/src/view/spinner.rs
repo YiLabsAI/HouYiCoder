@@ -5,25 +5,20 @@
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::view::ERROR_RED_RGB;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::f32::consts::TAU;
 use std::time::Duration;
 use std::time::Instant;
 
-/// Spinner glyph rotation (8 frames), 120 ms per frame. The braille block
-/// glyphs are Neutral width on every terminal, and Cascadia Code and
-/// Consolas both carry the braille block, so the spinner holds one column
-/// on the terminals this product targets. Width does not guarantee a glyph
-/// is present in every font, but the braille block has far wider coverage
-/// than the Dingbats block it replaces. The live row is rebuilt each draw
-/// from the run-start Instant so the animation needs no mutable tick state.
-const SPINNER_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
-
-/// The spinner glyph for a point in time, rotating through the braille
-/// frames at 120 ms each.
+/// The spinner glyph for a point in time, rotating through the frames of the
+/// detected glyph grade at 120 ms each. The grade decides the frame set: the
+/// safe rotation is ASCII and the rich rotation is the braille block, both
+/// pinned to one display column by the glyph module's width tests.
 fn spinner_glyph(elapsed: Duration) -> &'static str {
-    SPINNER_FRAMES[((elapsed.as_millis() / 120) % 8) as usize]
+    let frames = detect_glyph_set().spinner_frames();
+    frames[((elapsed.as_millis() / 120) % frames.len() as u128) as usize]
 }
 
 /// Build the full spinner row text for one draw: animated glyph, live-phase

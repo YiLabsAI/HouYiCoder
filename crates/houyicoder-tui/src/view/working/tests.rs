@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::ApprovalRequest;
@@ -246,7 +248,10 @@ fn test_fold_collapse_expand_toggle() {
         "collapsed summary offers expand: {out}"
     );
     // The preview row shares the two-space gutter used by child result rows.
-    assert!(out.contains("  ⎿  "), "hint gutter is aligned: {out}");
+    assert!(
+        out.contains(&format!("  {}  ", detect_glyph_set().result_gutter())),
+        "hint gutter is aligned: {out}"
+    );
 
     // --- Ctrl+O on summary row expands ---
     let fold_ri = app

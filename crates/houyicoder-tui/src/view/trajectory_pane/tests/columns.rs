@@ -1,6 +1,8 @@
 //! Tests for the turn list's columns: what each cell states and where it sits
 //! across the rows.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::super::list;
 use super::super::*;
 use super::fixtures::{lines_text, turn, view};
@@ -97,7 +99,7 @@ fn test_title_keeps_gap() {
         !text.contains("…1.2k"),
         "the ellipsis is not glued to the token cell: {text}"
     );
-    let (title_cell, _) = cell_of(&body[0], |c| c.contains('…'));
+    let (title_cell, _) = cell_of(&body[0], |c| c.contains(detect_glyph_set().ellipsis()));
     assert!(
         body[0].spans[title_cell].content.ends_with(' '),
         "the truncated title keeps a gap before the next cell: {text}"
@@ -139,8 +141,8 @@ fn test_token_column_sized() {
         "the full count is gone once the short figure carries the magnitude: {text}"
     );
     assert_eq!(
-        column_of(&body[0], |c| c.contains('✓')),
-        column_of(&body[1], |c| c.contains('✓')),
+        column_of(&body[0], |c| c.contains(detect_glyph_set().gate_open())),
+        column_of(&body[1], |c| c.contains(detect_glyph_set().gate_open())),
         "the rows close at one display column whatever the token counts"
     );
 }
@@ -246,7 +248,7 @@ fn test_long_model_cut() {
         .map(|s| s.content.as_ref())
         .collect();
     assert!(
-        text.contains('…'),
+        text.contains(detect_glyph_set().ellipsis()),
         "an id wider than its column is cut: {text}"
     );
     assert_eq!(
@@ -481,9 +483,10 @@ fn test_turn_list_keeps_tail() {
             shown <= width as usize,
             "row wider than the terminal at {width}: {shown} > {width}: {text:?}"
         );
-        let tail = text.trim_end().chars().last().unwrap_or(' ');
+        let set = detect_glyph_set();
+        let tail = text.trim_end();
         assert!(
-            tail == '✓' || tail == '✗',
+            tail.ends_with(set.gate_open()) || tail.ends_with(set.gate_blocked()),
             "the outcome must survive at {width} columns: {text:?}"
         );
         assert!(

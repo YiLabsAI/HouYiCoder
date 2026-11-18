@@ -17,6 +17,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::permission::PermissionMode;
 use houyicoder_protocol::llm::count_visible;
 
@@ -53,15 +54,16 @@ pub fn progress_str(app: &App) -> String {
 /// The mark and style for one chain stage given the current stage. Done is a
 /// Green check, current is a Cyan filled dot, pending is a dim hollow dot.
 fn stage_mark(current: Stage, target: Stage) -> (&'static str, Style) {
+    let set = detect_glyph_set();
     if stage_is_done(current, target) {
-        ("\u{2713}", Style::new().fg(Color::Green))
+        (set.gate_open(), Style::new().fg(Color::Green))
     } else if current == target {
         (
-            "\u{25cf}",
+            set.assistant_marker(),
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )
     } else {
-        ("\u{25cb}", Style::new().fg(Color::DarkGray))
+        (set.toggle_off(), Style::new().fg(Color::DarkGray))
     }
 }
 
@@ -262,14 +264,15 @@ fn context_gauge_label(pct: f64) -> String {
 /// Auto shows the auto label from session start). An unknown wire variant
 /// renders as manual (fail-safe).
 fn mode_label(mode: PermissionMode) -> (String, Style) {
+    let set = detect_glyph_set();
     let (symbol, label, color) = match mode {
-        PermissionMode::Manual => ("\u{23f8} ", "manual", Color::Blue),
-        PermissionMode::Auto => ("\u{23f5}\u{23f5} ", "auto", Color::Indexed(208)),
+        PermissionMode::Manual => (set.paused(), "manual", Color::Blue),
+        PermissionMode::Auto => (set.play(), "auto", Color::Indexed(208)),
         // non_exhaustive: unknown wire variant fails safe to manual.
-        _ => ("\u{23f8} ", "manual", Color::Blue),
+        _ => (set.paused(), "manual", Color::Blue),
     };
     (
-        format!("{symbol}{label} mode on (shift+tab to cycle)"),
+        format!("{symbol} {label} mode on (shift+tab to cycle)"),
         Style::new().fg(color),
     )
 }

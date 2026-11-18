@@ -4,6 +4,7 @@
 //! Scroll hide it), so the editor lives here, next to the layout that
 //! reserves its row.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -105,7 +106,7 @@ pub(super) fn draw_input(f: &mut Frame, area: Rect, app: &App) {
                 if shell_mode {
                     Span::styled("$ ", glyph_style)
                 } else {
-                    Span::styled("❯ ", glyph_style)
+                    Span::styled(detect_glyph_set().picker_cursor(), glyph_style)
                 }
             } else {
                 Span::raw("  ")

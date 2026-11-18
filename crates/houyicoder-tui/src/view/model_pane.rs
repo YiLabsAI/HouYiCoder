@@ -18,6 +18,8 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crate::session::capabilities::model::ModelCapability;
 use crate::state::App;
 use crate::state::model_draft::{ModelDraft, ModelSettingFocus};
@@ -44,9 +46,7 @@ const WIDE_NAME_MIN: usize = 14;
 /// The least gap between the name column and the id it prefixes.
 const WIDE_GAP: usize = 2;
 
-/// The marker in a row's gutter: the focused row, and the blank gutter that
-/// keeps the labels aligned.
-const FOCUS_MARKER: &str = "\u{276f} ";
+/// The blank gutter that keeps labels aligned on rows the cursor is not on.
 const BLANK_MARKER: &str = "  ";
 
 /// The mark on the row the host reports as applied.
@@ -165,7 +165,7 @@ fn row_line(
 /// applied mark, plus the style the whole column takes.
 fn row_left(model: &ModelCapability, draft: &ModelDraft, row: usize) -> (String, Style) {
     let marker = if row == draft.row {
-        FOCUS_MARKER
+        detect_glyph_set().picker_cursor()
     } else {
         BLANK_MARKER
     };

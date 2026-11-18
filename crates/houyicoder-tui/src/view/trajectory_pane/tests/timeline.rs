@@ -1,6 +1,8 @@
 //! Tests for the level 1 timeline's columns: where the bars are drawn and
 //! what the ruler above them says.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::super::*;
 use super::fixtures::{detail_of, detail_of_all, lines_text, record_of, turn, view};
 use crate::composition::app;
@@ -112,7 +114,10 @@ fn test_timeline_fits_narrow() {
                 drawn <= width as usize,
                 "width {width} drew {drawn}: {text:?}"
             );
-            assert!(text.contains('✓'), "the outcome survives: {text:?}");
+            assert!(
+                text.contains(detect_glyph_set().gate_open()),
+                "the outcome survives: {text:?}"
+            );
             if measured && width >= 80 {
                 assert!(
                     text.contains("tok/s"),
@@ -154,7 +159,10 @@ fn test_timeline_compact_narrow() {
                 "the duration stays where there is room for it, {width} columns: {row}"
             );
         }
-        assert!(row.contains('✓'), "and so does the outcome: {row}");
+        assert!(
+            row.contains(detect_glyph_set().gate_open()),
+            "and so does the outcome: {row}"
+        );
         for line in body.iter() {
             assert!(
                 line.width() <= width,
@@ -214,12 +222,12 @@ fn test_compact_row_keeps_marks() {
         let marked: Vec<&String> = rows.iter().filter(|row| row.contains('▸')).collect();
         assert_eq!(marked.len(), 1, "one row carries the cursor: {rows:?}");
         assert!(
-            marked[0].contains('✗'),
+            marked[0].contains(detect_glyph_set().gate_blocked()),
             "and it is the row the cursor is on: {rows:?}"
         );
         assert!(
             rows.iter()
-                .all(|row| row.contains('✗') && row.contains("1.0s")),
+                .all(|row| row.contains(detect_glyph_set().gate_blocked()) && row.contains("1.0s")),
             "every row keeps its outcome and duration: {rows:?}"
         );
         for line in body.iter() {

@@ -14,6 +14,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use houyicoder_platform::desktop::glyphs::{GlyphSet, detect_glyph_set};
+
 use crate::agent_message::fleet::FleetEntry;
 use crate::command::render::format_tokens;
 use crate::state::App;
@@ -239,12 +241,39 @@ fn build_row<'a>(
 /// cannot name. The tick is not drawn for an unnamed ending, because a tick
 /// claims the work completed and nobody observed that.
 fn ending_glyph(outcome: SubagentOutcome) -> &'static str {
+    let rich = detect_glyph_set() == GlyphSet::Rich;
     match outcome {
-        SubagentOutcome::Finished | SubagentOutcome::TurnLimit | SubagentOutcome::Budget => "✓ ",
-        SubagentOutcome::Failed => "✕ ",
-        SubagentOutcome::Interrupted => "⊘ ",
-        SubagentOutcome::TimedOut => "◷ ",
-        SubagentOutcome::Unknown => "· ",
+        SubagentOutcome::Finished | SubagentOutcome::TurnLimit | SubagentOutcome::Budget => {
+            if rich { "✓ " } else { "+ " }
+        }
+        SubagentOutcome::Failed => {
+            if rich {
+                "✕ "
+            } else {
+                "x "
+            }
+        }
+        SubagentOutcome::Interrupted => {
+            if rich {
+                "⊘ "
+            } else {
+                "x "
+            }
+        }
+        SubagentOutcome::TimedOut => {
+            if rich {
+                "◷ "
+            } else {
+                "t "
+            }
+        }
+        SubagentOutcome::Unknown => {
+            if rich {
+                "· "
+            } else {
+                "- "
+            }
+        }
     }
 }
 

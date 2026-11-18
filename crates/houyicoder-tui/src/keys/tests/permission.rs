@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
@@ -376,7 +377,10 @@ fn test_first_yes_selects_once() {
         "the first Yes covers the call under review only"
     );
     let text = render_text(&app, 100, 32);
-    assert!(text.contains("❯ 1. Yes"), "Yes is the focused row:\n{text}");
+    assert!(
+        text.contains(&format!("{}1. Yes", detect_glyph_set().picker_cursor())),
+        "Yes is the focused row:\n{text}"
+    );
     assert!(
         text.contains("2. Yes, and don't ask again for npm test *"),
         "the durable row names the scope the server would install:\n{text}"
@@ -394,7 +398,10 @@ fn test_second_yes_keeps_scope() {
     assert_eq!(approval_scope(a), ApprovalScope::Session);
     let text = render_text(&app, 100, 32);
     assert!(
-        text.contains("❯ 2. Yes, and don't ask again for npm test *"),
+        text.contains(&format!(
+            "{}2. Yes, and don't ask again for npm test *",
+            detect_glyph_set().picker_cursor()
+        )),
         "the durable row is the focused one:\n{text}"
     );
     assert!(text.contains("3. No"), "No keeps row 3:\n{text}");
@@ -418,7 +425,10 @@ fn test_two_option_second_rejects() {
         "no durable scope can be sent"
     );
     let text = render_text(&app, 100, 32);
-    assert!(text.contains("❯ 2. No"), "No is the focused row:\n{text}");
+    assert!(
+        text.contains(&format!("{}2. No", detect_glyph_set().picker_cursor())),
+        "No is the focused row:\n{text}"
+    );
     assert!(
         !text.contains("don't ask again"),
         "no remember row on this card:\n{text}"

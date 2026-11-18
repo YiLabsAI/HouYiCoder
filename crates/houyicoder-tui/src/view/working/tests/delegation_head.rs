@@ -1,5 +1,7 @@
 //! The delegation head row: the fold chord survives a long summary.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 use crate::records::TranscriptLine;
 
@@ -58,7 +60,10 @@ fn test_short_summary_unchanged() {
         out.contains("run the gate"),
         "a summary that fits is not truncated:\n{out}"
     );
-    assert!(!out.contains('\u{2026}'), "and gains no ellipsis:\n{out}");
+    assert!(
+        !out.contains(detect_glyph_set().ellipsis()),
+        "and gains no ellipsis:\n{out}"
+    );
 }
 
 /// The hint survives every width, however little room the summary leaves it.

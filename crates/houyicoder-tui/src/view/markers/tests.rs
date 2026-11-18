@@ -1,26 +1,45 @@
 use super::*;
 use crate::records::ToolOutcome;
 use crate::selection::diff_gutter_skip;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::Color;
 use unicode_width::UnicodeWidthStr;
 
+/// The glyph prefix a call row leads with, matching the detected grade.
+fn call_prefix() -> String {
+    format!("{} ", detect_glyph_set().tool_marker())
+}
+
+/// The gutter prefix a result row leads with, matching the detected grade.
+fn gutter_prefix() -> String {
+    format!("  {}  ", detect_glyph_set().result_gutter())
+}
+
 #[test]
 fn test_row_call_styled() {
-    let line = styled_row("⏺ Bash(echo hi)", None).expect("chip");
+    let line = styled_row(&format!("{}Bash(echo hi)", call_prefix()), None).expect("chip");
     // glyph + space + name + args = 4 spans.
     assert_eq!(line.spans.len(), 4);
 }
 
 #[test]
 fn test_row_call_success_green() {
-    // Call chip colored by outcome: Success ⇒ green glyph.
-    let line = styled_row("⏺ Bash(ls)", Some(ToolOutcome::Success)).expect("chip");
+    // Call chip colored by outcome: Success means green glyph.
+    let line = styled_row(
+        &format!("{}Bash(ls)", call_prefix()),
+        Some(ToolOutcome::Success),
+    )
+    .expect("chip");
     assert_eq!(line.spans.len(), 4);
 }
 
 #[test]
 fn test_row_call_error_red() {
-    let line = styled_row("⏺ Bash(rm)", Some(ToolOutcome::Error)).expect("chip");
+    let line = styled_row(
+        &format!("{}Bash(rm)", call_prefix()),
+        Some(ToolOutcome::Error),
+    )
+    .expect("chip");
     assert_eq!(line.spans.len(), 4);
 }
 
@@ -28,7 +47,11 @@ fn test_row_call_error_red() {
 /// is the user's to revisit, and red would report a tool that broke.
 #[test]
 fn test_row_call_refused_yellow() {
-    let line = styled_row("⏺ Bash(rm)", Some(ToolOutcome::Refused)).expect("chip");
+    let line = styled_row(
+        &format!("{}Bash(rm)", call_prefix()),
+        Some(ToolOutcome::Refused),
+    )
+    .expect("chip");
     assert_eq!(line.spans[0].style.fg, Some(Color::Yellow));
 }
 
@@ -37,7 +60,11 @@ fn test_row_result_success_default() {
     // A successful result body uses the default foreground (Reset), not
     // green — stdout is plain text, not a semantic signal. Green-washing
     // it drowns the color channel reserved for errors.
-    let line = styled_row("  ⎿  {\"success\":true}", Some(ToolOutcome::Success)).expect("chip");
+    let line = styled_row(
+        &format!("{}{{\"success\":true}}", gutter_prefix()),
+        Some(ToolOutcome::Success),
+    )
+    .expect("chip");
     assert_eq!(line.spans.len(), 2);
     // The body span (index 1) must be Reset, not green.
     assert_eq!(line.spans[1].style.fg, Some(Color::Reset));
@@ -45,24 +72,28 @@ fn test_row_result_success_default() {
 
 #[test]
 fn test_row_result_red() {
-    let line = styled_row("  ⎿  {\"error\":\"boom\"}", Some(ToolOutcome::Error)).expect("chip");
+    let line = styled_row(
+        &format!("{}{{\"error\":\"boom\"}}", gutter_prefix()),
+        Some(ToolOutcome::Error),
+    )
+    .expect("chip");
     assert_eq!(line.spans.len(), 2);
 }
 
 #[test]
 fn test_row_result_read_neutral() {
-    // A Read row carries outcome None ⇒ default body (not green/red), so a
-    // file whose content has "error" in it does not miscolor.
-    let line = styled_row("  ⎿  read config.json", None).expect("chip");
+    // A Read row carries outcome None and the default body (not green/red),
+    // so a file whose content has "error" in it does not miscolor.
+    let line = styled_row(&format!("{}read config.json", gutter_prefix()), None).expect("chip");
     assert_eq!(line.spans.len(), 2);
 }
 
 #[test]
 fn test_edit_summary_bolds_counts() {
-    // An Edit diff summary bolds the count numbers (bold
-    // emphasis on the Added/Removed counts); a non-edit summary does not.
+    // An Edit diff summary bolds the count numbers (bold emphasis on the
+    // Added/Removed counts); a non-edit summary does not.
     let line = styled_row(
-        "  ⎿  Added 2 lines, removed 1 line",
+        &format!("{}Added 2 lines, removed 1 line", gutter_prefix()),
         Some(ToolOutcome::Success),
     )
     .expect("chip");
@@ -74,16 +105,21 @@ fn test_edit_summary_bolds_counts() {
         .count();
     assert_eq!(bold_count, 2, "both counts bold: {:?}", line.spans);
     let joined: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(joined, "  ⎿  Added 2 lines, removed 1 line");
+    assert_eq!(
+        joined,
+        format!("{}Added 2 lines, removed 1 line", gutter_prefix())
+    );
     // A Read summary does not start with Added/Removed ⇒ single body span.
-    let read = styled_row("  ⎿  Read 3 lines", None).expect("chip");
+    let read = styled_row(&format!("{}Read 3 lines", gutter_prefix()), None).expect("chip");
     assert_eq!(read.spans.len(), 2);
 }
 
 #[test]
 fn test_row_nonmatch_none() {
-    assert!(styled_row("● hello", None).is_none());
-    assert!(styled_row("> user", None).is_none());
+    // A row that leads with a different prefix returns None: the prompt
+    // marker is not a tool marker or a result gutter.
+    assert!(styled_row("> hello", None).is_none());
+    assert!(styled_row("user", None).is_none());
 }
 
 #[test]
@@ -98,7 +134,7 @@ fn test_short_result_not_folded() {
     );
     // summary + 2 continuation, no hint.
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0].1, "  ⎿  a");
+    assert_eq!(rows[0].1, format!("{}a", gutter_prefix()));
     assert_eq!(rows[0].2, Some(ToolOutcome::Success));
     assert_eq!(rows[0].3.as_deref(), Some("c1"));
     assert_eq!(rows[1].1, "     b");
@@ -115,7 +151,7 @@ fn test_result_body_long_collapses() {
         .join("\n");
     let rows = result_body_rows(&body, "c1", Some(ToolOutcome::Success), false, false, 80);
     assert_eq!(rows.len(), 4);
-    assert_eq!(rows[0].1, "  ⎿  line0");
+    assert_eq!(rows[0].1, format!("{}line0", gutter_prefix()));
     assert_eq!(rows[1].1, "     line1");
     assert_eq!(rows[2].1, "     line2");
     assert!(rows[3].1.contains("+7 lines"));
@@ -152,7 +188,7 @@ fn test_result_body_empty() {
     // marker bug); it shows a "(no output)" placeholder instead.
     let rows = result_body_rows("", "c1", Some(ToolOutcome::Error), false, false, 80);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].1, "  ⎿  (no output)");
+    assert_eq!(rows[0].1, format!("{}(no output)", gutter_prefix()));
     assert_eq!(rows[0].2, Some(ToolOutcome::Error));
     assert_eq!(rows[0].3.as_deref(), Some("c1"));
 }
@@ -165,7 +201,7 @@ fn test_result_body_empty() {
 fn test_result_body_done_row() {
     let rows = result_body_rows("done", "c1", Some(ToolOutcome::Success), false, false, 80);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].1, "  ⎿  done");
+    assert_eq!(rows[0].1, format!("{}done", gutter_prefix()));
     assert_eq!(rows[0].2, Some(ToolOutcome::Success));
 }
 
@@ -221,7 +257,7 @@ fn test_stdout_caps_pathological_body() {
     );
     let joined: String = rows.iter().map(|r| r.1.as_str()).collect::<String>();
     assert!(
-        joined.contains("… +"),
+        joined.contains(&format!("{} +", detect_glyph_set().ellipsis())),
         "the capped tail must carry the +N lines estimate (from the original length): {joined}"
     );
     // The estimate reflects the ORIGINAL length, not the pre-truncated
@@ -370,7 +406,10 @@ fn test_diff_rows_numbered() {
     let rows = result_body_rows(body, "c1", Some(ToolOutcome::Success), true, true, 80);
     // expanded: summary + top border + 3 diff rows + bottom border.
     assert_eq!(rows.len(), 6);
-    assert_eq!(rows[0].1, "  ⎿  Added 1 line, removed 1 line");
+    assert_eq!(
+        rows[0].1,
+        format!("{}Added 1 line, removed 1 line", gutter_prefix())
+    );
     assert_eq!(rows[0].0, TAG_PLAIN);
     assert_eq!(rows[1].0, TAG_DIFF_BORDER);
     // Context row: marker(space) + sep + num + sep, TAG_DIFF_CTX so the
@@ -438,7 +477,9 @@ fn test_diff_collapses_and_counts() {
     let rows = result_body_rows(body, "c1", None, false, true, 80);
     assert_eq!(rows.len(), 10); // full diff, no collapse hint
     assert!(
-        !rows.iter().any(|r| r.1.contains("… +")),
+        !rows.iter().any(|r| r
+            .1
+            .contains(&format!("{} +", detect_glyph_set().ellipsis()))),
         "no collapse hint for a diff: {:?}",
         rows.iter().map(|r| &r.1).collect::<Vec<_>>()
     );

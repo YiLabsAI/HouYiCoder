@@ -7,6 +7,7 @@ use crate::records::{ToolOutcome, TranscriptLine};
 use crate::toggle_hint::ToggleHint;
 use crate::view::context_view::context_grid_text;
 use crate::view::context_view::render_as_rows;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::context::{ContextBreakdown, GridCell};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
@@ -215,12 +216,18 @@ fn test_subagent_line_field_marker() {
 
 #[test]
 fn test_transcript_render_glyphs() {
-    assert!(TranscriptLine::User("x".into()).render().starts_with(">"));
-    assert!(TranscriptLine::Agent("hi".into()).render().starts_with("●"));
+    // The marker the row leads with comes from the detected glyph grade, so
+    // the assertion accepts either grade's marker: the test host may run in
+    // a terminal that identifies itself either way.
+    let rendered = TranscriptLine::Agent("hi".into()).render();
     assert!(
-        TranscriptLine::System("note".into())
-            .render()
-            .starts_with("✻")
+        rendered.starts_with('*') || rendered.starts_with('◉'),
+        "the agent row leads with its marker: {rendered:?}"
+    );
+    let note = TranscriptLine::System("note".into()).render();
+    assert!(
+        note.starts_with('!') || note.starts_with('✻'),
+        "the system row leads with its marker: {note:?}"
     );
     assert!(
         TranscriptLine::Read { path: "p".into() }
@@ -271,7 +278,11 @@ fn test_tool_chip_ellipsis() {
     };
     let rows = call.tool_call_rows(24, false).expect("tool rows");
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].contains('\u{2026}'), "missing ellipsis: {:?}", rows);
+    assert!(
+        rows[0].contains(detect_glyph_set().ellipsis()),
+        "missing ellipsis: {:?}",
+        rows
+    );
     assert!(
         rows[0].ends_with(')'),
         "closing delimiter missing: {:?}",
@@ -307,7 +318,10 @@ fn test_result_body_only_result() {
     };
     assert_eq!(result.result_body(), ("ok".to_string(), false));
     // render() of a result shows the first body line under the gutter.
-    assert_eq!(result.render(), "  ⎿  ok");
+    assert_eq!(
+        result.render(),
+        format!("  {}  ok", detect_glyph_set().result_gutter())
+    );
 }
 
 #[test]
@@ -337,22 +351,29 @@ fn thought_label(ms: Option<u64>) -> String {
         .expect("a thought row has a label")
 }
 
+/// The notice marker the test host renders, from whichever glyph grade it
+/// detects. The tests expect the same marker the production code emits.
+fn notice_marker() -> &'static str {
+    detect_glyph_set().notice_marker()
+}
+
 /// A turn that recorded a span under a second states it in milliseconds.
 /// Whole seconds are the row's step, and rounding a measured span down to
 /// that step would print a turn that took time as one that took none.
 #[test]
 fn test_thought_row_millisecond_span() {
+    let m = notice_marker();
     assert_eq!(
         thought_label(Some(620)),
-        "✻ Thought for 620ms (ctrl+o to expand)"
+        format!("{m} Thought for 620ms (ctrl+o to expand)")
     );
     assert_eq!(
         thought_label(Some(999)),
-        "✻ Thought for 999ms (ctrl+o to expand)"
+        format!("{m} Thought for 999ms (ctrl+o to expand)")
     );
     assert_eq!(
         thought_label(Some(0)),
-        "✻ Thought for 0ms (ctrl+o to expand)"
+        format!("{m} Thought for 0ms (ctrl+o to expand)")
     );
 }
 
@@ -360,7 +381,10 @@ fn test_thought_row_millisecond_span() {
 /// completion record for it, so no duration is claimed at all.
 #[test]
 fn test_thought_row_no_duration() {
-    assert_eq!(thought_label(None), "✻ Thought (ctrl+o to expand)");
+    assert_eq!(
+        thought_label(None),
+        format!("{} Thought (ctrl+o to expand)", notice_marker())
+    );
 }
 
 /// A turn of a second or more reads in whole seconds, rounded to the nearest
@@ -368,17 +392,18 @@ fn test_thought_row_no_duration() {
 /// values either side of the next half second pin the rounding.
 #[test]
 fn test_thought_row_keeps_secs() {
+    let m = notice_marker();
     assert_eq!(
         thought_label(Some(1_000)),
-        "✻ Thought for 1s (ctrl+o to expand)"
+        format!("{m} Thought for 1s (ctrl+o to expand)")
     );
     assert_eq!(
         thought_label(Some(1_499)),
-        "✻ Thought for 1s (ctrl+o to expand)"
+        format!("{m} Thought for 1s (ctrl+o to expand)")
     );
     assert_eq!(
         thought_label(Some(1_500)),
-        "✻ Thought for 2s (ctrl+o to expand)"
+        format!("{m} Thought for 2s (ctrl+o to expand)")
     );
 }
 

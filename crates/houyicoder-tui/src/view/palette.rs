@@ -15,6 +15,7 @@ use ratatui::{
 
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// Maximum rows of commands the popover shows before scrolling. Keeps the
 /// popover small so it never covers the whole working surface.
@@ -70,7 +71,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("❯ ");
+        .highlight_symbol(detect_glyph_set().picker_cursor());
     f.render_stateful_widget(list, inner, &mut state);
 
     // If the filtered list is empty, either the user is typing an argument

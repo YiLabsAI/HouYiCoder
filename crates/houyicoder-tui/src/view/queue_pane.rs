@@ -16,6 +16,7 @@ use ratatui::{
 use crate::input::queue::InputItem;
 use crate::state::App;
 use crate::view::navigation::key_hint;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// The queue pane body: a header line, a scrollable list of pending items
 /// (one row per logical item), and a footer hint line.
@@ -55,7 +56,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("❯ "),
+                .highlight_symbol(detect_glyph_set().picker_cursor()),
             chunks[1],
             &mut state,
         );
@@ -90,7 +91,7 @@ fn queue_items(items: &[&InputItem], cursor: usize) -> Vec<ListItem<'static>> {
             let mut spans: Vec<Span> = vec![Span::styled(first_line.to_string(), style)];
             if hidden > 0 {
                 spans.push(Span::styled(
-                    format!(" … +{hidden} lines"),
+                    format!(" {} +{hidden} lines", detect_glyph_set().ellipsis()),
                     Style::new().fg(Color::DarkGray),
                 ));
             }

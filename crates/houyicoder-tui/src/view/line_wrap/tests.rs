@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 use ratatui::style::{Color, Modifier, Style};
 use unicode_width::UnicodeWidthStr;
@@ -15,7 +17,7 @@ fn test_truncate_width_exact_fit() {
 #[test]
 fn test_truncate_width_adds_ellipsis() {
     let out = truncate_width("abcdefghij", 5);
-    assert!(out.ends_with('\u{2026}'));
+    assert!(out.ends_with(detect_glyph_set().ellipsis()));
     assert!(
         UnicodeWidthStr::width(out.as_str()) <= 5,
         "width overflow: {out}"
@@ -29,7 +31,7 @@ fn test_truncate_width_zero_empty() {
 
 #[test]
 fn test_truncate_one_col_ellipsis() {
-    assert_eq!(truncate_width("abc", 1), "\u{2026}");
+    assert_eq!(truncate_width("abc", 1), detect_glyph_set().ellipsis());
 }
 
 /// A value longer than its column keeps the end, where the file name is, and
@@ -77,13 +79,22 @@ fn test_truncate_cjk_counted() {
     // Each CJK ideograph is display width 2; at max 5 we keep 2
     // ideographs (width 4) + ellipsis (width 1) = 5.
     let out = truncate_width("\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}", 5);
-    assert_eq!(out, "\u{4e2d}\u{6587}\u{2026}");
+    assert_eq!(
+        out,
+        format!("\u{4e2d}\u{6587}{}", detect_glyph_set().ellipsis())
+    );
 }
 
 #[test]
 fn test_truncate_keeps_grapheme() {
     let out = truncate_width("\u{1f469}\u{200d}\u{1f4bb}xy", 3);
-    assert_eq!(out, "\u{1f469}\u{200d}\u{1f4bb}\u{2026}");
+    assert_eq!(
+        out,
+        format!(
+            "\u{1f469}\u{200d}\u{1f4bb}{}",
+            detect_glyph_set().ellipsis()
+        )
+    );
 }
 
 #[test]

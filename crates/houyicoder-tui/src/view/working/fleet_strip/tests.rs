@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::{GlyphSet, detect_glyph_set};
+
 use super::*;
 use crate::composition;
 use crate::session::Session;
@@ -201,7 +203,7 @@ fn row_text(e: &FleetEntry) -> String {
 /// so the footer told a different story from the transcript row beside it.
 #[test]
 fn test_ended_row_names_ending() {
-    for (outcome, word, glyph, color) in [
+    for (outcome, word, rich_glyph, color) in [
         (SubagentOutcome::Finished, "finished", "✓", Color::DarkGray),
         (SubagentOutcome::Failed, "failed", "✕", ERROR_RED),
         (
@@ -220,6 +222,16 @@ fn test_ended_row_names_ending() {
         (SubagentOutcome::Budget, "budget", "✓", Color::DarkGray),
         (SubagentOutcome::Unknown, "ended", "·", Color::DarkGray),
     ] {
+        let glyph = if detect_glyph_set() == GlyphSet::Rich {
+            rich_glyph
+        } else {
+            match rich_glyph {
+                "✓" => "+",
+                "✕" | "⊘" => "x",
+                "◷" => "t",
+                _ => "-",
+            }
+        };
         let mut e = entry("c1", "explore", 3, 1_200, "grep");
         e.outcome = Some(outcome);
         let line = build_row(&e, false, None, false);

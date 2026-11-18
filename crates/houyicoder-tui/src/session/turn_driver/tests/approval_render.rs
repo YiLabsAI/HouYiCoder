@@ -11,6 +11,7 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_permission::GuardedTool;
 use houyicoder_permission::PermissionMode;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::permission::PermissionEffect;
 use houyicoder_protocol::frontend::permission::PermissionRule;
@@ -200,7 +201,7 @@ fn test_option3_no_duplicate_result() {
     // Render: one collapse hint, not two. The in-app form is a clean "+N
     // lines" tail (the verbose Ctrl+O-to-expand suffix is suppressed).
     let out = render_text(&app, 80, 24);
-    let hint_count = out.matches("… +").count();
+    let hint_count = out.matches(detect_glyph_set().ellipsis()).count();
     assert_eq!(hint_count, 1, "one collapse hint, got {hint_count}:\n{out}");
     // The system line must not appear fused onto the reply row.
     assert!(

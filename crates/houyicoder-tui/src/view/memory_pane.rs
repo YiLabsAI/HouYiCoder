@@ -9,6 +9,7 @@
 
 pub(crate) mod state;
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::memory::{MemoryDetail, MemoryToggleWhich};
 use ratatui::{
     Frame,
@@ -80,7 +81,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         f.render_stateful_widget(
             List::new(items)
                 .highlight_style(Style::default().bg(Color::Indexed(238)))
-                .highlight_symbol("❯ "),
+                .highlight_symbol(detect_glyph_set().picker_cursor()),
             chunks[1],
             &mut state,
         );
@@ -227,15 +228,16 @@ fn memory_status_line(memory: &MemoryCapability, count: usize) -> Line<'static> 
             MemoryToggleWhich::Auto => memory.toggles().auto_memory,
             MemoryToggleWhich::Dream => memory.toggles().auto_dream,
         };
+        let set = detect_glyph_set();
         let (glyph, style) = if memory.toggle_pending(which) {
-            ("◌", Style::new().fg(Color::Cyan))
+            (set.toggle_pending(), Style::new().fg(Color::Cyan))
         } else if on {
             (
-                "●",
+                set.toggle_on(),
                 Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             )
         } else {
-            ("○", Style::new().fg(Color::DarkGray))
+            (set.toggle_off(), Style::new().fg(Color::DarkGray))
         };
         spans.push(Span::styled(
             format!("{glyph} {}", toggle_label(which)),

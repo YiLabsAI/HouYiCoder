@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::checkpoint::{
     CheckpointListView, CheckpointSide, CheckpointState, CheckpointTextView, CheckpointView,
     UnreadableView,
@@ -107,7 +108,7 @@ pub(super) fn draw_list(f: &mut Frame, area: Rect, app: &App) {
         let mut state = ListState::default();
         state.select(Some(cursor));
         f.render_stateful_widget(
-            List::new(items).highlight_symbol("\u{276f} "),
+            List::new(items).highlight_symbol(detect_glyph_set().picker_cursor()),
             chunks[2],
             &mut state,
         );

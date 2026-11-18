@@ -4,6 +4,7 @@
 
 use crate::input::queue::InputItem;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -170,7 +171,7 @@ fn test_input_stable_while_busy() {
     let glyph = buf
         .content()
         .iter()
-        .find(|c| c.symbol() == "\u{276f}")
+        .find(|c| c.symbol() == detect_glyph_set().picker_cursor().trim_end())
         .expect("prompt glyph rendered");
     assert_eq!(
         glyph.style().fg,
@@ -203,11 +204,11 @@ fn test_queue_strip_renders() {
         .push(InputItem::ParkedMessage("run tests".into()));
     let out = render(&app);
     assert!(
-        out.contains("→ next"),
+        out.contains(&format!("{} next", detect_glyph_set().arrow())),
         "queue strip must render, got:\n{out}"
     );
     assert!(
-        out.contains("· queued"),
+        out.contains("- queued"),
         "second item shows queued state, got:\n{out}"
     );
     assert!(
@@ -250,7 +251,7 @@ fn test_queue_strip_in_focus() {
     app.ui.navigation.viewport = ViewportMode::Focus;
     let out = render(&app);
     assert!(
-        out.contains("→ next"),
+        out.contains(&format!("{} next", detect_glyph_set().arrow())),
         "queue strip renders in Focus, got:\n{out}"
     );
 }
@@ -331,10 +332,14 @@ fn test_queue_row_above_input() {
     let mut q = None;
     let mut p = None;
     for (i, line) in text.lines().enumerate() {
-        if q.is_none() && line.contains('→') {
+        if q.is_none() && line.contains(detect_glyph_set().arrow()) {
             q = Some(i);
         }
-        if p.is_none() && line.contains('❯') {
+        if p.is_none()
+            && line
+                .trim_start()
+                .starts_with(detect_glyph_set().picker_cursor().trim_end())
+        {
             p = Some(i);
         }
     }
@@ -353,7 +358,10 @@ fn test_queue_summary_one_row() {
     app.ui.input.queue.push(InputItem::Message("b".into()));
     app.ui.input.queue.push(InputItem::Message("c".into()));
     let out = render_text(&app, 80, 18);
-    assert!(out.contains("→ +3"), "small window count summary: {out}");
+    assert!(
+        out.contains(&format!("{} +3", detect_glyph_set().arrow())),
+        "small window count summary: {out}"
+    );
 }
 
 /// Gate closed (idle after a non-final run end -- interrupt, max-turns,
@@ -374,11 +382,11 @@ fn test_queue_held_row() {
         .push(InputItem::ParkedMessage("orphan b".into()));
     let out = render_text(&app, 100, 28);
     assert!(
-        out.contains("⏸ held"),
+        out.contains(&format!("{} held", detect_glyph_set().paused())),
         "gate closed: items show held: {out}"
     );
     assert!(
-        !out.contains("→ next"),
+        !out.contains(&format!("{} next", detect_glyph_set().arrow())),
         "no live head when the gate is closed: {out}"
     );
     assert!(
@@ -401,13 +409,16 @@ fn test_queue_next_row() {
         .queue
         .push(InputItem::ParkedMessage("queued".into()));
     let out = render_text(&app, 100, 28);
-    assert!(out.contains("→ next"), "busy head shows next: {out}");
     assert!(
-        out.contains("· queued"),
+        out.contains(&format!("{} next", detect_glyph_set().arrow())),
+        "busy head shows next: {out}"
+    );
+    assert!(
+        out.contains("- queued"),
         "non-head shows its queued state (will auto-run): {out}"
     );
     assert!(
-        !out.contains("⏸ held"),
+        !out.contains(&format!("{} held", detect_glyph_set().paused())),
         "non-head is NOT held (gate open, will auto-run): {out}"
     );
     assert!(out.contains("queued"), "queued body shown: {out}");
@@ -481,7 +492,7 @@ fn test_collapsed_strip_opens_queue() {
     );
     let text = render_text(&app, 100, 28);
     assert!(
-        text.contains("❯ alpha"),
+        text.contains(&format!("{}alpha", detect_glyph_set().picker_cursor())),
         "the highlight sits on the first row: {text}"
     );
 }
@@ -698,7 +709,7 @@ fn test_queue_pane_nav() {
     );
     let text = render_text(&app, 80, 28);
     assert!(
-        text.contains("❯ beta"),
+        text.contains(&format!("{}beta", detect_glyph_set().picker_cursor())),
         "the highlight follows the selection down: {text}"
     );
     handle_working(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -709,7 +720,7 @@ fn test_queue_pane_nav() {
     );
     let text = render_text(&app, 80, 28);
     assert!(
-        text.contains("❯ alpha"),
+        text.contains(&format!("{}alpha", detect_glyph_set().picker_cursor())),
         "the highlight follows the selection up: {text}"
     );
 }

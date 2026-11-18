@@ -2,6 +2,7 @@
 //! production file stays under the file-size gate.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
 
 use std::time::{Duration, Instant};
@@ -145,7 +146,10 @@ fn test_render_separator_and_question() {
     );
     assert!(out.contains("3. No"), "No option missing:\n{out}");
     // Cursor marker on the focused (Yes) option.
-    assert!(out.contains('❯'), "cursor marker missing:\n{out}");
+    assert!(
+        out.contains(detect_glyph_set().picker_cursor().trim_end()),
+        "cursor marker missing:\n{out}"
+    );
     // Bottom hint present.
     assert!(out.contains("Esc to cancel"), "hint line missing:\n{out}");
     // The actual command text is shown (not just raw JSON).
@@ -180,11 +184,12 @@ fn test_render_cursor_on_reject() {
         .find(|l| l.contains("1. Yes"))
         .expect("Yes line");
     let no_line = lines.iter().find(|l| l.contains("3. No")).expect("No line");
+    let cursor = detect_glyph_set().picker_cursor().trim_end();
     assert!(
-        !yes_line.contains('❯'),
+        !yes_line.contains(cursor),
         "cursor should not be on Yes:\n{out}"
     );
-    assert!(no_line.contains('❯'), "cursor should be on No:\n{out}");
+    assert!(no_line.contains(cursor), "cursor should be on No:\n{out}");
 }
 
 #[test]
@@ -213,12 +218,13 @@ fn test_render_cursor_dont_ask() {
         .iter()
         .find(|l| l.contains("2. Yes, and don't ask again"))
         .expect("dont-ask line");
+    let cursor = detect_glyph_set().picker_cursor().trim_end();
     assert!(
-        !yes_line.contains('❯'),
+        !yes_line.contains(cursor),
         "cursor should not be on Yes:\n{out}"
     );
     assert!(
-        dont_ask_line.contains('❯'),
+        dont_ask_line.contains(cursor),
         "cursor should be on dont-ask:\n{out}"
     );
 }
@@ -770,7 +776,7 @@ fn test_narrow_label_ellipsis() {
         .find(|line| line.contains("2. Yes"))
         .expect("remember option row");
     assert!(
-        row.ends_with('…'),
+        row.ends_with(detect_glyph_set().ellipsis()),
         "clipped row must say it continues: {row:?}"
     );
     assert!(row.chars().count() <= 40, "row must fit the card: {row:?}");

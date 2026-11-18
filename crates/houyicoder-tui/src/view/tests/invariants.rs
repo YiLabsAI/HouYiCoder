@@ -21,6 +21,7 @@ use crate::test_harness::dump_buffer;
 use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
 use houyicoder_core::agent::unified_diff;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::Color;
 
 fn working() -> App {
@@ -71,7 +72,10 @@ fn test_transcript_diff_gutter_gap() {
     let out = render_text(&app, 100, 32);
     println!("--- transcript diff render ---\n{out}\n--- end ---");
     assert!(
-        out.contains("⎿  Added 2 lines, removed 2 lines"),
+        out.contains(&format!(
+            "{}  Added 2 lines, removed 2 lines",
+            detect_glyph_set().result_gutter()
+        )),
         "summary head must render: {out}"
     );
     // Added/removed line content surfaces (sigil gutter does not strip it).
@@ -420,7 +424,8 @@ fn test_diff_stacks_below_100() {
 /// "list item glued to next block" regression).
 #[test]
 fn test_list_tail_not_welded() {
-    let (_lines, plain) = render_agent_text("●", "- apple\n- banana\n\ncherry", 80);
+    let marker = detect_glyph_set().assistant_marker();
+    let (_lines, plain) = render_agent_text(marker, "- apple\n- banana\n\ncherry", 80);
     let banana_row = plain.iter().position(|r| r.contains("banana")).unwrap();
     let cherry_row = plain.iter().position(|r| r.contains("cherry")).unwrap();
     assert_ne!(banana_row, cherry_row, "last item welded into next block");
@@ -767,10 +772,11 @@ fn test_verbose_count_matches() {
 /// Continuation lines hang under the glyph (2-space indent), not at col 0.
 #[test]
 fn test_continuation_hangs_under_glyph() {
-    let (_, plain) = render_agent_text("●", "para one\n\npara two", 80);
+    let marker = detect_glyph_set().assistant_marker();
+    let (_, plain) = render_agent_text(marker, "para one\n\npara two", 80);
     assert!(plain[2].starts_with("  "), "hang-indent: {:?}", plain[2]);
     assert!(
-        !plain[2].starts_with("● "),
+        !plain[2].starts_with(&format!("{marker} ")),
         "no glyph repeat: {:?}",
         plain[2]
     );
@@ -780,11 +786,12 @@ fn test_continuation_hangs_under_glyph() {
 /// hang at col 2 (glyph width + 1), never flush-left.
 #[test]
 fn test_long_para_hang_indent() {
+    let marker = detect_glyph_set().assistant_marker();
     let long = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra";
-    let (_, plain) = render_agent_text("●", long, 40);
+    let (_, plain) = render_agent_text(marker, long, 40);
     assert!(plain.len() > 1, "should wrap: {:?}", plain);
     assert!(
-        plain[0].starts_with("● "),
+        plain[0].starts_with(&format!("{marker} ")),
         "first row has glyph: {:?}",
         plain[0]
     );

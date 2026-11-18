@@ -7,9 +7,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::*;
 
-/// A compaction row gets the animated braille glyph rather than its static
-/// first character, so the spinner keeps rotating while the session
-/// compacts.
+/// A compaction row gets the animated glyph rather than its static first
+/// character, so the spinner keeps rotating while the session compacts.
 #[test]
 fn test_compaction_uses_spinner() {
     let line = spinner_line(
@@ -18,27 +17,34 @@ fn test_compaction_uses_spinner() {
         0.0,
         false,
     );
-    // The first span of the line is the glyph; at 240ms (frame 2) the
-    // braille glyph is the third frame in the rotation.
+    // The first span of the line is the glyph; at 240ms the frame index is
+    // the third in the rotation of whichever grade this terminal reports.
+    let frames = detect_glyph_set().spinner_frames();
+    let expected = frames[2 % frames.len()];
     let glyph = &line.spans[0].content;
-    assert_eq!(glyph, SPINNER_FRAMES[2]);
+    assert_eq!(glyph, expected);
 }
-/// and the CJK width rules. A glyph that widened on either would push the
-/// verb text on every frame it appeared, which is the jitter the braille
-/// rotation replaced.
+
+/// Every spinner frame the detected grade can show is one display column
+/// wide under both the ordinary and the CJK width rules. A glyph that
+/// widened on either would push the verb text on every frame it appeared,
+/// which is the jitter the glyph module's width contract prevents.
 #[test]
 fn test_spinner_glyphs_width_one() {
-    for glyph in SPINNER_FRAMES {
-        assert_eq!(
-            UnicodeWidthStr::width(glyph),
-            1,
-            "a spinner glyph must be one column: {glyph:?}"
-        );
-        assert_eq!(
-            UnicodeWidthStr::width_cjk(glyph),
-            1,
-            "a spinner glyph must be one column under CJK rules: {glyph:?}"
-        );
+    for frames in [detect_glyph_set().spinner_frames()] {
+        for glyph in frames {
+            let glyph = *glyph;
+            assert_eq!(
+                UnicodeWidthStr::width(glyph),
+                1,
+                "a spinner glyph must be one column: {glyph:?}"
+            );
+            assert_eq!(
+                UnicodeWidthStr::width_cjk(glyph),
+                1,
+                "a spinner glyph must be one column under CJK rules: {glyph:?}"
+            );
+        }
     }
 }
 

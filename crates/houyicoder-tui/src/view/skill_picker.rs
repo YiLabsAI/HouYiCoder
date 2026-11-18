@@ -17,6 +17,7 @@ use ratatui::{
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 use crate::view::skill_origin::display_order;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use unicode_width::UnicodeWidthStr;
 
@@ -93,7 +94,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("❯ ");
+        .highlight_symbol(detect_glyph_set().picker_cursor());
     f.render_stateful_widget(list, inner, &mut state);
 }
 
@@ -104,7 +105,12 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 /// the name width, so a long name clips the description (not the border).
 fn format_one(s: &SkillEntry, inner_width: u16) -> Line<'static> {
     let usable = s.user_invocable || s.invocable;
-    let glyph = if usable { "✓" } else { "✗" };
+    let set = detect_glyph_set();
+    let glyph = if usable {
+        set.gate_open()
+    } else {
+        set.gate_blocked()
+    };
     let glyph_color = if usable {
         Color::Green
     } else {

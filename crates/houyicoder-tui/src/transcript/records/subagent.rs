@@ -1,6 +1,7 @@
 //! How a delegation's end reads: the outcome its final status names, and the
 //! one-line trace the parent timeline keeps of it.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 
 use crate::view::relative_time::summary_span_label;
@@ -145,7 +146,12 @@ impl SubagentFinished {
     /// The whole trace as one row of text: the mark, the agent, the quoted
     /// name, the ending, and the measured segments.
     pub fn text(&self) -> String {
-        let mut text = format!("\u{25cf} Agent \"{}{}", self.name(), self.ending());
+        let mut text = format!(
+            "{} Agent \"{}{}",
+            detect_glyph_set().assistant_marker(),
+            self.name(),
+            self.ending()
+        );
         if let Some(duration) = self.duration_text() {
             text.push_str(&duration);
         }

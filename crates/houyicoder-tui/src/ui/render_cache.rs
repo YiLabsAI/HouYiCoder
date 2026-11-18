@@ -28,6 +28,7 @@ use crate::view::line_wrap::wrap_indented_block;
 use crate::view::line_wrap::wrap_plain_block;
 use crate::view::markers::PlannedRow;
 use crate::view::markers::result_body_rows;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::collections::hash_map::DefaultHasher;
 
 /// Cap on cached entries. A transcript holds at most a few thousand distinct
@@ -152,7 +153,8 @@ impl RenderCache {
             return (lines.clone(), plain.clone());
         }
         self.evict_if_needed();
-        let (lines, plain) = render_agent_text("●", text, width as usize);
+        let (lines, plain) =
+            render_agent_text(detect_glyph_set().assistant_marker(), text, width as usize);
         self.map.insert(
             key,
             CachedRender::Agent {
@@ -177,7 +179,8 @@ impl RenderCache {
             return c.len();
         }
         self.evict_if_needed();
-        let (lines, plain) = render_agent_text("●", text, width as usize);
+        let (lines, plain) =
+            render_agent_text(detect_glyph_set().assistant_marker(), text, width as usize);
         let n = lines.len();
         self.map.insert(key, CachedRender::Agent { lines, plain });
         n
@@ -366,7 +369,8 @@ impl RenderCache {
         {
             return (lines.clone(), plain.clone());
         }
-        let (lines, plain) = render_agent_text("●", text, width as usize);
+        let (lines, plain) =
+            render_agent_text(detect_glyph_set().assistant_marker(), text, width as usize);
         self.live_agent = Some(LiveEntry {
             h1,
             h2,
@@ -392,7 +396,8 @@ impl RenderCache {
                 _ => 0,
             };
         }
-        let (lines, plain) = render_agent_text("●", text, width as usize);
+        let (lines, plain) =
+            render_agent_text(detect_glyph_set().assistant_marker(), text, width as usize);
         let n = lines.len();
         self.live_agent = Some(LiveEntry {
             h1,

@@ -6,6 +6,8 @@
 //! the detail and record_detail modules.
 
 use super::*;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crate::command::render::{count_label, format_tokens};
 use crate::view::relative_time::{format_span_ms, session_span_label};
 
@@ -259,7 +261,12 @@ pub(super) fn turn_row(
     for boundary in &t.boundary_before {
         out.push(boundary_line(boundary, now_secs));
     }
-    let glyph = if t.success { "✓" } else { "✗" };
+    let set = detect_glyph_set();
+    let glyph = if t.success {
+        set.gate_open()
+    } else {
+        set.gate_blocked()
+    };
     let gc = if t.success { Color::Green } else { Color::Red };
     let mut spans = vec![
         sp(prefix, Color::Cyan),

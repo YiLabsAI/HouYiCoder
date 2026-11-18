@@ -3,6 +3,7 @@
 //! on, so the arguments block is bounded and gives its room back to the
 //! question and the options when it cannot hold everything.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::text::Line;
 use ratatui::{
     Frame,
@@ -145,15 +146,16 @@ fn fold_marker(hidden: usize, expanded: bool, width: u16) -> Line<'static> {
     } else {
         " \u{2014} ctrl+o to expand"
     };
+    let mark = detect_glyph_set().ellipsis();
     let candidates = [
-        format!("   \u{2026} ({hidden} lines hidden{offer}) \u{2026}"),
-        format!("   \u{2026} ({hidden} lines hidden) \u{2026}"),
-        format!("   \u{2026} {hidden} hidden \u{2026}"),
+        format!("   {mark} ({hidden} lines hidden{offer}) {mark}"),
+        format!("   {mark} ({hidden} lines hidden) {mark}"),
+        format!("   {mark} {hidden} hidden {mark}"),
     ];
     let text = candidates
         .into_iter()
         .find(|row| row.chars().count() <= usize::from(width))
-        .unwrap_or_else(|| format!("   {hidden} \u{2026}"));
+        .unwrap_or_else(|| format!("   {hidden} {mark}"));
     Line::from(Span::styled(text, Style::new().fg(Color::DarkGray)))
 }
 

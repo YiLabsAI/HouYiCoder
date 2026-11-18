@@ -29,6 +29,7 @@ use crate::state::{App, Pane};
 use crate::test_harness::{connected_app_events, render_buffer, render_text, wait_for_request};
 use crate::view::line_wrap::max_scroll_offset;
 use houyicoder_client::Client;
+use houyicoder_platform::desktop::glyphs::{GlyphSet, detect_glyph_set};
 use ratatui::text::Line;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -50,13 +51,21 @@ fn test_memory_cursor_moves() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     // Cursor starts on row 0 (build-gate).
+    let cursor = detect_glyph_set()
+        .picker_cursor()
+        .chars()
+        .next()
+        .unwrap_or_default();
     let first = render(&app);
-    assert!(first.contains("❯"), "cursor marker present");
+    assert!(first.contains(cursor), "cursor marker present");
     // Down to row 1 (comment-style).
     app.move_memory_cursor(1);
     let second = render(&app);
     assert!(
-        second.contains("❯ scope: user"),
+        second.contains(&format!(
+            "{}scope: user",
+            detect_glyph_set().picker_cursor()
+        )),
         "cursor on comment-style:\n{second}"
     );
     assert!(
@@ -294,8 +303,21 @@ fn test_memory_pane_renders_rows() {
     app.run_command(SlashCommand::Memory);
     let on = render(&app);
     assert_eq!(app.ui.navigation.pane, Pane::Memory);
+    // The toggle glyph comes from the detected grade; both grades render a
+    // filled marker for on and an empty marker for off.
+    let on_marker = if GlyphSet::Rich == detect_glyph_set() {
+        "◉"
+    } else {
+        "[x]"
+    };
+    let off_marker = if GlyphSet::Rich == detect_glyph_set() {
+        "◌"
+    } else {
+        "[ ]"
+    };
     assert!(
-        on.contains("a to toggle ● auto-memory") && on.contains("c to toggle ● auto-dream"),
+        on.contains(&format!("a to toggle {on_marker} auto-memory"))
+            && on.contains(&format!("c to toggle {on_marker} auto-dream")),
         "each toggle key must name its target"
     );
     assert!(
@@ -307,8 +329,14 @@ fn test_memory_pane_renders_rows() {
         "scope distribution must not duplicate the tab navigation:\n{on}"
     );
     // Both switches default on: the status row renders filled glyphs.
-    assert!(on.contains("● auto-memory"), "on renders ●:\n{on}");
-    assert!(on.contains("● auto-dream"), "on renders ●:\n{on}");
+    assert!(
+        on.contains(&format!("{on_marker} auto-memory")),
+        "on renders the filled marker:\n{on}"
+    );
+    assert!(
+        on.contains(&format!("{on_marker} auto-dream")),
+        "on renders the filled marker:\n{on}"
+    );
     app.sessions
         .current
         .capabilities
@@ -320,16 +348,24 @@ fn test_memory_pane_renders_rows() {
             recap_idle_secs: 300,
         });
     let off = render(&app);
-    assert!(off.contains("○ auto-memory"), "off renders ○:\n{off}");
-    assert!(off.contains("○ auto-dream"), "off renders ○:\n{off}");
     assert!(
-        off.contains("a to toggle ○ auto-memory") && off.contains("c to toggle ○ auto-dream"),
+        off.contains(&format!("{off_marker} auto-memory")),
+        "off renders the empty marker:\n{off}"
+    );
+    assert!(
+        off.contains(&format!("{off_marker} auto-dream")),
+        "off renders the empty marker:\n{off}"
+    );
+    assert!(
+        off.contains(&format!("a to toggle {off_marker} auto-memory"))
+            && off.contains(&format!("c to toggle {off_marker} auto-dream")),
         "toggle actions stay mapped when the state flips"
     );
 }
 
-/// The header color contract per cell: on = ● Cyan+BOLD, off = ○ DarkGray,
-/// pending = ◌ Cyan. The whole item carries the style, glyph and label
+/// The header color contract per cell: on renders the filled marker in
+/// Cyan+BOLD, off renders the empty marker in DarkGray, pending renders the
+/// dotted marker in Cyan. The whole item carries the style, glyph and label
 /// alike, so a refactor cannot silently drop the coloring half.
 #[test]
 fn test_header_status_row_styles() {
@@ -345,12 +381,19 @@ fn test_header_status_row_styles() {
         panic!("needle {needle:?} not on screen");
     }
 
+    let set = detect_glyph_set();
+    let on_marker = set.toggle_on();
+    let off_marker = set.toggle_off();
+    let _ = GlyphSet::Rich;
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let buf = render_buffer(&app, 100, 28);
     // Glyph cell and a label cell of the same item share the on-style.
-    for needle in ["● auto-memory", "auto-memory"] {
-        let st = style_at(&buf, needle);
+    for needle in [
+        format!("{on_marker} auto-memory"),
+        "auto-memory".to_string(),
+    ] {
+        let st = style_at(&buf, &needle);
         assert_eq!(st.fg, Some(Color::Cyan), "on item is Cyan: {needle}");
         assert!(
             st.add_modifier.contains(Modifier::BOLD),
@@ -369,8 +412,11 @@ fn test_header_status_row_styles() {
             recap_idle_secs: 300,
         });
     let buf = render_buffer(&app, 100, 28);
-    for needle in ["○ auto-memory", "auto-memory"] {
-        let st = style_at(&buf, needle);
+    for needle in [
+        format!("{off_marker} auto-memory"),
+        "auto-memory".to_string(),
+    ] {
+        let st = style_at(&buf, &needle);
         assert_eq!(st.fg, Some(Color::DarkGray), "off item is dim: {needle}");
         assert!(
             !st.add_modifier.contains(Modifier::BOLD),
@@ -384,7 +430,8 @@ fn test_header_status_row_styles() {
         .memory
         .begin_toggle(RequestId(1), MemoryToggleWhich::Dream);
     let buf = render_buffer(&app, 100, 28);
-    let st = style_at(&buf, "◌ auto-dream");
+    let pending = set.toggle_pending();
+    let st = style_at(&buf, &format!("{pending} auto-dream"));
     assert_eq!(st.fg, Some(Color::Cyan), "pending item is Cyan");
     assert!(
         !st.add_modifier.contains(Modifier::BOLD),
@@ -480,7 +527,7 @@ fn test_scope_tab_narrows_list() {
     assert!(back.contains("3 memories"), "All shows all three again");
 }
 
-/// A pending flip renders ◌ in the header, and the same switch cannot be
+/// A pending flip renders ◍ in the header, and the same switch cannot be
 /// submitted twice while its flip is in flight; the other switch stays
 /// operable.
 #[test]
@@ -511,8 +558,15 @@ fn test_pending_blocks_repeat_toggle() {
         "the other switch stays operable"
     );
     let out = render(&app);
-    assert!(out.contains("◌ auto-memory"), "pending renders ◌:\n{out}");
-    assert!(out.contains("◌ auto-dream"), "pending renders ◌:\n{out}");
+    let pending = detect_glyph_set().toggle_pending();
+    assert!(
+        out.contains(&format!("{pending} auto-memory")),
+        "pending renders its own mark:\n{out}"
+    );
+    assert!(
+        out.contains(&format!("{pending} auto-dream")),
+        "pending renders its own mark:\n{out}"
+    );
 }
 
 /// A repeat forget of a key already in flight is dropped; a different key
@@ -594,7 +648,7 @@ fn test_connection_loss_clears_pending() {
         "an open detail is settled state and survives"
     );
     assert!(
-        !render(&app).contains('◌'),
+        !render(&app).contains('◍'),
         "no pending mark left on screen:\n{}",
         render(&app)
     );
@@ -778,8 +832,12 @@ fn test_toggle_reply_writes_outcome() {
     );
     let out = render(&app);
     assert!(
-        out.contains("○ auto-memory"),
-        "pending cleared, off renders ○:\n{out}"
+        out.contains(if GlyphSet::Rich == detect_glyph_set() {
+            "◌ auto-memory"
+        } else {
+            "[ ] auto-memory"
+        }),
+        "pending cleared, off renders the empty marker:\n{out}"
     );
 }
 
@@ -876,11 +934,19 @@ fn test_toggle_failure_names_action() {
         "the failure names the action and the cause"
     );
     let out = render(&app);
+    let on_marker = if GlyphSet::Rich == detect_glyph_set() {
+        "◉"
+    } else {
+        "[x]"
+    };
     assert!(
-        out.contains("● auto-memory"),
+        out.contains(&format!("{on_marker} auto-memory")),
         "the header keeps the unchanged value:\n{out}"
     );
-    assert!(!out.contains("◌"), "the pending mark cleared");
+    assert!(
+        !out.contains(detect_glyph_set().toggle_pending()),
+        "the pending mark cleared"
+    );
 }
 
 /// A failed forget names the key that could not be deleted.
@@ -916,12 +982,18 @@ fn test_footer_wraps_when_narrow() {
     let mut app = working();
     app.run_command(SlashCommand::Memory);
     let wide = render_text(&app, 100, 28);
+    let on_marker = if GlyphSet::Rich == detect_glyph_set() {
+        "◉"
+    } else {
+        "[x]"
+    };
     assert!(
         wide.contains("Up/Down to select · Enter to open · d to forget · Esc to close"),
         "wide footer follows the sibling-pane grammar:\n{wide}"
     );
     assert!(
-        wide.contains("a to toggle ● auto-memory") && wide.contains("c to toggle ● auto-dream"),
+        wide.contains(&format!("a to toggle {on_marker} auto-memory"))
+            && wide.contains(&format!("c to toggle {on_marker} auto-dream")),
         "toggle hints stay mapped to their status:\n{wide}"
     );
     assert!(

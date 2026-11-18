@@ -19,6 +19,7 @@ use crate::resume_picker::format_size;
 use crate::state::App;
 use crate::view::line_wrap::truncate_width;
 use crate::view::navigation::key_hint;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use unicode_width::UnicodeWidthStr;
@@ -141,7 +142,7 @@ fn format_line(row: &SessionRow, now: u64, width: u16, selected: bool) -> Line<'
     let cwd = truncate_width(&row.cwd_basename, 24);
     let (marker, row_style) = if selected {
         (
-            "❯ ",
+            detect_glyph_set().picker_cursor(),
             Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )
     } else {

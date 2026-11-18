@@ -7,4 +7,5 @@
 //! desktop.
 
 pub mod clipboard;
+pub mod glyphs;
 pub mod terminal;

@@ -27,6 +27,7 @@ use crate::view::relative_time::now_epoch_secs;
 use crate::view::relative_time::relative_time;
 use crate::view::skill_origin::display_order;
 use crate::view::skill_origin::heading_spans;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::collections::HashSet;
 
 pub(crate) const SKILLS_PANE_HEIGHT: u16 = 16;
@@ -218,12 +219,13 @@ fn header_lines(entry: Option<&SkillEntry>, name: &str, user_disabled: bool) -> 
 /// The invocation gate glyph and colour: disabled by the user, invocable by
 /// the model or the user, or blocked by frontmatter.
 fn gate_glyph(entry: &SkillEntry, user_disabled: bool) -> (&'static str, Color) {
+    let set = detect_glyph_set();
     if user_disabled {
-        ("○", Color::DarkGray)
+        (set.toggle_off(), Color::DarkGray)
     } else if entry.user_invocable || entry.invocable {
-        ("✓", Color::Green)
+        (set.gate_open(), Color::Green)
     } else {
-        ("✗", Color::Red)
+        (set.gate_blocked(), Color::Red)
     }
 }
 
@@ -290,7 +292,11 @@ fn grouped_lines(
         if is_selected {
             selected_line = lines.len();
         }
-        let prefix = if is_selected { "▶ " } else { "  " };
+        let prefix = if is_selected {
+            detect_glyph_set().picker_cursor().to_string()
+        } else {
+            "  ".to_string()
+        };
         let (glyph, color) = gate_glyph(s, disabled.contains(&s.name));
         lines.push(Line::from(vec![
             Span::raw(prefix),

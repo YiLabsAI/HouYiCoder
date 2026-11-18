@@ -21,6 +21,7 @@ use crate::test_harness::attach_connection;
 use crate::test_harness::render_text;
 use crate::test_harness::worktree_preview;
 use crate::ui::{RemoveFocus, WorktreeLevel};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 fn working() -> App {
     let mut app = composition::app();
@@ -341,7 +342,7 @@ fn test_full_flow_viewport() {
         "Working status hint should show at Done"
     );
     assert!(
-        out.contains('❯'),
+        out.contains(detect_glyph_set().picker_cursor().trim_end()),
         "input row should be visible in Working: [{out}]"
     );
 

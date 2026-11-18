@@ -1,7 +1,7 @@
 //! The away recap as the terminal shows it.
 
 use super::*;
-use crate::records::RECAP_MARKER;
+use crate::records::recap_marker;
 use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::transcript_from_frames;
 use houyicoder_protocol::acpx::AcpxMethod;
@@ -69,21 +69,29 @@ fn test_recap_draws_dim_marker() {
 
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("※ recap: fixing the parser next: run the failing test"),
+        out.contains(&format!(
+            "{}fixing the parser next: run the failing test",
+            recap_marker()
+        )),
         "the summary draws under its marker with control sequences removed:\n{out}"
     );
 
     let buf = render_buffer(&app, 80, 24);
+    let marker_glyph = recap_marker()
+        .chars()
+        .next()
+        .unwrap_or_default()
+        .to_string();
     let row = (0..24u16)
         .find(|y| {
             (0..80u16)
                 .filter_map(|x| buf.cell((x, *y)))
-                .any(|cell| cell.symbol() == "※")
+                .any(|cell| cell.symbol() == marker_glyph)
         })
         .expect("the marker is drawn");
     let marker = (0..80u16)
         .filter_map(|x| buf.cell((x, row)))
-        .find(|cell| cell.symbol() == "※")
+        .find(|cell| cell.symbol() == marker_glyph)
         .expect("marker cell");
     assert_eq!(
         marker.fg,
@@ -160,7 +168,7 @@ fn test_recap_hangs_continuation_rows() {
     let lines: Vec<&str> = out.lines().collect();
     let marker_row = lines
         .iter()
-        .position(|row| row.contains("※ recap: "))
+        .position(|row| row.contains(recap_marker()))
         .expect("the marker row is drawn");
     let marker_line = lines[marker_row];
     let start = marker_line.find("fixing").expect("the sentence starts");
@@ -179,7 +187,7 @@ fn test_recap_hangs_continuation_rows() {
     // The sentence starts past the marker, counted from the row's own indent.
     assert_eq!(
         text_col,
-        first + UnicodeWidthStr::width(RECAP_MARKER),
+        first + UnicodeWidthStr::width(recap_marker()),
         "the sentence starts beside the marker's end:\n{out}"
     );
     for row in continuation {
@@ -212,7 +220,7 @@ fn test_recap_wraps_wide_text() {
     // A wide glyph occupies two cells, so the buffer dump shows it beside its
     // empty continuation cell: compare the glyphs, not the spacing.
     let drawn: String = out.chars().filter(|c| !c.is_whitespace()).collect();
-    let expected: String = format!("※recap:{text}")
+    let expected: String = format!("{}{text}", recap_marker().trim_end())
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();

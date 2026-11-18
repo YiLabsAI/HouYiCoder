@@ -3,6 +3,8 @@
 //! Plain data, so the composition root can build it and the render path can
 //! read it without either depending on the other.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crate::state::TrajectoryTurnKey;
 use houyicoder_protocol::llm::UsageProvenance;
 
@@ -419,10 +421,11 @@ pub enum RecordOutcome {
 impl RecordOutcome {
     /// The status glyph the timeline and the detail header show.
     pub fn glyph(self) -> &'static str {
+        let set = detect_glyph_set();
         match self {
-            Self::Ok => "✓",
-            Self::Failed => "✗",
-            Self::Pending => "…",
+            Self::Ok => set.gate_open(),
+            Self::Failed => set.gate_blocked(),
+            Self::Pending => "-",
             Self::Unknown => "?",
         }
     }

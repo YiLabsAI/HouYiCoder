@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 
 use crate::transcript::SequencedFrame;
@@ -517,7 +519,13 @@ fn test_notice_shows_memory_changes() {
         "the producer is not an object name in the notice: {out}"
     );
     assert!(
-        !out.contains("⎿  promoted alpha") && !out.contains("⎿  deleted beta"),
+        !out.contains(&format!(
+            "{}  promoted alpha",
+            detect_glyph_set().result_gutter()
+        )) && !out.contains(&format!(
+            "{}  deleted beta",
+            detect_glyph_set().result_gutter()
+        )),
         "several changes collapse to the summary, the keys open on expand: {out}"
     );
     // A second, single-change notice: its key is also collapsed by default,
@@ -535,13 +543,19 @@ fn test_notice_shows_memory_changes() {
     }));
     let out = render_text(&app, 100, 24);
     assert!(
-        !out.contains("⎿  created gamma"),
+        !out.contains(&format!(
+            "{}  created gamma",
+            detect_glyph_set().result_gutter()
+        )),
         "a second single-change notice is collapsed too: {out}"
     );
     app.ui.transcript_view.toggle_fold("mg#1".into());
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  created gamma"),
+        out.contains(&format!(
+            "{}  created gamma",
+            detect_glyph_set().result_gutter()
+        )),
         "expanding the notice reveals its key: {out}"
     );
 }
@@ -588,8 +602,13 @@ fn test_notice_detail_names_scope() {
     app.ui.transcript_view.toggle_fold("mg#0".into());
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  promoted alpha · scope: project")
-            && out.contains("⎿  promoted beta · scope: user"),
+        out.contains(&format!(
+            "{}  promoted alpha · scope: project",
+            detect_glyph_set().result_gutter()
+        )) && out.contains(&format!(
+            "{}  promoted beta · scope: user",
+            detect_glyph_set().result_gutter()
+        )),
         "each detail row names the scope the change was addressed to: {out}"
     );
 }
@@ -613,7 +632,10 @@ fn test_notice_skips_unknown_scope() {
     app.ui.transcript_view.toggle_fold("mg#0".into());
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  created alpha"),
+        out.contains(&format!(
+            "{}  created alpha",
+            detect_glyph_set().result_gutter()
+        )),
         "the row still names the key and the operation: {out}"
     );
     assert!(
@@ -645,7 +667,7 @@ fn test_notice_summarizes_many_changes() {
         "a batch sharing one operation takes its verb: {out}"
     );
     assert_eq!(
-        out.matches('⎿').count(),
+        out.matches(detect_glyph_set().result_gutter()).count(),
         0,
         "several changes collapse to the summary, no key echoed: {out}"
     );
@@ -654,7 +676,7 @@ fn test_notice_summarizes_many_changes() {
     app.ui.transcript_view.toggle_fold("mg#0".into());
     let out = render_text(&app, 54, 36);
     assert_eq!(
-        out.matches('⎿').count(),
+        out.matches(detect_glyph_set().result_gutter()).count(),
         4,
         "each change is a ⎿ row when the notice is expanded: {out}"
     );
@@ -733,7 +755,10 @@ fn test_notice_click_toggles_fold() {
     );
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  created alpha"),
+        out.contains(&format!(
+            "{}  created alpha",
+            detect_glyph_set().result_gutter()
+        )),
         "the opened notice shows its key: {out}"
     );
 }
@@ -795,7 +820,10 @@ fn test_notice_hint_matches_state() {
     app.ui.transcript_view.toggle_fold("mg#0".into());
     let out = render_text(&app, 100, 24);
     assert!(
-        out.contains("⎿  created alpha"),
+        out.contains(&format!(
+            "{}  created alpha",
+            detect_glyph_set().result_gutter()
+        )),
         "the opened notice shows its key: {out}"
     );
     assert!(

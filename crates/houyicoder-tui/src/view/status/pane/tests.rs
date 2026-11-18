@@ -15,6 +15,7 @@ use crate::test_harness::{
     TransportEvent, connected_app_with_events, render_text, wait_for_request, working_app,
 };
 use crate::view::status::config_rows::ConfigRow;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// The sub-tab header renders Status / Config / Usage, with the active one
 /// marked (the active title appears in the header).
@@ -230,7 +231,7 @@ fn test_config_tab_shows_cursor() {
     app.sync_config_cursor();
     let out = render_text(&app, 100, 30);
     assert!(
-        out.contains("❯ Model"),
+        out.contains(&format!("{}Model", detect_glyph_set().picker_cursor())),
         "the cursor marks the first row:\n{out}"
     );
     assert!(

@@ -12,6 +12,7 @@
 //! wrap" (the pane width is unknown / too narrow) — returns the line whole so
 //! the caller falls back to the terminal's truncation, never panics.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::borrow::Cow;
@@ -47,11 +48,13 @@ pub(crate) fn truncate_width(s: &str, max_width: usize) -> String {
     if total <= max_width {
         return s.to_string();
     }
-    // max_width 1: only the ellipsis fits.
-    if max_width == 1 {
-        return "\u{2026}".to_string();
+    let ellipsis = detect_glyph_set().ellipsis();
+    let ellipsis_width = UnicodeWidthStr::width(ellipsis);
+    // A width that leaves room for nothing but the mark still shows it.
+    if max_width <= ellipsis_width {
+        return ellipsis.to_string();
     }
-    let target = max_width - 1; // reserve 1 column for the ellipsis
+    let target = max_width - ellipsis_width;
     let mut acc = 0usize;
     let mut out = String::new();
     for grapheme in s.graphemes(true) {
@@ -62,7 +65,7 @@ pub(crate) fn truncate_width(s: &str, max_width: usize) -> String {
         acc += width;
         out.push_str(grapheme);
     }
-    out.push('\u{2026}');
+    out.push_str(ellipsis);
     out
 }
 

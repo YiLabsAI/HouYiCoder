@@ -4,6 +4,7 @@
 //! and the row-count path read these builders, so the two always agree on how
 //! many rows one call occupies.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::tasks::{BackgroundTaskSnapshot, BackgroundTaskStatus};
 use houyicoder_protocol::tool::strip_ansi;
 
@@ -46,12 +47,19 @@ pub(crate) fn running_rows(app: &App, line: &TranscriptLine, width: u16) -> Vec<
         return Vec::new();
     }
     let elapsed = format_span_secs(progress.elapsed_secs);
+    let set = detect_glyph_set();
     let head = match progress.timeout_secs {
         Some(limit) => format!(
-            "  \u{23bf}  Running\u{2026} ({elapsed} \u{00b7} timeout {})",
+            "  {}  Running{} ({elapsed} \u{00b7} timeout {})",
+            set.result_gutter(),
+            set.ellipsis(),
             format_span_secs(limit)
         ),
-        None => format!("  \u{23bf}  Running\u{2026} ({elapsed})"),
+        None => format!(
+            "  {}  Running{} ({elapsed})",
+            set.result_gutter(),
+            set.ellipsis()
+        ),
     };
     let mut rows = vec![truncate_width(&head, width as usize)];
     let tail = progress

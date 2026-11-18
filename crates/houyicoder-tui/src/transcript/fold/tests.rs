@@ -7,6 +7,7 @@ use super::*;
 use crate::toggle_hint::ToggleHint;
 
 use crate::view::line_wrap::wrap_line;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::Modifier;
 
 #[test]
@@ -85,11 +86,11 @@ fn test_render_summary_todo() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Updated 2 checklists"
+        format!("{} Updated 2 checklists", detect_glyph_set().tool_marker())
     );
     assert_eq!(
         render_summary(&s, &[], true, None).plain,
-        "\u{23fa} Updating 2 checklists"
+        format!("{} Updating 2 checklists", detect_glyph_set().tool_marker())
     );
     let s = ToolStats {
         todo: 1,
@@ -97,7 +98,7 @@ fn test_render_summary_todo() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Updated 1 checklist"
+        format!("{} Updated 1 checklist", detect_glyph_set().tool_marker())
     );
 }
 
@@ -111,7 +112,10 @@ fn test_render_past_tense() {
     };
     let out = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(
-        out.plain.starts_with("\u{23fa} Searched for 2 patterns"),
+        out.plain.starts_with(&format!(
+            "{} Searched for 2 patterns",
+            detect_glyph_set().tool_marker()
+        )),
         "{:?}",
         out
     );
@@ -146,7 +150,13 @@ fn test_render_summary_active_tense() {
         ..Default::default()
     };
     let out = render_summary(&s, &[], true, None);
-    assert_eq!(out.plain, "\u{23fa} Running 1 shell command");
+    assert_eq!(
+        out.plain,
+        format!(
+            "{} Running 1 shell command",
+            detect_glyph_set().tool_marker()
+        )
+    );
 }
 
 /// A Write call buckets separately from Edit so the turn summary reads
@@ -159,11 +169,11 @@ fn test_render_summary_write() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Wrote 1 file"
+        format!("{} Wrote 1 file", detect_glyph_set().tool_marker())
     );
     assert_eq!(
         render_summary(&s, &[], true, None).plain,
-        "\u{23fa} Writing 1 file"
+        format!("{} Writing 1 file", detect_glyph_set().tool_marker())
     );
     let s = ToolStats {
         write: 2,
@@ -171,7 +181,7 @@ fn test_render_summary_write() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Wrote 2 files"
+        format!("{} Wrote 2 files", detect_glyph_set().tool_marker())
     );
 }
 
@@ -183,7 +193,7 @@ fn test_render_summary_pluralization() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Listed 2 directories"
+        format!("{} Listed 2 directories", detect_glyph_set().tool_marker())
     );
     let s = ToolStats {
         list: 1,
@@ -191,7 +201,7 @@ fn test_render_summary_pluralization() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Listed 1 directory"
+        format!("{} Listed 1 directory", detect_glyph_set().tool_marker())
     );
 }
 
@@ -214,7 +224,7 @@ fn test_read_dedup_same_path() {
     assert_eq!(s.read_count(), 1);
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        "\u{23fa} Read 1 file"
+        format!("{} Read 1 file", detect_glyph_set().tool_marker())
     );
 }
 
@@ -657,16 +667,24 @@ fn test_memory_notice_slots() {
 /// collapsed row offers expand, an open row offers collapse.
 #[test]
 fn test_notice_summary_toggle() {
-    let text = "Memory saved by the agent: 2 changes · /memory\n  ⎿  updated alpha · scope: auto";
-    assert_eq!(
-        notice_lines(text, false, 200),
-        vec!["✻ Memory saved by the agent: 2 changes · /memory (ctrl+o to expand)".to_string()]
+    let set = detect_glyph_set();
+    let summary = "Memory saved by the agent: 2 changes · /memory";
+    let text = format!(
+        "{summary}\n  {}  updated alpha · scope: auto",
+        set.result_gutter()
     );
     assert_eq!(
-        notice_lines(text, true, 200),
+        notice_lines(&text, false, 200),
+        vec![format!(
+            "{} {summary} (ctrl+o to expand)",
+            set.notice_marker()
+        )]
+    );
+    assert_eq!(
+        notice_lines(&text, true, 200),
         vec![
-            "✻ Memory saved by the agent: 2 changes · /memory (ctrl+o to collapse)".to_string(),
-            "  ⎿  updated alpha · scope: auto".to_string(),
+            format!("{} {summary} (ctrl+o to collapse)", set.notice_marker()),
+            format!("  {}  updated alpha · scope: auto", set.result_gutter()),
         ]
     );
 }

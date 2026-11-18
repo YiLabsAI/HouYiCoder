@@ -20,6 +20,7 @@ use crate::command::render::render_status;
 use crate::state::{App, enums::StatusTab};
 use crate::view::navigation::{key_hint, tab_header_at};
 use crate::view::status::config_rows::{CONFIG_ROWS, row_changes, row_label, row_value};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// Default height /status asks for: a header + up to ~12 status lines + a
 /// footer. Capped at half the main area by draw_command_pane.
@@ -182,7 +183,11 @@ fn render_config(app: &App) -> Vec<Line<'static>> {
             // The marker follows the shared list grammar every other pane
             // uses, so a reader who has moved a cursor elsewhere already
             // knows what it means here.
-            let marker = if cursor == Some(i) { "❯ " } else { "  " };
+            let marker = if cursor == Some(i) {
+                detect_glyph_set().picker_cursor().to_string()
+            } else {
+                "  ".to_string()
+            };
             let label = format!("{marker}{}:", row_label(*row));
             let value_style = match row_changes(*row) {
                 true => Style::new(),

@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use super::line_wrap::truncate_width;
 use crate::input::queue::InputItem;
 use crate::state::App;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::cmp::min;
 
 /// Rows the ambient queued-input strip would like, capped at two: the head
@@ -42,7 +43,7 @@ fn preview_text(text: &str, width: usize) -> String {
     if hidden == 0 {
         return truncate_width(first, width);
     }
-    let suffix = format!(" … +{hidden} lines");
+    let suffix = format!(" {} +{hidden} lines", detect_glyph_set().ellipsis());
     let first_width = width.saturating_sub(UnicodeWidthStr::width(suffix.as_str()));
     format!("{}{}", truncate_width(first, first_width), suffix)
 }
@@ -74,7 +75,12 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     let one_row_summary = area.height <= 1 && items.len() > 1;
     if one_row_summary {
-        let head = if gate_closed { "⏸" } else { "→" };
+        let set = detect_glyph_set();
+        let head = if gate_closed {
+            set.paused()
+        } else {
+            set.arrow()
+        };
         lines.push(Line::from(Span::styled(
             format!("{head} +{}", items.len()),
             dim,
@@ -85,12 +91,13 @@ pub(super) fn draw_strip(f: &mut Frame, area: Rect, app: &App) {
         // within the cap; the count conveys scale a second preview cannot.
         let shown = if items.len() > cap { 1 } else { items.len() };
         for (i, item) in items.iter().take(shown).enumerate() {
+            let set = detect_glyph_set();
             let (glyph, label) = if gate_closed {
-                ("⏸", "held".to_string())
+                (set.paused(), "held".to_string())
             } else if i == 0 && matches!(item, InputItem::Message(_)) {
-                ("→", "next".to_string())
+                (set.arrow(), "next".to_string())
             } else {
-                ("·", "queued".to_string())
+                ("-", "queued".to_string())
             };
             let prefix = format!("{glyph} {label}  ");
             let available =

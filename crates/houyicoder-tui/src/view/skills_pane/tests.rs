@@ -10,6 +10,7 @@ use crate::state::App;
 use crate::state::{Pane, Screen};
 use crate::test_harness::render_text;
 use crossterm::event::KeyEvent;
+use houyicoder_platform::desktop::glyphs::{GlyphSet, detect_glyph_set};
 
 fn render(app: &App, w: u16, h: u16) -> String {
     render_text(app, w, h)
@@ -207,18 +208,26 @@ fn test_skills_pane_disabled_glyph() {
         .disabled
         .insert("stale".to_string());
     let out = render(&app, 80, 24);
-    assert!(out.contains("○"), "disabled glyph renders: {out}");
+    let off_marker = if GlyphSet::Rich == detect_glyph_set() {
+        "◌"
+    } else {
+        "[ ]"
+    };
+    assert!(out.contains(off_marker), "disabled glyph renders: {out}");
     assert!(
-        !out.contains("✓ stale"),
+        !out.contains(&format!("{} stale", detect_glyph_set().gate_open())),
         "invocable glyph hidden when disabled: {out}"
     );
     // The detail opened from that row shows the same disabled glyph, so the
     // header never claims a skill is usable while the toggle says otherwise.
     app.ui.skills_pane.open_unavailable("stale".into());
     let detail = render(&app, 80, 24);
-    assert!(detail.contains("○"), "disabled glyph in detail: {detail}");
     assert!(
-        !detail.contains("✓"),
+        detail.contains(off_marker),
+        "disabled glyph in detail: {detail}"
+    );
+    assert!(
+        !detail.contains(detect_glyph_set().gate_open()),
         "detail must not show the usable glyph: {detail}"
     );
 }
@@ -300,7 +309,10 @@ fn test_list_scrolls_to_cursor() {
         .collect();
     let top = render(&app, 80, 24);
     assert!(
-        top.contains("▶ - skill-00:"),
+        top.contains(&format!(
+            "{}- skill-00:",
+            detect_glyph_set().picker_cursor()
+        )),
         "the cursor opens on the first row: {top}"
     );
     for _ in 0..39 {
@@ -308,11 +320,12 @@ fn test_list_scrolls_to_cursor() {
     }
     let out = render(&app, 80, 24);
     assert!(
-        out.contains("▶ "),
+        out.contains(detect_glyph_set().picker_cursor()),
         "the row the cursor reached stays on screen: {out}"
     );
     assert_eq!(
-        out.matches("▶ - skill").count(),
+        out.matches(&format!("{}- skill", detect_glyph_set().picker_cursor()))
+            .count(),
         1,
         "one marked skill row is drawn, not a copy left at the top: {out}"
     );
@@ -343,14 +356,24 @@ fn test_user_only_skill_glyph() {
     }];
     // Listing view: checkmark, not cross.
     let out = render(&app, 80, 24);
-    assert!(out.contains("✓"), "usable glyph in listing: {out}");
-    assert!(!out.contains("✗"), "must not show disabled glyph: {out}");
+    let set = detect_glyph_set();
+    assert!(
+        out.contains(set.gate_open()),
+        "usable glyph in listing: {out}"
+    );
+    assert!(
+        !out.contains(set.gate_blocked()),
+        "must not show disabled glyph: {out}"
+    );
     // Detail view: also checkmark.
     app.ui.skills_pane.open_unavailable("managed".into());
     let out = render(&app, 80, 24);
-    assert!(out.contains("✓"), "usable glyph in detail: {out}");
     assert!(
-        !out.contains("✗"),
+        out.contains(set.gate_open()),
+        "usable glyph in detail: {out}"
+    );
+    assert!(
+        !out.contains(set.gate_blocked()),
         "detail must not show disabled glyph: {out}"
     );
 }

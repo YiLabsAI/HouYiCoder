@@ -1,6 +1,7 @@
 //! The dollar prompt row: a command the user typed, with the outcome right
 //! aligned so a reader compares verdicts down one column.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::envelope::RequestId;
 use ratatui::style::Color;
 use unicode_width::UnicodeWidthStr;
@@ -129,7 +130,10 @@ fn test_shell_row_long_command() {
         80,
         "a long command still fits one row: {row:?}"
     );
-    assert!(row.contains('\u{2026}'), "the command is cut: {row:?}");
+    assert!(
+        row.contains(detect_glyph_set().ellipsis()),
+        "the command is cut: {row:?}"
+    );
     assert!(row.ends_with("exit 0 · 10ms"), "{row:?}");
 }
 

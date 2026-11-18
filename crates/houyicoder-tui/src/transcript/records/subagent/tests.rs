@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 
 /// The trace names the task, not the agent type, when the delegation carried
@@ -16,7 +18,10 @@ fn test_trace_text_names_task() {
     .text();
     assert_eq!(
         full,
-        "\u{25cf} Agent \"find the auth module\" finished \u{00b7} 12s \u{00b7} 7 tools"
+        format!(
+            "{} Agent \"find the auth module\" finished \u{00b7} 12s \u{00b7} 7 tools",
+            detect_glyph_set().assistant_marker()
+        )
     );
     let stripped = SubagentFinished {
         child_sid: "c2".into(),
@@ -29,7 +34,10 @@ fn test_trace_text_names_task() {
     .text();
     assert_eq!(
         stripped,
-        "\u{25cf} Agent \"explore\" interrupted \u{00b7} 1 tool"
+        format!(
+            "{} Agent \"explore\" interrupted \u{00b7} 1 tool",
+            detect_glyph_set().assistant_marker()
+        )
     );
     assert!(
         !stripped.contains("0s"),
@@ -52,7 +60,10 @@ fn test_trace_omits_zero_tools() {
     .text();
     assert_eq!(
         text,
-        "\u{25cf} Agent \"find the auth module\" finished \u{00b7} 12s"
+        format!(
+            "{} Agent \"find the auth module\" finished \u{00b7} 12s",
+            detect_glyph_set().assistant_marker()
+        )
     );
     assert!(!text.contains("tool"), "no count is claimed: {text}");
 }
@@ -136,6 +147,9 @@ fn test_trace_duration_steps_up() {
     .text();
     assert_eq!(
         text,
-        "\u{25cf} Agent \"find the auth module\" finished \u{00b7} 1m \u{00b7} 7 tools"
+        format!(
+            "{} Agent \"find the auth module\" finished \u{00b7} 1m \u{00b7} 7 tools",
+            detect_glyph_set().assistant_marker()
+        )
     );
 }

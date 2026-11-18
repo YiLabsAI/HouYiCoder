@@ -16,6 +16,7 @@ use crate::selection::{
 use crate::transcript::markdown::{highlighter_for_path, syn_to_ratatui, syntax_set};
 use crate::view::word_diff::WordDiffPart;
 use crate::view::{ERROR_RED, SUCCESS_GREEN};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use syntect::easy::HighlightLines;
@@ -99,14 +100,17 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
         Some(ToolOutcome::NotRun) => dim,
         Some(ToolOutcome::Running) | None => cyan,
     };
-    if let Some(rest) = row.strip_prefix("⏺ ") {
-        // "⏺ Name(args...)" — bold the tool name, glyph by outcome, args plain.
+    let set = detect_glyph_set();
+    let tool_prefix = format!("{} ", set.tool_marker());
+    if let Some(rest) = row.strip_prefix(tool_prefix.as_str()) {
+        // "call Name(args...)" — bold the tool name, glyph by outcome, args
+        // plain. The glyph comes from the same set that generated the row.
         let (name, args) = match rest.find('(') {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, ""),
         };
         let mut spans: Vec<Span<'static>> = vec![
-            Span::styled("⏺", glyph_style),
+            Span::styled(set.tool_marker(), glyph_style),
             Span::raw(" "),
             Span::styled(name.to_string(), bold),
         ];
@@ -115,7 +119,8 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
         }
         return Some(Line::from(spans));
     }
-    if let Some(rest) = row.strip_prefix("  ⎿  ") {
+    let gutter_prefix = format!("  {}  ", set.result_gutter());
+    if let Some(rest) = row.strip_prefix(gutter_prefix.as_str()) {
         // Result row: the ⎿ gutter is dim. The body uses the default
         // foreground for success/running/none (stdout is plain text, not a
         // semantic signal — green-washing it drowns the color channel
@@ -131,11 +136,12 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
         } else {
             vec![Span::styled(rest.to_string(), body_style)]
         };
-        let mut spans = vec![Span::styled("  ⎿  ", dim)];
+        let mut spans = vec![Span::styled(gutter_prefix.clone(), dim)];
         spans.extend(body_spans);
         return Some(Line::from(spans));
     }
-    if row.starts_with("     … +") && row.ends_with(" lines") {
+    let hidden = format!("     {} +", set.ellipsis());
+    if row.starts_with(hidden.as_str()) && row.ends_with(" lines") {
         return Some(Line::from(Span::styled(row.to_string(), dim)));
     }
     None
@@ -269,7 +275,7 @@ pub(crate) fn result_body_rows(
     };
     out.push((
         plain,
-        format!("  ⎿  {first}"),
+        format!("  {}  {first}", detect_glyph_set().result_gutter()),
         outcome,
         Some(call_id.to_string()),
         None,
@@ -296,7 +302,7 @@ pub(crate) fn result_body_rows(
         // littered with "Ctrl+O to expand" on every collapsed result.
         out.push((
             plain,
-            format!("     … +{hidden} lines"),
+            format!("     {} +{hidden} lines", detect_glyph_set().ellipsis()),
             None,
             Some(call_id.to_string()),
             None,
@@ -339,7 +345,7 @@ fn render_diff_plan(
                 };
                 out.push((
                     TAG_PLAIN,
-                    format!("  ⎿  {first}"),
+                    format!("  {}  {first}", detect_glyph_set().result_gutter()),
                     outcome,
                     Some(call_id.to_string()),
                     None,

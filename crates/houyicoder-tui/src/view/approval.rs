@@ -14,6 +14,8 @@ use ratatui::{
 use serde_json::Value;
 use std::time::Instant;
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crate::records::Approval;
 
 use super::line_wrap::{truncate_width, wrap_line};
@@ -219,7 +221,7 @@ pub(super) fn essential_rows(a: &Approval) -> u16 {
 fn draw_narrow(f: &mut Frame, a: &Approval, area: Rect) {
     let line = format!(
         " {} {}. {}  Up/Down to select \u{b7} Enter to confirm \u{b7} Esc to cancel",
-        "\u{276f}",
+        detect_glyph_set().picker_cursor().trim_end(),
         option_number(a, a.selected),
         option_label(a, a.selected),
     );
@@ -388,7 +390,11 @@ fn wrapped_rows(text: &str, width: u16) -> Vec<Line<'static>> {
 fn render_options(f: &mut Frame, a: &Approval, rows: &mut CardRows) {
     for selected in option_order(a) {
         let focused = a.selected == selected;
-        let marker = if focused { "❯" } else { " " };
+        let marker = if focused {
+            detect_glyph_set().picker_cursor().trim_end()
+        } else {
+            " "
+        };
         let row = format!(
             " {marker} {}. {}",
             option_number(a, selected),

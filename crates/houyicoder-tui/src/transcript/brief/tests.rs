@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 
 #[test]
@@ -159,7 +161,7 @@ fn test_value_brief_multibyte() {
     // char must not panic (char-safe truncation, not byte slice).
     let s = "中".repeat(100);
     let brief = value_brief(&Value::String(s));
-    assert!(brief.ends_with("…"));
+    assert!(brief.ends_with(detect_glyph_set().ellipsis()));
 }
 
 // Unknown tools (MCP falls here) keep the 60-char value_brief glimpse,
@@ -176,7 +178,7 @@ fn test_unknown_tool_brief_glimpse() {
         brief.chars().count()
     );
     assert!(
-        brief.contains('…'),
+        brief.contains(detect_glyph_set().ellipsis()),
         "must be truncated with ellipsis: {brief}"
     );
     assert!(!brief.contains('\n'), "must be one line, not 2: {brief}");
@@ -356,7 +358,7 @@ fn test_truncate_filters_empty_lines() {
 fn test_truncate_caps_160_chars() {
     let long = "x".repeat(200);
     let brief = truncate_call_arg(&long);
-    assert!(brief.ends_with('…'));
+    assert!(brief.ends_with(detect_glyph_set().ellipsis()));
     assert!(brief.chars().count() <= 161); // 160 + ellipsis
 }
 
@@ -386,7 +388,7 @@ fn test_agent_brief_caps_long() {
         brief.chars().count()
     );
     assert!(
-        brief.ends_with('\u{2026}'),
+        brief.ends_with(detect_glyph_set().ellipsis()),
         "long type truncated with an ellipsis, got {brief}"
     );
     assert!(brief.starts_with("→ "), "prefix preserved, got {brief}");

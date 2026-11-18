@@ -12,6 +12,7 @@ use crate::transcript::records::SubagentFinished;
 use crate::transcript::records::SubagentOutcome;
 use crate::transcript::records::TranscriptLine;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
@@ -66,7 +67,7 @@ fn trace_mark_color(buf: &Buffer) -> Color {
         }
         for x in 0..area.width {
             let cell = buf.cell((x, y)).expect("cell");
-            if cell.symbol() == "\u{25cf}" {
+            if cell.symbol() == detect_glyph_set().assistant_marker() {
                 return cell.fg;
             }
         }
@@ -89,7 +90,10 @@ fn test_finished_status_leaves_trace() {
     app.handle_agent_message(status(Some(CompletionStatus::Completed), 3));
     let done = render_text(&app, 100, 30);
     assert!(
-        done.contains("\u{25cf} Agent \"map the auth path\" finished"),
+        done.contains(&format!(
+            "{} Agent \"map the auth path\" finished",
+            detect_glyph_set().assistant_marker()
+        )),
         "the trace names the task and its ending:\n{done}"
     );
     assert!(
@@ -109,7 +113,8 @@ fn test_repeat_completion_one_trace() {
     app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
     let done = render_text(&app, 100, 30);
     assert_eq!(
-        done.matches("\u{25cf} Agent").count(),
+        done.matches(&format!("{} Agent", detect_glyph_set().assistant_marker()))
+            .count(),
         1,
         "one trace per child:\n{done}"
     );
@@ -124,7 +129,10 @@ fn test_never_observed_no_duration() {
     app.handle_agent_message(status(Some(CompletionStatus::Completed), 1));
     let done = render_text(&app, 100, 30);
     assert!(
-        done.contains("\u{25cf} Agent \"map the auth path\" finished \u{00b7} 1 tool"),
+        done.contains(&format!(
+            "{} Agent \"map the auth path\" finished \u{00b7} 1 tool",
+            detect_glyph_set().assistant_marker()
+        )),
         "no duration stands before the tool count:\n{done}"
     );
     assert!(
@@ -172,7 +180,8 @@ fn test_absent_entry_one_trace() {
     app.handle_agent_message(status(Some(CompletionStatus::Completed), 2));
     let done = render_text(&app, 100, 30);
     assert_eq!(
-        done.matches("\u{25cf} Agent").count(),
+        done.matches(&format!("{} Agent", detect_glyph_set().assistant_marker()))
+            .count(),
         1,
         "one trace per ending:\n{done}"
     );
@@ -286,7 +295,7 @@ fn trace(description: &str) -> SubagentFinished {
 fn trace_row(app: &App, width: u16, height: u16) -> String {
     let out = render_text(app, width, height);
     out.lines()
-        .find(|line| line.contains("\u{25cf} Agent"))
+        .find(|line| line.contains(&format!("{} Agent", detect_glyph_set().assistant_marker())))
         .unwrap_or_else(|| panic!("no trace row on screen:\n{out}"))
         .trim_end()
         .to_string()
@@ -306,7 +315,7 @@ fn test_trace_row_fits_width() {
     assert!(row.contains("finished"), "the ending survives: {row:?}");
     assert!(row.contains("7 tools"), "the figures survive: {row:?}");
     assert!(
-        row.contains('\u{2026}'),
+        row.contains(detect_glyph_set().ellipsis()),
         "the name is the segment that gives way: {row:?}"
     );
 }
@@ -394,7 +403,10 @@ fn test_trace_wide_glyph_name() {
         row.contains('修') && row.contains('复'),
         "the name keeps its first characters: {row:?}"
     );
-    assert!(row.contains('\u{2026}'), "the name is cut: {row:?}");
+    assert!(
+        row.contains(detect_glyph_set().ellipsis()),
+        "the name is cut: {row:?}"
+    );
     assert!(row.contains("finished"), "the ending stays: {row:?}");
     assert!(row.contains("12s"), "the duration stays: {row:?}");
 }
@@ -451,7 +463,10 @@ fn test_trace_survives_rebuild() {
     app.rebuild_transcript();
     let out = render_text(&app, 100, 30);
     assert!(
-        out.contains("\u{25cf} Agent \"map the auth path\" finished"),
+        out.contains(&format!(
+            "{} Agent \"map the auth path\" finished",
+            detect_glyph_set().assistant_marker()
+        )),
         "the trace is still on screen after a rebuild:\n{out}"
     );
 }

@@ -20,6 +20,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};
 use unicode_width::UnicodeWidthStr;
 
@@ -209,7 +210,10 @@ fn span_row(row: &AgentRow<'_>, spans: &mut Vec<Span<'static>>, type_width: usiz
             ));
         }
         AgentRow::Completed(done) => {
-            spans.push(Span::styled("✓ ", Style::new().fg(Color::Green)));
+            spans.push(Span::styled(
+                format!("{} ", detect_glyph_set().gate_open()),
+                Style::new().fg(Color::Green),
+            ));
             spans.push(Span::styled(
                 pad_width(&done.subagent_type, type_width),
                 Style::new().fg(Color::Yellow),

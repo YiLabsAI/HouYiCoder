@@ -5,6 +5,8 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
 use super::transcript::push_line_rows;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crate::rows::row_set::{Row, RowSet};
 use crate::selection::TAG_PLAIN;
 use crate::selection::TAG_SYSTEM;
@@ -69,7 +71,10 @@ pub(crate) fn push_delegation_rows(
     // push the closing half of the chord past the right edge, leaving the
     // reader with a truncated "(ctrl+" and no way to know the row folds.
     let (summary, hint) = fit_head(subagent_type, summary, &hint, width);
-    let head = format!("\u{23bf} {subagent_type}: {summary}{hint}");
+    let head = format!(
+        "{} {subagent_type}: {summary}{hint}",
+        detect_glyph_set().result_gutter()
+    );
     // Plain tag so the head stays drag-selectable, plus the child session id
     // as its fold key: the mouse-down fold-key branch runs before selection
     // starts, so a click on the head toggles instead of selecting.
@@ -114,11 +119,12 @@ pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mu
         Some(name) => format!(" Agent \"{name}{suffix}"),
         None => format!(" Agent {suffix}"),
     };
+    let mark = detect_glyph_set().assistant_marker();
     sink.push(
-        Row::new(TAG_PLAIN, format!("\u{25cf}{rest}"))
+        Row::new(TAG_PLAIN, format!("{mark}{rest}"))
             .trace_child(Some(child.child_sid.clone()))
             .pre(Some(Line::from(vec![
-                Span::styled("\u{25cf}".to_string(), finished_mark_style(child.outcome)),
+                Span::styled(mark.to_string(), finished_mark_style(child.outcome)),
                 Span::raw(rest),
             ]))),
     );
@@ -127,12 +133,16 @@ pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mu
 /// The mark and the opening quote every trace row with a name draws before
 /// it. Every part but the name is measured before the name takes its share
 /// of the row.
-const FINISHED_PREFIX: &str = "\u{25cf} Agent \"";
+fn finished_prefix() -> String {
+    format!("{} Agent \"", detect_glyph_set().assistant_marker())
+}
 
 /// The same lead without the quote pair, for a row too narrow to draw any
 /// name: empty quotes would read as a delegation with a blank task rather
 /// than one whose name had to be dropped.
-const UNNAMED_PREFIX: &str = "\u{25cf} Agent ";
+fn unnamed_prefix() -> String {
+    format!("{} Agent ", detect_glyph_set().assistant_marker())
+}
 
 fn finished_mark_style(outcome: SubagentOutcome) -> Style {
     let color = match outcome {
@@ -162,7 +172,8 @@ fn fit_finished(child: &SubagentFinished, width: u16) -> (Option<String>, String
     let ending = child.ending();
     let duration = child.duration_text().unwrap_or_default();
     let tools = child.tools_text();
-    let budget = (width as usize).saturating_sub(UnicodeWidthStr::width(FINISHED_PREFIX));
+    let budget =
+        (width as usize).saturating_sub(UnicodeWidthStr::width(finished_prefix().as_str()));
     let suffix = [
         format!("{ending}{duration}{tools}"),
         format!("{ending}{duration}"),
@@ -180,7 +191,7 @@ fn fit_finished(child: &SubagentFinished, width: u16) -> (Option<String>, String
 /// The same fit without a name. The quote pair gives its two columns back to
 /// the ending and its figures, so more of them survive on a narrow row.
 fn fit_unnamed(child: &SubagentFinished, width: u16) -> (Option<String>, String) {
-    let budget = (width as usize).saturating_sub(UnicodeWidthStr::width(UNNAMED_PREFIX));
+    let budget = (width as usize).saturating_sub(UnicodeWidthStr::width(unnamed_prefix().as_str()));
     let label = child.outcome.label();
     let duration = child.duration_text().unwrap_or_default();
     let tools = child.tools_text();

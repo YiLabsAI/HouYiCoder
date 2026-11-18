@@ -61,3 +61,6 @@ windows = { version = "0.62", features = [
 # the test build needs the runtime and the test macro; the library itself only
 # needs the network types.
 tokio = { version = "1", features = ["rt", "macros", "io-util"] }
+# The glyph tests measure display widths; the library itself only returns
+# glyph strings.
+unicode-width = "0.2"

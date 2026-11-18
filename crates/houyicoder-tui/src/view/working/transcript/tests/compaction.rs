@@ -1,6 +1,8 @@
 //! The compaction row: one foldable entry instead of a raw checkpoint line
 //! plus the model's whole digest pasted into the transcript.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 use crate::records::compaction_row_text;
 use crate::ui::toggle_hint::ToggleHint;
@@ -224,13 +226,17 @@ fn test_verbose_count_matches_render() {
 /// one parenthesised pair joined by a middle dot.
 #[test]
 fn test_compaction_label_shape() {
+    let marker = detect_glyph_set().notice_marker();
     let row = compaction_row_text("754 turns, 5885 events", Some(ToggleHint::Expand));
     assert_eq!(
         row,
-        "\u{273b} Context compacted (754 turns, 5885 events \u{00b7} ctrl+o to expand)"
+        format!("{marker} Context compacted (754 turns, 5885 events \u{00b7} ctrl+o to expand)")
     );
     let bare = compaction_row_text("", Some(ToggleHint::Expand));
-    assert_eq!(bare, "\u{273b} Context compacted (ctrl+o to expand)");
+    assert_eq!(
+        bare,
+        format!("{marker} Context compacted (ctrl+o to expand)")
+    );
     let unfolded = compaction_row_text("754 turns", None);
-    assert_eq!(unfolded, "\u{273b} Context compacted (754 turns)");
+    assert_eq!(unfolded, format!("{marker} Context compacted (754 turns)"));
 }

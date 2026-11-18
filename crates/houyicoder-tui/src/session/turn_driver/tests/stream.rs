@@ -3,13 +3,14 @@ use super::*;
 use crate::agent_message::ServerResponse;
 use crate::input::queue::InputItem;
 use crate::keys::handle_working;
-use crate::records::INTERRUPTED_NOTICE;
+use crate::records::interrupted_notice;
 use crate::row_id::RowId;
 use crate::state::Screen;
 use crate::test_harness::attach_connection;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::frontend::QueuedInput;
 use houyicoder_protocol::frontend::run::StopReason;
@@ -523,15 +524,16 @@ fn test_recall_survives_interrupt() {
 #[test]
 fn test_interrupted_renders_child_gutter() {
     let rendered = TranscriptLine::Interrupted.render();
+    let gutter = format!("  {}  ", detect_glyph_set().result_gutter());
     assert!(
-        rendered.starts_with("  ⎿  "),
+        rendered.starts_with(&gutter),
         "interrupt must use the child gutter, got {rendered:?}"
     );
     assert!(
-        !rendered.starts_with('✻'),
+        !rendered.starts_with(detect_glyph_set().notice_marker()),
         "interrupt must not render as a top-level system notice"
     );
-    assert_eq!(rendered, INTERRUPTED_NOTICE);
+    assert_eq!(rendered, interrupted_notice());
 }
 
 /// A second interrupted turn must not stack a second Interrupted row: the

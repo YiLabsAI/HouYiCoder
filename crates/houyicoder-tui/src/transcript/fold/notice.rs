@@ -6,6 +6,7 @@ use crate::fold::DisplaySlot;
 use crate::records::TranscriptLine;
 use crate::toggle_hint::ToggleHint;
 use crate::view::line_wrap::wrap_line;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// The terminal rows a memory-change notice renders to at a width: the
 /// summary row trailing the toggle that matches the state it is in, then,
@@ -19,7 +20,14 @@ pub(crate) fn notice_lines(text: &str, expanded: bool, width: usize) -> Vec<Stri
     };
     let mut logical = text.split('\n');
     let summary = logical.next().unwrap_or("");
-    let mut rows = wrap_line(&format!("✻ {summary}{}", action.suffix()), width);
+    let mut rows = wrap_line(
+        &format!(
+            "{} {summary}{}",
+            detect_glyph_set().notice_marker(),
+            action.suffix()
+        ),
+        width,
+    );
     if expanded {
         for line in logical {
             rows.extend(wrap_line(line, width));

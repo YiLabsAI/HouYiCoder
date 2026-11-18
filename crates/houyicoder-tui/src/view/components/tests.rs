@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 use crate::composition::app;
 
@@ -39,8 +41,15 @@ fn test_consensus_line_verdicts() {
     assert!(joined.contains("correctness"), "lens missing: {joined}");
     assert!(joined.contains("security"), "lens missing: {joined}");
     assert!(joined.contains("style"), "lens missing: {joined}");
-    assert!(joined.contains('\u{2717}'), "cross mark missing: {joined}");
-    assert!(joined.contains('\u{2713}'), "check mark missing: {joined}");
+    let set = detect_glyph_set();
+    assert!(
+        joined.contains(set.gate_blocked()),
+        "cross mark missing: {joined}"
+    );
+    assert!(
+        joined.contains(set.gate_open()),
+        "check mark missing: {joined}"
+    );
     assert!(joined.contains("(2/3)"), "tally missing: {joined}");
 }
 

@@ -24,13 +24,21 @@ use crate::toggle_hint::ToggleHint;
 use crate::transcript::shell_result::ShellStorage;
 use crate::view::context_view::context_grid_text;
 use crate::view::relative_time::turn_span_label;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// The Esc-abort notice, gutter included. Dim, one line, welded under the
 /// message the abort cut off. The two leading spaces plus the gutter glyph
 /// plus two trailing spaces are the same child-row prefix tool results use,
 /// so an interrupt reads as an annotation on the message above it rather
 /// than as a fresh utterance in the conversation.
-pub const INTERRUPTED_NOTICE: &str = "  ⎿  Interrupted · What should Houyi do instead?";
+pub fn interrupted_notice() -> String {
+    let set = detect_glyph_set();
+    format!(
+        "  {}  Interrupted {} What should Houyi do instead?",
+        set.result_gutter(),
+        set.separator_dot(),
+    )
+}
 
 /// The row standing in for the part of a turn the resident frames no longer
 /// hold. A window opening inside a turn whose opening frame was drained would
@@ -42,7 +50,9 @@ pub const TURN_CONTENT_OUT_OF_VIEW: &str =
 /// The marker leading a recap row. The line's own text and its wrap path both
 /// read it here, so a wrapped summary hangs under the words it continues
 /// instead of under the marker's second column.
-pub const RECAP_MARKER: &str = "※ recap: ";
+pub fn recap_marker() -> &'static str {
+    detect_glyph_set().recap_prefix()
+}
 
 /// One line in the work transcript (action log, not chat bubbles).
 #[derive(Debug, Clone)]
@@ -243,10 +253,11 @@ pub(crate) fn compaction_row_text(stats: &str, hint: Option<ToggleHint>) -> Stri
         // only the words go in.
         parts.push(hint.action());
     }
+    let marker = detect_glyph_set().notice_marker();
     if parts.is_empty() {
-        return "\u{273b} Context compacted".to_string();
+        return format!("{marker} Context compacted");
     }
-    format!("\u{273b} Context compacted ({})", parts.join(" \u{00b7} "))
+    format!("{marker} Context compacted ({})", parts.join(" \u{00b7} "))
 }
 
 /// Build an inline Subagent fold-group line from an agent-tool result, or
@@ -441,7 +452,7 @@ impl TranscriptLine {
         if let Some(action) = hint {
             text.push_str(action.suffix());
         }
-        Some(format!("✻ {text}"))
+        Some(format!("{} {text}", detect_glyph_set().notice_marker()))
     }
 
     /// The rows a recap notice draws, or None for a line that is not one. The
@@ -452,7 +463,7 @@ impl TranscriptLine {
         let Self::Recap(text) = self else {
             return None;
         };
-        Some(wrap_plain_block(text, RECAP_MARKER, width, None))
+        Some(wrap_plain_block(text, recap_marker(), width, None))
     }
 
     pub(crate) fn tool_call_rows(&self, width: u16, full: bool) -> Option<Vec<String>> {
@@ -468,7 +479,7 @@ impl TranscriptLine {
         if name == "result" {
             return None;
         }
-        let prefix = format!("\u{23fa} {}(", capitalize(name));
+        let prefix = format!("{} {}(", detect_glyph_set().tool_marker(), capitalize(name));
         if full {
             if width == 0 {
                 return Some(
@@ -502,11 +513,18 @@ impl TranscriptLine {
     }
 
     fn render_with(&self, verbose: bool) -> String {
+        let set = detect_glyph_set();
         match self {
             Self::User(s) => format!("> {s}"),
-            Self::Agent(s) => format!("● {s}"),
-            Self::Read { path } => format!("  ⎿  read {path}"),
-            Self::Edit { path, summary } => format!("  ⎿  edit {path} — {summary}"),
+            Self::Agent(s) => format!("{} {s}", set.assistant_marker()),
+            Self::Read { path } => format!("  {}  read {path}", set.result_gutter()),
+            Self::Edit { path, summary } => {
+                format!(
+                    "  {}  edit {path} {} {summary}",
+                    set.result_gutter(),
+                    set.em_dash()
+                )
+            }
             Self::Tool {
                 name,
                 status,
@@ -516,21 +534,21 @@ impl TranscriptLine {
             } => {
                 if name == "result" {
                     let first = body.split('\n').next().unwrap_or("").to_string();
-                    format!("  ⎿  {first}")
+                    format!("  {}  {first}", set.result_gutter())
                 } else {
                     let arg = if verbose { invocation } else { status };
                     let display = capitalize(name);
-                    format!("⏺ {display}({arg})")
+                    format!("{} {display}({arg})", set.tool_marker())
                 }
             }
             Self::ShellCommand { command, .. } => {
                 let flat = command.lines().map(str::trim).collect::<Vec<_>>().join(" ");
                 format!("$ {flat}")
             }
-            Self::System(s) => format!("✻ {s}"),
-            Self::Recap(s) => format!("{RECAP_MARKER}{s}"),
-            Self::Interrupted => INTERRUPTED_NOTICE.to_string(),
-            Self::Thinking { text } => format!("✻ {}", thinking_brief(text)),
+            Self::System(s) => format!("{} {s}", set.notice_marker()),
+            Self::Recap(s) => format!("{}{s}", set.recap_prefix()),
+            Self::Interrupted => interrupted_notice(),
+            Self::Thinking { text } => format!("{} {}", set.notice_marker(), thinking_brief(text)),
             Self::ThoughtFor { .. } => {
                 let hint = matches!(
                     self,

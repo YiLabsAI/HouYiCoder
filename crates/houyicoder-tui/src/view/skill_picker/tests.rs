@@ -37,7 +37,7 @@ fn test_user_only_glyph() {
     let line = format_one(&entry, 40);
     let glyph = &line.spans[0].content;
     assert!(
-        glyph.contains("✓"),
+        glyph.contains(detect_glyph_set().gate_open()),
         "usable glyph for user-only skill: {glyph}"
     );
 }

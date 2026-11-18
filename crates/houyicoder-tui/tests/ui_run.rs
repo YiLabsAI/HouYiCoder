@@ -5,7 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use houyicoder_tui::records::INTERRUPTED_NOTICE;
+use houyicoder_tui::records::interrupted_notice;
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_slow, pty_session_slow_scripted};
 
@@ -135,11 +135,12 @@ fn test_queue_drains_without_keys() {
     // The notice's own wording, taken past the glyph and indent the renderer
     // emits as separate cells, so a reworded notice cannot leave this absence
     // check silently true.
-    let from = INTERRUPTED_NOTICE
+    let notice = interrupted_notice();
+    let from = notice
         .find("Interrupted")
         .expect("the notice names the interruption");
     assert!(
-        !s.output_plain().contains(&INTERRUPTED_NOTICE[from..]),
+        !s.output_plain().contains(&notice[from..]),
         "a journey where the user stopped nothing renders no interruption \
          notice:\n{}",
         s.output_plain()

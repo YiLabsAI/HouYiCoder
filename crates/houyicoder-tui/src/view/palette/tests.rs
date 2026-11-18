@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 use unicode_width::UnicodeWidthStr;
 
@@ -45,7 +47,7 @@ fn test_truncate_help_keeps_short() {
 #[test]
 fn test_truncate_help_adds_ellipsis() {
     let out = truncate_width("a very long help string", 10);
-    assert!(out.ends_with('\u{2026}'));
+    assert!(out.ends_with(detect_glyph_set().ellipsis()));
     assert!(
         UnicodeWidthStr::width(out.as_str()) <= 10,
         "width overflow: {out}"
@@ -111,7 +113,7 @@ fn test_help_truncated_to_budget() {
     let line = format_one(SlashCommand::Export, 12);
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(
-        text.contains('\u{2026}'),
+        text.contains(detect_glyph_set().ellipsis()),
         "a cut help must say it was cut: [{text}]"
     );
     let help = line.spans.last().expect("help span").content.to_string();
@@ -127,7 +129,7 @@ fn test_short_help_whole() {
     let line = format_one(SlashCommand::Help, 200);
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(
-        !text.contains('\u{2026}'),
+        !text.contains(detect_glyph_set().ellipsis()),
         "must not cut a short help: [{text}]"
     );
 }

@@ -2,6 +2,7 @@
 
 #![cfg(test)]
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::llm::EffortLevel;
 
@@ -120,7 +121,10 @@ fn test_progress_bar_updates() {
     let out = render(&app);
     println!("--- strip at implement ---\n{out}\n--- end ---");
     // design is now done (check mark), implement is current
-    assert!(out.contains('\u{2713}'), "done stage should show a check");
+    assert!(
+        out.contains(detect_glyph_set().gate_open()),
+        "done stage should show a check"
+    );
 }
 
 #[test]

@@ -16,6 +16,8 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use crate::evidence::{ReviewFinding, Verdict};
 
 /// Style for a review verdict. Monochrome: a real finding is the actionable
@@ -126,10 +128,11 @@ pub fn consensus_line(findings: &[ReviewFinding]) -> Line<'static> {
         if i > 0 {
             spans.push(Span::raw(" "));
         }
+        let set = detect_glyph_set();
         let (mark, color) = if f.verdict == "real" {
-            ('\u{2717}', Color::Red)
+            (set.gate_blocked(), Color::Red)
         } else {
-            ('\u{2713}', Color::Green)
+            (set.gate_open(), Color::Green)
         };
         spans.push(Span::styled(
             format!("{mark}{}", f.lens),

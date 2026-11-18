@@ -2,6 +2,7 @@
 
 use std::iter::once;
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
@@ -80,7 +81,7 @@ fn test_running_row_threshold() {
     let out = render_text(&app, 80, 24);
     assert!(out.contains("Bash(npm install)"), "chip present: {out}");
     assert!(
-        !out.contains("Running\u{2026}"),
+        !out.contains(&format!("Running{}", detect_glyph_set().ellipsis())),
         "under two seconds shows no row: {out}"
     );
 
@@ -94,7 +95,10 @@ fn test_running_row_threshold() {
     );
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("Running\u{2026} (12s \u{00b7} timeout 10m)"),
+        out.contains(&format!(
+            "Running{} (12s \u{00b7} timeout 10m)",
+            detect_glyph_set().ellipsis()
+        )),
         "elapsed time and the call's limit land under the chip: {out}"
     );
 }
@@ -113,7 +117,7 @@ fn test_running_row_without_timeout() {
     );
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("Running\u{2026} (30s)"),
+        out.contains(&format!("Running{} (30s)", detect_glyph_set().ellipsis())),
         "the row reports seconds alone: {out}"
     );
     assert!(!out.contains("timeout"), "no limit was declared: {out}");

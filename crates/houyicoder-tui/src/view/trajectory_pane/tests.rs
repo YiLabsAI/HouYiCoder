@@ -1,6 +1,8 @@
 //! Rendering tests for the trajectory pane: the turn list, the drill levels,
 //! and the time bars.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::detail;
 use super::list;
 
@@ -929,9 +931,10 @@ fn test_timing_and_cache_render() {
 /// finished and a failure never looks clean.
 #[test]
 fn test_outcome_glyphs() {
-    assert_eq!(RecordOutcome::Ok.glyph(), "✓");
-    assert_eq!(RecordOutcome::Failed.glyph(), "✗");
-    assert_eq!(RecordOutcome::Pending.glyph(), "…");
+    let set = detect_glyph_set();
+    assert_eq!(RecordOutcome::Ok.glyph(), set.gate_open());
+    assert_eq!(RecordOutcome::Failed.glyph(), set.gate_blocked());
+    assert_eq!(RecordOutcome::Pending.glyph(), "-");
     assert_eq!(RecordOutcome::Unknown.glyph(), "?");
 }
 
@@ -1286,7 +1289,10 @@ fn test_turn_list_degrades() {
     };
     let wide = text_at(200);
     assert!(wide.contains("12.4s"), "duration present when wide: {wide}");
-    assert!(wide.contains('✗'), "outcome present when wide: {wide}");
+    assert!(
+        wide.contains(detect_glyph_set().gate_blocked()),
+        "outcome present when wide: {wide}"
+    );
     assert!(wide.contains("3 calls"), "call count when wide: {wide}");
     assert!(wide.contains("qwen3.7-max"), "model when wide: {wide}");
     // Narrow: the low-priority columns are gone, the duration is not.
@@ -1295,7 +1301,10 @@ fn test_turn_list_degrades() {
         narrow.contains("12.4s"),
         "duration survives narrow: {narrow}"
     );
-    assert!(narrow.contains('✗'), "outcome survives narrow: {narrow}");
+    assert!(
+        narrow.contains(detect_glyph_set().gate_blocked()),
+        "outcome survives narrow: {narrow}"
+    );
     assert!(
         !narrow.contains("3 calls"),
         "the call column is the first to go: {narrow}"

@@ -4,6 +4,7 @@
 //! the confirmation are fixed blocks whose last row names the keys that act
 //! on them.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::WorktreePreviewView;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -107,7 +108,7 @@ fn draw_list(f: &mut Frame, area: Rect, app: &App) {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("❯ "),
+                .highlight_symbol(detect_glyph_set().picker_cursor()),
             chunks[3],
             &mut state,
         );

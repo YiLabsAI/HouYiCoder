@@ -1420,6 +1420,7 @@ dependencies = [
  "signal-hook",
  "tokio",
  "tracing",
+ "unicode-width",
  "windows",
 ]
 

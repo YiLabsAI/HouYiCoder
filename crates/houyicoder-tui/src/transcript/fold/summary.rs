@@ -3,6 +3,7 @@
 //! git ops, with a "(ctrl+o to expand)" affordance on completed groups.
 //! Present participle when the group is active, past tense when completed.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -175,9 +176,11 @@ pub(crate) fn render_summary(
         };
     }
     // Leading tool-call glyph so the summary text starts at col 2, aligning
-    // with the ⎿ hint/result rows below it (same as a single ⏺ Tool() call).
-    spans.insert(0, Span::styled("\u{23fa} ", dim));
-    let plain = format!("\u{23fa} {}", plain_parts.join(", "));
+    // with the gutter rows below it (the same marker a single call leads
+    // with).
+    let marker = format!("{} ", detect_glyph_set().tool_marker());
+    spans.insert(0, Span::styled(marker.clone(), dim));
+    let plain = format!("{marker}{}", plain_parts.join(", "));
     if let Some(action) = toggle {
         spans.push(Span::styled(action.suffix(), dim));
     }

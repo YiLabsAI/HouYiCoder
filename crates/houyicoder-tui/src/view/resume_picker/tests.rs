@@ -1,3 +1,5 @@
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 use crate::resume_picker::{SessionRow, TitleSource};
 use crate::state::App;
@@ -36,7 +38,7 @@ fn test_truncate_appends_ellipsis() {
     assert_eq!(truncate_width(s, 10), "abcdefghij");
     assert_eq!(truncate_width(s, 0), "");
     let out = truncate_width(s, 5);
-    assert!(out.ends_with('\u{2026}'));
+    assert!(out.ends_with(detect_glyph_set().ellipsis()));
     assert!(
         UnicodeWidthStr::width(out.as_str()) <= 5,
         "width overflow: {out}"
@@ -48,7 +50,12 @@ fn test_truncate_appends_ellipsis() {
 #[test]
 fn test_marker_marks_selected_row() {
     let buf = render_picker(two_rows(), 0, 80, 8);
-    let marks: Vec<(u16, u16)> = cells_matching(&buf, '❯');
+    let cursor = detect_glyph_set()
+        .picker_cursor()
+        .chars()
+        .next()
+        .unwrap_or_default();
+    let marks: Vec<(u16, u16)> = cells_matching(&buf, cursor);
     assert_eq!(marks.len(), 1, "one marker for the one selection");
     assert_eq!(marks[0].1, 1, "the marker sits on the selected row");
 }

@@ -3,6 +3,7 @@
 //! lines for rejected mutations. Request ids route each reply to the action
 //! that asked.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::{
     MemoryChange, MemoryChangeCausality, MemoryChangeId, MemoryChangeOrigin, MemoryDetail,
@@ -153,7 +154,8 @@ impl App {
         let mut notice = format!("Memory {producer}: {count} {noun} · /memory");
         for change in changes {
             notice.push_str(&format!(
-                "\n  ⎿  {} {}",
+                "\n  {}  {} {}",
+                detect_glyph_set().result_gutter(),
                 operation_verb(change.operation),
                 change.key
             ));

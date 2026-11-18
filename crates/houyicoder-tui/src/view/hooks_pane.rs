@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::state::App;
 use crate::view::navigation::key_hint;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::hooks::HookEntry;
 
 pub(crate) const HOOKS_PANE_HEIGHT: u16 = 20;
@@ -135,7 +136,7 @@ fn draw_event_list(f: &mut Frame, area: Rect, app: &App) {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("❯ "),
+            .highlight_symbol(detect_glyph_set().picker_cursor()),
         area,
         &mut state,
     );
