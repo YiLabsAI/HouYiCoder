@@ -13,4 +13,7 @@ houyicoder-context = { path = "../houyicoder-context" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# One timestamp parse (RFC 3339 to unix milliseconds). The timestamp crate
+# already sits in the workspace graph through other dependencies; parsing is
+# the only feature this crate needs.
+time = { version = "0.3", default-features = false, features = ["std", "parsing"] }

@@ -1371,11 +1371,11 @@ version = "0.1.0"
 name = "houyicoder-loader"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "houyicoder-context",
  "serde",
  "serde_json",
  "sha2",
+ "time",
 ]
 
 [[package]]

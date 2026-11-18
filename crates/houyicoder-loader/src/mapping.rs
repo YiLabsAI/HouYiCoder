@@ -16,9 +16,10 @@
 //!   mode / permission-mode / system / attachment / file-history-* / etc.
 //!     -> skipped (not needed to resume the readable transcript)
 
-use chrono::DateTime;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use serde_json::Value;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// Convert one source record into zero or more houyi SessionLogEntries. An assistant
 /// record can yield several (Reasoning + ToolCall + AssistantMessage); a user
@@ -216,8 +217,8 @@ fn push(out: &mut Vec<SessionLogEntry>, sid: SessionId, ts_ms: u64, kind: Sessio
 /// Falls back to 0 on any parse failure (the chain is byte-stable, not
 /// time-stable; a zero ts still renders).
 pub(crate) fn parse_ts_ms(ts: &str) -> u64 {
-    DateTime::parse_from_rfc3339(ts)
-        .map(|dt| dt.timestamp_millis().max(0) as u64)
+    OffsetDateTime::parse(ts, &Rfc3339)
+        .map(|at| u64::try_from(at.unix_timestamp_nanos() / 1_000_000).unwrap_or(0))
         .unwrap_or(0)
 }
 
