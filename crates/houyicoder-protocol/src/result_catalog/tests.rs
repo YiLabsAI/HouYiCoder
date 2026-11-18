@@ -155,6 +155,45 @@ fn test_opaque_content_counts_bytes() {
     assert_eq!(back, read);
 }
 
+/// Each encoding variant round-trips through its serde form. An older
+/// record with no encoding field is read as Raw, which is the form every
+/// reader knows.
+#[test]
+fn test_encoding_round_trips() {
+    for encoding in [
+        ResultEncoding::Raw,
+        ResultEncoding::JsonStored,
+        ResultEncoding::Utf8,
+        ResultEncoding::Utf16Le,
+        ResultEncoding::LegacyCodePage(936),
+    ] {
+        let mut e = entry();
+        e.encoding = encoding;
+        let stored = serde_json::to_value(&e).expect("the entry serializes");
+        let back: ResultEntry = serde_json::from_value(stored).expect("the entry reads back");
+        assert_eq!(back.encoding, encoding, "encoding round-trips");
+    }
+    // A record written before the encoding field existed reads as Raw.
+    let raw = json!({
+        "id": "record-1:stdout",
+        "tool": "bash",
+        "command": "cargo test",
+        "event": "event-1",
+        "call": "call-1",
+        "created_ms": 1_700_000_000_000u64,
+        "exit": 0,
+        "completeness": "complete",
+        "stream": {"stream": "stdout"},
+        "bytes": 2048,
+    });
+    let back: ResultEntry = serde_json::from_value(raw).expect("the entry reads back");
+    assert_eq!(
+        back.encoding,
+        ResultEncoding::Raw,
+        "a field-less record reads as Raw"
+    );
+}
+
 /// A result name prints as the scalar it is, so a reader that formats one
 /// into a message writes the same text it can hand back as a name.
 #[test]

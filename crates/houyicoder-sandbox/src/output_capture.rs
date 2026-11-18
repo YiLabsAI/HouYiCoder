@@ -280,6 +280,12 @@ pub(crate) async fn capture_streams(
             // the caller has to learn about.
             drop(wait);
             drop(reads);
+            // Whatever the buffers hold is the last text this call sees, so
+            // a character the last chunk cut is completed before the answer
+            // is built.
+            if let Some(receiver) = receiver {
+                receiver.end_of_stream();
+            }
             if let Err(error) = child.start_kill() {
                 tracing::warn!(%error, "sandbox: the capture stop could not end the command");
             }
@@ -303,6 +309,12 @@ pub(crate) async fn capture_streams(
                 "sandbox: stream window closed with the child gone; a descendant still holds the pipe"
             ),
         },
+    }
+    // Both streams have ended, so a unit either decoder still holds will
+    // never be completed by more bytes. Completing it now keeps the final
+    // view a receiver publishes from dropping the command's last character.
+    if let Some(receiver) = receiver {
+        receiver.end_of_stream();
     }
     Ok(Output {
         stdout: captured.take_stdout(),

@@ -11,11 +11,12 @@ use std::sync::{Arc, Mutex};
 use houyicoder_api::background::{
     BackgroundCommandLauncher, CommandTail, DetachedCommand, TailingReceiver,
 };
-use houyicoder_api::capture::RawOutputReceiver;
+use houyicoder_api::capture::{RawOutputReceiver, ResultCapture};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::shell::ShellCommand;
 use houyicoder_async::{CancellationToken, PFut};
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_platform::host::text::OutputEncoding;
 use serde_json::{Value, json};
 
 use houyicoder_api::tool::progress::{ToolProgressReporter, ToolProgressUpdate};
@@ -248,10 +249,7 @@ impl Tool for BashTool {
             let started_at = Instant::now();
             // The capture and the tail ride the same receiver, so previewing a
             // run costs no bytes from what the host keeps.
-            let capture = match (ctx.result_capture.as_ref(), ctx.session_id) {
-                (Some(source), Some(session_id)) => source.begin(session_id, &ctx.call_id, "bash"),
-                _ => None,
-            };
+            let capture = begin_capture(&ctx, session.output_encoding());
             let tail = CommandTail::with_encoding(session.output_encoding());
             let receiver: Option<Arc<dyn RawOutputReceiver>> =
                 Some(Arc::new(TailingReceiver::new(
@@ -343,6 +341,8 @@ impl Tool for BashTool {
     fn is_destructive(&self) -> bool {
         true
     }
+    /// Begin the capture for this call, recording the encoding the command's
+    /// interpreter declared so a later reader decodes the kept bytes under it.
     fn is_read_only(&self) -> bool {
         false
     }
@@ -367,6 +367,14 @@ impl Tool for BashTool {
         );
         Some(effective)
     }
+}
+
+/// Begin the capture for this call, recording the encoding the command's
+/// interpreter declared so a later reader decodes the kept bytes under it.
+fn begin_capture(ctx: &ToolCtx, encoding: OutputEncoding) -> Option<Arc<dyn ResultCapture>> {
+    let source = ctx.result_capture.as_ref()?;
+    let session = ctx.session_id?;
+    source.begin(session, &ctx.call_id, "bash", encoding)
 }
 
 /// Wait for a command to end, to be cancelled, or to reach the foreground

@@ -43,7 +43,7 @@ pub const STDERR_BYTES_KEY: &str = "stderr_bytes";
 /// Bump it when a field changes meaning or when one of the enums below gains
 /// a value. A reader on an older build refuses a newer record outright, so a
 /// value it has never seen cannot make it guess at the rest of the record.
-pub const CAPTURE_RECORD_VERSION: u64 = 1;
+pub const CAPTURE_RECORD_VERSION: u64 = 2;
 
 /// Why a capture stopped before the command's output ended.
 #[non_exhaustive]
@@ -82,11 +82,20 @@ pub enum CaptureCompleteness {
 
 /// How a stream block's bytes are to be read.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamEncoding {
     /// The bytes exactly as the pipe delivered them, not interpreted as text.
+    #[default]
     Raw,
+    /// UTF-8 text, read through the streaming decoder so a byte split across
+    /// two chunks still assembles into one character.
+    Utf8,
+    /// UTF-16 little-endian, the encoding PowerShell cmdlets and the .NET
+    /// console use by default.
+    Utf16Le,
+    /// Bytes in a legacy single-byte code page identified by its number.
+    LegacyCodePage(u16),
 }
 
 /// The marker that names a block.
@@ -115,7 +124,9 @@ pub struct StreamRecord {
     pub block: Option<BlockMarker>,
     /// Bytes kept from this stream.
     pub bytes: u64,
-    /// How those bytes are to be read.
+    /// How those bytes are to be read. A record written before this field
+    /// existed reads as Raw.
+    #[serde(default)]
     pub encoding: StreamEncoding,
 }
 

@@ -128,6 +128,21 @@ impl CommandTail {
         }
     }
 
+    /// Flush each decoder's buffered trailing unit into the window.
+    ///
+    /// The last chunk of a stream can cut a character in half: UTF-8 keeps
+    /// the leading bytes, UTF-16 keeps an odd byte or a lone high surrogate.
+    /// At end of stream those bytes never gain a partner, so they are decoded
+    /// once here and the window ends with the character the command printed
+    /// rather than dropping it.
+    pub fn finish(&self) {
+        let mut state = self.state.lock().expect("command tail lock");
+        let stdout = state.stdout.finish();
+        let stderr = state.stderr.finish();
+        Self::push_text(&mut state, &stdout);
+        Self::push_text(&mut state, &stderr);
+    }
+
     /// The lines the window holds right now, oldest first, including a line
     /// no newline has ended yet. A partial line is shortened to the same cap
     /// as a finished one, so a snapshot never carries a line longer than the
@@ -170,6 +185,13 @@ impl RawOutputReceiver for TailingReceiver {
         match &self.capture {
             Some(capture) => capture.receive(stream, bytes),
             None => CaptureVerdict::Continue,
+        }
+    }
+
+    fn end_of_stream(&self) {
+        self.tail.finish();
+        if let Some(capture) = &self.capture {
+            capture.end_of_stream();
         }
     }
 }

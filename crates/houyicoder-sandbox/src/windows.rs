@@ -20,7 +20,7 @@ use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_platform::host::process::{
     NativeChild, build_cmd_line, build_command_line, spawn_fenced, spawn_unfenced,
 };
-use houyicoder_platform::host::text::{decode_complete, output_encoding_for_shell};
+use houyicoder_platform::host::text::{decode_complete_report, output_encoding_for_shell};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all};
@@ -272,11 +272,26 @@ impl WindowsJobSession {
             child.end_tree();
         }
         match outcome {
-            Ok(Ok(output)) => Ok(ExecResult {
-                stdout: decode_complete(&output.stdout, encoding),
-                stderr: decode_complete(&output.stderr, encoding),
-                exit_code: output.status.code(),
-            }),
+            Ok(Ok(output)) => {
+                let stdout = decode_complete_report(&output.stdout, encoding);
+                let stderr = decode_complete_report(&output.stderr, encoding);
+                // Bytes the declared encoding could not read are replaced in
+                // the text the model sees, so the fact is recorded for a
+                // developer rather than left to look like ordinary output.
+                if stdout.had_errors || stderr.had_errors {
+                    tracing::warn!(
+                        encoding = ?encoding,
+                        stdout_errors = stdout.had_errors,
+                        stderr_errors = stderr.had_errors,
+                        "command output bytes did not decode under the declared encoding"
+                    );
+                }
+                Ok(ExecResult {
+                    stdout: stdout.text,
+                    stderr: stderr.text,
+                    exit_code: output.status.code(),
+                })
+            }
             Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
             Err(_elapsed) => Err(collected.timeout_error(message(config.wall_timeout_ms))),
         }

@@ -17,6 +17,7 @@ use houyicoder_api::capture::{
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::PFut;
 use houyicoder_context::{BlockHash, SessionId};
+use houyicoder_platform::host::text::OutputEncoding;
 use houyicoder_protocol::capture_record::{
     BlockMarker, CAPTURE_RECORD_VERSION, CaptureCompleteness, CaptureRecord, CaptureStopReason,
     StreamEncoding, StreamRecord,
@@ -58,6 +59,7 @@ impl ResultCaptureSource for SessionResultCapture {
         session: SessionId,
         call_id: &str,
         tool: &str,
+        encoding: OutputEncoding,
     ) -> Option<Arc<dyn ResultCapture>> {
         Some(Arc::new(CallCapture {
             log: self.log.clone(),
@@ -66,6 +68,7 @@ impl ResultCaptureSource for SessionResultCapture {
             tool: tool.to_string(),
             created_ms: now_ms(),
             budget: self.budget,
+            encoding,
             state: Mutex::new(CaptureState::default()),
         }))
     }
@@ -107,6 +110,9 @@ struct CallCapture {
     tool: String,
     created_ms: Option<u64>,
     budget: usize,
+    /// The encoding the caller's interpreter declared for this run, recorded
+    /// beside the bytes so a later reader decodes them as they were written.
+    encoding: OutputEncoding,
     state: Mutex<CaptureState>,
 }
 
@@ -163,8 +169,8 @@ impl CallCapture {
             exit,
             completeness,
             stop_reason,
-            stdout: stream_record(stdout, kept.stdout),
-            stderr: stream_record(stderr, kept.stderr),
+            stdout: stream_record(stdout, kept.stdout, self.encoding),
+            stderr: stream_record(stderr, kept.stderr, self.encoding),
         };
         let bytes =
             serde_json::to_vec(&record).map_err(|e| CaptureError::RecordWrite(e.to_string()))?;
@@ -263,13 +269,23 @@ struct KeptBytes {
 }
 
 /// What one stream contributes to the record. The bytes are kept exactly as
-/// the pipe delivered them, so the entry records that rather than claiming a
-/// text encoding the capture never applied.
-fn stream_record(block: &Option<BlockHash>, bytes: u64) -> StreamRecord {
+/// the pipe delivered them, and the record names the encoding the command's
+/// interpreter declared, so a reader that shows the stored text decodes it
+/// the way it was produced rather than assuming one encoding.
+fn stream_record(block: &Option<BlockHash>, bytes: u64, encoding: OutputEncoding) -> StreamRecord {
     StreamRecord {
         block: block.as_ref().map(|hash| BlockMarker::new(hash.0.clone())),
         bytes,
-        encoding: StreamEncoding::Raw,
+        encoding: stored_encoding(encoding),
+    }
+}
+
+/// The stored form of a decode-time encoding.
+fn stored_encoding(encoding: OutputEncoding) -> StreamEncoding {
+    match encoding {
+        OutputEncoding::Utf8 => StreamEncoding::Utf8,
+        OutputEncoding::Utf16Le => StreamEncoding::Utf16Le,
+        OutputEncoding::LegacyCodePage(code_page) => StreamEncoding::LegacyCodePage(code_page),
     }
 }
 

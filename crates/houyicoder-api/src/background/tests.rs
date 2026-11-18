@@ -150,3 +150,46 @@ fn test_tailing_without_capture() {
         CaptureVerdict::Continue
     );
 }
+
+/// The last chunk can cut a character. Flushing at end of stream completes
+/// it, so the window ends with the text the command printed.
+#[test]
+fn test_tail_finish_completes_char() {
+    let tail = CommandTail::with_encoding(OutputEncoding::Utf16Le);
+    let bytes: Vec<u8> = "x中".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    // Cut inside the second unit: the decoder holds its leading byte.
+    tail.push_encoded(CapturedStream::Stdout, &bytes[..3]);
+    assert_eq!(tail.snapshot(), vec!["x"]);
+    tail.finish();
+    assert_eq!(
+        tail.snapshot(),
+        vec!["x\u{fffd}"],
+        "the cut unit is replaced rather than silently dropped"
+    );
+}
+
+/// A character already complete before the stream ended is not duplicated
+/// by the flush.
+#[test]
+fn test_tail_finish_keeps_text() {
+    let tail = CommandTail::new();
+    tail.push_bytes(b"whole\npart");
+    tail.finish();
+    assert_eq!(tail.snapshot(), vec!["whole", "part"]);
+}
+
+/// The receiver's flush reaches both its tail and the capture, so a capture
+/// that buffers an incomplete unit also completes it.
+#[test]
+fn test_tailing_finish_reaches_both() {
+    let tail = CommandTail::with_encoding(OutputEncoding::Utf16Le);
+    let capture = Arc::new(RecordingReceiver {
+        seen: Mutex::new(Vec::new()),
+        verdict: CaptureVerdict::Continue,
+    });
+    let tee = TailingReceiver::new(tail.clone(), Some(capture));
+    let bytes: Vec<u8> = "ok".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    tee.receive(CapturedStream::Stdout, &bytes[..3]);
+    tee.end_of_stream();
+    assert_eq!(tail.snapshot(), vec!["o\u{fffd}"]);
+}

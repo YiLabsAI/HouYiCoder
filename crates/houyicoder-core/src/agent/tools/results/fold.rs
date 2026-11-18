@@ -368,6 +368,7 @@ fn push_stream(
         BlockSource {
             hash: BlockHash(block.hash.clone()),
             shape: StoredShape::Raw,
+            encoding: encoding_of(side.encoding),
         },
     ));
 }
@@ -386,10 +387,10 @@ fn stream_id(call: &str, stream: &ResultStream) -> ResultId {
 fn encoding_of(encoding: StreamEncoding) -> ResultEncoding {
     match encoding {
         StreamEncoding::Raw => ResultEncoding::Raw,
-        // An encoding this reader does not know is not known to be plain
-        // bytes, so it reads as a stored form rather than being shown as
-        // though the bytes were the text.
-        _ => ResultEncoding::JsonStored,
+        StreamEncoding::Utf8 => ResultEncoding::Utf8,
+        StreamEncoding::Utf16Le => ResultEncoding::Utf16Le,
+        StreamEncoding::LegacyCodePage(cp) => ResultEncoding::LegacyCodePage(cp),
+        _ => ResultEncoding::Raw,
     }
 }
 
@@ -460,17 +461,19 @@ async fn push_stored(
             field: field.to_string(),
         },
         encoding: ResultEncoding::JsonStored,
-        // The stored form of a string field is the escaped JSON, so its length
-        // is not the length of the text the producer wrote and is left absent
-        // rather than reported as a wrong count.
         bytes: match shape {
             StoredShape::JsonString => None,
             StoredShape::Raw | StoredShape::JsonText => Some(total),
         },
     };
-    folded
-        .results
-        .push(IndexedResult::new(entry, BlockSource { hash, shape }));
+    folded.results.push(IndexedResult::new(
+        entry,
+        BlockSource {
+            hash,
+            shape,
+            encoding: ResultEncoding::JsonStored,
+        },
+    ));
 }
 
 /// Read a capture record block whole.

@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_context::BlockHash;
-use houyicoder_protocol::result_catalog::ResultEntry;
+use houyicoder_protocol::result_catalog::{ResultEncoding, ResultEntry};
 
 /// How a stored block spells the bytes it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +25,9 @@ pub(super) struct BlockSource {
     pub hash: BlockHash,
     /// How the stored bytes encode the stream.
     pub shape: StoredShape,
+    /// The text encoding the producer declared, as the record kept it. A
+    /// window read decodes under this rather than assuming one encoding.
+    pub encoding: ResultEncoding,
 }
 
 /// The line marks a line read leaves behind, so a second read of the same

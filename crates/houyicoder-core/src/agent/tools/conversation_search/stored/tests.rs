@@ -8,6 +8,7 @@ use houyicoder_context::{
     EventId, ReadActor, ReadOutcome, SessionEvent, SessionId, SessionLogEntry,
 };
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_platform::host::text::OutputEncoding;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_session::SessionStore;
@@ -43,7 +44,7 @@ fn seed(
 ) {
     let source = SessionResultCapture::new(Arc::clone(log));
     let capture = source
-        .begin(session, call_id, tool)
+        .begin(session, call_id, tool, OutputEncoding::Utf8)
         .expect("a capture source starts a capture");
     capture.receive(CapturedStream::Stdout, stdout);
     capture.receive(CapturedStream::Stderr, stderr);

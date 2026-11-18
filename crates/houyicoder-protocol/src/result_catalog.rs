@@ -68,15 +68,22 @@ pub enum ResultStream {
 
 /// How the bytes behind a result are to be read.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResultEncoding {
     /// The bytes exactly as the pipe delivered them.
+    #[default]
     Raw,
     /// A JSON serialization an earlier externalize path wrote. Text inside it
     /// is escaped, so a reader that wants the text asks for it rather than
     /// treating the stored bytes as the text.
     JsonStored,
+    /// UTF-8 text, for output a command negotiated or a terminal declared.
+    Utf8,
+    /// Little-endian UTF-16, the form PowerShell cmdlets use.
+    Utf16Le,
+    /// A legacy single-byte code page identified by its number.
+    LegacyCodePage(u16),
 }
 
 impl ResultEncoding {
@@ -151,7 +158,9 @@ pub struct ResultEntry {
     pub stop_reason: Option<CaptureStopReason>,
     /// Which stream this entry names.
     pub stream: ResultStream,
-    /// How the stored bytes are to be read.
+    /// How the stored bytes are to be read. A record written before this
+    /// field existed reads as Raw.
+    #[serde(default)]
     pub encoding: ResultEncoding,
     /// Stored length in bytes, absent when the store does not report one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,7 +295,9 @@ pub enum ResultContent {
 pub struct ResultRead {
     /// The stream read.
     pub id: ResultId,
-    /// How the stored bytes are to be read.
+    /// How the stored bytes are to be read. A read written before this
+    /// field existed reads as Raw.
+    #[serde(default)]
     pub encoding: ResultEncoding,
     /// The window itself.
     pub content: ResultContent,

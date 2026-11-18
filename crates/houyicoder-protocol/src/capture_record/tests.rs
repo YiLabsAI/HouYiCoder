@@ -18,7 +18,7 @@ fn record() -> CaptureRecord {
         stdout: StreamRecord {
             block: Some(BlockMarker::new("stdout-hash")),
             bytes: 12,
-            encoding: StreamEncoding::Raw,
+            encoding: StreamEncoding::Utf8,
         },
         stderr: StreamRecord {
             block: None,

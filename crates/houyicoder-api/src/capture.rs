@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use houyicoder_async::PFut;
 use houyicoder_context::{BlockHash, SessionId};
+use houyicoder_platform::host::text::OutputEncoding;
 
 /// Which of a command's two output streams a chunk belongs to. The two are
 /// recorded apart: their relative order is not known, and the caller must not
@@ -58,6 +59,16 @@ pub enum CaptureVerdict {
 pub trait RawOutputReceiver: Send + Sync {
     /// Take one chunk read from the given stream.
     fn receive(&self, stream: CapturedStream, bytes: &[u8]) -> CaptureVerdict;
+
+    /// Signal that both output streams reached their end.
+    ///
+    /// A receiver that decodes incrementally can hold the first half of a
+    /// character the last chunk cut. Flushing it here completes that
+    /// character, so the final view a receiver publishes ends with the text
+    /// the command printed. A receiver that keeps raw bytes buffers nothing
+    /// and has nothing to do. The name stays distinct from the capture's own
+    /// finish, which publishes what it holds rather than closing a decoder.
+    fn end_of_stream(&self) {}
 }
 
 /// What a finished capture published. Each stream is one content-addressed
@@ -156,10 +167,16 @@ impl Error for CaptureError {}
 /// without one pays nothing and produces its result as it otherwise would.
 pub trait ResultCaptureSource: Send + Sync {
     /// Begin capturing the raw output of one call.
+    ///
+    /// The encoding is the one the caller's command interpreter declared for
+    /// this run. The record stores it beside the bytes, so a later reader
+    /// decodes the kept output the way it was produced instead of assuming
+    /// one encoding for every command.
     fn begin(
         &self,
         session: SessionId,
         call_id: &str,
         tool: &str,
+        encoding: OutputEncoding,
     ) -> Option<Arc<dyn ResultCapture>>;
 }

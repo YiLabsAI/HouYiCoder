@@ -18,6 +18,7 @@ use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_context::{BlockHash, ExecConfig, ExecResult, SandboxError, SessionId};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_platform::host::text::OutputEncoding;
 use houyicoder_session::SessionStore;
 use serde_json::json;
 
@@ -238,7 +239,13 @@ fn test_capture_failure_is_reported() {
     }
 
     impl ResultCaptureSource for FailingSource {
-        fn begin(&self, _: SessionId, _: &str, _: &str) -> Option<Arc<dyn ResultCapture>> {
+        fn begin(
+            &self,
+            _: SessionId,
+            _: &str,
+            _: &str,
+            _: OutputEncoding,
+        ) -> Option<Arc<dyn ResultCapture>> {
             Some(Arc::new(FailingCapture {
                 stop: self.stop.clone(),
             }))
@@ -293,7 +300,13 @@ fn test_failed_publish_keeps_stop() {
     struct FailingSource;
 
     impl ResultCaptureSource for FailingSource {
-        fn begin(&self, _: SessionId, _: &str, _: &str) -> Option<Arc<dyn ResultCapture>> {
+        fn begin(
+            &self,
+            _: SessionId,
+            _: &str,
+            _: &str,
+            _: OutputEncoding,
+        ) -> Option<Arc<dyn ResultCapture>> {
             Some(Arc::new(FailingCapture))
         }
     }

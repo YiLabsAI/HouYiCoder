@@ -24,7 +24,7 @@ fn begin(log: &Arc<dyn SessionLog>, budget: Option<usize>) -> (SessionId, Arc<dy
         None => Arc::new(SessionResultCapture::new(log.clone())),
     };
     let capture = source
-        .begin(session, "call-1", "bash")
+        .begin(session, "call-1", "bash", OutputEncoding::Utf8)
         .expect("a capture source starts a capture");
     (session, capture)
 }
@@ -83,6 +83,10 @@ fn test_large_output_publishes_streams() {
     assert_eq!(record["completeness"], "complete");
     assert_eq!(record["stdout"]["bytes"], stdout.len() as u64);
     assert_eq!(record["stderr"]["bytes"], stderr.len() as u64);
+    assert_eq!(
+        record["stdout"]["encoding"], "utf8",
+        "the record names the encoding the interpreter declared"
+    );
     assert_eq!(
         record["stdout"]["block"]["block_ref"],
         published.stdout.as_ref().unwrap().0,
@@ -366,4 +370,38 @@ fn test_stop_readable_before_finish() {
     let stop = capture.stop().expect("the applied stop is readable");
     assert_eq!(stop.reason, CaptureStopReason::ByteBudget);
     assert_eq!(stop.stdout_bytes, 16, "the prefix that fit is kept");
+}
+
+/// The encoding the caller declared is stored beside the bytes, so a
+/// command-interpreter run on a legacy code page reads back under that code
+/// page rather than as UTF-8.
+#[test]
+fn test_record_keeps_declared_encoding() {
+    let log = store();
+    let session = SessionId::new();
+    let source = SessionResultCapture::new(Arc::clone(&log));
+    let capture = source
+        .begin(
+            session,
+            "call-1",
+            "cmd",
+            OutputEncoding::LegacyCodePage(936),
+        )
+        .expect("a capture source starts a capture");
+    capture.receive(CapturedStream::Stdout, b"ready");
+    let published = pollster::block_on(capture.finish(CallEnd::Exited(Some(0))))
+        .expect("finish succeeds")
+        .expect("received output is published");
+    let record: Value =
+        serde_json::from_slice(&read_block(&log, &published.record)).expect("record is JSON");
+    assert_eq!(
+        record["stdout"]["encoding"],
+        json!({"legacy_code_page": 936}),
+        "the code page travels with the stream"
+    );
+    assert_eq!(
+        record["stderr"]["encoding"],
+        json!({"legacy_code_page": 936}),
+        "both streams carry it"
+    );
 }

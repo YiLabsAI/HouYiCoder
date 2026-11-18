@@ -15,6 +15,7 @@ use houyicoder_context::{
     EventId, SessionEvent, SessionId, SessionLogEntry,
 };
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_platform::host::text::OutputEncoding;
 use houyicoder_protocol::block_ref::BLOCK_REF_KEY;
 use houyicoder_protocol::result_catalog::{
     ResultContent, ResultCursor, ResultFilter, ResultId, ResultListQuery, ResultPage, ResultRange,
@@ -30,6 +31,11 @@ use super::entry::LineMarks;
 use crate::agent::tools::result_capture::SessionResultCapture;
 
 mod paging;
+
+/// Reads real code-page characters, so it runs on the host that has the
+/// table; elsewhere the module is not compiled at all.
+#[cfg(target_os = "windows")]
+mod code_page;
 
 fn store() -> Arc<dyn SessionLog> {
     Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())))
@@ -55,6 +61,119 @@ fn clear(log: &Arc<dyn SessionLog>, session: SessionId) {
 /// which names the record the fold reads.
 fn seed(log: &Arc<dyn SessionLog>, session: SessionId, stdout: &[u8], stderr: &[u8]) {
     seed_call(log, session, "call-1", "bash", stdout, stderr);
+}
+
+/// Publish a capture whose interpreter declared the given encoding, so the
+/// stored record names it and a reader decodes under it.
+fn seed_encoded(
+    log: &Arc<dyn SessionLog>,
+    session: SessionId,
+    stdout: &[u8],
+    encoding: OutputEncoding,
+) {
+    let source = SessionResultCapture::new(Arc::clone(log));
+    let capture = source
+        .begin(session, "call-1", "cmd", encoding)
+        .expect("a capture source starts a capture");
+    capture.receive(CapturedStream::Stdout, stdout);
+    let published: CapturedStreams = pollster::block_on(capture.finish(CallEnd::Exited(Some(0))))
+        .expect("finish succeeds")
+        .expect("output is published");
+    let call = entry(
+        session,
+        SessionEvent::ToolCall {
+            call_id: "call-1".to_string(),
+            tool: "cmd".to_string(),
+            input: json!({"command": "run"}),
+        },
+    );
+    pollster::block_on(log.append(call)).expect("the call is logged");
+    let result = entry(
+        session,
+        SessionEvent::ToolResult {
+            call_id: "call-1".to_string(),
+            output: json!({"raw_capture": {"record": {"block_ref": published.record.0}}}),
+            duration_ms: 3,
+        },
+    );
+    pollster::block_on(log.append(result)).expect("the result is logged");
+}
+
+/// A stream a command interpreter printed as UTF-16 reads back as the text it
+/// printed, and its byte range maps back to the stored offsets the
+/// interpreter wrote rather than to mis-decoded fragments.
+#[tokio::test]
+async fn test_read_decodes_utf16_stream() {
+    let log = store();
+    let session = SessionId::new();
+    let bytes: Vec<u8> = "中文\n第二行\n"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    seed_encoded(&log, session, &bytes, OutputEncoding::Utf16Le);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let read = catalog
+        .read(
+            session,
+            ResultReadQuery {
+                id: ResultId::new("call-1:stdout"),
+                range: ResultRange::Lines { start: 1, count: 2 },
+                cursor: None,
+            },
+        )
+        .await
+        .expect("the line read answers");
+    match read.content {
+        ResultContent::Text { text } => {
+            assert_eq!(
+                text, "中文\n第二行\n",
+                "the stored UTF-16 reads as its text"
+            )
+        }
+        other => panic!("a line read is text: {other:?}"),
+    }
+    assert_eq!(read.covered.start, 0);
+    assert_eq!(read.covered.len, bytes.len() as u64);
+    assert_eq!(read.total, Some(bytes.len() as u64));
+}
+
+/// A byte range that starts inside a two-byte unit still answers whole
+/// characters, so a reader never sees a fragment decoded as replacement
+/// marks.
+#[tokio::test]
+async fn test_read_utf16_odd_start() {
+    let log = store();
+    let session = SessionId::new();
+    let bytes: Vec<u8> = "中文第二"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    seed_encoded(&log, session, &bytes, OutputEncoding::Utf16Le);
+    let catalog = SessionResultCatalog::new(Arc::clone(&log));
+    let read = catalog
+        .read(
+            session,
+            ResultReadQuery {
+                id: ResultId::new("call-1:stdout"),
+                range: ResultRange::Bytes { offset: 3, len: 4 },
+                cursor: None,
+            },
+        )
+        .await
+        .expect("the byte read answers");
+    match read.content {
+        ResultContent::Text { text } => {
+            assert!(
+                !text.contains('\u{fffd}'),
+                "no unit is cut in half: {text:?}"
+            );
+            assert!(
+                text.starts_with('文'),
+                "the read starts on a whole character: {text:?}"
+            );
+        }
+        other => panic!("a byte read is text: {other:?}"),
+    }
 }
 
 /// A listing reports one entry per published stream, named so a reader can
@@ -369,7 +488,7 @@ fn seed_call(
 ) {
     let source = SessionResultCapture::new(Arc::clone(log));
     let capture = source
-        .begin(session, call_id, tool)
+        .begin(session, call_id, tool, OutputEncoding::Utf8)
         .expect("a capture source starts a capture");
     capture.receive(CapturedStream::Stdout, stdout);
     capture.receive(CapturedStream::Stderr, stderr);
@@ -1268,7 +1387,7 @@ async fn test_foreign_capture_record_skipped() {
     let other = SessionId::new();
     let source = SessionResultCapture::new(Arc::clone(&log));
     let capture = source
-        .begin(other, "call-1", "bash")
+        .begin(other, "call-1", "bash", OutputEncoding::Utf8)
         .expect("a capture source starts a capture");
     capture.receive(CapturedStream::Stdout, b"theirs");
     let published: CapturedStreams = pollster::block_on(capture.finish(CallEnd::Exited(Some(0))))

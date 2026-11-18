@@ -11,6 +11,8 @@ use std::str::from_utf8;
 
 use houyicoder_api::result_catalog::ResultCatalogError;
 use houyicoder_context::{BlockHash, ContextBackend, ContextError};
+use houyicoder_platform::host::text::{OutputEncoding, next_char, resync_offset};
+use houyicoder_protocol::result_catalog::ResultEncoding;
 
 use super::entry::{BlockSource, StoredShape};
 
@@ -20,6 +22,12 @@ pub(super) const WINDOW_BYTES: usize = 64 * 1024;
 /// How many bytes a window reaches back before its offset, so a character the
 /// offset splits can still be decoded whole.
 const LOOK_BACK: u64 = 3;
+
+/// How many bytes a window reaches back for a double-byte code page. That
+/// reach has to find a single-byte character to resume from, so it is long
+/// enough that any ordinary text holds one; a ceiling keeps a read bounded
+/// when it does not.
+const CODE_PAGE_LOOK_BACK: u64 = 4096;
 
 /// One decoded window: the text it covers and where that text sits in the
 /// stored block.
@@ -152,13 +160,22 @@ pub(super) async fn read_window(
     want: usize,
 ) -> Result<DecodedWindow, ResultCatalogError> {
     let want = want.clamp(1, WINDOW_BYTES);
-    // An escaped value has no character a stored offset can split, and its
-    // escapes have to be walked from a boundary anyway.
-    let look_back = match source.shape {
-        StoredShape::JsonString => 0,
-        StoredShape::Raw | StoredShape::JsonText => offset.min(LOOK_BACK),
+    // The window's first byte is chosen so a character the offset cuts is
+    // still decoded whole. An escaped value has no character a stored offset
+    // can split, and its escapes have to be walked from a boundary anyway.
+    let base = match (source.shape, source.encoding) {
+        (StoredShape::JsonString, _) => offset,
+        // The unit is two bytes wide and a surrogate pair spans two units, so
+        // the start stays on a unit boundary and reaches back one whole unit.
+        (_, ResultEncoding::Utf16Le) => (offset & !1).saturating_sub(2),
+        // A double-byte code page cannot re-align from a fixed distance,
+        // because a trail byte looks like a lead byte; the window reaches
+        // back far enough that a single-byte character is very likely in
+        // range, and the decode starts after the last one.
+        (_, ResultEncoding::LegacyCodePage(_)) => offset.saturating_sub(CODE_PAGE_LOOK_BACK),
+        _ => offset.saturating_sub(LOOK_BACK),
     };
-    let base = offset - look_back;
+    let look_back = offset - base;
     let len = want
         .saturating_add(look_back as usize)
         .saturating_add(LOOK_BACK as usize)
@@ -175,9 +192,88 @@ pub(super) async fn read_window(
         StoredShape::JsonString => {
             decode_json_string(backend, &source.hash, &window.bytes, base, offset, total).await
         }
-        StoredShape::Raw | StoredShape::JsonText => {
-            Ok(decode_text(&window.bytes, base, offset, total))
-        }
+        StoredShape::Raw | StoredShape::JsonText => Ok(match source.encoding {
+            // The producer declared a multi-byte text encoding, so each
+            // window decodes under it rather than assuming one encoding for
+            // every stored stream.
+            ResultEncoding::Utf16Le => {
+                decode_per_character(&window.bytes, base, offset, total, source.encoding)
+            }
+            ResultEncoding::LegacyCodePage(_) => {
+                let up_to = usize::try_from(offset.saturating_sub(base)).unwrap_or(usize::MAX);
+                let start = resync_offset(&window.bytes, up_to);
+                decode_per_character(
+                    &window.bytes[start..],
+                    base + start as u64,
+                    offset,
+                    total,
+                    source.encoding,
+                )
+            }
+            _ => decode_text(&window.bytes, base, offset, total),
+        }),
+    }
+}
+
+/// Decode a window under an encoding whose character width is not one byte.
+///
+/// Every character gets a break, so a decoded index maps back to the stored
+/// byte it came from. The window may start before the requested offset, on
+/// purpose: the characters that end at or before it are dropped after
+/// decoding, which is what lets a character the offset cut still come out
+/// whole.
+fn decode_per_character(
+    bytes: &[u8],
+    base: u64,
+    offset: u64,
+    total: u64,
+    encoding: ResultEncoding,
+) -> DecodedWindow {
+    let encoding = output_encoding(encoding);
+    let mut text = String::new();
+    let mut breaks = vec![(0usize, base)];
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let Some((chunk, used)) = next_char(&bytes[index..], encoding) else {
+            break;
+        };
+        text.push_str(&chunk);
+        index += used;
+        breaks.push((text.len(), base + index as u64));
+    }
+    // Drop the characters that end at or before the offset the read asked
+    // for: they were decoded only so a split character came out whole. A
+    // character that straddles the offset is kept, and the window starts at
+    // its first byte, the way a single-byte window read reaches back to the
+    // boundary of the character the offset cut.
+    let mut keep = breaks
+        .iter()
+        .position(|(_, stored)| *stored >= offset)
+        .unwrap_or(0);
+    if keep > 0 && breaks[keep].1 > offset {
+        keep -= 1;
+    }
+    let (text_at, stored_at) = breaks[keep];
+    let text = text[text_at..].to_string();
+    let breaks = breaks[keep..]
+        .iter()
+        .map(|(at, stored)| (at - text_at, *stored))
+        .collect();
+    DecodedWindow {
+        text,
+        start: stored_at,
+        end: base + index as u64,
+        breaks,
+        total,
+    }
+}
+
+/// The decode-time form of a stored encoding.
+fn output_encoding(encoding: ResultEncoding) -> OutputEncoding {
+    match encoding {
+        ResultEncoding::Utf16Le => OutputEncoding::Utf16Le,
+        ResultEncoding::LegacyCodePage(code_page) => OutputEncoding::LegacyCodePage(code_page),
+        _ => OutputEncoding::Utf8,
     }
 }
 
