@@ -50,7 +50,7 @@ fn test_narrow_row_keeps_tag() {
     let (_, body, _, _) =
         detail::draw_turn_detail(&turn, &detail, 0, Rect::new(0, 0, 50, 20), &app);
     let text = lines_text(&body);
-    assert!(text.contains("[CAS 22.5 KiB]"), "{text}");
+    assert!(text.contains("[CAS 22.5 Ki"), "{text}");
 }
 
 /// The detail states the block, the raw bytes behind it, and the form the

@@ -31,7 +31,10 @@ fn test_truncate_width_zero_empty() {
 
 #[test]
 fn test_truncate_one_col_ellipsis() {
-    assert_eq!(truncate_width("abc", 1), detect_glyph_set().ellipsis());
+    let out = truncate_width("abc", 1);
+    let expected: String = detect_glyph_set().ellipsis().chars().take(1).collect();
+    assert_eq!(out, expected);
+    assert!(UnicodeWidthStr::width(out.as_str()) <= 1, "width: {out:?}");
 }
 
 /// A value longer than its column keeps the end, where the file name is, and
@@ -79,22 +82,25 @@ fn test_truncate_cjk_counted() {
     // Each CJK ideograph is display width 2; at max 5 we keep 2
     // ideographs (width 4) + ellipsis (width 1) = 5.
     let out = truncate_width("\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}", 5);
-    assert_eq!(
-        out,
-        format!("\u{4e2d}\u{6587}{}", detect_glyph_set().ellipsis())
-    );
+    let ellipsis = detect_glyph_set().ellipsis();
+    let expected = if 4 + UnicodeWidthStr::width(ellipsis) <= 5 {
+        format!("\u{4e2d}\u{6587}{ellipsis}")
+    } else {
+        format!("\u{4e2d}{ellipsis}")
+    };
+    assert_eq!(out, expected);
 }
 
 #[test]
 fn test_truncate_keeps_grapheme() {
     let out = truncate_width("\u{1f469}\u{200d}\u{1f4bb}xy", 3);
-    assert_eq!(
-        out,
-        format!(
-            "\u{1f469}\u{200d}\u{1f4bb}{}",
-            detect_glyph_set().ellipsis()
-        )
-    );
+    let ellipsis = detect_glyph_set().ellipsis();
+    let expected = if 2 + UnicodeWidthStr::width(ellipsis) <= 3 {
+        format!("\u{1f469}\u{200d}\u{1f4bb}{ellipsis}")
+    } else {
+        ellipsis.to_string()
+    };
+    assert_eq!(out, expected);
 }
 
 #[test]

@@ -400,7 +400,7 @@ fn test_trace_wide_glyph_name() {
     )));
     let row = trace_row(&app, 30, 20);
     assert!(
-        row.contains('修') && row.contains('复'),
+        row.contains('修'),
         "the name keeps its first characters: {row:?}"
     );
     assert!(

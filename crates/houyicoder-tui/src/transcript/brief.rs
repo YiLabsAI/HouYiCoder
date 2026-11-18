@@ -18,9 +18,10 @@ pub(crate) fn value_brief(v: &Value) -> String {
         Value::String(s) => strip_ansi(s),
         _ => strip_ansi(&v.to_string()),
     };
+    let ellipsis = detect_glyph_set().ellipsis();
     if s.chars().count() > 60 {
-        let kept: String = s.chars().take(57).collect();
-        format!("{kept}{}", detect_glyph_set().ellipsis())
+        let kept: String = s.chars().take(60 - ellipsis.chars().count()).collect();
+        format!("{kept}{ellipsis}")
     } else {
         s
     }
@@ -59,9 +60,13 @@ pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
             // Cap the type so a malformed or very long name keeps the chip
             // one line, matching the budget every other arm enforces.
             const MAX_TYPE: usize = 40;
+            let ellipsis = detect_glyph_set().ellipsis();
             let capped = if st.chars().count() > MAX_TYPE {
-                let cut: String = st.chars().take(MAX_TYPE - 1).collect();
-                format!("{cut}{}", detect_glyph_set().ellipsis())
+                let cut: String = st
+                    .chars()
+                    .take(MAX_TYPE - ellipsis.chars().count())
+                    .collect();
+                format!("{cut}{ellipsis}")
             } else {
                 st.to_string()
             };
@@ -105,9 +110,13 @@ pub(crate) fn truncate_call_arg(s: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
+    let ellipsis = detect_glyph_set().ellipsis();
     if collapsed.chars().count() > MAX_CHARS {
-        let kept: String = collapsed.chars().take(MAX_CHARS).collect();
-        format!("{kept}{}", detect_glyph_set().ellipsis())
+        let kept: String = collapsed
+            .chars()
+            .take(MAX_CHARS - ellipsis.chars().count())
+            .collect();
+        format!("{kept}{ellipsis}")
     } else {
         collapsed
     }
@@ -184,8 +193,9 @@ pub(crate) fn fold_summary(s: &str) -> String {
     if chars.len() <= 80 {
         flat.trim().to_string()
     } else {
-        let t: String = chars.iter().take(79).collect();
-        format!("{}{}", t.trim_end(), detect_glyph_set().ellipsis())
+        let ellipsis = detect_glyph_set().ellipsis();
+        let t: String = chars.iter().take(80 - ellipsis.chars().count()).collect();
+        format!("{}{ellipsis}", t.trim_end())
     }
 }
 

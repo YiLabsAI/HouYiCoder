@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::mem::take;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Characters a display cap keeps from the head and from the newest end of a
 /// long text. The cap threshold belongs to the caller; the retention is this
@@ -50,9 +50,21 @@ pub(crate) fn truncate_width(s: &str, max_width: usize) -> String {
     }
     let ellipsis = detect_glyph_set().ellipsis();
     let ellipsis_width = UnicodeWidthStr::width(ellipsis);
-    // A width that leaves room for nothing but the mark still shows it.
+    // A width narrower than the mark itself keeps as much of the mark as
+    // fits, so a cut inside a very narrow column still reads as a cut and
+    // never widens the row past its budget.
     if max_width <= ellipsis_width {
-        return ellipsis.to_string();
+        let mut out = String::new();
+        let mut acc = 0usize;
+        for ch in ellipsis.chars() {
+            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if acc + width > max_width {
+                break;
+            }
+            acc += width;
+            out.push(ch);
+        }
+        return out;
     }
     let target = max_width - ellipsis_width;
     let mut acc = 0usize;

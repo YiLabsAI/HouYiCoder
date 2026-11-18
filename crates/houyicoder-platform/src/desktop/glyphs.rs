@@ -169,12 +169,14 @@ impl GlyphSet {
         }
     }
 
-    /// The ellipsis a truncation ends with. Both grades are one column wide, so
-    /// a column budget measures the same in either grade.
+    /// The ellipsis a truncation ends with. The safe form is three columns
+    /// wide, so a caller measures the mark with the display-width table
+    /// instead of assuming one column; a single dot would read as the end of
+    /// a sentence rather than as a cut.
     #[must_use]
     pub fn ellipsis(&self) -> &'static str {
         match self {
-            Self::Safe => ".",
+            Self::Safe => "...",
             Self::Rich => "…",
         }
     }

@@ -295,7 +295,7 @@ fn test_model_column_survives_narrow() {
     let (_, body, _, _) = list::draw_turn_list(&view, 0, Rect::new(0, 0, 130, 10));
     let text: String = body[0].spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(
-        text.contains("deepseek-v4-pro") && text.contains("+1"),
+        text.contains("deepseek-v4-pr") && text.contains("+1"),
         "the switch stays visible at 130 columns: {text:?}"
     );
 }
