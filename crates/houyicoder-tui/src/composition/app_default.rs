@@ -62,7 +62,7 @@ pub fn app() -> App {
             last_title: None,
             selection: Selections::default(),
             notifications: NotificationState::default(),
-            clipboard: Arc::new(SystemClipboard),
+            clipboard: Arc::new(SystemClipboard::new()),
             terminal_focused: true,
             quit: false,
             notification_wake: Default::default(),

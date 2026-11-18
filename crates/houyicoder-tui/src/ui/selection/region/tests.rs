@@ -14,7 +14,9 @@ use crate::records::{ToolOutcome, TranscriptLine};
 use crate::selection::region::{
     RegionIntent, clear_stale_click, edge_scroll_if_at_edge, paint_overlay,
 };
-use crate::selection::{CopyOutcome, Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN};
+use crate::selection::{
+    CopyReceipt, CopyReport, Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN,
+};
 use crate::state::App;
 use crate::test_harness::{render_text, working_app};
 
@@ -133,16 +135,44 @@ fn test_scroll_intents_move() {
     assert_eq!(app.whole_scroll().top_offset(), start);
 }
 
-/// A copy intent raises the notice for the copied text. The wording depends
-/// on the platform's clipboard (copied vs sent), the char count does not.
+/// A copy intent starts the write and claims nothing: the notice appears
+/// only when the background write reports, and then carries its outcome.
 #[test]
 fn test_copied_raises_notice() {
     let mut app = rendered_working();
 
-    app.apply_region_intent(RegionIntent::Copied("hi".into(), CopyOutcome::NativeCopied));
+    app.apply_region_intent(RegionIntent::Copied);
+    assert!(
+        !app.poll_copy_results(),
+        "the intent alone raises nothing; the write has not reported yet"
+    );
+    let before = render_text(&app, 80, 24);
+    assert!(
+        !before.contains("chars"),
+        "no notice is shown before the write reports:\n{before}"
+    );
+    app.ui.notifications.copy_receipts.send(CopyReceipt {
+        chars: 2,
+        outcome: CopyReport::NativeCopied,
+    });
+    app.poll_copy_results();
 
     let out = render_text(&app, 80, 24);
     assert!(out.contains("2 chars"), "the copy notice is shown:\n{out}");
+}
+
+/// A failed write still reports: the notice says the copy failed rather
+/// than staying silent about it.
+#[test]
+fn test_failed_copy_reports() {
+    let mut app = rendered_working();
+    app.ui.notifications.copy_receipts.send(CopyReceipt {
+        chars: 3,
+        outcome: CopyReport::CopyFailed,
+    });
+    app.poll_copy_results();
+    let out = render_text(&app, 80, 24);
+    assert!(out.contains("copy failed"), "the failure is shown:\n{out}");
 }
 
 /// A toggle intent clears the click it consumed, so the next press is not read

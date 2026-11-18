@@ -28,7 +28,7 @@ use crate::input::terminal_events::EventReader;
 use crate::keys;
 use crate::keys::filter::KeyFilter;
 use crate::keys::pane_predicates::child_action_pending;
-use crate::notifications::{NotifKind, Notification, copy_toast};
+use crate::notifications::{NotifKind, Notification};
 use crate::selection::region::{Region, RegionIntent, RegionView, TranscriptRegion, paint_overlay};
 use crate::state::{App, Pane, Screen, ViewportMode};
 use crate::terminal_guard::{CrosstermModes, TerminalGuard, assert_mouse_modes};
@@ -197,7 +197,16 @@ impl App {
             frame: &self.ui.frame,
             scroll_top,
             clipboard: self.ui.clipboard.as_ref(),
+            copy_results: &self.ui.notifications.copy_receipts,
         }
+    }
+
+    /// Drain the copy receipts a background write delivered, raising one
+    /// toast per receipt. Answers whether anything was raised, so the loop
+    /// can mark the frame dirty. The wake raised on send is what brings the
+    /// loop back; a receipt that lands between passes waits in the queue.
+    pub(crate) fn poll_copy_results(&mut self) -> bool {
+        self.ui.notifications.drain_copy_receipts()
     }
 
     /// Perform what a gesture asked for. The leaf decided which row it acted
@@ -255,8 +264,10 @@ impl App {
             }
             RegionIntent::ScrollUp => self.scroll_transcript_line_up(1),
             RegionIntent::ScrollDown => self.scroll_transcript_line_down(1),
-            RegionIntent::Copied(text, outcome) => {
-                self.ui.notifications.add(copy_toast(&text, outcome));
+            RegionIntent::Copied => {
+                // The write already started on a background thread; the
+                // toast arrives when poll_copy_results drains the receipt,
+                // so nothing is claimed before the result is known.
             }
         }
     }

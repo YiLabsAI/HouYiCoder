@@ -26,7 +26,9 @@ use ratatui::{
 };
 
 use crate::renderer::PreparedFrame;
-use crate::selection::{self, ClipboardWriter, CopyOutcome, Selection, anchor_row, extract_text};
+use crate::selection::{
+    self, ClipboardWriter, CopyResultQueue, Selection, anchor_row, extract_text,
+};
 use crate::selections::Selections;
 use crate::state::App;
 
@@ -79,8 +81,9 @@ pub(crate) fn finish_release(
     rect: Rect,
     rows: &[(u8, String)],
     clipboard: &dyn ClipboardWriter,
+    copy_results: &CopyResultQueue,
     persist: bool,
-) -> Option<(String, CopyOutcome)> {
+) -> Option<String> {
     sel.finish();
     sel.cursor = None;
     if sel.drag_moved {
@@ -92,11 +95,11 @@ pub(crate) fn finish_release(
     }
     let text = extract_text(rows, rect, sel);
     if !text.trim().is_empty() {
-        let outcome = clipboard.write(&text);
+        clipboard.write(&text, copy_results);
         if !persist {
             sel.clear();
         }
-        return Some((text, outcome));
+        return Some(text);
     }
     if !persist {
         sel.clear();
@@ -176,6 +179,7 @@ pub(crate) struct RegionParts<'a> {
     pub rows: Ref<'a, Vec<(u8, String)>>,
     pub rect: Rect,
     pub clipboard: &'a dyn ClipboardWriter,
+    pub copy_results: &'a CopyResultQueue,
 }
 
 /// Everything a selection leaf may read: the four per-region selections (a
@@ -193,6 +197,7 @@ pub(crate) struct RegionView<'a> {
     pub frame: &'a PreparedFrame,
     pub scroll_top: usize,
     pub clipboard: &'a dyn ClipboardWriter,
+    pub copy_results: &'a CopyResultQueue,
 }
 
 /// What a gesture asks the router to do beyond the shared mechanics. The leaf
@@ -221,9 +226,10 @@ pub(crate) enum RegionIntent {
     ScrollUp,
     /// Scroll one line down.
     ScrollDown,
-    /// Raise the copy notice for the text a release copied, with the
-    /// outcome the clipboard write reported.
-    Copied(String, CopyOutcome),
+    /// The release copied the text: the write has started on a background
+    /// thread and the loop raises the notice when the result queue reports
+    /// the outcome.
+    Copied,
 }
 
 /// A draggable, copyable text surface. The transcript and each slash-command
@@ -277,8 +283,8 @@ pub(crate) trait Region {
         self.reanchor();
         let persist = self.persist();
         let p = self.parts();
-        match finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist) {
-            Some((text, outcome)) => RegionIntent::Copied(text, outcome),
+        match finish_release(p.sel, p.rect, &p.rows, p.clipboard, p.copy_results, persist) {
+            Some(_) => RegionIntent::Copied,
             None => RegionIntent::None,
         }
     }
@@ -303,8 +309,8 @@ pub(crate) trait Region {
         if text.trim().is_empty() {
             return RegionIntent::None;
         }
-        let outcome = p.clipboard.write(&text);
-        RegionIntent::Copied(text, outcome)
+        p.clipboard.write(&text, p.copy_results);
+        RegionIntent::Copied
     }
 }
 
@@ -317,7 +323,14 @@ fn down_body<S: Region + ?Sized>(s: &mut S, x: u16, y: u16) {
     let (col, cr) = s.to_content(x, y);
     let p = s.parts();
     if was_dragging {
-        drop(finish_release(p.sel, p.rect, &p.rows, p.clipboard, persist));
+        drop(finish_release(
+            p.sel,
+            p.rect,
+            &p.rows,
+            p.clipboard,
+            p.copy_results,
+            persist,
+        ));
     }
     let count = p.sel.on_click(x, y);
     p.sel.cursor = Some((x, y));
@@ -374,6 +387,7 @@ impl Region for TranscriptRegion<'_> {
             rows,
             rect: layout.transcript_rect.get(),
             clipboard: self.view.clipboard,
+            copy_results: self.view.copy_results,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
@@ -521,6 +535,7 @@ impl Region for PaneRegion<'_> {
             rows,
             rect: layout.pane_rect.get(),
             clipboard: self.view.clipboard,
+            copy_results: self.view.copy_results,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
@@ -549,6 +564,7 @@ impl Region for ApprovalSelection<'_> {
             rows,
             rect: layout.approval_rect.get(),
             clipboard: self.view.clipboard,
+            copy_results: self.view.copy_results,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
@@ -611,6 +627,7 @@ impl Region for StatusRegion<'_> {
             rows,
             rect: layout.status_rect.get(),
             clipboard: self.view.clipboard,
+            copy_results: self.view.copy_results,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {

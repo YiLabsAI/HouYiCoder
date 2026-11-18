@@ -164,13 +164,14 @@ fn test_status_drag_and_moved() {
     );
 }
 
-/// Releasing a drag in the status bar copies the text it selected and says so.
-/// The notice is the router's job under the intent model, so every region
-/// reports a copy the same way. The wording depends on the platform's
-/// clipboard (copied vs sent), the char count does not.
+/// Releasing a drag in the status bar copies the text it selected and says
+/// so. The notice is the router's job under the intent model, so every
+/// region reports a copy the same way: the write reports through the result
+/// queue and the notice names the char count.
 #[test]
 fn test_status_release_copies() {
     let mut app = working_app();
+    app.ui.clipboard = Arc::new(RecordingClipboard::default());
     let _rendered = render_text(&app, 100, 28);
     let srect = app.ui.frame.layout.status_rect.get();
 
@@ -194,6 +195,9 @@ fn test_status_release_copies() {
         &mut app,
         mouse(MouseEventKind::Up(MouseButton::Left), srect.x + 20, srect.y),
     );
+    // The recording clipboard reports synchronously; drain the queue the
+    // way the loop would before reading the frame.
+    app.poll_copy_results();
 
     let out = render_text(&app, 100, 28);
     assert!(

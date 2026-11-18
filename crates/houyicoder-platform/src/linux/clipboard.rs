@@ -5,7 +5,7 @@ use std::env::var_os;
 use std::io::{Error, Result};
 use std::sync::Mutex;
 
-use crate::desktop::clipboard::run_utility;
+use crate::unix::clipboard::run_utility_unix;
 
 /// The utility that answered last, cached so a copy costs no probe.
 static ANSWERING_TOOL: Mutex<Option<Option<&'static str>>> = Mutex::new(None);
@@ -14,7 +14,7 @@ static ANSWERING_TOOL: Mutex<Option<Option<&'static str>>> = Mutex::new(None);
 /// to decide whether to also emit the terminal escape.
 pub(crate) fn copy(text: &str) -> Result<()> {
     if let Some((tool, args)) = answering_tool(text) {
-        run_utility(tool, args, text)
+        run_utility_unix(tool, args, text)
     } else {
         Err(Error::other("no clipboard utility answered"))
     }
@@ -32,11 +32,11 @@ fn answering_tool(text: &str) -> Option<(&'static str, &'static [&'static str])>
     }
     drop(cached);
     let wayland = var_os("WAYLAND_DISPLAY").is_some();
-    let winner = if wayland && run_utility("wl-copy", &[], text).is_ok() {
+    let winner = if wayland && run_utility_unix("wl-copy", &[], text).is_ok() {
         Some("wl-copy")
-    } else if run_utility("xclip", &["-selection", "clipboard"], text).is_ok() {
+    } else if run_utility_unix("xclip", &["-selection", "clipboard"], text).is_ok() {
         Some("xclip")
-    } else if run_utility("xsel", &["--clipboard", "--input"], text).is_ok() {
+    } else if run_utility_unix("xsel", &["--clipboard", "--input"], text).is_ok() {
         Some("xsel")
     } else {
         None

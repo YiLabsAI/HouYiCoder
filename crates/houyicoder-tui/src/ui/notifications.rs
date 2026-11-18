@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::style::Color;
 
-use crate::selection::CopyOutcome;
+use crate::selection::{CopyReport, CopyResultQueue};
 
 /// Default on-screen lifetime when a notification does not name its own.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(8000);
@@ -61,36 +61,35 @@ impl Notification {
     }
 }
 
-/// The copy-confirmation toast, driven by the outcome the clipboard write
-/// reported. Green marks a reliable success (native or tmux buffer); yellow
-/// marks an uncertain or fallback path (terminal escape, or a native failure
-/// that fell back to one); red marks a total failure where the selection is
-/// kept for a retry.
-pub fn copy_toast(text: &str, outcome: CopyOutcome) -> Notification {
-    let n = text.chars().count();
+/// The copy-confirmation toast, driven by what the background write
+/// reported. Green marks a reliable success (native or tmux buffer); a
+/// plain terminal request is neutral because the process cannot verify the
+/// terminal received it; yellow marks a native failure that fell back to
+/// the escape; red marks a copy no path delivered.
+pub fn copy_toast(chars: usize, outcome: CopyReport) -> Notification {
     let (msg, timeout, color) = match outcome {
-        CopyOutcome::NativeCopied => (
-            format!("copied {n} chars"),
+        CopyReport::NativeCopied => (
+            format!("copied {chars} chars"),
             Duration::from_millis(2000),
             Color::Green,
         ),
-        CopyOutcome::TmuxBufferCopied => (
-            format!("copied {n} chars to tmux buffer · prefix + ]"),
+        CopyReport::TmuxBufferCopied => (
+            format!("copied {chars} chars to tmux buffer · prefix + ]"),
             Duration::from_millis(4000),
             Color::Green,
         ),
-        CopyOutcome::TerminalRequested => (
-            format!("copy requested via terminal ({n} chars)"),
+        CopyReport::TerminalRequested => (
+            format!("copy requested via terminal ({chars} chars)"),
             Duration::from_millis(3000),
-            Color::Yellow,
+            Color::Gray,
         ),
-        CopyOutcome::NativeFailedTerminalRequested => (
-            format!("native copy failed; requested via terminal ({n} chars)"),
+        CopyReport::NativeFailedTerminalRequested => (
+            format!("native copy failed; requested via terminal ({chars} chars)"),
             Duration::from_millis(4000),
             Color::Yellow,
         ),
-        CopyOutcome::CopyFailed => (
-            format!("copy failed · selection kept ({n} chars)"),
+        CopyReport::CopyFailed => (
+            format!("copy failed ({chars} chars)"),
             Duration::from_millis(3000),
             Color::Red,
         ),
@@ -114,9 +113,25 @@ struct Current {
 pub struct NotificationState {
     current: Option<Current>,
     queue: Vec<Notification>,
+    /// The receipts a background clipboard write reports. The toast the
+    /// receipt raises is this state's product, so the queue it drains from
+    /// lives here: the loop calls drain_copy_receipts each pass and the
+    /// toasts land in the same place every other notice does.
+    pub copy_receipts: CopyResultQueue,
 }
 
 impl NotificationState {
+    /// Drain the clipboard receipts a background write delivered, raising
+    /// one toast per receipt. Answers whether anything was raised, so the
+    /// loop can mark the frame dirty.
+    pub fn drain_copy_receipts(&mut self) -> bool {
+        let receipts = self.copy_receipts.drain();
+        let raised = !receipts.is_empty();
+        for receipt in receipts {
+            self.add(copy_toast(receipt.chars, receipt.outcome));
+        }
+        raised
+    }
     pub fn add(&mut self, n: Notification) {
         if n.priority == Priority::Immediate {
             // Preempt the current entry; a non-immediate displaced entry

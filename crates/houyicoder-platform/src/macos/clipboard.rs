@@ -3,7 +3,10 @@
 
 use std::io::Result;
 
-use crate::desktop::clipboard::run_utility;
+use crate::unix::clipboard::run_utility_unix;
+
+#[cfg(test)]
+mod tests;
 
 /// The absolute path to the macOS clipboard utility, never a bare name: a bare
 /// name is resolved through the search path, and a directory earlier on it
@@ -14,5 +17,5 @@ pub(crate) const CLIP_TOOL: &str = "/usr/bin/pbcopy";
 /// whether to also emit the terminal escape: a clean run is the whole copy,
 /// and a failure is the reason to fall back.
 pub(crate) fn copy(text: &str) -> Result<()> {
-    run_utility(CLIP_TOOL, &[], text)
+    run_utility_unix(CLIP_TOOL, &[], text)
 }

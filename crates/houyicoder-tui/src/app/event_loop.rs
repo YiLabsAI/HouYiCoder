@@ -205,6 +205,9 @@ pub(crate) fn run(
         if app.poll_agent() {
             dirty = true;
         }
+        if app.poll_copy_results() {
+            dirty = true;
+        }
         if app.agent_busy() != reported_busy {
             if let Err(e) = set_terminal_progress(app.agent_busy()) {
                 tracing::warn!(error = %e, "terminal progress update failed");

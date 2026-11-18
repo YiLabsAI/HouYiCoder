@@ -108,7 +108,7 @@ fn test_tick_keeps_before_expiry() {
 
 #[test]
 fn test_copy_toast_pins_config() {
-    let native = copy_toast("hello", CopyOutcome::NativeCopied);
+    let native = copy_toast(5, CopyReport::NativeCopied);
     assert_eq!(native.key, "selection-copied");
     assert_eq!(native.priority, Priority::Immediate);
     assert_eq!(native.timeout, Duration::from_millis(2000));
@@ -118,22 +118,22 @@ fn test_copy_toast_pins_config() {
             assert_eq!(*color, Some(Color::Green));
         }
     }
-    let tmux = copy_toast("abc", CopyOutcome::TmuxBufferCopied);
+    let tmux = copy_toast(3, CopyReport::TmuxBufferCopied);
     assert_eq!(tmux.timeout, Duration::from_millis(4000));
     match &tmux.kind {
         NotifKind::Text { text, .. } => {
             assert_eq!(text, "copied 3 chars to tmux buffer · prefix + ]")
         }
     }
-    let osc = copy_toast("xy", CopyOutcome::TerminalRequested);
+    let osc = copy_toast(2, CopyReport::TerminalRequested);
     assert_eq!(osc.timeout, Duration::from_millis(3000));
     match &osc.kind {
         NotifKind::Text { text, color } => {
             assert_eq!(text, "copy requested via terminal (2 chars)");
-            assert_eq!(*color, Some(Color::Yellow));
+            assert_eq!(*color, Some(Color::Gray));
         }
     }
-    let failed_native = copy_toast("hi", CopyOutcome::NativeFailedTerminalRequested);
+    let failed_native = copy_toast(2, CopyReport::NativeFailedTerminalRequested);
     assert_eq!(failed_native.timeout, Duration::from_millis(4000));
     match &failed_native.kind {
         NotifKind::Text { text, color } => {
@@ -141,11 +141,11 @@ fn test_copy_toast_pins_config() {
             assert_eq!(*color, Some(Color::Yellow));
         }
     }
-    let failed = copy_toast("hi", CopyOutcome::CopyFailed);
+    let failed = copy_toast(2, CopyReport::CopyFailed);
     assert_eq!(failed.timeout, Duration::from_millis(3000));
     match &failed.kind {
         NotifKind::Text { text, color } => {
-            assert_eq!(text, "copy failed · selection kept (2 chars)");
+            assert_eq!(text, "copy failed (2 chars)");
             assert_eq!(*color, Some(Color::Red));
         }
     }

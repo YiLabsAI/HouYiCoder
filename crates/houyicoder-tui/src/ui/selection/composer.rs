@@ -27,6 +27,7 @@ impl Region for InputRegion<'_> {
             rows,
             rect: layout.input_rect.get(),
             clipboard: self.view.clipboard,
+            copy_results: self.view.copy_results,
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
