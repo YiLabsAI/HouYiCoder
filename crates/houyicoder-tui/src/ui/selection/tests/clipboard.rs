@@ -6,8 +6,14 @@
 
 #![cfg(test)]
 
+use std::process::Command;
+
+#[cfg(unix)]
+use super::super::clipboard::tmux_load_buffer;
+#[cfg(target_os = "macos")]
+use super::super::clipboard::write_clipboard;
 use super::super::clipboard::{
-    CopyInputs, decide_outcome, emit_osc52, raw_osc52, tmux_passthrough_osc52,
+    CopyInputs, decide_outcome, emit_osc52, raw_osc52, tmux_passthrough_osc52, wait_bounded,
 };
 use crate::selection::CopyOutcome;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -185,6 +191,65 @@ fn test_emit_osc52_reports_requested() {
 #[test]
 fn test_emit_osc52_tmux_form() {
     assert_eq!(emit_osc52("hi", true), CopyOutcome::TerminalRequested);
+}
+
+/// A subprocess that exits cleanly reports success through the bounded wait.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test scaffolding, not an engine spawn"
+)]
+fn test_wait_bounded_success() {
+    let mut child = Command::new("true").spawn().expect("spawn true");
+    assert!(wait_bounded(&mut child), "a clean exit is a success");
+}
+
+/// A subprocess that exits non-zero reports failure through the bounded wait.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test scaffolding, not an engine spawn"
+)]
+fn test_wait_bounded_failure() {
+    let mut child = Command::new("false").spawn().expect("spawn false");
+    assert!(!wait_bounded(&mut child), "a non-zero exit is a failure");
+}
+
+/// A subprocess that takes a moment exercises the poll loop: the first
+/// try_wait returns None (still running), the deadline check passes, and
+/// the next poll finds the child exited.
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test scaffolding, not an engine spawn"
+)]
+fn test_wait_bounded_polls() {
+    let mut child = Command::new("sleep")
+        .arg("0.1")
+        .spawn()
+        .expect("spawn sleep");
+    assert!(wait_bounded(&mut child), "the child exits within the bound");
+}
+
+/// The tmux load-buffer path spawns a subprocess and waits for it through
+/// the bounded wait. Whether tmux accepts the buffer or not, the path
+/// through wait_bounded is exercised.
+#[cfg(unix)]
+#[test]
+fn test_tmux_load_buffer_exits() {
+    // The call returns true or false depending on whether tmux accepted the
+    // buffer; either way it does not hang, which is the property under test.
+    let _ = tmux_load_buffer("test");
+}
+
+/// On macOS without SSH or tmux, write_clipboard calls pbcopy and reports a
+/// native copy. The text reaches the system clipboard through the native
+/// path rather than the terminal escape.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_write_clipboard_native() {
+    assert_eq!(write_clipboard("test"), CopyOutcome::NativeCopied);
 }
 
 /// Raw OSC 52 uses BEL, not ST, for wider terminal support.

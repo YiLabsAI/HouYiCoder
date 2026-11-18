@@ -12,11 +12,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 /// Spinner glyph rotation (8 frames), 120 ms per frame. The braille block
-/// glyphs are Neutral width on every terminal and ship in Cascadia Code,
-/// Consolas, and every modern monospace font, so the spinner never pushes
-/// the verb text or renders as a missing-glyph box. The live row is rebuilt
-/// each draw from the run-start Instant so the animation needs no mutable
-/// tick state.
+/// glyphs are Neutral width on every terminal, and Cascadia Code and
+/// Consolas both carry the braille block, so the spinner holds one column
+/// on the terminals this product targets. Width does not guarantee a glyph
+/// is present in every font, but the braille block has far wider coverage
+/// than the Dingbats block it replaces. The live row is rebuilt each draw
+/// from the run-start Instant so the animation needs no mutable tick state.
 const SPINNER_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 /// The spinner glyph for a point in time, rotating through the braille

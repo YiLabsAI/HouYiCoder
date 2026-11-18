@@ -15,6 +15,10 @@ use std::io::{Error, Result};
 use std::io::{Error, Result, Write};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::{Command, Stdio};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::thread::sleep;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::time::{Duration, Instant};
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
@@ -42,13 +46,31 @@ pub(crate) fn run_utility(program: &str, args: &[&str], text: &str) -> Result<()
         stdin.write_all(text.as_bytes())?;
         drop(stdin);
     }
-    let status = child.wait()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::other("the clipboard utility exited non-zero"))
+    let deadline = Instant::now() + CLIPBOARD_TIMEOUT;
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                if status.success() {
+                    return Ok(());
+                } else {
+                    return Err(Error::other("the clipboard utility exited non-zero"));
+                }
+            }
+            None => {
+                if Instant::now() >= deadline {
+                    drop(child.kill());
+                    drop(child.wait());
+                    return Err(Error::other("the clipboard utility timed out"));
+                }
+                sleep(Duration::from_millis(10));
+            }
+        }
     }
 }
+
+/// How long a clipboard subprocess may run before it is killed.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Whether a native clipboard write is worth trying on this host.
 ///

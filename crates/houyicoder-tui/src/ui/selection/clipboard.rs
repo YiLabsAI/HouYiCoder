@@ -1,21 +1,22 @@
 //! Clipboard delivery for a completed selection.
 //!
-//! The write is synchronous: the native clipboard API and the terminal
-//! escape both complete in microseconds, so the result is known before the
-//! gesture's intent returns to the loop. A typed outcome carries that result
-//! so the toast reports what happened rather than what was predicted.
+//! The write is synchronous with a bounded wait: the native clipboard API
+//! and the terminal escape both complete in microseconds, and the subprocess
+//! utilities (pbcopy, xclip, tmux load-buffer) are killed after two seconds
+//! if they hang. A typed outcome carries the result so the toast reports
+//! what happened rather than what was predicted.
 
 use std::env::var_os;
 use std::io::stdout;
 use std::io::{Result, Write as _};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use houyicoder_platform::desktop::clipboard::{
-    copy_to_native_clipboard, native_clipboard_preferred,
-};
+use houyicoder_platform::desktop::clipboard::copy_to_native_clipboard;
 
 /// What a clipboard write accomplished. The toast the loop raises reads this
 /// rather than a predicted path, so a native failure that fell back to the
@@ -76,34 +77,36 @@ impl ClipboardWriter for RecordingClipboard {
 }
 
 /// Write text to the clipboard through the most robust path available, and
-/// report what happened. The priority: (1) the tmux paste buffer when inside
-/// tmux, tried before native because it works over SSH too: the buffer is on
-/// the remote tmux server and -w bridges to the outer terminal; (2) the
-/// native clipboard where the host offers one, gated on SSH because a native
-/// utility would write to the remote clipboard; (3) the terminal escape as
-/// the final fallback. A native success suppresses the escape so the two
-/// writers never compete for the same clipboard.
+/// report what happened. The tmux paste buffer is tried first when inside
+/// tmux, because it works over SSH too. The native clipboard is tried
+/// whenever the session is local, regardless of whether the host is known
+/// to prefer it, and a probe that finds no tool simply fails and falls
+/// back. The terminal escape is the final fallback. A native success
+/// suppresses the escape so the two writers never compete.
 pub fn write_clipboard(text: &str) -> CopyOutcome {
     let in_ssh = var_os("SSH_CONNECTION").is_some();
     let in_tmux = var_os("TMUX").is_some();
-    if in_tmux && tmux_load_buffer(text) {
+    let tmux_buffer_ok = in_tmux && tmux_load_buffer(text);
+    if tmux_buffer_ok {
         return CopyOutcome::TmuxBufferCopied;
     }
-    if !in_ssh && native_clipboard_preferred() {
-        return match copy_to_native_clipboard(text) {
-            Ok(()) => CopyOutcome::NativeCopied,
-            Err(_) => match emit_osc52(text, in_tmux) {
-                CopyOutcome::TerminalRequested => CopyOutcome::NativeFailedTerminalRequested,
-                other => other,
-            },
-        };
-    }
-    emit_osc52(text, in_tmux)
+    let native_available = !in_ssh;
+    let native_ok = native_available && copy_to_native_clipboard(text).is_ok();
+    let osc52_ok = native_ok || emit_osc52(text, in_tmux) != CopyOutcome::CopyFailed;
+    decide_outcome(CopyInputs {
+        in_ssh,
+        in_tmux,
+        tmux_buffer_ok,
+        native_available,
+        native_ok,
+        osc52_ok,
+    })
 }
 
-/// The inputs to the outcome decision, collected so the pure test helper
-/// takes one value rather than a row of bools the workspace forbids.
-#[cfg(test)]
+/// The inputs to the outcome decision, collected so the pure decision
+/// function takes one value rather than a row of bools the workspace
+/// forbids. Production and tests share this type so the branching cannot
+/// diverge between them.
 pub(crate) struct CopyInputs {
     pub in_ssh: bool,
     pub in_tmux: bool,
@@ -116,9 +119,8 @@ pub(crate) struct CopyInputs {
 /// The outcome a write reports, given which paths are available and which
 /// succeeded. Pure so tests exercise the SSH gate, the tmux fallback, and
 /// the native-success suppression of the escape without calling system APIs.
-/// The branching mirrors write_clipboard exactly: tmux first (works over
-/// SSH), then native (gated on SSH), then the escape.
-#[cfg(test)]
+/// Production calls this after gathering the side-effect results, so the
+/// decision logic lives in one place rather than being duplicated.
 pub(crate) fn decide_outcome(c: CopyInputs) -> CopyOutcome {
     // tmux: tried before native because it works over SSH too. The buffer
     // is on the remote tmux server, and -w bridges to the outer terminal.
@@ -141,7 +143,6 @@ pub(crate) fn decide_outcome(c: CopyInputs) -> CopyOutcome {
 }
 
 /// The outcome from an OSC 52 emit, given whether the write reached stdout.
-#[cfg(test)]
 fn osc_outcome(osc52_ok: bool) -> CopyOutcome {
     if osc52_ok {
         CopyOutcome::TerminalRequested
@@ -185,7 +186,7 @@ pub(crate) fn tmux_passthrough_osc52(b64: &str) -> String {
 /// propagates to the outer terminal via the multiplexer own OSC 52; dropped
 /// for iTerm2 where that emission crashes an SSH session.
 #[expect(clippy::disallowed_methods, reason = "infra spawn, not model-driven")]
-fn tmux_load_buffer(text: &str) -> bool {
+pub(crate) fn tmux_load_buffer(text: &str) -> bool {
     let args: &[&str] = if var_os("LC_TERMINAL").is_some_and(|v| v == "iTerm2") {
         &["load-buffer", "-"]
     } else {
@@ -201,7 +202,7 @@ fn tmux_load_buffer(text: &str) -> bool {
                 let _r = stdin.write_all(text.as_bytes());
                 drop(stdin);
             }
-            child.wait().map(|s| s.success()).unwrap_or(false)
+            wait_bounded(&mut child)
         }
         Err(_) => false,
     }
@@ -214,4 +215,23 @@ fn emit_raw(seq: &str) -> Result<()> {
     let mut out = stdout().lock();
     out.write_all(seq.as_bytes())?;
     out.flush()
+}
+
+/// How long a clipboard subprocess may run before it is killed. pbcopy,
+/// xclip, and tmux load-buffer are all fast in normal use; a hang past this
+/// bound is a pathology the TUI must not freeze on.
+const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Wait for a child with a bounded deadline, killing it if it does not
+/// exit in time. Returns whether the child exited successfully.
+pub(crate) fn wait_bounded(child: &mut Child) -> bool {
+    let deadline = Instant::now() + CLIPBOARD_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            return status.success();
+        }
+        sleep(Duration::from_millis(10));
+    }
+    drop(child.kill());
+    child.wait().is_ok_and(|s| s.success())
 }
