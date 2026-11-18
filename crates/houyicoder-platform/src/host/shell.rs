@@ -110,12 +110,15 @@ impl ShellProgram {
 /// that is set wins, otherwise zero. Capturing $? first closes the quadrant
 /// where a native succeeded ($LASTEXITCODE zero) and a later cmdlet failed --
 /// the old form saw the non-null zero and exited zero, swallowing the failure.
-/// Pure so the wrapping is testable without a PowerShell process; the
-/// four-quadrant exit behavior is pinned by an ignored suite that runs where the
-/// shell is installed.
+/// The wrapper also negotiates UTF-8 for cmdlet and native output before the
+/// command starts. Pure so the wrapping is testable without a PowerShell
+/// process; the four-quadrant exit behavior is pinned by an ignored suite that
+/// runs where the shell is installed.
 pub fn pwsh_command(command: &str) -> String {
     format!(
-        "& {{ $global:LASTEXITCODE = $null; {command}; $__ok = $?; \
+        "& {{ [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); \
+         $OutputEncoding = [Console]::OutputEncoding; \
+         $global:LASTEXITCODE = $null; {command}; $__ok = $?; \
          if (-not $__ok) {{ if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} exit 1 }} \
          if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }} exit 0 }}"
     )

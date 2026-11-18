@@ -77,6 +77,16 @@ fn test_tail_replaces_bad_byte() {
     assert_eq!(tail.snapshot(), vec!["ok \u{fffd} done", "next"]);
 }
 
+#[test]
+fn test_tail_decodes_utf16_chunks() {
+    let tail = CommandTail::with_encoding(OutputEncoding::Utf16Le);
+    let bytes: Vec<u8> = "中文\n".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    tail.push_encoded(CapturedStream::Stdout, &bytes[..3]);
+    assert_eq!(tail.snapshot(), vec!["中"]);
+    tail.push_encoded(CapturedStream::Stdout, &bytes[3..]);
+    assert_eq!(tail.snapshot(), vec!["中文"]);
+}
+
 /// A receiver that records what it saw and answers with a fixed verdict, so
 /// the test can prove the tail neither swallows nor duplicates a chunk.
 struct RecordingReceiver {

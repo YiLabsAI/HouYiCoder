@@ -8,6 +8,7 @@
 
 use houyicoder_api::capture::{CaptureVerdict, CapturedStream, RawOutputReceiver};
 use houyicoder_context::SandboxError;
+use houyicoder_platform::host::text::{OutputEncoding, decode_complete};
 use std::future::Future;
 use std::io::{Error, Result};
 use std::pin::Pin;
@@ -40,20 +41,29 @@ pub(crate) const DRAIN_GRACE: Duration = Duration::from_millis(250);
 pub(crate) struct CapturedOutput {
     stdout: Mutex<Vec<u8>>,
     stderr: Mutex<Vec<u8>>,
+    encoding: OutputEncoding,
 }
 
 impl CapturedOutput {
-    /// Everything read from stdout, in order. Bytes that are not valid text
-    /// become the replacement character rather than failing the read.
+    /// A capture whose streams use the encoding declared by their interpreter.
+    pub(crate) fn new(encoding: OutputEncoding) -> Self {
+        Self {
+            encoding,
+            ..Self::default()
+        }
+    }
+
+    /// Everything read from stdout, in order, decoded under the encoding the
+    /// command interpreter declared for this capture.
     pub(crate) fn stdout_text(&self) -> String {
         let bytes = self.stdout.lock().unwrap_or_else(|e| e.into_inner());
-        String::from_utf8_lossy(&bytes).into_owned()
+        decode_complete(&bytes, self.encoding)
     }
 
     /// Everything read from stderr, in order.
     pub(crate) fn stderr_text(&self) -> String {
         let bytes = self.stderr.lock().unwrap_or_else(|e| e.into_inner());
-        String::from_utf8_lossy(&bytes).into_owned()
+        decode_complete(&bytes, self.encoding)
     }
 
     /// The answer a wall-clock stop becomes, carrying the streams read so

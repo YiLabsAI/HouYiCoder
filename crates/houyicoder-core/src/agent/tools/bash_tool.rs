@@ -252,7 +252,7 @@ impl Tool for BashTool {
                 (Some(source), Some(session_id)) => source.begin(session_id, &ctx.call_id, "bash"),
                 _ => None,
             };
-            let tail = CommandTail::new();
+            let tail = CommandTail::with_encoding(session.output_encoding());
             let receiver: Option<Arc<dyn RawOutputReceiver>> =
                 Some(Arc::new(TailingReceiver::new(
                     tail.clone(),

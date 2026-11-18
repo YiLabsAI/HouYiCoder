@@ -18,6 +18,7 @@ use houyicoder_api::sandbox::{
 };
 use houyicoder_async::PFut;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_platform::host::text::OutputEncoding;
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use nix::sys::signal::Signal;
 use nix::sys::signal::kill;
@@ -289,7 +290,7 @@ impl LinuxLandlockSession {
         let _tree_guard = TreeKillGuard { pgid };
         // The bytes land in collected as they arrive, so a wall-clock stop
         // still reports what the command printed before it was cut off.
-        let collected = CapturedOutput::default();
+        let collected = CapturedOutput::new(OutputEncoding::Utf8);
         let outcome = timeout(
             wall,
             capture(child, None, &collected, DRAIN_GRACE, receiver.as_deref()),

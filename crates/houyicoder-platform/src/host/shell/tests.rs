@@ -162,6 +162,16 @@ fn test_pwsh_command_resets_exit() {
 }
 
 #[test]
+fn test_pwsh_command_selects_utf8() {
+    let wrapped = super::pwsh_command("Get-Location");
+    assert!(
+        wrapped.contains("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)")
+            && wrapped.contains("$OutputEncoding = [Console]::OutputEncoding"),
+        "the wrapper negotiates UTF-8 output: {wrapped}"
+    );
+}
+
+#[test]
 fn test_shell_dialect_mapping() {
     assert_eq!(ShellProgram::Posix.shell(), Shell::Posix);
     assert_eq!(ShellProgram::Cmd.shell(), Shell::Cmd);

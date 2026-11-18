@@ -8,11 +8,11 @@
 
 use std::collections::VecDeque;
 use std::mem::take;
-use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use houyicoder_async::PFut;
+use houyicoder_platform::host::text::{OutputEncoding, StreamDecoder};
 use houyicoder_protocol::frontend::BackgroundTaskId;
 use serde_json::Value;
 
@@ -39,9 +39,10 @@ struct TailState {
     /// Characters in partial, carried as it grows. Counting the whole string
     /// per character would make a long line cost its own length squared.
     partial_chars: usize,
-    /// Bytes of a codepoint split across two writes, held until the rest
-    /// arrives rather than decoded as a replacement character.
-    undecoded: Vec<u8>,
+    /// Independent decoders keep a partial code unit on one stream from being
+    /// completed by bytes arriving on the other.
+    stdout: StreamDecoder,
+    stderr: StreamDecoder,
 }
 
 /// A bounded window over the most recent lines a command printed.
@@ -61,41 +62,34 @@ impl CommandTail {
         Self::default()
     }
 
-    /// Add one chunk of raw output. Lines are split across chunk boundaries,
-    /// so a pipe read that ends mid-line does not split the visible line, and
-    /// a codepoint split across two chunks is held until its bytes are whole.
-    pub fn push_bytes(&self, bytes: &[u8]) {
-        let mut state = self.state.lock().expect("command tail lock");
-        let mut pending = take(&mut state.undecoded);
-        pending.extend_from_slice(bytes);
-        let mut rest = &pending[..];
-        loop {
-            match str::from_utf8(rest) {
-                Ok(text) => {
-                    Self::push_text(&mut state, text);
-                    rest = &[];
-                    break;
-                }
-                Err(error) => {
-                    let valid = error.valid_up_to();
-                    if let Ok(valid_text) = str::from_utf8(&rest[..valid]) {
-                        Self::push_text(&mut state, valid_text);
-                    }
-                    rest = &rest[valid..];
-                    match error.error_len() {
-                        // A byte that cannot start a codepoint is replaced
-                        // and skipped, so one bad byte does not stall the
-                        // window behind it.
-                        Some(len) => {
-                            Self::push_text(&mut state, "\u{fffd}");
-                            rest = &rest[len..];
-                        }
-                        None => break,
-                    }
-                }
-            }
+    /// A tail whose two output streams use the declared encoding.
+    #[must_use]
+    pub fn with_encoding(encoding: OutputEncoding) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(TailState {
+                stdout: StreamDecoder::new(encoding),
+                stderr: StreamDecoder::new(encoding),
+                ..TailState::default()
+            })),
         }
-        state.undecoded = rest.to_vec();
+    }
+
+    /// Add one UTF-8 chunk of standard output.
+    pub fn push_bytes(&self, bytes: &[u8]) {
+        self.push_encoded(CapturedStream::Stdout, bytes);
+    }
+
+    /// Add one chunk from the named stream. Lines are split across chunk
+    /// boundaries, and each stream's decoder retains incomplete code units
+    /// until the rest arrives.
+    pub fn push_encoded(&self, stream: CapturedStream, bytes: &[u8]) {
+        let mut state = self.state.lock().expect("command tail lock");
+        let decoder = match stream {
+            CapturedStream::Stdout => &mut state.stdout,
+            CapturedStream::Stderr => &mut state.stderr,
+        };
+        let text = decoder.push(bytes);
+        Self::push_text(&mut state, &text);
     }
 
     fn push_text(state: &mut TailState, text: &str) {
@@ -172,7 +166,7 @@ impl TailingReceiver {
 
 impl RawOutputReceiver for TailingReceiver {
     fn receive(&self, stream: CapturedStream, bytes: &[u8]) -> CaptureVerdict {
-        self.tail.push_bytes(bytes);
+        self.tail.push_encoded(stream, bytes);
         match &self.capture {
             Some(capture) => capture.receive(stream, bytes),
             None => CaptureVerdict::Continue,

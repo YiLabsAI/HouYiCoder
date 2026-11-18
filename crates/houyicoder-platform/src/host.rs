@@ -6,6 +6,7 @@ pub mod net;
 pub mod process;
 pub mod secrets;
 pub mod shell;
+pub mod text;
 
 use std::env::{current_dir, temp_dir};
 use std::path::{Path, PathBuf};

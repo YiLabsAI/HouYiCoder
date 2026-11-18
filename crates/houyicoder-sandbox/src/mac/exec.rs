@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use houyicoder_api::capture::RawOutputReceiver;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
+use houyicoder_platform::host::text::OutputEncoding;
 use houyicoder_resilience::resource_breaker::SpawnEvent;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -134,7 +135,7 @@ impl MacSeatbeltSession {
         // wall-timeout wraps the drain; on timeout tokio cancels it → child
         // drops (kill_on_drop) → _tree_guard killpg, and the bytes already
         // read stay in collected for the caller.
-        let collected = CapturedOutput::default();
+        let collected = CapturedOutput::new(OutputEncoding::Utf8);
         let outcome = timeout(
             wall,
             capture(

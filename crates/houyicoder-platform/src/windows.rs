@@ -12,6 +12,7 @@ pub(crate) mod process;
 mod secrets;
 pub(crate) mod shell;
 pub(crate) mod terminal;
+pub(crate) mod text;
 pub(crate) mod user;
 
 pub(crate) use fs::atomic_replace;

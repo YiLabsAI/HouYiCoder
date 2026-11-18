@@ -18,6 +18,7 @@ use crate::capture::RawOutputReceiver;
 use crate::shell::Shell;
 use houyicoder_async::PFut;
 use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError};
+use houyicoder_platform::host::text::{OutputEncoding, output_encoding_for_shell};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -405,6 +406,12 @@ pub trait SandboxSession: Send + Sync {
     /// shell needs translating before it is judged and run.
     fn shell(&self) -> Shell {
         Shell::Posix
+    }
+
+    /// The encoding this session's output streams use. It follows the actual
+    /// interpreter rather than the host console's code page.
+    fn output_encoding(&self) -> OutputEncoding {
+        output_encoding_for_shell(self.shell())
     }
 
     /// The kernel fence status after construction. The composition root

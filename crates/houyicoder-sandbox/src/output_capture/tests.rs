@@ -6,6 +6,7 @@ use houyicoder_api::capture::{
     CaptureStop, CaptureStopReason, CaptureVerdict, CapturedStream, RawOutputReceiver,
 };
 use houyicoder_context::SandboxError;
+use houyicoder_platform::host::text::OutputEncoding;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::process::Stdio;
@@ -14,6 +15,18 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::time::timeout;
+
+#[test]
+fn test_timeout_decodes_utf16_output() {
+    let captured = CapturedOutput::new(OutputEncoding::Utf16Le);
+    let bytes: Vec<u8> = "中文".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    captured.push_stdout(&bytes);
+    let error = captured.timeout_error("stopped".to_string());
+    match error {
+        SandboxError::Timeout { stdout, .. } => assert_eq!(stdout, "中文"),
+        other => panic!("unexpected error: {other}"),
+    }
+}
 
 /// A shell that reads stdin finishes at once: the drain sets stdin to end of
 /// file, so a pipe the caller handed in cannot hold it open. Asserted with a

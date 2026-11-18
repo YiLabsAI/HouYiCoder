@@ -20,6 +20,7 @@ use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
 use houyicoder_platform::host::process::{
     NativeChild, build_cmd_line, build_command_line, spawn_fenced, spawn_unfenced,
 };
+use houyicoder_platform::host::text::{decode_complete, output_encoding_for_shell};
 use houyicoder_resilience::resource_breaker::ResourceBreaker;
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all};
@@ -249,7 +250,8 @@ impl WindowsJobSession {
         })?;
         // The bytes land in collected as they arrive, so a wall-clock stop
         // still reports what the command printed before the tree ended.
-        let collected = CapturedOutput::default();
+        let encoding = output_encoding_for_shell(self.shell());
+        let collected = CapturedOutput::new(encoding);
         let outcome = timeout(
             wall,
             capture_streams(
@@ -271,8 +273,8 @@ impl WindowsJobSession {
         }
         match outcome {
             Ok(Ok(output)) => Ok(ExecResult {
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                stdout: decode_complete(&output.stdout, encoding),
+                stderr: decode_complete(&output.stderr, encoding),
                 exit_code: output.status.code(),
             }),
             Ok(Err(e)) => Err(SandboxError::Io(format!("drain: {e}"))),
