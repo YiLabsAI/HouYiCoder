@@ -1,5 +1,7 @@
 use std::thread;
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+
 use super::*;
 
 /// Teammate-view strip + stay journey: when the user drills into a
@@ -252,7 +254,10 @@ fn test_strip_completed_check_glyph() {
     s.send_str("find auth");
     s.send_str("\r");
     assert!(
-        s.wait_for_compact("✓findauth", RENDER_TIMEOUT * 2),
+        s.wait_for_compact(
+            &format!("{}findauth", detect_glyph_set().gate_open()),
+            RENDER_TIMEOUT * 2
+        ),
         "completed strip should show the check glyph + type:\n{}",
         s.output()
     );
@@ -273,7 +278,10 @@ fn test_strip_shift_arrows_enter() {
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
-    assert!(s.wait_for_compact("✓findauth", RENDER_TIMEOUT * 2));
+    assert!(s.wait_for_compact(
+        &format!("{}findauth", detect_glyph_set().gate_open()),
+        RENDER_TIMEOUT * 2
+    ));
     s.send_key(&Key::ShiftUp);
     s.send_key(&Key::ShiftDown);
     s.send_str("\r");
@@ -360,7 +368,13 @@ fn test_finished_trace_row() {
     s.send_str("find auth");
     s.send_str("\r");
     assert!(
-        s.wait_for_compact("\u{25cf}Agent\"findauth\"finished", RENDER_TIMEOUT * 3),
+        s.wait_for_compact(
+            &format!(
+                "{}Agent\"findauth\"finished",
+                detect_glyph_set().assistant_marker()
+            ),
+            RENDER_TIMEOUT * 3
+        ),
         "the finished child should leave a trace row in the transcript:\n{}",
         s.output()
     );

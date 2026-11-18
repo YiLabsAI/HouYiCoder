@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -464,7 +465,10 @@ fn test_hop_expansion_isolation() {
     // more than the changed cells, while the reconstructed screen states the
     // row the user actually sees selected.
     assert!(
-        s.wait_for_screen("▶ ✓ explore", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("▶ {} explore", detect_glyph_set().gate_open()),
+            RENDER_TIMEOUT
+        ),
         "the older delegation is selected before Enter:\n{}",
         s.screen().contents()
     );

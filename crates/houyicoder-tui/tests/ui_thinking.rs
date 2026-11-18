@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_in_result)]
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_scripted};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 /// A response that streams a reasoning item, then a bash ToolCall, then plain
 /// text to end the run after the approve. The call redirects its output: in
@@ -67,7 +68,10 @@ fn test_no_live_thinking_block() {
     // read waits on the rebuilt screen instead of sampling the byte stream at
     // one instant.
     assert!(
-        s.wait_for_screen_compact("✻Thoughtfor", RENDER_TIMEOUT),
+        s.wait_for_screen_compact(
+            &format!("{}Thoughtfor", detect_glyph_set().notice_marker()),
+            RENDER_TIMEOUT
+        ),
         "the reasoning should land as a collapsed transcript line:\n{}\nscreen:\n{}",
         s.output(),
         s.screen().contents()

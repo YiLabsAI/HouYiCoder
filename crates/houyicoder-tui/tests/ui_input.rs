@@ -9,6 +9,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -221,7 +222,7 @@ fn test_esc_keeps_queue() {
     s.send_str(QUEUED_TOKEN);
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for("· queued", RENDER_TIMEOUT),
+        s.wait_for("- queued", RENDER_TIMEOUT),
         "the run should hold both entries queued:\n{}",
         s.output()
     );
@@ -235,7 +236,10 @@ fn test_esc_keeps_queue() {
         s.output()
     );
     assert!(
-        s.wait_for_screen("⏸ held", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("{} held", detect_glyph_set().paused()),
+            RENDER_TIMEOUT
+        ),
         "repeated Esc must leave the queue held:\n{}",
         s.output()
     );

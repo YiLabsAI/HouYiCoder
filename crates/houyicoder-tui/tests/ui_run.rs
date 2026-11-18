@@ -5,6 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_tui::records::interrupted_notice;
 
 use crate::common::{Key, RENDER_TIMEOUT, pty_session_slow, pty_session_slow_scripted};
@@ -76,7 +77,10 @@ fn test_queue_strip_while_busy() {
     s.send_str("second");
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for("→ next", RENDER_TIMEOUT),
+        s.wait_for(
+            &format!("{} next", detect_glyph_set().arrow()),
+            RENDER_TIMEOUT
+        ),
         "a non-empty queue should render the strip head:\n{}",
         s.output()
     );
@@ -106,7 +110,10 @@ fn test_queue_drains_without_keys() {
     s.send_str(QUEUED_TOKEN);
     s.send_key(&Key::Enter);
     assert!(
-        s.wait_for("→ next", RENDER_TIMEOUT),
+        s.wait_for(
+            &format!("{} next", detect_glyph_set().arrow()),
+            RENDER_TIMEOUT
+        ),
         "the active run queues the second message:\n{}",
         s.output()
     );
@@ -117,7 +124,9 @@ fn test_queue_drains_without_keys() {
         s.screen().contents()
     );
     assert!(
-        !s.screen().contents().contains("→ next"),
+        !s.screen()
+            .contents()
+            .contains(&format!("{} next", detect_glyph_set().arrow())),
         "the drained queue leaves no strip behind:\n{}",
         s.screen().contents()
     );

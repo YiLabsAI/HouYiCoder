@@ -6,6 +6,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::path::{Path, PathBuf};
 use std::process::id;
 use std::thread;
@@ -50,9 +51,9 @@ fn wait_for_row(s: &mut PtySession, file: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
         let screen = s.screen().contents();
-        let found = screen
-            .lines()
-            .any(|line| line.contains("❯") && line.contains(file));
+        let found = screen.lines().any(|line| {
+            line.contains(detect_glyph_set().picker_cursor().trim_end()) && line.contains(file)
+        });
         if found || Instant::now() >= deadline {
             return found;
         }

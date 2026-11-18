@@ -11,6 +11,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use houyicoder_core::SessionEvent;
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 use crate::common::{
     self, Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, parse_scroll_status, run_slash_command,
@@ -783,7 +784,7 @@ fn test_trajectory_switch_visible_narrow() {
     let screen = s.screen().contents();
     let row = screen
         .lines()
-        .find(|line| line.contains("+1") && line.contains("✓"))
+        .find(|line| line.contains("+1") && line.contains(detect_glyph_set().gate_open()))
         .unwrap_or_else(|| panic!("no turn row with the model cell:\n{screen}"));
     assert!(
         row.contains("1 call"),
@@ -822,7 +823,9 @@ fn test_trajectory_switch_visible_narrow() {
         .find(|line| line.contains("model 1") && line.contains("TTFT"))
         .unwrap_or_else(|| panic!("no model row on the level 1 screen:\n{detail_screen}"));
     assert!(
-        model_row.trim_end().ends_with('✓'),
+        model_row
+            .trim_end()
+            .ends_with(detect_glyph_set().gate_open()),
         "the model row keeps its outcome at 130 columns: {model_row:?}"
     );
     // The third level is where the raw identity is checked: the row above

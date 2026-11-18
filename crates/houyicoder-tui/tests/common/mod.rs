@@ -1150,7 +1150,14 @@ fn pty_session_inner(mut s: PtySession) -> PtySession {
 /// arg-taking local commands are reachable end-to-end.
 pub fn run_slash_command(s: &mut PtySession, cmd: &str) {
     s.send_key(&Key::Char('/'));
+    // Latch on the effects, not on time: the popover's header proves the
+    // slash was consumed by the running loop, and the echoed query proves
+    // every character landed before Enter is sent. A command written in one
+    // burst after the slash can otherwise be consumed before the popover
+    // exists, and the pane it should open never appears.
+    let _ = s.wait_for_screen("/ commands", RENDER_TIMEOUT);
     s.send_str(cmd);
+    let _ = s.wait_for_screen(&format!("/{cmd}"), RENDER_TIMEOUT);
     s.send_key(&Key::Enter);
 }
 

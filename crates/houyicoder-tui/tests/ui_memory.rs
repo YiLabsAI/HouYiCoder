@@ -5,6 +5,7 @@
 
 #![allow(clippy::unwrap_in_result)]
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -63,12 +64,18 @@ fn test_pane_opens() {
         s.output()
     );
     assert!(
-        s.wait_for_screen("a to toggle ● auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("a to toggle {} auto-memory", detect_glyph_set().toggle_on()),
+            RENDER_TIMEOUT
+        ),
         "auto-memory action should render:\n{}",
         s.output()
     );
     assert!(
-        s.wait_for_screen("● auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("{} auto-memory", detect_glyph_set().toggle_on()),
+            RENDER_TIMEOUT
+        ),
         "both switches default on in the header status row:\n{}",
         s.output()
     );
@@ -126,7 +133,10 @@ fn test_toggle_flips_and_persists() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_screen("● auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("{} auto-memory", detect_glyph_set().toggle_on()),
+            RENDER_TIMEOUT
+        ),
         "default state renders on in the header:\n{}",
         s.output()
     );
@@ -134,7 +144,10 @@ fn test_toggle_flips_and_persists() {
     // The reply flips the header glyph off — the pane-visible proof that
     // the round-trip landed.
     assert!(
-        s.wait_for_screen("○ auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("{} auto-memory", detect_glyph_set().toggle_off()),
+            RENDER_TIMEOUT
+        ),
         "the toggle reply should flip the header to off:\n{}",
         s.output()
     );
@@ -242,7 +255,10 @@ fn test_esc_closes_pane() {
     let mut s = pty_session_isolated(home.clone());
     run_slash_command(&mut s, "memory");
     assert!(
-        s.wait_for_screen("a to toggle ● auto-memory", RENDER_TIMEOUT),
+        s.wait_for_screen(
+            &format!("a to toggle {} auto-memory", detect_glyph_set().toggle_on()),
+            RENDER_TIMEOUT
+        ),
         "memory pane should render:\n{}",
         s.output()
     );
@@ -254,7 +270,10 @@ fn test_esc_closes_pane() {
         "pane should close:\n{screen}"
     );
     assert!(
-        !screen.contains("a to toggle ● auto-memory"),
+        !screen.contains(&format!(
+            "a to toggle {} auto-memory",
+            detect_glyph_set().toggle_on()
+        )),
         "memory controls should be gone:\n{screen}"
     );
     drop(s);
