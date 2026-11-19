@@ -81,6 +81,21 @@ fn is_recap(event: &SessionEvent) -> bool {
     )
 }
 
+/// Whether an event represents visible conversation work rather than
+/// compaction, audit, or telemetry bookkeeping. Keying deduplication on
+/// visible work ensures background compaction or usage records never advance
+/// the point and trigger a second summary for a turn already summarized.
+fn is_turn_work(event: &SessionEvent) -> bool {
+    matches!(
+        event,
+        SessionEvent::UserInput { .. }
+            | SessionEvent::MidTurnInput { .. }
+            | SessionEvent::AssistantMessage { .. }
+            | SessionEvent::ToolCall { .. }
+            | SessionEvent::ToolResult { .. }
+    )
+}
+
 /// Whether the user asked for something. A mid-turn message counts here,
 /// unlike the session frontier's rule: the work it steers is work the recap
 /// must describe, even though it continues the turn it arrived in.
@@ -91,26 +106,43 @@ fn is_user_request(event: &SessionEvent) -> bool {
     )
 }
 
-/// The dedup key of a log, or None for a log with no user request to
-/// summarize.
+/// The dedup key of a log, or None for a log with no user request in the
+/// active context window to summarize.
 pub fn dedup_key(events: &[SessionLogEntry]) -> Option<DedupKey> {
-    let last_user = events
+    let last_user_idx = events
+        .iter()
+        .rposition(|entry| is_user_request(&entry.event))?;
+    if events[last_user_idx + 1..]
+        .iter()
+        .any(|entry| matches!(entry.event, SessionEvent::ContextCleared { .. }))
+    {
+        return None;
+    }
+    let last_user = events[last_user_idx].id;
+    let as_of = events[last_user_idx..]
         .iter()
         .rev()
-        .find(|entry| is_user_request(&entry.event))?
-        .id;
-    let as_of = events
-        .iter()
-        .rev()
-        .find(|entry| !is_recap(&entry.event))?
+        .find(|entry| is_turn_work(&entry.event))?
         .id;
     Some(DedupKey { last_user, as_of })
 }
 
 /// Whether this point was already attempted, whatever the attempt produced.
 /// A failed request keeps its attempt record, so a retry needs new work or an
-/// explicit request rather than a second silent spend.
+/// explicit request rather than a second silent spend. Logs written before
+/// deduplication ignored bookkeeping records may hold an older event id on the
+/// trailing recap, so any recap sitting after the latest visible work also
+/// marks the turn attempted.
 fn attempted(events: &[SessionLogEntry], key: DedupKey) -> bool {
+    for entry in events.iter().rev() {
+        if is_recap(&entry.event) {
+            return true;
+        }
+        if is_turn_work(&entry.event) || matches!(entry.event, SessionEvent::ContextCleared { .. })
+        {
+            break;
+        }
+    }
     events.iter().any(|entry| match &entry.event {
         SessionEvent::RecapAttempt {
             last_user_event,
@@ -142,7 +174,7 @@ fn new_entry(session: SessionId, event: SessionEvent) -> SessionLogEntry {
 /// configured one, not a fixed default: a user who lengthened it meant the
 /// resume entry to wait that long too.
 fn idle_before_resume(events: &[SessionLogEntry], now_ms: u64, away_after: Duration) -> bool {
-    let Some(last) = events.iter().rev().find(|entry| !is_recap(&entry.event)) else {
+    let Some(last) = events.iter().rev().find(|entry| is_turn_work(&entry.event)) else {
         return false;
     };
     let idle_ms = now_ms.saturating_sub(last.ts);

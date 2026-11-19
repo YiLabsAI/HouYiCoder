@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::RecapSource;
+use houyicoder_context::{CheckpointId, RecapSource};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::CompletionResponse;
 use houyicoder_protocol::llm::LlmEvent;
@@ -519,6 +519,84 @@ fn test_dedup_key_ignores_recaps() {
         "a recap is not part of the work it describes"
     );
     assert!(!attempted(&[user, reply], key), "nothing tried it yet");
+}
+
+/// Auto-compaction and turn-usage records appended after a recap do not
+/// represent new user or assistant work, so they neither move the dedup key
+/// nor allow a second recap right below the compaction notice.
+#[test]
+fn test_compaction_keeps_dedup() {
+    let session = SessionId::new();
+    let user = new_entry(session, SessionEvent::UserInput { text: "go".into() });
+    let reply = new_entry(
+        session,
+        SessionEvent::AssistantMessage {
+            text: "done".into(),
+            thinking: None,
+        },
+    );
+    let usage = new_entry(
+        session,
+        SessionEvent::TurnUsage {
+            turn: 1,
+            call_in_turn: 0,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            model: "m".into(),
+            recovery: false,
+            effort: None,
+            input_reported: true,
+            cache_read_reported: false,
+            cache_write_reported: false,
+            cas_recorded: false,
+        },
+    );
+    let legacy_recap = new_entry(
+        session,
+        SessionEvent::AwayRecap {
+            text: "Goal was testing.".into(),
+            last_user_event: user.id,
+            as_of_event: usage.id,
+            source: RecapSource::Away,
+            model: "small".into(),
+            usage: None,
+        },
+    );
+    let summary = new_entry(
+        session,
+        SessionEvent::Summary {
+            text: "folded".into(),
+        },
+    );
+    let boundary = new_entry(
+        session,
+        SessionEvent::CompactionBoundary {
+            checkpoint: CheckpointId::new(),
+            pre_tokens: 70_400,
+            post_tokens: 4_100,
+        },
+    );
+    let log = [
+        user.clone(),
+        reply.clone(),
+        usage,
+        legacy_recap,
+        summary,
+        boundary,
+    ];
+    let key = dedup_key(&log).expect("active turn");
+    assert_eq!(key.last_user, user.id);
+    assert_eq!(
+        key.as_of, reply.id,
+        "compaction and usage events must not advance the recap work anchor"
+    );
+    assert!(
+        attempted(&log, key),
+        "a turn already recapped stays attempted after auto-compaction"
+    );
 }
 
 #[test]
