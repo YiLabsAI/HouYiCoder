@@ -563,15 +563,26 @@ pub(crate) fn highlighted_line(row: &str, query: &str, current: bool) -> Line<'s
     Line::from(spans)
 }
 
-/// Render a user row as one complete background band. Explicit padding keeps
-/// wide-character continuation cells connected to the band during scrolling.
+/// Render a user row as one cohesive background band while keeping the
+/// rightmost column at the default terminal background. Leaving that single
+/// edge column at the default background prevents terminal emulators that
+/// sample viewport perimeter colors from mistaking a scrolled multi-line
+/// prompt for the application background and tinting window margins gray.
 pub(crate) fn user_row(row: &str, query: &str, current: bool, width: u16) -> Line<'static> {
+    let band_width = usize::from(width.saturating_sub(1).max(1));
     let style = Style::new().bg(Color::Indexed(238));
-    let mut line = highlighted_line(row, query, current).style(style);
+    let mut line = highlighted_line(row, query, current);
+    for span in &mut line.spans {
+        span.style = style.patch(span.style);
+    }
     let used = UnicodeWidthStr::width(row);
-    let padding = (width as usize).saturating_sub(used);
+    let padding = band_width.saturating_sub(used);
     if padding > 0 {
         line.spans.push(Span::styled(" ".repeat(padding), style));
+    }
+    if width > 1 {
+        line.spans
+            .push(Span::styled(" ", Style::default().bg(Color::Reset)));
     }
     line
 }

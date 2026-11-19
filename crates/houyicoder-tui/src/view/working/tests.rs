@@ -1157,7 +1157,7 @@ fn test_user_background_band() {
         })
         .expect("user row");
 
-    let missing: Vec<_> = (area.x..area.x + area.width)
+    let missing: Vec<_> = (area.x..area.x + area.width - 1)
         .filter(|x| {
             let continuation = *x > area.x
                 && buf
@@ -1177,6 +1177,11 @@ fn test_user_background_band() {
     let row_tail = buf
         .cell((area.x + area.width - 1, user_y))
         .expect("row tail");
+    assert_eq!(
+        row_tail.style().bg,
+        Some(Color::Reset),
+        "rightmost edge stays at default background so terminal margins do not tint"
+    );
     assert_eq!(row_tail.diff_option, CellDiffOption::AlwaysUpdate);
 }
 

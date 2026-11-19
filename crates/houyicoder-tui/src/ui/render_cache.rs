@@ -270,7 +270,8 @@ impl RenderCache {
             return rows.clone();
         }
         self.evict_if_needed();
-        let rows = wrap_plain_block(text, "> ", width, Some(USER_DISPLAY_CAP));
+        let wrap_width = width.saturating_sub(1).max(1);
+        let rows = wrap_plain_block(text, "> ", wrap_width, Some(USER_DISPLAY_CAP));
         self.map
             .insert(key, CachedRender::Plain { rows: rows.clone() });
         rows
@@ -292,7 +293,8 @@ impl RenderCache {
             return c.len();
         }
         self.evict_if_needed();
-        let rows = wrap_plain_block(text, "> ", width, Some(USER_DISPLAY_CAP));
+        let wrap_width = width.saturating_sub(1).max(1);
+        let rows = wrap_plain_block(text, "> ", wrap_width, Some(USER_DISPLAY_CAP));
         let n = rows.len();
         self.map.insert(key, CachedRender::Plain { rows });
         n

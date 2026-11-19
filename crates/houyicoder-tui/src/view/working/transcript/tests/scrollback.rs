@@ -604,7 +604,7 @@ fn test_user_row_band_intact() {
         "badge sits on the input top border below the transcript"
     );
     let bottom_y = t.y + t.height - 1;
-    let gaps: Vec<_> = (t.x..t.x + t.width)
+    let gaps: Vec<_> = (t.x..t.x + t.width - 1)
         .filter(|x| {
             let cont = *x > t.x
                 && buf
@@ -619,5 +619,11 @@ fn test_user_row_band_intact() {
     assert!(
         gaps.is_empty(),
         "bottom user row has no black tear: {gaps:?}"
+    );
+    assert_eq!(
+        buf.cell((t.x + t.width - 1, bottom_y))
+            .and_then(|c| c.style().bg),
+        Some(Color::Reset),
+        "rightmost edge column keeps default background"
     );
 }
