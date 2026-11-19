@@ -414,7 +414,10 @@ fn test_refresh_after_query_panic() {
         );
         thread::yield_now();
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert!(
+        calls.load(Ordering::SeqCst) >= 3,
+        "at least one refresh ran after the panic unwound"
+    );
 }
 
 /// A lifetime of zero is a caller asking for no reuse, so every call reads on

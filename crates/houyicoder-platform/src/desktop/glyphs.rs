@@ -10,6 +10,17 @@
 use std::env::var;
 use std::sync::OnceLock;
 
+/// Plain ASCII spinner frames for unknown terminals and legacy consoles.
+pub const SAFE_SPINNER_FRAMES: &[&str] = &["|", "/", "-", "\\"];
+
+/// Eight-dot rotation for modern Windows terminals whose console fonts carry
+/// this block while lacking the dingbat star block.
+pub const CONSOLE_SPINNER_FRAMES: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// Star-breathing sequence for terminals backed by system symbol fonts. Every
+/// frame has neutral East-Asian width so CJK terminals hold one column.
+pub const RICH_SPINNER_FRAMES: &[&str] = &["∙", "✢", "✳", "✶", "✻", "✶", "✳", "✢"];
+
 /// One glyph grade: the values a caller draws rows with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlyphSet {
@@ -187,8 +198,8 @@ impl GlyphSet {
     #[must_use]
     pub fn spinner_frames(&self) -> &'static [&'static str] {
         match self {
-            Self::Safe => &["|", "/", "-", "\\"],
-            Self::Rich => &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
+            Self::Safe => SAFE_SPINNER_FRAMES,
+            Self::Rich => RICH_SPINNER_FRAMES,
         }
     }
 }
@@ -274,26 +285,29 @@ pub fn resolve_glyph_set(
     }
 }
 
-/// The grade the live activity spinner should draw with. Unlike the technical
-/// and dingbat blocks, the Braille block is carried by the modern Windows
-/// console fonts too, so a recognized modern terminal uses the Braille
-/// rotation even when static markers stay Safe.
+/// Resolve the spinner frame slice for the given terminal and host fonts.
+/// Terminals backed by system symbol fonts get the star-breathing sequence;
+/// recognized modern terminals on Windows get the eight-dot rotation carried
+/// by console fonts; unknown terminals and safe overrides stay plain ASCII.
 #[must_use]
-pub fn resolve_spinner_grade(
+pub fn resolve_spinner_frames(
     program: Option<&str>,
     wt_session: Option<&str>,
     wezterm: Option<&str>,
     ghostty: Option<&str>,
     preference: GlyphPreference,
-) -> GlyphSet {
+    fonts: HostFonts,
+) -> &'static [&'static str] {
     match preference {
-        GlyphPreference::Safe => GlyphSet::Safe,
-        GlyphPreference::Rich => GlyphSet::Rich,
+        GlyphPreference::Safe => SAFE_SPINNER_FRAMES,
+        GlyphPreference::Rich => RICH_SPINNER_FRAMES,
         GlyphPreference::Auto => {
-            if is_known_terminal(program, wt_session, wezterm, ghostty) {
-                GlyphSet::Rich
+            if !is_known_terminal(program, wt_session, wezterm, ghostty) {
+                SAFE_SPINNER_FRAMES
+            } else if fonts == HostFonts::Windows {
+                CONSOLE_SPINNER_FRAMES
             } else {
-                GlyphSet::Safe
+                RICH_SPINNER_FRAMES
             }
         }
     }
@@ -321,14 +335,14 @@ pub fn detect_glyph_set() -> GlyphSet {
 pub fn detect_spinner_frames() -> &'static [&'static str] {
     static FRAMES: OnceLock<&'static [&'static str]> = OnceLock::new();
     FRAMES.get_or_init(|| {
-        resolve_spinner_grade(
+        resolve_spinner_frames(
             env_var("TERM_PROGRAM").as_deref(),
             env_var("WT_SESSION").as_deref(),
             env_var("WezTerm").as_deref(),
             env_var("GHOSTTY_RESOURCES_DIR").as_deref(),
             preference_from(env_var("HOUYICODER_GLYPHS").as_deref()),
+            host_fonts(),
         )
-        .spinner_frames()
     })
 }
 

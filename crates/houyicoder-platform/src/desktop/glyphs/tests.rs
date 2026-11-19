@@ -3,7 +3,8 @@
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    GlyphPreference, GlyphSet, HostFonts, preference_from, resolve_glyph_set, resolve_spinner_grade,
+    CONSOLE_SPINNER_FRAMES, GlyphPreference, GlyphSet, HostFonts, RICH_SPINNER_FRAMES,
+    SAFE_SPINNER_FRAMES, preference_from, resolve_glyph_set, resolve_spinner_frames,
 };
 
 /// Every Safe glyph is plain ASCII: no font can miss it and no width
@@ -93,8 +94,14 @@ fn test_marker_glyphs_one_column() {
 /// that widened would push the verb text on the frames it appears in.
 #[test]
 fn test_spinner_one_column() {
-    for set in [GlyphSet::Safe, GlyphSet::Rich] {
-        for frame in set.spinner_frames() {
+    assert_eq!(GlyphSet::Safe.spinner_frames(), SAFE_SPINNER_FRAMES);
+    assert_eq!(GlyphSet::Rich.spinner_frames(), RICH_SPINNER_FRAMES);
+    for set in [
+        SAFE_SPINNER_FRAMES,
+        CONSOLE_SPINNER_FRAMES,
+        RICH_SPINNER_FRAMES,
+    ] {
+        for frame in set {
             assert_eq!(
                 UnicodeWidthStr::width(*frame),
                 1,
@@ -203,22 +210,65 @@ fn test_windows_fonts_stay_safe() {
     );
 }
 
-/// Modern terminals on Windows still carry the Braille block, so the spinner
-/// uses the rich rotation while legacy consoles without a modern identifier
-/// stay on the ASCII rotation.
+/// System-symbol hosts use the star-breathing sequence on recognized
+/// terminals, Windows console fonts use the eight-dot rotation, and unknown
+/// terminals stay on the ASCII rotation.
 #[test]
 fn test_known_terminal_spinner_rich() {
     assert_eq!(
-        resolve_spinner_grade(None, Some("session"), None, None, GlyphPreference::Auto),
-        GlyphSet::Rich
+        resolve_spinner_frames(
+            Some("iTerm.app"),
+            None,
+            None,
+            None,
+            GlyphPreference::Auto,
+            HostFonts::SystemSymbols,
+        ),
+        RICH_SPINNER_FRAMES
     );
     assert_eq!(
-        resolve_spinner_grade(None, None, None, None, GlyphPreference::Auto),
-        GlyphSet::Safe
+        resolve_spinner_frames(
+            None,
+            Some("session"),
+            None,
+            None,
+            GlyphPreference::Auto,
+            HostFonts::Windows,
+        ),
+        CONSOLE_SPINNER_FRAMES
     );
     assert_eq!(
-        resolve_spinner_grade(None, Some("session"), None, None, GlyphPreference::Safe),
-        GlyphSet::Safe
+        resolve_spinner_frames(
+            None,
+            None,
+            None,
+            None,
+            GlyphPreference::Auto,
+            HostFonts::SystemSymbols,
+        ),
+        SAFE_SPINNER_FRAMES
+    );
+    assert_eq!(
+        resolve_spinner_frames(
+            Some("iTerm.app"),
+            None,
+            None,
+            None,
+            GlyphPreference::Safe,
+            HostFonts::SystemSymbols,
+        ),
+        SAFE_SPINNER_FRAMES
+    );
+    assert_eq!(
+        resolve_spinner_frames(
+            None,
+            None,
+            None,
+            None,
+            GlyphPreference::Rich,
+            HostFonts::Windows,
+        ),
+        RICH_SPINNER_FRAMES
     );
 }
 
