@@ -625,6 +625,26 @@ fn test_auth_error_mentions_key() {
     );
 }
 
+/// An AccessDenied error preserves the provider's rejection reason and never
+/// blames the API key.
+#[test]
+fn test_access_denied_omits_key() {
+    let e = RunError::ProviderFatal(ProviderError::AccessDenied(
+        "HTTP 403: Access to model denied.".into(),
+    ));
+    let wire = super::map_run_error(&e);
+    assert!(
+        wire.message.contains("Access to model denied."),
+        "access-denied → server reason: {}",
+        wire.message
+    );
+    assert!(
+        !wire.message.contains("API key"),
+        "access-denied must not blame credentials: {}",
+        wire.message
+    );
+}
+
 /// A run refused because another call already drives the runner reports a
 /// category of its own, so a frontend can tell a busy host from a failure.
 #[test]

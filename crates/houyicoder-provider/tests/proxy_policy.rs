@@ -221,6 +221,29 @@ async fn test_https_proxy_plain_target() {
     );
 }
 
+/// A desktop bypass rule normalized from an address wildcard reaches the
+/// loopback model endpoint direct even when the configured proxy port is
+/// closed.
+#[tokio::test]
+async fn test_bypass_reaches_direct() {
+    let server = model_server().await;
+    let proxy = ProxyConfig::new(
+        Some("http://127.0.0.1:1".into()),
+        Some("http://127.0.0.1:1".into()),
+        "127.0.0.0/8,.aliyuncs.com".into(),
+    );
+    let provider = OpenAiCompatibleProvider::with_proxy_cache(
+        server.uri(),
+        "k".into(),
+        cache_with(ProxyResolution::system(proxy)),
+    );
+    let response = provider
+        .complete(request())
+        .await
+        .expect("a bypassed host connects direct instead of hitting the closed proxy");
+    assert_eq!(response.model, "test-model");
+}
+
 /// A TLS-only proxy that is closed must fail a TLS target rather than bypass
 /// the proxy: the endpoint records no direct request.
 #[tokio::test]

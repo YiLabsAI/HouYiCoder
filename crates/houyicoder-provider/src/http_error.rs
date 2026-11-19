@@ -11,7 +11,8 @@ pub(crate) fn classify_status(status: u16, retry_after_ms: Option<u64>) -> Provi
     match status {
         408 => ProviderError::Network,
         429 => ProviderError::RateLimit { retry_after_ms },
-        401 | 403 => ProviderError::Auth,
+        401 => ProviderError::Auth,
+        403 => ProviderError::AccessDenied("HTTP 403".into()),
         // No body available here, so the enforced limit is unknown.
         413 | 414 => ProviderError::ContextOverflow {
             enforced_limit: None,
@@ -59,6 +60,7 @@ pub(crate) fn classify_with_body(
                 enforced_limit: extract_context_limit(body),
             }
         }
+        403 => ProviderError::AccessDenied(status_detail(status, body)),
         400 | 404 | 409 | 422 => ProviderError::InvalidRequest(status_detail(status, body)),
         _ => classify_status(status, retry_after_ms),
     }

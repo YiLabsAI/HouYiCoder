@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use crate::host::net::{ProxyConfig, ProxyResolution};
+use crate::host::net::{ProxyConfig, ProxyResolution, expand_bypass_rules};
 
 use super::wait_bounded;
 
@@ -126,7 +126,8 @@ fn parse_scutil_proxy(text: &str) -> ProxyResolution {
         _ => None,
     };
     if http.is_some() || https.is_some() {
-        return ProxyResolution::system(ProxyConfig::new(http, https, exceptions.join(",")));
+        let bypass = expand_bypass_rules(&exceptions.join(","));
+        return ProxyResolution::system(ProxyConfig::new(http, https, bypass));
     }
     match (auto_config_enable, auto_config_url) {
         (true, Some(url)) => ProxyResolution::pac(url),

@@ -268,12 +268,31 @@ fn test_invalid_redacts_echoed_key() {
     }
 }
 
-/// A 401/403 is Auth (not ModelNotFound), so the message points at the
-/// API key.
+/// A 401 is Auth (not ModelNotFound), so the message points at the API key.
 #[test]
 fn test_classify_auth_not_model() {
     let e = classify_with_body(401, None, "invalid api key");
     assert!(matches!(e, ProviderError::Auth), "401 → Auth, got {e:?}");
+}
+
+/// A 403 is AccessDenied rather than Auth, carrying the server's reason so an
+/// unpurchased model or gateway rule is not misreported as a bad key.
+#[test]
+fn test_access_denied_detail() {
+    let body = r#"{"error":{"message":"Access to model denied. Please make sure you are eligible for using the model.","code":"AccessDenied.Unpurchased"}}"#;
+    match classify_with_body(403, None, body) {
+        ProviderError::AccessDenied(detail) => {
+            assert_eq!(
+                detail,
+                "HTTP 403: Access to model denied. Please make sure you are eligible for using the model."
+            );
+        }
+        other => panic!("403 → AccessDenied, got {other:?}"),
+    }
+    match classify_status(403, None) {
+        ProviderError::AccessDenied(detail) => assert_eq!(detail, "HTTP 403"),
+        other => panic!("status-only 403 → AccessDenied, got {other:?}"),
+    }
 }
 
 /// A body that stops before its declared length is a transport fault. The

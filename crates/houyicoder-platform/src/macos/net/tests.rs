@@ -26,7 +26,7 @@ fn test_scutil_proxy_enabled() {
     let config = proxy.proxy.expect("a static proxy");
     assert_eq!(config.http.as_deref(), Some("http://127.0.0.1:8080"));
     assert_eq!(config.https.as_deref(), Some("http://127.0.0.1:8080"));
-    assert_eq!(config.exceptions, "10.0.0.0/8,fe80::1,*.local");
+    assert_eq!(config.exceptions, "10.0.0.0/8,fe80::1,.local");
 }
 
 #[test]

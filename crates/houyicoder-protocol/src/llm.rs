@@ -567,8 +567,12 @@ pub enum ProviderError {
     /// 429 caused by quota/billing exhaustion (not a transient rate limit).
     /// Distinct from RateLimit so the loop does NOT retry burning budget.
     QuotaExceeded,
-    /// 401/403 — authentication or permission. Not retryable.
+    /// 401 — credentials rejected. Not retryable.
     Auth,
+    /// 403 — access, model entitlement, or network policy denied. Not retryable.
+    /// Split from Auth so a forbidden model or gateway rule reports the
+    /// server's reason instead of sending the user to debug valid credentials.
+    AccessDenied(String),
     /// 404 or a 400/422 whose body names the model — the model id does not
     /// exist on the provider. Not retryable. Split from InvalidRequest so the
     /// caller's error message points at the model id / catalog, not at auth.
@@ -631,6 +635,9 @@ impl Display for ProviderError {
             },
             Self::QuotaExceeded => write!(f, "the model provider quota is exhausted"),
             Self::Auth => write!(f, "the model provider rejected the credentials"),
+            Self::AccessDenied(detail) => {
+                write!(f, "the model provider denied access ({detail})")
+            }
             Self::ModelNotFound(m) => write!(f, "the model provider has no model named {m}"),
             Self::InvalidRequest(m) => write!(f, "the model provider rejected the request ({m})"),
             Self::ContextOverflow { .. } => {

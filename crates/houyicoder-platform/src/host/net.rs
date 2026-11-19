@@ -305,21 +305,72 @@ fn proxy_url(value: &str) -> Option<String> {
     }
 }
 
-/// Bypass rules in the comma-separated form the HTTP client accepts. The
-/// local marker expands to the loopback names it stands for.
+/// Merge an environment bypass variable into a desktop proxy resolution when
+/// no environment proxy overrode the desktop settings.
+pub(crate) fn merge_env_no_proxy(resolution: ProxyResolution) -> ProxyResolution {
+    merge_no_proxy(resolution, first_env(&["NO_PROXY", "no_proxy"]).as_deref())
+}
+
+fn merge_no_proxy(mut resolution: ProxyResolution, raw_no_proxy: Option<&str>) -> ProxyResolution {
+    let Some(extra) = raw_no_proxy
+        .map(expand_bypass_rules)
+        .filter(|s| !s.is_empty())
+    else {
+        return resolution;
+    };
+    if let Some(config) = &mut resolution.proxy {
+        if config.exceptions.is_empty() {
+            config.exceptions = extra;
+        } else {
+            config.exceptions.push(',');
+            config.exceptions.push_str(&extra);
+        }
+    }
+    resolution
+}
+
+/// Bypass rules in the comma-separated form the HTTP client accepts. Desktop
+/// settings write domain suffixes with a leading star-dot and address prefixes
+/// with a trailing star, whereas the HTTP client only treats a lone star as a
+/// wildcard and matches domain suffixes through a leading dot and subnets
+/// through CIDR notation.
 pub(crate) fn expand_bypass_rules(raw: &str) -> String {
-    raw.split(';')
+    raw.split([';', ','])
         .map(str::trim)
         .filter(|item| !item.is_empty())
-        .map(|item| {
-            if item.eq_ignore_ascii_case("<local>") {
-                "localhost,127.0.0.1,::1".to_string()
-            } else {
-                item.to_string()
-            }
-        })
+        .map(normalize_bypass_entry)
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn normalize_bypass_entry(item: &str) -> String {
+    if item.eq_ignore_ascii_case("<local>") {
+        return "localhost,127.0.0.1,::1".to_string();
+    }
+    if let Some(suffix) = item.strip_prefix("*.")
+        && !suffix.is_empty()
+        && !suffix.contains('*')
+    {
+        return format!(".{suffix}");
+    }
+    if let Some(cidr) = expand_address_wildcard(item) {
+        return cidr;
+    }
+    item.to_string()
+}
+
+fn expand_address_wildcard(item: &str) -> Option<String> {
+    let prefix = item.strip_suffix(".*")?;
+    let octets: Vec<u8> = prefix
+        .split('.')
+        .map(|part| part.parse::<u8>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    match octets.as_slice() {
+        [a] => Some(format!("{a}.0.0.0/8")),
+        [a, b] => Some(format!("{a}.{b}.0.0/16")),
+        [a, b, c] => Some(format!("{a}.{b}.{c}.0/24")),
+        _ => None,
+    }
 }
 
 /// Whether an endpoint names this machine. Only a proxy on this machine gets

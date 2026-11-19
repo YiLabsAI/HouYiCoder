@@ -29,9 +29,10 @@ fn platform_proxy() -> ProxyResolution {
 }
 
 /// The proxy configuration the process should use right now: an explicit
-/// environment configuration wins, then the desktop system settings.
+/// environment configuration wins, then the desktop system settings merged with
+/// any environment bypass list.
 pub(crate) fn system_proxy() -> ProxyResolution {
-    net::env_proxy().unwrap_or_else(platform_proxy)
+    net::env_proxy().unwrap_or_else(|| net::merge_env_no_proxy(platform_proxy()))
 }
 
 #[cfg(unix)]

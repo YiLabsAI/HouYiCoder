@@ -30,8 +30,26 @@ fn test_per_scheme_endpoints() {
 
 #[test]
 fn test_local_bypass_expansion() {
-    let rules = expand_bypass_rules("<local>;*.corp;10.0.0.0/8");
-    assert_eq!(rules, "localhost,127.0.0.1,::1,*.corp,10.0.0.0/8");
+    let rules = expand_bypass_rules("<local>;*.corp, *.aliyuncs.com; 192.168.*; 10.0.0.0/8; *");
+    assert_eq!(
+        rules,
+        "localhost,127.0.0.1,::1,.corp,.aliyuncs.com,192.168.0.0/16,10.0.0.0/8,*"
+    );
+}
+
+#[test]
+fn test_system_merges_no_proxy() {
+    let system = ProxyResolution::system(ProxyConfig::new(
+        Some("http://127.0.0.1:8118".into()),
+        Some("http://127.0.0.1:8118".into()),
+        ".local,169.254.0.0/16".into(),
+    ));
+    let merged = merge_no_proxy(system, Some("*.aliyuncs.com, localhost"));
+    let config = merged.proxy.expect("a merged proxy");
+    assert_eq!(
+        config.exceptions,
+        ".local,169.254.0.0/16,.aliyuncs.com,localhost"
+    );
 }
 
 #[test]

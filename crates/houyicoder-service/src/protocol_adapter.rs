@@ -367,7 +367,7 @@ pub(crate) fn map_run_error(e: &EngineRunError) -> RunError {
     let message = match e {
         EngineRunError::ProviderFatal(ProviderError::Auth)
         | EngineRunError::ProviderExhausted(ProviderError::Auth) => {
-            "authentication failed — check your API key (DASHSCOPE_API_KEY or OPENAI_API_KEY)"
+            "authentication failed — check your API key (keychain, apiKeyHelper, DASHSCOPE_API_KEY, or OPENAI_API_KEY)"
                 .to_string()
         }
         EngineRunError::ProviderFatal(ProviderError::ModelNotFound(m))

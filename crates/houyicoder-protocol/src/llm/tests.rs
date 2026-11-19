@@ -358,6 +358,10 @@ fn test_error_display_sentence() {
             "the model provider rejected the credentials",
         ),
         (
+            ProviderError::AccessDenied("HTTP 403: Access to model denied.".into()),
+            "the model provider denied access (HTTP 403: Access to model denied.)",
+        ),
+        (
             ProviderError::InvalidRequest("no messages".into()),
             "the model provider rejected the request (no messages)",
         ),
