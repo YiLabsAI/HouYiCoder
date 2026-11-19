@@ -9,6 +9,8 @@ use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use unicode_width::UnicodeWidthStr;
 
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::app::handle_mouse;
@@ -16,7 +18,7 @@ use crate::composition;
 use crate::records::TranscriptLine;
 use crate::scroll::VIEWABLE_SCROLLBACK_CAP;
 use crate::state::{App, EventCursor, Screen};
-use crate::test_harness::render_text;
+use crate::test_harness::{render_buffer, render_text};
 use crate::transcript::frame::TranscriptFrame;
 
 fn agent_msg(text: &str) -> TranscriptFrame {
@@ -194,7 +196,7 @@ fn test_count_rises_per_reply() {
     );
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("3 new | End"),
+        out.contains("3 new messages"),
         "the label states the count:\n{out}"
     );
 }
@@ -217,7 +219,7 @@ fn test_count_caps_label() {
     assert_eq!(app.new_message_count().count, 120, "every reply counts");
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("99+ new | End"),
+        out.contains("99+ new messages"),
         "the label caps the stated count:\n{out}"
     );
 }
@@ -241,11 +243,11 @@ fn test_label_cap_boundary() {
     assert_eq!(app.new_message_count().count, 99);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("99 new | End"),
+        out.contains("99 new messages"),
         "the label states the exact count at the cap:\n{out}"
     );
     assert!(
-        !out.contains("99+ new | End"),
+        !out.contains("99+ new messages"),
         "no at-least marker while the count is exactly the cap:\n{out}"
     );
     for frame in [
@@ -258,7 +260,7 @@ fn test_label_cap_boundary() {
     assert_eq!(app.new_message_count().count, 100);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("99+ new | End"),
+        out.contains("99+ new messages"),
         "one past the cap reads as a floor:\n{out}"
     );
 }
@@ -283,7 +285,7 @@ fn test_label_fits_narrow_width() {
         "the label must stay inside the transcript: label={rect:?} transcript={t:?}"
     );
     assert!(
-        out.contains("End"),
+        out.contains("Jump to bottom"),
         "the label still names its action when clipped:\n{out}"
     );
     let px = rect.x + rect.width / 2;
@@ -407,8 +409,8 @@ fn test_click_label_jumps() {
     // clickable affordance, not just a status hint.
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("Bottom | End"),
-        "idle label should carry the (click) hint:\n{out}"
+        out.contains("Jump to bottom"),
+        "idle label should carry the jump action:\n{out}"
     );
     let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
     assert!(
@@ -573,7 +575,49 @@ fn test_floor_count_after_drain() {
     app.park_scroll_at(0);
     let out = render_text(&app, 80, 24);
     assert!(
-        out.contains("+ new | End"),
+        out.contains("+ new messages"),
         "a floor count renders with the + marker:\n{out}"
+    );
+}
+
+/// Scrolling into a multi-line CJK user prompt leaves its bottom visible row
+/// and gray background band intact because the jump badge sits on the input
+/// border below the transcript rather than cutting into the row.
+#[test]
+fn test_user_row_band_intact() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    let prompt = (0..30)
+        .map(|i| format!("第{i:02}行 核对归因结论与中文字段边界完整显示不撕裂"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.push_transcript_line(TranscriptLine::User(prompt));
+    app.push_transcript_line(TranscriptLine::Agent("done".into()));
+    let _out = render_text(&app, 80, 16);
+    app.scroll_transcript_line_up(5);
+    let buf = render_buffer(&app, 80, 16);
+    let t = app.ui.frame.layout.transcript_rect.get();
+    let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
+    assert_eq!(
+        rect.y,
+        t.y + t.height,
+        "badge sits on the input top border below the transcript"
+    );
+    let bottom_y = t.y + t.height - 1;
+    let gaps: Vec<_> = (t.x..t.x + t.width)
+        .filter(|x| {
+            let cont = *x > t.x
+                && buf
+                    .cell((*x - 1, bottom_y))
+                    .is_some_and(|c| UnicodeWidthStr::width(c.symbol()) > 1);
+            !cont
+                && buf
+                    .cell((*x, bottom_y))
+                    .is_none_or(|c| c.style().bg != Some(Color::Indexed(238)))
+        })
+        .collect();
+    assert!(
+        gaps.is_empty(),
+        "bottom user row has no black tear: {gaps:?}"
     );
 }

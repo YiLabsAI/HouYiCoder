@@ -144,6 +144,7 @@ fn draw_working(f: &mut Frame, app: &App) {
     }
     if !pane_hides_input {
         input_bar::draw_input(f, outer[layout.input_idx], app);
+        transcript::draw_jump_label(f, outer[layout.input_idx], app);
     }
     if let Some(i) = layout.slots.queue {
         queue_overlay::draw_strip(f, outer[i], app);

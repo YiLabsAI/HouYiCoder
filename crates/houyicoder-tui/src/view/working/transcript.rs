@@ -47,6 +47,8 @@ const MESSAGE_COUNT_CAP: usize = 99;
 
 mod jump_label;
 
+pub(super) use jump_label::draw as draw_jump_label;
+
 pub(crate) fn ensure_cached_slots(area: Rect, app: &App) {
     // The slot rows depend on the source and its revisions, the wrap width,
     // the mode flags, and the bash ticker. SlotsKey names those inputs and
@@ -112,19 +114,6 @@ pub(super) fn draw_transcript(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Block::default().borders(Borders::NONE), area);
 
     render_transcript_lines(f, inner, app, &visible);
-    jump_label::draw(f, inner, app);
-    // The label clears a span of the bottom row, and a clear edge can land
-    // between the two columns of a wide character, leaving its second column
-    // holding a glyph the buffer no longer accounts for. Refreshing that row
-    // after the overlay repaints the split cell instead of letting the
-    // terminal shift the text right of it by one column.
-    let label_row = Rect::new(
-        inner.x,
-        inner.y.saturating_add(inner.height.saturating_sub(1)),
-        inner.width,
-        1,
-    );
-    refresh_wide_cells(f, label_row);
 }
 
 fn compute_spinner_params(app: &App) -> (Duration, f32, bool) {
