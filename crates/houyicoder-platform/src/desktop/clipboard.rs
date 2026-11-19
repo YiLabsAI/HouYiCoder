@@ -9,6 +9,8 @@
 use crate::unix::clipboard::copy_local;
 #[cfg(target_os = "windows")]
 use crate::windows::clipboard::copy as windows_copy;
+#[cfg(target_os = "windows")]
+use std::env::var_os;
 
 /// What one native clipboard write accomplished. A caller that adds the
 /// terminal escape maps these onto its own report, so a user is never told
@@ -35,6 +37,9 @@ pub fn copy_to_native_clipboard(text: &str) -> CopyOutcome {
 /// Write text to the host's clipboard where the platform offers a path.
 #[cfg(target_os = "windows")]
 pub fn copy_to_native_clipboard(text: &str) -> CopyOutcome {
+    if var_os("SSH_CONNECTION").is_some() {
+        return CopyOutcome::NoNativePath;
+    }
     match windows_copy(text) {
         Ok(()) => CopyOutcome::NativeCopied,
         Err(error) => {

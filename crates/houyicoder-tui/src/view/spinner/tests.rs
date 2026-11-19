@@ -19,7 +19,7 @@ fn test_compaction_uses_spinner() {
     );
     // The first span of the line is the glyph; at 240ms the frame index is
     // the third in the rotation of whichever grade this terminal reports.
-    let frames = detect_glyph_set().spinner_frames();
+    let frames = detect_spinner_frames();
     let expected = frames[2 % frames.len()];
     let glyph = &line.spans[0].content;
     assert_eq!(glyph, expected);
@@ -31,7 +31,7 @@ fn test_compaction_uses_spinner() {
 /// which is the jitter the glyph module's width contract prevents.
 #[test]
 fn test_spinner_glyphs_width_one() {
-    for frames in [detect_glyph_set().spinner_frames()] {
+    for frames in [detect_spinner_frames()] {
         for glyph in frames {
             let glyph = *glyph;
             assert_eq!(

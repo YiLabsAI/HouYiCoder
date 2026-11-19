@@ -2,7 +2,9 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use super::{GlyphPreference, GlyphSet, HostFonts, preference_from, resolve_glyph_set};
+use super::{
+    GlyphPreference, GlyphSet, HostFonts, preference_from, resolve_glyph_set, resolve_spinner_grade,
+};
 
 /// Every Safe glyph is plain ASCII: no font can miss it and no width
 /// table can disagree about it.
@@ -194,6 +196,30 @@ fn test_windows_fonts_stay_safe() {
     };
     assert_eq!(case(None, Some("session")), GlyphSet::Safe);
     assert_eq!(case(Some("WezTerm"), None), GlyphSet::Safe);
+    assert_eq!(
+        GlyphSet::Safe.notice_marker(),
+        "*",
+        "safe notice marker avoids an exclamation alarm"
+    );
+}
+
+/// Modern terminals on Windows still carry the Braille block, so the spinner
+/// uses the rich rotation while legacy consoles without a modern identifier
+/// stay on the ASCII rotation.
+#[test]
+fn test_known_terminal_spinner_rich() {
+    assert_eq!(
+        resolve_spinner_grade(None, Some("session"), None, None, GlyphPreference::Auto),
+        GlyphSet::Rich
+    );
+    assert_eq!(
+        resolve_spinner_grade(None, None, None, None, GlyphPreference::Auto),
+        GlyphSet::Safe
+    );
+    assert_eq!(
+        resolve_spinner_grade(None, Some("session"), None, None, GlyphPreference::Safe),
+        GlyphSet::Safe
+    );
 }
 
 /// The setting accepts both grade names, the alphabet name of the safe

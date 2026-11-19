@@ -49,11 +49,13 @@ impl GlyphSet {
         }
     }
 
-    /// The marker a system notice row leads with.
+    /// The marker a system notice, reasoning summary, or memory receipt row
+    /// leads with. Both grades stay calm rather than using an exclamation
+    /// mark, which reads as a warning.
     #[must_use]
     pub fn notice_marker(&self) -> &'static str {
         match self {
-            Self::Safe => "!",
+            Self::Safe => "*",
             Self::Rich => "✻",
         }
     }
@@ -218,9 +220,32 @@ pub enum HostFonts {
     SystemSymbols,
 }
 
-/// The grade the running terminal should draw with, decided from the
-/// identifiers the terminal carries and the fonts the host resolves to.
-/// Pure over its inputs so the decision is testable without the process
+fn is_known_terminal(
+    program: Option<&str>,
+    wt_session: Option<&str>,
+    wezterm: Option<&str>,
+    ghostty: Option<&str>,
+) -> bool {
+    fn non_empty(value: Option<&str>) -> Option<&str> {
+        value.filter(|value| !value.is_empty())
+    }
+    let (program, wt_session, wezterm, ghostty) = (
+        non_empty(program),
+        non_empty(wt_session),
+        non_empty(wezterm),
+        non_empty(ghostty),
+    );
+    matches!(
+        program,
+        Some("ghostty" | "WezTerm" | "iTerm.app" | "vscode")
+    ) || wt_session.is_some()
+        || wezterm.is_some()
+        || ghostty.is_some()
+}
+
+/// The grade the running terminal should draw static markers with, decided
+/// from the identifiers the terminal carries and the fonts the host resolves
+/// to. Pure over its inputs so the decision is testable without the process
 /// environment.
 #[must_use]
 pub fn resolve_glyph_set(
@@ -231,33 +256,47 @@ pub fn resolve_glyph_set(
     preference: GlyphPreference,
     fonts: HostFonts,
 ) -> GlyphSet {
-    fn non_empty(value: Option<&str>) -> Option<&str> {
-        value.filter(|value| !value.is_empty())
-    }
-    let (program, wt_session, wezterm, ghostty) = (
-        non_empty(program),
-        non_empty(wt_session),
-        non_empty(wezterm),
-        non_empty(ghostty),
-    );
     match preference {
         GlyphPreference::Safe => return GlyphSet::Safe,
         GlyphPreference::Rich => return GlyphSet::Rich,
         GlyphPreference::Auto => {}
     }
-    // The terminal being modern says nothing about the font: Windows
-    // Terminal answers yes and still draws Cascadia, which has no box for
-    // the tool marker or the result gutter. Those hosts stay Safe.
+    // The terminal being modern says nothing about the technical and dingbat
+    // blocks: Windows Terminal still draws console fonts that lack the rich
+    // tool marker and result gutter, so static markers stay Safe there.
     if fonts == HostFonts::Windows {
         return GlyphSet::Safe;
     }
-    let rich = matches!(
-        program,
-        Some("ghostty" | "WezTerm" | "iTerm.app" | "vscode")
-    ) || wt_session.is_some()
-        || wezterm.is_some()
-        || ghostty.is_some();
-    if rich { GlyphSet::Rich } else { GlyphSet::Safe }
+    if is_known_terminal(program, wt_session, wezterm, ghostty) {
+        GlyphSet::Rich
+    } else {
+        GlyphSet::Safe
+    }
+}
+
+/// The grade the live activity spinner should draw with. Unlike the technical
+/// and dingbat blocks, the Braille block is carried by the modern Windows
+/// console fonts too, so a recognized modern terminal uses the Braille
+/// rotation even when static markers stay Safe.
+#[must_use]
+pub fn resolve_spinner_grade(
+    program: Option<&str>,
+    wt_session: Option<&str>,
+    wezterm: Option<&str>,
+    ghostty: Option<&str>,
+    preference: GlyphPreference,
+) -> GlyphSet {
+    match preference {
+        GlyphPreference::Safe => GlyphSet::Safe,
+        GlyphPreference::Rich => GlyphSet::Rich,
+        GlyphPreference::Auto => {
+            if is_known_terminal(program, wt_session, wezterm, ghostty) {
+                GlyphSet::Rich
+            } else {
+                GlyphSet::Safe
+            }
+        }
+    }
 }
 
 /// The grade the process's own terminal reports, decided once. Unknown and
@@ -274,6 +313,22 @@ pub fn detect_glyph_set() -> GlyphSet {
             preference_from(env_var("HOUYICODER_GLYPHS").as_deref()),
             host_fonts(),
         )
+    })
+}
+
+/// The spinner frames for the running terminal, decided once.
+#[must_use]
+pub fn detect_spinner_frames() -> &'static [&'static str] {
+    static FRAMES: OnceLock<&'static [&'static str]> = OnceLock::new();
+    FRAMES.get_or_init(|| {
+        resolve_spinner_grade(
+            env_var("TERM_PROGRAM").as_deref(),
+            env_var("WT_SESSION").as_deref(),
+            env_var("WezTerm").as_deref(),
+            env_var("GHOSTTY_RESOURCES_DIR").as_deref(),
+            preference_from(env_var("HOUYICODER_GLYPHS").as_deref()),
+        )
+        .spinner_frames()
     })
 }
 

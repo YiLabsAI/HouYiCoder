@@ -226,7 +226,7 @@ fn test_transcript_render_glyphs() {
     );
     let note = TranscriptLine::System("note".into()).render();
     assert!(
-        note.starts_with('!') || note.starts_with('✻'),
+        note.starts_with('*') || note.starts_with('✻'),
         "the system row leads with its marker: {note:?}"
     );
     assert!(

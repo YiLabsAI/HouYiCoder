@@ -5,7 +5,7 @@
 use crate::state::App;
 use crate::state::enums::LiveBlock;
 use crate::view::ERROR_RED_RGB;
-use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+use houyicoder_platform::desktop::glyphs::detect_spinner_frames;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::f32::consts::TAU;
@@ -17,7 +17,7 @@ use std::time::Instant;
 /// safe rotation is ASCII and the rich rotation is the braille block, both
 /// pinned to one display column by the glyph module's width tests.
 fn spinner_glyph(elapsed: Duration) -> &'static str {
-    let frames = detect_glyph_set().spinner_frames();
+    let frames = detect_spinner_frames();
     frames[((elapsed.as_millis() / 120) % frames.len() as u128) as usize]
 }
 
