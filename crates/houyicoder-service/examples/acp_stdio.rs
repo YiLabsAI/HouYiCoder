@@ -16,6 +16,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_protocol::acp_wire::NewSessionRequest;
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp::adapter::AcpAdapter;
@@ -26,6 +27,7 @@ use houyicoder_session::SessionStore;
 use std::io::stdin;
 use std::io::stdout;
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::spawn;
 
@@ -33,13 +35,9 @@ use std::thread::spawn;
 async fn main() {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
-    // The server is single-session-bound: the runner drives this one session.
-    // Print it to stderr so a client prompts against the right id (stdout
-    // stays clean for the JSON-RPC frame stream). A production composition
-    // root binds the runner to the id session/new mints; this stub example
-    // pre-mints because the adapter's session/new mints a store-only record
-    // the runner is not bound to (a gap the lifecycle runtime closes).
-    eprintln!("session_id={session}");
+    // The runner drives this one session, and the adapter binding hands its
+    // id to session/new, so a stock client learns the target from the reply
+    // the protocol defines rather than a process-private stderr convention.
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("hello from stub"));
     let tools = ToolRegistry::new();
     let runner = Arc::new(Runner::new(
@@ -53,11 +51,23 @@ async fn main() {
             ..RunnerConfig::default()
         },
     ));
-    let adapter = Arc::new(AcpAdapter::new(
-        AcpxCapabilities::default(),
-        1,
-        SessionLeaseStore::new(),
-    ));
+    let runner_for_binding = Arc::clone(&runner);
+    let binding_session = session;
+    let adapter = Arc::new(
+        AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new())
+            .with_session_binding(Arc::new(move |params: &NewSessionRequest| {
+                // The example accepts the client's cwd when it is absolute;
+                // a relative one keeps the startup directory, logged rather
+                // than fatal so the demo stays usable.
+                let cwd = PathBuf::from(&params.cwd);
+                if cwd.is_absolute() {
+                    runner_for_binding.switch_cwd(cwd);
+                } else {
+                    tracing::warn!(cwd = %params.cwd, "session/new cwd is not absolute");
+                }
+                binding_session
+            })),
+    );
 
     // mpsc pair: one direction each way, matching the in-memory carrier.
     // Large capacity so a short turn's frames buffer without a concurrent

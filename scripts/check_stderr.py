@@ -84,7 +84,7 @@ CRATES = ROOT / "crates"
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
     "crates/houyicoder-cli/src/session/cleanup.rs": 15,
-    "crates/houyicoder-cli/src/main.rs": 14,
+    "crates/houyicoder-cli/src/main.rs": 13,
     "crates/houyicoder-loader/src/main.rs": 2,
     # The fence binary is a separate process the daemon spawns with both
     # pipes attached: its stdout carries the probe status word and its

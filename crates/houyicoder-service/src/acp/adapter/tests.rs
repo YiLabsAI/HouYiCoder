@@ -51,24 +51,67 @@ fn test_unknown_method_not_found() {
     }
 }
 
+use std::sync::Arc;
+use std::sync::Mutex;
+
+use houyicoder_protocol::acp_wire::McpServer;
+use houyicoder_protocol::acp_wire::NewSessionRequest;
+
+/// A bound adapter answers session/new with the runner's own session id and
+/// hands the request's workspace facts to the binding, so a stock client
+/// that prompts against the returned id drives the session the runner
+/// actually runs. The binding records what it saw; the assertions read the
+/// recorded request rather than the id alone, so a regression that answers
+/// the right id without applying the workspace still fails here.
 #[test]
-fn test_new_session_mints_stores() {
-    let adapter = AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new());
+fn test_acp_new_session_binds() {
+    let bound_session = SessionId::new();
+    let seen: Arc<Mutex<Option<NewSessionRequest>>> = Arc::new(Mutex::new(None));
+    let record = Arc::clone(&seen);
+    let adapter = AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new())
+        .with_session_binding(Arc::new(move |params: &NewSessionRequest| {
+            *record.lock().expect("seen lock") = Some(params.clone());
+            bound_session
+        }));
     let req = AcpRequest {
         jsonrpc: JsonRpcVersion::V2,
-        id: AcpRequestId::Number(2),
+        id: AcpRequestId::Number(9),
         method: "session/new".into(),
-        params: Some(serde_json::json!({"cwd": "/tmp"})),
+        params: Some(serde_json::json!({
+            "cwd": "/work/acp",
+            "additionalDirectories": ["/work/libs"],
+            "mcpServers": [
+                {"name": "fs", "command": "/usr/bin/fsmcp", "args": ["--stdio"]},
+                {"type": "http", "name": "web", "url": "https://acp.example/mcp"}
+            ]
+        })),
     };
     let resp = block_on(adapter.handle(&req));
-    match resp {
-        AcpResponse::Result { result, .. } => {
-            assert!(
-                result.get("sessionId").is_some(),
-                "missing sessionId: {result}"
-            );
+    let result = match resp {
+        AcpResponse::Result { result, .. } => result,
+        AcpResponse::Error { .. } => panic!("bound new_session must succeed"),
+    };
+    assert_eq!(
+        result.get("sessionId").and_then(|v| v.as_str()),
+        Some(bound_session.to_string().as_str()),
+        "the reply carries the bound runner session id"
+    );
+    let seen = seen
+        .lock()
+        .expect("seen lock")
+        .clone()
+        .expect("binding ran");
+    assert_eq!(seen.cwd, "/work/acp");
+    assert_eq!(seen.additional_directories, vec!["/work/libs".to_string()]);
+    // The stdio entry decodes without a type tag; the http entry keeps its
+    // explicit one. Both shapes arrive typed, not as opaque JSON.
+    match seen.mcp_servers.as_slice() {
+        [McpServer::Stdio(stdio), McpServer::Http(http)] => {
+            assert_eq!(stdio.command, "/usr/bin/fsmcp");
+            assert_eq!(stdio.args, vec!["--stdio".to_string()]);
+            assert_eq!(http.url, "https://acp.example/mcp");
         }
-        AcpResponse::Error { .. } => panic!("new_session must succeed"),
+        other => panic!("mcp servers decoded wrong: {other:?}"),
     }
 }
 

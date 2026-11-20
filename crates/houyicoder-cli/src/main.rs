@@ -66,6 +66,7 @@ use houyicoder_permission::FileRuleStore;
 use houyicoder_permission::ModeGate;
 use houyicoder_platform::ipc;
 use houyicoder_platform::ipc::LocalListener;
+use houyicoder_protocol::acp_wire::NewSessionRequest;
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::MAX_MESSAGE_BYTES;
 use houyicoder_service::CancellationToken;
@@ -139,7 +140,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             model,
             ..
         } => {
-            run_serve(project, endpoint, model)?;
+            run_detached_host(project, endpoint, model)?;
             Ok(())
         }
         CliCommand::Acp { project, model, .. } => {
@@ -332,7 +333,7 @@ fn production_runner(project: Option<String>, provider: ProviderResolution) -> B
 /// Each connecting client reattaches the same session via serve_session; the
 /// session survives a client disconnect. The session id is printed to stderr
 /// so an attaching client knows the target.
-fn run_serve(
+fn run_detached_host(
     project: Option<String>,
     endpoint: Option<String>,
     model_override: Option<String>,
@@ -455,11 +456,11 @@ fn run_attach(endpoint: String, session_id: String) -> Result<(), Box<dyn Error>
 }
 
 /// The ACP stdio entry. Builds the runner through the same composition root
-/// the TUI path uses (real provider config, tools, sandbox, memory), then
-/// drives the ACP server over stdin + stdout. The session id is assigned up
-/// front and printed to stderr so a stock client prompts against it — the
-/// server is single-session-bound at construction, so the id the client sees
-/// from session/new must match the one the runner drives.
+/// the TUI path uses, then drives the ACP server over stdin + stdout. A
+/// stock client learns the session id from the session/new reply alone; the
+/// binding registered here hands the runner's real session id to the
+/// adapter and applies the request's cwd and additional directories before
+/// the first prompt.
 fn run_acp_stdio(
     project: Option<String>,
     model_override: Option<String>,
@@ -475,20 +476,47 @@ fn run_acp_stdio(
     if let Some(store) = bundle.runner.descriptor_store() {
         lease.bind(StoreIdentity::of(store.as_ref()));
     }
-    // Print the session id to stderr so a client prompts against the right
-    // id; stdout stays clean for the JSON-RPC frame stream.
-    eprintln!("session_id={}", bundle.session);
     let session = bundle.session;
     let runner = Arc::new(bundle.runner);
     // The ACP server has no frontend event stream to publish a task's state
     // into, but a command moved to the background still ends after the call
     // that started it: the runner is how its ending reaches the model.
     bundle.background_tasks.attach(None, &runner);
-    let adapter = Arc::new(AcpAdapter::new(
-        AcpxCapabilities::default(),
-        1,
-        SessionLeaseStore::new(),
-    ));
+    // The binding a session/new call resolves through. It answers with the
+    // runner's own session id and moves the runner onto the workspace the
+    // client named, so the id the client prompts with is the id the engine
+    // drives and the file scope matches the request. Directory grants that
+    // the fence cannot take are logged, not fatal: the session stays usable
+    // and the denial is visible to a developer reading the debug log.
+    let binding_runner = Arc::clone(&runner);
+    let binding = Arc::new(move |params: &NewSessionRequest| {
+        let cwd = PathBuf::from(&params.cwd);
+        if cwd.is_absolute() {
+            binding_runner.switch_cwd(cwd.clone());
+        } else {
+            tracing::warn!(cwd = %params.cwd, "session/new cwd is not absolute; keeping the startup workspace");
+        }
+        if let Some(sandbox) = binding_runner.sandbox_session() {
+            for dir in &params.additional_directories {
+                let path = PathBuf::from(dir);
+                if !path.is_absolute() {
+                    tracing::warn!(dir = %dir, "additional directory is not absolute; skipped");
+                    continue;
+                }
+                match sandbox.add_working_dir(&path.to_string_lossy()) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::warn!(dir = %dir, error = %e, "additional directory not granted");
+                    }
+                }
+            }
+        }
+        session
+    });
+    let adapter = Arc::new(
+        AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new())
+            .with_session_binding(binding),
+    );
 
     // mpsc pair: one direction each way. Large capacity so a short turn's
     // frames buffer without a concurrent drain (the drain runs after serve

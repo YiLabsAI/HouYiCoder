@@ -26,6 +26,13 @@ use crate::lifecycle::{Lifecycle, SessionLeaseStore, SessionRecord};
 #[cfg(test)]
 use crate::lifecycle::{PendingPermission, PendingTurn};
 use serde_json::Map;
+use std::sync::Arc;
+
+/// Binds a session/new request to the runner that will drive it. Returns the
+/// session id the client must use in later prompts, which is the id of the
+/// runner session the composition root started or reused rather than a fresh
+/// store-only id the runner has never seen.
+pub type SessionBinding = Arc<dyn Fn(&NewSessionRequest) -> SessionId + Send + Sync>;
 
 /// The adapter's static config: the capability block it advertises at
 /// initialize. Built by the composition root from what the agent supports.
@@ -33,6 +40,11 @@ pub struct AcpAdapter {
     caps: AcpxCapabilities,
     protocol_version: u16,
     store: SessionLeaseStore,
+    /// The composition root's binding for session/new. Without one the
+    /// adapter mints an id and records it, which serves only a build where
+    /// no runner backs the adapter, such as a test or the standalone
+    /// example.
+    session_binding: Option<SessionBinding>,
 }
 
 impl AcpAdapter {
@@ -43,7 +55,15 @@ impl AcpAdapter {
             caps,
             protocol_version,
             store,
+            session_binding: None,
         }
+    }
+
+    /// Attach the composition root's binding, so session/new answers with
+    /// the id of the runner session that actually drives the prompts.
+    pub fn with_session_binding(mut self, binding: SessionBinding) -> Self {
+        self.session_binding = Some(binding);
+        self
     }
 
     /// Route one inbound request to its handler. Unknown methods reply
@@ -103,7 +123,7 @@ impl AcpAdapter {
     }
 
     fn handle_new_session(&self, req: &AcpRequest) -> AcpResponse {
-        let _params: NewSessionRequest = match req.params.as_ref() {
+        let params: NewSessionRequest = match req.params.as_ref() {
             Some(v) => match serde_json::from_value(v.clone()) {
                 Ok(p) => p,
                 Err(e) => {
@@ -122,7 +142,16 @@ impl AcpAdapter {
                 );
             }
         };
-        let sid = SessionId::new();
+        // A binding composition root answers with the runner's real session
+        // id. The unbound fallback mints an id no runner has seen, which
+        // serves a build where no runner backs the adapter. The binding also
+        // applied the request's cwd and extra directories to the runner
+        // before returning, so by the time the client prompts the session
+        // drives the workspace the client asked for.
+        let sid = match &self.session_binding {
+            Some(binding) => binding(&params),
+            None => SessionId::new(),
+        };
         self.store.insert(SessionRecord {
             session_id: sid,
             event_cursor: EventId::new(),
@@ -132,7 +161,7 @@ impl AcpAdapter {
         });
         let resp = NewSessionResponse {
             session_id: sid.to_string(),
-            meta: None,
+            ..Default::default()
         };
         AcpResponse::ok(
             req.id.clone(),

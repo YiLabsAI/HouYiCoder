@@ -32,7 +32,10 @@ pub use permission::{
     RequestPermissionResponse, SelectedPermissionOutcome,
 };
 pub use prompt::{PromptRequest, PromptResponse};
-pub use session::{LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse};
+pub use session::{
+    EnvVariable, HttpHeader, LoadSessionRequest, LoadSessionResponse, McpServer, McpServerHttp,
+    McpServerSse, McpServerStdio, NewSessionRequest, NewSessionResponse,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
