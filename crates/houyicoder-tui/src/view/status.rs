@@ -17,7 +17,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+use houyicoder_platform::desktop::glyphs::{detect_glyph_set, detect_mode_marks};
 use houyicoder_protocol::frontend::permission::PermissionMode;
 use houyicoder_protocol::llm::count_visible;
 
@@ -259,17 +259,18 @@ fn context_gauge_label(pct: f64) -> String {
     }
 }
 
-/// The mode label text and color for the status bar. Two modes: Manual shows
-/// the pause glyph, Auto the double-play glyph; both always show (the default
-/// Auto shows the auto label from session start). An unknown wire variant
-/// renders as manual (fail-safe).
+/// The mode label text and color for the status bar. Manual uses a calm
+/// hollow ring in neutral silver so the resting state stays legible without
+/// competing with active alerts, while Auto uses the fast-forward mark in
+/// warm amber to signal autonomous execution. An unknown wire variant renders
+/// as manual (fail-safe).
 fn mode_label(mode: PermissionMode) -> (String, Style) {
-    let set = detect_glyph_set();
+    let (auto_mark, manual_mark) = detect_mode_marks();
     let (symbol, label, color) = match mode {
-        PermissionMode::Manual => (set.paused(), "manual", Color::Blue),
-        PermissionMode::Auto => (set.play(), "auto", Color::Indexed(208)),
+        PermissionMode::Manual => (manual_mark, "manual", Color::Indexed(250)),
+        PermissionMode::Auto => (auto_mark, "auto", Color::Indexed(208)),
         // non_exhaustive: unknown wire variant fails safe to manual.
-        _ => (set.paused(), "manual", Color::Blue),
+        _ => (manual_mark, "manual", Color::Indexed(250)),
     };
     (
         format!("{symbol} {label} mode on (shift+tab to cycle)"),

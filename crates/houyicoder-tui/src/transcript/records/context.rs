@@ -1,6 +1,7 @@
 //! Record types for the /context view: the drill-down rows, suggestion entries,
 //! and the full view payload carried by the ContextGrid transcript line.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 
 /// Drill-down rows under the /context grid: per-source memory and per-skill
@@ -79,12 +80,12 @@ pub enum SuggestionSeverity {
 }
 
 impl SuggestionSeverity {
-    /// Glyph prefix for a suggestion row: warning -> the heavy warning mark,
-    /// info -> the circled i.
-    pub fn glyph(self) -> char {
+    /// Frameless glyph prefix for a suggestion row from the detected grade.
+    pub fn glyph(self) -> &'static str {
+        let set = detect_glyph_set();
         match self {
-            Self::Warning => '\u{26A0}',
-            Self::Info => '\u{2139}',
+            Self::Warning => set.warning_marker(),
+            Self::Info => set.info_marker(),
         }
     }
 }

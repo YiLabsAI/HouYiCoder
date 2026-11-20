@@ -9,6 +9,7 @@
 //! copyable content (the grid glyphs are ordinary characters) and the styled
 //! line keeps the category colors, so a drag lifts exactly what the user sees.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -463,7 +464,11 @@ fn suggestions_rows(suggestions: &[ContextSuggestion]) -> Vec<Vec<Span<'static>>
         ];
         if let Some(savings) = sug.savings_tokens {
             title.push(Span::styled(
-                format!(" \u{2192} save ~{}", format_tokens(u64::from(savings))),
+                format!(
+                    " {} save ~{}",
+                    detect_glyph_set().arrow(),
+                    format_tokens(u64::from(savings))
+                ),
                 dim,
             ));
         }

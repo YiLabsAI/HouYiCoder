@@ -558,9 +558,11 @@ fn test_grid_inline_renders_suggestions() {
     let buf = render_buffer(&app, 100, 50);
     let text = dump(&buf);
     assert!(text.contains("Suggestions"), "suggestions header missing");
+    let set = detect_glyph_set();
     assert!(
-        text.contains('\u{26A0}') || text.contains('\u{2139}'),
-        "suggestion glyph missing"
+        text.contains(&format!("{} ", set.warning_marker()))
+            || text.contains(&format!("{} ", set.info_marker())),
+        "suggestion glyph missing:\n{text}"
     );
 }
 

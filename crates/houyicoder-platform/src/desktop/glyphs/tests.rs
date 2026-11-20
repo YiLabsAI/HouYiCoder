@@ -4,7 +4,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     CONSOLE_SPINNER_FRAMES, GlyphPreference, GlyphSet, HostFonts, RICH_SPINNER_FRAMES,
-    SAFE_SPINNER_FRAMES, preference_from, resolve_glyph_set, resolve_spinner_frames,
+    SAFE_SPINNER_FRAMES, preference_from, resolve_glyph_set, resolve_mode_marks,
+    resolve_spinner_frames,
 };
 
 /// Every Safe glyph is plain ASCII: no font can miss it and no width
@@ -27,6 +28,8 @@ fn test_safe_glyphs_ascii() {
         safe.toggle_pending(),
         safe.gate_open(),
         safe.gate_blocked(),
+        safe.warning_marker(),
+        safe.info_marker(),
         safe.paused(),
     ];
     for glyph in all {
@@ -50,6 +53,8 @@ fn test_marker_glyphs_one_column() {
             set.notice_marker(),
             set.gate_open(),
             set.gate_blocked(),
+            set.warning_marker(),
+            set.info_marker(),
         ];
         for glyph in leading {
             for (glyph, width) in [
@@ -160,6 +165,10 @@ fn test_known_terminal_rich() {
         )
     };
     assert_eq!(case(Some("WezTerm"), None, None, None), GlyphSet::Rich);
+    assert_eq!(
+        case(Some("Apple_Terminal"), None, None, None),
+        GlyphSet::Rich
+    );
     assert_eq!(case(None, Some("session"), None, None), GlyphSet::Rich);
     assert_eq!(case(None, None, Some("1"), None), GlyphSet::Rich);
     assert_eq!(case(Some("ghostty"), None, None, None), GlyphSet::Rich);
@@ -270,6 +279,70 @@ fn test_known_terminal_spinner_rich() {
         ),
         RICH_SPINNER_FRAMES
     );
+}
+
+/// Mode marks unify manual mode on the hollow bullet across modern desktop
+/// and Windows terminals while using neutral-width auto marks per font host.
+#[test]
+fn test_mode_marks_neutral_width() {
+    let win = resolve_mode_marks(
+        None,
+        Some("session"),
+        None,
+        None,
+        GlyphPreference::Auto,
+        HostFonts::Windows,
+    );
+    assert_eq!(win, ("»", "◦"));
+    let mac = resolve_mode_marks(
+        Some("iTerm.app"),
+        None,
+        None,
+        None,
+        GlyphPreference::Auto,
+        HostFonts::SystemSymbols,
+    );
+    assert_eq!(mac, ("⏵⏵", "◦"));
+    let legacy = resolve_mode_marks(
+        None,
+        None,
+        None,
+        None,
+        GlyphPreference::Auto,
+        HostFonts::Windows,
+    );
+    assert_eq!(legacy, (">>", "o"));
+    assert_eq!(
+        resolve_mode_marks(
+            Some("iTerm.app"),
+            None,
+            None,
+            None,
+            GlyphPreference::Safe,
+            HostFonts::SystemSymbols,
+        ),
+        (">>", "o")
+    );
+    assert_eq!(
+        resolve_mode_marks(
+            None,
+            None,
+            None,
+            None,
+            GlyphPreference::Rich,
+            HostFonts::Windows,
+        ),
+        ("⏵⏵", "◦")
+    );
+    for (auto_mark, manual_mark) in [win, mac, legacy] {
+        for mark in [auto_mark, manual_mark] {
+            assert_eq!(
+                UnicodeWidthStr::width(mark),
+                UnicodeWidthStr::width_cjk(mark),
+                "mode mark keeps one width under CJK rules: {mark:?}"
+            );
+        }
+    }
 }
 
 /// The setting accepts both grade names, the alphabet name of the safe

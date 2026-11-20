@@ -135,15 +135,6 @@ impl GlyphSet {
         "->"
     }
 
-    /// The mark a running mode shows, distinct from the paused mark.
-    #[must_use]
-    pub fn play(&self) -> &'static str {
-        match self {
-            Self::Safe => ">>",
-            Self::Rich => "⏵⏵",
-        }
-    }
-
     /// The prefix a recap row leads with, including its trailing space.
     /// Both forms are Neutral-width so the row's leading columns hold.
     #[must_use]
@@ -191,6 +182,23 @@ impl GlyphSet {
         match self {
             Self::Safe => "...",
             Self::Rich => "…",
+        }
+    }
+
+    /// The marker a warning suggestion row leads with, kept free of boxed
+    /// symbol enclosures across platforms.
+    #[must_use]
+    pub fn warning_marker(&self) -> &'static str {
+        "!"
+    }
+
+    /// The marker an informational suggestion row leads with, kept free of
+    /// boxed symbol enclosures across platforms.
+    #[must_use]
+    pub fn info_marker(&self) -> &'static str {
+        match self {
+            Self::Safe => "*",
+            Self::Rich => "∙",
         }
     }
 
@@ -248,7 +256,7 @@ fn is_known_terminal(
     );
     matches!(
         program,
-        Some("ghostty" | "WezTerm" | "iTerm.app" | "vscode")
+        Some("ghostty" | "WezTerm" | "iTerm.app" | "Apple_Terminal" | "vscode")
     ) || wt_session.is_some()
         || wezterm.is_some()
         || ghostty.is_some()
@@ -336,6 +344,52 @@ pub fn detect_spinner_frames() -> &'static [&'static str] {
     static FRAMES: OnceLock<&'static [&'static str]> = OnceLock::new();
     FRAMES.get_or_init(|| {
         resolve_spinner_frames(
+            env_var("TERM_PROGRAM").as_deref(),
+            env_var("WT_SESSION").as_deref(),
+            env_var("WezTerm").as_deref(),
+            env_var("GHOSTTY_RESOURCES_DIR").as_deref(),
+            preference_from(env_var("HOUYICODER_GLYPHS").as_deref()),
+            host_fonts(),
+        )
+    })
+}
+
+/// Resolve the status-bar permission mode marks (auto, manual) for the given
+/// terminal and host fonts. Both modern symbol hosts and modern Windows
+/// terminals share the calm hollow bullet for manual mode, while Windows uses
+/// the compact double angle quote in place of the double triangle that
+/// console fonts omit. Every mark keeps neutral East-Asian width.
+#[must_use]
+pub fn resolve_mode_marks(
+    program: Option<&str>,
+    wt_session: Option<&str>,
+    wezterm: Option<&str>,
+    ghostty: Option<&str>,
+    preference: GlyphPreference,
+    fonts: HostFonts,
+) -> (&'static str, &'static str) {
+    match preference {
+        GlyphPreference::Safe => (">>", "o"),
+        GlyphPreference::Rich => ("⏵⏵", "◦"),
+        GlyphPreference::Auto => {
+            if !is_known_terminal(program, wt_session, wezterm, ghostty) {
+                (">>", "o")
+            } else if fonts == HostFonts::Windows {
+                ("»", "◦")
+            } else {
+                ("⏵⏵", "◦")
+            }
+        }
+    }
+}
+
+/// The status-bar permission mode marks (auto, manual) for the running
+/// terminal, decided once.
+#[must_use]
+pub fn detect_mode_marks() -> (&'static str, &'static str) {
+    static MARKS: OnceLock<(&'static str, &'static str)> = OnceLock::new();
+    *MARKS.get_or_init(|| {
+        resolve_mode_marks(
             env_var("TERM_PROGRAM").as_deref(),
             env_var("WT_SESSION").as_deref(),
             env_var("WezTerm").as_deref(),

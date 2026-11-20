@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use houyicoder_platform::desktop::glyphs::detect_glyph_set;
+use houyicoder_platform::desktop::glyphs::{detect_glyph_set, detect_mode_marks};
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
@@ -25,9 +25,10 @@ use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, TranscriptLine};
 use crate::state::PermissionTab;
 use crate::state::{App, Pane, PermissionInput, Screen};
-use crate::test_harness::{connection_lost_app, render_text};
+use crate::test_harness::{connection_lost_app, render_buffer, render_text};
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::permission::RuleDestination;
+use ratatui::style::Color;
 
 fn app() -> App {
     let mut app = composition::app();
@@ -176,15 +177,28 @@ fn test_status_bar_renders_mode() {
 
 #[test]
 fn test_status_bar_renders_manual() {
-    // Manual mode shows the pause-glyph label in the status bar.
     let mut app = build_app_for_test(None);
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Manual);
+    let (_, manual_mark) = detect_mode_marks();
+    let expected = format!("{manual_mark} manual mode on");
     let text = render_text(&app, 100, 28);
     assert!(
-        text.contains("manual mode on"),
+        text.contains(&expected),
         "status bar should show the manual label, got:\n{text}"
     );
+    let buf = render_buffer(&app, 100, 28);
+    let bottom_y = 27;
+    let has_silver = (0..100).any(|x| {
+        buf.cell((x, bottom_y))
+            .is_some_and(|c| c.style().fg == Some(Color::Indexed(250)))
+    });
+    let has_blue = (0..100).any(|x| {
+        buf.cell((x, bottom_y))
+            .is_some_and(|c| c.style().fg == Some(Color::Blue))
+    });
+    assert!(has_silver, "manual mode uses calm neutral silver");
+    assert!(!has_blue, "manual mode never uses electric blue");
 }
 
 #[test]
