@@ -112,7 +112,6 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     // transcript tail and the input-border shimmer — not duplicated here.
     let dim = Style::new().fg(Color::DarkGray);
     let mode = app.current_mode();
-    let (mode_label, mode_style) = mode_label(mode);
     let mut left: Vec<Span<'static>> = vec![Span::raw(" ")];
     // The live task count leads the line so a narrow terminal clips the model
     // id and the less urgent hints before it drops the count, matching the
@@ -123,7 +122,7 @@ fn draw_agent_status_bar(f: &mut Frame, area: Rect, app: &App) {
     }
     left.push(Span::styled(app.status_bar_model().to_string(), dim));
     left.push(Span::styled(" · ", dim));
-    left.push(Span::styled(mode_label, mode_style));
+    left.extend(mode_spans(mode));
     if let Some(hint) = shell_hint(app) {
         left.push(Span::styled(" · ", dim));
         left.push(Span::styled(hint, Style::new().fg(Color::Cyan)));
@@ -259,23 +258,23 @@ fn context_gauge_label(pct: f64) -> String {
     }
 }
 
-/// The mode label text and color for the status bar. Manual uses a calm
-/// hollow ring in neutral silver so the resting state stays legible without
-/// competing with active alerts, while Auto uses the fast-forward mark in
-/// warm amber to signal autonomous execution. An unknown wire variant renders
-/// as manual (fail-safe).
-fn mode_label(mode: PermissionMode) -> (String, Style) {
+/// The mode label spans for the status bar. Manual uses a calm hollow ring in
+/// muted sage teal while Auto uses the fast-forward mark in warm amber, and
+/// both dim the cycle shortcut hint so the active mode name stands out. An
+/// unknown wire variant renders as manual (fail-safe).
+fn mode_spans(mode: PermissionMode) -> [Span<'static>; 2] {
     let (auto_mark, manual_mark) = detect_mode_marks();
+    let sage = Color::Rgb(72, 150, 140);
     let (symbol, label, color) = match mode {
-        PermissionMode::Manual => (manual_mark, "manual", Color::Indexed(250)),
+        PermissionMode::Manual => (manual_mark, "manual", sage),
         PermissionMode::Auto => (auto_mark, "auto", Color::Indexed(208)),
         // non_exhaustive: unknown wire variant fails safe to manual.
-        _ => (manual_mark, "manual", Color::Indexed(250)),
+        _ => (manual_mark, "manual", sage),
     };
-    (
-        format!("{symbol} {label} mode on (shift+tab to cycle)"),
-        Style::new().fg(color),
-    )
+    [
+        Span::styled(format!("{symbol} {label} mode on"), Style::new().fg(color)),
+        Span::styled(" (shift+tab to cycle)", Style::new().fg(Color::DarkGray)),
+    ]
 }
 
 /// The Focus-mode status bar: the actionable keys for the current pane (what

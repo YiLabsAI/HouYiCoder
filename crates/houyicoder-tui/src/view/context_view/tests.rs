@@ -564,6 +564,23 @@ fn test_grid_inline_renders_suggestions() {
             || text.contains(&format!("{} ", set.info_marker())),
         "suggestion glyph missing:\n{text}"
     );
+    let has_colored_title = (0..50).any(|y| {
+        let colored_cols = (0..100)
+            .filter(|x| {
+                buf.cell((*x, y)).is_some_and(|c| {
+                    matches!(
+                        c.style().fg,
+                        Some(Color::Rgb(255, 193, 7)) | Some(Color::Rgb(177, 185, 249))
+                    )
+                })
+            })
+            .count();
+        colored_cols > 5
+    });
+    assert!(
+        has_colored_title,
+        "full suggestion title carries severity color, not only its leading glyph"
+    );
 }
 
 #[test]

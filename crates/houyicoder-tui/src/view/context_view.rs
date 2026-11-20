@@ -448,19 +448,26 @@ fn suggestions_rows(suggestions: &[ContextSuggestion]) -> Vec<Vec<Span<'static>>
     }
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().fg(Color::DarkGray);
-    let warn = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    let info = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let warn = Style::new()
+        .fg(Color::Rgb(255, 193, 7))
+        .add_modifier(Modifier::BOLD);
+    let info = Style::new()
+        .fg(Color::Rgb(177, 185, 249))
+        .add_modifier(Modifier::BOLD);
     let mut rows: Vec<Vec<Span>> = Vec::new();
     rows.push(vec![Span::styled("Suggestions", bold)]);
-    for sug in suggestions {
-        let glyph_style = match sug.severity {
+    for (idx, sug) in suggestions.iter().enumerate() {
+        if idx > 0 {
+            rows.push(Vec::new());
+        }
+        let heading_style = match sug.severity {
             SuggestionSeverity::Warning => warn,
             SuggestionSeverity::Info => info,
         };
         let glyph = sug.severity.glyph();
         let mut title = vec![
-            Span::styled(format!("{glyph} "), glyph_style),
-            Span::styled(sug.title.clone(), bold),
+            Span::styled(format!("{glyph} "), heading_style),
+            Span::styled(sug.title.clone(), heading_style),
         ];
         if let Some(savings) = sug.savings_tokens {
             title.push(Span::styled(

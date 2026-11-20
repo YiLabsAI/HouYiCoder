@@ -189,15 +189,15 @@ fn test_status_bar_renders_manual() {
     );
     let buf = render_buffer(&app, 100, 28);
     let bottom_y = 27;
-    let has_silver = (0..100).any(|x| {
+    let has_sage = (0..100).any(|x| {
         buf.cell((x, bottom_y))
-            .is_some_and(|c| c.style().fg == Some(Color::Indexed(250)))
+            .is_some_and(|c| c.style().fg == Some(Color::Rgb(72, 150, 140)))
     });
     let has_blue = (0..100).any(|x| {
         buf.cell((x, bottom_y))
             .is_some_and(|c| c.style().fg == Some(Color::Blue))
     });
-    assert!(has_silver, "manual mode uses calm neutral silver");
+    assert!(has_sage, "manual mode uses muted sage teal");
     assert!(!has_blue, "manual mode never uses electric blue");
 }
 

@@ -185,20 +185,23 @@ impl GlyphSet {
         }
     }
 
-    /// The marker a warning suggestion row leads with, kept free of boxed
-    /// symbol enclosures across platforms.
+    /// The marker a warning suggestion row leads with. Symbol hosts use the
+    /// single-column warning sign; console hosts use the ASCII exclamation.
     #[must_use]
     pub fn warning_marker(&self) -> &'static str {
-        "!"
+        match self {
+            Self::Safe => "!",
+            Self::Rich => "\u{26A0}",
+        }
     }
 
-    /// The marker an informational suggestion row leads with, kept free of
-    /// boxed symbol enclosures across platforms.
+    /// The marker an informational suggestion row leads with. Symbol hosts
+    /// use the single-column information source mark; console hosts use ASCII.
     #[must_use]
     pub fn info_marker(&self) -> &'static str {
         match self {
-            Self::Safe => "*",
-            Self::Rich => "∙",
+            Self::Safe => "i",
+            Self::Rich => "\u{2139}",
         }
     }
 

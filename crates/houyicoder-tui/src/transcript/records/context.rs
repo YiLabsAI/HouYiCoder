@@ -80,7 +80,7 @@ pub enum SuggestionSeverity {
 }
 
 impl SuggestionSeverity {
-    /// Frameless glyph prefix for a suggestion row from the detected grade.
+    /// Glyph prefix for a suggestion row from the detected grade.
     pub fn glyph(self) -> &'static str {
         let set = detect_glyph_set();
         match self {
