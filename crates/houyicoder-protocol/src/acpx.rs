@@ -32,50 +32,50 @@ use serde_json::Value;
 #[non_exhaustive]
 pub enum AcpxMethod {
     // acpx/llm/* — the token-level provider stream (matches LlmEvent).
-    #[serde(rename = "acpx/llm/step_start")]
+    #[serde(rename = "_acpx/llm/step_start")]
     LlmStepStart,
-    #[serde(rename = "acpx/llm/step_finish")]
+    #[serde(rename = "_acpx/llm/step_finish")]
     LlmStepFinish,
-    #[serde(rename = "acpx/llm/text_start")]
+    #[serde(rename = "_acpx/llm/text_start")]
     LlmTextStart,
-    #[serde(rename = "acpx/llm/text_delta")]
+    #[serde(rename = "_acpx/llm/text_delta")]
     LlmTextDelta,
-    #[serde(rename = "acpx/llm/text_end")]
+    #[serde(rename = "_acpx/llm/text_end")]
     LlmTextEnd,
-    #[serde(rename = "acpx/llm/reasoning_start")]
+    #[serde(rename = "_acpx/llm/reasoning_start")]
     LlmReasoningStart,
-    #[serde(rename = "acpx/llm/reasoning_delta")]
+    #[serde(rename = "_acpx/llm/reasoning_delta")]
     LlmReasoningDelta,
-    #[serde(rename = "acpx/llm/reasoning_end")]
+    #[serde(rename = "_acpx/llm/reasoning_end")]
     LlmReasoningEnd,
-    #[serde(rename = "acpx/llm/tool_input_start")]
+    #[serde(rename = "_acpx/llm/tool_input_start")]
     LlmToolInputStart,
-    #[serde(rename = "acpx/llm/tool_input_delta")]
+    #[serde(rename = "_acpx/llm/tool_input_delta")]
     LlmToolInputDelta,
-    #[serde(rename = "acpx/llm/tool_input_end")]
+    #[serde(rename = "_acpx/llm/tool_input_end")]
     LlmToolInputEnd,
-    #[serde(rename = "acpx/llm/tool_call")]
+    #[serde(rename = "_acpx/llm/tool_call")]
     LlmToolCall,
-    #[serde(rename = "acpx/llm/tool_result")]
+    #[serde(rename = "_acpx/llm/tool_result")]
     LlmToolResult,
-    #[serde(rename = "acpx/llm/tool_error")]
+    #[serde(rename = "_acpx/llm/tool_error")]
     LlmToolError,
-    #[serde(rename = "acpx/llm/finish")]
+    #[serde(rename = "_acpx/llm/finish")]
     LlmFinish,
-    #[serde(rename = "acpx/llm/provider_error")]
+    #[serde(rename = "_acpx/llm/provider_error")]
     LlmProviderError,
 
     // acpx/max_turns — the MaxTurnsReached side channel (the run hit the
     // turn cap; the stop_reason carries max_turn_requests, the turn count
     // rides here). Lands when the reverse-request mapping promotes it.
-    #[serde(rename = "acpx/max_turns")]
+    #[serde(rename = "_acpx/max_turns")]
     MaxTurns,
 
     // acpx/tool/progress — a long-running tool (currently bash) reports its
     // elapsed seconds so the host can show the chip is not stuck. Carries
     // call_id + elapsed_secs in params. Ephemeral like the llm deltas: a
     // later authoritative tool-result frame supersedes it.
-    #[serde(rename = "acpx/tool/progress")]
+    #[serde(rename = "_acpx/tool/progress")]
     ToolProgress,
 
     // acpx/context/* — SessionLogEntry kinds the base session/update has no
@@ -83,26 +83,26 @@ pub enum AcpxMethod {
     // PermissionDecision, RunCompleted). These ride the extension
     // notification stream (the durable-context audit trail), orthogonal to
     // session/update.
-    #[serde(rename = "acpx/context/compaction_boundary")]
+    #[serde(rename = "_acpx/context/compaction_boundary")]
     ContextCompactionBoundary,
-    #[serde(rename = "acpx/context/summary")]
+    #[serde(rename = "_acpx/context/summary")]
     ContextSummary,
-    #[serde(rename = "acpx/context/meta_user")]
+    #[serde(rename = "_acpx/context/meta_user")]
     ContextMetaUser,
     /// A recap the host wrote while the user was away or after reopening an
     /// idle session. It is not a turn of the conversation: the client renders
     /// it as its own dim row and never counts it as a message. Params carry
     /// the summary text.
-    #[serde(rename = "acpx/context/recap")]
+    #[serde(rename = "_acpx/context/recap")]
     ContextRecap,
-    #[serde(rename = "acpx/context/permission_decision")]
+    #[serde(rename = "_acpx/context/permission_decision")]
     ContextPermissionDecision,
     /// A run reached its terminal outcome. The params carry the turn's
     /// duration in ms, the sum of how long its drive legs ran, which is the
     /// work it spent rather than the wall clock it was open for. The host
     /// closes the turn's summary row on this frame, so a replayed session
     /// shows the same row the live one did.
-    #[serde(rename = "acpx/context/run_completed")]
+    #[serde(rename = "_acpx/context/run_completed")]
     ContextRunCompleted,
     /// A message delivered into a running turn rather than one that opens it.
     /// The message itself rides the user-message stream; this mark rides
@@ -110,29 +110,29 @@ pub enum AcpxMethod {
     /// it is and a turn boundary turns on that. A queued interjection is
     /// delivered this way; a background notification is not, because it
     /// carries no message of its own.
-    #[serde(rename = "acpx/context/mid_turn_input")]
+    #[serde(rename = "_acpx/context/mid_turn_input")]
     ContextMidTurnInput,
     /// A background notification reached the model. The notice is written for
     /// the model and produces no message chunk, so this mark stands where a
     /// message would: it opens the turn the notification woke when the session
     /// sat idle, and leaves a running turn alone when it arrives mid-turn.
-    #[serde(rename = "acpx/context/child_completed")]
+    #[serde(rename = "_acpx/context/child_completed")]
     ContextChildCompleted,
     /// A turn was interrupted (a cancel, or a process that died mid-turn) and
     /// the run regenerates inside the same user turn. The notice rides the
     /// user-message stream and this mark rides beside it, so a reader does not
     /// mistake the notice for a message that opens a turn and split one user
     /// turn into two summary rows.
-    #[serde(rename = "acpx/context/turn_interrupted")]
+    #[serde(rename = "_acpx/context/turn_interrupted")]
     ContextTurnInterrupted,
 
     // acpx/a2a/*, acpx/trajectory/*, acpx/cas/* — placeholder namespaces;
     // payload shapes land with their respective subsystems.
-    #[serde(rename = "acpx/a2a/handoff")]
+    #[serde(rename = "_acpx/a2a/handoff")]
     A2aHandoff,
-    #[serde(rename = "acpx/trajectory/snapshot")]
+    #[serde(rename = "_acpx/trajectory/snapshot")]
     TrajectorySnapshot,
-    #[serde(rename = "acpx/cas/block_ref")]
+    #[serde(rename = "_acpx/cas/block_ref")]
     CasBlockRef,
 
     // acpx/session/takeControl — a session-scoped ext_method request (not a
@@ -141,7 +141,7 @@ pub enum AcpxMethod {
     // resolves the pending reverse request future and replies with a
     // TakeControlOutcome. Rides the ext_method request axis (carries a
     // req_id), unlike the notification methods above which have no req_id.
-    #[serde(rename = "acpx/session/takeControl")]
+    #[serde(rename = "_acpx/session/takeControl")]
     SessionTakeControl,
 
     /// A method this build does not know: a newer peer's addition, or a name

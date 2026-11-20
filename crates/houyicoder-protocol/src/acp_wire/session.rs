@@ -89,17 +89,121 @@ pub struct NewSessionRequest {
     pub meta: Option<Meta>,
 }
 
-/// The new-session response: the session id the runner is bound to. The mode
-/// state and config options mirror the fields the official schema defines;
-/// a first-cut agent may omit them.
+/// A mode the agent can operate in, such as a permission strictness level.
+/// The id is what later set-mode requests name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMode {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// The mode state a session reports: which mode is current and the full set
+/// the agent offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModeState {
+    pub current_mode_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_modes: Vec<SessionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// One selectable value of a config option.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfigSelectOption {
+    pub value: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// The type-specific payload of a config option. Select carries a current
+/// value and the options to switch to; Boolean carries a current on/off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionConfigKind {
+    Select {
+        #[serde(rename = "currentValue")]
+        current_value: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<SessionConfigSelectOption>,
+    },
+    Boolean {
+        #[serde(rename = "currentValue")]
+        current_value: bool,
+    },
+}
+
+/// A config option the session offers, such as which model it runs. The
+/// semantic category is advisory for the client's UI, not for correctness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfigOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(flatten)]
+    pub kind: SessionConfigKind,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// The new-session response: the session id the runner is bound to, plus the
+/// mode state and config options the session offers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionResponse {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub modes: Option<serde_json::Value>,
+    pub modes: Option<SessionModeState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_options: Option<serde_json::Value>,
+    pub config_options: Option<Vec<SessionConfigOption>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// Request parameters for session/set_mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionModeRequest {
+    pub session_id: String,
+    pub mode_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// The value a set-config-option request carries. A select option names a
+/// value id; a boolean option carries true or false.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionConfigOptionValue {
+    #[serde(rename = "boolean")]
+    Boolean { value: bool },
+    #[serde(untagged)]
+    ValueId { value: String },
+}
+
+/// Request parameters for session/set_config_option. Switching the model is
+/// the option whose id the agent defined with category model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionConfigOptionRequest {
+    pub session_id: String,
+    pub config_id: String,
+    #[serde(flatten)]
+    pub value: SessionConfigOptionValue,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<Meta>,
 }

@@ -9,7 +9,7 @@ fn test_method_serializes_slash_key() {
     // The wire key is the slash-namespaced string the base ext_*
     // mechanism carries, not a Rust-style snake name.
     let json = serde_json::to_string(&AcpxMethod::LlmTextDelta).unwrap();
-    assert_eq!(json, r#""acpx/llm/text_delta""#);
+    assert_eq!(json, r#""_acpx/llm/text_delta""#);
     let back: AcpxMethod = serde_json::from_str(&json).unwrap();
     assert_eq!(back, AcpxMethod::LlmTextDelta);
 }
@@ -17,7 +17,7 @@ fn test_method_serializes_slash_key() {
 #[test]
 fn test_take_control_method_serializes() {
     let json = serde_json::to_string(&AcpxMethod::SessionTakeControl).unwrap();
-    assert_eq!(json, r#""acpx/session/takeControl""#);
+    assert_eq!(json, r#""_acpx/session/takeControl""#);
     let back: AcpxMethod = serde_json::from_str(&json).unwrap();
     assert!(matches!(back, AcpxMethod::SessionTakeControl));
 }
@@ -28,7 +28,7 @@ fn test_unknown_method_decodes() {
     // grows, and a build that cannot name a method still reads the
     // notification carrying it. The payload survives for a consumer to
     // report.
-    let json = r#"{"method":"acpx/context/future_note","params":{"secs":12}}"#;
+    let json = r#"{"method":"_acpx/context/future_note","params":{"secs":12}}"#;
     let back: AcpxNotification = serde_json::from_str(json).unwrap();
     assert!(matches!(back.method, AcpxMethod::Unknown));
     assert_eq!(back.params["secs"], 12);
@@ -42,37 +42,37 @@ fn test_unknown_method_decodes() {
 /// serde gives it, which no peer defines as a method.
 fn pinned_name(method: &AcpxMethod) -> &'static str {
     match method {
-        AcpxMethod::LlmStepStart => "acpx/llm/step_start",
-        AcpxMethod::LlmStepFinish => "acpx/llm/step_finish",
-        AcpxMethod::LlmTextStart => "acpx/llm/text_start",
-        AcpxMethod::LlmTextDelta => "acpx/llm/text_delta",
-        AcpxMethod::LlmTextEnd => "acpx/llm/text_end",
-        AcpxMethod::LlmReasoningStart => "acpx/llm/reasoning_start",
-        AcpxMethod::LlmReasoningDelta => "acpx/llm/reasoning_delta",
-        AcpxMethod::LlmReasoningEnd => "acpx/llm/reasoning_end",
-        AcpxMethod::LlmToolInputStart => "acpx/llm/tool_input_start",
-        AcpxMethod::LlmToolInputDelta => "acpx/llm/tool_input_delta",
-        AcpxMethod::LlmToolInputEnd => "acpx/llm/tool_input_end",
-        AcpxMethod::LlmToolCall => "acpx/llm/tool_call",
-        AcpxMethod::LlmToolResult => "acpx/llm/tool_result",
-        AcpxMethod::LlmToolError => "acpx/llm/tool_error",
-        AcpxMethod::LlmFinish => "acpx/llm/finish",
-        AcpxMethod::LlmProviderError => "acpx/llm/provider_error",
-        AcpxMethod::MaxTurns => "acpx/max_turns",
-        AcpxMethod::ToolProgress => "acpx/tool/progress",
-        AcpxMethod::ContextCompactionBoundary => "acpx/context/compaction_boundary",
-        AcpxMethod::ContextSummary => "acpx/context/summary",
-        AcpxMethod::ContextMetaUser => "acpx/context/meta_user",
-        AcpxMethod::ContextPermissionDecision => "acpx/context/permission_decision",
-        AcpxMethod::ContextRunCompleted => "acpx/context/run_completed",
-        AcpxMethod::ContextMidTurnInput => "acpx/context/mid_turn_input",
-        AcpxMethod::ContextChildCompleted => "acpx/context/child_completed",
-        AcpxMethod::ContextTurnInterrupted => "acpx/context/turn_interrupted",
-        AcpxMethod::ContextRecap => "acpx/context/recap",
-        AcpxMethod::A2aHandoff => "acpx/a2a/handoff",
-        AcpxMethod::TrajectorySnapshot => "acpx/trajectory/snapshot",
-        AcpxMethod::CasBlockRef => "acpx/cas/block_ref",
-        AcpxMethod::SessionTakeControl => "acpx/session/takeControl",
+        AcpxMethod::LlmStepStart => "_acpx/llm/step_start",
+        AcpxMethod::LlmStepFinish => "_acpx/llm/step_finish",
+        AcpxMethod::LlmTextStart => "_acpx/llm/text_start",
+        AcpxMethod::LlmTextDelta => "_acpx/llm/text_delta",
+        AcpxMethod::LlmTextEnd => "_acpx/llm/text_end",
+        AcpxMethod::LlmReasoningStart => "_acpx/llm/reasoning_start",
+        AcpxMethod::LlmReasoningDelta => "_acpx/llm/reasoning_delta",
+        AcpxMethod::LlmReasoningEnd => "_acpx/llm/reasoning_end",
+        AcpxMethod::LlmToolInputStart => "_acpx/llm/tool_input_start",
+        AcpxMethod::LlmToolInputDelta => "_acpx/llm/tool_input_delta",
+        AcpxMethod::LlmToolInputEnd => "_acpx/llm/tool_input_end",
+        AcpxMethod::LlmToolCall => "_acpx/llm/tool_call",
+        AcpxMethod::LlmToolResult => "_acpx/llm/tool_result",
+        AcpxMethod::LlmToolError => "_acpx/llm/tool_error",
+        AcpxMethod::LlmFinish => "_acpx/llm/finish",
+        AcpxMethod::LlmProviderError => "_acpx/llm/provider_error",
+        AcpxMethod::MaxTurns => "_acpx/max_turns",
+        AcpxMethod::ToolProgress => "_acpx/tool/progress",
+        AcpxMethod::ContextCompactionBoundary => "_acpx/context/compaction_boundary",
+        AcpxMethod::ContextSummary => "_acpx/context/summary",
+        AcpxMethod::ContextMetaUser => "_acpx/context/meta_user",
+        AcpxMethod::ContextPermissionDecision => "_acpx/context/permission_decision",
+        AcpxMethod::ContextRunCompleted => "_acpx/context/run_completed",
+        AcpxMethod::ContextMidTurnInput => "_acpx/context/mid_turn_input",
+        AcpxMethod::ContextChildCompleted => "_acpx/context/child_completed",
+        AcpxMethod::ContextTurnInterrupted => "_acpx/context/turn_interrupted",
+        AcpxMethod::ContextRecap => "_acpx/context/recap",
+        AcpxMethod::A2aHandoff => "_acpx/a2a/handoff",
+        AcpxMethod::TrajectorySnapshot => "_acpx/trajectory/snapshot",
+        AcpxMethod::CasBlockRef => "_acpx/cas/block_ref",
+        AcpxMethod::SessionTakeControl => "_acpx/session/takeControl",
         AcpxMethod::Unknown => "Unknown",
     }
 }
@@ -133,12 +133,60 @@ fn test_method_names_round_trip() {
     assert_eq!(distinct.len(), seen.len(), "names are distinct: {seen:?}");
 }
 
+/// Every named method serializes with the leading underscore the base
+/// protocol reserves for extension method names, so a stock client's
+/// routing layer can distinguish an extension method from a standard one
+/// without knowing the acpx namespace.
+#[test]
+fn test_acpx_methods_underscored() {
+    let named = [
+        AcpxMethod::LlmStepStart,
+        AcpxMethod::LlmStepFinish,
+        AcpxMethod::LlmTextStart,
+        AcpxMethod::LlmTextDelta,
+        AcpxMethod::LlmTextEnd,
+        AcpxMethod::LlmReasoningStart,
+        AcpxMethod::LlmReasoningDelta,
+        AcpxMethod::LlmReasoningEnd,
+        AcpxMethod::LlmToolInputStart,
+        AcpxMethod::LlmToolInputDelta,
+        AcpxMethod::LlmToolInputEnd,
+        AcpxMethod::LlmToolCall,
+        AcpxMethod::LlmToolResult,
+        AcpxMethod::LlmToolError,
+        AcpxMethod::LlmFinish,
+        AcpxMethod::LlmProviderError,
+        AcpxMethod::MaxTurns,
+        AcpxMethod::ToolProgress,
+        AcpxMethod::ContextCompactionBoundary,
+        AcpxMethod::ContextSummary,
+        AcpxMethod::ContextMetaUser,
+        AcpxMethod::ContextPermissionDecision,
+        AcpxMethod::ContextRunCompleted,
+        AcpxMethod::ContextMidTurnInput,
+        AcpxMethod::ContextChildCompleted,
+        AcpxMethod::ContextTurnInterrupted,
+        AcpxMethod::ContextRecap,
+        AcpxMethod::A2aHandoff,
+        AcpxMethod::TrajectorySnapshot,
+        AcpxMethod::CasBlockRef,
+        AcpxMethod::SessionTakeControl,
+    ];
+    for method in named {
+        let encoded = serde_json::to_string(&method).unwrap();
+        assert!(
+            encoded.starts_with("\"_"),
+            "method {method:?} must serialize with the extension prefix: {encoded}"
+        );
+    }
+}
+
 #[test]
 fn test_notification_without_params_decodes() {
     // JSON-RPC 2.0 lets a notification omit params; the method still
     // decodes and the fields read as null, so a peer that sends the bare
     // method does not end the read.
-    let json = r#"{"method":"acpx/context/summary"}"#;
+    let json = r#"{"method":"_acpx/context/summary"}"#;
     let back: AcpxNotification = serde_json::from_str(json).unwrap();
     assert_eq!(back.method, AcpxMethod::ContextSummary);
     assert!(back.params.get("text").is_none());

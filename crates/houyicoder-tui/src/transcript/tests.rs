@@ -941,7 +941,7 @@ fn test_row_uses_recorded_ms() {
 /// drift in either one loses every turn's duration and fails nothing else.
 #[test]
 fn test_row_reads_duration_key() {
-    let raw = r#"{"method":"acpx/context/run_completed","params":{"ms":620}}"#;
+    let raw = r#"{"method":"_acpx/context/run_completed","params":{"ms":620}}"#;
     let n: AcpxNotification = serde_json::from_str(raw).expect("the peer's frame decodes");
     let frames = vec![
         user_msg("go"),

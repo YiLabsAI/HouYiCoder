@@ -34,7 +34,9 @@ pub use permission::{
 pub use prompt::{PromptRequest, PromptResponse};
 pub use session::{
     EnvVariable, HttpHeader, LoadSessionRequest, LoadSessionResponse, McpServer, McpServerHttp,
-    McpServerSse, McpServerStdio, NewSessionRequest, NewSessionResponse,
+    McpServerSse, McpServerStdio, NewSessionRequest, NewSessionResponse, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionMode,
+    SessionModeState, SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 
 use serde::{Deserialize, Serialize};

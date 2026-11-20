@@ -20,7 +20,7 @@ fn test_initialize_replies_acpx_caps() {
         streaming: true,
         cas: false,
         detach: true,
-        ext_methods: vec!["acpx/session/takeControl".into()],
+        ext_methods: vec!["_acpx/session/takeControl".into()],
     };
     let adapter = AcpAdapter::new(caps, 1, SessionLeaseStore::new());
     let resp = block_on(adapter.handle(&req("initialize", 5)));
@@ -30,7 +30,7 @@ fn test_initialize_replies_acpx_caps() {
             assert!(s.contains(r#""_meta":{"acpx""#), "{s}");
             assert!(s.contains(r#""loadSession":true"#), "{s}");
             assert!(
-                s.contains(r#""extMethods":["acpx/session/takeControl"]"#),
+                s.contains(r#""extMethods":["_acpx/session/takeControl"]"#),
                 "{s}"
             );
         }

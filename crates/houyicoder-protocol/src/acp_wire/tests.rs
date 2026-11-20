@@ -87,7 +87,7 @@ fn test_initialize_response_carries_meta() {
         streaming: true,
         cas: false,
         detach: true,
-        ext_methods: vec!["acpx/session/takeControl".into()],
+        ext_methods: vec!["_acpx/session/takeControl".into()],
     };
     let mut meta = Map::new();
     meta.insert("acpx".into(), serde_json::to_value(&caps).unwrap());
@@ -111,7 +111,7 @@ fn test_initialize_response_carries_meta() {
     assert!(j.contains(r#""_meta":{"acpx":{"#), "{j}");
     assert!(j.contains(r#""streaming":true"#), "{j}");
     assert!(
-        j.contains(r#""extMethods":["acpx/session/takeControl"]"#),
+        j.contains(r#""extMethods":["_acpx/session/takeControl"]"#),
         "{j}"
     );
     let back: InitializeResponse = serde_json::from_str(&j).unwrap();
