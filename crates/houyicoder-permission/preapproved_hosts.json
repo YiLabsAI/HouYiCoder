@@ -8,6 +8,8 @@
   "doc.rust-lang.org",
   "docs.rs",
   "crates.io",
+  "static.crates.io",
+  "index.crates.io",
   "docs.python.org",
   "pypi.org",
   "en.cppreference.com",

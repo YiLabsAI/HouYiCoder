@@ -47,6 +47,8 @@ mod rule_dedup;
 #[cfg(test)]
 mod sandbox_containment;
 #[cfg(test)]
+mod scratch;
+#[cfg(test)]
 mod session_replay;
 #[cfg(test)]
 mod shell_policy;

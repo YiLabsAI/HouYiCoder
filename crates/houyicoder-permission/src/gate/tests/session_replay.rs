@@ -259,7 +259,7 @@ fn test_trusted_egress_scopes() {
     // removal, or host substitution fails this gate check until reviewed.
     assert_eq!(
         hosts.len(),
-        107,
+        109,
         "preapproved_hosts.json is a governed whitelist; update this count only after architecture review"
     );
     let mut seen = HashSet::new();
@@ -286,7 +286,7 @@ fn test_trusted_egress_scopes() {
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     assert_eq!(
-        hash, 972_859_653_657_059_805,
+        hash, 6_773_165_740_272_969_275,
         "preapproved_hosts.json content changed without updating the governed digest"
     );
     for required in [

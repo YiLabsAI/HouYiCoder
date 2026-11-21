@@ -16,11 +16,13 @@ use crate::shell::{substitution_bodies, unwrap_clause};
 mod effect;
 mod protected_write;
 mod readonly;
+mod temp_cwd;
 
 pub use effect::{is_effect_safe, reads_only_protected, removes_only_temp};
-pub(crate) use effect::{is_temp_output_target, sets_tmpdir, starts_with_supported_command};
+pub(crate) use effect::{sets_tmpdir, starts_with_supported_command};
 pub(crate) use protected_write::writes_fence_denied_path;
 pub use readonly::is_readonly_compound;
+pub(crate) use temp_cwd::{TempCwd, chain_links, scratch_target, starts_a_subshell};
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
 /// pipe, newline, and background ampersand. A bare pipe counts as a segment

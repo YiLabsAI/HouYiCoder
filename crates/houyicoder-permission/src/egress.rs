@@ -15,19 +15,21 @@
 
 use houyicoder_api::shell::interpreter::is_read_only_program;
 
+use crate::compound::TempCwd;
+use crate::compound::chain_links;
 use crate::compound::is_attestable;
 use crate::compound::is_effect_safe;
 use crate::compound::is_readonly_compound;
-use crate::compound::is_temp_output_target;
 use crate::compound::normalize_shell_command;
+use crate::compound::scratch_target;
 use crate::compound::sets_tmpdir;
 use crate::compound::split_compound;
+use crate::compound::starts_a_subshell;
 use crate::compound::starts_with_supported_command;
 use crate::compound::strip_safe_redirects;
 use crate::shell::Stage;
 use crate::shell::has_process_substitution;
 use crate::shell::program_name;
-use crate::shell::split_clauses;
 use crate::shell::stage_inline_code;
 use crate::shell::stage_program;
 use crate::shell::substitution_bodies;
@@ -157,59 +159,21 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
     let can_use_temp = fenced && !sets_tmpdir(command);
     let normalized = normalize_shell_command(command);
     let mut preceding_supported = true;
-    for clause in split_clauses(&normalized) {
-        for stage in split_compound(&clause) {
-            let command = match stage_program(stage.trim()) {
-                Stage::Empty => continue,
-                Stage::Program { command, exact } => {
-                    // An argument the scan could not read could be the one
-                    // naming the output, so the outputs are not safe.
-                    if !exact {
-                        return false;
-                    }
-                    command
-                }
-            };
-            let program = program_name(command.program()).to_ascii_lowercase();
-            if !EGRESS_TOOLS.contains(&program.as_str()) {
-                preceding_supported = preceding_supported && starts_with_supported_command(&stage);
-                continue;
-            }
-            let allow_temp = can_use_temp && preceding_supported;
-            let args = command.args();
-            let mut document_output = program == "curl";
-            let mut idx = 0;
-            while idx < args.len() {
-                let w = args[idx].as_str();
-                if let Some(val) = w
-                    .strip_prefix("--output=")
-                    .or_else(|| w.strip_prefix("--output-document="))
-                {
-                    if !output_target_safe(val, allow_temp) {
-                        return false;
-                    }
-                    document_output = true;
-                } else if matches!(w, "-o" | "-O" | "--output" | "--output-document") {
-                    if program == "curl" && w == "-O" {
-                        return false;
-                    }
-                    let v = args.get(idx + 1).map(String::as_str).unwrap_or("");
-                    if !output_target_safe(v, allow_temp) {
-                        return false;
-                    }
-                    if program == "wget" && w == "-o" {
-                        if v != "/dev/null" {
-                            return false;
-                        }
-                    } else {
-                        document_output = true;
-                    }
-                    idx += 2;
-                    continue;
-                }
-                idx += 1;
-            }
-            if !document_output {
+    let mut cwd = TempCwd::Outside;
+    for link in chain_links(&normalized) {
+        cwd = cwd.advance(&link);
+        let text = link.text.as_str();
+        // A parenthesised group runs in a subshell whose working directory this
+        // walk cannot place, so neither the group nor anything after it can be
+        // proven to write inside the scratch space.
+        if starts_a_subshell(text) {
+            return false;
+        }
+        // A link may still hold a pipeline. Its stages share the working
+        // directory the link established, so each is read under that same cwd.
+        for stage in split_compound(text) {
+            let stage = stage.trim();
+            if !stage_outputs_safe(stage, can_use_temp, &mut preceding_supported, cwd) {
                 return false;
             }
         }
@@ -217,13 +181,78 @@ pub fn egress_outputs_safe(command: &str, fenced: bool) -> bool {
     true
 }
 
-/// Whether one output argument names stdout, /dev/null, or a fenced session
-/// temporary child.
-fn output_target_safe(value: &str, fenced: bool) -> bool {
-    if value == "/dev/null" || value == "-" {
+/// Whether one stage's output arguments stay inside the scratch space. Updates
+/// the running flag that says every stage so far has been one the walk can
+/// read, which gates whether a relative scratch output may be trusted.
+fn stage_outputs_safe(
+    stage: &str,
+    can_use_temp: bool,
+    preceding_supported: &mut bool,
+    cwd: TempCwd,
+) -> bool {
+    let command = match stage_program(stage) {
+        Stage::Empty => {
+            *preceding_supported = *preceding_supported && starts_with_supported_command(stage);
+            return true;
+        }
+        Stage::Program { command, exact } => {
+            // An argument the scan could not read could be the one naming the
+            // output, so the outputs are not safe.
+            if !exact {
+                return false;
+            }
+            command
+        }
+    };
+    let program = program_name(command.program()).to_ascii_lowercase();
+    if !EGRESS_TOOLS.contains(&program.as_str()) {
+        *preceding_supported = *preceding_supported && starts_with_supported_command(stage);
         return true;
     }
-    fenced && is_temp_output_target(value)
+    let allow_temp = can_use_temp && *preceding_supported;
+    let args = command.args();
+    let mut document_output = program == "curl";
+    let mut idx = 0;
+    while idx < args.len() {
+        let w = args[idx].as_str();
+        if let Some(val) = w
+            .strip_prefix("--output=")
+            .or_else(|| w.strip_prefix("--output-document="))
+        {
+            if !output_target_safe(val, allow_temp, cwd) {
+                return false;
+            }
+            document_output = true;
+        } else if matches!(w, "-o" | "-O" | "--output" | "--output-document") {
+            if program == "curl" && w == "-O" {
+                return false;
+            }
+            let v = args.get(idx + 1).map(String::as_str).unwrap_or("");
+            if !output_target_safe(v, allow_temp, cwd) {
+                return false;
+            }
+            if program == "wget" && w == "-o" {
+                if v != "/dev/null" {
+                    return false;
+                }
+            } else {
+                document_output = true;
+            }
+            idx += 2;
+            continue;
+        }
+        idx += 1;
+    }
+    document_output
+}
+
+/// Whether one output argument names stdout, /dev/null, or a place inside the
+/// session scratch directory that the surrounding chain proves.
+fn output_target_safe(value: &str, fenced: bool, cwd: TempCwd) -> bool {
+    if !fenced {
+        return value == "/dev/null" || value == "-";
+    }
+    scratch_target(value, cwd)
 }
 
 fn collect_egress_scopes(
@@ -241,39 +270,50 @@ fn collect_egress_scopes(
     }
 }
 
-/// Walk a command's clauses, unwrapping shell constructs as it goes. The
+/// Walk a command's steps, unwrapping shell constructs as it goes. The
 /// substitution bodies of an assignment or a loop header are commands the
 /// classifiers must judge too, so each body recurses through this same
 /// walk rather than being refused as an opaque word. A body that fails
-/// fails the whole command, the way a refused clause does.
+/// fails the whole command, the way a refused step does.
+///
+/// The walk keeps the separator each step was joined by, so the working
+/// directory a change of directory establishes is carried across an and-and
+/// and dropped at every other separator.
 fn collect_from_command(
     command: &str,
     allow_effect_safe: bool,
     fenced: bool,
     scopes: &mut Vec<String>,
 ) -> Option<()> {
-    for clause in split_clauses(command) {
+    let links = chain_links(command);
+    let mut cwd = TempCwd::Outside;
+    for link in &links {
+        cwd = cwd.advance(link);
         // A process substitution hands a stage the output of another command
         // as a file name. The inner command is walked and judged on its own,
         // but the scope this walk derives would name it rather than the
-        // command line the user wrote, so the clause cannot be remembered.
-        if has_process_substitution(&clause) {
+        // command line the user wrote, so the step cannot be remembered.
+        if has_process_substitution(&link.text) {
             return None;
         }
-        // The clause's own words, with control-flow and case-label shells
-        // peeled, are what the stages below classify.
-        let peeled = unwrap_clause(&clause)?;
-        let stages: Vec<String> = split_compound(&peeled);
-        let stage_refs: Vec<&str> = stages.iter().map(|s| s.as_str()).collect();
-        let piped = stages.len() > 1;
-        // Substitution bodies inside the clause — a loop's generator, an
+        let peeled = unwrap_clause(&link.text)?;
+        // A parenthesised group runs in a subshell whose working directory the
+        // walk cannot place, so the scope read from its body is not one the
+        // user's command line establishes.
+        if starts_a_subshell(&link.text) {
+            return None;
+        }
+        // Substitution bodies inside the step — a loop's generator, an
         // assignment's capture — recurse through the same walk so their
         // programs are judged, not refused as syntax.
-        if let Some(bodies) = substitution_bodies(&clause) {
+        if let Some(bodies) = substitution_bodies(&link.text) {
             for body in bodies {
                 collect_from_command(&body, allow_effect_safe, fenced, scopes)?;
             }
         }
+        let stages: Vec<String> = split_compound(&peeled);
+        let stage_refs: Vec<&str> = stages.iter().map(|s| s.as_str()).collect();
+        let piped = stages.len() > 1;
         for (idx, stage) in stages.iter().enumerate() {
             let trimmed = stage.trim();
             if trimmed.is_empty() {
@@ -287,7 +327,7 @@ fn collect_from_command(
             if !stage_ok {
                 return None;
             }
-            match classify_segment(trimmed) {
+            match classify_segment(trimmed, cwd) {
                 Segment::Local => {
                     // A local stage after a pipe is a consumer of the response.
                     // The same rule as a scoped stage's downstream: a static
@@ -323,7 +363,7 @@ fn collect_from_command(
 }
 
 /// Classify one command segment by where it reaches.
-fn classify_segment(segment: &str) -> Segment {
+fn classify_segment(segment: &str, cwd: TempCwd) -> Segment {
     // A redirect that only moves a stream is not an argument to the program.
     // Left in, a trailing 2>&1 reads as an unknown operand and refuses a
     // request whose destination is already trusted.
@@ -360,7 +400,7 @@ fn classify_segment(segment: &str) -> Segment {
         };
     }
     let arg_refs: Vec<&str> = command.args().iter().map(String::as_str).collect();
-    match literal_origin_list(&arg_refs, allow_multi_origin_for(&program)) {
+    match literal_origin_list(&arg_refs, allow_multi_origin_for(&program), cwd) {
         Some(origin_list) => Segment::Scoped {
             program,
             origin_list,
@@ -415,7 +455,7 @@ fn is_refused_egress_env(word: &str) -> bool {
 /// The single origin a request program's arguments name, or None when the
 /// arguments upload, retarget, carry a credential, or name no single literal
 /// URL.
-fn literal_origin_list(args: &[&str], allow_multiple: bool) -> Option<Vec<String>> {
+fn literal_origin_list(args: &[&str], allow_multiple: bool, cwd: TempCwd) -> Option<Vec<String>> {
     let mut origin_list: Vec<String> = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -451,7 +491,7 @@ fn literal_origin_list(args: &[&str], allow_multiple: bool) -> Option<Vec<String
                         next
                     }
                 };
-                if !is_safe_flag_value(&flag_name, value) {
+                if !is_safe_flag_value(&flag_name, value, cwd) {
                     return None;
                 }
             } else {
@@ -482,7 +522,7 @@ fn literal_origin_list(args: &[&str], allow_multiple: bool) -> Option<Vec<String
                         'A' => "--user-agent",
                         _ => "",
                     };
-                    if !is_safe_flag_value(mapped, value) {
+                    if !is_safe_flag_value(mapped, value, cwd) {
                         return None;
                     }
                     index += 2;
@@ -512,7 +552,7 @@ fn literal_origin_list(args: &[&str], allow_multiple: bool) -> Option<Vec<String
     }
 }
 
-fn is_safe_flag_value(flag: &str, value: &str) -> bool {
+fn is_safe_flag_value(flag: &str, value: &str, cwd: TempCwd) -> bool {
     if value.is_empty() || value.contains('`') || value.contains("$(") {
         return false;
     }
@@ -523,20 +563,7 @@ fn is_safe_flag_value(flag: &str, value: &str) -> bool {
                 && !value.to_ascii_lowercase().contains("%output")
         }
         "--user-agent" => !value.contains('$'),
-        "--output" | "--output-document" => {
-            if value == "/dev/null" || value == "-" {
-                return true;
-            }
-            let suffix = value
-                .strip_prefix("$TMPDIR/")
-                .or_else(|| value.strip_prefix("${TMPDIR}/"));
-            suffix.is_some_and(|s| {
-                !s.is_empty()
-                    && s != "."
-                    && s != ".."
-                    && !s.contains(['/', '*', '?', '[', '$', '`', '('])
-            })
-        }
+        "--output" | "--output-document" => scratch_target(value, cwd),
         _ => true,
     }
 }

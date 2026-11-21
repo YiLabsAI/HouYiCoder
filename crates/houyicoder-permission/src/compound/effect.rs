@@ -10,6 +10,7 @@
 use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
 
 use super::readonly::{command_reads_only, find_matching_paren};
+use super::temp_cwd::{TempCwd, chain_links, scratch_delete};
 use super::{
     decode_shell_word, is_attestable, is_env_assignment, quotes_balanced, shell_word_spans,
     split_compound, strip_safe_redirects,
@@ -267,26 +268,6 @@ fn program_of(segment: &str) -> Option<String> {
     }
 }
 
-/// Whether a deletion target names a single child of the session temporary
-/// directory.
-///
-/// Deletion is narrower than a redirect: the expansion forms are the session's
-/// own directory, and nothing else is. The literal shared roots are not
-/// accepted here, because a fence that refuses them would refuse the removal
-/// after this gate had already waived it.
-fn is_temp_delete_target(target: &str) -> bool {
-    if marker_hit(target) {
-        return false;
-    }
-    let rest = target
-        .strip_prefix("$TMPDIR/")
-        .or_else(|| target.strip_prefix("${TMPDIR}/"));
-    let Some(suffix) = rest else {
-        return false;
-    };
-    is_single_temp_child(suffix)
-}
-
 /// Whether a redirect target names a single child of the session temporary
 /// directory. A nested path, a traversal, a glob, or an expansion cannot be
 /// resolved from text, so none of them qualify. The literal /tmp and
@@ -470,55 +451,31 @@ pub fn removes_only_temp(command: &str, fenced: bool) -> bool {
     if sets_tmpdir(&stripped) {
         return false;
     }
-    let segments = split_compound(&stripped);
-    if segments.is_empty() {
+    let links = chain_links(&stripped);
+    if links.is_empty() {
         return false;
     }
     let mut saw_rm = false;
     let mut preceding_supported = true;
-    let mut cwd_in_temp = false;
-    for segment in &segments {
-        if let Some(dir) = cd_target(segment) {
-            cwd_in_temp = is_temp_root(dir);
-        }
-        if is_rm_segment(segment) {
+    let mut cwd = TempCwd::Outside;
+    for link in &links {
+        cwd = cwd.advance(link);
+        if is_rm_segment(&link.text) {
             saw_rm = true;
-            if !preceding_supported || !rm_targets_are_temp(segment, cwd_in_temp) {
+            if !preceding_supported || !rm_targets_are_scratch(&link.text, cwd) {
                 return false;
             }
         }
-        preceding_supported = preceding_supported && starts_with_supported_command(segment);
+        preceding_supported = preceding_supported && starts_with_supported_command(&link.text);
     }
     saw_rm
-}
-
-/// The destination of a cd segment, when the segment is exactly two tokens. A
-/// following rm that names a single relative file is judged against whether the
-/// working directory sits in a session temporary root.
-fn cd_target(segment: &str) -> Option<&str> {
-    let tokens: Vec<&str> = segment.split_whitespace().collect();
-    if tokens.len() != 2 || tokens[0] != "cd" {
-        return None;
-    }
-    Some(strip_quotes(tokens[1]))
-}
-
-/// Whether a directory names the session's own temporary root.
-///
-/// Only the expansion is accepted. The literal shared roots used to be
-/// accepted too, which read as a promise this fence lets writes into the
-/// shared temp root. The Linux fence does not, so removing a file there was
-/// waived here and then refused by the kernel. A path this gate cannot verify
-/// is a path it must ask about.
-fn is_temp_root(dir: &str) -> bool {
-    dir == "$TMPDIR" || dir == "${TMPDIR}"
 }
 
 fn is_rm_segment(segment: &str) -> bool {
     first_command_word(segment).as_deref() == Some("rm")
 }
 
-fn rm_targets_are_temp(segment: &str, cwd_in_temp: bool) -> bool {
+fn rm_targets_are_scratch(segment: &str, cwd: TempCwd) -> bool {
     let cleaned = strip_safe_redirects(segment);
     let mut saw_target = false;
     for token in cleaned.split_whitespace().skip(1) {
@@ -533,7 +490,7 @@ fn rm_targets_are_temp(segment: &str, cwd_in_temp: bool) -> bool {
             continue;
         }
         saw_target = true;
-        if !(is_temp_delete_target(word) || cwd_in_temp && is_single_temp_child(word)) {
+        if !scratch_delete(word, cwd) {
             return false;
         }
     }

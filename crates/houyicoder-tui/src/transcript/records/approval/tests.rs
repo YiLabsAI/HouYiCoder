@@ -1,5 +1,7 @@
 //! Classification and countdown mechanics for the auto-approve timer.
 
+mod scratch;
+
 use std::time::{Duration, Instant};
 
 use houyicoder_protocol::frontend::permission::AskSource;

@@ -307,6 +307,11 @@ impl Approval {
 #[cfg(test)]
 mod tests;
 
+mod scratch_local;
+use scratch_local::{
+    acts_on_named_files, advance_scratch, names_only_scratch_paths, split_steps, unpacks_in_place,
+};
+
 /// Whether the network access in a command only reads.
 ///
 /// A command is a list of segments, and only some of them reach the network.
@@ -327,17 +332,20 @@ fn reads_network(command: &str) -> bool {
     let stripped = without_stream_redirects(&without_code);
     // The command keeps its case: a short flag is case-sensitive, and folding
     // it would read an upload flag as the fail flag beside it.
-    for segment in stripped.split(['&', ';', '|', '\n', '(', ')', '`']) {
-        let words: Vec<&str> = segment
+    let mut in_scratch = false;
+    for step in split_steps(&stripped) {
+        let words: Vec<&str> = step
+            .text
             .split_whitespace()
             .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
             .filter(|w| !w.is_empty() && !is_assignment(w))
             .collect();
-        // A command substitution body arrives as its own split segment below;
-        // a leading control keyword or case label is structure, not a
-        // program, so it steps aside and the program word decides.
+        // A command substitution body arrives as its own split segment
+        // below; a leading control keyword or case label is structure, not
+        // a program, so it steps aside and the program word decides.
         let words: Vec<&str> = skip_control_shell(words);
         let words: Vec<&str> = skip_timeout(words);
+        in_scratch = advance_scratch(in_scratch, step.chained, &words);
         let Some(&first) = words.first() else {
             continue;
         };
@@ -375,11 +383,22 @@ fn reads_network(command: &str) -> bool {
                 }
                 saw_network_read = true;
             }
-            // An interactive transport carries whatever the far side asks for.
+            // An interactive transport carries whatever the far side asks
+            // for.
             "scp" | "rsync" | "sftp" | "ssh" | "nc" | "netcat" | "telnet" => return false,
             "npm" | "cargo" if args.first() == Some(&"publish") => return false,
             "pip" if args.first() == Some(&"upload") => return false,
             local if is_local_consumer(local) => {}
+            // A local file program beside the request changes only files it
+            // names on its own command line. A name that reaches outside the
+            // session scratch space, or a remote path, is not that, so it is
+            // held.
+            local if acts_on_named_files(local) && names_only_scratch_paths(&words, in_scratch) => {
+            }
+            // An extraction that unpacks a relative archive in place also
+            // stays beside the request. Its own check already requires every
+            // path in the step to stay in the scratch space.
+            _ if unpacks_in_place(&words, in_scratch) => {}
             // Not a form this walk knows. A countdown that publishes work is
             // the failure this exists to prevent, so it is held.
             _ => return false,
