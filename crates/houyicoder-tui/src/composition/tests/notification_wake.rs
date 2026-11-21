@@ -190,6 +190,29 @@ fn test_wake_skips_after_interrupt() {
     assert_eq!(app.ui.notification_wake.auto_wake_turns, 0);
 }
 
+/// An interrupted run parks the wake, but the debounce window must still
+/// close. A window left open makes the loop's own wait return zero, so the
+/// session spins on a wake it will never send.
+#[test]
+fn test_interrupt_closes_window() {
+    let mut app = wired_app();
+    app.sessions.current.last_run_final = false;
+    report_pending(&mut app, 1);
+    age_past_debounce(&mut app);
+    assert!(
+        app.ui.notification_wake.window_started.is_some(),
+        "precondition: an open window to close"
+    );
+    let mut dirty = false;
+    app.idle_drain(None, &mut dirty);
+    assert!(
+        app.ui.notification_wake.window_started.is_none(),
+        "an interrupted run closes the window instead of spinning"
+    );
+    assert!(app.ui.notification_wake.pending_at_window.is_none());
+    assert!(!app.sessions.current.run.is_active());
+}
+
 /// Sixteen consecutive wakes inside one burst is the ceiling: the next report
 /// parks.
 #[test]

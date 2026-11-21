@@ -758,3 +758,42 @@ fn test_queue_level_drops_stale() {
         "the older report is dropped, leaving the fresh level in place"
     );
 }
+
+/// The stamp check and the append are one critical section, so any report that
+/// arrives while another is being appended waits for the whole section rather
+/// than slipping between a check and its append.
+///
+/// This is a structural assertion, not a race reproduction: the window is too
+/// narrow to hit from a test, so pinning it by timing would pass whether or not
+/// the two steps are separate. The handler instead holds one guard across both,
+/// and a second acquisition would have to appear in review, not in a flaky test.
+#[test]
+fn test_queue_level_rejects_repeat() {
+    let sequencer = EventSequencer::new();
+    // A lower stamp arriving first is dropped, and the higher one appends once.
+    sequencer.handle(NotificationQueueEvent {
+        count: 0,
+        generation: 1,
+    });
+    sequencer.handle(NotificationQueueEvent {
+        count: 1,
+        generation: 2,
+    });
+    sequencer.handle(NotificationQueueEvent {
+        count: 0,
+        generation: 1,
+    });
+    let frames = sequencer.sequence_pending_for_test();
+    let levels: Vec<u32> = frames
+        .iter()
+        .filter_map(|envelope| match &envelope.payload {
+            FrontendEvent::NotificationsPending { count } => Some(*count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        levels,
+        vec![0, 1],
+        "reports append in stamp order, and the repeated stamp is dropped"
+    );
+}

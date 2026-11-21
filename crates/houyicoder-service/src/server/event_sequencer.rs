@@ -290,20 +290,25 @@ impl EventHandler<NotificationQueueEvent> for EventSequencer {
     fn handle(&self, event: NotificationQueueEvent) {
         // The count is read under the queue lock and delivered after it is
         // released, so two reports can arrive out of order. The newest stamp
-        // wins and an older one is dropped, which keeps the client's last
-        // figure equal to the live queue instead of letting a stale zero
-        // land after a fresh one.
-        {
-            let mut state = self.inner.state.lock().expect("event sequencer lock");
-            if event.generation <= state.last_notification_generation {
-                return;
-            }
-            state.last_notification_generation = event.generation;
+        // wins and an older one is dropped. The check and the append share one
+        // acquisition: passing the check and then taking the lock again would
+        // let a newer report queue ahead of this one, putting a stale count
+        // last and stranding the wake it was meant to deliver.
+        let mut state = self.inner.state.lock().expect("event sequencer lock");
+        if event.generation <= state.last_notification_generation {
+            return;
         }
+        state.last_notification_generation = event.generation;
         // Reliable, not ephemeral: this frame is the only signal that wakes an
         // idle session, so dropping it under backpressure would strand the
         // notification with no later event to recover it.
-        self.enqueue_reliable(FrontendEvent::NotificationsPending { count: event.count });
+        Self::enqueue_locked(
+            &mut state,
+            FrontendEvent::NotificationsPending { count: event.count },
+            true,
+        );
+        drop(state);
+        self.inner.notify.notify_one();
     }
 }
 
@@ -391,8 +396,23 @@ impl EventSequencer {
 
     fn enqueue(&self, payload: FrontendEvent, reliable: bool) {
         let mut state = self.inner.state.lock().expect("event sequencer lock");
-        if !reliable && state.ephemeral_pending >= MAX_EPHEMERAL_PENDING {
+        if !Self::enqueue_locked(&mut state, payload, reliable) {
             return;
+        }
+        drop(state);
+        self.inner.notify.notify_one();
+    }
+
+    /// Append one event to the pending queue while the caller holds the state
+    /// lock, answering whether it was queued.
+    ///
+    /// Shared with the queue-level handler so the stamp check and the push
+    /// happen under one acquisition: a report that passed the check and then
+    /// waited for a second lock could be overtaken by a newer one and land
+    /// behind it.
+    fn enqueue_locked(state: &mut SequencerState, payload: FrontendEvent, reliable: bool) -> bool {
+        if !reliable && state.ephemeral_pending >= MAX_EPHEMERAL_PENDING {
+            return false;
         }
         let order = state.next_pending_order;
         state.next_pending_order = state.next_pending_order.saturating_add(1);
@@ -403,16 +423,13 @@ impl EventSequencer {
         };
         if reliable && let Some(agent_id) = agent_status_id(&event.payload).map(str::to_owned) {
             state.pending_status.insert(agent_id, event);
-            drop(state);
-            self.inner.notify.notify_one();
-            return;
+            return true;
         }
         if !reliable {
             state.ephemeral_pending += 1;
         }
         state.pending.push_back(event);
-        drop(state);
-        self.inner.notify.notify_one();
+        true
     }
 
     pub(crate) fn notified(&self) -> impl Future<Output = ()> + '_ {

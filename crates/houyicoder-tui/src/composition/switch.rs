@@ -94,6 +94,13 @@ impl App {
             {
                 *dirty = true;
             }
+            if !self.sessions.current.last_run_final && !switched {
+                // An interrupted run parks the wake: the user's own turn goes
+                // first. The debounce window has to close here anyway, or the
+                // loop's own wait arithmetic returns zero and spins.
+                self.ui.notification_wake.pending_at_window = None;
+                self.ui.notification_wake.window_started = None;
+            }
         }
     }
 
