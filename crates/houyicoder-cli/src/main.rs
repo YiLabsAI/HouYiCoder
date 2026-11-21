@@ -489,6 +489,15 @@ fn run_acp_stdio(
     project: Option<String>,
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
+    // A host launches this process in the directory it wants the agent to work
+    // in, and that workspace may carry no project marker. Pinning the fence to
+    // the process cwd keeps the tools in the host's workspace instead of an
+    // isolated tempdir whose files vanish with the session.
+    let project = project.or_else(|| {
+        env::current_dir()
+            .ok()
+            .map(|dir| dir.to_string_lossy().into_owned())
+    });
     let provider = resolve_provider(project.as_deref());
     let mut bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
