@@ -15,7 +15,7 @@ use crate::selection::region::{
     RegionIntent, clear_stale_click, edge_scroll_if_at_edge, paint_overlay,
 };
 use crate::selection::{
-    CopyReceipt, CopyReport, Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN,
+    CopyReceipt, CopyReport, Selection, TAG_DIFF_BORDER, TAG_DIFF_HUNK, TAG_PLAIN, snap_to_glyphs,
 };
 use crate::state::App;
 use crate::test_harness::{render_text, working_app};
@@ -51,6 +51,58 @@ fn test_overlay_covers_diff() {
             cell.bg,
             Color::Indexed(24),
             "row {y} is painted as part of the block"
+        );
+    }
+}
+
+/// The paint widens a range edge that falls inside a wide glyph, so the
+/// highlight covers exactly the glyphs the extractor takes. A half-tinted wide
+/// glyph would tell the user one character is selected while the clipboard
+/// receives the whole one.
+#[test]
+fn test_overlay_covers_wide_glyph() {
+    let rect = Rect::new(0, 0, 10, 1);
+    let mut buf = Buffer::empty(rect);
+    // Three wide characters: columns 0-1, 2-3, 4-5.
+    let rows = vec![(TAG_PLAIN, "\u{4e00}\u{4e8c}\u{4e09}".to_string())];
+    // The range starts on the second half of the first glyph and ends on the
+    // first half of the third.
+    let sel = sel_with((1, 0), (4, 0));
+    paint_overlay(&mut buf, rect, &rows, &sel, 0);
+    let sel_bg = Color::Indexed(24);
+    for x in 0..6 {
+        let cell = buf.cell(Position::new(x, 0)).expect("cell");
+        assert_eq!(
+            cell.bg, sel_bg,
+            "column {x} belongs to a touched glyph and must be painted"
+        );
+    }
+    let outside = buf.cell(Position::new(6, 0)).expect("cell past the glyphs");
+    assert_ne!(outside.bg, sel_bg, "an untouched column stays unpainted");
+}
+
+/// The widening step must stay inside the row it is given, whatever range it
+/// receives. A range that returned an end before its start would make the
+/// paint loop empty, and one that reached past the row would paint cells the
+/// row does not own.
+#[test]
+fn test_glyph_widen_in_bounds() {
+    // Empty row, range entirely past the row, empty range, and a trailing wide
+    // glyph half-covered.
+    for (row, c0, c1) in [
+        ("", 0usize, 5usize),
+        ("abc", 10, 20),
+        ("\u{4e00}\u{4e8c}", 0, 0),
+        ("abc\u{4e00}", 1, 3),
+    ] {
+        let (s0, s1) = snap_to_glyphs(row, c0, c1);
+        assert!(
+            s0 <= s1,
+            "{row:?} ({c0}, {c1}) widened to a backwards range {s0}..{s1}"
+        );
+        assert!(
+            s1 <= c1.max(s0),
+            "{row:?} ({c0}, {c1}) widened past what it was given: {s0}..{s1}"
         );
     }
 }

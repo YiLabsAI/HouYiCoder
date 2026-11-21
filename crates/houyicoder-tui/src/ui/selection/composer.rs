@@ -9,7 +9,7 @@ use ratatui::buffer::Buffer;
 
 use super::region::{
     ApprovalSelection, PaneRegion, Region, RegionParts, RegionView, StatusRegion, TranscriptRegion,
-    paint_overlay,
+    paint_overlay, pane_mouse_to_content,
 };
 use crate::state::App;
 
@@ -31,11 +31,10 @@ impl Region for InputRegion<'_> {
         }
     }
     fn to_content(&self, x: u16, y: u16) -> (u16, usize) {
-        let rect = self.view.frame.layout.input_rect.get();
-        (
-            x.saturating_sub(rect.x).min(rect.width.saturating_sub(1)),
-            (y.saturating_sub(rect.y)) as usize,
-        )
+        // The selection stores screen columns, the same contract every other
+        // surface keeps: the overlay paints them directly and the extractor
+        // subtracts the rect origin once. Clamping is all this may do.
+        pane_mouse_to_content(self.view.frame.layout.input_rect.get(), x, y)
     }
     /// The composer keeps its highlight after the release: it is an editor,
     /// so the range the user dragged stays visible to read or copy again.

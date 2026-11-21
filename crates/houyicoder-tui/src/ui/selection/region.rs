@@ -27,7 +27,7 @@ use ratatui::{
 
 use crate::renderer::PreparedFrame;
 use crate::selection::{
-    self, ClipboardWriter, CopyResultQueue, Selection, anchor_row, extract_text,
+    self, ClipboardWriter, CopyResultQueue, Selection, anchor_row, extract_text, snap_to_glyphs,
 };
 use crate::selections::Selections;
 use crate::state::App;
@@ -671,9 +671,9 @@ pub(crate) fn paint_overlay(
     let last = bot_row.min(scroll_top + vh - 1);
     for cr in first..=last {
         let ri = cr - scroll_top;
-        if rows.get(ri).is_none() {
+        let Some((_, row)) = rows.get(ri) else {
             continue;
-        }
+        };
         let y = rect.y + ri as u16;
         let (sx, ex) = if top_row == bot_row {
             (top_x.min(bot_x), top_x.max(bot_x))
@@ -686,7 +686,13 @@ pub(crate) fn paint_overlay(
         };
         let sx = sx.max(rect.x).min(right);
         let ex = ex.max(rect.x).min(right);
-        for x in sx..=ex {
+        // A range edge inside a wide glyph would tint half of it while the
+        // extractor takes the whole glyph, so widen both sides the same way.
+        let (s0, s1) = snap_to_glyphs(row, (sx - rect.x) as usize, (ex - rect.x) as usize + 1);
+        let end = (rect.x + s1.min(u16::MAX as usize) as u16)
+            .saturating_sub(1)
+            .min(right);
+        for x in rect.x + s0 as u16..=end {
             if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
                 cell.bg = sel_bg;
             }

@@ -16,10 +16,11 @@ use crate::selection::RecordingClipboard;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::{
-    FailedHandshakeTransport, connected_app_events, connection_lost_app, render_text,
-    wait_for_notification, wait_for_request,
+    FailedHandshakeTransport, connected_app_events, connection_lost_app, render_buffer,
+    render_text, wait_for_notification, wait_for_request,
 };
 use crate::todo_view::{TodoStatus, TodoView};
+use crate::ui::selection::ClipboardWriter;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -27,12 +28,18 @@ use houyicoder_client::Client;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
+use ratatui::style::Color;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::thread::yield_now;
 use std::time::Duration;
 use std::time::Instant;
+
+/// The draft a wide-glyph drag test types: two wide characters, a full-width
+/// comma, a space, then the run a reader would drag. U+4FEE U+590D U+FF0C
+/// occupy columns 0-5, so U+8DDF starts at column 7.
+const WIDE_DRAFT: &str = "\u{4fee}\u{590d}\u{ff0c} \u{8ddf} cc-bck \u{5bf9}\u{6bd4}";
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -1439,9 +1446,9 @@ fn test_drag_copies_composer_draft() {
     }
     let got = clipboard.captured.lock().expect("captured").clone();
     assert_eq!(got.len(), 1, "one copy on release: {got:?}");
-    assert!(
-        got[0].starts_with("hello worl") && "hello world".starts_with(&got[0]),
-        "the copy is the dragged draft text: {got:?}"
+    assert_eq!(
+        got[0], "hello world",
+        "the copy is exactly the dragged draft, with no extra column"
     );
     assert!(
         !got[0].contains('\u{276f}'),
@@ -1450,6 +1457,68 @@ fn test_drag_copies_composer_draft() {
     assert!(
         app.ui.selection.input.has_selection(),
         "the composer keeps its highlight after the release"
+    );
+}
+
+/// A drag that starts on a wide character must copy from that character and
+/// highlight from that column. The composer used to subtract the rect origin
+/// twice, so the highlight moved left by two columns and the copy by four,
+/// which pulled in the full-width comma ahead of the dragged run.
+#[test]
+fn test_composer_drag_wide_glyph() {
+    let mut app = working_app();
+    app.ui.input.editor.set(WIDE_DRAFT.to_string());
+    let clipboard = Arc::new(RecordingClipboard {
+        captured: Arc::new(Mutex::new(Vec::new())),
+    });
+    app.ui.clipboard = Arc::clone(&clipboard) as Arc<dyn ClipboardWriter>;
+    drop(render_text(&app, 80, 24));
+    let rect = app.ui.frame.layout.input_rect.get();
+    let start = rect.x + 7;
+    let end = rect.x + 20;
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        let column = if matches!(kind, MouseEventKind::Down(_)) {
+            start
+        } else {
+            end
+        };
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind,
+                column,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    }
+    let got = clipboard.captured.lock().expect("captured").clone();
+    assert_eq!(got.len(), 1, "one copy on release: {got:?}");
+    assert!(
+        got[0].starts_with('\u{8ddf}'),
+        "the copy starts at the dragged character, not before it: {got:?}"
+    );
+    assert!(
+        !got[0].contains('\u{ff0c}'),
+        "the unselected full-width comma must not be copied: {got:?}"
+    );
+    let buf = render_buffer(&app, 80, 24);
+    let sel_bg = Color::Indexed(24);
+    let first = buf.cell((start, rect.y)).expect("first dragged cell");
+    assert_eq!(
+        first.bg, sel_bg,
+        "the highlight starts on the first dragged column"
+    );
+    let behind = buf
+        .cell((start - 1, rect.y))
+        .expect("the cell before the drag");
+    assert_ne!(
+        behind.bg, sel_bg,
+        "the space before the first dragged character stays unhighlighted"
     );
 }
 

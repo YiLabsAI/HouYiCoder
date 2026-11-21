@@ -463,6 +463,7 @@ pub(crate) use anchor::anchor_row;
 pub use clipboard::RecordingClipboard;
 pub use clipboard::{ClipboardWriter, CopyReceipt, CopyReport, CopyResultQueue, SystemClipboard};
 pub use text::extract_text;
+pub(crate) use text::snap_to_glyphs;
 
 /// Paint every region's held selection over the frame.
 ///

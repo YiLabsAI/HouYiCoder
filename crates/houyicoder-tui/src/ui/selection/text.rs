@@ -56,6 +56,10 @@ pub fn extract_text(rows: &[(u8, String)], rect: Rect, sel: &Selection) -> Strin
         } else {
             0
         };
+        // Widen before slicing so a range edge inside a wide glyph takes that
+        // glyph whole; the paint path widens the same way, so the highlight and
+        // the clipboard cover the same characters.
+        let (col_start, col_end) = snap_to_glyphs(row, col_start, col_end);
         let col_start = col_start.max(glyph_skip);
         out.push_str(&substring_by_display(row, col_start, col_end));
         wrote = true;
@@ -79,6 +83,40 @@ fn substring_by_display(s: &str, c0: usize, c1: usize) -> String {
         w += gw;
     }
     out
+}
+
+/// Widen a half-open column range to whole glyph boundaries, returning the
+/// first column and the exclusive end column of every glyph the range touches.
+///
+/// A wide glyph occupies two columns, so a range whose edge falls inside one
+/// names columns no glyph owns: the extractor takes the whole glyph while a
+/// cell-by-cell paint covers only the half the range named. Both sides call
+/// this first, so the highlight and the clipboard cover the same glyphs.
+pub(crate) fn snap_to_glyphs(row: &str, c0: usize, c1: usize) -> (usize, usize) {
+    let mut w = 0usize;
+    let mut first: Option<usize> = None;
+    let mut last = c1;
+    for g in row.graphemes(true) {
+        let gw = UnicodeWidthStr::width(g);
+        let glyph_start = w;
+        let glyph_end = w + gw;
+        w = glyph_end;
+        if glyph_start >= c1 {
+            break;
+        }
+        if glyph_end <= c0 {
+            continue;
+        }
+        if first.is_none() {
+            first = Some(glyph_start.min(c0));
+        }
+        last = glyph_end;
+    }
+    // A range past the row keeps its own end: nothing to widen.
+    match first {
+        Some(start) => (start, last.max(start)),
+        None => (c0, c1),
+    }
 }
 
 /// 3-class grapheme classifier (space / word / other-punct) — a word boundary
