@@ -13,6 +13,7 @@ pub(crate) mod memory_view;
 pub(crate) mod redundancy;
 pub(crate) mod session_descriptor;
 pub(crate) mod skills;
+mod tool_meta;
 mod trajectory_row;
 pub(crate) mod worktree_view;
 use trajectory_row::{event_name, hex_short};
@@ -63,6 +64,7 @@ use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 use houyicoder_protocol::frontend::trajectory::TrajectoryUsage;
 use houyicoder_protocol::llm::ProviderError;
 pub(crate) use session_descriptor::map_session_descriptor;
+pub(crate) use tool_meta::{tool_kind, tool_locations, tool_title};
 
 /// Map the engine run result to the protocol message form. Outcome
 /// variants match the engine enum one-for-one except Interruption (a
@@ -577,7 +579,9 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
             tool,
             input,
         } => SessionUpdate::ToolCall(
-            ToolCall::new(call_id.clone(), tool.clone())
+            ToolCall::new(call_id.clone(), tool_title(tool, Some(input)))
+                .kind(tool_kind(tool))
+                .locations(tool_locations(tool, Some(input)))
                 .raw_input(input.clone())
                 .status(ToolCallStatus::InProgress),
         ),

@@ -11,6 +11,10 @@ use houyicoder_protocol::acp_wire::{
 };
 use houyicoder_protocol::frontend::session_update::{ToolCallUpdate, ToolCallUpdateFields};
 
+use super::tool_kind;
+use super::tool_locations;
+use super::tool_title;
+
 /// The four verdict options the agent offers on every permission ask. The
 /// option ids are stable strings so the server maps a selected id back to an
 /// approved/rejected verdict without stashing the offered list per ask. The
@@ -62,6 +66,9 @@ pub(crate) fn approval_to_acp_permission(
     let tool_call = ToolCallUpdate {
         tool_call_id: req.call_id.clone().into(),
         fields: ToolCallUpdateFields {
+            title: Some(tool_title(&req.tool_name, Some(&req.input))),
+            kind: Some(tool_kind(&req.tool_name)),
+            locations: tool_locations(&req.tool_name, Some(&req.input)),
             raw_input: Some(req.input.clone()),
             ..Default::default()
         },

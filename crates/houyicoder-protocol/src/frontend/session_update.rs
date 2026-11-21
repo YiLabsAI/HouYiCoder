@@ -194,6 +194,18 @@ impl ToolCall {
         self.status = status;
         self
     }
+
+    /// The category a client renders the call under.
+    pub fn kind(mut self, kind: ToolKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// The files the call touches, so a client can offer a jump to them.
+    pub fn locations(mut self, locations: Vec<ToolCallLocation>) -> Self {
+        self.locations = locations;
+        self
+    }
 }
 
 impl ToolKind {
@@ -220,6 +232,10 @@ pub struct ToolCallUpdateFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ToolKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<ToolCallLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<Value>,
@@ -237,6 +253,24 @@ impl ToolCallUpdateFields {
 
     pub fn status(mut self, status: ToolCallStatus) -> Self {
         self.status = Some(status);
+        self
+    }
+
+    /// The human title a card renders for the call under review.
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// The category a client renders the call under.
+    pub fn kind(mut self, kind: ToolKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    /// The files the call touches, so a client can offer a jump to them.
+    pub fn locations(mut self, locations: Vec<ToolCallLocation>) -> Self {
+        self.locations = locations;
         self
     }
 

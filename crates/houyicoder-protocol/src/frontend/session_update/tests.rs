@@ -110,3 +110,28 @@ fn test_chunks_round_trip() {
         assert_eq!(json, serde_json::to_string(&back).unwrap());
     }
 }
+
+/// A tool-call update can carry the metadata a host renders: the title, the
+/// category, and the files the call touches. Empty fields stay off the wire.
+#[test]
+fn test_tool_update_carries_metadata() {
+    let fields = ToolCallUpdateFields::new()
+        .title("Edit src/lib.rs")
+        .kind(ToolKind::Edit)
+        .locations(vec![ToolCallLocation::new("src/lib.rs")]);
+    let json = serde_json::to_value(&fields).expect("serialize");
+    assert_eq!(json["title"], "Edit src/lib.rs");
+    assert_eq!(json["kind"], "edit");
+    assert_eq!(json["locations"][0]["path"], "src/lib.rs");
+
+    let empty = serde_json::to_value(ToolCallUpdateFields::new()).expect("serialize");
+    assert!(empty.get("kind").is_none(), "{empty}");
+    assert!(empty.get("locations").is_none(), "{empty}");
+
+    let call = ToolCall::new("call-1", "Edit src/lib.rs")
+        .kind(ToolKind::Edit)
+        .locations(vec![ToolCallLocation::new("src/lib.rs")]);
+    let json = serde_json::to_value(&call).expect("serialize");
+    assert_eq!(json["kind"], "edit");
+    assert_eq!(json["locations"][0]["path"], "src/lib.rs");
+}

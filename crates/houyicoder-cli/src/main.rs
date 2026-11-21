@@ -37,6 +37,7 @@ use {
     houyicoder_tui::agent_message::SessionMessage,
 };
 
+mod acp;
 mod cli_args;
 mod composition;
 mod detach;
@@ -63,18 +64,8 @@ use houyicoder_permission::FileRuleStore;
 use houyicoder_permission::ModeGate;
 use houyicoder_platform::ipc;
 use houyicoder_platform::ipc::LocalListener;
-use houyicoder_protocol::acp_wire::NewSessionRequest;
-use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::MAX_MESSAGE_BYTES;
 use houyicoder_service::CancellationToken;
-use houyicoder_service::acp::adapter::AcpAdapter;
-use houyicoder_service::acp::adapter::SessionFacts;
-use houyicoder_service::acp::adapter::SessionView;
-use houyicoder_service::acp::adapter::session_config_options;
-use houyicoder_service::acp::adapter::session_modes;
-use houyicoder_service::acp::live::AcpLiveStream;
-use houyicoder_service::acp::pump::spawn_pump;
-use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::ProviderResolution;
 use houyicoder_service::composition::SessionHost;
@@ -89,9 +80,6 @@ use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_service::local_ipc;
 use houyicoder_service::server::EventSequencer;
 use houyicoder_tui::app::run_with_runner;
-use std::io::BufReader;
-use std::io::stdin;
-use std::io::stdout;
 use std::process::id;
 use tokio::runtime::Builder;
 
@@ -140,7 +128,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             endpoint,
             session,
             acp,
-        } => run_attach(endpoint, session, acp),
+        } => {
+            // One positional names the session; its recorded endpoint is
+            // where the detached host bound. Two positionals keep the
+            // endpoint explicit.
+            let endpoint = match endpoint {
+                Some(endpoint) => endpoint,
+                None => detach::read_endpoint(&session).ok_or_else(|| {
+                    format!("no endpoint record for session {session}; start it detached first")
+                })?,
+            };
+            run_attach(endpoint, session, acp)
+        }
         CliCommand::Serve {
             project,
             endpoint,
@@ -151,7 +150,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         CliCommand::Acp { project, model, .. } => {
-            run_acp_stdio(project, model)?;
+            acp::run_acp_stdio(project, model)?;
             Ok(())
         }
         CliCommand::Tui { project, model, .. } => {
@@ -462,129 +461,6 @@ fn run_attach(endpoint: String, session_id: String, acp: bool) -> Result<(), Box
     // cannot open (run_resume reports no store wired); no /resume Command is
     // enqueued.
     drop(run_with_runner(bundle, startup, None)?);
-    Ok(())
-}
-
-/// The model ids a client may switch to through session/set_config_option:
-/// the settings catalog plus the runner's active model, so a resumed
-/// session whose model is not in the catalog still has a row.
-fn acp_model_options(runner: &Runner) -> Vec<String> {
-    let (section, _) =
-        houyicoder_config::load_model_section_from(&houyicoder_config::settings_path());
-    let mut ids: Vec<String> = section.catalog.into_iter().map(|e| e.id).collect();
-    let active = runner.active_model();
-    if !ids.iter().any(|m| m == &active) {
-        ids.push(active);
-    }
-    ids
-}
-
-/// The ACP stdio entry. Builds the runner through the same composition root
-/// the TUI path uses, then drives the ACP server over stdin + stdout. A
-/// stock client learns the session id from the session/new reply alone; the
-/// binding registered here hands the runner's real session id to the
-/// adapter and applies the request's cwd and additional directories before
-/// the first prompt.
-fn run_acp_stdio(
-    project: Option<String>,
-    model_override: Option<String>,
-) -> Result<(), Box<dyn Error>> {
-    // A host launches this process in the directory it wants the agent to work
-    // in, and that workspace may carry no project marker. Pinning the fence to
-    // the process cwd keeps the tools in the host's workspace instead of an
-    // isolated tempdir whose files vanish with the session.
-    let project = project.or_else(|| {
-        env::current_dir()
-            .ok()
-            .map(|dir| dir.to_string_lossy().into_owned())
-    });
-    let provider = resolve_provider(project.as_deref());
-    let mut bundle = build_runner(production_runner(project, provider));
-    if let Some(m) = &model_override {
-        bundle.runner.set_model(m.clone());
-    }
-    // The ACP server records this session for as long as it runs, so it holds
-    // the session lock, as the detached server does.
-    let lease = SessionLock::acquire(&bundle.session.to_string(), &session_log_root())?;
-    if let Some(store) = bundle.runner.descriptor_store() {
-        lease.bind(StoreIdentity::of(store.as_ref()));
-    }
-    let session = bundle.session;
-    let gate: Arc<dyn ModeGate> = bundle.gate;
-    // Install the live model-output sink before the runner is shared, so each
-    // response delta the provider emits reaches the serve loop as a
-    // session/update chunk instead of only the assembled message at turn end.
-    let (sink, live) = AcpLiveStream::channel();
-    sink.install_on(&mut bundle.runner);
-    let model_options = acp_model_options(&bundle.runner);
-    let runner = Arc::new(bundle.runner);
-    // The ACP server has no frontend event stream to publish a task's state
-    // into, but a command moved to the background still ends after the call
-    // that started it: the runner is how its ending reaches the model.
-    bundle.background_tasks.attach(None, &runner);
-    // The binding a session/new call resolves through. It answers with the
-    // runner's own session id and moves the runner onto the workspace the
-    // client named, so the id the client prompts with is the id the engine
-    // drives and the file scope matches the request. Directory grants that
-    // the fence cannot take are logged, not fatal: the session stays usable
-    // and the denial is visible to a developer reading the debug log.
-    let binding_runner = Arc::clone(&runner);
-    let binding = Arc::new(move |params: &NewSessionRequest| {
-        let cwd = PathBuf::from(&params.cwd);
-        if cwd.is_absolute() {
-            binding_runner.switch_cwd(cwd.clone());
-        } else {
-            tracing::warn!(cwd = %params.cwd, "session/new cwd is not absolute; keeping the startup workspace");
-        }
-        if let Some(sandbox) = binding_runner.sandbox_session() {
-            for dir in &params.additional_directories {
-                let path = PathBuf::from(dir);
-                if !path.is_absolute() {
-                    tracing::warn!(dir = %dir, "additional directory is not absolute; skipped");
-                    continue;
-                }
-                match sandbox.add_working_dir(&path.to_string_lossy()) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        tracing::warn!(dir = %dir, error = %e, "additional directory not granted");
-                    }
-                }
-            }
-        }
-        session
-    });
-    let facts_runner = Arc::clone(&runner);
-    let facts_gate = Arc::clone(&gate);
-    let facts_models = model_options.clone();
-    let facts: SessionFacts = Arc::new(move || SessionView {
-        modes: session_modes(facts_gate.as_ref()),
-        config_options: session_config_options(facts_runner.as_ref(), &facts_models),
-    });
-    let adapter = Arc::new(
-        AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new())
-            .with_session_binding(binding)
-            .with_session_facts(facts),
-    );
-
-    // Drive the server on a multi-thread runtime so the real provider (HTTP
-    // calls) + the sandbox (subprocess spawns) have a runtime that can handle
-    // blocking I/O + child reaping. The pump reads stdin on its own thread and
-    // writes each outbound frame to stdout as it is produced, so a client that
-    // waits for a reply before sending the next request never deadlocks.
-    let runtime = Builder::new_multi_thread().enable_all().build()?;
-    let background_tasks = Arc::clone(&bundle.background_tasks);
-    runtime.block_on(async move {
-        fire_after_bundle(session);
-        let mut pump = spawn_pump(BufReader::new(stdin()), stdout());
-        let server = AcpServer::new(adapter, runner, gate, session)
-            .with_live_stream(live)
-            .with_model_options(model_options);
-        drop(server.serve(&mut pump).await);
-        background_tasks.shutdown();
-        // serve returns when the client closes stdin; close waits for the
-        // writer to flush the last reply before the process exits.
-        pump.close().await;
-    });
     Ok(())
 }
 

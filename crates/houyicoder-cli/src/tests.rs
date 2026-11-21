@@ -243,8 +243,28 @@ fn test_parse_attach() {
         CliCommand::Attach {
             endpoint, session, ..
         } => {
-            assert_eq!(endpoint, "/tmp/s.sock");
+            assert_eq!(endpoint.as_deref(), Some("/tmp/s.sock"));
             assert_eq!(session, "abc-123");
+        }
+        other => panic!("expected Attach, got {other:?}"),
+    }
+}
+
+/// A single positional names the session and leaves the endpoint to be
+/// resolved from the session's record.
+#[test]
+fn test_parse_attach_sid_only() {
+    let cmd =
+        parse_args(vec!["attach".into(), "abc-123".into(), "--acp".into()]).expect("must parse");
+    match cmd {
+        CliCommand::Attach {
+            endpoint,
+            session,
+            acp,
+        } => {
+            assert!(endpoint.is_none());
+            assert_eq!(session, "abc-123");
+            assert!(acp);
         }
         other => panic!("expected Attach, got {other:?}"),
     }
@@ -252,7 +272,7 @@ fn test_parse_attach() {
 
 #[test]
 fn test_parse_attach_missing() {
-    let err = parse_args(vec!["attach".into(), "/tmp/s.sock".into()]).unwrap_err();
+    let err = parse_args(vec!["attach".into()]).unwrap_err();
     assert!(err.contains("session id"), "got: {err}");
 }
 

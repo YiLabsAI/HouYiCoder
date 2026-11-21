@@ -29,7 +29,9 @@ pub(crate) enum CliCommand {
     },
     /// Attach a TUI to a detached session.
     Attach {
-        endpoint: String,
+        /// The endpoint to connect to. None means the session's recorded
+        /// endpoint, which the attach entry resolves before connecting.
+        endpoint: Option<String>,
         session: String,
         /// Pipe the Agent Client Protocol over stdio instead of running the
         /// TUI: the process bridges an external ACP client to the host.
@@ -188,18 +190,30 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
     let first = iter.next();
 
     if first.as_deref() == Some("attach") {
-        let endpoint = iter.next().ok_or("-- attach needs an endpoint")?;
-        let session = iter.next().ok_or("-- attach needs a session id")?;
+        let mut positionals = Vec::new();
         let mut acp = false;
-        for arg in iter.by_ref() {
+        for arg in iter {
             if arg == "--acp" {
                 acp = true;
-            } else {
+            } else if arg.starts_with("--") {
                 return Err(format!(
                     "attach: unknown argument: {arg} (use --acp to pipe the Agent Client Protocol)"
                 ));
+            } else {
+                positionals.push(arg);
             }
         }
+        let (endpoint, session) = match positionals.as_slice() {
+            [session] => (None, session.clone()),
+            [endpoint, session] => (Some(endpoint.clone()), session.clone()),
+            [] => return Err("-- attach needs a session id".to_string()),
+            _ => {
+                return Err(
+                    "attach: too many arguments (attach <session> or attach <endpoint> <session>)"
+                        .to_string(),
+                );
+            }
+        };
         return Ok(CliCommand::Attach {
             endpoint,
             session,
