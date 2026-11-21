@@ -686,13 +686,13 @@ pub(crate) fn paint_overlay(
         };
         let sx = sx.max(rect.x).min(right);
         let ex = ex.max(rect.x).min(right);
-        // A range edge inside a wide glyph would tint half of it while the
-        // extractor takes the whole glyph, so widen both sides the same way.
         let (s0, s1) = snap_to_glyphs(row, (sx - rect.x) as usize, (ex - rect.x) as usize + 1);
-        let end = (rect.x + s1.min(u16::MAX as usize) as u16)
+        let end = rect
+            .x
+            .saturating_add(s1.min(rect.width as usize) as u16)
             .saturating_sub(1)
             .min(right);
-        for x in rect.x + s0 as u16..=end {
+        for x in rect.x.saturating_add(s0 as u16)..=end {
             if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
                 cell.bg = sel_bg;
             }

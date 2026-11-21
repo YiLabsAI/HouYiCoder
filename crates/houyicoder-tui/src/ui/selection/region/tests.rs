@@ -58,53 +58,67 @@ fn test_overlay_covers_diff() {
 /// The paint widens a range edge that falls inside a wide glyph, so the
 /// highlight covers exactly the glyphs the extractor takes. A half-tinted wide
 /// glyph would tell the user one character is selected while the clipboard
-/// receives the whole one.
+/// receives the whole one. The rect origin is non-zero here because the
+/// origin arithmetic is what the composer surface got wrong.
 #[test]
 fn test_overlay_covers_wide_glyph() {
-    let rect = Rect::new(0, 0, 10, 1);
-    let mut buf = Buffer::empty(rect);
-    // Three wide characters: columns 0-1, 2-3, 4-5.
+    let rect = Rect::new(2, 0, 10, 1);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 14, 1));
+    // Three wide characters: columns 2-3, 4-5, 6-7.
     let rows = vec![(TAG_PLAIN, "\u{4e00}\u{4e8c}\u{4e09}".to_string())];
     // The range starts on the second half of the first glyph and ends on the
     // first half of the third.
-    let sel = sel_with((1, 0), (4, 0));
+    let sel = sel_with((3, 0), (6, 0));
     paint_overlay(&mut buf, rect, &rows, &sel, 0);
     let sel_bg = Color::Indexed(24);
-    for x in 0..6 {
+    for x in 2..8 {
         let cell = buf.cell(Position::new(x, 0)).expect("cell");
         assert_eq!(
             cell.bg, sel_bg,
             "column {x} belongs to a touched glyph and must be painted"
         );
     }
-    let outside = buf.cell(Position::new(6, 0)).expect("cell past the glyphs");
+    let outside = buf.cell(Position::new(8, 0)).expect("cell past the glyphs");
     assert_ne!(outside.bg, sel_bg, "an untouched column stays unpainted");
+    let before = buf.cell(Position::new(1, 0)).expect("cell before the rect");
+    assert_ne!(before.bg, sel_bg, "the origin column itself is not painted");
 }
 
-/// The widening step must stay inside the row it is given, whatever range it
-/// receives. A range that returned an end before its start would make the
-/// paint loop empty, and one that reached past the row would paint cells the
-/// row does not own.
+/// The widening step must return a usable range for whatever input it gets: a
+/// start not past the end, and an end inside the row. It also has to actually
+/// widen a range whose edge falls inside a wide glyph, which is the only
+/// reason the step exists.
 #[test]
 fn test_glyph_widen_in_bounds() {
-    // Empty row, range entirely past the row, empty range, and a trailing wide
-    // glyph half-covered.
-    for (row, c0, c1) in [
-        ("", 0usize, 5usize),
-        ("abc", 10, 20),
-        ("\u{4e00}\u{4e8c}", 0, 0),
-        ("abc\u{4e00}", 1, 3),
-    ] {
+    // Empty row, range past the row, empty range, and a right-straddling wide
+    // glyph: the last one is the case the step exists for.
+    let cases = [
+        ("", 0usize, 5usize, (0usize, 5usize)),
+        ("abc", 10, 20, (10, 20)),
+        ("\u{4e00}\u{4e8c}", 0, 0, (0, 0)),
+        // Columns 0 is "a"; the wide glyph spans 1..3, so a range ending at
+        // column 2 straddles it and must widen to cover the whole glyph.
+        ("a\u{4e00}", 1, 2, (1, 3)),
+    ];
+    for (row, c0, c1, expected) in cases {
         let (s0, s1) = snap_to_glyphs(row, c0, c1);
-        assert!(
-            s0 <= s1,
-            "{row:?} ({c0}, {c1}) widened to a backwards range {s0}..{s1}"
+        assert_eq!(
+            (s0, s1),
+            expected,
+            "{row:?} ({c0}, {c1}) must widen to whole glyph boundaries"
         );
-        assert!(
-            s1 <= c1.max(s0),
-            "{row:?} ({c0}, {c1}) widened past what it was given: {s0}..{s1}"
-        );
+        assert!(s0 <= s1, "{row:?} widened to a backwards range");
     }
+    // An end that lands inside the row stays inside it; only a range already
+    // past the row is returned untouched.
+    let width = "\u{4e00}\u{4e8c}".chars().map(|_| 2).sum::<usize>();
+    let (s0, s1) = snap_to_glyphs("\u{4e00}\u{4e8c}", 0, 3);
+    assert_eq!(
+        (s0, s1),
+        (0, 4),
+        "a straddled wide glyph widens inward only"
+    );
+    assert!(s1 <= width, "the widened end stays inside the row");
 }
 
 /// A click-only drag (anchor == focus, no span) is stale and is cleared before
