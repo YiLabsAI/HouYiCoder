@@ -77,11 +77,15 @@ fn text_response(text: &str) -> CompletionResponse {
 }
 
 fn tool_call_response(id: &str, name: &str) -> CompletionResponse {
+    tool_call_with_input(id, name, json!({}))
+}
+
+fn tool_call_with_input(id: &str, name: &str, input: Value) -> CompletionResponse {
     CompletionResponse {
         output: vec![OutputItem::ToolCall {
             id: id.into(),
             name: name.into(),
-            input: json!({}),
+            input,
         }],
         usage: Usage::default(),
         model: "test".into(),
@@ -375,6 +379,63 @@ async fn test_prompt_echoes_user_once() {
         "the durable copy is suppressed: {updates:?}"
     );
     assert_eq!(user_text, "go");
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A shell tool whose call carries a command, as a real engine turn does.
+struct NamedShellTool;
+
+impl Tool for NamedShellTool {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "runs a shell command"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    fn execute(&self, _ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async { Ok(json!({ "stdout": "hi" })) })
+    }
+}
+
+/// The tool-call notification an ACP client receives names the call in prose
+/// and carries the command, so a host can render the row without guessing.
+#[tokio::test]
+async fn test_tool_update_carries_title() {
+    let session = SessionId::new();
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(NamedShellTool));
+    let runner = runner_with(
+        FakeProvider::new(vec![
+            tool_call_with_input("toolu_1", "bash", json!({ "command": "echo hi" })),
+            text_response("done"),
+        ]),
+        tools,
+    );
+    let (handle, tx, mut rx) = spawn_server(runner, session);
+
+    send(&tx, &prompt_request(session, 9)).await;
+    let mut titled = None;
+    loop {
+        let frame = recv(&mut rx).await;
+        let Ok(msg) = serde_json::from_str::<Value>(&frame) else {
+            continue;
+        };
+        if msg.get("method") == Some(&json!("session/update"))
+            && msg["params"]["sessionUpdate"] == json!("tool_call")
+        {
+            titled = msg["params"]["title"].as_str().map(str::to_string);
+            break;
+        }
+        if msg.get("id") == Some(&json!(9)) {
+            break;
+        }
+    }
+    assert_eq!(titled.as_deref(), Some("Run: echo hi"));
 
     drop(tx);
     handle.await.expect("join").expect("clean close");

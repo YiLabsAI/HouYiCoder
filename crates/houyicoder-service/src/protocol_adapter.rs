@@ -579,7 +579,7 @@ pub fn map_session_update(kind: &SessionEvent) -> Option<SessionUpdate> {
             tool,
             input,
         } => SessionUpdate::ToolCall(
-            ToolCall::new(call_id.clone(), tool_title(tool, Some(input)))
+            ToolCall::new(call_id.clone(), tool.clone())
                 .kind(tool_kind(tool))
                 .locations(tool_locations(tool, Some(input)))
                 .raw_input(input.clone())

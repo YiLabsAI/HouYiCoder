@@ -21,7 +21,7 @@ use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::protocol_adapter::{
-    map_run_error, map_run_result, map_session_update, map_stream_event,
+    map_run_error, map_run_result, map_session_update, map_stream_event, tool_title,
 };
 use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::session::TrajectoryPages;
@@ -37,6 +37,7 @@ use houyicoder_protocol::acp_wire::{
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::llm::Usage;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -562,7 +563,14 @@ impl AcpServer {
         {
             return Ok(());
         }
-        if let Some(update) = map_session_update(&ev.event) {
+        if let Some(mut update) = map_session_update(&ev.event) {
+            // The frontend keeps its own short tool labels; the ACP client
+            // gets the human title its card protocol defines.
+            if let (SessionEvent::ToolCall { tool, input, .. }, SessionUpdate::ToolCall(call)) =
+                (&ev.event, &mut update)
+            {
+                call.title = tool_title(tool, Some(input));
+            }
             let params = serde_json::to_value(&update).expect("session update serialize");
             let notif = AcpNotification::new("session/update", params);
             self.send_typed(io, &notif).await?;
