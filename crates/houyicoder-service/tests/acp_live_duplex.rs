@@ -260,6 +260,53 @@ fn test_acp_config_option_switch() {
     drop(child.wait());
 }
 
+/// A one-mebibyte prompt arrives across many pipe fragments and a cancel
+/// sent alongside it still stops the run, so the reader does not desync on a
+/// large frame or lose the cancel behind it.
+#[test]
+fn test_acp_large_prompt_cancel() {
+    let (mut child, mut stdin, mut stdout) = spawn_server(&[("HOUYICODER_ACP_STUB_HANG", "1")]);
+    let (sid, _) = handshake(&mut stdin, &mut stdout);
+    // The one mebibyte rides the opaque _meta map, not the model text: the
+    // frame still arrives across many fragments without entering the model's
+    // context budget, so the test isolates framing from context accounting.
+    let big = "x".repeat(1024 * 1024);
+    let prompt = json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "session/prompt",
+        "params": {
+            "sessionId": sid,
+            "prompt": [{"type": "text", "text": "hi"}],
+            "_meta": {"blob": big},
+        },
+    })
+    .to_string();
+    let cancel =
+        json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}});
+    // Write the large frame in fragments so the reader reassembles it across
+    // many reads, then the cancel immediately after.
+    let bytes = format!("{prompt}\n{cancel}\n");
+    for chunk in bytes.as_bytes().chunks(8192) {
+        stdin.write_all(chunk).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    let mut reply = None;
+    for _ in 0..256 {
+        let line = recv(&mut stdout);
+        if line.contains(r#""id":3"#) {
+            reply = Some(line);
+            break;
+        }
+    }
+    let reply = reply.expect("prompt reply after a large frame");
+    assert!(reply.contains(r#""stopReason":"cancelled""#), "{reply}");
+
+    drop(stdin);
+    drop(child.wait());
+}
+
 /// A prompt carrying an image block is rejected with a typed InvalidParams
 /// rather than dropped silently.
 #[test]
