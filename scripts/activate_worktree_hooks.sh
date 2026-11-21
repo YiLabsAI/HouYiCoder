@@ -57,4 +57,5 @@ WORDLIST="$MAIN_CHECKOUT/scripts/.rs-comment-products"
 # definition of the gate for every tree, and the gate's meta-test imports
 # that same module.
 
-echo "Done. ExitWorktree -> EnterWorktree to reload hooks."
+echo "Done. Hooks resolve from this tree first, then the main checkout through"
+echo "the git common dir, so no re-entry is needed."
