@@ -22,7 +22,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
+use tokio::time::sleep;
 
 /// A sandbox stub whose working_dirs() is configurable. The other trait
 /// methods are required by the trait but never called by prepare_with_probe,
@@ -211,4 +212,28 @@ fn test_bash_schema_no_workdir() {
         props.contains_key("timeout_ms"),
         "the per-call wall budget is advertised: {schema}"
     );
+}
+
+#[tokio::test]
+async fn test_prepare_reclaims_evicted() {
+    let ws = temp_workspace();
+    let store = SnapshotStore::new(&ws).expect("store");
+    let stack = Mutex::new(UndoStack::new());
+    let session = StubSession {
+        root: ws.clone(),
+        extra: vec![],
+    };
+    for _ in 0..12 {
+        assert_eq!(prepare(&store, &stack, &session).expect("prepare"), None);
+    }
+    let first = ws.join(".houyicoder").join("snapshots").join("snap-1");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while first.exists() && Instant::now() < deadline {
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !first.exists(),
+        "evicted oldest snapshot is reclaimed in the background"
+    );
+    remove_dir_all(&ws).ok();
 }

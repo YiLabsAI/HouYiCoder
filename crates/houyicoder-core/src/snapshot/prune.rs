@@ -14,6 +14,8 @@ use std::time::SystemTime;
 
 use walkdir::WalkDir;
 
+use super::MAX_UNDO_DEPTH;
+use super::UndoEntry;
 use super::lease;
 use super::lease::LeaseProbe;
 use super::lease::SnapshotLease;
@@ -37,7 +39,7 @@ pub(in crate::snapshot) fn enforce_retention(
 ) -> usize {
     let now = SystemTime::now();
     let mut expired: Vec<(PathBuf, SystemTime)> = Vec::new();
-    let mut sized: Vec<(PathBuf, SystemTime, Option<u64>)> = Vec::new();
+    let mut fresh: Vec<(u64, PathBuf, SystemTime)> = Vec::new();
     let entries = match read_dir(store_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == ErrorKind::NotFound => return 0,
@@ -54,11 +56,13 @@ pub(in crate::snapshot) fn enforce_retention(
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let is_snapshot = name
+        let Some(seq) = name
             .strip_prefix("snap-")
             .and_then(|rest| rest.parse::<u64>().ok())
-            .is_some();
-        if !is_snapshot || !path.is_dir() {
+        else {
+            continue;
+        };
+        if !path.is_dir() {
             continue;
         }
         if protected
@@ -75,13 +79,31 @@ pub(in crate::snapshot) fn enforce_retention(
         if age.as_secs() > ttl_secs {
             expired.push((path, mtime));
         } else {
-            let size = dir_size(&path);
+            fresh.push((seq, path, mtime));
+        }
+    }
+    // Restart re-linking inspects at most MAX_UNDO_DEPTH newest snapshots, so
+    // any older unprotected entry is unreachable and can be reclaimed without
+    // walking its directory tree to measure byte size.
+    fresh.sort_by_key(|(seq, _, mtime)| (*mtime, *seq));
+    let keep_from = fresh.len().saturating_sub(MAX_UNDO_DEPTH);
+    for (_, path, mtime) in fresh.drain(..keep_from) {
+        expired.push((path, mtime));
+    }
+    let mut sized: Vec<(PathBuf, SystemTime, Option<u64>)> = fresh
+        .into_iter()
+        .map(|(_, path, mtime)| {
+            let size = if max_size == 0 {
+                Some(1)
+            } else {
+                dir_size(&path)
+            };
             if size.is_none() {
                 tracing::debug!("snapshot {} size unknown; kept", path.display());
             }
-            sized.push((path, mtime, size));
-        }
-    }
+            (path, mtime, size)
+        })
+        .collect();
     let Ok(lock) = StoreLock::acquire(store_root) else {
         tracing::warn!("snapshot store lock unavailable; prune skipped this round");
         return 0;
@@ -116,6 +138,17 @@ pub(in crate::snapshot) fn enforce_retention(
         orphan.remove();
     }
     remove_claimed(store_root, removals)
+}
+
+/// Remove a single snapshot entry just evicted from the undo stack while this
+/// process still holds its exclusive lease.
+pub(in crate::snapshot) fn reclaim_single(store_root: &Path, entry: UndoEntry) {
+    if let UndoEntry::CoWSnapshot {
+        store_path, lease, ..
+    } = entry
+    {
+        let _ = remove_claimed(store_root, vec![(store_path, lease)]);
+    }
 }
 
 /// Claim a snapshot for deletion. A snapshot another process holds, one

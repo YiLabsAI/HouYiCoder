@@ -41,6 +41,7 @@ use houyicoder_api::skill::SkillSnapshot;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use std::mem::take;
 use std::time::Duration;
+use tokio::task::spawn_blocking;
 
 /// A point-in-time view of the runner's live state for the host to render.
 /// Carries only engine-owned state; the mode and session id live in the host
@@ -683,6 +684,37 @@ impl Runner {
             self.snapshot_size_cap_bytes,
             &protected,
         );
+    }
+
+    /// Schedule snapshot retention on the blocking pool so a large deletion
+    /// never blocks the async turn loop or delays cancellation handling.
+    pub(crate) fn spawn_prune_snapshots(&self) {
+        let Some(store) = self.snapshot_store.as_ref().map(Arc::clone) else {
+            return;
+        };
+        let Some(stack) = &self.undo_stack else {
+            return;
+        };
+        if !store.try_acquire_prune() {
+            return;
+        }
+        let protected = stack
+            .lock()
+            .ok()
+            .map(|s| s.snapshot_paths())
+            .unwrap_or_default();
+        let ttl = self.snapshot_ttl_secs;
+        let cap = self.snapshot_size_cap_bytes;
+        struct FinishGuard(Arc<SnapshotStore>);
+        impl Drop for FinishGuard {
+            fn drop(&mut self) {
+                self.0.finish_prune();
+            }
+        }
+        drop(spawn_blocking(move || {
+            let _guard = FinishGuard(Arc::clone(&store));
+            store.prune(ttl, cap, &protected);
+        }));
     }
 
     /// The undo stack depth (for the host to show undoable ops count).

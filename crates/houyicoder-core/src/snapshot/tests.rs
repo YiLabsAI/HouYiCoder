@@ -1983,3 +1983,5 @@ fn test_relink_without_lock() {
     );
     remove_dir_all(&tmp).ok();
 }
+
+mod trigger_prune;

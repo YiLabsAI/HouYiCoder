@@ -18,9 +18,8 @@ use std::path::{Path, PathBuf};
 use std::process::id;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::agent::git_safety::command_triggers_git_snapshot;
 use crate::agent::runner_config::DEFAULT_SNAPSHOT_TTL_SECS;
 use std::fs::copy;
 use std::fs::create_dir_all;
@@ -43,47 +42,16 @@ use self::lease::try_store_lock;
 use self::migrate::migrate_store;
 use self::migrate::scan_max_snapshot_id;
 use self::prune::enforce_retention;
+use self::prune::reclaim_single;
 use self::staging::is_complete;
 use self::staging::pause_at_build_barrier;
 use self::staging::publish;
 use self::staging::start_build;
+pub use self::trigger::is_destructive_command;
 
 /// Directories excluded from a snapshot: the snapshot store itself (prevents
 /// self-referential explosion) plus large generated trees.
 const PRUNE_DIRS: &[&str] = &[".houyicoder", ".claude", "target", "node_modules", ".git"];
-
-/// A simplified destructive-command check (the snapshot trigger predicate).
-/// The authoritative check (with compound splitting + attestability) lives in
-/// the permission crate's should_ask_destructive, which the gate uses for the
-/// Ask/Allow decision. This heuristic is for the snapshot trigger only: a
-/// false negative (misses a destructive command) is safe because the gate
-/// still asks; a false positive (snapshots a non-destructive command) wastes
-/// a snapshot but is harmless. The layering forbids core from importing the
-/// permission crate (permission depends on core, not vice versa), so this is
-/// a self-contained keyword check.
-pub fn is_destructive_command(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    // rm / rmdir / unlink — file deletion.
-    let has_rm = lower
-        .split_whitespace()
-        .any(|tok| tok == "rm" || tok == "rmdir" || tok == "unlink" || tok.starts_with("rm"));
-    // sudo — privilege escalation (whatever follows is elevated).
-    let has_sudo = lower.split_whitespace().any(|tok| tok == "sudo");
-    // Redirect operators (unquoted) — output redirection can overwrite.
-    let has_redirect = {
-        let in_single = lower.contains('\'');
-        let in_double = lower.contains('"');
-        !in_single && !in_double && (lower.contains('>') || lower.contains(">>"))
-    };
-    // Git working-tree / history discards (checkout -- / path / -f, restore,
-    // clean -f, stash drop/clear/pop, branch -d/-D, push --force) — back up
-    // the tree before they run so the undo stack can recover. Argument-aware so a bare
-    // git checkout <branch> switch does NOT trigger a snapshot. Matches
-    // the consent-gate classifier in the permission crate; keep both in
-    // sync.
-    let has_git_discard = command_triggers_git_snapshot(command);
-    has_rm || has_sudo || has_redirect || has_git_discard
-}
 
 /// One undo entry on the LIFO stack. Bash commands produce a whole-workspace
 /// CoW snapshot (touch-set unknowable); file tools produce a per-file
@@ -174,6 +142,13 @@ impl UndoStack {
     /// prune reclaim the tree. Before-image entries hold no handle and are
     /// not counted.
     pub fn push(&mut self, entry: UndoEntry) {
+        drop(self.push_evicting(entry));
+    }
+
+    /// Push a snapshot entry and return any oldest snapshot evicted when the
+    /// stack was already at capacity, allowing immediate background reclamation.
+    pub(crate) fn push_evicting(&mut self, entry: UndoEntry) -> Option<UndoEntry> {
+        let mut evicted = None;
         if matches!(entry, UndoEntry::CoWSnapshot { .. }) {
             let snapshots = self
                 .entries
@@ -186,10 +161,11 @@ impl UndoStack {
                     .iter()
                     .position(|entry| matches!(entry, UndoEntry::CoWSnapshot { .. }))
             {
-                let _evicted = self.entries.remove(oldest);
+                evicted = Some(self.entries.remove(oldest));
             }
         }
         self.entries.push(entry);
+        evicted
     }
 
     pub fn pop(&mut self) -> Option<UndoEntry> {
@@ -237,7 +213,7 @@ impl UndoStack {
 /// re-links, so older snapshots stay for prune to reclaim, and it caps the
 /// live stack, because each snapshot entry keeps one lease file open for as
 /// long as it is alive.
-const MAX_UNDO_DEPTH: usize = 10;
+pub(in crate::snapshot) const MAX_UNDO_DEPTH: usize = 10;
 
 /// The default threshold (bytes) above which a full-copy fallback on a
 /// no-reflink filesystem degrades to Ask instead of paying a slow copy per
@@ -263,6 +239,8 @@ pub struct SnapshotStore {
     /// is constant for a store's lifetime (the filesystem does not change
     /// under a running session), so it is memoized.
     reflink_capable: OnceLock<bool>,
+    /// Single-flight guard preventing overlapping background prune walks.
+    pruning: AtomicBool,
 }
 
 /// Audit sink for snapshot lifecycle events. Injected via
@@ -347,6 +325,7 @@ impl SnapshotStore {
             counter: AtomicU64::new(start),
             audit: None,
             reflink_capable: OnceLock::new(),
+            pruning: AtomicBool::new(false),
         })
     }
 
@@ -553,7 +532,10 @@ impl SnapshotStore {
     /// A real I/O failure from the walk, by contrast, is undo genuinely
     /// unavailable and the caller refuses to run.
     pub fn check_reflink_policy(&self) -> std::io::Result<()> {
-        reflink_policy(self.can_reflink(), self.workspace_size())
+        if self.can_reflink() {
+            return Ok(());
+        }
+        reflink_policy(false, self.workspace_size())
     }
 
     /// The workspace root (the snapshot scope).
@@ -740,6 +722,30 @@ impl SnapshotStore {
         }
         removed
     }
+
+    /// Reclaim a single snapshot entry evicted from the live undo stack while
+    /// its exclusive lease is still held.
+    pub(crate) fn reclaim_evicted(&self, entry: UndoEntry) {
+        reclaim_single(&self.store_root, entry);
+    }
+
+    /// Reclaim an evicted snapshot entry directly from its parent store root.
+    pub(crate) fn reclaim_evicted_at(store_root: &Path, entry: UndoEntry) {
+        reclaim_single(store_root, entry);
+    }
+
+    /// Acquire the single-flight background prune flag; returns false when a
+    /// background prune is already running for this store.
+    pub(crate) fn try_acquire_prune(&self) -> bool {
+        self.pruning
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Release the single-flight background prune flag.
+    pub(crate) fn finish_prune(&self) {
+        self.pruning.store(false, Ordering::Release);
+    }
 }
 
 /// Pure ext4 fallback policy: when CoW is unavailable, degrade to Ask only if
@@ -771,10 +777,11 @@ fn is_pruned(path: &Path, workspace_root: &Path, store_root: &Path) -> bool {
         return true;
     }
     let rel = path.strip_prefix(workspace_root).unwrap_or(path);
-    if let Some(first) = rel.iter().next()
-        && PRUNE_DIRS.contains(&first.to_string_lossy().as_ref())
-    {
-        return true;
+    if let Some(first) = rel.iter().next() {
+        let name = first.to_string_lossy();
+        if PRUNE_DIRS.contains(&name.as_ref()) || name.starts_with("target-") {
+            return true;
+        }
     }
     false
 }
@@ -783,6 +790,7 @@ mod lease;
 mod migrate;
 mod prune;
 mod staging;
+mod trigger;
 
 pub mod file_transaction;
 

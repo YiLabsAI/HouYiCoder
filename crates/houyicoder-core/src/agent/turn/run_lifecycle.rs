@@ -159,7 +159,7 @@ impl Runner {
         let Some(_drive) = self.begin_drive() else {
             return Err(RunError::Busy);
         };
-        self.prune_snapshots();
+        self.spawn_prune_snapshots();
         self.reset_run_state();
         self.reset_user_turn();
         self.reapply_skill_entitlements();
@@ -278,7 +278,7 @@ impl Runner {
                 usage: Usage::default(),
             });
         }
-        self.prune_snapshots();
+        self.spawn_prune_snapshots();
         self.reset_run_state();
         self.reset_user_turn();
         self.reapply_skill_entitlements();

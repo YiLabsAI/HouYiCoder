@@ -7,13 +7,15 @@
 //! undo exists. A snapshot failure removes that premise, so a real failure
 //! refuses to run the command rather than letting it execute without recovery.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_protocol::extension::ToolError;
+use tokio::runtime::Handle;
+use tokio::task::spawn_blocking;
 
-use crate::snapshot::{SnapshotStore, UndoStack};
+use crate::snapshot::{SnapshotStore, UndoEntry, UndoStack};
 
 /// Snapshot the session's writable roots and push the entry onto the undo
 /// stack, using the store's own copy-on-write policy probe. Returns
@@ -76,7 +78,10 @@ pub(crate) fn prepare_with_probe(
         Ok(()) => match store.snapshot_after_probe(&additional) {
             Ok(entry) => match stack.lock() {
                 Ok(mut guard) => {
-                    guard.push(entry);
+                    if let Some(evicted) = guard.push_evicting(entry) {
+                        drop(guard);
+                        reclaim_evicted_snapshot(store, evicted);
+                    }
                     Ok(None)
                 }
                 Err(_) => Err(ToolError::Failed(
@@ -91,6 +96,22 @@ pub(crate) fn prepare_with_probe(
             ))),
         },
     }
+}
+
+fn reclaim_evicted_snapshot(store: &SnapshotStore, evicted: UndoEntry) {
+    if Handle::try_current().is_ok() {
+        let root = match &evicted {
+            UndoEntry::CoWSnapshot { store_path, .. } => store_path.parent().map(Path::to_path_buf),
+            UndoEntry::BeforeImage { .. } => None,
+        };
+        if let Some(root) = root {
+            drop(spawn_blocking(move || {
+                SnapshotStore::reclaim_evicted_at(&root, evicted);
+            }));
+            return;
+        }
+    }
+    store.reclaim_evicted(evicted);
 }
 
 #[cfg(test)]
