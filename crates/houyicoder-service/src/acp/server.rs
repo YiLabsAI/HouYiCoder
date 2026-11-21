@@ -21,20 +21,19 @@ use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::protocol_adapter::{
-    acp_permission_response_to_decision, approval_to_acp_permission, map_run_error, map_run_result,
-    map_session_update, map_stream_event,
+    map_run_error, map_run_result, map_session_update, map_stream_event,
 };
 use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::RunError;
 use houyicoder_core::agent::RunResult;
-use houyicoder_core::agent::{ApprovalRequest, RunOutcome, Runner};
+use houyicoder_core::agent::{ApprovalDecision, RunOutcome, Runner};
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acp_wire::{
     AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, PromptRequest,
-    PromptResponse, RequestPermissionResponse,
+    PromptResponse,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
@@ -83,6 +82,16 @@ pub struct AcpServer {
     cancel_requested: AtomicBool,
 }
 
+/// The turn result a cancel during a permission ask produces: the turn ended
+/// before the engine could continue.
+fn cancelled_run() -> RunResult {
+    RunResult {
+        outcome: RunOutcome::Interrupted("cancelled during permission ask".to_string()),
+        turns: 0,
+        usage: Usage::default(),
+    }
+}
+
 impl AcpServer {
     /// Build a server bound to one runner + session + mode gate, delegating
     /// the stateless methods to the adapter. The composition root constructs
@@ -122,33 +131,6 @@ impl AcpServer {
     pub fn with_model_options(mut self, models: Vec<String>) -> Self {
         self.model_options = models;
         self
-    }
-
-    /// Mint a fresh reverse-request id for a mid-turn permission ask. Distinct
-    /// from any event seq so the two correlation axes never collide.
-    fn mint_req_id(&mut self) -> i64 {
-        let id = self.next_req_id as i64;
-        self.next_req_id += 1;
-        id
-    }
-
-    /// Append the durable record of one approval card this transport sent. A
-    /// failed write is logged rather than failing the ask: the user still
-    /// needs the question, and the fold reports the cards it did see.
-    async fn record_asked(&self, approval: &ApprovalRequest) {
-        let record = SessionLogEntry {
-            id: EventId::new(),
-            session: self.session,
-            ts: now_millis(),
-            prev_hash: None,
-            event: SessionEvent::PermissionAsked {
-                call_id: approval.call_id.clone(),
-                tool: approval.tool_name.clone(),
-            },
-        };
-        if let Err(e) = self.runner.store().append(record).await {
-            tracing::warn!("permission-asked audit append failed: {e}");
-        }
     }
 
     /// Run the connection: receive frames until the client closes. Each frame
@@ -286,150 +268,26 @@ impl AcpServer {
                     .await;
             }
         };
+        // The client's own message goes out before the run starts. Its durable
+        // record is only readable once the run has appended it, so echoing it
+        // here is what keeps the conversation in the order the user typed it;
+        // the durable copy is suppressed below.
+        self.echo_user_prompt(io, &text).await?;
         // Await the run while concurrently reading inbound frames so a
         // session/cancel notification arriving mid-run aborts the drive loop.
         // Any other frame mid-run is a protocol violation (fail-closed).
         let mut result = self.drive_run(io, text).await?;
         loop {
-            // Push only the events appended since the last push so a resumed
-            // run does not re-send what the client already saw.
-            let events = self.drain_pushed();
-            for ev in &events {
-                self.push_turn_event(io, ev).await?;
-            }
+            self.push_pending(io).await?;
             match result {
                 Ok(run) => match run.outcome {
                     RunOutcome::Interruption(approvals) => {
-                        let mut decisions = Vec::with_capacity(approvals.len());
-                        let mut cancelled = false;
-                        for approval in approvals {
-                            let ask_id = self.mint_req_id();
-                            let session_str = self.session.to_string();
-                            let params = approval_to_acp_permission(&approval, session_str);
-                            let params_value = serde_json::to_value(&params).map_err(|e| {
-                                ProtocolError::new(
-                                    ErrorCategory::InvalidFrame,
-                                    e.to_string(),
-                                    false,
-                                )
-                            })?;
-                            let ask =
-                                AcpRequest::new(ask_id, "session/request_permission", params_value);
-                            self.send_typed(io, &ask).await?;
-                            // The card is on the durable trail from the moment
-                            // the client received it: an ask abandoned or
-                            // cancelled at the client records no verdict, and
-                            // the audit must still hold the question rather
-                            // than report that none was ever asked.
-                            self.record_asked(&approval).await;
-                            // A cancel that arrives while the card is up ends
-                            // the turn without a verdict: the remaining asks
-                            // are not sent and resume is skipped below.
-                            let Some(resp) = self.await_permission(io, ask_id).await? else {
-                                cancelled = true;
-                                break;
-                            };
-                            let resp_value = match resp {
-                                AcpResponse::Result { result, .. } => result,
-                                AcpResponse::Error { error, .. } => {
-                                    return Err(ProtocolError::new(
-                                        ErrorCategory::InvalidFrame,
-                                        format!("permission ask rejected: {error:?}"),
-                                        false,
-                                    ));
-                                }
-                            };
-                            let perm_resp: RequestPermissionResponse =
-                                serde_json::from_value(resp_value).map_err(|e| {
-                                    ProtocolError::new(
-                                        ErrorCategory::InvalidFrame,
-                                        e.to_string(),
-                                        false,
-                                    )
-                                })?;
-                            // Record the durable PermissionDecision audit event
-                            // before resume applies the decision. A cancelled
-                            // response carries no verdict, so the card stays
-                            // on the trail as an outcome nobody stated.
-                            let reply = acp_permission_response_to_decision(
-                                perm_resp,
-                                approval.call_id.clone(),
-                            );
-                            if let Some(verdict) = reply.verdict {
-                                let audit = SessionLogEntry {
-                                    id: EventId::new(),
-                                    session: self.session,
-                                    ts: now_millis(),
-                                    prev_hash: None,
-                                    event: SessionEvent::PermissionDecision {
-                                        call_id: approval.call_id.clone(),
-                                        tool: approval.tool_name.clone(),
-                                        verdict,
-                                        scope: "once".into(),
-                                        validator: None,
-                                        reason: None,
-                                    },
-                                };
-                                if let Err(e) = self.runner.store().append(audit).await {
-                                    tracing::warn!("permission-decision audit append failed: {e}");
-                                }
-                            }
-                            decisions.push(reply.decision);
-                        }
-                        if cancelled {
+                        let Some(decisions) = self.ask_permissions(io, approvals).await? else {
                             tracing::debug!("permission ask cancelled; turn ends without resume");
-                        }
-                        result = {
-                            let resume_fut = self.runner.resume(self.session, &decisions);
-                            tokio::pin!(resume_fut);
-                            let mut live = self.live.take();
-                            let outcome = loop {
-                                // If a cancel arrived during the permission
-                                // ask (route_cancel_frame set the flag), skip
-                                // resume entirely — the turn ends cancelled.
-                                if self.cancel_requested.load(Ordering::Relaxed) {
-                                    break Ok(RunResult {
-                                        outcome: RunOutcome::Interrupted(
-                                            "cancelled during permission ask".to_string(),
-                                        ),
-                                        turns: 0,
-                                        usage: Usage::default(),
-                                    });
-                                }
-                                tokio::select! {
-                                    biased;
-                                    r = &mut resume_fut => break r,
-                                    delta = next_delta(&mut live) => {
-                                        if let Some(delta) = delta {
-                                            self.push_delta(io, &delta).await?;
-                                        }
-                                    }
-                                    frame = io.next_frame() => match frame {
-                                        Some(f) => {
-                                            if !self.route_cancel_frame(&f).await? {
-                                                return Err(ProtocolError::new(
-                                                    ErrorCategory::InvalidFrame,
-                                                    "unexpected frame mid-resume",
-                                                    false,
-                                                ));
-                                            }
-                                        }
-                                        None => {
-                                            return Err(ProtocolError::new(
-                                                ErrorCategory::Unavailable,
-                                                "client closed mid-resume",
-                                                false,
-                                            ));
-                                        }
-                                    },
-                                }
-                            };
-                            // Drain any deltas the model pushed in its final
-                            // resume frame before the run resolved.
-                            self.drain_live_tail(io, &mut live).await?;
-                            self.live = live;
-                            outcome
+                            result = Ok(cancelled_run());
+                            continue;
                         };
+                        result = self.resume_run(io, &decisions).await?;
                         continue;
                     }
                     _ => {
@@ -493,7 +351,10 @@ impl AcpServer {
         io: &mut AcpDuplexPump,
         text: String,
     ) -> Result<Result<RunResult, RunError>, ProtocolError> {
-        let run_fut = self.runner.run(self.session, text);
+        // The run future holds its own handle, so the loop can still reach
+        // the durable trail through the server while the turn is live.
+        let runner = Arc::clone(&self.runner);
+        let run_fut = runner.run(self.session, text);
         tokio::pin!(run_fut);
         let mut live = self.live.take();
         // biased: poll the run future first so a ready run resolves before an
@@ -507,6 +368,11 @@ impl AcpServer {
                 delta = next_delta(&mut live) => {
                     if let Some(delta) = delta {
                         self.push_delta(io, &delta).await?;
+                        // A step's tool events land in the durable trail while
+                        // the model keeps streaming, so draining after each
+                        // delta puts them on the client stream at the point
+                        // the turn reached them instead of after its reply.
+                        self.push_pending(io).await?;
                     }
                 }
                 frame = io.next_frame() => match frame {
@@ -538,76 +404,55 @@ impl AcpServer {
         Ok(outcome)
     }
 
-    /// Wait for the response to one permission ask. Returns None when a
-    /// session/cancel notification arrived first: the turn ends cancelled and
-    /// the ask keeps no verdict. The response is matched by its correlation
-    /// id through the pump's waiter table, so a reply meant for another ask
-    /// stays pending instead of deciding this card. An unparseable line is
-    /// answered with a parse error and the wait continues; any other frame
-    /// while the card is up is a protocol violation.
-    async fn await_permission(
+    /// Drive the resumed turn and stream its deltas. A cancel that arrived
+    /// during the ask skips resume and ends the turn cancelled.
+    async fn resume_run(
         &mut self,
         io: &mut AcpDuplexPump,
-        ask_id: i64,
-    ) -> Result<Option<AcpResponse>, ProtocolError> {
-        let mut response = io.expect_response(ask_id);
-        loop {
-            // biased: the verdict wins over a concurrent EOF. A client that
-            // answers and closes immediately makes both the oneshot and
-            // next_frame ready; without bias tokio picks at random and can
-            // drop the delivered answer for a "client closed" error.
+        decisions: &[ApprovalDecision],
+    ) -> Result<Result<RunResult, RunError>, ProtocolError> {
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Ok(Ok(cancelled_run()));
+        }
+        let runner = Arc::clone(&self.runner);
+        let resume_fut = runner.resume(self.session, decisions);
+        tokio::pin!(resume_fut);
+        let mut live = self.live.take();
+        let outcome = loop {
             tokio::select! {
                 biased;
-                resp = &mut response => {
-                    return resp.map(Some).map_err(|_| {
-                        ProtocolError::new(
-                            ErrorCategory::Unavailable,
-                            "permission waiter dropped",
-                            false,
-                        )
-                    });
+                r = &mut resume_fut => break r,
+                delta = next_delta(&mut live) => {
+                    if let Some(delta) = delta {
+                        self.push_delta(io, &delta).await?;
+                        self.push_pending(io).await?;
+                    }
                 }
                 frame = io.next_frame() => match frame {
-                    Some(InboundFrame::Response(resp)) => {
-                        if !io.deliver_response(resp) {
-                            tracing::warn!("response matched no pending permission ask");
+                    Some(f) => {
+                        if !self.route_cancel_frame(&f).await? {
+                            self.live = live;
+                            return Err(ProtocolError::new(
+                                ErrorCategory::InvalidFrame,
+                                "unexpected frame mid-resume",
+                                false,
+                            ));
                         }
                     }
-                    Some(InboundFrame::Notification(notif))
-                        if notif.method == "session/cancel" =>
-                    {
-                        self.runner.abort();
-                        self.adapter.handle_notification(&notif).await;
-                        self.cancel_requested.store(true, Ordering::Relaxed);
-                        io.forget_response(ask_id);
-                        return Ok(None);
-                    }
-                    Some(InboundFrame::Unparseable(line)) => {
-                        tracing::warn!(bytes = line.len(), "inbound frame did not parse");
-                        let resp = AcpResponse::err(
-                            AcpRequestId::Null,
-                            AcpErrorCode::ParseError,
-                            "frame did not parse as a request, response, or notification",
-                        );
-                        self.send_response(io, &resp).await?;
-                    }
-                    Some(_) => {
-                        return Err(ProtocolError::new(
-                            ErrorCategory::InvalidFrame,
-                            "unexpected frame while a permission ask is pending",
-                            false,
-                        ));
-                    }
                     None => {
+                        self.live = live;
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
-                            "client closed mid-permission",
+                            "client closed mid-resume",
                             false,
                         ));
                     }
                 },
             }
-        }
+        };
+        self.drain_live_tail(io, &mut live).await?;
+        self.live = live;
+        Ok(outcome)
     }
 
     /// Inspect one inbound frame read mid-run (or mid-resume) for a
@@ -659,6 +504,36 @@ impl AcpServer {
         events
     }
 
+    /// Push every durable turn event the client has not seen yet, in the order
+    /// the engine appended them.
+    async fn push_pending(&mut self, io: &mut AcpDuplexPump) -> Result<(), ProtocolError> {
+        let events = self.drain_pushed();
+        for ev in &events {
+            self.push_turn_event(io, ev).await?;
+        }
+        Ok(())
+    }
+
+    /// Echo the prompt the client just sent as a user message chunk, so the
+    /// host renders it before the answer rather than after it.
+    async fn echo_user_prompt(
+        &self,
+        io: &mut AcpDuplexPump,
+        text: &str,
+    ) -> Result<(), ProtocolError> {
+        let event = SessionEvent::UserInput {
+            text: text.to_string(),
+        };
+        if let Some(update) = map_session_update(&event) {
+            let params = serde_json::to_value(&update).map_err(|e| {
+                ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false)
+            })?;
+            self.send_typed(io, &AcpNotification::new("session/update", params))
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Forward one engine turn event as a session/update notification. Kinds
     /// the base protocol has no standard counterpart for (compaction boundary,
     /// summary, meta user, permission decision) ride the acpx/context/* side
@@ -670,6 +545,11 @@ impl AcpServer {
         io: &mut AcpDuplexPump,
         ev: &SessionLogEntry,
     ) -> Result<(), ProtocolError> {
+        // The prompt was echoed when it arrived, so its durable record would
+        // repeat the user's message.
+        if matches!(ev.event, SessionEvent::UserInput { .. }) {
+            return Ok(());
+        }
         // When the live stream carried the turn text as deltas, the durable
         // Assistant and Reasoning events would repeat it as a whole message;
         // suppress them so the client does not render the turn twice. Other
@@ -754,6 +634,7 @@ impl AcpServer {
 }
 
 mod config;
+mod permission;
 mod util;
 
 use util::next_delta;

@@ -333,6 +333,53 @@ async fn test_prompt_final_output() {
     handle.await.expect("join").expect("clean close");
 }
 
+/// The client's own message reaches it before the answer, exactly once: the
+/// prompt echo goes out when the prompt arrives, and the durable copy of the
+/// same record is suppressed.
+#[tokio::test]
+async fn test_prompt_echoes_user_once() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let (handle, tx, mut rx) = spawn_server(runner, session);
+
+    send(&tx, &prompt_request(session, 4)).await;
+    let mut updates = Vec::new();
+    let mut user_text = String::new();
+    loop {
+        let frame = recv(&mut rx).await;
+        let Ok(msg) = serde_json::from_str::<Value>(&frame) else {
+            continue;
+        };
+        if msg.get("method") == Some(&json!("session/update")) {
+            let update = &msg["params"];
+            let kind = update["sessionUpdate"].as_str().unwrap_or_default();
+            if kind == "user_message_chunk" {
+                user_text.push_str(update["content"]["text"].as_str().unwrap_or_default());
+            }
+            updates.push(kind.to_string());
+        }
+        if msg.get("id") == Some(&json!(4)) {
+            break;
+        }
+    }
+    assert_eq!(
+        updates.first().map(String::as_str),
+        Some("user_message_chunk")
+    );
+    assert_eq!(
+        updates
+            .iter()
+            .filter(|u| *u == "user_message_chunk")
+            .count(),
+        1,
+        "the durable copy is suppressed: {updates:?}"
+    );
+    assert_eq!(user_text, "go");
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
 /// A client that closes while the run is active fails the serve loop with a
 /// typed Unavailable error; the best-effort protocol-error write to the dead
 /// carrier is swallowed, and the original failure is what returns.
