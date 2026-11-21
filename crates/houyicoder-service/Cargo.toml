@@ -102,6 +102,10 @@ name = "acpx_cross_decode"
 path = "tests/acpx_cross_decode.rs"
 required-features = ["acp-cross-decode"]
 
+[[test]]
+name = "acp_live_duplex"
+path = "tests/acp_live_duplex.rs"
+
 [dev-dependencies]
 # test-util drives the recap deadline and the away window on a paused clock,
 # so their tests prove the timing without waiting for it.
