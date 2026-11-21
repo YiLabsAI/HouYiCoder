@@ -3,9 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::RunOutcome;
-use houyicoder_core::agent::multi_agent::bus_types::permission_request_topic;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::SessionId;
@@ -41,16 +39,12 @@ impl Server {
         }
         let runner = Arc::clone(&self.runner);
         let run_fut = runner.run_notification_turn(self.session);
-        let mut perm_rx = self
-            .bus
-            .as_ref()
-            .map(|b| b.subscribe(permission_request_topic()));
         let mut result = self
             .drive_while(
                 io,
                 run_fut,
                 "client closed mid-drain",
-                perm_rx.as_mut(),
+                true,
                 OnClose::Abandon,
             )
             .await?;

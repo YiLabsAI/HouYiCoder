@@ -55,7 +55,7 @@ impl Server {
         Self::send_typed(io, &ServerFrame::Request(prompt)).await?;
         // Ignore unrelated frames while preserving cancellation as decline.
         let resp = loop {
-            let frame = match io.next_frame().await? {
+            let frame = match io.next_live_frame().await? {
                 Some(f) => f,
                 None => {
                     return Err(ProtocolError::new(
@@ -81,6 +81,13 @@ impl Server {
                 && r.req_id == ask_id
             {
                 break r;
+            }
+            if matches!(
+                serde_json::from_str::<ClientFrame>(&frame),
+                Ok(ClientFrame::Request(_))
+            ) && io.defer_frame(frame.clone())
+            {
+                continue;
             }
             tracing::warn!(
                 "trust-wait: dropped a non-matching frame while waiting for the trust response (first 80 chars): {}",

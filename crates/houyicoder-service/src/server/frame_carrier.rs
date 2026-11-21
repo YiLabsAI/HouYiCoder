@@ -4,11 +4,16 @@
 //! Each frame is a complete NDJSON line (newline included), matching the
 //! byte stream a pipe would carry.
 
+use std::collections::VecDeque;
+
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::check_frame_size;
+
+/// Bound on client request frames held aside while a reverse ask is open.
+const MAX_DEFERRED_FRAMES: usize = 64;
 
 /// The service end of the in-memory carrier pair (mode A).
 pub struct FrameCarrier {
@@ -16,6 +21,9 @@ pub struct FrameCarrier {
     pub(crate) tx: mpsc::Sender<String>,
     /// Inbound frames from the client (client -> service direction).
     pub(crate) rx: mpsc::Receiver<String>,
+    /// Client request frames that crossed on the wire while a reverse ask was
+    /// waiting for its response, drained ahead of new inbound frames.
+    deferred: VecDeque<String>,
 }
 
 impl FrameCarrier {
@@ -23,15 +31,26 @@ impl FrameCarrier {
     /// allocates. The pair is created once and both ends handed out; the
     /// server never mints its own pair.
     pub fn new(tx: mpsc::Sender<String>, rx: mpsc::Receiver<String>) -> Self {
-        Self { tx, rx }
+        Self {
+            tx,
+            rx,
+            deferred: VecDeque::new(),
+        }
     }
 
-    /// Read the next inbound frame, stripping the trailing newline the carrier
-    /// preserves. Ok(None) means the client cleanly half-closed its send side;
-    /// an Err means the carrier failed, or the client sent a frame above the
-    /// protocol's per-message byte bound. A frame over the bound is a contract
-    /// violation rather than a clean close, so it must not read as one.
+    /// Read the next frame for normal dispatch, draining any frame deferred
+    /// during an earlier reverse ask before reading from the inbound stream.
     pub(crate) async fn next_frame(&mut self) -> Result<Option<String>, ProtocolError> {
+        if let Some(frame) = self.deferred.pop_front() {
+            return Ok(Some(frame));
+        }
+        self.next_live_frame().await
+    }
+
+    /// Read the next inbound frame directly from the transport, stripping the
+    /// trailing newline the carrier preserves. Used by reverse-ask loops so a
+    /// frame they just deferred is not handed back to the same wait loop.
+    pub(crate) async fn next_live_frame(&mut self) -> Result<Option<String>, ProtocolError> {
         let Some(frame) = self.rx.next().await else {
             return Ok(None);
         };
@@ -43,6 +62,16 @@ impl FrameCarrier {
             return Err(e.into());
         }
         Ok(Some(line.to_string()))
+    }
+
+    /// Hold a client request frame aside until the active reverse ask settles.
+    /// Returns false when the queue is full.
+    pub(crate) fn defer_frame(&mut self, frame: String) -> bool {
+        if self.deferred.len() >= MAX_DEFERRED_FRAMES {
+            return false;
+        }
+        self.deferred.push_back(frame);
+        true
     }
 
     /// Send one outbound frame, appending the newline terminator the carrier

@@ -123,7 +123,7 @@ impl Server {
         let runner = Arc::clone(&self.runner);
         let work = runner.run_direct_shell(self.session, command);
         let result = self
-            .drive_while(io, work, "client closed mid-shell", None, OnClose::Settle)
+            .drive_while(io, work, "client closed mid-shell", false, OnClose::Settle)
             .await?;
         match result {
             Ok(_) => {

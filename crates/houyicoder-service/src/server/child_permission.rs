@@ -4,17 +4,64 @@
 //! resumes. Mirrors the parent's own approval path (handle_approval); a
 //! child ask is just another wire Permission the TUI answers.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use houyicoder_async::bus::MessageBus;
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, permission_response_topic,
+    AgentBus, BusMessage, permission_request_topic, permission_response_topic,
 };
+use tokio::sync::broadcast::Receiver;
 
 use super::frame_carrier::FrameCarrier;
 use super::{ProtocolError, Server};
 use houyicoder_protocol::frontend::run::DelegationSource;
+
+/// Connection-scoped receiver for child permission asks, shared across idle
+/// waits and active turns so every published ask is consumed once per server.
+#[derive(Default)]
+pub(crate) struct ChildPermissionRx {
+    slot: Mutex<Option<Receiver<BusMessage>>>,
+    subscribed: AtomicBool,
+}
+
+impl ChildPermissionRx {
+    pub(crate) fn lease(&self, bus: Option<&Arc<AgentBus>>) -> PermissionLease<'_> {
+        let rx = if !self.subscribed.swap(true, Ordering::AcqRel) {
+            bus.map(|b| b.subscribe(permission_request_topic()))
+        } else {
+            self.slot.lock().ok().and_then(|mut s| s.take())
+        };
+        PermissionLease {
+            owner: &self.slot,
+            rx,
+        }
+    }
+}
+
+/// Drop guard that returns the shared broadcast receiver to its slot on every
+/// exit path, including cancellation at an await point.
+pub(crate) struct PermissionLease<'a> {
+    owner: &'a Mutex<Option<Receiver<BusMessage>>>,
+    rx: Option<Receiver<BusMessage>>,
+}
+
+impl PermissionLease<'_> {
+    pub(crate) fn receiver(&mut self) -> Option<&mut Receiver<BusMessage>> {
+        self.rx.as_mut()
+    }
+}
+
+impl Drop for PermissionLease<'_> {
+    fn drop(&mut self) {
+        if let Some(rx) = self.rx.take()
+            && let Ok(mut slot) = self.owner.lock()
+        {
+            *slot = Some(rx);
+        }
+    }
+}
 
 impl Server {
     /// Wire the shared multi-agent bus so a child's permission ask reaches
@@ -47,6 +94,15 @@ pub(crate) async fn handle(
         // A non-request message on the permission topic: ignore.
         return Ok(());
     };
+    if let Some(spawn_handle) = server.runner.spawn_handle() {
+        let waiting = spawn_handle
+            .take_pending_child_permissions()
+            .iter()
+            .any(|p| p.child_id == child_id && p.call_id == call_id);
+        if !waiting {
+            return Ok(());
+        }
+    }
     let approval = ApprovalRequest::new(call_id.clone(), tool.clone(), input.clone(), reason);
     // Label the ask with its origin so the TUI card shows which delegation
     // the ask belongs to (a child ask vs the parent's own tool call).

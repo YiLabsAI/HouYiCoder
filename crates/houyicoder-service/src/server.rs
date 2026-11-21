@@ -18,13 +18,10 @@
 use std::sync::Arc;
 
 use crate::composition::multi_agent::permission_request_from;
-use houyicoder_async::bus::MessageBus;
-use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, permission_request_topic,
-};
+use child_permission::ChildPermissionRx;
+use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
 
 use tokio::sync::Notify;
-use tokio::sync::broadcast::Receiver;
 
 use crate::composition::SessionHost;
 use crate::composition::background_tasks::BackgroundTasks;
@@ -139,6 +136,7 @@ pub struct Server {
     descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
     diagnostics: Option<DiagnosticsHandle>,
     bus: Option<Arc<AgentBus>>,
+    child_perm_rx: Arc<ChildPermissionRx>,
     /// The session's recap state. One instance per session, shared across
     /// connections; None on a server assembled without the feature, which
     /// never starts a request.
@@ -196,6 +194,7 @@ impl Server {
             descriptor_store: None,
             diagnostics: handle(),
             bus: None,
+            child_perm_rx: Arc::new(ChildPermissionRx::default()),
             recap: None,
             recap_client: None,
             background_tasks: None,
@@ -334,13 +333,10 @@ impl Server {
         session::resume_pending(&mut self, &mut io).await?;
         // Subscribe before re-emitting: a child asking while the user answers
         // an earlier card publishes on the same topic.
-        let mut perm_rx = self
-            .bus
-            .as_ref()
-            .map(|b| b.subscribe(permission_request_topic()));
+        drop(self.child_perm_rx.lease(self.bus.as_ref()));
         self.reemit_pending_child_permissions(&mut io).await;
         loop {
-            let wake = self.next_serve_wake(&mut io, perm_rx.as_mut()).await;
+            let wake = self.next_serve_wake(&mut io).await;
             let frame = match wake {
                 ServeWake::Event => {
                     self.flush_events(&mut io).await?;
@@ -459,11 +455,9 @@ impl Server {
         }
     }
 
-    async fn next_serve_wake(
-        &mut self,
-        io: &mut FrameCarrier,
-        perm_rx: Option<&mut Receiver<BusMessage>>,
-    ) -> ServeWake {
+    async fn next_serve_wake(&mut self, io: &mut FrameCarrier) -> ServeWake {
+        let perm_owner = Arc::clone(&self.child_perm_rx);
+        let mut perm_lease = perm_owner.lease(self.bus.as_ref());
         let append_fut = match &self.append_notify {
             Some(notify) => Either::Left(notify.notified()),
             None => Either::Right(pending::<()>()),
@@ -477,7 +471,7 @@ impl Server {
             Some(due) => Either::Left(sleep_until(due)),
             None => Either::Right(pending::<()>()),
         };
-        let perm_fut = match perm_rx {
+        let perm_fut = match perm_lease.receiver() {
             Some(rx) => Either::Left(rx.recv()),
             None => Either::Right(pending()),
         };
@@ -619,18 +613,8 @@ impl Server {
     ) -> Result<Result<RunResult, RunError>, ProtocolError> {
         let runner = Arc::clone(&self.runner);
         let run_fut = runner.run(self.session, text);
-        let mut perm_rx = self
-            .bus
-            .as_ref()
-            .map(|b| b.subscribe(permission_request_topic()));
-        self.drive_while(
-            io,
-            run_fut,
-            "client closed mid-run",
-            perm_rx.as_mut(),
-            OnClose::Abandon,
-        )
-        .await
+        self.drive_while(io, run_fut, "client closed mid-run", true, OnClose::Abandon)
+            .await
     }
 
     async fn collect_interruption_decisions(
@@ -677,18 +661,11 @@ impl Server {
     ) -> Result<Result<RunResult, RunError>, ProtocolError> {
         let runner = Arc::clone(&self.runner);
         let resume_fut = runner.resume(self.session, decisions);
-        // A child spawned by the resumed leg asks for approval the same way
-        // one spawned by the first leg does; without this receiver the ask
-        // reached no card and the child waited until its ceiling ended it.
-        let mut perm_rx = self
-            .bus
-            .as_ref()
-            .map(|b| b.subscribe(permission_request_topic()));
         self.drive_while(
             io,
             resume_fut,
             "client closed mid-resume",
-            perm_rx.as_mut(),
+            true,
             OnClose::Abandon,
         )
         .await

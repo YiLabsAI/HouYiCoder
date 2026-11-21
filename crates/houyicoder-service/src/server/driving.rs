@@ -9,6 +9,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
@@ -18,7 +19,6 @@ use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::ClientFrame;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::timeout;
 
@@ -56,7 +56,7 @@ impl Server {
         io: &mut FrameCarrier,
         work: F,
         closed: &str,
-        permissions: Option<&mut Receiver<BusMessage>>,
+        route_permissions: bool,
         on_close: OnClose,
     ) -> Result<F::Output, ProtocolError>
     where
@@ -64,18 +64,20 @@ impl Server {
         F::Output: Debug,
     {
         tokio::pin!(work);
-        let mut permissions = permissions;
+        let perm_owner = Arc::clone(&self.child_perm_rx);
+        let mut perm_lease = route_permissions.then(|| perm_owner.lease(self.bus.as_ref()));
         loop {
             let notify_fut = match &self.append_notify {
                 Some(n) => Either::Left(n.notified()),
                 None => Either::Right(pending::<()>()),
             };
             let event_fut = self.event_sequencer.notified();
-            let permission_fut = match permissions.as_deref_mut() {
+            let permission_fut = match perm_lease.as_mut().and_then(|l| l.receiver()) {
                 Some(receiver) => Either::Left(receiver.recv()),
                 None => Either::Right(pending::<Result<BusMessage, RecvError>>()),
             };
             tokio::select! {
+                biased;
                 done = &mut work => return Ok(done),
                 frame = io.next_frame() => match frame {
                     Ok(Some(f)) => self.dispatch_during_run_frame(io, &f).await,

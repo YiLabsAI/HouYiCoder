@@ -83,16 +83,10 @@ impl Server {
         // Recorded after the send: a card the connection never received was
         // never shown, so a failed send must leave no card in the audit.
         self.record_card(approval).await;
-        // Read the matching reverse response. Loop, not a single read, so a
-        // non-matching frame mid-ask does not fatal: a reconnecting client's
-        // first status tick, a racing poll, a session/cancel, or a mode-cycle
-        // all land here while the ask is in flight. The prior single read +
-        // fatal arm returned InvalidFrame and closed the connection, so the run
-        // never resumed (the AskUserQuestion deadlock). Aligns with the mid-run
-        // and mid-resume selects: dispatch session/* notifications + mode-cycle
-        // requests, drop the rest, fatal only on client close.
+        // Read the matching reverse response, dispatching notifications and
+        // deferring crossing client requests until the ask settles.
         let resp = loop {
-            let frame = match io.next_frame().await? {
+            let frame = match io.next_live_frame().await? {
                 Some(f) => f,
                 None => {
                     return Err(ProtocolError::new(
@@ -106,9 +100,6 @@ impl Server {
                 let is_cancel = notif.method == "session/cancel";
                 self.handle_session_notification(&notif);
                 if is_cancel {
-                    // Esc: abort + return a deny so the serve loop resumes the
-                    // now-cancelled run instead of hanging on a response the
-                    // client will not send.
                     return Ok(EngineApprovalDecision {
                         call_id: approval.call_id.clone(),
                         approved: false,
@@ -122,10 +113,13 @@ impl Server {
             {
                 break r;
             }
-            // A non-matching frame (a Request, a mismatched Response, or an
-            // unparseable frame) is dropped so the ask stays open. Surface it
-            // so a protocol-incompatible client does not look stuck with no
-            // clue (the old fatal arm at least logged the InvalidFrame).
+            if matches!(
+                serde_json::from_str::<ClientFrame>(&frame),
+                Ok(ClientFrame::Request(_))
+            ) && io.defer_frame(frame.clone())
+            {
+                continue;
+            }
             tracing::warn!(
                 "ask-wait: dropped a non-matching frame while waiting for the permission response (first 80 chars): {}",
                 frame.chars().take(80).collect::<String>()

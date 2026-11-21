@@ -52,3 +52,23 @@ async fn test_oversized_frame_refused() {
     );
     assert!(!err.retriable, "the same bytes fail the same way again");
 }
+
+#[tokio::test]
+async fn test_deferred_frames_drain_first() {
+    let (mut io, mut inbound) = carrier();
+    inbound
+        .send("live\n".to_string())
+        .await
+        .expect("handed to the carrier");
+    for i in 0..MAX_DEFERRED_FRAMES {
+        assert!(io.defer_frame(format!("deferred-{i}")));
+    }
+    assert!(
+        !io.defer_frame("overflow".to_string()),
+        "queue refuses past its bound"
+    );
+    let first = io.next_frame().await.expect("read").expect("deferred");
+    assert_eq!(first, "deferred-0");
+    let live = io.next_live_frame().await.expect("read").expect("live");
+    assert_eq!(live, "live");
+}

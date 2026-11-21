@@ -18,6 +18,7 @@ use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
 use crate::server::approval::disclose_directory_grants;
+use crate::server::child_permission::ChildPermissionRx;
 use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_context::SessionDescriptorStore;
@@ -70,6 +71,7 @@ impl Server {
             // Set by serve_session from the host, which is where the
             // process-scoped bus lives for a detached session.
             bus: None,
+            child_perm_rx: Arc::new(ChildPermissionRx::default()),
             // Attached by serve_session from the host, which is where the
             // process-scoped registry lives for a detached session.
             background_tasks: None,
@@ -127,7 +129,7 @@ async fn await_reemit_verdict(
     call_id: &str,
 ) -> Result<(ApprovalDecision, bool), ProtocolError> {
     loop {
-        let frame = match io.next_frame().await? {
+        let frame = match io.next_live_frame().await? {
             Some(f) => f,
             None => {
                 return Err(ProtocolError::new(
@@ -164,6 +166,13 @@ async fn await_reemit_verdict(
                     false,
                 )),
             };
+        }
+        if matches!(
+            serde_json::from_str::<ClientFrame>(&frame),
+            Ok(ClientFrame::Request(_))
+        ) && io.defer_frame(frame.clone())
+        {
+            continue;
         }
         tracing::warn!(
             "re-emit ask-wait: dropped a non-matching frame (first 80 chars): {}",
