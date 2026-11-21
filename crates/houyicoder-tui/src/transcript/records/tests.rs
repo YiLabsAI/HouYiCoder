@@ -216,17 +216,19 @@ fn test_subagent_line_field_marker() {
 
 #[test]
 fn test_transcript_render_glyphs() {
-    // The marker the row leads with comes from the detected glyph grade, so
-    // the assertion accepts either grade's marker: the test host may run in
-    // a terminal that identifies itself either way.
+    // The marker the row leads with is taken from the glyph grade in force, so
+    // the assertion reads that grade rather than naming a character: a marker
+    // that changed shape would leave a literal copy here describing a row no
+    // host draws.
+    let glyphs = detect_glyph_set();
     let rendered = TranscriptLine::Agent("hi".into()).render();
     assert!(
-        rendered.starts_with('*') || rendered.starts_with('◉'),
+        rendered.starts_with(glyphs.assistant_marker()),
         "the agent row leads with its marker: {rendered:?}"
     );
     let note = TranscriptLine::System("note".into()).render();
     assert!(
-        note.starts_with('*') || note.starts_with('✻'),
+        note.starts_with(glyphs.notice_marker()),
         "the system row leads with its marker: {note:?}"
     );
     assert!(

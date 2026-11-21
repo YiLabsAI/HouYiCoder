@@ -107,13 +107,15 @@ pub enum AcpxMethod {
     /// A message delivered into a running turn rather than one that opens it.
     /// The message itself rides the user-message stream; this mark rides
     /// beside it, because the chunk a client reads cannot say which of the two
-    /// it is and a turn boundary turns on that. A queued interjection and a
-    /// background child's completion are both delivered this way.
+    /// it is and a turn boundary turns on that. A queued interjection is
+    /// delivered this way; a background notification is not, because it
+    /// carries no message of its own.
     #[serde(rename = "acpx/context/mid_turn_input")]
     ContextMidTurnInput,
-    /// A background child finished and its result was handed to the running
-    /// turn. Marked as delivered rather than opening, by the same rule as a
-    /// queued interjection.
+    /// A background notification reached the model. The notice is written for
+    /// the model and produces no message chunk, so this mark stands where a
+    /// message would: it opens the turn the notification woke when the session
+    /// sat idle, and leaves a running turn alone when it arrives mid-turn.
     #[serde(rename = "acpx/context/child_completed")]
     ContextChildCompleted,
     /// A turn was interrupted (a cancel, or a process that died mid-turn) and

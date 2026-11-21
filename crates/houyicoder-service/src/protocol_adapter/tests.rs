@@ -342,9 +342,10 @@ fn test_task_notice_not_rendered() {
         map_session_update(&task).is_none(),
         "a task notice never becomes a user message chunk"
     );
-    assert!(
-        map_acpx_notification(&task).is_none(),
-        "a task notice carries no delivery mark"
+    assert_eq!(
+        map_acpx_notification(&task).map(|n| n.method),
+        Some(AcpxMethod::ContextChildCompleted),
+        "a task notice marks the turn it woke"
     );
 
     let child = SessionEvent::NotificationInjected {
@@ -355,16 +356,15 @@ fn test_task_notice_not_rendered() {
         summary: "the child finished".into(),
         capture: None,
     };
-    let update = map_session_update(&child).expect("a child completion surfaces");
     assert!(
-        matches!(update, SessionUpdate::UserMessageChunk(_)),
-        "a child completion reads as a message chunk"
+        map_session_update(&child).is_none(),
+        "a child completion never becomes a user message chunk either"
     );
     let mark = map_acpx_notification(&child).expect("a child completion is marked");
     assert_eq!(
         mark.method,
         AcpxMethod::ContextChildCompleted,
-        "a child completion carries its delivery mark"
+        "a child completion marks the turn it woke"
     );
 }
 

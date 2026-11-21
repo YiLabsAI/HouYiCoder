@@ -547,12 +547,8 @@ impl App {
         loop {
             let Some(idx) = self.sessions.current.transcript.frames()[..search_from]
                 .iter()
-                .rposition(|sf| {
-                    matches!(
-                        sf.as_ref(),
-                        TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
-                    )
-                })
+                .enumerate()
+                .rposition(|(at, _)| self.opens_turn_at(at))
             else {
                 return base;
             };
@@ -564,6 +560,43 @@ impl App {
             }
             return candidate;
         }
+    }
+
+    /// Whether the frame at the position opens a turn: a user message, or the
+    /// mark a background notification leaves when it opens a turn while the
+    /// session sits idle. A turn opened by a notification has no message to
+    /// name it, so a search that only looked for messages would walk past the
+    /// mark and name the turn before it, keeping that finished turn live and
+    /// folding its reply into the running one.
+    fn opens_turn_at(&self, idx: usize) -> bool {
+        let frames = self.sessions.current.transcript.frames();
+        let Some(frame) = frames.get(idx).map(AsRef::as_ref) else {
+            return false;
+        };
+        if matches!(
+            frame,
+            TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
+        ) {
+            return true;
+        }
+        if !matches!(frame, TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextChildCompleted)
+        {
+            return false;
+        }
+        // The notice opens a turn only when it is not inside one: at the
+        // resident front, or directly after the record that closed the turn
+        // before it, reading past rows the frontend raised.
+        idx == 0
+            || frames[..idx]
+                .iter()
+                .rev()
+                .find(|sf| !matches!(sf.as_ref(), TranscriptFrame::Frontend(_)))
+                .is_none_or(|prev| {
+                    matches!(
+                        prev.as_ref(),
+                        TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextRunCompleted
+                    )
+                })
     }
 
     /// Whether the candidate boundary splits a tool call from a result that

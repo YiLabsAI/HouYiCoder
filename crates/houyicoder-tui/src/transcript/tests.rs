@@ -727,16 +727,14 @@ fn mid_turn_msg(text: &str) -> [TranscriptFrame; 2] {
     ]
 }
 
-/// A background child's result handed to the running turn, written the same
-/// way a queued message is.
-fn child_completed_msg(text: &str) -> [TranscriptFrame; 2] {
-    [
-        user_msg(text),
-        TranscriptFrame::Acpx(AcpxNotification::new(
-            AcpxMethod::ContextChildCompleted,
-            serde_json::json!({}),
-        )),
-    ]
+/// The mark a background child's completion leaves in the log. It carries no
+/// message chunk: the child's own completion row already shows the ending, and
+/// the notice is written for the model.
+fn child_completed_msg() -> [TranscriptFrame; 1] {
+    [TranscriptFrame::Acpx(AcpxNotification::new(
+        AcpxMethod::ContextChildCompleted,
+        serde_json::json!({}),
+    ))]
 }
 
 /// The notice a regenerate leaves behind after a cancel or a restart, in the
@@ -1062,10 +1060,11 @@ fn test_frontend_row_between_mark() {
 
 #[test]
 fn test_child_notice_no_split() {
-    // A background child's result is handed to the running turn the same way
-    // a queued message is, so it folds into that turn rather than ending it.
+    // A background child's completion is handed to the running turn, so the
+    // notice folds into that turn rather than ending it, and it leaves no
+    // user line of its own.
     let mut frames = vec![user_msg("go"), thought("before ")];
-    frames.extend(child_completed_msg("child found it"));
+    frames.extend(child_completed_msg());
     frames.push(thought("after"));
     frames.push(run_completed(Some(2_000)));
     let lines = transcript_from_frames(&frames, 0..frames.len(), false);
@@ -1077,6 +1076,179 @@ fn test_child_notice_no_split() {
     let row = thought_row(&lines).expect("a row");
     assert_eq!(row.reasoning.as_deref(), Some("before after"));
     assert_eq!(row.ms, Some(2_000));
+    let user_rows = lines
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::User { .. }))
+        .count();
+    assert_eq!(user_rows, 1, "only the prompt is a user line: {lines:?}");
+}
+
+fn thought_rows(lines: &[TranscriptLine]) -> Vec<RowFacts> {
+    lines
+        .iter()
+        .filter_map(|l| match l {
+            TranscriptLine::ThoughtFor {
+                ms,
+                reasoning,
+                tool_summary,
+                turn_id,
+            } => Some(RowFacts {
+                ms: *ms,
+                reasoning: reasoning.clone(),
+                tool_summary: tool_summary.clone(),
+                turn_id: turn_id.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A notification that reaches the session while it sits idle wakes a turn of
+/// its own. That turn has no message to name it, so the notice stands where
+/// the message would, and the reasoning and calls that follow fold into a row
+/// rather than vanishing for want of an opening.
+#[test]
+fn test_notice_opens_idle_turn() {
+    let mut frames = vec![
+        user_msg("start"),
+        thought("spawning"),
+        agent_msg("spawned"),
+        run_completed(Some(1_000)),
+    ];
+    frames.extend(child_completed_msg());
+    frames.push(thought("synthesizing"));
+    frames.push(tool_call("c1", "read", Value::Null));
+    frames.push(agent_msg("all good"));
+    frames.push(run_completed(Some(2_500)));
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let user_rows = lines
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::User { .. }))
+        .count();
+    assert_eq!(user_rows, 1, "the notice is not a user line: {lines:?}");
+    let rows = thought_rows(&lines);
+    assert_eq!(rows.len(), 2, "one row per turn: {lines:?}");
+    let woke = &rows[1];
+    assert_eq!(woke.ms, Some(2_500), "the woken turn carries its duration");
+    assert_eq!(
+        woke.reasoning.as_deref(),
+        Some("synthesizing"),
+        "the woken turn carries its reasoning"
+    );
+    assert_eq!(
+        woke.tool_summary.as_deref(),
+        Some("ran 1 read"),
+        "the woken turn carries its tool summary"
+    );
+}
+
+/// A window cut inside a turn a notification woke derives the same row the
+/// whole log derives, so the read-back that reaches the notice names the row
+/// the same way the forward walk does. The woken turn opens the log here, as
+/// it does when a session's first work is a drained notification, so the walk
+/// back reaches the notice without a closing record in between.
+#[test]
+fn test_notice_turn_window_matches() {
+    let mut frames = Vec::new();
+    frames.extend(child_completed_msg());
+    frames.push(thought("synthesizing"));
+    frames.push(tool_call("c1", "read", Value::Null));
+    frames.push(agent_msg("all good"));
+    frames.push(run_completed(Some(2_500)));
+    let whole = transcript_from_frames(&frames, 0..frames.len(), false);
+    // Cut at the reasoning, so the window begins inside the woken turn and
+    // must read back to the notice to fold it.
+    let cut = 1;
+    let tail = transcript_from_frames(&frames, cut..frames.len(), false);
+    let whole_rows = thought_rows(&whole);
+    let tail_row = thought_row(&tail).expect("the window derives a row");
+    let woke = whole_rows.last().expect("the whole log derives the row");
+    assert_eq!(
+        tail_row.turn_id, woke.turn_id,
+        "the window names the row as the whole log does"
+    );
+    assert_eq!(tail_row.ms, woke.ms, "the duration agrees");
+    assert_eq!(tail_row.reasoning, woke.reasoning, "the reasoning agrees");
+    assert_eq!(
+        tail_row.tool_summary, woke.tool_summary,
+        "the tool summary agrees"
+    );
+}
+
+/// A notification is not a turn boundary by itself. The turn a notification
+/// opens always follows the record that closed the turn before it, and a turn
+/// that opens the log is already at the file head, so a lookback that stopped
+/// on the notice would cut a running turn in half whenever a child finished
+/// while that turn was still going.
+#[test]
+fn test_bounds_ignores_midturn_notice() {
+    let notice = child_completed_msg()[0].clone();
+    // A notice in the middle of a turn: the only boundary is the opening
+    // prompt and the record that closes the turn, never the notice.
+    let mid = vec![
+        user_msg("go"),
+        thought("part one"),
+        notice.clone(),
+        thought("part two"),
+    ];
+    assert!(bounds_turn_in(&mid), "the opening prompt is a boundary");
+    assert!(
+        !bounds_turn_in(&[thought("part one"), notice.clone(), thought("part two")]),
+        "a notice between two thoughts is not a boundary"
+    );
+    // The turn a notification opens: its record is the boundary, and the
+    // notice sits after that record.
+    let opened = vec![
+        user_msg("go"),
+        thought("done"),
+        run_completed(Some(900)),
+        notice,
+        thought("reply"),
+    ];
+    assert!(bounds_turn_in(&opened), "the closing record is a boundary");
+}
+
+/// A prompt followed straight away by a notification: the notice is the frame
+/// that decides how the prompt reads. The prompt still opened its turn, so a
+/// read beginning at the notice is not read as starting inside a turn, and the
+/// cut row that marks a partly drained turn is not drawn for a turn the log
+/// still reaches from its first frame.
+#[test]
+fn test_notice_after_prompt_opens() {
+    let notice = child_completed_msg()[0].clone();
+    let frames = vec![user_msg("first"), notice, thought("work")];
+    assert!(
+        !starts_inside_turn(&frames, 0),
+        "the prompt opened the turn even with a notice beside it"
+    );
+}
+
+/// A notice arriving while a turn runs must not bind to the prompt that
+/// opened it: the prompt still opens the turn, and the notice leaves the
+/// turn's reasoning intact rather than reading the prompt as an
+/// interjection handed to a running turn.
+#[test]
+fn test_notice_keeps_prompt() {
+    let notice = child_completed_msg()[0].clone();
+    let frames = vec![
+        user_msg("first"),
+        notice,
+        thought("work"),
+        run_completed(Some(700)),
+    ];
+    let lines = transcript_from_frames(&frames, 0..frames.len(), false);
+    let user_rows = lines
+        .iter()
+        .filter(|l| matches!(l, TranscriptLine::User { .. }))
+        .count();
+    assert_eq!(user_rows, 1, "the notice adds no user line: {lines:?}");
+    let row = thought_row(&lines).expect("the turn folds");
+    assert_eq!(
+        row.reasoning.as_deref(),
+        Some("work"),
+        "the prompt that opened the turn still names it"
+    );
+    assert_eq!(row.ms, Some(700), "the turn closed on its own record");
 }
 
 #[test]

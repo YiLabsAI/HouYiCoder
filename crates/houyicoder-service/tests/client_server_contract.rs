@@ -282,14 +282,18 @@ async fn test_drains_notifications() {
         .await
         .expect("send drain request");
 
-    let mut saw_notification = false;
+    let mut saw_marker = false;
+    let mut saw_user_chunk = false;
     let mut outcome = None;
     for _ in 0..32 {
         match client.next_frame().await.expect("server frame") {
             ServerFrame::Event(ev) => {
                 let text = serde_json::to_string(&ev.payload).expect("event encodes");
-                if text.contains("the child finished") {
-                    saw_notification = true;
+                if text.contains("context/child_completed") {
+                    saw_marker = true;
+                }
+                if text.contains("UserMessageChunk") {
+                    saw_user_chunk = true;
                 }
             }
             ServerFrame::Response(resp) => {
@@ -313,8 +317,12 @@ async fn test_drains_notifications() {
         "the notification turn answers the drained ending: {outcome:?}"
     );
     assert!(
-        saw_notification,
-        "the drained ending reached the client as an event frame"
+        saw_marker,
+        "the drained ending reached the client as a turn boundary mark"
+    );
+    assert!(
+        !saw_user_chunk,
+        "the notice is written for the model, so it is never a user chunk"
     );
 }
 

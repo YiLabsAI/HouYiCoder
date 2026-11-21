@@ -15,6 +15,7 @@ use crate::state::{App, EventCursor};
 use crate::transcript::frame::{FrontendRow, TranscriptFrame};
 use crate::view::working::history_window::window_rows;
 use crate::view::working::transcript::ensure_cached_slots;
+use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCallStatus, ToolCallUpdate,
@@ -518,9 +519,16 @@ impl App {
         let mut has_unseen_work = false;
         for f in &self.sessions.current.transcript.frames()[from..] {
             match f.as_ref() {
-                // Turn boundary: a new user message starts a new assistant
-                // turn, so the next agent text counts again.
-                TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) => {
+                // A record that closed a turn ends the run of agent text: the
+                // next turn's reply counts again even when a notification
+                // opened it and it carries no message of its own. A notice
+                // arriving mid-turn is not a boundary, so it leaves the run
+                // alone and one reply is not counted twice.
+                TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_))
+                | TranscriptFrame::Acpx(AcpxNotification {
+                    method: AcpxMethod::ContextRunCompleted,
+                    ..
+                }) => {
                     prev_was_agent_text = false;
                 }
                 TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(chunk)) => {

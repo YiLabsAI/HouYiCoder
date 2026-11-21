@@ -1,6 +1,7 @@
 use super::*;
 use crate::composition;
 use crate::transcript::SequencedFrame;
+use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::envelope::{DurableEventId, EventSeq};
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
@@ -139,5 +140,71 @@ fn test_cursor_resolves_durable_anchor() {
     assert!(
         app.new_message_count().is_lower_bound,
         "the count is a floor when the anchor frame is gone"
+    );
+}
+
+fn agent_text(text: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+        ContentBlock::Text { text: text.into() },
+    )))
+}
+
+/// A background notification that wakes the session from idle opens a turn
+/// with no message of its own. Its reply is a message of that new turn, not a
+/// continuation of the reply above it, so a reader scrolled away must see the
+/// reply counted rather than folded into the run that already had one.
+#[test]
+fn test_notice_wake_text_counts() {
+    let mut app = composition::app();
+    let push = |app: &mut App, frame: TranscriptFrame| {
+        app.sessions.current.transcript.push_frame(frame);
+    };
+    push(&mut app, agent_text("earlier reply"));
+    push(
+        &mut app,
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextRunCompleted,
+            serde_json::json!({ "ms": 900 }),
+        )),
+    );
+    push(
+        &mut app,
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextChildCompleted,
+            serde_json::json!({}),
+        )),
+    );
+    push(&mut app, agent_text("reply to the notice"));
+    app.ui.transcript_view.unseen_since = Some(EventCursor::Local(0));
+    assert_eq!(
+        app.new_message_count().count,
+        2,
+        "the reply of the opened turn counts on its own"
+    );
+}
+
+/// A notification that arrives while a turn is still running belongs to that
+/// turn. Its text continues the reply above it, so a reader scrolled away sees
+/// one new message rather than the same reply counted twice.
+#[test]
+fn test_notice_midturn_text_joins() {
+    let mut app = composition::app();
+    let push = |app: &mut App, frame: TranscriptFrame| {
+        app.sessions.current.transcript.push_frame(frame);
+    };
+    push(&mut app, agent_text("first part"));
+    push(
+        &mut app,
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextChildCompleted,
+            serde_json::json!({}),
+        )),
+    );
+    push(&mut app, agent_text("second part"));
+    app.ui.transcript_view.unseen_since = Some(EventCursor::Local(0));
+    assert_eq!(
+        app.new_message_count().count,
+        1,
+        "a mid-turn notice does not split one reply into two"
     );
 }

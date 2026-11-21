@@ -43,16 +43,24 @@ fn recorded_ms(params: &serde_json::Value) -> Option<u64> {
 /// Whether a frame moves where the open turn currently ends — the position
 /// that names the turn's row once it closes. The turn's own facts move it:
 /// its reasoning, its answer, its tool calls, and the record that closes it.
-/// A message delivered into the turn and a row the frontend raised are not
-/// facts of the turn and do not move it. Both the walk over the window's
-/// frames and the read-back over the frames ahead of the window follow this
-/// one rule, which is what makes a row's name independent of where a read
-/// started.
+/// A message delivered into the turn, a row the frontend raised, and the mark
+/// a notification leaves are not facts of the turn and do not move it. Both
+/// the walk over the window's frames and the read-back over the frames ahead
+/// of the window follow this one rule, which is what makes a row's name
+/// independent of where a read started.
 fn moves_turn_end(frame: &TranscriptFrame) -> bool {
     !matches!(
         frame,
         TranscriptFrame::Session(SessionUpdate::UserMessageChunk(_)) | TranscriptFrame::Frontend(_)
-    )
+    ) && !is_notification_turn_marker(frame)
+}
+
+/// Whether the frame marks where a turn a background notification woke begins.
+/// The notice carries no message chunk, so the turn it opens has no user
+/// message to name it; this mark stands in that place. It is not a fact of the
+/// turn, so it neither moves where the turn ends nor contributes a row.
+fn is_notification_turn_marker(frame: &TranscriptFrame) -> bool {
+    matches!(frame, TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextChildCompleted)
 }
 
 /// Whether the frame is a run-completion record: the marker that names where a
@@ -94,25 +102,30 @@ pub(crate) fn starts_inside_turn<F: AsRef<TranscriptFrame>>(frames: &[F], at: us
 /// than stopping ahead of the turn's real opening — stopping there would leave
 /// the fold without the frame that opened the turn it is asked to summarize.
 pub fn bounds_turn_in<F: AsRef<TranscriptFrame>>(frames: &[F]) -> bool {
+    // A notice is not a boundary on its own. The turn a notification opens is
+    // always preceded by the record that closed the turn before it, and a turn
+    // that opens the log itself is already at the file head, so counting the
+    // notice would stop a lookback in the middle of a long turn whenever a
+    // child finished while that turn was still running.
     (0..frames.len()).any(|at| is_run_completed(frames[at].as_ref()) || opens_turn(frames, at))
 }
 
 /// Whether the frame marks the message beside it as belonging to the turn that
 /// was already running, rather than a message that opens a turn. A queued
-/// interjection, a background child's completion, and the notice that a turn
-/// was interrupted all reach the host as user messages, exactly like a fresh
-/// prompt, so the message chunk alone cannot say which of the four it is. The
-/// host sends the mark right after the message it belongs to; the fold reads
-/// it to place that message inside the turn that was already running.
+/// interjection and the notice that a turn was interrupted both reach the host
+/// as user messages, exactly like a fresh prompt, so the message chunk alone
+/// cannot say which of the three it is. The host sends the mark right after the
+/// message it belongs to; the fold reads it to place that message inside the
+/// turn that was already running. A background notification completes a turn
+/// without any message of its own, so its mark is not here: it opens the turn
+/// it woke instead.
 fn marks_delivery(frame: &TranscriptFrame) -> bool {
     matches!(
         frame,
         TranscriptFrame::Acpx(n)
             if matches!(
                 n.method,
-                AcpxMethod::ContextMidTurnInput
-                    | AcpxMethod::ContextChildCompleted
-                    | AcpxMethod::ContextTurnInterrupted
+                AcpxMethod::ContextMidTurnInput | AcpxMethod::ContextTurnInterrupted
             )
     )
 }
@@ -151,21 +164,33 @@ fn message_marked_delivered<F: AsRef<TranscriptFrame>>(frames: &[F], at: usize) 
 /// A user frame is not always an opening — a message the log marks as
 /// delivered into the running turn belongs to the turn already running, so
 /// the walk continues past it. The search stops at the first undelivered
-/// message; a record before it ends the turn instead, and there the window
-/// opens between turns, with no turn to fold. A window cut inside a turn
-/// still folds that turn, so its row keeps its place rather than vanishing
-/// whenever the oldest frames of the view fall inside a turn.
+/// message. A record before it ends the turn instead, and there the window
+/// opens at the earliest notice seen since that record: a turn a notification
+/// backed has no message to open it, so its notice stands in the message's
+/// place, and the window opens between turns only when the walk met no notice
+/// at all. A window cut inside a turn still folds that turn, so its row keeps
+/// its place rather than vanishing whenever the oldest frames of the view fall
+/// inside a turn.
 fn open_turn_before<F: AsRef<TranscriptFrame>>(log: &[F], start: usize) -> Option<usize> {
     // One pass back over the frames, so the work grows with how many frames
     // the window leaves behind rather than restarting the search at each
     // message the running turn absorbed: a turn carrying many queued messages
     // would otherwise walk its own prefix once per message.
+    let mut earliest_notice: Option<usize> = None;
     for at in (0..start).rev() {
         let frame = log[at].as_ref();
         // A record here closed the turn before this position, so the window
-        // opens between turns: no turn to fold.
+        // opens between turns, and a notice seen since names a turn that began
+        // after it.
         if is_run_completed(frame) {
-            return None;
+            return earliest_notice;
+        }
+        // A turn a notification woke has no message to name it, so its notice
+        // stands where an opening message would. One met inside a user turn is
+        // passed through to that turn's opening message.
+        if is_notification_turn_marker(frame) {
+            earliest_notice = Some(at);
+            continue;
         }
         if !is_user_frame(frame) {
             continue;
@@ -177,7 +202,7 @@ fn open_turn_before<F: AsRef<TranscriptFrame>>(log: &[F], start: usize) -> Optio
             return Some(at);
         }
     }
-    None
+    earliest_notice
 }
 
 /// Where folded summary rows take their identity. The identity is only
@@ -451,6 +476,18 @@ impl<'a, F: AsRef<TranscriptFrame>> TurnFold<'a, F> {
             TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextRunCompleted => {
                 self.state.moved_to(self.names.name_at(abs));
                 return self.close(recorded_ms(&n.params));
+            }
+            // A background notification seen while no turn is open woke one:
+            // the notice opens it in place of the message a prompt would
+            // carry, so the reasoning and tool calls that follow fold into a
+            // row. Seen inside a running turn it is not a fact of that turn,
+            // so it leaves the turn alone.
+            TranscriptFrame::Acpx(n) if n.method == AcpxMethod::ContextChildCompleted => {
+                if !self.state.is_open() {
+                    self.state.open(self.names.name_at(abs));
+                    self.reasoning.clear();
+                }
+                return None;
             }
             // A row the frontend raises is not a fact of the turn it sits in:
             // it does not move where the turn ended, which names the row.

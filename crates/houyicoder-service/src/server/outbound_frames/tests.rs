@@ -29,13 +29,14 @@ fn entry(event: SessionEvent) -> SessionLogEntry {
     }
 }
 
-/// The method of the mark frame at index 1, or None when the event carries no
-/// mark at all.
+/// The method of the first mark frame in the event, or None when the event
+/// carries no mark at all. The mark does not always sit second: a frame that
+/// accompanies a message follows it, while one that stands alone leads.
 fn mark_method(frames: &[FrontendEvent]) -> Option<AcpxMethod> {
-    match frames.get(1) {
-        Some(FrontendEvent::Acpx { notification }) => Some(notification.method.clone()),
+    frames.iter().find_map(|f| match f {
+        FrontendEvent::Acpx { notification } => Some(notification.method.clone()),
         _ => None,
-    }
+    })
 }
 
 #[test]
@@ -69,7 +70,15 @@ fn test_child_notice_marked() {
     assert_eq!(
         mark_method(&mapped.payloads),
         Some(AcpxMethod::ContextChildCompleted),
-        "a child completion is marked as delivered too: {:?}",
+        "a child completion is marked as a turn boundary: {:?}",
+        mapped.payloads
+    );
+    assert!(
+        !mapped
+            .payloads
+            .iter()
+            .any(|p| matches!(p, FrontendEvent::SessionUpdate { .. })),
+        "the notice reaches the model, not the transcript: {:?}",
         mapped.payloads
     );
 }

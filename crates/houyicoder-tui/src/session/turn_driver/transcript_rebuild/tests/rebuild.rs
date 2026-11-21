@@ -487,3 +487,38 @@ fn test_replaced_front_rederives_block() {
         app.transcript()
     );
 }
+
+/// A turn a background notification opened has no user message to mark it, so
+/// the search for the running turn's start must recognise the notice. Reading
+/// past it would name the turn before, keeping that finished turn live and
+/// folding this turn's reply into it.
+#[test]
+fn test_notice_turn_starts() {
+    let mut app = fresh_app();
+    pump(&mut app, user_msg("go"));
+    pump(&mut app, thought_msg("first"));
+    pump(&mut app, run_record(1_000));
+    pump(
+        &mut app,
+        TranscriptFrame::Acpx(AcpxNotification::new(
+            AcpxMethod::ContextChildCompleted,
+            serde_json::json!({}),
+        )),
+    );
+    pump(&mut app, thought_msg("second"));
+    let start = app.current_turn_start();
+    let base = app.sessions.current.transcript.frame_window_start();
+    let frames = app.sessions.current.transcript.frames();
+    let at = start.saturating_sub(base);
+    assert!(
+        at > 0,
+        "the woken turn starts after the first turn: start {start}, base {base}"
+    );
+    assert!(
+        matches!(
+            frames.get(at - 1).map(AsRef::as_ref),
+            Some(TranscriptFrame::Acpx(n)) if n.method == AcpxMethod::ContextChildCompleted
+        ),
+        "the turn starts at the notice, not at the prompt before it"
+    );
+}
