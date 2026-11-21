@@ -24,6 +24,7 @@ fn test_rm_prefix_not_destructive() {
         "echo \"escaped \\\"quote\\\" -> ok\" &> /dev/null",
         "python3 - <<'PY'\nrm -rf src/\nPY\n",
         "cat < Cargo.toml",
+        "# echo x > src/lib.rs\ngit status",
     ] {
         assert!(
             !is_destructive_command(safe),
@@ -44,6 +45,23 @@ fn test_rm_prefix_not_destructive() {
         "cat patch.txt >> Cargo.toml",
         "sudo apt install pkg",
         "git checkout -- src/lib.rs",
+        // An empty quoted operand of an input redirect is still a word, so it
+        // must not leave the following command word unread.
+        "cat < ''; rm -rf src/",
+        "cat < \"\"; rm -rf src/",
+        // A newline separates commands exactly as a semicolon does, so a
+        // delete on a later line is seen even when the first line is not one.
+        "cd /tmp\nrm -rf src/",
+        "echo start\nrm -rf src/",
+        "set -e\nmkdir -p out\nrm -rf src/",
+        // A backslash before a newline joins the two lines without injecting
+        // a newline character into the next command word.
+        "rm -rf \\\nsrc/",
+        "cd /tmp && \\\nrm -rf src/",
+        "cd /tmp && \\\r\nrm -rf src/",
+        "r\\\nm -rf src/",
+        // An apostrophe inside a comment must not swallow the next command line.
+        "# check owner's file\nrm -rf src/",
     ] {
         assert!(
             is_destructive_command(destructive),

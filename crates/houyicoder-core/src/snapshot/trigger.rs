@@ -37,13 +37,24 @@ struct ShellScan {
     token: String,
     take_redirect: bool,
     skip_word: bool,
+    /// Whether the token has begun, which an empty quoted word does even
+    /// though it contributes no characters. Without this, an operand such as
+    /// an empty quoted string leaves a pending skip_word in place, and the
+    /// next word the scan swallows is a command rather than an operand.
+    word_started: bool,
 }
 
 impl ShellScan {
+    fn push_char(&mut self, ch: char) {
+        self.word_started = true;
+        self.token.push(ch);
+    }
+
     fn flush_word(&mut self) {
-        if self.token.is_empty() {
+        if !self.word_started {
             return;
         }
+        self.word_started = false;
         let word = take(&mut self.token);
         if self.skip_word {
             self.skip_word = false;
@@ -76,18 +87,20 @@ fn scan_shell(input: &str) -> ShellScan {
             if ch == '\'' {
                 in_single = false;
             } else {
-                state.token.push(ch);
+                state.push_char(ch);
             }
             i += 1;
         } else if in_double {
-            if ch == '\\' && i + 1 < chars.len() {
-                state.token.push(chars[i + 1]);
+            if let Some(step) = line_continuation_len(&chars, i) {
+                i += step;
+            } else if ch == '\\' && i + 1 < chars.len() {
+                state.push_char(chars[i + 1]);
                 i += 2;
             } else {
                 if ch == '"' {
                     in_double = false;
                 } else {
-                    state.token.push(ch);
+                    state.push_char(ch);
                 }
                 i += 1;
             }
@@ -99,6 +112,17 @@ fn scan_shell(input: &str) -> ShellScan {
     state
 }
 
+fn line_continuation_len(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'\\') {
+        return None;
+    }
+    match chars.get(i + 1) {
+        Some('\n') => Some(2),
+        Some('\r') if chars.get(i + 2) == Some(&'\n') => Some(3),
+        _ => None,
+    }
+}
+
 fn step_unquoted(
     chars: &[char],
     i: usize,
@@ -106,18 +130,40 @@ fn step_unquoted(
     in_single: &mut bool,
     in_double: &mut bool,
 ) -> usize {
+    if let Some(step) = line_continuation_len(chars, i) {
+        return i + step;
+    }
     let ch = chars[i];
     match ch {
         '\\' if i + 1 < chars.len() => {
-            state.token.push(chars[i + 1]);
+            state.push_char(chars[i + 1]);
             i + 2
         }
+        '#' if !state.word_started => {
+            // An unquoted comment runs to the end of the line without opening
+            // quotes or redirects inside its prose.
+            let mut next = i + 1;
+            while next < chars.len() && chars[next] != '\n' {
+                next += 1;
+            }
+            next
+        }
         '\'' => {
+            state.word_started = true;
             *in_single = true;
             i + 1
         }
         '"' => {
+            state.word_started = true;
             *in_double = true;
+            i + 1
+        }
+        '\n' => {
+            // A newline ends a command exactly as a semicolon does. Reading it
+            // as ordinary whitespace joins the lines into one clause, and a
+            // clause is judged by its first word, so a delete on a later line
+            // goes unseen.
+            state.flush_clause();
             i + 1
         }
         c if c.is_ascii_whitespace() => {
@@ -125,19 +171,19 @@ fn step_unquoted(
             i + 1
         }
         '{' if state.token.ends_with('$') => {
-            state.token.push('{');
+            state.push_char('{');
             let mut next = i + 1;
             while next < chars.len() && chars[next] != '}' {
-                state.token.push(chars[next]);
+                state.push_char(chars[next]);
                 next += 1;
             }
             if next < chars.len() {
-                state.token.push('}');
+                state.push_char('}');
                 next += 1;
             }
             next
         }
-        ';' | '|' | '\n' | '(' | ')' | '{' | '}' | '`' => {
+        ';' | '|' | '(' | ')' | '{' | '}' | '`' => {
             state.flush_clause();
             i + 1
         }
@@ -145,7 +191,7 @@ fn step_unquoted(
         '>' => step_greater(chars, i, state),
         '<' => step_less(chars, i, state),
         _ => {
-            state.token.push(ch);
+            state.push_char(ch);
             i + 1
         }
     }
@@ -169,9 +215,12 @@ fn step_ampersand(chars: &[char], i: usize, state: &mut ShellScan) -> usize {
 fn step_greater(chars: &[char], i: usize, state: &mut ShellScan) -> usize {
     let fd_prefix = !state.token.is_empty() && state.token.chars().all(|c| c.is_ascii_digit());
     if fd_prefix {
+        // The digits belong to the operator, not to a word, so they leave no
+        // empty word behind that would shadow the command word that follows.
         state.token.clear();
+        state.word_started = false;
     } else if state.token.ends_with('-') || state.token.ends_with('=') {
-        state.token.push('>');
+        state.push_char('>');
         return i + 1;
     } else {
         state.flush_word();
