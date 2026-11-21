@@ -2,9 +2,11 @@
 //! trips over a bound endpoint, the one-listener rule, and the naming and
 //! security descriptor a session pipe carries.
 
+#[cfg(not(unix))]
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::id;
 
 #[cfg(unix)]
@@ -23,12 +25,27 @@ use super::{
 #[cfg(unix)]
 use super::{create_owner_only_dir, set_owner_only};
 
+/// A directory short enough to hold a socket. A unix socket path must fit the
+/// platform's sun_path limit, and the session's own temporary directory can be
+/// long enough that appending a directory and a socket name exceeds it, so the
+/// socket tests take the shortest base the host always provides instead.
+fn socket_base() -> PathBuf {
+    #[cfg(unix)]
+    {
+        PathBuf::from("/tmp")
+    }
+    #[cfg(not(unix))]
+    {
+        temp_dir()
+    }
+}
+
 /// A bound socket is restricted to its owner, so a shared host's other users
 /// cannot reach it.
 #[cfg(unix)]
 #[test]
 fn test_socket_restricted_to_owner() {
-    let dir = temp_dir().join(format!("houyi-ipc-{}", id()));
+    let dir = socket_base().join(format!("houyi-ipc-{}", id()));
     create_dir_all(&dir).expect("a temp dir for the socket");
     let path = dir.join("sock");
     let _listener = UnixListener::bind(&path).expect("bind a socket");
@@ -43,7 +60,7 @@ fn test_socket_restricted_to_owner() {
 #[cfg(unix)]
 #[test]
 fn test_owner_dir_private() {
-    let dir = temp_dir().join(format!("houyi-ipc-dir-{}", id()));
+    let dir = socket_base().join(format!("houyi-ipc-dir-{}", id()));
     create_dir_all(&dir).expect("create the dir with the default mode");
     create_owner_only_dir(&dir).expect("restrict the dir");
     let mode = metadata(&dir).expect("read the dir").mode() & 0o777;
@@ -55,7 +72,7 @@ fn test_owner_dir_private() {
 /// a name and a client always reaches the listener that recorded it.
 #[tokio::test]
 async fn test_second_bind_refused() {
-    let dir = temp_dir().join(format!("houyi-ipc-exclusive-{}", id()));
+    let dir = socket_base().join(format!("houyi-ipc-exclusive-{}", id()));
     create_dir_all(&dir).expect("a temp dir for the endpoint");
     let endpoint = session_endpoint(&dir, "exclusive").expect("name the endpoint");
     remove_endpoint(&endpoint).expect("clear a leftover endpoint");
@@ -99,7 +116,7 @@ fn test_sddl_grants_owner_only() {
 /// shared host requires.
 #[tokio::test]
 async fn test_endpoint_round_trips() {
-    let dir = temp_dir().join(format!("houyi-ipc-rt-{}", id()));
+    let dir = socket_base().join(format!("houyi-ipc-rt-{}", id()));
     create_dir_all(&dir).expect("a temp dir for the endpoint");
     let endpoint = session_endpoint(&dir, "round-trip").expect("name the endpoint");
     remove_endpoint(&endpoint).expect("clear a leftover endpoint");
@@ -128,7 +145,7 @@ async fn test_endpoint_round_trips() {
 /// arrives while another is connected is never refused.
 #[tokio::test]
 async fn test_listener_accepts_second_client() {
-    let dir = temp_dir().join(format!("houyi-ipc-pair-{}", id()));
+    let dir = socket_base().join(format!("houyi-ipc-pair-{}", id()));
     create_dir_all(&dir).expect("a temp dir for the endpoint");
     let endpoint = session_endpoint(&dir, "two-clients").expect("name the endpoint");
     remove_endpoint(&endpoint).expect("clear a leftover endpoint");

@@ -3,9 +3,11 @@
 use super::*;
 use crate::lifecycle::SessionLeaseStore;
 use houyicoder_platform::ipc;
+#[cfg(not(unix))]
 use std::env::temp_dir;
 use std::fs::{create_dir_all, remove_dir_all};
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::id;
 use std::time::Duration;
 use tokio::task::spawn_blocking;
@@ -21,6 +23,21 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::UnixStream;
+
+/// A directory short enough to hold a socket. A unix socket path must fit the
+/// platform's sun_path limit, and the session's own temporary directory can be
+/// long enough that appending a directory and a socket name exceeds it, so the
+/// socket tests take the shortest base the host always provides instead.
+fn socket_base() -> PathBuf {
+    #[cfg(unix)]
+    {
+        PathBuf::from("/tmp")
+    }
+    #[cfg(not(unix))]
+    {
+        temp_dir()
+    }
+}
 
 /// A frame round-trips through the carrier: writing on one stream end
 /// lands on the FrameCarrier inbound channel, and sending on the outbound
@@ -64,7 +81,7 @@ async fn test_bridge_round_trips_frame() {
 /// the server never closes blocks its reader forever.
 #[tokio::test]
 async fn test_listener_signals_close() {
-    let dir = temp_dir().join(format!("hu-ipc-close-{}", id()));
+    let dir = socket_base().join(format!("hu-ipc-close-{}", id()));
     create_dir_all(&dir).ok();
     let listener = ipc::bind_session(&dir, "close").expect("bind the endpoint");
     let endpoint = listener.endpoint().to_string();
@@ -106,7 +123,7 @@ async fn test_listener_signals_close() {
 /// account.
 #[tokio::test]
 async fn test_private_dir_holds_endpoint() {
-    let dir = temp_dir().join(format!("hu-ipc-private-{}", id()));
+    let dir = socket_base().join(format!("hu-ipc-private-{}", id()));
     ipc::create_owner_only_dir(&dir).expect("create the private dir");
     let listener = ipc::bind_session(&dir, "private").expect("bind the endpoint");
     let endpoint = listener.endpoint().to_string();
