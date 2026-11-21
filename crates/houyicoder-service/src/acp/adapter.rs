@@ -15,9 +15,14 @@
 
 use houyicoder_async::PFut;
 use houyicoder_context::{EventId, SessionId};
+use houyicoder_core::agent::Runner;
+use houyicoder_permission::ModeGate;
+use houyicoder_permission::PermissionMode;
+use houyicoder_protocol::acp_wire::{AcpErrorCode, AcpNotification, AcpRequest, AcpResponse};
 use houyicoder_protocol::acp_wire::{
-    AcpErrorCode, AcpNotification, AcpRequest, AcpResponse, AgentCapabilities, InitializeResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+    AgentCapabilities, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PromptCapabilities, SessionConfigKind,
+    SessionConfigOption, SessionConfigSelectOption, SessionMode, SessionModeState,
 };
 use houyicoder_protocol::acpx::{AcpxCapabilities, TakeControlOutcome, TakeControlParams};
 
@@ -34,6 +39,85 @@ use std::sync::Arc;
 /// store-only id the runner has never seen.
 pub type SessionBinding = Arc<dyn Fn(&NewSessionRequest) -> SessionId + Send + Sync>;
 
+/// The session view a client learns at session/new: the modes the gate
+/// currently offers and the config options it may switch. Built by the
+/// composition root from the live gate + runner + model catalog.
+#[derive(Debug, Clone)]
+pub struct SessionView {
+    pub modes: SessionModeState,
+    pub config_options: Vec<SessionConfigOption>,
+}
+
+/// The composition root's source of the session view. A closure so the
+/// adapter stays a router that does not own the runner or the gate.
+pub type SessionFacts = Arc<dyn Fn() -> SessionView + Send + Sync>;
+
+/// The wire mode id for a permission mode. Manual asks before acting; Auto
+/// allows classified calls and asks for destructive ones.
+pub fn mode_id(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Manual => "manual",
+        PermissionMode::Auto => "auto",
+    }
+}
+
+/// The full mode set the agent offers, with the gate's current mode marked.
+pub fn session_modes(gate: &dyn ModeGate) -> SessionModeState {
+    let current = gate.current();
+    SessionModeState {
+        current_mode_id: mode_id(current).into(),
+        available_modes: vec![
+            SessionMode {
+                id: "manual".into(),
+                name: "Manual".into(),
+                description: Some("Ask before acting".into()),
+                meta: None,
+            },
+            SessionMode {
+                id: "auto".into(),
+                name: "Auto".into(),
+                description: Some("Allow classified calls, ask for destructive ones".into()),
+                meta: None,
+            },
+        ],
+        meta: None,
+    }
+}
+
+/// The config options a client may switch: one select option for the model,
+/// built from the catalog plus the runner's active model.
+pub fn session_config_options(runner: &Runner, models: &[String]) -> Vec<SessionConfigOption> {
+    let active = runner.active_model();
+    let mut options: Vec<SessionConfigSelectOption> = models
+        .iter()
+        .map(|m| SessionConfigSelectOption {
+            value: m.clone(),
+            name: m.clone(),
+            description: None,
+            meta: None,
+        })
+        .collect();
+    if !options.iter().any(|o| o.value == active) {
+        options.push(SessionConfigSelectOption {
+            value: active.clone(),
+            name: active.clone(),
+            description: None,
+            meta: None,
+        });
+    }
+    vec![SessionConfigOption {
+        id: "model".into(),
+        name: "Model".into(),
+        description: Some("The model the agent runs".into()),
+        category: Some("model".into()),
+        kind: SessionConfigKind::Select {
+            current_value: active,
+            options,
+        },
+        meta: None,
+    }]
+}
+
 /// The adapter's static config: the capability block it advertises at
 /// initialize. Built by the composition root from what the agent supports.
 pub struct AcpAdapter {
@@ -45,6 +129,10 @@ pub struct AcpAdapter {
     /// no runner backs the adapter, such as a test or the standalone
     /// example.
     session_binding: Option<SessionBinding>,
+    /// The composition root's source of the modes and config options a
+    /// client learns at session/new. None leaves the response's modes and
+    /// config_options absent, which serves a test or example with no gate.
+    session_facts: Option<SessionFacts>,
 }
 
 impl AcpAdapter {
@@ -56,6 +144,7 @@ impl AcpAdapter {
             protocol_version,
             store,
             session_binding: None,
+            session_facts: None,
         }
     }
 
@@ -63,6 +152,14 @@ impl AcpAdapter {
     /// the id of the runner session that actually drives the prompts.
     pub fn with_session_binding(mut self, binding: SessionBinding) -> Self {
         self.session_binding = Some(binding);
+        self
+    }
+
+    /// Attach the composition root's source of the session view, so
+    /// session/new answers with the modes and config options the live gate
+    /// and runner offer rather than leaving them absent.
+    pub fn with_session_facts(mut self, facts: SessionFacts) -> Self {
+        self.session_facts = Some(facts);
         self
     }
 
@@ -110,6 +207,11 @@ impl AcpAdapter {
             protocol_version: self.protocol_version,
             agent_capabilities: AgentCapabilities {
                 load_session: self.caps.detach,
+                // The engine run takes plain text today, so the agent tells
+                // the client at handshake that image, audio, and embedded
+                // context are not accepted; a stock client then withholds
+                // them, and one that sends them anyway gets a named error.
+                prompt_capabilities: PromptCapabilities::default(),
                 ..Default::default()
             },
             auth_methods: Vec::new(),
@@ -159,8 +261,18 @@ impl AcpAdapter {
             runner_checkpoint: Vec::new(),
             lease_holder: Some("new_session".into()),
         });
+        let (modes, config_options) = match &self.session_facts {
+            Some(facts) => {
+                let view = facts();
+                (Some(view.modes), Some(view.config_options))
+            }
+            None => (None, None),
+        };
+        let config_options = config_options.filter(|v| !v.is_empty());
         let resp = NewSessionResponse {
             session_id: sid.to_string(),
+            modes,
+            config_options,
             ..Default::default()
         };
         AcpResponse::ok(

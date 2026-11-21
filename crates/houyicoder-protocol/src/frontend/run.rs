@@ -35,9 +35,10 @@ pub enum StopReason {
 /// carries the string; Image carries base64 data plus its mime type (not a
 /// URL + alt text). The mime_type field renames to mimeType on the wire to
 /// match the base agent protocol ImageContent (camelCase); the enum-level
-/// snake_case applies to variant tags (text / image), and the field rename
-/// overrides it for this one camelCase field. non_exhaustive so an Audio or
-/// future block lands without reworking every match.
+/// snake_case applies to variant tags (text / image / resource_link), and
+/// the field rename overrides it for this one camelCase field.
+/// non_exhaustive so an Audio or future block lands without reworking
+/// every match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -49,6 +50,14 @@ pub enum ContentBlock {
         data: String,
         #[serde(rename = "mimeType")]
         mime_type: String,
+    },
+    /// A referenced resource a client attached (an IDE @file, a linked
+    /// document). The agent does not inline it today; the server rejects it
+    /// with a named error rather than failing to deserialize the block.
+    ResourceLink {
+        uri: String,
+        #[serde(default)]
+        name: Option<String>,
     },
 }
 

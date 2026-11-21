@@ -68,6 +68,11 @@ use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::MAX_MESSAGE_BYTES;
 use houyicoder_service::CancellationToken;
 use houyicoder_service::acp::adapter::AcpAdapter;
+use houyicoder_service::acp::adapter::SessionFacts;
+use houyicoder_service::acp::adapter::SessionView;
+use houyicoder_service::acp::adapter::session_config_options;
+use houyicoder_service::acp::adapter::session_modes;
+use houyicoder_service::acp::live::AcpLiveStream;
 use houyicoder_service::acp::pump::spawn_pump;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
@@ -453,6 +458,20 @@ fn run_attach(endpoint: String, session_id: String) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
+/// The model ids a client may switch to through session/set_config_option:
+/// the settings catalog plus the runner's active model, so a resumed
+/// session whose model is not in the catalog still has a row.
+fn acp_model_options(runner: &Runner) -> Vec<String> {
+    let (section, _) =
+        houyicoder_config::load_model_section_from(&houyicoder_config::settings_path());
+    let mut ids: Vec<String> = section.catalog.into_iter().map(|e| e.id).collect();
+    let active = runner.active_model();
+    if !ids.iter().any(|m| m == &active) {
+        ids.push(active);
+    }
+    ids
+}
+
 /// The ACP stdio entry. Builds the runner through the same composition root
 /// the TUI path uses, then drives the ACP server over stdin + stdout. A
 /// stock client learns the session id from the session/new reply alone; the
@@ -464,7 +483,7 @@ fn run_acp_stdio(
     model_override: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let provider = resolve_provider(project.as_deref());
-    let bundle = build_runner(production_runner(project, provider));
+    let mut bundle = build_runner(production_runner(project, provider));
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -475,6 +494,13 @@ fn run_acp_stdio(
         lease.bind(StoreIdentity::of(store.as_ref()));
     }
     let session = bundle.session;
+    let gate: Arc<dyn ModeGate> = bundle.gate;
+    // Install the live model-output sink before the runner is shared, so each
+    // response delta the provider emits reaches the serve loop as a
+    // session/update chunk instead of only the assembled message at turn end.
+    let (sink, live) = AcpLiveStream::channel();
+    sink.install_on(&mut bundle.runner);
+    let model_options = acp_model_options(&bundle.runner);
     let runner = Arc::new(bundle.runner);
     // The ACP server has no frontend event stream to publish a task's state
     // into, but a command moved to the background still ends after the call
@@ -511,9 +537,17 @@ fn run_acp_stdio(
         }
         session
     });
+    let facts_runner = Arc::clone(&runner);
+    let facts_gate = Arc::clone(&gate);
+    let facts_models = model_options.clone();
+    let facts: SessionFacts = Arc::new(move || SessionView {
+        modes: session_modes(facts_gate.as_ref()),
+        config_options: session_config_options(facts_runner.as_ref(), &facts_models),
+    });
     let adapter = Arc::new(
         AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new())
-            .with_session_binding(binding),
+            .with_session_binding(binding)
+            .with_session_facts(facts),
     );
 
     // Drive the server on a multi-thread runtime so the real provider (HTTP
@@ -526,7 +560,9 @@ fn run_acp_stdio(
     runtime.block_on(async move {
         fire_after_bundle(session);
         let mut pump = spawn_pump(BufReader::new(stdin()), stdout());
-        let server = AcpServer::new(adapter, runner, session);
+        let server = AcpServer::new(adapter, runner, gate, session)
+            .with_live_stream(live)
+            .with_model_options(model_options);
         drop(server.serve(&mut pump).await);
         background_tasks.shutdown();
         // serve returns when the client closes stdin; close waits for the

@@ -13,6 +13,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::acp_wire::{AcpRequest, PromptResponse};
 use houyicoder_protocol::acpx::AcpxCapabilities;
@@ -86,7 +87,7 @@ async fn test_prompt_streams_updates_replies() {
     let store = SessionLeaseStore::new();
     let adapter = Arc::new(AcpAdapter::new(AcpxCapabilities::default(), 1, store));
     let (mut io, mut client_tx, mut client_rx) = pair();
-    let server = AcpServer::new(adapter, runner, session);
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
     let handle = tokio::spawn(async move { server.serve(&mut io).await });
 
     // initialize
@@ -219,7 +220,7 @@ async fn test_cancel_during_run_cancelled() {
         SessionLeaseStore::new(),
     ));
     let (mut io, mut client_tx, mut client_rx) = pair();
-    let server = AcpServer::new(adapter, runner, session);
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
     let handle = tokio::spawn(async move { server.serve(&mut io).await });
 
     send_line(

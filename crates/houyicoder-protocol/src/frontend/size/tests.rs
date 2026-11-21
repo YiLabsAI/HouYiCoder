@@ -272,6 +272,17 @@ fn test_command_input_meta_counts() {
     );
 }
 
+/// A resource_link block's bytes are its uri and name, so an IDE @file the
+/// agent rejected still measures for the resident-window budget.
+#[test]
+fn test_resource_link_block_measured() {
+    let block = ContentBlock::ResourceLink {
+        uri: "file:///x".into(),
+        name: Some("x".into()),
+    };
+    assert_eq!(content_block_bytes(&block), "file:///x".len() + "x".len());
+}
+
 /// A notification's parameters are JSON the producer chose, so the walk
 /// measures whatever it put there rather than a fixed figure.
 #[test]

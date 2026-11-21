@@ -103,7 +103,7 @@ async fn acp_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> String
         1,
         SessionLeaseStore::new(),
     ));
-    let server = AcpServer::new(adapter, runner, session);
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
     let handle = tokio::spawn(async move { server.serve(&mut io).await });
 
     let tx = client_tx;

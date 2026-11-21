@@ -8,13 +8,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::stream;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
+use houyicoder_async::PStream;
 use houyicoder_context::{PermissionVerdict, SessionEvent, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::{
     AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, PromptResponse,
     RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome,
@@ -24,16 +27,21 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::StopReason;
-use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
+use houyicoder_protocol::llm::{
+    CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
+    Usage,
+};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 use super::AcpServer;
 use crate::acp::adapter::AcpAdapter;
+use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::from_line_channels;
 use crate::lifecycle::SessionLeaseStore;
 use tokio::time::timeout;
@@ -214,7 +222,7 @@ fn spawn_server(
         1,
         SessionLeaseStore::new(),
     ));
-    let srv = AcpServer::new(adapter, runner, session);
+    let srv = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
     let mut io = from_line_channels(server_rx, server_tx);
@@ -493,6 +501,298 @@ async fn test_bad_permission_result() {
         .expect_err("a malformed outcome fails closed");
     assert_eq!(err.category, ErrorCategory::InvalidFrame);
     assert!(!err.message.is_empty(), "the decode failure is carried");
+}
+
+/// A prompt with an image block is rejected with a named error, not silently
+/// dropped: the agent declared promptCapabilities.image false at initialize.
+#[tokio::test]
+async fn test_image_block_rejected() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+    let prompt = json!({
+        "sessionId": session.to_string(),
+        "prompt": [{"type": "image", "data": "base64", "mimeType": "image/png"}],
+    });
+    send(&tx, &AcpRequest::new(1, "session/prompt", prompt)).await;
+    let reply = recv(&mut rx).await;
+    assert!(reply.contains(r#""id":1"#), "{reply}");
+    assert!(reply.contains(r#""code":-32602"#), "{reply}");
+    assert!(reply.contains("image content is not supported"), "{reply}");
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A resource_link attachment (an IDE @file) is rejected with a named error
+/// instead of failing opaquely at deserialization.
+#[tokio::test]
+async fn test_resource_link_rejected() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+    let prompt = json!({
+        "sessionId": session.to_string(),
+        "prompt": [{"type": "resource_link", "uri": "file:///x", "name": "x"}],
+    });
+    send(&tx, &AcpRequest::new(1, "session/prompt", prompt)).await;
+    let reply = recv(&mut rx).await;
+    assert!(reply.contains(r#""code":-32602"#), "{reply}");
+    assert!(
+        reply.contains("resource_link attachments are not supported"),
+        "{reply}"
+    );
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// session/set_mode applies the mode to the gate and replies with the
+/// resulting state, so the client sees the current mode it must display.
+#[tokio::test]
+async fn test_set_mode_changes_gate() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+    let params = json!({"sessionId": session.to_string(), "modeId": "manual"});
+    send(&tx, &AcpRequest::new(1, "session/set_mode", params)).await;
+    let reply = recv(&mut rx).await;
+    assert!(reply.contains(r#""currentModeId":"manual""#), "{reply}");
+    // An unknown mode id is refused, not silently applied.
+    let bad = json!({"sessionId": session.to_string(), "modeId": "bogus"});
+    send(&tx, &AcpRequest::new(2, "session/set_mode", bad)).await;
+    let bad_reply = recv(&mut rx).await;
+    assert!(bad_reply.contains(r#""code":-32602"#), "{bad_reply}");
+    assert!(bad_reply.contains("unknown mode"), "{bad_reply}");
+    // A wrong session id is rejected, not silently applied to this session.
+    let wrong = json!({"sessionId": "wrong", "modeId": "manual"});
+    send(&tx, &AcpRequest::new(3, "session/set_mode", wrong)).await;
+    let wrong_reply = recv(&mut rx).await;
+    assert!(wrong_reply.contains(r#""code":-32602"#), "{wrong_reply}");
+    assert!(wrong_reply.contains("session id mismatch"), "{wrong_reply}");
+    // Malformed params (modeId of the wrong type) report a decode error.
+    let malformed = json!({"sessionId": session.to_string(), "modeId": 123});
+    send(&tx, &AcpRequest::new(4, "session/set_mode", malformed)).await;
+    let malformed_reply = recv(&mut rx).await;
+    assert!(
+        malformed_reply.contains(r#""code":-32602"#),
+        "{malformed_reply}"
+    );
+    assert!(malformed_reply.contains("bad params"), "{malformed_reply}");
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// session/set_config_option for the model option switches the runner's
+/// active model when the value is in the catalog; an unknown id is refused.
+#[tokio::test]
+async fn test_set_config_option_switches() {
+    let session = SessionId::new();
+    let runner = guarded_runner();
+    let inspector = runner.clone();
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
+        .with_model_options(vec!["test".into(), "alt".into()]);
+    let (tx, server_rx) = mpsc::channel::<String>(256);
+    let (server_tx, mut rx) = mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let handle = tokio::spawn(async move { server.serve(&mut io).await });
+
+    let params = json!({
+        "sessionId": session.to_string(),
+        "configId": "model",
+        "value": "alt",
+    });
+    send(
+        &tx,
+        &AcpRequest::new(1, "session/set_config_option", params),
+    )
+    .await;
+    let reply = recv(&mut rx).await;
+    assert!(reply.contains(r#""id":1"#), "{reply}");
+    assert!(reply.contains(r#""currentValue":"alt""#), "{reply}");
+    assert_eq!(inspector.active_model(), "alt");
+
+    // An unknown model id is refused.
+    let bad = json!({
+        "sessionId": session.to_string(),
+        "configId": "model",
+        "value": "nope",
+    });
+    send(&tx, &AcpRequest::new(2, "session/set_config_option", bad)).await;
+    let bad_reply = recv(&mut rx).await;
+    assert!(bad_reply.contains(r#""code":-32602"#), "{bad_reply}");
+    assert!(bad_reply.contains("model not in catalog"), "{bad_reply}");
+
+    // An unknown config option id is refused.
+    let unknown = json!({"sessionId": session.to_string(), "configId": "theme", "value": "dark"});
+    send(
+        &tx,
+        &AcpRequest::new(3, "session/set_config_option", unknown),
+    )
+    .await;
+    let unknown_reply = recv(&mut rx).await;
+    assert!(
+        unknown_reply.contains(r#""code":-32602"#),
+        "{unknown_reply}"
+    );
+    assert!(
+        unknown_reply.contains("unknown config option"),
+        "{unknown_reply}"
+    );
+
+    // A boolean value for the model option is the wrong shape.
+    let boolean = json!({"sessionId": session.to_string(), "configId": "model", "type": "boolean", "value": true});
+    send(
+        &tx,
+        &AcpRequest::new(4, "session/set_config_option", boolean),
+    )
+    .await;
+    let bool_reply = recv(&mut rx).await;
+    assert!(bool_reply.contains(r#""code":-32602"#), "{bool_reply}");
+    assert!(
+        bool_reply.contains("value id, not a boolean"),
+        "{bool_reply}"
+    );
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A provider that streams text deltas with a small sleep between them, so
+/// the run future is pending between deltas and the serve loop's live-delta
+/// branch polls. A synchronous stream resolves in one poll and starves the
+/// branch; the delay is what makes the live path observable.
+struct StreamingProvider {
+    text: String,
+}
+
+impl ModelProvider for StreamingProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let text = self.text.clone();
+        Box::pin(async move {
+            Ok(CompletionResponse {
+                output: vec![OutputItem::Text { text }],
+                usage: Usage::default(),
+                model: "test".into(),
+            })
+        })
+    }
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let id = "t1".to_string();
+        let parts: Vec<String> = vec!["hel".into(), "lo".into()];
+        Box::pin(stream::unfold(
+            (0u32, id, parts),
+            |(i, id, parts)| async move {
+                match i {
+                    0 => Some((Ok(LlmEvent::StepStart { index: 0 }), (1, id, parts))),
+                    1 => Some((Ok(LlmEvent::TextStart { id: id.clone() }), (2, id, parts))),
+                    2 => {
+                        sleep(Duration::from_millis(2)).await;
+                        Some((
+                            Ok(LlmEvent::TextDelta {
+                                id: id.clone(),
+                                text: parts[0].clone(),
+                            }),
+                            (3, id, parts),
+                        ))
+                    }
+                    3 => {
+                        sleep(Duration::from_millis(2)).await;
+                        Some((
+                            Ok(LlmEvent::TextDelta {
+                                id: id.clone(),
+                                text: parts[1].clone(),
+                            }),
+                            (4, id, parts),
+                        ))
+                    }
+                    4 => Some((Ok(LlmEvent::TextEnd { id: id.clone() }), (5, id, parts))),
+                    5 => Some((
+                        Ok(LlmEvent::StepFinish {
+                            index: 0,
+                            reason: "stop".into(),
+                            usage: None,
+                        }),
+                        (6, id, parts),
+                    )),
+                    _ => None,
+                }
+            },
+        ))
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// A live-streamed turn forwards response deltas as session/update chunks
+/// during the run and suppresses the durable copy, so the client sees the
+/// deltas, not the delta plus the assembled message.
+#[tokio::test]
+async fn test_live_stream_sends_deltas() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(StreamingProvider {
+        text: "hello".into(),
+    });
+    let mut runner = Runner::new(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    );
+    let (sink, live) = AcpLiveStream::channel();
+    sink.install_on(&mut runner);
+    let runner = Arc::new(runner);
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
+        .with_live_stream(live);
+    let (tx, server_rx) = mpsc::channel::<String>(256);
+    let (server_tx, mut rx) = mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let handle = tokio::spawn(async move { server.serve(&mut io).await });
+
+    send(&tx, &prompt_request(session, 1)).await;
+    let mut chunk_lines: Vec<String> = Vec::new();
+    let mut reply = None;
+    for _ in 0..64 {
+        let line = recv(&mut rx).await;
+        if line.contains(r#""id":1"#) {
+            reply = Some(line);
+            break;
+        }
+        if line.contains("agent_message_chunk") {
+            chunk_lines.push(line);
+        }
+    }
+    let reply = reply.expect("got a prompt reply");
+    assert!(reply.contains(r#""stopReason":"end_turn""#), "{reply}");
+    // A live delta carries a partial ("hel"), not the full "hello"; and the
+    // durable AssistantMessage is suppressed, so no chunk carries the full
+    // text. This separates the live path from a durable-only false green.
+    assert!(
+        chunk_lines.iter().any(|l| l.contains(r#""text":"hel""#)),
+        "a live partial delta reached the client: {chunk_lines:?}"
+    );
+    assert!(
+        !chunk_lines.iter().any(|l| l.contains(r#""text":"hello""#)),
+        "the durable full message was suppressed: {chunk_lines:?}"
+    );
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
 }
 
 /// The permission happy path: an allow_once answer resumes the run to its

@@ -11,6 +11,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::NewSessionRequest;
 use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_provider::FakeProvider;
@@ -68,7 +69,7 @@ async fn main() {
     // so a client that waits for a reply before sending the next request
     // never deadlocks.
     let mut pump = spawn_pump(BufReader::new(stdin()), stdout());
-    let server = AcpServer::new(adapter, runner, session);
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
     drop(server.serve(&mut pump).await);
     pump.close().await;
 }

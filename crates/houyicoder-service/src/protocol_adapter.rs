@@ -26,6 +26,7 @@ pub(crate) use durable_grant::{
 };
 #[cfg(test)]
 pub(crate) use durable_grant::{FENCED, UNFENCED};
+use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
 use houyicoder_api::tool::is_shell_tool;
@@ -516,6 +517,27 @@ fn scope_to_wire_destination(s: houyicoder_permission::Scope) -> RuleDestination
         Scope::Session => RuleDestination::Session,
         Scope::Builtin => RuleDestination::Builtin,
     }
+}
+
+/// Map one live response delta to the session/update a client renders as it
+/// arrives. Text deltas become agent message chunks and reasoning deltas
+/// become thought chunks; tool-input deltas carry raw JSON arguments with no
+/// standard update shape, so they stay off the client stream.
+pub fn map_stream_event(event: &ResponseStreamEvent) -> Option<SessionUpdate> {
+    let text_chunk = |text: &str| {
+        ContentChunk::new(ContentBlock::Text {
+            text: text.to_string(),
+        })
+    };
+    Some(match event {
+        ResponseStreamEvent::AssistantTextDelta { text } => {
+            SessionUpdate::AgentMessageChunk(text_chunk(text))
+        }
+        ResponseStreamEvent::ReasoningDelta { text } => {
+            SessionUpdate::AgentThoughtChunk(text_chunk(text))
+        }
+        ResponseStreamEvent::ToolInputDelta { .. } => return None,
+    })
 }
 
 /// Map a session event to its session/update form. Standard event kinds map

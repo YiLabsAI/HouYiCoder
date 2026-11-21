@@ -12,6 +12,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::AcpRequest;
 use houyicoder_protocol::acp_wire::{AcpRequestId, JsonRpcVersion};
 use houyicoder_protocol::acpx::AcpxCapabilities;
@@ -71,7 +72,7 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
 }
 
 fn server(adapter: Arc<AcpAdapter>, runner: Arc<Runner>, session: SessionId) -> AcpServer {
-    AcpServer::new(adapter, runner, session)
+    AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
 }
 
 /// Unknown method replies method-not-found (-32601) on the request id, not

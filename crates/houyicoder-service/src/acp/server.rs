@@ -17,17 +17,21 @@
 use std::sync::Arc;
 
 use crate::acp::adapter::AcpAdapter;
+use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::protocol_adapter::{
     acp_permission_response_to_decision, approval_to_acp_permission, map_run_error, map_run_result,
-    map_session_update,
+    map_session_update, map_stream_event,
 };
+use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_core::agent::RunError;
 use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::{ApprovalRequest, RunOutcome, Runner};
+use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acp_wire::{
     AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, PromptRequest,
     PromptResponse, RequestPermissionResponse,
@@ -36,6 +40,7 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::llm::Usage;
+use std::future::pending;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
@@ -52,12 +57,25 @@ use std::time::UNIX_EPOCH;
 pub struct AcpServer {
     adapter: Arc<AcpAdapter>,
     runner: Arc<Runner>,
+    gate: Arc<dyn ModeGate>,
     session: SessionId,
     next_req_id: u64,
     /// The position the client has been pushed up to: every durable record
     /// before it was sent. An absolute ordinal of the session's own history,
     /// so it survives the log state dropping its oldest rows.
     pushed_through: TrajectoryPosition,
+    /// The live model-output stream, when the composition root installed one
+    /// on the runner. None in tests that drive a stub provider without a
+    /// stream sink; the serve loop sends only the durable events then.
+    live: Option<AcpLiveStream>,
+    /// True once a live delta was sent this turn, so the durable Assistant
+    /// and Reasoning events are suppressed to avoid sending the turn text
+    /// twice (as deltas and again as a whole message).
+    streamed_text: AtomicBool,
+    /// The model ids the client may switch to through session/set_config_option.
+    /// Empty when the composition root supplied no catalog; a switch is then
+    /// rejected rather than silently accepted for an unknown id.
+    model_options: Vec<String>,
     /// Set when a session/cancel notification arrives during a pending
     /// permission ask (the run is paused at Interruption, the drive loop
     /// is not streaming). The resume loop checks this after each frame read
@@ -70,18 +88,44 @@ pub struct AcpServer {
 }
 
 impl AcpServer {
-    /// Build a server bound to one runner + session, delegating the stateless
-    /// methods to the adapter. The composition root constructs the runner and
-    /// shares the adapter via Arc.
-    pub fn new(adapter: Arc<AcpAdapter>, runner: Arc<Runner>, session: SessionId) -> Self {
+    /// Build a server bound to one runner + session + mode gate, delegating
+    /// the stateless methods to the adapter. The composition root constructs
+    /// the runner and shares the adapter via Arc.
+    pub fn new(
+        adapter: Arc<AcpAdapter>,
+        runner: Arc<Runner>,
+        gate: Arc<dyn ModeGate>,
+        session: SessionId,
+    ) -> Self {
         Self {
             adapter,
             runner,
+            gate,
             session,
             next_req_id: 0,
             pushed_through: TrajectoryPosition::start(),
+            live: None,
+            streamed_text: AtomicBool::new(false),
+            model_options: Vec::new(),
             cancel_requested: AtomicBool::new(false),
         }
+    }
+
+    /// Install the live model-output stream the runner reports deltas
+    /// through. The composition root builds the pair and installs the sink
+    /// on the runner before wrapping it in Arc; the serve loop drains the
+    /// receiver this holds.
+    pub fn with_live_stream(mut self, live: AcpLiveStream) -> Self {
+        self.live = Some(live);
+        self
+    }
+
+    /// Set the model ids a client may switch to through
+    /// session/set_config_option. Built by the composition root from the
+    /// settings catalog plus the runner's active model.
+    pub fn with_model_options(mut self, models: Vec<String>) -> Self {
+        self.model_options = models;
+        self
     }
 
     /// Mint a fresh reverse-request id for a mid-turn permission ask. Distinct
@@ -123,17 +167,22 @@ impl AcpServer {
                 return Ok(());
             };
             match frame {
-                InboundFrame::Request(req) => {
-                    if req.method == "session/prompt" {
+                InboundFrame::Request(req) => match req.method.as_str() {
+                    "session/prompt" => {
                         if let Err(e) = self.handle_prompt(pump, &req).await {
                             self.send_protocol_error(pump, e.clone()).await.ok();
                             return Err(e);
                         }
-                    } else {
+                    }
+                    "session/set_mode" => self.handle_set_mode(pump, &req).await?,
+                    "session/set_config_option" => {
+                        self.handle_set_config_option(pump, &req).await?
+                    }
+                    _ => {
                         let resp = self.adapter.handle(&req).await;
                         self.send_response(pump, &resp).await?;
                     }
-                }
+                },
                 InboundFrame::Notification(notif) => {
                     // An idle cancel has no drive loop to observe the token,
                     // so abort here: the next run starts un-cancelled, and a
@@ -225,59 +274,26 @@ impl AcpServer {
         // must not leak into this one. A cancel queued before this prompt still
         // reaches the run select below, so resetting here loses nothing.
         self.cancel_requested.store(false, Ordering::Relaxed);
-        // Collapse the multimodal content to the plain text the engine run
-        // takes today; non-text blocks drop at the service boundary until a
-        // multimodal run path lands.
-        let text: String = params
-            .prompt
-            .into_iter()
-            .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text),
-                _ => None,
-            })
-            .collect();
-        // Await the run while concurrently reading inbound frames so a
-        // session/cancel notification arriving mid-run aborts the drive loop
-        // (the run future keeps polling, observes the cancel token, resolves
-        // Interrupted). Any other frame mid-run is a protocol violation
-        // (fail-closed). This is the concurrent-reader fix for the cancel race
-        // that a stock ACP client triggers over the wire — the frontend server
-        // sidesteps it by aborting a shared Arc<Runner> directly, but an ACP
-        // client has no shared handle, so the cancel must ride the wire.
-        let mut result = {
-            // Scoped so run_fut (which borrows self.runner) drops before the
-            // turn loop below mutably borrows self for push/send calls.
-            let run_fut = self.runner.run(self.session, text);
-            tokio::pin!(run_fut);
-            loop {
-                // biased: poll the run future first so a ready run resolves
-                // before an inbound EOF frame wins the race (without this, a
-                // fast stub run + immediate stdin close races ~50/50, dropping
-                // the real reply for a spurious "client closed mid-run").
-                tokio::select! {
-                    biased;
-                    r = &mut run_fut => break r,
-                    frame = io.next_frame() => match frame {
-                        Some(f) => {
-                            if !self.route_cancel_frame(&f).await? {
-                                return Err(ProtocolError::new(
-                                    ErrorCategory::InvalidFrame,
-                                    "unexpected frame mid-run",
-                                    false,
-                                ));
-                            }
-                        }
-                        None => {
-                            return Err(ProtocolError::new(
-                                ErrorCategory::Unavailable,
-                                "client closed mid-run",
-                                false,
-                            ));
-                        }
-                    },
-                }
+        self.streamed_text.store(false, Ordering::Relaxed);
+        // The engine run takes plain text today. A non-text block is not silently
+        // dropped: the agent declared promptCapabilities.image false at
+        // initialize, so a client that sends one is told which block it must
+        // not send, and an empty prompt is not fed to the runner.
+        let text = match prompt_text(params.prompt) {
+            Ok(text) => text,
+            Err(msg) => {
+                return self
+                    .send_response(
+                        io,
+                        &AcpResponse::err(req.id.clone(), AcpErrorCode::InvalidParams, msg),
+                    )
+                    .await;
             }
         };
+        // Await the run while concurrently reading inbound frames so a
+        // session/cancel notification arriving mid-run aborts the drive loop.
+        // Any other frame mid-run is a protocol violation (fail-closed).
+        let mut result = self.drive_run(io, text).await?;
         loop {
             // Push only the events appended since the last push so a resumed
             // run does not re-send what the client already saw.
@@ -370,24 +386,28 @@ impl AcpServer {
                         result = {
                             let resume_fut = self.runner.resume(self.session, &decisions);
                             tokio::pin!(resume_fut);
-                            let outcome;
-                            loop {
+                            let mut live = self.live.take();
+                            let outcome = loop {
                                 // If a cancel arrived during the permission
                                 // ask (route_cancel_frame set the flag), skip
                                 // resume entirely — the turn ends cancelled.
                                 if self.cancel_requested.load(Ordering::Relaxed) {
-                                    outcome = Ok(RunResult {
+                                    break Ok(RunResult {
                                         outcome: RunOutcome::Interrupted(
                                             "cancelled during permission ask".to_string(),
                                         ),
                                         turns: 0,
                                         usage: Usage::default(),
                                     });
-                                    break;
                                 }
                                 tokio::select! {
                                     biased;
-                                    r = &mut resume_fut => { outcome = r; break; }
+                                    r = &mut resume_fut => break r,
+                                    delta = next_delta(&mut live) => {
+                                        if let Some(delta) = delta {
+                                            self.push_delta(io, &delta).await?;
+                                        }
+                                    }
                                     frame = io.next_frame() => match frame {
                                         Some(f) => {
                                             if !self.route_cancel_frame(&f).await? {
@@ -407,7 +427,8 @@ impl AcpServer {
                                         }
                                     },
                                 }
-                            }
+                            };
+                            self.live = live;
                             outcome
                         };
                         continue;
@@ -444,6 +465,59 @@ impl AcpServer {
                 }
             }
         }
+    }
+
+    /// Drive the run future to completion while reading inbound frames and live
+    /// deltas concurrently. A session/cancel notification aborts the run; any
+    /// other frame mid-run is a protocol violation. The live stream is taken
+    /// out of self so its borrow does not collide with the &self calls inside
+    /// the select, and restored on the normal path. Returns the run's own
+    /// outcome inside a transport result: the outer error ends the serve loop.
+    async fn drive_run(
+        &mut self,
+        io: &mut AcpDuplexPump,
+        text: String,
+    ) -> Result<Result<RunResult, RunError>, ProtocolError> {
+        let run_fut = self.runner.run(self.session, text);
+        tokio::pin!(run_fut);
+        let mut live = self.live.take();
+        // biased: poll the run future first so a ready run resolves before an
+        // inbound EOF frame wins the race (without this, a fast stub run plus
+        // an immediate stdin close can drop the real reply for a spurious
+        // client-closed error).
+        let outcome = loop {
+            tokio::select! {
+                biased;
+                r = &mut run_fut => break r,
+                delta = next_delta(&mut live) => {
+                    if let Some(delta) = delta {
+                        self.push_delta(io, &delta).await?;
+                    }
+                }
+                frame = io.next_frame() => match frame {
+                    Some(f) => {
+                        if !self.route_cancel_frame(&f).await? {
+                            self.live = live;
+                            return Err(ProtocolError::new(
+                                ErrorCategory::InvalidFrame,
+                                "unexpected frame mid-run",
+                                false,
+                            ));
+                        }
+                    }
+                    None => {
+                        self.live = live;
+                        return Err(ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            "client closed mid-run",
+                            false,
+                        ));
+                    }
+                },
+            }
+        };
+        self.live = live;
+        Ok(outcome)
     }
 
     /// Wait for the response to one permission ask. Returns None when a
@@ -578,6 +652,18 @@ impl AcpServer {
         io: &mut AcpDuplexPump,
         ev: &SessionLogEntry,
     ) -> Result<(), ProtocolError> {
+        // When the live stream carried the turn text as deltas, the durable
+        // Assistant and Reasoning events would repeat it as a whole message;
+        // suppress them so the client does not render the turn twice. Other
+        // durable events (tool calls, results, run completion) still push.
+        if self.streamed_text.load(Ordering::Relaxed)
+            && matches!(
+                ev.event,
+                SessionEvent::AssistantMessage { .. } | SessionEvent::Reasoning { .. }
+            )
+        {
+            return Ok(());
+        }
         if let Some(update) = map_session_update(&ev.event) {
             let params = serde_json::to_value(&update).expect("session update serialize");
             let notif = AcpNotification::new("session/update", params);
@@ -586,9 +672,38 @@ impl AcpServer {
         Ok(())
     }
 
+    /// Forward one live response delta as a session/update notification. Text
+    /// deltas become agent message chunks, reasoning deltas become thought
+    /// chunks; tool-input deltas carry raw JSON and stay off the client
+    /// stream. The first text delta marks the turn as streamed so the
+    /// durable copy is suppressed.
+    async fn push_delta(
+        &self,
+        io: &mut AcpDuplexPump,
+        delta: &ResponseStreamEvent,
+    ) -> Result<(), ProtocolError> {
+        // Any text or reasoning delta marks the turn as streamed, so the
+        // durable Assistant and Reasoning events are both suppressed. A
+        // reasoning-only turn still streams its reasoning; without this flag
+        // the durable copy would repeat it.
+        if matches!(
+            delta,
+            ResponseStreamEvent::AssistantTextDelta { .. }
+                | ResponseStreamEvent::ReasoningDelta { .. }
+        ) {
+            self.streamed_text.store(true, Ordering::Relaxed);
+        }
+        if let Some(update) = map_stream_event(delta) {
+            let params = serde_json::to_value(&update).expect("stream update serialize");
+            let notif = AcpNotification::new("session/update", params);
+            self.send_typed(io, &notif).await?;
+        }
+        Ok(())
+    }
+
     /// Send a response paired to a request by id.
     async fn send_response(
-        &mut self,
+        &self,
         io: &mut AcpDuplexPump,
         resp: &AcpResponse,
     ) -> Result<(), ProtocolError> {
@@ -597,7 +712,7 @@ impl AcpServer {
 
     /// Send a protocol error with no correlation (the req_id is unknown).
     async fn send_protocol_error(
-        &mut self,
+        &self,
         io: &mut AcpDuplexPump,
         err: ProtocolError,
     ) -> Result<(), ProtocolError> {
@@ -611,12 +726,51 @@ impl AcpServer {
 
     /// Encode a typed message and push it through the carrier.
     async fn send_typed<T: serde::Serialize>(
-        &mut self,
+        &self,
         io: &mut AcpDuplexPump,
         msg: &T,
     ) -> Result<(), ProtocolError> {
         let frame = encode(msg)?;
         io.send_frame(frame).await
+    }
+}
+
+mod config;
+
+/// The plain text of a prompt, or an error message naming the first non-text
+/// block the agent does not accept. The agent declared promptCapabilities
+/// false for image, audio, and embedded context at initialize, so a block of
+/// any of those kinds is rejected here rather than silently dropped.
+fn prompt_text(prompt: Vec<ContentBlock>) -> Result<String, String> {
+    let mut text = String::new();
+    for block in prompt {
+        match block {
+            ContentBlock::Text { text: t } => text.push_str(&t),
+            ContentBlock::Image { .. } => {
+                return Err(
+                    "image content is not supported (agent declared promptCapabilities.image false)"
+                        .into(),
+                );
+            }
+            ContentBlock::ResourceLink { uri, .. } => {
+                return Err(format!(
+                    "resource_link attachments are not supported: {uri}"
+                ));
+            }
+            _ => return Err("unsupported content block".into()),
+        }
+    }
+    Ok(text)
+}
+
+/// The next live delta, or pending forever when no stream is installed. A
+/// select branch that never resolves keeps the run future and the frame
+/// reader as the only live branches, so the absence of a stream costs
+/// nothing.
+async fn next_delta(live: &mut Option<AcpLiveStream>) -> Option<ResponseStreamEvent> {
+    match live {
+        Some(stream) => stream.recv().await,
+        None => pending().await,
     }
 }
 

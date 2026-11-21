@@ -116,6 +116,9 @@ fn content_block_bytes(block: &ContentBlock) -> usize {
     match block {
         ContentBlock::Text { text } => text.len(),
         ContentBlock::Image { data, mime_type } => data.len() + mime_type.len(),
+        ContentBlock::ResourceLink { uri, name } => {
+            uri.len() + name.as_ref().map(|n| n.len()).unwrap_or(0)
+        }
     }
 }
 

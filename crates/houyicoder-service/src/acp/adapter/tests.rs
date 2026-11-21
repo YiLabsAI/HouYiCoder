@@ -3,7 +3,14 @@
 use super::*;
 use crate::lifecycle::LifecycleState;
 use futures::executor::block_on;
+use houyicoder_api::provider::ModelProvider;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::acp_wire::{AcpRequest, AcpRequestId, JsonRpcVersion};
+use houyicoder_provider::FakeProvider;
+use houyicoder_session::SessionStore;
 
 fn req(method: &str, id: i64) -> AcpRequest {
     AcpRequest {
@@ -319,4 +326,40 @@ fn test_cancel_notification_reaps_session() {
     );
     block_on(adapter.handle_notification(&notif));
     assert_eq!(store.state(sid), LifecycleState::Cancelled);
+}
+
+/// A session/new reply carries the modes and config options the composition
+/// root supplied through the facts closure, so a stock client learns what it
+/// may switch at the same time it learns the session id.
+#[test]
+fn test_new_session_reports_view() {
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")) as Arc<dyn ModelProvider>,
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "m1".into(),
+            ..RunnerConfig::default()
+        },
+    );
+    let gate = Arc::new(DefaultModeGate::new());
+    let facts_runner = Arc::new(runner);
+    let facts_gate = gate.clone();
+    let facts_models: Vec<String> = Vec::new();
+    let facts: SessionFacts = Arc::new(move || SessionView {
+        modes: session_modes(facts_gate.as_ref()),
+        config_options: session_config_options(facts_runner.as_ref(), &facts_models),
+    });
+    let adapter = AcpAdapter::new(AcpxCapabilities::default(), 1, SessionLeaseStore::new())
+        .with_session_facts(facts);
+    let params = serde_json::json!({"cwd": "/x", "mcpServers": []});
+    let resp = block_on(adapter.handle(&AcpRequest::new(1, "session/new", params)));
+    let s = match resp {
+        AcpResponse::Result { result, .. } => result.to_string(),
+        _ => panic!("expected a result, got {resp:?}"),
+    };
+    assert!(s.contains(r#""currentModeId":"auto""#), "{s}");
+    assert!(s.contains(r#""configOptions""#), "{s}");
+    assert!(s.contains(r#""id":"model""#), "{s}");
+    assert!(s.contains(r#""currentValue":"m1""#), "{s}");
 }
