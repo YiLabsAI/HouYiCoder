@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_api::agent_event::{AgentEventHandlers, NotificationQueueEvent};
 use houyicoder_core::agent::ToolRegistry;
 use houyicoder_core::agent::multi_agent::bus_types::{ChildDescriptor, spawned_topic};
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -8,6 +9,7 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::yield_now;
@@ -47,7 +49,6 @@ async fn test_background_completion_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -86,7 +87,6 @@ async fn test_foreground_completion_skips_queue() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -122,7 +122,6 @@ async fn test_duplicate_signal_dedups() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -163,7 +162,6 @@ async fn test_failed_completion_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -199,7 +197,6 @@ async fn test_multi_child_concurrent_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -241,7 +238,6 @@ async fn test_empty_summary_still_enqueues() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -286,7 +282,6 @@ async fn test_back_to_back_deliver() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -324,7 +319,6 @@ async fn test_orphan_completion_notifies() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -363,7 +357,6 @@ async fn test_cancel_ends_drain() {
     let handle = spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         cancel.clone(),
     )
@@ -390,7 +383,6 @@ async fn test_drain_releases_runner() {
     let _handle = spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        EventSequencer::new(),
         Handle::current(),
         cancel.clone(),
     );
@@ -402,19 +394,43 @@ async fn test_drain_releases_runner() {
     cancel.cancel();
 }
 
-/// Each enqueued notification also reports the queue depth to the frontend,
-/// so an idle client learns the session holds something to wake for. Two
-/// completions produce two reports, each naming the depth after its own
-/// enqueue.
+/// Record the levels the runner reports, through the same handler the
+/// composition root installs.
+fn bare_runner_with(levels: &Arc<Mutex<Vec<u32>>>) -> Arc<Runner> {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let mut runner = Runner::new(
+        store,
+        Arc::new(FakeProvider::text("ok")),
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 5,
+            max_output_tokens: 8_000,
+            ..RunnerConfig::default()
+        },
+    );
+    let sink = Arc::clone(levels);
+    let mut events = AgentEventHandlers::default();
+    events.set_notification_queue(Arc::new(move |event: NotificationQueueEvent| {
+        sink.lock().expect("levels lock").push(event.count);
+    }));
+    runner.set_event_handlers(events);
+    Arc::new(runner)
+}
+
+/// Each enqueued notification reports the queue depth through the runner's
+/// queue handler, which is the one path every producer shares. Two completions
+/// produce two reports, each naming the depth after its own enqueue, so an
+/// idle client learns the session holds something to wake for.
 #[tokio::test]
 async fn test_enqueue_reports_pending_count() {
     let bus = Arc::new(AgentBus::new());
-    let runner = bare_runner();
-    let sequencer = EventSequencer::new();
+    let levels: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let runner = bare_runner_with(&levels);
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&runner),
-        sequencer.clone(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -436,6 +452,11 @@ async fn test_enqueue_reports_pending_count() {
         runner.queued_notification_count(),
         2,
         "the count matches the queue depth"
+    );
+    assert_eq!(
+        *levels.lock().expect("levels lock"),
+        vec![1, 2],
+        "each enqueue reports the level after it"
     );
 }
 

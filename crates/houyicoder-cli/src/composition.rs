@@ -256,7 +256,6 @@ pub(crate) fn start_local_server(
     if let Some(handle) = notification_drain::spawn(
         server_bus.clone(),
         Arc::downgrade(&runner),
-        event_sequencer.clone(),
         shared_runtime().handle().clone(),
         host.cancel_token(),
     ) {

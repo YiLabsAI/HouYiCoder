@@ -33,6 +33,7 @@ use houyicoder_core::agent::Runner;
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_protocol::envelope::{ClientFrame, EventSeq, RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
+use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
 
@@ -330,6 +331,12 @@ impl Server {
         let trust = self.ensure_trust(&mut io).await?;
         self.runner.set_trust(trust);
         self.replay_events(&mut io).await?;
+        // A resume attaches to a session whose queue may already hold
+        // endings produced while no client was reading. Replay carries the
+        // frames that existed then, but the level is a live number, so
+        // report it now: without this the attaching client starts at zero
+        // and no later event corrects it.
+        self.emit_queued_notification_count();
         session::resume_pending(&mut self, &mut io).await?;
         // Subscribe before re-emitting: a child asking while the user answers
         // an earlier card publishes on the same topic.
@@ -485,6 +492,22 @@ impl Server {
                 Err(_) => ServeWake::Event,
             },
         }
+    }
+
+    /// Report the live queued-notification level to the frontend.
+    ///
+    /// Used when a reader attaches: the queue is process state, so a client
+    /// that just connected knows nothing about it, and no future event would
+    /// tell it about endings that arrived earlier.
+    fn emit_queued_notification_count(&self) {
+        let count = self.runner.queued_notification_count();
+        // A reader that just connected starts at zero, so zero carries no
+        // information and would cost every attach a frame.
+        if count == 0 {
+            return;
+        }
+        self.event_sequencer
+            .enqueue_reliable(FrontendEvent::NotificationsPending { count });
     }
 
     /// Exchange Hello with the client. Both ends send their Hello first; the

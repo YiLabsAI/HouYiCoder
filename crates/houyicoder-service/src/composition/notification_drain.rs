@@ -17,12 +17,9 @@ use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, ChildRunMode, global_completed_topic,
 };
 use houyicoder_protocol::frontend::completion::CompletionStatus;
-use houyicoder_protocol::frontend::event::FrontendEvent;
 use tokio::runtime::Handle;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
-
-use crate::server::EventSequencer;
 
 /// Format the notification text the parent reads as a mid-turn interjection:
 /// subagent type + terminal status + the child's own summary, so the model can
@@ -50,12 +47,12 @@ pub(crate) fn notification_text(
 }
 
 /// Spawn the injector. On each Completed from a background child, enqueues a
-/// notification and reports the queue depth to the frontend. Holds the runner
-/// weakly; the cancel token ends the loop at shutdown.
+/// notification; the runner's queue reports the new level itself, so the
+/// drain does not talk to the frontend directly. Holds the runner weakly; the
+/// cancel token ends the loop at shutdown.
 pub fn spawn(
     bus: Option<Arc<AgentBus>>,
     runner: Weak<Runner>,
-    event_sequencer: EventSequencer,
     runtime: Handle,
     cancel: CancellationToken,
 ) -> Option<JoinHandle<()>> {
@@ -83,9 +80,6 @@ pub fn spawn(
                                 text,
                                 None,
                             );
-                            let count = runner.queued_notification_count();
-                            event_sequencer
-                                .enqueue_ephemeral(FrontendEvent::NotificationsPending { count });
                         }
                     }
                     Ok(_) => {}

@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use houyicoder_api::agent_event::NotificationQueueEvent;
 use houyicoder_context::{NotificationTopic, SessionId};
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
 use serde_json::Value;
@@ -57,15 +58,31 @@ impl Runner {
         text: String,
         capture: Option<Value>,
     ) {
-        self.queued_notifications
-            .lock()
-            .expect("queued_notifications lock")
-            .push_back(QueuedNotification {
+        let count = {
+            let mut q = self
+                .queued_notifications
+                .lock()
+                .expect("queued_notifications lock");
+            q.push_back(QueuedNotification {
                 source_id,
                 topic,
                 text,
                 capture,
             });
+            q.len() as u32
+        };
+        self.publish_notification_count(count);
+    }
+
+    /// Emit the authoritative queued-notification level.
+    ///
+    /// Every transition of the queue goes through here with the length read
+    /// under the same lock that changed it, so a consumer reads a level: a
+    /// count whose edge it missed still converges, and a mid-turn drain
+    /// reports zero instead of leaving a positive count to wake on.
+    fn publish_notification_count(&self, count: u32) {
+        self.events
+            .emit_notification_queue(NotificationQueueEvent { count });
     }
 
     /// Remove one queued message by stable identity. No-op when that
@@ -112,6 +129,7 @@ impl Runner {
             .lock()
             .expect("queued_notifications lock")
             .clear();
+        self.publish_notification_count(0);
     }
 
     /// Drop the injection buffer on a terminal run end; keep it on
@@ -201,11 +219,19 @@ impl Runner {
         let pending_user: Vec<QueuedInput> = self.drain_pending_input();
         let inbox_pending = self.drain_inbox();
         let pending_notifications: Vec<QueuedNotification> = if pending_user.is_empty() {
-            let mut q = self
-                .queued_notifications
-                .lock()
-                .expect("queued_notifications lock");
-            q.drain(..).collect()
+            let (drained, left) = {
+                let mut q = self
+                    .queued_notifications
+                    .lock()
+                    .expect("queued_notifications lock");
+                let drained: Vec<QueuedNotification> = q.drain(..).collect();
+                (drained, q.len() as u32)
+            };
+            // A consumed notification is gone from the queue, so the level
+            // has to be re-reported here; otherwise the client keeps a
+            // positive stale count and wakes an empty turn after the run.
+            self.publish_notification_count(left);
+            drained
         } else {
             Vec::new()
         };

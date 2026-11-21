@@ -20,6 +20,7 @@ use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::SessionId;
+use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
@@ -175,15 +176,60 @@ async fn test_drain_empty_queue_answers() {
         )),
     );
     let mut outcome = None;
-    if let Ok(ServerFrame::Response(resp)) =
-        timeout(Duration::from_secs(5), recv_frame(&mut client_rx)).await
-    {
-        assert_eq!(resp.req_id, RequestId(9));
-        outcome = Some(resp.payload);
+    // Attaching reports the live queued-notification level first, so the
+    // response to this request is not necessarily the next frame.
+    for _ in 0..4 {
+        match timeout(Duration::from_secs(5), recv_frame(&mut client_rx)).await {
+            Ok(ServerFrame::Response(resp)) if resp.req_id == RequestId(9) => {
+                outcome = Some(resp.payload);
+                break;
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
     }
     handle.abort();
     assert!(
         matches!(outcome, Some(ResponsePayload::RunOk(_))),
         "an empty queue is an immediate clean answer: {outcome:?}"
+    );
+}
+
+/// A client that attaches to a session already holding endings is told the
+/// live count. The queue is process state, so a reader that just connected
+/// knows nothing about it, and replay carries only the frames that existed
+/// when they were written: without the attach report the session sits with
+/// notifications the client has no way to learn about.
+#[tokio::test]
+async fn test_attach_reports_queued_count() {
+    let session = EngineSessionId::new();
+    let (server, runner) = server_with_session(session);
+    runner.enqueue_notification(
+        "child-a".to_string(),
+        NotificationTopic::ChildCompletion,
+        "the child finished".to_string(),
+        None,
+    );
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(16);
+    let (mut client_tx, server_rx) = mpsc::channel::<String>(16);
+    let io = FrameCarrier::new(server_tx, server_rx);
+    let handle = tokio::spawn(async move { drop(server.serve(io).await) });
+    send_line(&mut client_tx, &Hello::local());
+    drop(client_rx.next().await);
+    let reported = loop {
+        match timeout(Duration::from_secs(5), recv_frame(&mut client_rx)).await {
+            Ok(ServerFrame::Event(envelope)) => match envelope.payload {
+                FrontendEvent::NotificationsPending { count } => break Some(count),
+                _ => continue,
+            },
+            Ok(_) => continue,
+            Err(_) => break None,
+        }
+    };
+    handle.abort();
+    assert_eq!(
+        reported,
+        Some(1),
+        "attaching reports the queued ending so the client can wake for it"
     );
 }

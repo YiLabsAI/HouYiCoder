@@ -373,7 +373,6 @@ fn run_serve(
     let drain_handle = notification_drain::spawn(
         bundle.bus.clone(),
         Arc::downgrade(&runner),
-        event_sequencer.clone(),
         runtime.handle().clone(),
         drain_cancel.clone(),
     );

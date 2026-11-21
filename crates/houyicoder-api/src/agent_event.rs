@@ -182,6 +182,19 @@ pub struct UserNoticeEvent {
     pub message: String,
 }
 
+/// The authoritative number of completion notifications waiting for the
+/// parent model to read.
+///
+/// A level, not an edge: it is emitted on every queue transition, so a
+/// consumer that missed an earlier event still converges on the current
+/// figure, and a queue that empties mid-turn reports zero rather than leaving
+/// a stale positive count behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationQueueEvent {
+    /// How many notifications currently wait for a turn boundary.
+    pub count: u32,
+}
+
 /// Cohesive ownership of optional handlers for every agent event domain.
 #[derive(Clone, Default)]
 pub struct AgentEventHandlers {
@@ -190,6 +203,7 @@ pub struct AgentEventHandlers {
     run_lifecycle: Option<Arc<dyn EventHandler<RunLifecycleEvent>>>,
     memory_changed: Option<Arc<dyn EventHandler<MemoryChangedEvent>>>,
     user_notice: Option<Arc<dyn EventHandler<UserNoticeEvent>>>,
+    notification_queue: Option<Arc<dyn EventHandler<NotificationQueueEvent>>>,
 }
 
 impl AgentEventHandlers {
@@ -278,6 +292,23 @@ impl AgentEventHandlers {
     /// Return the installed user-notice handler.
     pub fn user_notice_handler(&self) -> Option<Arc<dyn EventHandler<UserNoticeEvent>>> {
         self.user_notice.clone()
+    }
+
+    /// Replace the notification-queue handler.
+    pub fn set_notification_queue(
+        &mut self,
+        handler: Arc<dyn EventHandler<NotificationQueueEvent>>,
+    ) {
+        self.notification_queue = Some(handler);
+    }
+
+    /// Emit the current queued-notification count when a handler is
+    /// installed. Every queue transition calls this, so the consumer reads a
+    /// level rather than an edge.
+    pub fn emit_notification_queue(&self, event: NotificationQueueEvent) {
+        if let Some(handler) = &self.notification_queue {
+            handler.handle(event);
+        }
     }
 }
 

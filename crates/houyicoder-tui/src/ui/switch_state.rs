@@ -12,10 +12,19 @@ use std::time::{Duration, Instant};
 /// instead of waking per child.
 pub(crate) const WAKE_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// How many consecutive notification turns the session may start on its own.
-/// Bounds the wake loop a child that keeps finishing (or a server that keeps
-/// re-reporting) could otherwise drive; any user input resets the budget.
-pub(crate) const MAX_AUTO_WAKE_TURNS: u32 = 5;
+/// How many consecutive notification turns the session may start on its own
+/// inside one burst. Bounds the wake loop a child that keeps finishing (or a
+/// server that keeps re-reporting) could otherwise drive; any user input
+/// resets the budget, and so does a quiet stretch longer than the cooldown
+/// below, so a long session with sporadic endings never latches shut.
+pub(crate) const MAX_AUTO_WAKE_TURNS: u32 = 16;
+
+/// How long a wake-free stretch resets the consecutive budget.
+///
+/// Without it the cap is a one-way switch: sixteen auto-wakes spread over an
+/// hour of normal work would shut the wake off for good. One genuinely tight
+/// burst of wake-after-wake still reaches the cap within this window.
+pub(crate) const WAKE_BUDGET_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// The pacing state for the idle wake.
 #[derive(Default)]
@@ -29,6 +38,13 @@ pub(crate) struct NotificationWake {
     pub(crate) window_started: Option<Instant>,
     /// Consecutive notification turns this session started on its own.
     pub(crate) auto_wake_turns: u32,
+    /// When the last auto-wake turn started, so a quiet stretch can reset the
+    /// consecutive budget instead of letting it age into a permanent shutoff.
+    pub(crate) last_wake_at: Option<Instant>,
+    /// Whether the "waiting" line was already shown for the current backlog,
+    /// so a session that keeps deferring reports it once rather than each
+    /// pass of the serve loop.
+    pub(crate) paused_notice_sent: bool,
 }
 
 impl NotificationWake {
@@ -36,7 +52,9 @@ impl NotificationWake {
     /// first, so the consecutive budget restarts and any open window closes.
     pub(crate) fn user_interrupted(&mut self) {
         self.auto_wake_turns = 0;
+        self.last_wake_at = None;
         self.pending_at_window = None;
         self.window_started = None;
+        self.paused_notice_sent = false;
     }
 }

@@ -12,7 +12,7 @@ use std::env::var;
 use std::mem::take;
 use std::time::Instant;
 
-use crate::ui::switch_state::{MAX_AUTO_WAKE_TURNS, WAKE_DEBOUNCE};
+use crate::ui::switch_state::{MAX_AUTO_WAKE_TURNS, WAKE_BUDGET_COOLDOWN, WAKE_DEBOUNCE};
 
 impl App {
     /// Try to consume a queued /resume Command at the head and swap the
@@ -102,9 +102,27 @@ impl App {
         if count == 0 {
             self.ui.notification_wake.pending_at_window = None;
             self.ui.notification_wake.window_started = None;
+            self.ui.notification_wake.paused_notice_sent = false;
             return false;
         }
         let now = Instant::now();
+        // A burst is what the cap bounds. Endings spaced further apart than
+        // the cooldown are ordinary session work, not a loop, so the budget
+        // starts over rather than ratcheting toward a permanent shutoff. This
+        // also clears the parked flag, which is what lets a long session
+        // resume waking after a quiet stretch.
+        if let Some(last) = self.ui.notification_wake.last_wake_at
+            && now.saturating_duration_since(last) >= WAKE_BUDGET_COOLDOWN
+        {
+            self.ui.notification_wake.auto_wake_turns = 0;
+            self.ui.notification_wake.paused_notice_sent = false;
+        }
+        // Parked means the burst budget is spent and the user was told once:
+        // stay quiet until their own input or the cooldown above resets it.
+        // Reopening the window each pass would wake the loop every debounce.
+        if self.ui.notification_wake.paused_notice_sent {
+            return false;
+        }
         let window_open = {
             let wake = &self.ui.notification_wake;
             match (wake.pending_at_window, wake.window_started) {
@@ -122,9 +140,24 @@ impl App {
             return false;
         }
         if self.ui.notification_wake.auto_wake_turns >= MAX_AUTO_WAKE_TURNS {
+            // Close the window: leaving window_started set would make the
+            // loop's own wait arithmetic return zero and spin the CPU.
+            self.ui.notification_wake.pending_at_window = None;
+            self.ui.notification_wake.window_started = None;
+            if !self.ui.notification_wake.paused_notice_sent {
+                self.ui.notification_wake.paused_notice_sent = true;
+                self.system_line(format!(
+                    "{count} background notification(s) waiting; send a message to continue"
+                ));
+                return true;
+            }
             return false;
         }
         let Some(s) = self.sessions.current.connection.as_ref() else {
+            // Same reason as the cap above: an open window with nothing able
+            // to consume it would spin the loop's wait down to zero.
+            self.ui.notification_wake.pending_at_window = None;
+            self.ui.notification_wake.window_started = None;
             return false;
         };
         let Ok(req_id) = s.next_request_id() else {
@@ -146,8 +179,10 @@ impl App {
         }
         let wake = &mut self.ui.notification_wake;
         wake.auto_wake_turns = wake.auto_wake_turns.saturating_add(1);
+        wake.last_wake_at = Some(now);
         wake.pending_at_window = None;
         wake.window_started = None;
+        wake.paused_notice_sent = false;
         self.sessions.current.notifications_pending = 0;
         self.sessions.current.run.start(req_id, Instant::now());
         true

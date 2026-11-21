@@ -690,3 +690,35 @@ fn test_tool_input_delta_maps() {
         other => panic!("expected an acpx notification, got {other:?}"),
     }
 }
+
+/// The queue handler forwards every level as a reliable frame. Reliable is the
+/// point: this frame is the only signal that wakes an idle session, so a
+/// producer under backpressure that dropped it as a preview would leave the
+/// notification with no later event to recover it.
+#[test]
+fn test_queue_level_is_reliable() {
+    let sequencer = EventSequencer::new();
+    sequencer.handle(NotificationQueueEvent { count: 3 });
+    sequencer.handle(NotificationQueueEvent { count: 0 });
+    let frames = sequencer.sequence_pending_for_test();
+    let levels: Vec<u32> = frames
+        .iter()
+        .filter_map(|envelope| match &envelope.payload {
+            FrontendEvent::NotificationsPending { count } => Some(*count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels, vec![3, 0], "every level reaches the frame stream");
+    // A reliable frame is retained for a reconnect; an ephemeral preview is
+    // not. Replaying from the start reads back both levels, which is only true
+    // when neither was enqueued as a preview.
+    let replayed = replay_all(&sequencer, None, Vec::new());
+    let retained: Vec<u32> = replayed
+        .into_iter()
+        .filter_map(|envelope| match envelope.payload {
+            FrontendEvent::NotificationsPending { count } => Some(count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(retained, vec![3, 0], "both levels survive for a reconnect");
+}

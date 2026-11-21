@@ -1,5 +1,4 @@
 use super::*;
-use crate::server::EventSequencer;
 use houyicoder_api::tool::Tool;
 
 mod descriptor;
@@ -750,7 +749,6 @@ async fn test_background_child_notifies_parent() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&parent_runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -1035,7 +1033,6 @@ async fn test_background_failure_notifies_parent() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&parent_runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );
@@ -1381,7 +1378,6 @@ async fn test_background_panic_notifies_parent() {
     spawn(
         Some(bus.clone()),
         Arc::downgrade(&parent_runner),
-        EventSequencer::new(),
         Handle::current(),
         CancellationToken::new(),
     );

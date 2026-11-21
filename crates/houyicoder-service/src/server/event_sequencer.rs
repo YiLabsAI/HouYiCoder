@@ -4,8 +4,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::agent_event::{
-    self, AgentEventHandlers, EventHandler, MemoryChangedEvent, ResponseStreamEvent,
-    ToolExecutionEvent, UserNoticeEvent,
+    self, AgentEventHandlers, EventHandler, MemoryChangedEvent, NotificationQueueEvent,
+    ResponseStreamEvent, ToolExecutionEvent, UserNoticeEvent,
 };
 use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::MemoryScope;
@@ -282,6 +282,15 @@ impl EventHandler<UserNoticeEvent> for EventSequencer {
     }
 }
 
+impl EventHandler<NotificationQueueEvent> for EventSequencer {
+    fn handle(&self, event: NotificationQueueEvent) {
+        // Reliable, not ephemeral: this frame is the only signal that wakes an
+        // idle session, so dropping it under backpressure would strand the
+        // notification with no later event to recover it.
+        self.enqueue_reliable(FrontendEvent::NotificationsPending { count: event.count });
+    }
+}
+
 fn to_protocol_memory_origin(origin: agent_event::MemoryChangeOrigin) -> MemoryChangeOrigin {
     match origin {
         agent_event::MemoryChangeOrigin::PrimaryAgent => MemoryChangeOrigin::PrimaryAgent,
@@ -350,6 +359,7 @@ impl EventSequencer {
         handlers.set_tool_execution(Arc::new(self.clone()));
         handlers.set_memory_changed(Arc::new(self.clone()));
         handlers.set_user_notice(Arc::new(self.clone()));
+        handlers.set_notification_queue(Arc::new(self.clone()));
         runner.set_event_handlers(handlers);
     }
 

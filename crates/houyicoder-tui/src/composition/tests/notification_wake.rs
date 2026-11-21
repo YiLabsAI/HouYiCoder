@@ -6,6 +6,8 @@
 use super::super::*;
 use crate::agent_message::{ServerEvent, SessionMessage};
 use crate::composition::local_test_home;
+use crate::records::TranscriptLine;
+use crate::ui::switch_state::{MAX_AUTO_WAKE_TURNS, WAKE_BUDGET_COOLDOWN};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::SessionId;
 use houyicoder_service::composition::BuildRunnerOptions;
@@ -161,11 +163,11 @@ fn test_wake_waits_for_idle() {
 }
 
 /// A user submission resets the budget: after the user's own turn, the
-/// session may wake five more times on its own.
+/// session may wake again on its own.
 #[test]
 fn test_wake_user_resets_budget() {
     let mut app = wired_app();
-    app.ui.notification_wake.auto_wake_turns = 5;
+    app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
     app.ui.notification_wake.user_interrupted();
     assert_eq!(app.ui.notification_wake.auto_wake_turns, 0);
 }
@@ -188,18 +190,18 @@ fn test_wake_skips_after_interrupt() {
     assert_eq!(app.ui.notification_wake.auto_wake_turns, 0);
 }
 
-/// Five consecutive wakes is the ceiling: the sixth report parks.
+/// Sixteen consecutive wakes inside one burst is the ceiling: the next report
+/// parks.
 #[test]
 fn test_wake_budget_stops() {
     let mut app = wired_app();
     app.sessions.current.last_run_final = true;
-    app.ui.notification_wake.auto_wake_turns = 5;
+    app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
     report_pending(&mut app, 1);
     age_past_debounce(&mut app);
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(!app.sessions.current.run.is_active());
-    assert!(!dirty);
 }
 
 /// A session with no connection to enqueue through does not crash or spend
@@ -215,4 +217,70 @@ fn test_wake_survives_no_connection() {
     app.idle_drain(None, &mut dirty);
     assert!(!app.sessions.current.run.is_active());
     assert_eq!(app.ui.notification_wake.auto_wake_turns, 0);
+}
+
+/// Hitting the cap must close the debounce window and say so once. A window
+/// left open makes the loop's own wait arithmetic return zero, so the session
+/// spins at full CPU on a wake it will never send.
+#[test]
+fn test_wake_cap_closes_window() {
+    let mut app = wired_app();
+    app.sessions.current.last_run_final = true;
+    app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
+    report_pending(&mut app, 3);
+    age_past_debounce(&mut app);
+    let mut dirty = false;
+    app.idle_drain(None, &mut dirty);
+    assert!(
+        app.ui.notification_wake.window_started.is_none(),
+        "the cap closes the window instead of leaving it open to spin"
+    );
+    assert!(app.ui.notification_wake.paused_notice_sent);
+    let notices = app
+        .sessions
+        .current
+        .transcript
+        .lines()
+        .iter()
+        .filter(|line| matches!(line, TranscriptLine::System(s) if s.contains("waiting")))
+        .count();
+    assert_eq!(
+        notices, 1,
+        "the parked backlog is reported once, not per pass"
+    );
+    // A second pass reports nothing new.
+    age_past_debounce(&mut app);
+    app.idle_drain(None, &mut dirty);
+    let again = app
+        .sessions
+        .current
+        .transcript
+        .lines()
+        .iter()
+        .filter(|line| matches!(line, TranscriptLine::System(s) if s.contains("waiting")))
+        .count();
+    assert_eq!(again, 1, "the notice is deduplicated across passes");
+}
+
+/// A quiet stretch longer than the cooldown resets the burst budget, so
+/// endings spread through a long session never latch the wake shut.
+#[test]
+fn test_wake_cooldown_resets_budget() {
+    let mut app = wired_app();
+    app.sessions.current.last_run_final = true;
+    app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
+    app.ui.notification_wake.last_wake_at = Some(
+        Instant::now()
+            .checked_sub(WAKE_BUDGET_COOLDOWN + Duration::from_secs(1))
+            .expect("past the cooldown"),
+    );
+    report_pending(&mut app, 1);
+    age_past_debounce(&mut app);
+    let mut dirty = false;
+    app.idle_drain(None, &mut dirty);
+    assert!(
+        app.sessions.current.run.is_active(),
+        "a wake-free stretch longer than the cooldown restores the budget"
+    );
+    assert_eq!(app.ui.notification_wake.auto_wake_turns, 1);
 }
