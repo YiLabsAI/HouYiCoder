@@ -7,9 +7,6 @@
 
 #![cfg(feature = "acp-cross-decode")]
 
-use futures::SinkExt;
-use futures::StreamExt;
-use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -21,11 +18,13 @@ use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::encode;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp::adapter::AcpAdapter;
-use houyicoder_service::acp::carrier::AcpIo;
+use houyicoder_service::acp::pump::AcpDuplexPump;
+use houyicoder_service::acp::pump::from_line_channels;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 fn stub_runner() -> (Arc<Runner>, SessionId) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -45,13 +44,17 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-fn pair() -> (AcpIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (AcpDuplexPump, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    (AcpIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        from_line_channels(server_rx, server_tx),
+        client_tx,
+        client_rx,
+    )
 }
 
-async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
+async fn send(tx: &mpsc::Sender<String>, msg: &impl serde::Serialize) {
     let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
@@ -60,7 +63,7 @@ async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
 }
 
 async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
-    rx.next()
+    rx.recv()
         .await
         .expect("server replied")
         .trim_end()
@@ -81,14 +84,10 @@ async fn test_unknown_method_not_found() {
         1,
         SessionLeaseStore::new(),
     ));
-    let (mut io, mut tx, mut rx) = pair();
+    let (mut io, tx, mut rx) = pair();
     let srv = server(adapter, runner, session);
     let h = tokio::spawn(async move { srv.serve(&mut io).await });
-    send(
-        &mut tx,
-        &AcpRequest::new(99, "bogus", serde_json::json!({})),
-    )
-    .await;
+    send(&tx, &AcpRequest::new(99, "bogus", serde_json::json!({}))).await;
     let reply = recv(&mut rx).await;
     assert!(reply.contains(r#""id":99"#), "{reply}");
     assert!(reply.contains(r#""code":-32601"#), "{reply}");
@@ -106,7 +105,7 @@ async fn test_malformed_frame_parse_error() {
         1,
         SessionLeaseStore::new(),
     ));
-    let (mut io, mut tx, mut rx) = pair();
+    let (mut io, tx, mut rx) = pair();
     let srv = server(adapter, runner, session);
     let h = tokio::spawn(async move { srv.serve(&mut io).await });
     tx.send("not json at all\n".into()).await.unwrap();
@@ -126,12 +125,12 @@ async fn test_prompt_missing_params_invalid() {
         1,
         SessionLeaseStore::new(),
     ));
-    let (mut io, mut tx, mut rx) = pair();
+    let (mut io, tx, mut rx) = pair();
     let srv = server(adapter, runner, session);
     let h = tokio::spawn(async move { srv.serve(&mut io).await });
     // No params field.
     send(
-        &mut tx,
+        &tx,
         &AcpRequest::new(2, "session/prompt", serde_json::json!({})),
     )
     .await;
@@ -152,7 +151,7 @@ async fn test_string_request_id_echoed() {
         1,
         SessionLeaseStore::new(),
     ));
-    let (mut io, mut tx, mut rx) = pair();
+    let (mut io, tx, mut rx) = pair();
     let srv = server(adapter, runner, session);
     let h = tokio::spawn(async move { srv.serve(&mut io).await });
     let req = AcpRequest {
@@ -161,7 +160,7 @@ async fn test_string_request_id_echoed() {
         method: "initialize".into(),
         params: None,
     };
-    send(&mut tx, &req).await;
+    send(&tx, &req).await;
     let reply = recv(&mut rx).await;
     assert!(reply.contains(r#""id":"abc""#), "{reply}");
     drop(tx);

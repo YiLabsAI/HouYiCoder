@@ -10,10 +10,9 @@
 //!                      instead of the TUI. A stock client connects via the
 //!                      pipe; frames are NDJSON JSON-RPC lines on stdin,
 //!                      replies + notifications on stdout. The session id
-//!                      is printed to stderr so the client prompts against
-//!                      the right id (stdout stays clean for the frame
-//!                      stream). Single-session per process; multi-session
-//!                      detach + reconnect across processes is a later cut.
+//!                      arrives in the session/new reply. Single-session per
+//!                      process; multi-session detach + reconnect across
+//!                      processes is a later cut.
 //!
 //! Without --project, the runner resolves the workspace by walking up from
 //! the process cwd to the nearest workspace manifest, so launching from
@@ -56,8 +55,6 @@ use crate::session::housekeeping::fire_after_bundle;
 use crate::session::lock::{SessionLock, StoreIdentity};
 use crate::session::resume_bundle::build_bundle_for_fork;
 use crate::session::resume_bundle::build_bundle_for_resume_sid;
-use futures::StreamExt;
-use futures::channel::mpsc;
 use houyicoder_client::Client;
 use houyicoder_client::StdioTransport;
 use houyicoder_context::SessionId;
@@ -71,12 +68,13 @@ use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::framing::MAX_MESSAGE_BYTES;
 use houyicoder_service::CancellationToken;
 use houyicoder_service::acp::adapter::AcpAdapter;
-use houyicoder_service::acp::carrier::AcpIo;
+use houyicoder_service::acp::pump::spawn_pump;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::composition::BuildRunnerOptions;
 use houyicoder_service::composition::ProviderResolution;
 use houyicoder_service::composition::SessionHost;
 use houyicoder_service::composition::build_runner;
+use houyicoder_service::composition::fleet_status_relay;
 use houyicoder_service::composition::resolve_provider;
 use houyicoder_service::composition::resume_candidates;
 use houyicoder_service::composition::resume_candidates_all;
@@ -86,9 +84,9 @@ use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_service::local_ipc;
 use houyicoder_service::server::EventSequencer;
 use houyicoder_tui::app::run_with_runner;
+use std::io::BufReader;
 use std::io::stdin;
 use std::io::stdout;
-use std::io::{BufRead, Write};
 use std::process::id;
 use tokio::runtime::Builder;
 
@@ -363,7 +361,7 @@ fn run_detached_host(
     let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut bundle.runner);
     let relay_cancel = CancellationToken::new();
-    let relay_handle = houyicoder_service::composition::fleet_status_relay::spawn(
+    let relay_handle = fleet_status_relay::spawn(
         bundle.bus.clone(),
         event_sequencer.clone(),
         runtime.handle().clone(),
@@ -518,54 +516,22 @@ fn run_acp_stdio(
             .with_session_binding(binding),
     );
 
-    // mpsc pair: one direction each way. Large capacity so a short turn's
-    // frames buffer without a concurrent drain (the drain runs after serve
-    // returns); a streaming production carrier drains concurrently to avoid
-    // blocking on a full buffer.
-    let (client_tx, server_rx) = mpsc::channel::<String>(256);
-    let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    let mut io = AcpIo::new(server_tx, server_rx);
-
-    // Bridge stdin to the inbound channel. A dedicated thread does blocking
-    // read_line (tokio stdin has an event-loop blocking pitfall); EOF drops
-    // the sender so the server sees a clean close.
-    std::thread::spawn(move || {
-        let stdin = stdin();
-        let mut tx = client_tx;
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(l) => {
-                    if tx.try_send(l + "\n").is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
     // Drive the server on a multi-thread runtime so the real provider (HTTP
     // calls) + the sandbox (subprocess spawns) have a runtime that can handle
-    // blocking I/O + child reaping. serve returns when the client closes
-    // stdin; the buffered outbound frames drain to stdout after.
+    // blocking I/O + child reaping. The pump reads stdin on its own thread and
+    // writes each outbound frame to stdout as it is produced, so a client that
+    // waits for a reply before sending the next request never deadlocks.
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     let background_tasks = Arc::clone(&bundle.background_tasks);
     runtime.block_on(async move {
         fire_after_bundle(session);
+        let mut pump = spawn_pump(BufReader::new(stdin()), stdout());
         let server = AcpServer::new(adapter, runner, session);
-        drop(server.serve(&mut io).await);
+        drop(server.serve(&mut pump).await);
         background_tasks.shutdown();
-        // serve borrows io by reference, so io (which holds the outbound
-        // sender) outlives serve. Drop it so the drain below terminates.
-        drop(io);
-        let mut out_rx = client_rx;
-        let stdout = stdout();
-        let mut out = stdout.lock();
-        while let Some(frame) = out_rx.next().await {
-            drop(out.write_all(frame.as_bytes()));
-            drop(out.write_all(b"\n"));
-            drop(out.flush());
-        }
+        // serve returns when the client closes stdin; close waits for the
+        // writer to flush the last reply before the process exits.
+        pump.close().await;
     });
     Ok(())
 }

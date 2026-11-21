@@ -1,5 +1,5 @@
-//! Agent Client Protocol (ACP) adapter, stdio serve loop, and server.
+//! Agent Client Protocol (ACP) adapter, duplex frame pump, and server.
 
 pub mod adapter;
-pub mod carrier;
+pub mod pump;
 pub mod server;

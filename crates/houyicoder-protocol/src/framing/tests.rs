@@ -53,6 +53,19 @@ fn test_decoder_holds_until_terminator() {
     assert_eq!(m.id, 1);
 }
 
+/// A reader that classifies frames reads their raw text, and the bytes a
+/// peer left without a terminator are handed back once the stream ends.
+#[test]
+fn test_decoder_yields_raw_lines() {
+    let mut d = FrameDecoder::new(1024);
+    d.push(b"first\nsecond\nthird").unwrap();
+    assert_eq!(d.next_line().as_deref(), Some("first"));
+    assert_eq!(d.next_line().as_deref(), Some("second"));
+    assert!(d.next_line().is_none(), "third is unterminated");
+    assert_eq!(d.finish().as_deref(), Some("third"));
+    assert!(d.finish().is_none(), "nothing left after the final frame");
+}
+
 #[test]
 fn test_encode_refuses_oversized() {
     let m = Msg {

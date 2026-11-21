@@ -25,12 +25,13 @@ use houyicoder_protocol::frontend::{FrontendRequest, SessionId as FrontendSessio
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp::adapter::AcpAdapter;
-use houyicoder_service::acp::carrier::AcpIo;
+use houyicoder_service::acp::pump::from_line_channels;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use std::sync::Arc;
+use tokio::sync::mpsc as tokio_mpsc;
 
 const REPLY: &str = "hello from stub";
 
@@ -94,9 +95,9 @@ async fn frontend_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> S
 /// the stdio path is covered by acp_drop_in; this isolates the server
 /// logic from the carrier).
 async fn acp_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> String {
-    let (client_tx, server_rx) = mpsc::channel::<String>(256);
-    let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    let mut io = AcpIo::new(server_tx, server_rx);
+    let (client_tx, server_rx) = tokio_mpsc::channel::<String>(256);
+    let (server_tx, client_rx) = tokio_mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
     let adapter = Arc::new(AcpAdapter::new(
         AcpxCapabilities::default(),
         1,
@@ -105,24 +106,24 @@ async fn acp_turn_stop_reason(runner: Arc<Runner>, session: SessionId) -> String
     let server = AcpServer::new(adapter, runner, session);
     let handle = tokio::spawn(async move { server.serve(&mut io).await });
 
-    let mut tx = client_tx;
+    let tx = client_tx;
     let mut rx = client_rx;
-    send(
-        &mut tx,
+    send_line(
+        &tx,
         &AcpRequest::new(1, "initialize", serde_json::json!({})),
     )
     .await;
-    drop(recv(&mut rx).await); // initialize reply
+    drop(recv_line(&mut rx).await); // initialize reply
 
     let prompt = serde_json::json!({
         "sessionId": session.to_string(),
         "prompt": [{"type": "text", "text": "hi"}],
     });
-    send(&mut tx, &AcpRequest::new(2, "session/prompt", prompt)).await;
+    send_line(&tx, &AcpRequest::new(2, "session/prompt", prompt)).await;
 
     let mut stop = String::new();
     for _ in 0..64 {
-        let line = recv(&mut rx).await;
+        let line = recv_line(&mut rx).await;
         if line.contains(r#""id":2"#) {
             stop = line;
             break;
@@ -145,6 +146,22 @@ async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
     rx.next()
         .await
         .expect("server frame")
+        .trim_end()
+        .to_string()
+}
+
+async fn send_line(tx: &tokio_mpsc::Sender<String>, msg: &impl serde::Serialize) {
+    let mut f = encode(msg).expect("encode");
+    if !f.ends_with('\n') {
+        f.push('\n');
+    }
+    tx.send(f).await.expect("acp client sends frame");
+}
+
+async fn recv_line(rx: &mut tokio_mpsc::Receiver<String>) -> String {
+    rx.recv()
+        .await
+        .expect("acp server frame")
         .trim_end()
         .to_string()
 }

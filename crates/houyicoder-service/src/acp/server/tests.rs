@@ -8,9 +8,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::SinkExt;
-use futures::StreamExt;
-use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
@@ -31,12 +28,13 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 
 use super::AcpServer;
 use crate::acp::adapter::AcpAdapter;
-use crate::acp::carrier::AcpIo;
+use crate::acp::pump::from_line_channels;
 use crate::lifecycle::SessionLeaseStore;
 use tokio::time::timeout;
 
@@ -219,7 +217,7 @@ fn spawn_server(
     let srv = AcpServer::new(adapter, runner, session);
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
-    let mut io = AcpIo::new(server_tx, server_rx);
+    let mut io = from_line_channels(server_rx, server_tx);
     let handle = tokio::spawn(async move { srv.serve(&mut io).await });
     (handle, client_tx, client_rx)
 }
@@ -235,7 +233,7 @@ fn prompt_request(session: SessionId, id: i64) -> AcpRequest {
     AcpRequest::new(id, "session/prompt", prompt_params(session, "go"))
 }
 
-async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
+async fn send(tx: &mpsc::Sender<String>, msg: &impl serde::Serialize) {
     let mut f = encode(msg).expect("encode");
     if !f.ends_with('\n') {
         f.push('\n');
@@ -244,7 +242,7 @@ async fn send(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
 }
 
 async fn recv(rx: &mut mpsc::Receiver<String>) -> String {
-    timeout(Duration::from_secs(5), rx.next())
+    timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("server frame timeout")
         .expect("server replied")
@@ -316,9 +314,9 @@ fn cancelled(ask_id: AcpRequestId) -> AcpResponse {
 async fn test_prompt_final_output() {
     let session = SessionId::new();
     let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 7)).await;
+    send(&tx, &prompt_request(session, 7)).await;
     let result = recv_prompt_result(&mut rx, 7).await;
     let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
@@ -334,9 +332,9 @@ async fn test_prompt_final_output() {
 async fn test_client_closed_during_run() {
     let session = SessionId::new();
     let (runner, entered, release_tx) = blocking_runner();
-    let (handle, mut tx, rx) = spawn_server(runner, session);
+    let (handle, tx, rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     // Effect latch: the run is live inside the tool, so the closed carrier
     // is observed by the frame branch of the run select, not raced.
     timeout(Duration::from_secs(5), entered.notified())
@@ -361,13 +359,13 @@ async fn test_client_closed_during_run() {
 async fn test_unexpected_frame_during_run() {
     let session = SessionId::new();
     let (runner, entered, release_tx) = blocking_runner();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("run entered the blocking tool");
-    send(&mut tx, &AcpRequest::new(5, "bogus", json!({}))).await;
+    send(&tx, &AcpRequest::new(5, "bogus", json!({}))).await;
     let err = handle
         .await
         .expect("join")
@@ -387,13 +385,13 @@ async fn test_unexpected_frame_during_run() {
 async fn test_cancel_during_run_stops() {
     let session = SessionId::new();
     let (runner, entered, release_tx) = blocking_runner();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 3)).await;
+    send(&tx, &prompt_request(session, 3)).await;
     timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("run entered the blocking tool");
-    send(&mut tx, &AcpNotification::new("session/cancel", json!({}))).await;
+    send(&tx, &AcpNotification::new("session/cancel", json!({}))).await;
     let result = recv_prompt_result(&mut rx, 3).await;
     let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
     assert_eq!(resp.stop_reason, StopReason::Cancelled);
@@ -408,9 +406,9 @@ async fn test_cancel_during_run_stops() {
 #[tokio::test]
 async fn test_client_closed_during_permission() {
     let session = SessionId::new();
-    let (handle, mut tx, mut rx) = spawn_server(guarded_runner(), session);
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     let _ask = recv_ask(&mut rx).await;
     drop(tx);
     drop(rx);
@@ -422,24 +420,27 @@ async fn test_client_closed_during_permission() {
     assert_eq!(err.message, "client closed mid-permission");
 }
 
-/// A frame that parses as no JSON-RPC shape cannot answer the ask: the
-/// serve loop fails closed with a typed InvalidFrame error.
+/// A frame that parses as no JSON-RPC shape is answered with a parse error
+/// and leaves the card pending; the real answer still decides the ask.
 #[tokio::test]
 async fn test_garbage_permission_response() {
     let session = SessionId::new();
-    let (handle, mut tx, mut rx) = spawn_server(guarded_runner(), session);
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
-    let _ask = recv_ask(&mut rx).await;
+    send(&tx, &prompt_request(session, 1)).await;
+    let ask = recv_ask(&mut rx).await;
     tx.send("not json at all\n".into())
         .await
         .expect("send garbage");
-    let err = handle
-        .await
-        .expect("join")
-        .expect_err("a garbage answer fails closed");
-    assert_eq!(err.category, ErrorCategory::InvalidFrame);
-    assert!(!err.message.is_empty(), "the parse failure is carried");
+    let error = recv_acp_error(&mut rx).await;
+    assert_eq!(error.code, AcpErrorCode::ParseError);
+    send(&tx, &allow_once(ask.id.clone())).await;
+    let result = recv_prompt_result(&mut rx, 1).await;
+    let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
+    assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
 }
 
 /// An error response to the permission ask is a refusal the protocol cannot
@@ -447,12 +448,12 @@ async fn test_garbage_permission_response() {
 #[tokio::test]
 async fn test_rejected_permission_ask() {
     let session = SessionId::new();
-    let (handle, mut tx, mut rx) = spawn_server(guarded_runner(), session);
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     let ask = recv_ask(&mut rx).await;
     send(
-        &mut tx,
+        &tx,
         &AcpResponse::err(
             ask.id.clone(),
             AcpErrorCode::InternalError,
@@ -477,12 +478,12 @@ async fn test_rejected_permission_ask() {
 #[tokio::test]
 async fn test_bad_permission_result() {
     let session = SessionId::new();
-    let (handle, mut tx, mut rx) = spawn_server(guarded_runner(), session);
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     let ask = recv_ask(&mut rx).await;
     send(
-        &mut tx,
+        &tx,
         &AcpResponse::ok(ask.id.clone(), json!({"nonsense": 1})),
     )
     .await;
@@ -502,11 +503,11 @@ async fn test_permission_allow_completes() {
     let session = SessionId::new();
     let runner = guarded_runner();
     let inspector = runner.clone();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 4)).await;
+    send(&tx, &prompt_request(session, 4)).await;
     let ask = recv_ask(&mut rx).await;
-    send(&mut tx, &allow_once(ask.id.clone())).await;
+    send(&tx, &allow_once(ask.id.clone())).await;
     let result = recv_prompt_result(&mut rx, 4).await;
     let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
@@ -527,6 +528,167 @@ async fn test_permission_allow_completes() {
     handle.await.expect("join").expect("clean close");
 }
 
+/// A session/cancel that arrives while the card is up ends the turn as
+/// cancelled: the client never sends a verdict, so the ask is abandoned and
+/// the prompt replies with the cancelled stop reason.
+#[tokio::test]
+async fn test_ask_cancel_ends_turn() {
+    let session = SessionId::new();
+    let runner = guarded_runner();
+    let inspector = runner.clone();
+    let (handle, tx, mut rx) = spawn_server(runner, session);
+
+    send(&tx, &prompt_request(session, 5)).await;
+    let _ask = recv_ask(&mut rx).await;
+    let cancel = AcpNotification::new("session/cancel", json!({"sessionId": session.to_string()}));
+    send(&tx, &cancel).await;
+
+    let result = recv_prompt_result(&mut rx, 5).await;
+    let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
+    assert_eq!(resp.stop_reason, StopReason::Cancelled);
+
+    let approvals = inspector.store().trajectory_head(session).summary.approvals;
+    assert_eq!(approvals.cards, 1, "the question still reached the client");
+    assert_eq!(approvals.unknown_outcome, 1, "and gave no verdict");
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A response addressed to a different ask id does not decide the pending
+/// card: the wait keeps going until the answer for this ask arrives.
+#[tokio::test]
+async fn test_mismatched_ask_response_ignored() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+
+    send(&tx, &prompt_request(session, 3)).await;
+    let ask = recv_ask(&mut rx).await;
+    let wrong = allow_once(AcpRequestId::Number(999));
+    send(&tx, &wrong).await;
+    send(&tx, &allow_once(ask.id.clone())).await;
+
+    let result = recv_prompt_result(&mut rx, 3).await;
+    let resp: PromptResponse = serde_json::from_value(result).expect("typed prompt response");
+    assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A verdict delivered an instant before the client closes still decides
+/// the card: the biased select lets the answer win over the concurrent EOF,
+/// so the approval is audited before the connection tears down.
+#[tokio::test]
+async fn test_close_after_answer_audits() {
+    let session = SessionId::new();
+    let runner = guarded_runner();
+    let inspector = runner.clone();
+    let (handle, tx, mut rx) = spawn_server(runner, session);
+
+    send(&tx, &prompt_request(session, 7)).await;
+    let ask = recv_ask(&mut rx).await;
+    send(&tx, &allow_once(ask.id.clone())).await;
+    drop(tx);
+    drop(rx);
+    drop(handle.await);
+    let events = inspector.store().trajectory_tail(session);
+    assert!(
+        events.iter().any(|e| matches!(
+            e.event,
+            SessionEvent::PermissionDecision {
+                verdict: PermissionVerdict::Approved,
+                ..
+            }
+        )),
+        "the answer was applied before the close"
+    );
+}
+
+/// A cancel that ended one turn does not poison the next: the sticky flag
+/// resets at prompt start, so a following prompt runs to its normal outcome.
+#[tokio::test]
+async fn test_prompt_after_cancel_runs() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+
+    send(&tx, &prompt_request(session, 1)).await;
+    let _ask = recv_ask(&mut rx).await;
+    let cancel = AcpNotification::new("session/cancel", json!({"sessionId": session.to_string()}));
+    send(&tx, &cancel).await;
+    let first = recv_prompt_result(&mut rx, 1).await;
+    let resp: PromptResponse = serde_json::from_value(first).expect("typed prompt response");
+    assert_eq!(resp.stop_reason, StopReason::Cancelled);
+
+    send(&tx, &prompt_request(session, 2)).await;
+    let second = recv_prompt_result(&mut rx, 2).await;
+    let resp: PromptResponse = serde_json::from_value(second).expect("typed prompt response");
+    assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// The idle frame loop routes each shape: a request delegates to the
+/// adapter, a malformed line is answered with a parse error, an orphan
+/// response is logged without a reply, and a cancel notification aborts the
+/// runner. The initialize reply at the end proves the loop kept serving.
+#[tokio::test]
+async fn test_idle_frames_answered() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+
+    tx.send("not json at all\n".into())
+        .await
+        .expect("send garbage");
+    let error = recv_acp_error(&mut rx).await;
+    assert_eq!(error.code, AcpErrorCode::ParseError);
+
+    send(&tx, &AcpResponse::ok(AcpRequestId::Number(99), json!({}))).await;
+    send(
+        &tx,
+        &AcpNotification::new("session/cancel", json!({"sessionId": session.to_string()})),
+    )
+    .await;
+    send(
+        &tx,
+        &AcpRequest::new(9, "initialize", serde_json::json!({})),
+    )
+    .await;
+    let reply = recv(&mut rx).await;
+    assert!(reply.contains(r#""id":9"#), "{reply}");
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A request that arrives while a permission card is up is a protocol
+/// violation: the card cannot be answered by a new request, so the serve
+/// loop fails closed instead of guessing.
+#[tokio::test]
+async fn test_ask_request_fails_closed() {
+    let session = SessionId::new();
+    let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
+
+    send(&tx, &prompt_request(session, 1)).await;
+    let _ask = recv_ask(&mut rx).await;
+    send(
+        &tx,
+        &AcpRequest::new(9, "initialize", serde_json::json!({})),
+    )
+    .await;
+    let err = handle
+        .await
+        .expect("join")
+        .expect_err("a request during the ask fails closed");
+    assert_eq!(err.category, ErrorCategory::InvalidFrame);
+    assert!(
+        err.message.contains("permission ask is pending"),
+        "the violation is named: {}",
+        err.message
+    );
+}
+
 /// An ask the client abandons is still a card on the durable trail: the
 /// question reached the client, so the audit holds it with no verdict rather
 /// than reporting that nothing was ever asked.
@@ -535,9 +697,9 @@ async fn test_abandoned_ask_counts_card() {
     let session = SessionId::new();
     let runner = guarded_runner();
     let inspector = runner.clone();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     let _ask = recv_ask(&mut rx).await;
     drop(tx);
     drop(rx);
@@ -560,17 +722,17 @@ async fn test_abandoned_ask_counts_card() {
 async fn test_unexpected_frame_during_resume() {
     let session = SessionId::new();
     let (runner, entered, release_tx) = guarded_blocking_runner();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 6)).await;
+    send(&tx, &prompt_request(session, 6)).await;
     let ask = recv_ask(&mut rx).await;
-    send(&mut tx, &allow_once(ask.id.clone())).await;
+    send(&tx, &allow_once(ask.id.clone())).await;
     // Effect latch: the resumed run is live inside the tool, so the bogus
     // frame arrives while the resume select is still reading.
     timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("resumed run entered the blocking tool");
-    send(&mut tx, &AcpRequest::new(9, "bogus", json!({}))).await;
+    send(&tx, &AcpRequest::new(9, "bogus", json!({}))).await;
     let err = handle
         .await
         .expect("join")
@@ -590,11 +752,11 @@ async fn test_unexpected_frame_during_resume() {
 async fn test_client_closed_during_resume() {
     let session = SessionId::new();
     let (runner, entered, release_tx) = guarded_blocking_runner();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     let ask = recv_ask(&mut rx).await;
-    send(&mut tx, &allow_once(ask.id.clone())).await;
+    send(&tx, &allow_once(ask.id.clone())).await;
     timeout(Duration::from_secs(5), entered.notified())
         .await
         .expect("resumed run entered the blocking tool");
@@ -617,11 +779,11 @@ async fn test_cancelled_ask_counts_unknown() {
     let session = SessionId::new();
     let runner = guarded_runner();
     let inspector = runner.clone();
-    let (handle, mut tx, mut rx) = spawn_server(runner, session);
+    let (handle, tx, mut rx) = spawn_server(runner, session);
 
-    send(&mut tx, &prompt_request(session, 1)).await;
+    send(&tx, &prompt_request(session, 1)).await;
     let ask = recv_ask(&mut rx).await;
-    send(&mut tx, &cancelled(ask.id.clone())).await;
+    send(&tx, &cancelled(ask.id.clone())).await;
     drop(tx);
     drop(rx);
     let _served = handle.await.expect("join");

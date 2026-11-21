@@ -89,8 +89,7 @@ CLONE_BASELINE = 2808
 # module-level dead_code suppressions; the L3 report lists the files so
 # deep review asks "still needed?" when a file is touched.
 MODULE_DEAD_CODE_RE = re.compile(r"#!\[allow\(dead_code\)\]")
-MODULE_DEAD_CODE_BASELINE = 14  # measured 2026-09-11 after removing the TUI
-# crate-wide suppression and narrowing test-only items.
+MODULE_DEAD_CODE_BASELINE = 13  # lowered when the ACP carrier suppression left with the carrier
 
 
 def _rg(pattern: str, *args: str) -> str:

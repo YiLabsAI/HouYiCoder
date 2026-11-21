@@ -5,9 +5,7 @@
 //! a pipe carrier would serve — the adapter handles the stateless methods,
 //! AcpServer owns the runner + the half-live turn state machine.
 
-use futures::SinkExt;
 use futures::StreamExt;
-use futures::channel::mpsc;
 use futures::stream::iter;
 use futures::stream::pending;
 use houyicoder_api::provider::ModelProvider;
@@ -28,12 +26,14 @@ use houyicoder_protocol::llm::ProviderError;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp::adapter::AcpAdapter;
-use houyicoder_service::acp::carrier::AcpIo;
+use houyicoder_service::acp::pump::AcpDuplexPump;
+use houyicoder_service::acp::pump::from_line_channels;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_session::SessionStore;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::task::yield_now;
 
 /// Build a minimal runner over a stub provider that returns one text reply.
@@ -56,10 +56,14 @@ fn stub_runner() -> (Arc<Runner>, SessionId) {
     (Arc::new(runner), session)
 }
 
-fn pair() -> (AcpIo, mpsc::Sender<String>, mpsc::Receiver<String>) {
+fn pair() -> (AcpDuplexPump, mpsc::Sender<String>, mpsc::Receiver<String>) {
     let (client_tx, server_rx) = mpsc::channel::<String>(8);
     let (server_tx, client_rx) = mpsc::channel::<String>(8);
-    (AcpIo::new(server_tx, server_rx), client_tx, client_rx)
+    (
+        from_line_channels(server_rx, server_tx),
+        client_tx,
+        client_rx,
+    )
 }
 
 async fn send_line(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
@@ -71,7 +75,7 @@ async fn send_line(tx: &mut mpsc::Sender<String>, msg: &impl serde::Serialize) {
 }
 
 async fn recv_line(rx: &mut mpsc::Receiver<String>) -> String {
-    let line = rx.next().await.expect("server sent a frame");
+    let line = rx.recv().await.expect("server sent a frame");
     line.strip_suffix('\n').unwrap_or(&line).to_string()
 }
 

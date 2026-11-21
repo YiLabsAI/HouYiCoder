@@ -139,6 +139,26 @@ impl FrameDecoder {
         Ok(())
     }
 
+    /// Drain the next complete frame as raw text, its terminator already
+    /// stripped. Use it when the reader classifies the frame before choosing
+    /// the type to decode it as; next_frame decodes directly.
+    pub fn next_line(&mut self) -> Option<String> {
+        self.ready.pop_front()
+    }
+
+    /// Hand back the bytes buffered since the last terminator as one final
+    /// frame. Call it once the peer's stream has ended: a peer that wrote a
+    /// last frame without a line break still sent a frame, and a reader that
+    /// waits for a terminator that will never come drops it.
+    pub fn finish(&mut self) -> Option<String> {
+        if self.buf.is_empty() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&self.buf).into_owned();
+        self.buf.clear();
+        Some(line)
+    }
+
     /// Drain the next complete frame, deserialized to T. None when no
     /// complete frame is ready.
     pub fn next_frame<T: DeserializeOwned>(&mut self) -> Option<Result<T, FrameError>> {

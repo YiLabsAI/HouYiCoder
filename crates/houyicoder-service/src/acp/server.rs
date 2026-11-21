@@ -9,16 +9,16 @@
 //! returns Interruption does NOT end — the server sends one reverse request
 //! per pending ask, reads one response back, appends the verdict audit, resumes,
 //! and loops. Only a final outcome replies to the original session/prompt id.
-//! The runner-abort half of cancel and takeControl-force lands when the
-//! composition root wires Arc<Runner> into those handlers; prompt here is the
-//! first cut that drives the run.
+//! A session/cancel notification aborts the runner whether it arrives during
+//! the run, while a permission card is pending, or between turns.
 
 #![allow(dead_code)] // pub server type consumed by other crates and tests; locally unused
 
 use std::sync::Arc;
 
 use crate::acp::adapter::AcpAdapter;
-use crate::acp::carrier::AcpIo;
+use crate::acp::pump::AcpDuplexPump;
+use crate::acp::pump::InboundFrame;
 use crate::protocol_adapter::{
     acp_permission_response_to_decision, approval_to_acp_permission, map_run_error, map_run_result,
     map_session_update,
@@ -29,8 +29,8 @@ use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::{ApprovalRequest, RunOutcome, Runner};
 use houyicoder_protocol::acp_wire::{
-    AcpError, AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, JsonRpcVersion,
-    PromptRequest, PromptResponse, RequestPermissionResponse,
+    AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, PromptRequest,
+    PromptResponse, RequestPermissionResponse,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
@@ -44,9 +44,11 @@ use std::time::UNIX_EPOCH;
 /// The full ACP server. Owns the adapter (shared via Arc so the composition
 /// root and the IO bridge can hold the same one) plus the runner + session +
 /// the reverse-request id counter + the pushed-event cursor. serve runs the
-/// line loop: each inbound frame is a request (session/prompt drives the
-/// runner; other methods delegate to the adapter) or a notification
-/// (session/cancel reaps state).
+/// frame loop: a request drives the runner (session/prompt) or delegates to
+/// the adapter, a notification reaps state and aborts the runner
+/// (session/cancel), a response wakes the reverse-request waiter, and an
+/// unparseable line is answered with a parse error unless a run is active,
+/// where it fails closed.
 pub struct AcpServer {
     adapter: Arc<AcpAdapter>,
     runner: Arc<Runner>,
@@ -110,45 +112,54 @@ impl AcpServer {
     }
 
     /// Run the connection: receive frames until the client closes. Each frame
-    /// is parsed as a request (has id) or a notification (no id). session/prompt
-    /// drives the runner through handle_prompt; other requests delegate to the
-    /// adapter and the reply is written back. A parse failure replies with a
-    /// ParseError on the null id. Returns Ok for a clean close, Err for a
-    /// carrier-level failure.
-    pub async fn serve(mut self, io: &mut AcpIo) -> Result<(), ProtocolError> {
+    /// arrives classified by the pump; session/prompt drives the runner
+    /// through handle_prompt, other requests delegate to the adapter and the
+    /// reply is written back, and a response to a reverse request routes to
+    /// its waiter. Returns Ok for a clean close, Err for a pump-level
+    /// failure.
+    pub async fn serve(mut self, pump: &mut AcpDuplexPump) -> Result<(), ProtocolError> {
         loop {
-            let Some(frame) = io.next_frame().await else {
+            let Some(frame) = pump.next_frame().await else {
                 return Ok(());
             };
-            match serde_json::from_str::<AcpRequest>(&frame) {
-                Ok(req) => {
+            match frame {
+                InboundFrame::Request(req) => {
                     if req.method == "session/prompt" {
-                        if let Err(e) = self.handle_prompt(io, &req).await {
-                            self.send_protocol_error(io, e.clone()).await.ok();
+                        if let Err(e) = self.handle_prompt(pump, &req).await {
+                            self.send_protocol_error(pump, e.clone()).await.ok();
                             return Err(e);
                         }
                     } else {
                         let resp = self.adapter.handle(&req).await;
-                        self.send_response(io, &resp).await?;
+                        self.send_response(pump, &resp).await?;
                     }
                 }
-                Err(_) => match serde_json::from_str::<AcpNotification>(&frame) {
-                    Ok(notif) => {
-                        self.adapter.handle_notification(&notif).await;
+                InboundFrame::Notification(notif) => {
+                    // An idle cancel has no drive loop to observe the token,
+                    // so abort here: the next run starts un-cancelled, and a
+                    // cancel that races a run's start still reaches it.
+                    if notif.method == "session/cancel" {
+                        self.runner.abort();
                     }
-                    Err(_) => {
-                        let resp = AcpResponse::Error {
-                            jsonrpc: JsonRpcVersion::V2,
-                            id: AcpRequestId::Null,
-                            error: AcpError {
-                                code: AcpErrorCode::ParseError,
-                                message: "frame did not parse as request or notification".into(),
-                                data: None,
-                            },
-                        };
-                        self.send_response(io, &resp).await?;
+                    self.adapter.handle_notification(&notif).await;
+                }
+                InboundFrame::Response(resp) => {
+                    if !pump.deliver_response(resp) {
+                        tracing::warn!("response matched no pending reverse request");
                     }
-                },
+                }
+                InboundFrame::Unparseable(line) => {
+                    // JSON-RPC 2.0 answers a frame that is not valid JSON-RPC
+                    // with a parse error on the null id, so the peer learns
+                    // the frame was rejected rather than waiting for a reply.
+                    tracing::warn!(bytes = line.len(), "inbound frame did not parse");
+                    let resp = AcpResponse::err(
+                        AcpRequestId::Null,
+                        AcpErrorCode::ParseError,
+                        "frame did not parse as a request, response, or notification",
+                    );
+                    self.send_response(pump, &resp).await?;
+                }
             }
         }
     }
@@ -161,7 +172,7 @@ impl AcpServer {
     #[expect(clippy::too_many_lines, reason = "long by design, kept whole")]
     async fn handle_prompt(
         &mut self,
-        io: &mut AcpIo,
+        io: &mut AcpDuplexPump,
         req: &AcpRequest,
     ) -> Result<(), ProtocolError> {
         let params: PromptRequest = match req.params.as_ref() {
@@ -210,6 +221,10 @@ impl AcpServer {
                 )
                 .await;
         }
+        // Each turn begins un-cancelled: a cancel that ended the previous turn
+        // must not leak into this one. A cancel queued before this prompt still
+        // reaches the run select below, so resetting here loses nothing.
+        self.cancel_requested.store(false, Ordering::Relaxed);
         // Collapse the multimodal content to the plain text the engine run
         // takes today; non-text blocks drop at the service boundary until a
         // multimodal run path lands.
@@ -274,6 +289,7 @@ impl AcpServer {
                 Ok(run) => match run.outcome {
                     RunOutcome::Interruption(approvals) => {
                         let mut decisions = Vec::with_capacity(approvals.len());
+                        let mut cancelled = false;
                         for approval in approvals {
                             let ask_id = self.mint_req_id();
                             let session_str = self.session.to_string();
@@ -294,24 +310,13 @@ impl AcpServer {
                             // the audit must still hold the question rather
                             // than report that none was ever asked.
                             self.record_asked(&approval).await;
-                            // Read the matching reverse response.
-                            let frame = match io.next_frame().await {
-                                Some(f) => f,
-                                None => {
-                                    return Err(ProtocolError::new(
-                                        ErrorCategory::Unavailable,
-                                        "client closed mid-permission",
-                                        false,
-                                    ));
-                                }
+                            // A cancel that arrives while the card is up ends
+                            // the turn without a verdict: the remaining asks
+                            // are not sent and resume is skipped below.
+                            let Some(resp) = self.await_permission(io, ask_id).await? else {
+                                cancelled = true;
+                                break;
                             };
-                            let resp: AcpResponse = serde_json::from_str(&frame).map_err(|e| {
-                                ProtocolError::new(
-                                    ErrorCategory::InvalidFrame,
-                                    e.to_string(),
-                                    false,
-                                )
-                            })?;
                             let resp_value = match resp {
                                 AcpResponse::Result { result, .. } => result,
                                 AcpResponse::Error { error, .. } => {
@@ -358,6 +363,9 @@ impl AcpServer {
                                 }
                             }
                             decisions.push(reply.decision);
+                        }
+                        if cancelled {
+                            tracing::debug!("permission ask cancelled; turn ends without resume");
                         }
                         result = {
                             let resume_fut = self.runner.resume(self.session, &decisions);
@@ -438,24 +446,95 @@ impl AcpServer {
         }
     }
 
+    /// Wait for the response to one permission ask. Returns None when a
+    /// session/cancel notification arrived first: the turn ends cancelled and
+    /// the ask keeps no verdict. The response is matched by its correlation
+    /// id through the pump's waiter table, so a reply meant for another ask
+    /// stays pending instead of deciding this card. An unparseable line is
+    /// answered with a parse error and the wait continues; any other frame
+    /// while the card is up is a protocol violation.
+    async fn await_permission(
+        &mut self,
+        io: &mut AcpDuplexPump,
+        ask_id: i64,
+    ) -> Result<Option<AcpResponse>, ProtocolError> {
+        let mut response = io.expect_response(ask_id);
+        loop {
+            // biased: the verdict wins over a concurrent EOF. A client that
+            // answers and closes immediately makes both the oneshot and
+            // next_frame ready; without bias tokio picks at random and can
+            // drop the delivered answer for a "client closed" error.
+            tokio::select! {
+                biased;
+                resp = &mut response => {
+                    return resp.map(Some).map_err(|_| {
+                        ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            "permission waiter dropped",
+                            false,
+                        )
+                    });
+                }
+                frame = io.next_frame() => match frame {
+                    Some(InboundFrame::Response(resp)) => {
+                        if !io.deliver_response(resp) {
+                            tracing::warn!("response matched no pending permission ask");
+                        }
+                    }
+                    Some(InboundFrame::Notification(notif))
+                        if notif.method == "session/cancel" =>
+                    {
+                        self.runner.abort();
+                        self.adapter.handle_notification(&notif).await;
+                        self.cancel_requested.store(true, Ordering::Relaxed);
+                        io.forget_response(ask_id);
+                        return Ok(None);
+                    }
+                    Some(InboundFrame::Unparseable(line)) => {
+                        tracing::warn!(bytes = line.len(), "inbound frame did not parse");
+                        let resp = AcpResponse::err(
+                            AcpRequestId::Null,
+                            AcpErrorCode::ParseError,
+                            "frame did not parse as a request, response, or notification",
+                        );
+                        self.send_response(io, &resp).await?;
+                    }
+                    Some(_) => {
+                        return Err(ProtocolError::new(
+                            ErrorCategory::InvalidFrame,
+                            "unexpected frame while a permission ask is pending",
+                            false,
+                        ));
+                    }
+                    None => {
+                        return Err(ProtocolError::new(
+                            ErrorCategory::Unavailable,
+                            "client closed mid-permission",
+                            false,
+                        ));
+                    }
+                },
+            }
+        }
+    }
+
     /// Inspect one inbound frame read mid-run (or mid-resume) for a
     /// session/cancel notification. Returns Ok(true) when the frame was a
     /// cancel (the run future keeps polling, the drive loop observes the
     /// cancelled token, and resolves Interrupted) and Ok(false) for any other
     /// frame, which the caller treats as a protocol violation (fail-closed).
     /// The store is reaped so lifecycle state reflects Cancelled. A cancel
-    /// during a pending permission ask (the run paused at Interruption) does
-    /// not cleanly abort the paused drive loop — the engine lacks a
-    /// cancel-pending-resume path; that sub-case lands with engine support.
-    async fn route_cancel_frame(&self, frame: &str) -> Result<bool, ProtocolError> {
-        let Ok(notif) = serde_json::from_str::<AcpNotification>(frame) else {
+    /// arriving while a permission card is pending is handled by the ask
+    /// wait, not here.
+    async fn route_cancel_frame(&self, frame: &InboundFrame) -> Result<bool, ProtocolError> {
+        let InboundFrame::Notification(notif) = frame else {
             return Ok(false);
         };
         if notif.method != "session/cancel" {
             return Ok(false);
         }
         self.runner.abort();
-        self.adapter.handle_notification(&notif).await;
+        self.adapter.handle_notification(notif).await;
         self.cancel_requested.store(true, Ordering::Relaxed);
         Ok(true)
     }
@@ -496,7 +575,7 @@ impl AcpServer {
     /// for the first cut.
     async fn push_turn_event(
         &mut self,
-        io: &mut AcpIo,
+        io: &mut AcpDuplexPump,
         ev: &SessionLogEntry,
     ) -> Result<(), ProtocolError> {
         if let Some(update) = map_session_update(&ev.event) {
@@ -510,7 +589,7 @@ impl AcpServer {
     /// Send a response paired to a request by id.
     async fn send_response(
         &mut self,
-        io: &mut AcpIo,
+        io: &mut AcpDuplexPump,
         resp: &AcpResponse,
     ) -> Result<(), ProtocolError> {
         self.send_typed(io, resp).await
@@ -519,7 +598,7 @@ impl AcpServer {
     /// Send a protocol error with no correlation (the req_id is unknown).
     async fn send_protocol_error(
         &mut self,
-        io: &mut AcpIo,
+        io: &mut AcpDuplexPump,
         err: ProtocolError,
     ) -> Result<(), ProtocolError> {
         let resp = AcpResponse::err(
@@ -533,13 +612,11 @@ impl AcpServer {
     /// Encode a typed message and push it through the carrier.
     async fn send_typed<T: serde::Serialize>(
         &mut self,
-        io: &mut AcpIo,
+        io: &mut AcpDuplexPump,
         msg: &T,
     ) -> Result<(), ProtocolError> {
         let frame = encode(msg)?;
-        io.send_frame(frame)
-            .await
-            .map_err(|e| ProtocolError::new(ErrorCategory::Unavailable, e, false))
+        io.send_frame(frame).await
     }
 }
 
