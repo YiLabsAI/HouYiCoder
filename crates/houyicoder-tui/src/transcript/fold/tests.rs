@@ -86,7 +86,7 @@ fn test_render_summary_todo() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Updated 2 checklists", detect_glyph_set().tool_marker())
+        "  Updated 2 checklists"
     );
     assert_eq!(
         render_summary(&s, &[], true, None).plain,
@@ -98,7 +98,7 @@ fn test_render_summary_todo() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Updated 1 checklist", detect_glyph_set().tool_marker())
+        "  Updated 1 checklist"
     );
 }
 
@@ -112,10 +112,7 @@ fn test_render_past_tense() {
     };
     let out = render_summary(&s, &[], false, Some(ToggleHint::Expand));
     assert!(
-        out.plain.starts_with(&format!(
-            "{} Searched for 2 patterns",
-            detect_glyph_set().tool_marker()
-        )),
+        out.plain.starts_with("  Searched for 2 patterns"),
         "{:?}",
         out
     );
@@ -169,7 +166,7 @@ fn test_render_summary_write() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Wrote 1 file", detect_glyph_set().tool_marker())
+        "  Wrote 1 file"
     );
     assert_eq!(
         render_summary(&s, &[], true, None).plain,
@@ -181,7 +178,7 @@ fn test_render_summary_write() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Wrote 2 files", detect_glyph_set().tool_marker())
+        "  Wrote 2 files"
     );
 }
 
@@ -193,7 +190,7 @@ fn test_render_summary_pluralization() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Listed 2 directories", detect_glyph_set().tool_marker())
+        "  Listed 2 directories"
     );
     let s = ToolStats {
         list: 1,
@@ -201,7 +198,7 @@ fn test_render_summary_pluralization() {
     };
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Listed 1 directory", detect_glyph_set().tool_marker())
+        "  Listed 1 directory"
     );
 }
 
@@ -224,7 +221,7 @@ fn test_read_dedup_same_path() {
     assert_eq!(s.read_count(), 1);
     assert_eq!(
         render_summary(&s, &[], false, Some(ToggleHint::Expand)).plain,
-        format!("{} Read 1 file", detect_glyph_set().tool_marker())
+        "  Read 1 file"
     );
 }
 

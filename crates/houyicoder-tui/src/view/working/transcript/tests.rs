@@ -1,17 +1,21 @@
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
+use houyicoder_protocol::frontend::tasks::BackgroundTaskId;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use crate::agent_message::fleet::FleetEntry;
 use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::brief::tool_call_brief;
-use crate::records::{TeammateView, ToolOutcome, TranscriptLine};
+use crate::records::{
+    SubagentFinished, SubagentOutcome, TeammateView, ToolOutcome, TranscriptLine,
+};
 use crate::rows::row_set::RowSet;
 use crate::rows::slots_key::SlotsKey;
-use crate::test_harness::{attach_connection, render_text, working_app};
+use crate::test_harness::{attach_connection, render_buffer, render_text, working_app};
 use crate::transcript::frame::TranscriptFrame;
+use crate::view::SUCCESS_GREEN;
 use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 
 use super::super::tail_rows::build_tail_rows;
@@ -114,7 +118,11 @@ fn test_hint_single_line() {
         bash_result(),
     ]
     .into();
-    drop(render_text(&app, 32, 12));
+    let out = render_text(&app, 32, 12);
+    assert!(
+        out.contains("  Ran 1 shell command"),
+        "settled fold group indents two spaces without a leading marker:\n{out}"
+    );
     let rows = app.ui.frame.layout.last_all_rows.borrow();
     let hint = rows
         .iter()
@@ -130,6 +138,91 @@ fn test_hint_single_line() {
         UnicodeWidthStr::width(hint.as_str()) <= 32,
         "hint overflow: {hint}"
     );
+}
+
+#[test]
+fn test_primary_markers_share_shape() {
+    let mut app = working_app();
+    let mut background_result = bash_result();
+    if let TranscriptLine::Tool {
+        background_task, ..
+    } = &mut background_result
+    {
+        *background_task = Some(BackgroundTaskId(1));
+    }
+    app.sessions.current.transcript = vec![
+        TranscriptLine::User("check".into()),
+        TranscriptLine::Agent("First assistant reply".into()),
+        TranscriptLine::Tool {
+            name: "read".into(),
+            tool: "read".into(),
+            status: "src/lib.rs".into(),
+            invocation: "src/lib.rs".into(),
+            outcome: ToolOutcome::Success,
+            call_id: "r1".into(),
+            background_task: None,
+            body: String::new(),
+            is_diff: false,
+        },
+        TranscriptLine::Tool {
+            name: "result".into(),
+            tool: "read".into(),
+            status: String::new(),
+            invocation: String::new(),
+            outcome: ToolOutcome::Success,
+            call_id: "r1".into(),
+            background_task: None,
+            body: "ok".into(),
+            is_diff: false,
+        },
+        bash_call("cargo test"),
+        background_result,
+        TranscriptLine::SubagentFinished(SubagentFinished {
+            child_sid: "c1".into(),
+            subagent_type: "explore".into(),
+            description: "audit".into(),
+            outcome: SubagentOutcome::Finished,
+            duration_ms: Some(2_000),
+            tool_uses: 3,
+        }),
+    ]
+    .into();
+
+    let buf = render_buffer(&app, 80, 24);
+    let t = app.ui.frame.layout.transcript_rect.get();
+    let find_row = |needle: &str| -> u16 {
+        (t.y..t.y + t.height)
+            .find(|&y| {
+                let row: String = (t.x..t.x + t.width)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()))
+                    .collect();
+                row.contains(needle)
+            })
+            .unwrap_or_else(|| panic!("missing row containing {needle:?}"))
+    };
+
+    let dot = detect_glyph_set().tool_marker();
+    let agent_y = find_row("First assistant reply");
+    let fold_y = find_row("Read 1 file");
+    let tool_y = find_row("Bash(");
+    let child_y = find_row("Agent \"audit\" finished");
+
+    let agent_cell = buf.cell((t.x, agent_y)).expect("agent col 0");
+    let fold_cell = buf.cell((t.x, fold_y)).expect("fold col 0");
+    let tool_cell = buf.cell((t.x, tool_y)).expect("tool col 0");
+    let child_cell = buf.cell((t.x, child_y)).expect("child col 0");
+
+    assert_eq!(agent_cell.symbol(), dot);
+    assert_ne!(agent_cell.style().fg, Some(SUCCESS_GREEN));
+    assert_eq!(
+        fold_cell.symbol(),
+        " ",
+        "settled fold summary must not draw a gray marker in col 0"
+    );
+    assert_eq!(tool_cell.symbol(), dot);
+    assert_eq!(tool_cell.style().fg, Some(SUCCESS_GREEN));
+    assert_eq!(child_cell.symbol(), dot);
+    assert_eq!(child_cell.style().fg, Some(SUCCESS_GREEN));
 }
 
 #[test]

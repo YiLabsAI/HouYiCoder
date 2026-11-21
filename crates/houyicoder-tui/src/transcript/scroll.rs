@@ -136,6 +136,8 @@ pub struct TranscriptScroll {
     /// step clamps against the number the renderer will publish. The step
     /// and clamp methods read this cell and nothing else.
     pub total: Cell<usize>,
+    /// True while the pointer rests inside the scrollback jump badge.
+    jump_highlighted: bool,
 }
 
 /// The outcome of a downward scroll step. Unchanged: already at the tail,
@@ -174,6 +176,7 @@ impl Default for TranscriptScroll {
             row_absent: Cell::new(false),
             cap: Cell::new(0),
             total: Cell::new(0),
+            jump_highlighted: false,
         }
     }
 }
@@ -254,6 +257,19 @@ impl TranscriptScroll {
     pub fn follow_tail(&mut self) {
         self.anchor = None;
         self.row_absent.set(false);
+        self.jump_highlighted = false;
+    }
+
+    /// True while the pointer rests inside the scrollback jump badge.
+    pub fn jump_highlighted(&self) -> bool {
+        self.jump_highlighted
+    }
+
+    /// Update the scrollback jump badge highlight and report whether it changed.
+    pub fn set_jump_highlighted(&mut self, highlighted: bool) -> bool {
+        let changed = self.jump_highlighted != highlighted;
+        self.jump_highlighted = highlighted;
+        changed
     }
 
     /// Give up a place taken on a frame position, leaving the viewport

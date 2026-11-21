@@ -1,11 +1,13 @@
-//! The glyph vocabulary the transcript draws with, in two grades.
+//! The glyph vocabulary the transcript draws with, in three grades.
 //!
-//! Safe is plain ASCII, present in every font. Rich is the symbol blocks a
-//! modern terminal carries. Every leading marker, gutter, cursor, toggle,
-//! gate mark, and spinner frame is one column wide under both width
-//! policies. Inline punctuation is the exception: the rich forms are
-//! Ambiguous-width, so a renderer that wraps must measure them with the
-//! terminal's own table rather than counting columns itself.
+//! Safe is plain ASCII, present in every font. Console is the neutral-width
+//! subset carried by Windows console fonts (Cascadia Mono and Consolas). Rich
+//! is the symbol blocks a desktop terminal backed by system symbol fonts
+//! carries. Every leading marker, gutter, cursor, toggle, gate mark, down
+//! mark, and spinner frame keeps identical column width under both ordinary
+//! and East-Asian width rules. Inline punctuation is the exception: the rich
+//! forms are Ambiguous-width, so a renderer that wraps must measure them with
+//! the terminal's own table rather than counting columns itself.
 
 use std::env::var;
 use std::sync::OnceLock;
@@ -24,20 +26,26 @@ pub const RICH_SPINNER_FRAMES: &[&str] = &["∙", "✢", "✳", "✶", "✻", "�
 /// One glyph grade: the values a caller draws rows with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlyphSet {
-    /// Plain ASCII only. Used for unknown terminals, terminals without the
-    /// richer symbol blocks, and an explicit user preference.
+    /// Plain ASCII only. Used for unknown terminals, legacy consoles without
+    /// symbol font coverage, and an explicit safe override.
     Safe,
-    /// The richer symbols, for terminals that carry their blocks: one
-    /// column wide and font-covered on the terminals this product targets.
+    /// Neutral-width glyphs covered by Windows console fonts (Cascadia Mono
+    /// and Consolas) without reaching into technical or dingbat blocks.
+    Console,
+    /// The richer symbols, for desktop terminals backed by system symbol
+    /// fonts: one column wide and font-covered on those hosts.
     Rich,
 }
 
 impl GlyphSet {
-    /// The marker a tool call row leads with.
+    /// The marker a tool call or finished delegation row leads with. Shares
+    /// one shape with assistant_marker so color alone distinguishes a reply
+    /// from an external action.
     #[must_use]
     pub fn tool_marker(&self) -> &'static str {
         match self {
             Self::Safe => "*",
+            Self::Console => "∙",
             Self::Rich => "⏺",
         }
     }
@@ -47,27 +55,38 @@ impl GlyphSet {
     pub fn result_gutter(&self) -> &'static str {
         match self {
             Self::Safe => "|",
+            Self::Console => "›",
             Self::Rich => "⎿",
         }
     }
 
-    /// The marker the assistant's reply row leads with.
+    /// The marker the assistant's reply row leads with. Shares one shape with
+    /// tool_marker in default foreground so primary utterances and tool calls
+    /// read as one column vocabulary differentiated by color.
     #[must_use]
     pub fn assistant_marker(&self) -> &'static str {
-        match self {
-            Self::Safe => "*",
-            Self::Rich => "◉",
-        }
+        self.tool_marker()
     }
 
     /// The marker a system notice, reasoning summary, or memory receipt row
-    /// leads with. Both grades stay calm rather than using an exclamation
+    /// leads with. All grades stay calm rather than using an exclamation
     /// mark, which reads as a warning.
     #[must_use]
     pub fn notice_marker(&self) -> &'static str {
         match self {
-            Self::Safe => "*",
+            Self::Safe | Self::Console => "*",
             Self::Rich => "✻",
+        }
+    }
+
+    /// The downward mark on the scrollback jump badge. Uses the neutral-width
+    /// small downward triangle on modern desktop and Windows console hosts so
+    /// East-Asian width tables never widen the badge rectangle.
+    #[must_use]
+    pub fn down_mark(&self) -> &'static str {
+        match self {
+            Self::Safe => "v",
+            Self::Console | Self::Rich => "▾",
         }
     }
 
@@ -75,7 +94,7 @@ impl GlyphSet {
     #[must_use]
     pub fn toggle_on(&self) -> &'static str {
         match self {
-            Self::Safe => "[x]",
+            Self::Safe | Self::Console => "[x]",
             Self::Rich => "◉",
         }
     }
@@ -84,18 +103,18 @@ impl GlyphSet {
     #[must_use]
     pub fn toggle_off(&self) -> &'static str {
         match self {
-            Self::Safe => "[ ]",
+            Self::Safe | Self::Console => "[ ]",
             Self::Rich => "◌",
         }
     }
 
-    /// The marker a toggle shows while its change is in flight. The pane
+    /// The marker a toggle shows while its change is running. The pane
     /// colours it apart from a settled state, and the mark itself differs
     /// from both settled marks so a test can tell the states apart.
     #[must_use]
     pub fn toggle_pending(&self) -> &'static str {
         match self {
-            Self::Safe => "[-]",
+            Self::Safe | Self::Console => "[-]",
             Self::Rich => "◍",
         }
     }
@@ -104,7 +123,7 @@ impl GlyphSet {
     #[must_use]
     pub fn gate_open(&self) -> &'static str {
         match self {
-            Self::Safe => "+",
+            Self::Safe | Self::Console => "+",
             Self::Rich => "✓",
         }
     }
@@ -113,7 +132,7 @@ impl GlyphSet {
     #[must_use]
     pub fn gate_blocked(&self) -> &'static str {
         match self {
-            Self::Safe => "x",
+            Self::Safe | Self::Console => "x",
             Self::Rich => "✗",
         }
     }
@@ -122,12 +141,12 @@ impl GlyphSet {
     #[must_use]
     pub fn paused(&self) -> &'static str {
         match self {
-            Self::Safe => "||",
+            Self::Safe | Self::Console => "||",
             Self::Rich => "⏸",
         }
     }
 
-    /// The mark a row that is next in line shows. The ASCII arrow in both
+    /// The mark a row that is next in line shows. The ASCII arrow across
     /// grades: the drawn arrow is Ambiguous-width, so it would widen the
     /// row it leads on a CJK terminal.
     #[must_use]
@@ -136,12 +155,12 @@ impl GlyphSet {
     }
 
     /// The prefix a recap row leads with, including its trailing space.
-    /// Both forms are Neutral-width so the row's leading columns hold.
+    /// Every form is Neutral-width so the row's leading columns hold.
     #[must_use]
     pub fn recap_prefix(&self) -> &'static str {
         match self {
             Self::Safe => "* recap: ",
-            Self::Rich => "» recap: ",
+            Self::Console | Self::Rich => "» recap: ",
         }
     }
 
@@ -151,6 +170,7 @@ impl GlyphSet {
     pub fn picker_cursor(&self) -> &'static str {
         match self {
             Self::Safe => "> ",
+            Self::Console => "▸ ",
             Self::Rich => "❯ ",
         }
     }
@@ -159,7 +179,7 @@ impl GlyphSet {
     #[must_use]
     pub fn separator_dot(&self) -> &'static str {
         match self {
-            Self::Safe => "-",
+            Self::Safe | Self::Console => "-",
             Self::Rich => "·",
         }
     }
@@ -168,39 +188,40 @@ impl GlyphSet {
     #[must_use]
     pub fn em_dash(&self) -> &'static str {
         match self {
-            Self::Safe => "--",
+            Self::Safe | Self::Console => "--",
             Self::Rich => "—",
         }
     }
 
-    /// The ellipsis a truncation ends with. The safe form is three columns
-    /// wide, so a caller measures the mark with the display-width table
-    /// instead of assuming one column; a single dot would read as the end of
-    /// a sentence rather than as a cut.
+    /// The ellipsis a truncation ends with. The safe and console forms are
+    /// three columns wide, so a caller measures the mark with the
+    /// display-width table instead of assuming one column; a single dot would
+    /// read as the end of a sentence rather than as a cut.
     #[must_use]
     pub fn ellipsis(&self) -> &'static str {
         match self {
-            Self::Safe => "...",
+            Self::Safe | Self::Console => "...",
             Self::Rich => "…",
         }
     }
 
     /// The marker a warning suggestion row leads with. Symbol hosts use the
-    /// single-column warning sign; console hosts use the ASCII exclamation.
+    /// single-column warning sign; console and safe hosts use ASCII.
     #[must_use]
     pub fn warning_marker(&self) -> &'static str {
         match self {
-            Self::Safe => "!",
+            Self::Safe | Self::Console => "!",
             Self::Rich => "\u{26A0}",
         }
     }
 
     /// The marker an informational suggestion row leads with. Symbol hosts
-    /// use the single-column information source mark; console hosts use ASCII.
+    /// use the single-column information source mark; console and safe hosts
+    /// use ASCII.
     #[must_use]
     pub fn info_marker(&self) -> &'static str {
         match self {
-            Self::Safe => "i",
+            Self::Safe | Self::Console => "i",
             Self::Rich => "\u{2139}",
         }
     }
@@ -210,21 +231,34 @@ impl GlyphSet {
     pub fn spinner_frames(&self) -> &'static [&'static str] {
         match self {
             Self::Safe => SAFE_SPINNER_FRAMES,
+            Self::Console => CONSOLE_SPINNER_FRAMES,
             Self::Rich => RICH_SPINNER_FRAMES,
+        }
+    }
+
+    /// The status-bar permission mode marks (auto, manual) for this grade.
+    #[must_use]
+    pub fn mode_marks(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Safe => (">>", "o"),
+            Self::Console => ("»", "◦"),
+            Self::Rich => ("⏵⏵", "◦"),
         }
     }
 }
 
-/// What the environment asked for. Auto is the ordinary case; the other two
-/// let a user pin either grade when the detected one is wrong for their
-/// font.
+/// What the environment asked for. Auto is the ordinary case; the explicit
+/// variants let a user select a grade when auto-detection does not match
+/// their font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlyphPreference {
     /// Decide from the terminal and the host fonts.
     Auto,
-    /// Draw with the safe grade whatever the detection says.
+    /// Draw with the safe ASCII grade whatever the detection says.
     Safe,
-    /// Draw with the rich grade whatever the detection says.
+    /// Draw with the neutral-width Windows console grade whatever detection says.
+    Console,
+    /// Draw with the rich symbol grade whatever the detection says.
     Rich,
 }
 
@@ -280,19 +314,16 @@ pub fn resolve_glyph_set(
 ) -> GlyphSet {
     match preference {
         GlyphPreference::Safe => return GlyphSet::Safe,
+        GlyphPreference::Console => return GlyphSet::Console,
         GlyphPreference::Rich => return GlyphSet::Rich,
         GlyphPreference::Auto => {}
     }
-    // The terminal being modern says nothing about the technical and dingbat
-    // blocks: Windows Terminal still draws console fonts that lack the rich
-    // tool marker and result gutter, so static markers stay Safe there.
-    if fonts == HostFonts::Windows {
-        return GlyphSet::Safe;
-    }
-    if is_known_terminal(program, wt_session, wezterm, ghostty) {
-        GlyphSet::Rich
-    } else {
+    if !is_known_terminal(program, wt_session, wezterm, ghostty) {
         GlyphSet::Safe
+    } else if fonts == HostFonts::Windows {
+        GlyphSet::Console
+    } else {
+        GlyphSet::Rich
     }
 }
 
@@ -309,19 +340,7 @@ pub fn resolve_spinner_frames(
     preference: GlyphPreference,
     fonts: HostFonts,
 ) -> &'static [&'static str] {
-    match preference {
-        GlyphPreference::Safe => SAFE_SPINNER_FRAMES,
-        GlyphPreference::Rich => RICH_SPINNER_FRAMES,
-        GlyphPreference::Auto => {
-            if !is_known_terminal(program, wt_session, wezterm, ghostty) {
-                SAFE_SPINNER_FRAMES
-            } else if fonts == HostFonts::Windows {
-                CONSOLE_SPINNER_FRAMES
-            } else {
-                RICH_SPINNER_FRAMES
-            }
-        }
-    }
+    resolve_glyph_set(program, wt_session, wezterm, ghostty, preference, fonts).spinner_frames()
 }
 
 /// The grade the process's own terminal reports, decided once. Unknown and
@@ -345,16 +364,7 @@ pub fn detect_glyph_set() -> GlyphSet {
 #[must_use]
 pub fn detect_spinner_frames() -> &'static [&'static str] {
     static FRAMES: OnceLock<&'static [&'static str]> = OnceLock::new();
-    FRAMES.get_or_init(|| {
-        resolve_spinner_frames(
-            env_var("TERM_PROGRAM").as_deref(),
-            env_var("WT_SESSION").as_deref(),
-            env_var("WezTerm").as_deref(),
-            env_var("GHOSTTY_RESOURCES_DIR").as_deref(),
-            preference_from(env_var("HOUYICODER_GLYPHS").as_deref()),
-            host_fonts(),
-        )
-    })
+    FRAMES.get_or_init(|| detect_glyph_set().spinner_frames())
 }
 
 /// Resolve the status-bar permission mode marks (auto, manual) for the given
@@ -371,19 +381,7 @@ pub fn resolve_mode_marks(
     preference: GlyphPreference,
     fonts: HostFonts,
 ) -> (&'static str, &'static str) {
-    match preference {
-        GlyphPreference::Safe => (">>", "o"),
-        GlyphPreference::Rich => ("⏵⏵", "◦"),
-        GlyphPreference::Auto => {
-            if !is_known_terminal(program, wt_session, wezterm, ghostty) {
-                (">>", "o")
-            } else if fonts == HostFonts::Windows {
-                ("»", "◦")
-            } else {
-                ("⏵⏵", "◦")
-            }
-        }
-    }
+    resolve_glyph_set(program, wt_session, wezterm, ghostty, preference, fonts).mode_marks()
 }
 
 /// The status-bar permission mode marks (auto, manual) for the running
@@ -391,25 +389,15 @@ pub fn resolve_mode_marks(
 #[must_use]
 pub fn detect_mode_marks() -> (&'static str, &'static str) {
     static MARKS: OnceLock<(&'static str, &'static str)> = OnceLock::new();
-    *MARKS.get_or_init(|| {
-        resolve_mode_marks(
-            env_var("TERM_PROGRAM").as_deref(),
-            env_var("WT_SESSION").as_deref(),
-            env_var("WezTerm").as_deref(),
-            env_var("GHOSTTY_RESOURCES_DIR").as_deref(),
-            preference_from(env_var("HOUYICODER_GLYPHS").as_deref()),
-            host_fonts(),
-        )
-    })
+    *MARKS.get_or_init(|| detect_glyph_set().mode_marks())
 }
 
-/// The setting a user sets to pin a grade. Auto-detection is wrong when the
-/// terminal is unrecognized but does carry the fonts, or recognized while
-/// the font does not carry the glyphs.
+/// The setting a user sets to select a grade when auto-detection does not
+/// match their font.
 pub const GLYPH_SET_ENV: &str = "HOUYICODER_GLYPHS";
 
-/// The preference this setting value asks for. Both grade names and the
-/// alphabet name of the safe grade are accepted, in either case.
+/// The preference this setting value asks for. Grade names and the alphabet
+/// name of the safe grade are accepted, in either case.
 fn preference_from(value: Option<&str>) -> GlyphPreference {
     match value {
         Some(value)
@@ -417,6 +405,7 @@ fn preference_from(value: Option<&str>) -> GlyphPreference {
         {
             GlyphPreference::Safe
         }
+        Some(value) if value.eq_ignore_ascii_case("console") => GlyphPreference::Console,
         Some(value) if value.eq_ignore_ascii_case("rich") => GlyphPreference::Rich,
         _ => GlyphPreference::Auto,
     }

@@ -1,9 +1,10 @@
 //! The jump-to-bottom badge: centered on the input box's top border rule while
-//! the reader is scrolled back, naming how many new replies have landed or
-//! offering a direct jump to the tail. Riding on the border rule keeps every
-//! transcript row and inline fold hint completely uncovered and avoids
+//! the reader is scrolled back, naming how many new replies have landed and
+//! advertising the click and downward jump action. Riding on the border rule
+//! keeps every transcript row and inline fold hint uncovered and avoids
 //! splitting wide characters or user-row background bands.
 
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -26,20 +27,13 @@ pub(in super::super) fn draw(f: &mut Frame, input_area: Rect, app: &App) {
         && !app.active_scroll().is_following_tail()
         && !app.ui.transcript_view.search_active();
     if label_visible {
-        let label = format_label(app.new_message_count());
+        let down_mark = detect_glyph_set().down_mark();
+        let label = format_label(app.new_message_count(), down_mark, input_area.width);
         let label_w = UnicodeWidthStr::width(label.as_str()).min(input_area.width as usize) as u16;
         let x = border_column(input_area, label_w);
         let rect = Rect::new(x, input_area.y, label_w, 1);
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                label,
-                Style::new()
-                    .fg(Color::White)
-                    .bg(Color::Indexed(238))
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            rect,
-        );
+        let style = badge_style(app.active_scroll().jump_highlighted());
+        f.render_widget(Paragraph::new(Line::from(Span::styled(label, style))), rect);
         app.ui.frame.layout.jump_to_bottom_rect.set(rect);
     } else {
         app.ui
@@ -50,22 +44,40 @@ pub(in super::super) fn draw(f: &mut Frame, input_area: Rect, app: &App) {
     }
 }
 
-fn format_label(new: NewMessageCount) -> String {
-    if new.count == 0 {
-        return " Jump to bottom ".to_string();
+fn badge_style(highlighted: bool) -> Style {
+    if highlighted {
+        Style::new()
+            .fg(Color::White)
+            .bg(Color::Indexed(240))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(Color::White).bg(Color::Indexed(238))
     }
-    let shown = new.count.min(MESSAGE_COUNT_CAP);
-    let floor = if new.count > MESSAGE_COUNT_CAP || new.is_lower_bound {
-        "+"
+}
+
+fn format_label(new: NewMessageCount, down_mark: &str, max_width: u16) -> String {
+    let core = if new.count == 0 {
+        "Jump to bottom".to_string()
     } else {
-        ""
+        let shown = new.count.min(MESSAGE_COUNT_CAP);
+        let floor = if new.count > MESSAGE_COUNT_CAP || new.is_lower_bound {
+            "+"
+        } else {
+            ""
+        };
+        let noun = if shown == 1 && floor.is_empty() {
+            "message"
+        } else {
+            "messages"
+        };
+        format!("{shown}{floor} new {noun}")
     };
-    let noun = if shown == 1 && floor.is_empty() {
-        "message"
+    let full = format!(" {core} (click) {down_mark} ");
+    if UnicodeWidthStr::width(full.as_str()) + 2 <= usize::from(max_width) {
+        full
     } else {
-        "messages"
-    };
-    format!(" {shown}{floor} new {noun} ")
+        format!(" {core} {down_mark} ")
+    }
 }
 
 fn border_column(area: Rect, label_w: u16) -> u16 {

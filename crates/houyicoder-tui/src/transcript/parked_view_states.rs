@@ -10,6 +10,7 @@ use std::hash::Hash;
 
 use houyicoder_protocol::frontend::SessionId;
 
+use crate::records::ChildUnseenBaseline;
 use crate::row_id::RowId;
 use crate::scroll::TranscriptScroll;
 use crate::state::App;
@@ -71,7 +72,7 @@ fn toggle_set<T: Hash + Eq>(set: &mut HashSet<T>, key: T) -> bool {
 pub(crate) struct ParkedViewState {
     pub(crate) keys: ExpandedKeys,
     pub(crate) scroll: TranscriptScroll,
-    pub(crate) seen_messages: Option<usize>,
+    pub(crate) seen_messages: Option<ChildUnseenBaseline>,
 }
 
 /// State parked for views that are not on screen. Every list is capped: a

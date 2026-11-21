@@ -349,10 +349,7 @@ fn test_save_memory_wrote_bucket() {
     assert_eq!(s.mem_write, 1);
     assert_eq!(s.edit, 0);
     let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
-    assert_eq!(
-        summary.plain,
-        format!("{} Wrote 1 memory", detect_glyph_set().tool_marker())
-    );
+    assert_eq!(summary.plain, "  Wrote 1 memory");
 }
 
 /// delete_memory lands in its own mem_delete bucket (no delete tool
@@ -366,10 +363,7 @@ fn test_delete_memory_deleted_bucket() {
     assert_eq!(s.mem_write, 0);
     assert_eq!(s.edit, 0);
     let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
-    assert_eq!(
-        summary.plain,
-        format!("{} Deleted 1 memory", detect_glyph_set().tool_marker())
-    );
+    assert_eq!(summary.plain, "  Deleted 1 memory");
 }
 
 /// Pluralization: two saves → "memories", and a save+delete in one group
@@ -382,13 +376,7 @@ fn test_memory_plural_and_order() {
     accumulate_brief(&mut s, "save_memory", "b");
     accumulate_brief(&mut s, "delete_memory", "c");
     let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
-    assert_eq!(
-        summary.plain,
-        format!(
-            "{} Wrote 2 memories, deleted 1 memory",
-            detect_glyph_set().tool_marker()
-        )
-    );
+    assert_eq!(summary.plain, "  Wrote 2 memories, deleted 1 memory");
 }
 
 /// Memory ops lead the file-op counts: a turn that saves a memory AND
@@ -400,13 +388,7 @@ fn test_memory_leads_file_ops() {
     accumulate_brief(&mut s, "read", "src/foo.rs");
     accumulate_brief(&mut s, "save_memory", "note");
     let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
-    assert_eq!(
-        summary.plain,
-        format!(
-            "{} Wrote 1 memory, read 1 file",
-            detect_glyph_set().tool_marker()
-        )
-    );
+    assert_eq!(summary.plain, "  Wrote 1 memory, read 1 file");
 }
 
 /// Active groups use present participle: "writing N memory" / "deleting
@@ -438,10 +420,7 @@ fn test_show_memory_read_bucket() {
     assert_eq!(s.mem_read, 1);
     assert_eq!(s.other, 0);
     let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
-    assert_eq!(
-        summary.plain,
-        format!("{} Read 1 memory", detect_glyph_set().tool_marker())
-    );
+    assert_eq!(summary.plain, "  Read 1 memory");
 }
 
 /// Both memory-read tools share one bucket so a mixed group sums rather
@@ -453,10 +432,7 @@ fn test_search_memory_read_bucket() {
     accumulate_brief(&mut s, "show_memory", "key: deploy-gate");
     assert_eq!(s.mem_read, 2);
     let summary = render_summary(&s, &[], false, Some(ToggleHint::Expand));
-    assert_eq!(
-        summary.plain,
-        format!("{} Read 2 memories", detect_glyph_set().tool_marker())
-    );
+    assert_eq!(summary.plain, "  Read 2 memories");
 }
 
 /// The read tools are collapsible: without fold membership a show_memory

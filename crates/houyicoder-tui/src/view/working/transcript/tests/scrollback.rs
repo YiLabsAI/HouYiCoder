@@ -4,12 +4,13 @@
 //! invariant it pins.
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use unicode_width::UnicodeWidthStr;
 
 use crate::agent_message::{ServerEvent, SessionMessage};
@@ -625,5 +626,113 @@ fn test_user_row_band_intact() {
             .and_then(|c| c.style().bg),
         Some(Color::Reset),
         "rightmost edge column keeps default background"
+    );
+}
+
+#[test]
+fn test_badge_pointer_and_click() {
+    let mut app = app_scrolled_back();
+    let down = detect_glyph_set().down_mark();
+    let out = render_text(&app, 80, 24);
+    assert!(
+        out.contains(&format!("Jump to bottom (click) {down}")),
+        "idle badge shows click affordance and down mark:\n{out}"
+    );
+    let buf = render_buffer(&app, 80, 24);
+    let rect = app.ui.frame.layout.jump_to_bottom_rect.get();
+    let rest_cell = buf.cell((rect.x + 1, rect.y)).expect("badge cell");
+    assert_eq!(rest_cell.style().bg, Some(Color::Indexed(238)));
+
+    assert!(
+        !handle_mouse(&mut app, mouse(MouseEventKind::Moved, 0, 0)),
+        "motion outside badge must not request a redraw"
+    );
+    assert!(
+        handle_mouse(&mut app, mouse(MouseEventKind::Moved, rect.x + 2, rect.y)),
+        "entering badge must request one redraw"
+    );
+    assert!(
+        !handle_mouse(&mut app, mouse(MouseEventKind::Moved, rect.x + 3, rect.y)),
+        "steady motion inside badge must not request another redraw"
+    );
+
+    let active_buf = render_buffer(&app, 80, 24);
+    let active_cell = active_buf
+        .cell((rect.x + 1, rect.y))
+        .expect("highlighted badge cell");
+    assert_eq!(active_cell.style().bg, Some(Color::Indexed(240)));
+    assert!(active_cell.style().add_modifier.contains(Modifier::BOLD));
+
+    handle_mouse(
+        &mut app,
+        mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, rect.y),
+    );
+    assert!(app.whole_scroll().is_following_tail());
+
+    app.scroll_transcript_line_up(3);
+    let reopened = render_buffer(&app, 80, 24);
+    let next_rect = app.ui.frame.layout.jump_to_bottom_rect.get();
+    assert_eq!(
+        reopened
+            .cell((next_rect.x + 1, next_rect.y))
+            .and_then(|c| c.style().bg),
+        Some(Color::Indexed(238)),
+        "clicking badge clears highlight before next scroll-back"
+    );
+}
+
+#[test]
+fn test_tool_activity_floors_count() {
+    let mut app = app_scrolled_back();
+    let down = detect_glyph_set().down_mark();
+    pump(&mut app, tool_call_frame("c1"));
+    pump(&mut app, tool_call_frame("c2"));
+    let during_tools = render_text(&app, 80, 24);
+    assert!(
+        during_tools.contains(&format!("1 new message (click) {down}")),
+        "unseen tool sequence floors badge at one message:\n{during_tools}"
+    );
+
+    pump(&mut app, tool_result_frame("c2"));
+    pump(&mut app, agent_msg("first prose after tools"));
+    let first_prose = render_text(&app, 80, 24);
+    assert!(
+        first_prose.contains(&format!("1 new message (click) {down}")),
+        "first prose reply keeps count at one:\n{first_prose}"
+    );
+
+    pump(&mut app, tool_result_frame("c3"));
+    pump(&mut app, agent_msg("second prose reply"));
+    let second_prose = render_text(&app, 80, 24);
+    assert!(
+        second_prose.contains(&format!("2 new messages (click) {down}")),
+        "second prose reply advances count to two:\n{second_prose}"
+    );
+}
+
+#[test]
+fn test_park_captures_unseen_baseline() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    for i in 0..40 {
+        app.system_line(format!("row {i}"));
+    }
+    drop(render_text(&app, 80, 16));
+    app.park_scroll_at(0);
+    pump(&mut app, agent_msg("reply after direct park"));
+    let parked_out = render_text(&app, 80, 16);
+    assert!(
+        parked_out.contains("1 new message (click)"),
+        "direct park must capture unseen baseline:\n{parked_out}"
+    );
+
+    app.scroll_transcript_follow_tail();
+    drop(render_text(&app, 80, 16));
+    app.pin_transcript_top();
+    pump(&mut app, agent_msg("reply after top hold"));
+    assert_eq!(
+        app.new_message_count().count,
+        1,
+        "holding top row on expand must capture unseen baseline"
     );
 }

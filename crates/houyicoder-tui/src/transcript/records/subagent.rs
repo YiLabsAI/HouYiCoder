@@ -4,6 +4,7 @@
 use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 
+use super::TranscriptLine;
 use crate::view::relative_time::summary_span_label;
 
 /// How a child agent ended, as its final fleet status reported it. The mark
@@ -148,7 +149,7 @@ impl SubagentFinished {
     pub fn text(&self) -> String {
         let mut text = format!(
             "{} Agent \"{}{}",
-            detect_glyph_set().assistant_marker(),
+            detect_glyph_set().tool_marker(),
             self.name(),
             self.ending()
         );
@@ -169,6 +170,38 @@ fn display_char(c: char) -> char {
         '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
     );
     if c.is_control() || reorders { ' ' } else { c }
+}
+
+/// Child transcript counts captured at scroll-away so new replies increment
+/// the count while new tool activity without text still floors the badge at
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChildUnseenBaseline {
+    /// Visible agent text replies already present at scroll-away.
+    pub messages: usize,
+    /// Visible non-user transcript lines already present at scroll-away.
+    pub activity_lines: usize,
+}
+
+/// Count visible agent replies in a child transcript slice.
+pub(crate) fn child_agent_messages(lines: &[TranscriptLine]) -> usize {
+    lines
+        .iter()
+        .filter(|line| matches!(line, TranscriptLine::Agent(text) if !text.trim().is_empty()))
+        .count()
+}
+
+/// Count visible agent or tool activity lines in a child transcript slice.
+pub(crate) fn child_activity_lines(lines: &[TranscriptLine]) -> usize {
+    lines
+        .iter()
+        .filter(|line| {
+            !matches!(
+                line,
+                TranscriptLine::User(_) | TranscriptLine::Thinking { .. }
+            )
+        })
+        .count()
 }
 
 #[cfg(test)]

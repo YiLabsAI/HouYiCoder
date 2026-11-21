@@ -8,6 +8,7 @@
 use crate::common::{
     Key, PtySession, RENDER_TIMEOUT, fresh_temp_dir, make_temp_repo, run_slash_command,
 };
+use houyicoder_platform::desktop::glyphs::detect_glyph_set;
 use serde_json::Value;
 #[cfg(unix)]
 use std::fs::Permissions;
@@ -206,9 +207,10 @@ fn test_model_info_respects_session() {
         s.output_plain()
     );
     let screen = s.screen().contents();
+    let cursor = detect_glyph_set().picker_cursor().trim_end();
     let focused = screen
         .lines()
-        .find(|line| line.contains("qwen3-coder") && line.contains('\u{276f}'))
+        .find(|line| line.contains("qwen3-coder") && line.contains(cursor))
         .unwrap_or_else(|| panic!("the cursor sits on the session model: {screen}"));
     assert!(
         focused.contains('\u{2714}'),

@@ -175,12 +175,17 @@ pub(crate) fn render_summary(
             plain: String::new(),
         };
     }
-    // Leading tool-call glyph so the summary text starts at col 2, aligning
-    // with the gutter rows below it (the same marker a single call leads
-    // with).
-    let marker = format!("{} ", detect_glyph_set().tool_marker());
-    spans.insert(0, Span::styled(marker.clone(), dim));
-    let plain = format!("{marker}{}", plain_parts.join(", "));
+    // Active groups lead with the dim tool marker while running; completed
+    // groups indent by two spaces without a marker so settled summaries stay
+    // subordinate to primary reply and tool rows while keeping column 2
+    // aligned.
+    let lead = if active {
+        format!("{} ", detect_glyph_set().tool_marker())
+    } else {
+        "  ".to_string()
+    };
+    spans.insert(0, Span::styled(lead.clone(), dim));
+    let plain = format!("{lead}{}", plain_parts.join(", "));
     if let Some(action) = toggle {
         spans.push(Span::styled(action.suffix(), dim));
     }

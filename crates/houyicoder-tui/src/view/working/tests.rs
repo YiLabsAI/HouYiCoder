@@ -247,7 +247,12 @@ fn test_fold_collapse_expand_toggle() {
         out.contains("ctrl+o to expand"),
         "collapsed summary offers expand: {out}"
     );
-    // The preview row shares the two-space gutter used by child result rows.
+    // Settled collapsed summary indents two spaces without a leading marker,
+    // and its preview row shares the two-space gutter used by child results.
+    assert!(
+        out.contains("  Read 1 file"),
+        "settled summary indents two spaces without a gray marker: {out}"
+    );
     assert!(
         out.contains(&format!("  {}  ", detect_glyph_set().result_gutter())),
         "hint gutter is aligned: {out}"

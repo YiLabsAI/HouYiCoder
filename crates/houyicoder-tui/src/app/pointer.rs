@@ -33,7 +33,7 @@ pub(crate) fn handle_mouse(app: &mut App, m: MouseEvent) -> bool {
     match m.kind {
         MouseEventKind::Down(MouseButton::Left) => gestures.press(&m),
         MouseEventKind::Drag(MouseButton::Left) => gestures.drag_to(&m),
-        MouseEventKind::Moved => gestures.close_lost_drags(),
+        MouseEventKind::Moved => gestures.pointer_moved(&m),
         MouseEventKind::Up(MouseButton::Left) => gestures.release(),
         MouseEventKind::ScrollUp => gestures.wheel(true),
         MouseEventKind::ScrollDown => gestures.wheel(false),
@@ -250,6 +250,17 @@ impl PointerGestures<'_> {
             self.app.apply_region_intent(intent);
         }
         true
+    }
+
+    /// Handle pointer motion: close any lost drag and update badge highlight
+    /// only on boundary crossings so steady motion inside or outside triggers
+    /// no extra frame draw.
+    fn pointer_moved(&mut self, m: &MouseEvent) -> bool {
+        let drag_changed = self.close_lost_drags();
+        let rect = self.app.ui.frame.layout.jump_to_bottom_rect.get();
+        let inside = rect.width > 0 && rect.height > 0 && in_rect(rect, m.column, m.row);
+        let highlight_changed = self.app.active_scroll_mut().set_jump_highlighted(inside);
+        drag_changed || highlight_changed
     }
 
     /// Close every drag whose release never arrived. Motion without a pressed

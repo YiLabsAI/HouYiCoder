@@ -18,6 +18,7 @@ fn test_safe_glyphs_ascii() {
         safe.result_gutter(),
         safe.assistant_marker(),
         safe.notice_marker(),
+        safe.down_mark(),
         safe.recap_prefix(),
         safe.picker_cursor(),
         safe.separator_dot(),
@@ -37,20 +38,25 @@ fn test_safe_glyphs_ascii() {
     }
 }
 
-/// Every glyph a row leads with, in both grades, is exactly one display
-/// column under both the ordinary and the CJK width rules. A glyph that
-/// widened under either would push the text it leads on every row it
-/// appears, which is the jitter this module exists to prevent. Inline
-/// punctuation is measured by the wrapping table instead and is not part
-/// of this contract.
+/// Every glyph a row leads with, across all three grades, is exactly one
+/// display column under both the ordinary and the CJK width rules. A glyph
+/// that widened under either would push the text it leads on every row it
+/// appears, which is the jitter this module exists to prevent. Assistant and
+/// tool rows share one leading shape in every grade so color carries the role.
 #[test]
 fn test_marker_glyphs_one_column() {
-    for set in [GlyphSet::Safe, GlyphSet::Rich] {
+    for set in [GlyphSet::Safe, GlyphSet::Console, GlyphSet::Rich] {
+        assert_eq!(
+            set.assistant_marker(),
+            set.tool_marker(),
+            "assistant and tool rows share one primary dot in {set:?}"
+        );
         let leading = [
             set.tool_marker(),
             set.result_gutter(),
             set.assistant_marker(),
             set.notice_marker(),
+            set.down_mark(),
             set.gate_open(),
             set.gate_blocked(),
             set.warning_marker(),
@@ -77,10 +83,8 @@ fn test_marker_glyphs_one_column() {
             2,
             "the picker cursor is two columns under CJK rules too"
         );
-        // A toggle's brackets make it wider than one column in the safe
-        // grade; what matters is that the same table measures it the same
-        // way under both policies, so the label after it stays put.
         for mark in [
+            set.recap_prefix(),
             set.toggle_on(),
             set.toggle_off(),
             set.toggle_pending(),
@@ -95,11 +99,12 @@ fn test_marker_glyphs_one_column() {
     }
 }
 
-/// Every spinner frame, in both grades, is exactly one column. A frame
+/// Every spinner frame, in every grade, is exactly one column. A frame
 /// that widened would push the verb text on the frames it appears in.
 #[test]
 fn test_spinner_one_column() {
     assert_eq!(GlyphSet::Safe.spinner_frames(), SAFE_SPINNER_FRAMES);
+    assert_eq!(GlyphSet::Console.spinner_frames(), CONSOLE_SPINNER_FRAMES);
     assert_eq!(GlyphSet::Rich.spinner_frames(), RICH_SPINNER_FRAMES);
     for set in [
         SAFE_SPINNER_FRAMES,
@@ -194,12 +199,12 @@ fn test_unknown_terminal_safe() {
     assert_eq!(case(Some("")), GlyphSet::Safe);
 }
 
-/// A modern terminal on Windows still draws with the console fonts, which
-/// lack the blocks the rich grade uses; the grade stays Safe however the
-/// terminal identifies itself. This is the case Windows Terminal sets
-/// WT_SESSION and shows a missing-glyph box for the rich tool marker.
+/// A modern terminal on Windows resolves to Console so it gets neutral-width
+/// geometric and punctuation marks covered by Cascadia Mono and Consolas
+/// without reaching into technical or dingbat blocks, while unknown Windows
+/// consoles stay Safe.
 #[test]
-fn test_windows_fonts_stay_safe() {
+fn test_windows_console_grade() {
     let case = |program, wt| {
         resolve_glyph_set(
             program,
@@ -210,8 +215,15 @@ fn test_windows_fonts_stay_safe() {
             HostFonts::Windows,
         )
     };
-    assert_eq!(case(None, Some("session")), GlyphSet::Safe);
-    assert_eq!(case(Some("WezTerm"), None), GlyphSet::Safe);
+    assert_eq!(case(None, Some("session")), GlyphSet::Console);
+    assert_eq!(case(Some("WezTerm"), None), GlyphSet::Console);
+    assert_eq!(case(Some("vscode"), None), GlyphSet::Console);
+    assert_eq!(case(None, None), GlyphSet::Safe);
+    assert_eq!(GlyphSet::Console.assistant_marker(), "∙");
+    assert_eq!(GlyphSet::Console.tool_marker(), "∙");
+    assert_eq!(GlyphSet::Console.result_gutter(), "›");
+    assert_eq!(GlyphSet::Console.down_mark(), "▾");
+    assert_eq!(GlyphSet::Console.picker_cursor(), "▸ ");
     assert_eq!(
         GlyphSet::Safe.notice_marker(),
         "*",
@@ -345,7 +357,7 @@ fn test_mode_marks_neutral_width() {
     }
 }
 
-/// The setting accepts both grade names, the alphabet name of the safe
+/// The setting accepts all three grade names, the alphabet name of the safe
 /// grade, and either case.
 #[test]
 fn test_setting_names_grades() {
@@ -356,6 +368,19 @@ fn test_setting_names_grades() {
             "{value} asks for the safe grade"
         );
     }
+    assert_eq!(preference_from(Some("console")), GlyphPreference::Console);
+    assert_eq!(preference_from(Some("CONSOLE")), GlyphPreference::Console);
+    assert_eq!(
+        resolve_glyph_set(
+            Some("ghostty"),
+            None,
+            None,
+            None,
+            GlyphPreference::Console,
+            HostFonts::SystemSymbols,
+        ),
+        GlyphSet::Console
+    );
     assert_eq!(preference_from(Some("rich")), GlyphPreference::Rich);
     assert_eq!(preference_from(Some("RICH")), GlyphPreference::Rich);
     assert_eq!(preference_from(None), GlyphPreference::Auto);

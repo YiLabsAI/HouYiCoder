@@ -119,7 +119,7 @@ pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mu
         Some(name) => format!(" Agent \"{name}{suffix}"),
         None => format!(" Agent {suffix}"),
     };
-    let mark = detect_glyph_set().assistant_marker();
+    let mark = detect_glyph_set().tool_marker();
     sink.push(
         Row::new(TAG_PLAIN, format!("{mark}{rest}"))
             .trace_child(Some(child.child_sid.clone()))
@@ -134,14 +134,14 @@ pub(crate) fn push_finished_rows(child: &SubagentFinished, width: u16, sink: &mu
 /// it. Every part but the name is measured before the name takes its share
 /// of the row.
 fn finished_prefix() -> String {
-    format!("{} Agent \"", detect_glyph_set().assistant_marker())
+    format!("{} Agent \"", detect_glyph_set().tool_marker())
 }
 
 /// The same lead without the quote pair, for a row too narrow to draw any
 /// name: empty quotes would read as a delegation with a blank task rather
 /// than one whose name had to be dropped.
 fn unnamed_prefix() -> String {
-    format!("{} Agent ", detect_glyph_set().assistant_marker())
+    format!("{} Agent ", detect_glyph_set().tool_marker())
 }
 
 fn finished_mark_style(outcome: SubagentOutcome) -> Style {

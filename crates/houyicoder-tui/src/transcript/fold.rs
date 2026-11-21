@@ -679,7 +679,7 @@ impl App {
                 let rows = self.line_display_rows_mode(line, full);
                 (rows, rows > 0 && line.opens_block())
             }
-            DisplaySlot::Summary(g) => (1 + g.hint.is_some() as usize, true),
+            DisplaySlot::Summary(g) => (1 + usize::from(g.hint.is_some()), true),
             DisplaySlot::NoticeCollapsed { idx, .. } | DisplaySlot::NoticeExpanded { idx, .. } => {
                 let width = self.ui.frame.feedback.transcript_width.get();
                 let rows = notice_slot_rows(slot, &transcript[*idx], width);

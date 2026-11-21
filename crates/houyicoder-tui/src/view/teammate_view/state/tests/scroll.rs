@@ -421,3 +421,34 @@ fn test_child_tracks_new_messages() {
     app.scroll_transcript_follow_tail();
     app.pin_transcript_top();
 }
+
+#[test]
+fn test_child_tool_floors_count() {
+    let mut app = app_with_parent(20);
+    app.sessions.current.transcript.push(subagent_line(40));
+    assert!(app.enter_teammate_view());
+    drop(render_text(&app, 80, 24));
+    app.scroll_transcript_up();
+    assert_eq!(app.new_message_count().count, 0);
+
+    if let Some(view) = app.ui.teammate_view.as_mut() {
+        view.transcript.push(TranscriptLine::Read {
+            path: "src/lib.rs".into(),
+        });
+    }
+    let tool_badge = render_text(&app, 80, 24);
+    assert!(
+        tool_badge.contains("1 new message (click)"),
+        "child tool work floors badge at one:\n{tool_badge}"
+    );
+
+    if let Some(view) = app.ui.teammate_view.as_mut() {
+        view.transcript
+            .push(TranscriptLine::Agent("child summary".into()));
+    }
+    assert_eq!(
+        app.new_message_count().count,
+        1,
+        "first child prose keeps count at one"
+    );
+}

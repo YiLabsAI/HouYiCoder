@@ -5,14 +5,14 @@
 //! debug_scroll helper is private to this impl block and only these methods
 //! call it.
 
-use crate::records::child_agent_messages;
+use crate::records::{ChildUnseenBaseline, child_activity_lines, child_agent_messages};
 use crate::row_id::RowId;
 use crate::rows::row_set::RowSet;
 use crate::scroll::{
     NewMessageCount, RowRelease, ScrollAnchor, ScrollTransition, TranscriptScroll,
 };
 use crate::state::{App, EventCursor};
-use crate::transcript::frame::TranscriptFrame;
+use crate::transcript::frame::{FrontendRow, TranscriptFrame};
 use crate::view::working::history_window::window_rows;
 use crate::view::working::transcript::ensure_cached_slots;
 use houyicoder_protocol::frontend::run::ContentBlock;
@@ -160,6 +160,8 @@ impl App {
         self.park_at_row(row);
         if self.ui.teammate_view.is_some() {
             self.snapshot_child_scroll_away(was_following);
+        } else {
+            self.snapshot_scroll_away(was_following);
         }
     }
 
@@ -425,6 +427,8 @@ impl App {
         self.park_at_row(top);
         if self.ui.teammate_view.is_some() {
             self.snapshot_child_scroll_away(was_following);
+        } else {
+            self.snapshot_scroll_away(was_following);
         }
     }
 
@@ -435,7 +439,10 @@ impl App {
             return;
         };
         if was_following && !view.scroll.is_following_tail() && view.seen_messages.is_none() {
-            view.seen_messages = Some(child_agent_messages(&view.transcript));
+            view.seen_messages = Some(ChildUnseenBaseline {
+                messages: child_agent_messages(&view.transcript),
+                activity_lines: child_activity_lines(&view.transcript),
+            });
         }
     }
 
@@ -478,21 +485,24 @@ impl App {
     /// A message is a run of agent text the reader sees: one reply counts
     /// once however many chunks stream it, and the text that answers a tool
     /// result counts again, so a turn that searches, reads, and then answers
-    /// reads as several messages rather than one. A chunk carrying no text
-    /// (an empty delta, an image) counts nothing and does not end the run
-    /// above it. A tool call on its own does not end a run either: the call
-    /// and the text introducing it are one reply to the reader. The baseline
-    /// is an absolute or durable cursor rather than a transcript length, so
-    /// the cap that drops the oldest pushed rows does not silently zero the
-    /// count.
+    /// reads as several messages rather than one. When visible tool or
+    /// delegation work has landed past the baseline before any prose text
+    /// arrives, the count floors at one so the badge signals live tail output
+    /// rather than staying on Jump to bottom through an entire tool sequence;
+    /// the first prose block after those calls keeps the count at one rather
+    /// than double-counting.
     pub fn new_message_count(&self) -> NewMessageCount {
         if let Some(view) = self.ui.teammate_view.as_ref() {
             let Some(seen) = view.seen_messages else {
                 return NewMessageCount::default();
             };
             let total = child_agent_messages(&view.transcript);
+            let mut count = total.saturating_sub(seen.messages);
+            if count == 0 && child_activity_lines(&view.transcript) > seen.activity_lines {
+                count = 1;
+            }
             return NewMessageCount {
-                count: total.saturating_sub(seen),
+                count,
                 is_lower_bound: false,
             };
         }
@@ -505,6 +515,7 @@ impl App {
         };
         let mut count = 0usize;
         let mut prev_was_agent_text = false;
+        let mut has_unseen_work = false;
         for f in &self.sessions.current.transcript.frames()[from..] {
             match f.as_ref() {
                 // Turn boundary: a new user message starts a new assistant
@@ -521,17 +532,26 @@ impl App {
                     }
                     prev_was_agent_text = true;
                 }
+                TranscriptFrame::Session(SessionUpdate::ToolCall(_)) => {
+                    has_unseen_work = true;
+                }
                 // The result ends the reply it answered, so the text that
                 // reasons about it is a message of its own.
                 TranscriptFrame::Session(SessionUpdate::ToolCallUpdate(update))
                     if finishes_call(update) =>
                 {
                     prev_was_agent_text = false;
+                    has_unseen_work = true;
                 }
-                // A call, a thought, or any other frame leaves the run of
-                // text alone.
+                TranscriptFrame::Frontend(FrontendRow::SubagentFinished(_)) => {
+                    has_unseen_work = true;
+                }
+                // A thought or any other frame leaves the run of text alone.
                 _ => {}
             }
+        }
+        if count == 0 && has_unseen_work {
+            count = 1;
         }
         NewMessageCount {
             count,
