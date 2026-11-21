@@ -71,6 +71,7 @@ fn toggle_set<T: Hash + Eq>(set: &mut HashSet<T>, key: T) -> bool {
 pub(crate) struct ParkedViewState {
     pub(crate) keys: ExpandedKeys,
     pub(crate) scroll: TranscriptScroll,
+    pub(crate) seen_messages: Option<usize>,
 }
 
 /// State parked for views that are not on screen. Every list is capped: a
@@ -196,6 +197,7 @@ impl App {
         ParkedViewState {
             keys: self.ui.transcript_view.take_expanded(),
             scroll: self.ui.transcript_view.take_whole_scroll(),
+            seen_messages: None,
         }
     }
 

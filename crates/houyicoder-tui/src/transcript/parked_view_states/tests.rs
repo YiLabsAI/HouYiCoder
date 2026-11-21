@@ -18,6 +18,7 @@ fn view_state(value: &str) -> ParkedViewState {
     ParkedViewState {
         keys: keys(value),
         scroll: TranscriptScroll::default(),
+        seen_messages: None,
     }
 }
 
@@ -95,6 +96,7 @@ fn test_park_filters_thinking_keys() {
         ParkedViewState {
             keys: thinking_only,
             scroll: TranscriptScroll::default(),
+            seen_messages: None,
         },
     );
     assert!(
@@ -111,6 +113,7 @@ fn test_park_filters_thinking_keys() {
         ParkedViewState {
             keys: mixed,
             scroll: TranscriptScroll::default(),
+            seen_messages: None,
         },
     );
     let taken = parked.take_session(&sid("b")).expect("parked");
@@ -152,6 +155,7 @@ fn test_session_restores_place() {
         ParkedViewState {
             keys: ExpandedKeys::default(),
             scroll: parked_scroll(durable_row("e7")),
+            seen_messages: None,
         },
     );
     let taken = parked
@@ -177,6 +181,7 @@ fn test_local_anchor_dropped() {
         ParkedViewState {
             keys: ExpandedKeys::default(),
             scroll: parked_scroll(RowId::local(3)),
+            seen_messages: None,
         },
     );
     assert!(
@@ -189,6 +194,7 @@ fn test_local_anchor_dropped() {
         ParkedViewState {
             keys: keys("open"),
             scroll: parked_scroll(RowId::local(3)),
+            seen_messages: None,
         },
     );
     let taken = parked.take_session(&sid("b")).expect("parked");

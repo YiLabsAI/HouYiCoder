@@ -5,6 +5,7 @@
 //! debug_scroll helper is private to this impl block and only these methods
 //! call it.
 
+use crate::records::child_agent_messages;
 use crate::row_id::RowId;
 use crate::rows::row_set::RowSet;
 use crate::scroll::{
@@ -154,8 +155,12 @@ impl App {
     /// rebuild between the jump and the next draw resolves back to it. The
     /// search match jump and the top-of-view jump both land here.
     pub fn park_scroll_at(&mut self, row: usize) {
+        let was_following = self.active_scroll().is_following_tail();
         self.ensure_rows_published();
         self.park_at_row(row);
+        if self.ui.teammate_view.is_some() {
+            self.snapshot_child_scroll_away(was_following);
+        }
     }
 
     /// Step the byte-window view, which keeps no scroll-away snapshot and
@@ -314,7 +319,9 @@ impl App {
         let was_following = self.active_scroll().is_following_tail();
         let cap = self.active_scroll().effective_cap();
         self.step_scroll_to(before.saturating_sub(cap));
-        if !viewing_child {
+        if viewing_child {
+            self.snapshot_child_scroll_away(was_following);
+        } else {
             self.snapshot_scroll_away(was_following);
         }
         let after = self.active_scroll().top_offset();
@@ -334,8 +341,12 @@ impl App {
         let before = self.active_scroll().top_offset();
         let cap = self.active_scroll().effective_cap();
         let transition = self.step_scroll_to(before.saturating_add(cap));
-        if !viewing_child && transition == ScrollTransition::ReachedTail {
-            self.resume_tail_trim();
+        if transition == ScrollTransition::ReachedTail {
+            if viewing_child {
+                self.clear_child_unseen();
+            } else {
+                self.resume_tail_trim();
+            }
         }
         let after = self.active_scroll().top_offset();
         self.debug_scroll("down", total, before, after);
@@ -345,13 +356,15 @@ impl App {
     /// this also clears the scroll-away snapshot so the next scroll-back
     /// starts a fresh "new messages" count (an on-repin clears the unseen
     /// divider), and trims the live transcript so the cap holds at the tail.
-    /// On the child only the child's scroll follows; the parent keeps its
-    /// position and its cap. Called by the jump-to-bottom label click, a new
-    /// user submission, End, Ctrl+End, and PageDown-to-bottom.
+    /// On the child only the child's scroll and unseen baseline reset; the
+    /// parent keeps its position and its cap. Called by the jump-to-bottom
+    /// label click, a new user submission, End, Ctrl+End, and PageDown-to-bottom.
     pub fn scroll_transcript_follow_tail(&mut self) {
         let viewing_child = self.ui.teammate_view.is_some();
         self.active_scroll_mut().follow_tail();
-        if !viewing_child {
+        if viewing_child {
+            self.clear_child_unseen();
+        } else {
             self.resume_tail_trim();
         }
     }
@@ -407,8 +420,29 @@ impl App {
     /// reader's place instead, and names it, so the rebuild that follows the
     /// expansion resolves back to the same row.
     pub fn pin_transcript_top(&mut self) {
+        let was_following = self.active_scroll().is_following_tail();
         let top = self.active_scroll().top_offset();
         self.park_at_row(top);
+        if self.ui.teammate_view.is_some() {
+            self.snapshot_child_scroll_away(was_following);
+        }
+    }
+
+    /// Capture the child reply count the first time a scroll breaks follow-tail
+    /// inside a teammate view.
+    fn snapshot_child_scroll_away(&mut self, was_following: bool) {
+        let Some(view) = self.ui.teammate_view.as_mut() else {
+            return;
+        };
+        if was_following && !view.scroll.is_following_tail() && view.seen_messages.is_none() {
+            view.seen_messages = Some(child_agent_messages(&view.transcript));
+        }
+    }
+
+    fn clear_child_unseen(&mut self) {
+        if let Some(view) = self.ui.teammate_view.as_mut() {
+            view.seen_messages = None;
+        }
     }
 
     /// Capture the frame index the first time a scroll breaks follow-tail
@@ -452,6 +486,16 @@ impl App {
     /// the cap that drops the oldest pushed rows does not silently zero the
     /// count.
     pub fn new_message_count(&self) -> NewMessageCount {
+        if let Some(view) = self.ui.teammate_view.as_ref() {
+            let Some(seen) = view.seen_messages else {
+                return NewMessageCount::default();
+            };
+            let total = child_agent_messages(&view.transcript);
+            return NewMessageCount {
+                count: total.saturating_sub(seen),
+                is_lower_bound: false,
+            };
+        }
         let Some(cursor) = self.ui.transcript_view.unseen_since.as_ref() else {
             return NewMessageCount::default();
         };
@@ -552,7 +596,9 @@ impl App {
         let before = self.active_scroll().top_offset();
         let was_following = self.active_scroll().is_following_tail();
         self.step_scroll_to(before.saturating_sub(n));
-        if !viewing_child {
+        if viewing_child {
+            self.snapshot_child_scroll_away(was_following);
+        } else {
             self.snapshot_scroll_away(was_following);
         }
         let after = self.active_scroll().top_offset();
@@ -562,15 +608,19 @@ impl App {
     /// Step the transcript on view down by n lines. See
     /// scroll_transcript_line_up. A parent step that crosses to the tail
     /// trims and clears the scroll-away snapshot, matching page_down; a
-    /// child step to the tail moves the child scroll alone.
+    /// child step to the tail resets the child unseen baseline alone.
     pub fn scroll_transcript_line_down(&mut self, n: usize) {
         self.ensure_rows_published();
         let total = self.transcript_display_rows();
         let viewing_child = self.ui.teammate_view.is_some();
         let before = self.active_scroll().top_offset();
         let transition = self.step_scroll_to(before.saturating_add(n));
-        if !viewing_child && transition == ScrollTransition::ReachedTail {
-            self.resume_tail_trim();
+        if transition == ScrollTransition::ReachedTail {
+            if viewing_child {
+                self.clear_child_unseen();
+            } else {
+                self.resume_tail_trim();
+            }
         }
         let after = self.active_scroll().top_offset();
         self.debug_scroll("line-down", total, before, after);

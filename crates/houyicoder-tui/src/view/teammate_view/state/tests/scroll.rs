@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
 
+use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::state::App;
@@ -16,6 +17,7 @@ use crate::test_harness::render_buffer;
 use crate::test_harness::render_text;
 use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::rows::NamedRows;
+use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 
@@ -311,4 +313,111 @@ fn test_active_total_switches() {
     // The child walks its own rows: 40 child lines plus the row spacers
     // between them, not the parent's count.
     assert_eq!(child_total, 79, "the count walks the child transcript");
+}
+
+fn agent_frame(text: &str) -> TranscriptFrame {
+    TranscriptFrame::Session(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+        ContentBlock::Text { text: text.into() },
+    )))
+}
+
+/// Scrolling back inside a child view tracks new replies arriving for that
+/// child, updates the jump badge from Jump to bottom to the unseen reply count,
+/// preserves the count across a visit out to the parent, and never leaks the
+/// parent's unseen count into the child badge.
+#[test]
+fn test_child_tracks_new_messages() {
+    let mut app = app_with_parent(60);
+    drop(render_text(&app, 80, 24));
+    app.scroll_transcript_up();
+    app.sessions
+        .current
+        .transcript
+        .push_frame(agent_frame("parent unseen reply"));
+    app.rebuild_transcript();
+    app.sessions.current.transcript.push(subagent_line(40));
+    assert_eq!(
+        app.new_message_count().count,
+        1,
+        "parent holds one unseen reply before entering the child"
+    );
+
+    assert!(app.enter_teammate_view());
+    drop(render_text(&app, 80, 24));
+    app.scroll_transcript_up();
+    let initial_badge = render_text(&app, 80, 24);
+    assert!(
+        initial_badge.contains("Jump to bottom"),
+        "freshly scrolled child starts at zero unseen child replies:\n{initial_badge}"
+    );
+    assert!(
+        !initial_badge.contains("1 new message"),
+        "parent unseen count must not leak into the child view:\n{initial_badge}"
+    );
+
+    let mut frames: Vec<TranscriptFrame> = (0..42)
+        .flat_map(|i| {
+            [
+                user_frame(&format!("q{i}")),
+                agent_frame(&format!("child row {i}")),
+            ]
+        })
+        .collect();
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(99),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames: frames.clone(),
+        },
+    });
+    let updated_badge = render_text(&app, 80, 24);
+    assert!(
+        updated_badge.contains("2 new messages"),
+        "child view badge states the two new child replies:\n{updated_badge}"
+    );
+
+    // Leaving and re-entering keeps the child's unseen baseline, while the
+    // parent keeps its own single unseen message.
+    app.exit_teammate_view();
+    assert_eq!(app.new_message_count().count, 1);
+    assert!(app.enter_teammate_view());
+    frames.extend([user_frame("q42"), agent_frame("child row 42")]);
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(100),
+        response: ServerResponse::ChildTranscript {
+            child_sid: "c1".into(),
+            frames,
+        },
+    });
+    let reentered_badge = render_text(&app, 80, 24);
+    assert!(
+        reentered_badge.contains("3 new messages"),
+        "parked child unseen baseline survives exit and re-entry:\n{reentered_badge}"
+    );
+
+    app.scroll_transcript_follow_tail();
+    assert_eq!(app.new_message_count().count, 0);
+
+    // Line-level scroll, direct park, and top-pin inside the child view each
+    // record and clear the child unseen baseline without touching the parent.
+    app.scroll_transcript_line_up(3);
+    assert!(
+        app.ui
+            .teammate_view
+            .as_ref()
+            .and_then(|v| v.seen_messages)
+            .is_some()
+    );
+    app.scroll_transcript_line_down(200);
+    assert_eq!(app.new_message_count().count, 0);
+    app.park_scroll_at(0);
+    assert!(
+        app.ui
+            .teammate_view
+            .as_ref()
+            .and_then(|v| v.seen_messages)
+            .is_some()
+    );
+    app.scroll_transcript_follow_tail();
+    app.pin_transcript_top();
 }

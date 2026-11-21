@@ -121,6 +121,7 @@ impl App {
             .enter_child(child_sid, parent_keys)
         {
             view.scroll = parked.scroll;
+            view.seen_messages = parked.seen_messages;
             self.set_expanded_keys(parked.keys);
         }
         self.ui.teammate_view = Some(view);
@@ -164,6 +165,7 @@ impl App {
         let view_state = ParkedViewState {
             keys: self.take_expanded_keys(),
             scroll: view.scroll,
+            seen_messages: view.seen_messages,
         };
         if let Some(parent_keys) = self
             .ui

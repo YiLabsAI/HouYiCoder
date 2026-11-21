@@ -340,6 +340,17 @@ pub struct TeammateView {
     /// The refetch handler preserves it until the durable User line appears,
     /// then clears it. None when no echo is pending.
     pub pending_echo: Option<String>,
+    /// Visible agent replies already present when the reader scrolled away
+    /// from the child tail. None while following the tail.
+    pub seen_messages: Option<usize>,
+}
+
+/// Count visible agent replies in a child transcript slice.
+pub(crate) fn child_agent_messages(lines: &[TranscriptLine]) -> usize {
+    lines
+        .iter()
+        .filter(|line| matches!(line, TranscriptLine::Agent(text) if !text.trim().is_empty()))
+        .count()
 }
 
 /// A tool call's resolved outcome, for chip coloring. Running = no matching
