@@ -184,6 +184,15 @@ pub struct SetSessionModeRequest {
     pub meta: Option<Meta>,
 }
 
+/// Response to session/set_mode. The body is empty: a mode change reaches the
+/// client as a session/update current_mode_update notification, not in the
+/// reply. Mirrors the official schema 1.5 SetSessionModeResponse.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSessionModeResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
 /// The value a set-config-option request carries. A select option names a
 /// value id; a boolean option carries true or false.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +213,17 @@ pub struct SetSessionConfigOptionRequest {
     pub config_id: String,
     #[serde(flatten)]
     pub value: SessionConfigOptionValue,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Meta>,
+}
+
+/// Response to session/set_config_option. The body carries the full config
+/// options set after the switch, so the client sees the new current value.
+/// Mirrors the official schema 1.5 SetSessionConfigOptionResponse.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionConfigOptionResponse {
+    pub config_options: Vec<SessionConfigOption>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
     pub meta: Option<Meta>,
 }

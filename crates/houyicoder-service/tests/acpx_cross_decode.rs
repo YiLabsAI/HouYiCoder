@@ -27,6 +27,8 @@ use acp::ContentChunk;
 use acp::Cost;
 use acp::ImageContent;
 use acp::SessionUpdate;
+use acp::SetSessionConfigOptionResponse as AcpSetSessionConfigOptionResponse;
+use acp::SetSessionModeResponse as AcpSetSessionModeResponse;
 use acp::TextContent;
 use acp::ToolCall;
 use acp::ToolCallId;
@@ -35,6 +37,10 @@ use acp::ToolCallUpdate;
 use acp::ToolCallUpdateFields;
 use acp::UsageUpdate;
 use agent_client_protocol::schema::v1 as acp;
+use houyicoder_protocol::acp_wire::{
+    SetSessionConfigOptionResponse as OurSetSessionConfigOptionResponse,
+    SetSessionModeResponse as OurSetSessionModeResponse,
+};
 use houyicoder_protocol::frontend::run::ContentBlock as OurContentBlock;
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk as OurContentChunk, SessionUpdate as OurSessionUpdate, ToolCall as OurToolCall,
@@ -394,4 +400,46 @@ fn test_unknown_session_update_fails() {
         result.is_err(),
         "unknown variant must not decode successfully"
     );
+}
+
+// ---------------------------------------------------------------------------
+// set_mode / set_config_option response bodies mirror schema 1.5
+// ---------------------------------------------------------------------------
+
+/// session/set_mode replies with an empty body (only _meta); a stock client
+/// decoding the official SetSessionModeResponse accepts our reply and vice
+/// versa.
+#[test]
+fn test_mode_response_round_trip() {
+    let acp_val = AcpSetSessionModeResponse::default();
+    let json = serde_json::to_string(&acp_val).expect("ACP serialize");
+    let ours: OurSetSessionModeResponse = serde_json::from_str(&json).expect("decode into ours");
+    assert!(ours.meta.is_none());
+    let back = serde_json::to_string(&ours).expect("ours serialize");
+    assert_eq!(back, "{}");
+}
+
+/// session/set_config_option replies with the config options set wrapped in
+/// configOptions, matching the official SetSessionConfigOptionResponse.
+#[test]
+fn test_config_response_round_trip() {
+    let ours = OurSetSessionConfigOptionResponse::default();
+    let json = serde_json::to_string(&ours).expect("ours serialize");
+    let acp_val: AcpSetSessionConfigOptionResponse =
+        serde_json::from_str(&json).expect("decode into ACP");
+    assert!(acp_val.config_options.is_empty());
+    let value = serde_json::json!({
+        "configOptions": [{
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "m1",
+            "options": [{"value": "m1", "name": "m1"}]
+        }]
+    });
+    let parsed: OurSetSessionConfigOptionResponse =
+        serde_json::from_value(value).expect("decode wrapped response");
+    assert_eq!(parsed.config_options.len(), 1);
+    assert_eq!(parsed.config_options[0].id, "model");
 }

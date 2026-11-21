@@ -63,6 +63,15 @@ impl AcpLiveStream {
     pub async fn recv(&mut self) -> Option<ResponseStreamEvent> {
         self.rx.recv().await
     }
+
+    /// Take a delta that is already queued, without waiting. None when the
+    /// channel is empty. The serve loop calls this after a run resolves to
+    /// drain any deltas the model pushed in its final frame before the run
+    /// future was ready, so the last few characters are not lost when the
+    /// durable Assistant message is suppressed.
+    pub fn try_recv(&mut self) -> Option<ResponseStreamEvent> {
+        self.rx.try_recv().ok()
+    }
 }
 
 #[cfg(test)]

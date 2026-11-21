@@ -5,14 +5,15 @@
 
 use super::AcpServer;
 use crate::acp::adapter::session_config_options;
-use crate::acp::adapter::session_modes;
 use crate::acp::pump::AcpDuplexPump;
 use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::acp_wire::{
-    AcpErrorCode, AcpRequest, AcpResponse, SessionConfigOptionValue, SetSessionConfigOptionRequest,
-    SetSessionModeRequest,
+    AcpErrorCode, AcpNotification, AcpRequest, AcpResponse, SessionConfigOptionValue,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
+    SetSessionModeResponse,
 };
 use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::frontend::session_update::{CurrentModeUpdate, SessionUpdate};
 
 impl AcpServer {
     /// Handle session/set_mode: map the wire mode id to a permission mode,
@@ -81,12 +82,23 @@ impl AcpServer {
             }
         };
         self.gate.set_mode(mode, "acp session/set_mode");
-        let view = session_modes(self.gate.as_ref());
+        // The reply body is empty per schema 1.5; the mode change reaches the
+        // client as a session/update current_mode_update notification.
+        let update = SessionUpdate::CurrentModeUpdate(CurrentModeUpdate {
+            current_mode_id: params.mode_id,
+            meta: None,
+        });
+        let notif = AcpNotification::new(
+            "session/update",
+            serde_json::to_value(&update).expect("mode update serialize"),
+        );
+        self.send_typed(io, &notif).await?;
         self.send_response(
             io,
             &AcpResponse::ok(
                 req.id.clone(),
-                serde_json::to_value(&view).expect("mode state serialize"),
+                serde_json::to_value(SetSessionModeResponse::default())
+                    .expect("mode response serialize"),
             ),
         )
         .await
@@ -183,11 +195,15 @@ impl AcpServer {
         }
         self.runner.set_model(new_model);
         let options = session_config_options(&self.runner, &self.model_options);
+        let resp = SetSessionConfigOptionResponse {
+            config_options: options,
+            meta: None,
+        };
         self.send_response(
             io,
             &AcpResponse::ok(
                 req.id.clone(),
-                serde_json::to_value(&options).expect("config options serialize"),
+                serde_json::to_value(&resp).expect("config response serialize"),
             ),
         )
         .await

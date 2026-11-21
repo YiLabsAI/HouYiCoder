@@ -36,7 +36,8 @@ pub use session::{
     EnvVariable, HttpHeader, LoadSessionRequest, LoadSessionResponse, McpServer, McpServerHttp,
     McpServerSse, McpServerStdio, NewSessionRequest, NewSessionResponse, SessionConfigKind,
     SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionMode,
-    SessionModeState, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    SessionModeState, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionModeRequest, SetSessionModeResponse,
 };
 
 use serde::{Deserialize, Serialize};

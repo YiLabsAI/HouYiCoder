@@ -31,6 +31,25 @@ async fn test_sink_forwards_deltas() {
     );
 }
 
+/// try_recv takes a queued delta without waiting and returns None when the
+/// channel is empty, so the serve loop can drain the tail after a run
+/// resolves without blocking.
+#[tokio::test]
+async fn test_sink_try_recv_drains() {
+    let (sink, mut stream) = AcpLiveStream::channel();
+    sink.handle(ResponseStreamEvent::AssistantTextDelta { text: "a".into() });
+    sink.handle(ResponseStreamEvent::AssistantTextDelta { text: "b".into() });
+    assert_eq!(
+        stream.try_recv(),
+        Some(ResponseStreamEvent::AssistantTextDelta { text: "a".into() })
+    );
+    assert_eq!(
+        stream.try_recv(),
+        Some(ResponseStreamEvent::AssistantTextDelta { text: "b".into() })
+    );
+    assert!(stream.try_recv().is_none(), "channel drained");
+}
+
 /// Installing the sink makes it the runner's response-stream destination.
 #[test]
 fn test_sink_installs_on_runner() {

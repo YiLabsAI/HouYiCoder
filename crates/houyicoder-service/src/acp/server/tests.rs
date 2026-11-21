@@ -551,8 +551,12 @@ async fn test_set_mode_changes_gate() {
     let (handle, tx, mut rx) = spawn_server(guarded_runner(), session);
     let params = json!({"sessionId": session.to_string(), "modeId": "manual"});
     send(&tx, &AcpRequest::new(1, "session/set_mode", params)).await;
+    // The reply body is empty; the mode change arrives as a session/update
+    // current_mode_update notification before the reply.
+    let notif = recv(&mut rx).await;
+    assert!(notif.contains(r#""currentModeId":"manual""#), "{notif}");
     let reply = recv(&mut rx).await;
-    assert!(reply.contains(r#""currentModeId":"manual""#), "{reply}");
+    assert!(reply.contains(r#""id":1"#), "{reply}");
     // An unknown mode id is refused, not silently applied.
     let bad = json!({"sessionId": session.to_string(), "modeId": "bogus"});
     send(&tx, &AcpRequest::new(2, "session/set_mode", bad)).await;
@@ -609,6 +613,7 @@ async fn test_set_config_option_switches() {
     .await;
     let reply = recv(&mut rx).await;
     assert!(reply.contains(r#""id":1"#), "{reply}");
+    assert!(reply.contains(r#""configOptions""#), "{reply}");
     assert!(reply.contains(r#""currentValue":"alt""#), "{reply}");
     assert_eq!(inspector.active_model(), "alt");
 
@@ -779,12 +784,17 @@ async fn test_live_stream_sends_deltas() {
     }
     let reply = reply.expect("got a prompt reply");
     assert!(reply.contains(r#""stopReason":"end_turn""#), "{reply}");
-    // A live delta carries a partial ("hel"), not the full "hello"; and the
-    // durable AssistantMessage is suppressed, so no chunk carries the full
-    // text. This separates the live path from a durable-only false green.
+    // Both live deltas reach the client, including the tail that arrives in
+    // the run's final frame; the durable full message is suppressed, so no
+    // chunk carries the assembled text. This separates the live path from a
+    // durable-only false green and proves the tail-drain fix.
     assert!(
         chunk_lines.iter().any(|l| l.contains(r#""text":"hel""#)),
-        "a live partial delta reached the client: {chunk_lines:?}"
+        "the first live partial reached the client: {chunk_lines:?}"
+    );
+    assert!(
+        chunk_lines.iter().any(|l| l.contains(r#""text":"lo""#)),
+        "the tail live partial reached the client: {chunk_lines:?}"
     );
     assert!(
         !chunk_lines.iter().any(|l| l.contains(r#""text":"hello""#)),
