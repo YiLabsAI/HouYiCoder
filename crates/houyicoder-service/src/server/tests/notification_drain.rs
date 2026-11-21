@@ -202,14 +202,35 @@ async fn test_drain_empty_queue_answers() {
 /// notifications the client has no way to learn about.
 #[tokio::test]
 async fn test_attach_reports_queued_count() {
+    let reported = attach_and_read_first_level(1).await;
+    assert_eq!(
+        reported,
+        Some(1),
+        "attaching reports the queued ending so the client can wake for it"
+    );
+}
+
+/// Attaching to an empty queue reports nothing: the client starts at zero, so
+/// a frame saying zero would cost every attach a frame and tell it nothing.
+#[tokio::test]
+async fn test_attach_quiet_when_empty() {
+    let reported = attach_and_read_first_level(0).await;
+    assert_eq!(reported, None, "an empty queue needs no attach report");
+}
+
+/// Enqueue the given number of endings, attach a client, and return the first
+/// queued-notification level it receives, if any.
+async fn attach_and_read_first_level(endings: usize) -> Option<u32> {
     let session = EngineSessionId::new();
     let (server, runner) = server_with_session(session);
-    runner.enqueue_notification(
-        "child-a".to_string(),
-        NotificationTopic::ChildCompletion,
-        "the child finished".to_string(),
-        None,
-    );
+    for index in 0..endings {
+        runner.enqueue_notification(
+            format!("child-{index}"),
+            NotificationTopic::ChildCompletion,
+            "the child finished".to_string(),
+            None,
+        );
+    }
     let (server_tx, mut client_rx) = mpsc::channel::<String>(16);
     let (mut client_tx, server_rx) = mpsc::channel::<String>(16);
     let io = FrameCarrier::new(server_tx, server_rx);
@@ -226,10 +247,8 @@ async fn test_attach_reports_queued_count() {
             Err(_) => break None,
         }
     };
+    // Abort before any assertion can unwind, so a failing assertion does not
+    // leave the serve loop running until the runtime tears down.
     handle.abort();
-    assert_eq!(
-        reported,
-        Some(1),
-        "attaching reports the queued ending so the client can wake for it"
-    );
+    reported
 }

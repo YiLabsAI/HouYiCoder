@@ -8,7 +8,7 @@ use crate::agent::append::new_event;
 use crate::agent::cache_liveness::CachedPrefixState;
 use crate::agent::context::cas_views::CasViewState;
 use crate::agent::fact;
-use crate::agent::input_queue::InputQueue;
+use crate::agent::input_queue::{InputQueue, NotificationQueue};
 use crate::agent::memory::MemoryRuntime;
 use crate::agent::redundancy::RedundancyTracker;
 use crate::agent::runner_config::{
@@ -27,7 +27,7 @@ use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::skill::grant::SkillGrantStore;
 use houyicoder_api::skill::grant::resolve_entitlements;
 use houyicoder_api::spawn::AgentIdentity;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 #[cfg(test)]
 use std::env::temp_dir;
 use std::env::var;
@@ -114,7 +114,7 @@ impl Runner {
             result_catalog: None,
             reducer: None,
             input_queue: InputQueue::new(),
-            queued_notifications: Mutex::new(VecDeque::new()),
+            queued_notifications: Mutex::new(NotificationQueue::default()),
             redundancy: Mutex::new(RedundancyTracker::new()),
             denied_agents: Arc::new(HashSet::new()),
             spawn_handle: None,

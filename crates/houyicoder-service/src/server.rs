@@ -33,7 +33,6 @@ use houyicoder_core::agent::Runner;
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_protocol::envelope::{ClientFrame, EventSeq, RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-use houyicoder_protocol::frontend::event::FrontendEvent;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::handshake::{Hello, Negotiated, negotiate};
 
@@ -50,6 +49,7 @@ pub use frame_carrier::FrameCarrier;
 use futures::future::Either;
 use futures::future::pending;
 use houyicoder_api::agent_event::UserNoticeEvent;
+use houyicoder_api::agent_event::{EventHandler, NotificationQueueEvent};
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_core::agent::{
     ApprovalDecision as EngineApprovalDecision, ApprovalRequest as EngineApprovalRequest, RunError,
@@ -498,16 +498,16 @@ impl Server {
     ///
     /// Used when a reader attaches: the queue is process state, so a client
     /// that just connected knows nothing about it, and no future event would
-    /// tell it about endings that arrived earlier.
+    /// tell it about endings that arrived earlier. The stamp orders this
+    /// report against the producers', so a drain that lands first survives.
     fn emit_queued_notification_count(&self) {
-        let count = self.runner.queued_notification_count();
-        // A reader that just connected starts at zero, so zero carries no
-        // information and would cost every attach a frame.
-        if count == 0 {
+        let Some((generation, count)) = self.runner.stamp_queued_notification_level() else {
             return;
-        }
+        };
+        // Through the queue handler, not a bare frame, so this report updates
+        // the same high-water mark the producers' reports do.
         self.event_sequencer
-            .enqueue_reliable(FrontendEvent::NotificationsPending { count });
+            .handle(NotificationQueueEvent { count, generation });
     }
 
     /// Exchange Hello with the client. Both ends send their Hello first; the

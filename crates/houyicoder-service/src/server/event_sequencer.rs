@@ -179,6 +179,10 @@ struct SequencerState {
     ephemeral_pending: usize,
     window: ReliableWindow,
     latest_status: HashMap<String, EventEnvelope>,
+    /// The newest notification-queue stamp already delivered. A report whose
+    /// stamp is not newer than this one describes a queue state the client
+    /// has already moved past, so it is dropped rather than applied.
+    last_notification_generation: u64,
 }
 
 struct SequencerInner {
@@ -284,6 +288,18 @@ impl EventHandler<UserNoticeEvent> for EventSequencer {
 
 impl EventHandler<NotificationQueueEvent> for EventSequencer {
     fn handle(&self, event: NotificationQueueEvent) {
+        // The count is read under the queue lock and delivered after it is
+        // released, so two reports can arrive out of order. The newest stamp
+        // wins and an older one is dropped, which keeps the client's last
+        // figure equal to the live queue instead of letting a stale zero
+        // land after a fresh one.
+        {
+            let mut state = self.inner.state.lock().expect("event sequencer lock");
+            if event.generation <= state.last_notification_generation {
+                return;
+            }
+            state.last_notification_generation = event.generation;
+        }
         // Reliable, not ephemeral: this frame is the only signal that wakes an
         // idle session, so dropping it under backpressure would strand the
         // notification with no later event to recover it.
@@ -412,6 +428,7 @@ impl EventSequencer {
         state.ephemeral_pending = 0;
         state.window.clear();
         state.latest_status.clear();
+        state.last_notification_generation = 0;
     }
 
     /// Sequence the durable events one bounded batch of the log maps, and the

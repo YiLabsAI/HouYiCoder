@@ -67,7 +67,7 @@ pub use exports::{
 };
 pub use inference::{InferenceConfig, RequestInferenceConfig};
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -328,11 +328,11 @@ pub struct Runner {
     /// from its mirror. Single source of truth on the host; the frontend
     /// keeps only a derived copy.
     input_queue: input_queue::InputQueue,
-    /// Lower-priority background notifications, from a finished subagent or
-    /// a finished command. Drained only after input_queue is empty, so user
-    /// input never starves. std Mutex: drain is non-blocking, no await under
-    /// the lock.
-    queued_notifications: Mutex<VecDeque<input_queue::QueuedNotification>>,
+    /// Lower-priority background notifications from a finished subagent or
+    /// command. Drained only after input_queue is empty, so user input never
+    /// starves. std Mutex: drain is non-blocking, no await under the lock.
+    /// Each transition is stamped so a consumer can drop an out-of-order one.
+    queued_notifications: Mutex<input_queue::NotificationQueue>,
     /// Redundant-call detector — a harness self-evolution observer,
     /// independent of the user hook registry (which early-returns when no
     /// hooks are configured). check_batch runs before run_pre_tool_use_gate

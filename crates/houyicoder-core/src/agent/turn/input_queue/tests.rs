@@ -10,6 +10,12 @@ use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 use std::sync::{Arc, Mutex};
 
+/// One reported queue level: the transition stamp and the depth it left.
+type ReportedLevel = (u64, u32);
+
+/// The levels a runner reported, shared with the handler that records them.
+type ReportedLevels = Arc<Mutex<Vec<ReportedLevel>>>;
+
 fn bare_runner() -> Runner {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     Runner::new(
@@ -38,17 +44,28 @@ fn test_remove_exact_id() {
     assert_eq!(r.queued_input_snapshot(), vec![first.text]);
 }
 
-/// Collect the levels the runner reports on its notification-queue handler.
-fn counting_runner() -> (Runner, Arc<Mutex<Vec<u32>>>) {
+/// Collect the stamps and counts the runner reports on its queue handler.
+fn counting_runner() -> (Runner, ReportedLevels) {
     let mut r = bare_runner();
-    let seen: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen: ReportedLevels = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
     let mut events = AgentEventHandlers::default();
     events.set_notification_queue(Arc::new(move |event: NotificationQueueEvent| {
-        sink.lock().expect("levels lock").push(event.count);
+        sink.lock()
+            .expect("levels lock")
+            .push((event.generation, event.count));
     }));
     r.set_event_handlers(events);
     (r, seen)
+}
+
+/// The depths a runner reported, in the order it reported them.
+fn reported_depths(seen: &ReportedLevels) -> Vec<u32> {
+    seen.lock()
+        .expect("levels lock")
+        .iter()
+        .map(|(_, count)| *count)
+        .collect()
 }
 
 /// A finished background command must report a non-zero level, because that
@@ -63,7 +80,7 @@ fn test_enqueue_notification_reports_level() {
         "done".into(),
         None,
     );
-    assert_eq!(*seen.lock().expect("levels lock"), vec![1]);
+    assert_eq!(reported_depths(&seen), vec![1]);
 }
 
 /// Consuming a notification must report the level that is left, not silence.
@@ -81,5 +98,48 @@ async fn test_drain_reports_remaining_level() {
     r.drain_turn_boundary(SessionId::new())
         .await
         .expect("drain");
-    assert_eq!(*seen.lock().expect("levels lock"), vec![1, 0]);
+    assert_eq!(reported_depths(&seen), vec![1, 0]);
+}
+
+/// The level a reader attaches with carries a stamp taken under the queue
+/// lock, so it orders against the producers' reports. A drain that lands
+/// after that reading must carry a newer stamp: the older reading cannot
+/// resurrect a count the queue has already left, which would wake the client
+/// for an empty queue.
+#[tokio::test]
+async fn test_attach_report_is_ordered() {
+    let (r, seen) = counting_runner();
+    r.enqueue_notification(
+        "bash-1".into(),
+        NotificationTopic::Task,
+        "done".into(),
+        None,
+    );
+    let attach = r.stamp_queued_notification_level();
+    assert_eq!(
+        attach.map(|(_, count)| count),
+        Some(1),
+        "the stamp carries the queue depth"
+    );
+    let attach_generation = attach.expect("a non-empty queue reports").0;
+    r.drain_turn_boundary(SessionId::new())
+        .await
+        .expect("drain");
+    let stamps: Vec<u64> = seen
+        .lock()
+        .expect("levels lock")
+        .iter()
+        .map(|(generation, _)| *generation)
+        .collect();
+    assert!(
+        stamps
+            .last()
+            .is_some_and(|newest| *newest > attach_generation),
+        "the report after the attach reading is newer: {stamps:?} vs {attach_generation}"
+    );
+    assert_eq!(
+        seen.lock().expect("levels lock").last().map(|(_, c)| *c),
+        Some(0),
+        "the drain's report is the newest, so the client ends at zero"
+    );
 }

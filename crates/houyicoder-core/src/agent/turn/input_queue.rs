@@ -28,6 +28,26 @@ pub(crate) struct InputQueue {
     pending: Mutex<VecDeque<QueuedInput>>,
 }
 
+/// The queued notifications plus the counter that stamps every transition.
+///
+/// The count is read under the queue lock but the event leaves after it, so
+/// two transitions can reach a consumer out of order. Stamping each one under
+/// the same lock lets the consumer drop a report older than what it applied.
+#[derive(Default)]
+pub(crate) struct NotificationQueue {
+    pub(crate) items: VecDeque<QueuedNotification>,
+    pub(crate) generation: u64,
+}
+
+impl NotificationQueue {
+    /// Apply one transition, returning the stamp it owns and the depth left.
+    fn transition(&mut self, change: impl FnOnce(&mut VecDeque<QueuedNotification>)) -> (u64, u32) {
+        change(&mut self.items);
+        self.generation = self.generation.wrapping_add(1);
+        (self.generation, self.items.len() as u32)
+    }
+}
+
 impl InputQueue {
     pub(crate) fn new() -> Self {
         Self {
@@ -58,31 +78,53 @@ impl Runner {
         text: String,
         capture: Option<Value>,
     ) {
-        let count = {
+        let (generation, count) = {
             let mut q = self
                 .queued_notifications
                 .lock()
                 .expect("queued_notifications lock");
-            q.push_back(QueuedNotification {
-                source_id,
-                topic,
-                text,
-                capture,
-            });
-            q.len() as u32
+            q.transition(|items| {
+                items.push_back(QueuedNotification {
+                    source_id,
+                    topic,
+                    text,
+                    capture,
+                });
+            })
         };
-        self.publish_notification_count(count);
+        self.publish_notification_count(generation, count);
     }
 
     /// Emit the authoritative queued-notification level.
     ///
-    /// Every transition of the queue goes through here with the length read
-    /// under the same lock that changed it, so a consumer reads a level: a
-    /// count whose edge it missed still converges, and a mid-turn drain
-    /// reports zero instead of leaving a positive count to wake on.
-    fn publish_notification_count(&self, count: u32) {
+    /// Every transition of the queue goes through here with the depth and the
+    /// transition stamp read under the same lock that produced them, so a
+    /// consumer can discard a report it receives out of order.
+    fn publish_notification_count(&self, generation: u64, count: u32) {
         self.events
-            .emit_notification_queue(NotificationQueueEvent { count });
+            .emit_notification_queue(NotificationQueueEvent { count, generation });
+    }
+
+    /// Take the stamped level a reader attaching now should start from.
+    ///
+    /// A client that just connected knows nothing about the queue, and no
+    /// later event would tell it about endings that arrived before it. The
+    /// stamp is taken under the queue lock so the report orders against the
+    /// producers': an older reading can never overwrite a newer one. An empty
+    /// queue reports nothing, because every client already starts at zero.
+    ///
+    /// The caller delivers the pair; taking the stamp here and delivering it
+    /// there keeps the report independent of whether this runner has an event
+    /// handler installed.
+    pub fn stamp_queued_notification_level(&self) -> Option<(u64, u32)> {
+        let (generation, count) = {
+            let mut q = self
+                .queued_notifications
+                .lock()
+                .expect("queued_notifications lock");
+            q.transition(|_| {})
+        };
+        (count > 0).then_some((generation, count))
     }
 
     /// Remove one queued message by stable identity. No-op when that
@@ -125,11 +167,14 @@ impl Runner {
     /// (finalize_input_buffer): a pending notification survives to the next
     /// run so the parent still learns the child finished.
     pub fn clear_notifications(&self) {
-        self.queued_notifications
-            .lock()
-            .expect("queued_notifications lock")
-            .clear();
-        self.publish_notification_count(0);
+        let (generation, count) = {
+            let mut q = self
+                .queued_notifications
+                .lock()
+                .expect("queued_notifications lock");
+            q.transition(|items| items.clear())
+        };
+        self.publish_notification_count(generation, count);
     }
 
     /// Drop the injection buffer on a terminal run end; keep it on
@@ -162,6 +207,7 @@ impl Runner {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
+            .items
             .len() as u32
     }
 
@@ -182,6 +228,7 @@ impl Runner {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
+            .items
             .iter()
             .map(|notification| notification.text.clone())
             .collect()
@@ -193,6 +240,7 @@ impl Runner {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
+            .items
             .iter()
             .map(|notification| notification.topic)
             .collect()
@@ -204,6 +252,7 @@ impl Runner {
         self.queued_notifications
             .lock()
             .expect("queued_notifications lock")
+            .items
             .iter()
             .map(|notification| notification.capture.clone())
             .collect()
@@ -219,18 +268,20 @@ impl Runner {
         let pending_user: Vec<QueuedInput> = self.drain_pending_input();
         let inbox_pending = self.drain_inbox();
         let pending_notifications: Vec<QueuedNotification> = if pending_user.is_empty() {
-            let (drained, left) = {
+            let (drained, generation, left) = {
                 let mut q = self
                     .queued_notifications
                     .lock()
                     .expect("queued_notifications lock");
-                let drained: Vec<QueuedNotification> = q.drain(..).collect();
-                (drained, q.len() as u32)
+                let mut taken: Vec<QueuedNotification> = Vec::new();
+                let (generation, left) = q.transition(|items| taken.extend(items.drain(..)));
+                (taken, generation, left)
             };
-            // A consumed notification is gone from the queue, so the level
-            // has to be re-reported here; otherwise the client keeps a
-            // positive stale count and wakes an empty turn after the run.
-            self.publish_notification_count(left);
+            // The drain empties the queue, so the level it reports clears the
+            // count the client saw before the drain. The depth comes from the
+            // transition rather than a written zero, so it cannot drift from
+            // what the queue actually holds.
+            self.publish_notification_count(generation, left);
             drained
         } else {
             Vec::new()

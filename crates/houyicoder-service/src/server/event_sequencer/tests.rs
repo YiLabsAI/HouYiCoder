@@ -698,8 +698,14 @@ fn test_tool_input_delta_maps() {
 #[test]
 fn test_queue_level_is_reliable() {
     let sequencer = EventSequencer::new();
-    sequencer.handle(NotificationQueueEvent { count: 3 });
-    sequencer.handle(NotificationQueueEvent { count: 0 });
+    sequencer.handle(NotificationQueueEvent {
+        count: 3,
+        generation: 1,
+    });
+    sequencer.handle(NotificationQueueEvent {
+        count: 0,
+        generation: 2,
+    });
     let frames = sequencer.sequence_pending_for_test();
     let levels: Vec<u32> = frames
         .iter()
@@ -721,4 +727,34 @@ fn test_queue_level_is_reliable() {
         })
         .collect();
     assert_eq!(retained, vec![3, 0], "both levels survive for a reconnect");
+}
+
+/// A report older than one already applied is dropped, so a stale count can
+/// never land after a fresh one. The count is read under the queue lock and
+/// delivered after it is released, so the deeper level can arrive first; the
+/// client must keep that one rather than the older zero that follows.
+#[test]
+fn test_queue_level_drops_stale() {
+    let sequencer = EventSequencer::new();
+    sequencer.handle(NotificationQueueEvent {
+        count: 1,
+        generation: 2,
+    });
+    sequencer.handle(NotificationQueueEvent {
+        count: 0,
+        generation: 1,
+    });
+    let frames = sequencer.sequence_pending_for_test();
+    let levels: Vec<u32> = frames
+        .iter()
+        .filter_map(|envelope| match &envelope.payload {
+            FrontendEvent::NotificationsPending { count } => Some(*count),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        levels,
+        vec![1],
+        "the older report is dropped, leaving the fresh level in place"
+    );
 }

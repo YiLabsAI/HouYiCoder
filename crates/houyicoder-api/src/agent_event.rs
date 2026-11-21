@@ -193,6 +193,14 @@ pub struct UserNoticeEvent {
 pub struct NotificationQueueEvent {
     /// How many notifications currently wait for a turn boundary.
     pub count: u32,
+    /// Monotonic stamp for the queue transition that produced the count.
+    ///
+    /// The count is read under the queue lock and the event is delivered
+    /// after it is released, so two transitions can reach a consumer in the
+    /// wrong order. A consumer drops any report whose stamp is not newer
+    /// than one it already applied, which leaves its last figure equal to
+    /// the live queue. The wire frame carries only the count.
+    pub generation: u64,
 }
 
 /// Cohesive ownership of optional handlers for every agent event domain.
