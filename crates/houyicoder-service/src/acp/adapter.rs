@@ -52,6 +52,19 @@ pub struct SessionView {
 /// adapter stays a router that does not own the runner or the gate.
 pub type SessionFacts = Arc<dyn Fn() -> SessionView + Send + Sync>;
 
+/// The model ids a client may switch to through session/set_config_option:
+/// the settings catalog plus the runner's active model.
+pub fn model_options(runner: &Runner) -> Vec<String> {
+    let (section, _) =
+        houyicoder_config::load_model_section_from(&houyicoder_config::settings_path());
+    let mut ids: Vec<String> = section.catalog.into_iter().map(|e| e.id).collect();
+    let active = runner.active_model();
+    if !ids.iter().any(|m| m == &active) {
+        ids.push(active);
+    }
+    ids
+}
+
 /// The wire mode id for a permission mode. Manual asks before acting; Auto
 /// allows classified calls and asks for destructive ones.
 pub fn mode_id(mode: PermissionMode) -> &'static str {

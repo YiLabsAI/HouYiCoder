@@ -328,6 +328,27 @@ fn test_cancel_notification_reaps_session() {
     assert_eq!(store.state(sid), LifecycleState::Cancelled);
 }
 
+/// model_options returns the settings catalog plus the runner's active
+/// model, so a resumed session whose model is not in the catalog still has
+/// a row.
+#[test]
+fn test_model_options_includes_active() {
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::text("x")) as Arc<dyn ModelProvider>,
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "active-model".into(),
+            ..RunnerConfig::default()
+        },
+    );
+    let options = model_options(&runner);
+    assert!(
+        options.iter().any(|m| m == "active-model"),
+        "the active model is included: {options:?}"
+    );
+}
+
 /// A session/new reply carries the modes and config options the composition
 /// root supplied through the facts closure, so a stock client learns what it
 /// may switch at the same time it learns the session id.

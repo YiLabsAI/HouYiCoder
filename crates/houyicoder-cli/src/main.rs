@@ -136,7 +136,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        CliCommand::Attach { endpoint, session } => run_attach(endpoint, session),
+        CliCommand::Attach {
+            endpoint,
+            session,
+            acp,
+        } => run_attach(endpoint, session, acp),
         CliCommand::Serve {
             project,
             endpoint,
@@ -429,7 +433,10 @@ fn run_detached_host(
 /// against the session id the detached process printed to stderr. The TUI
 /// holds no runner; the detached process owns it. Disconnecting the TUI
 /// leaves the session alive for a later reattach.
-fn run_attach(endpoint: String, session_id: String) -> Result<(), Box<dyn Error>> {
+fn run_attach(endpoint: String, session_id: String, acp: bool) -> Result<(), Box<dyn Error>> {
+    if acp {
+        return detach::run_attach_acp(endpoint);
+    }
     let streams = ipc::connect_local_streams(&endpoint)?;
     let transport = StdioTransport::new(streams.read, streams.write, MAX_MESSAGE_BYTES);
     let client = Client::new(Box::new(transport));

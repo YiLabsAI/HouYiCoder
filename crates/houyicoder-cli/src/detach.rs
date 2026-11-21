@@ -7,13 +7,18 @@
 
 use std::env::temp_dir;
 use std::env::var_os;
+use std::error::Error;
 use std::fs::read_dir;
 use std::fs::read_to_string;
 use std::fs::remove_file;
 use std::fs::write;
-use std::io::Result;
+use std::io::Result as IoResult;
+use std::io::copy;
+use std::io::stdin;
+use std::io::stdout;
 use std::path::PathBuf;
 use std::process::id;
+use std::thread::spawn;
 
 use houyicoder_api::path::home_directory;
 use houyicoder_platform::ipc;
@@ -68,7 +73,7 @@ fn session_pidfile(session_id: &str) -> PathBuf {
 /// it and an attaching client can reach it. The caller binds first: a record
 /// written for an endpoint nobody listens on makes a session that failed to
 /// listen look attachable.
-pub fn record_endpoint(session_id: &str, endpoint: &str) -> Result<()> {
+pub fn record_endpoint(session_id: &str, endpoint: &str) -> IoResult<()> {
     write(endpoint_file(session_id), endpoint)
 }
 
@@ -160,6 +165,37 @@ pub fn cleanup_stale() -> usize {
         reaped += 1;
     }
     reaped
+}
+
+/// Bridge an external ACP client on stdio to a detached host's endpoint.
+/// The host dispatches by the first frame the client sends.
+///
+/// When the client closes stdin (EOF), the socket's write direction drops so
+/// the server sees it and can finish its reply. The process waits for the
+/// server to close its side (all reply frames read to stdout) before exiting.
+/// If the server closes first, the process exits immediately rather than
+/// blocking on stdin.
+pub(crate) fn run_attach_acp(endpoint: String) -> Result<(), Box<dyn Error>> {
+    let streams = ipc::connect_local_streams(&endpoint)?;
+    let mut write = streams.write;
+    let mut read = streams.read;
+    // stdin -> socket. Not joined: when the server closes, the process exits
+    // and this thread is left to the runtime. Dropping write on EOF signals
+    // the server that the client finished sending.
+    spawn(move || {
+        let mut stdin = stdin().lock();
+        if copy(&mut stdin, &mut write).is_err() {
+            tracing::debug!("stdin pipe ended");
+        }
+    });
+    // socket -> stdout. Read until the server closes (EOF). The process exits
+    // when this returns: every reply frame the server sent reaches stdout
+    // before the process ends.
+    let mut stdout = stdout().lock();
+    if copy(&mut read, &mut stdout).is_err() {
+        tracing::debug!("socket pipe ended");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

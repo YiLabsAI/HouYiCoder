@@ -18,6 +18,7 @@ use houyicoder_protocol::frontend::memory::{
     MemoryOperation,
 };
 use tokio::sync::Notify;
+use tokio::sync::broadcast;
 
 const MAX_EPHEMERAL_PENDING: usize = 256;
 
@@ -188,6 +189,10 @@ struct SequencerState {
 struct SequencerInner {
     state: Mutex<SequencerState>,
     notify: Notify,
+    /// A fan-out for response deltas so an attach connection can subscribe
+    /// without replacing the handler the rich frontend installed. No
+    /// subscribers means send is a no-op; a dropped receiver auto-unsubscribes.
+    response_broadcast: broadcast::Sender<ResponseStreamEvent>,
 }
 
 fn agent_status_id(event: &FrontendEvent) -> Option<&str> {
@@ -218,6 +223,11 @@ pub struct EventSequencer {
 
 impl EventHandler<ResponseStreamEvent> for EventSequencer {
     fn handle(&self, event: ResponseStreamEvent) {
+        // Fan out to any attach connections subscribed to the live stream.
+        // No subscribers makes send a no-op error that is safe to drop.
+        if self.inner.response_broadcast.send(event.clone()).is_err() {
+            // No subscribers: the delta reaches only the sequencer's window.
+        }
         let (method, text) = match event {
             ResponseStreamEvent::AssistantTextDelta { text } => (AcpxMethod::LlmTextDelta, text),
             ResponseStreamEvent::ReasoningDelta { text } => (AcpxMethod::LlmReasoningDelta, text),
@@ -369,6 +379,7 @@ impl EventSequencer {
                     ..SequencerState::default()
                 }),
                 notify: Notify::new(),
+                response_broadcast: broadcast::channel(256).0,
             }),
         }
     }
@@ -382,6 +393,14 @@ impl EventSequencer {
         handlers.set_user_notice(Arc::new(self.clone()));
         handlers.set_notification_queue(Arc::new(self.clone()));
         runner.set_event_handlers(handlers);
+    }
+
+    /// Subscribe to the live response-delta stream. An attach connection
+    /// calls this to receive the same deltas the rich frontend's sequencer
+    /// sees, without replacing its handler. The receiver auto-unsubscribes
+    /// when dropped.
+    pub fn subscribe_response_stream(&self) -> broadcast::Receiver<ResponseStreamEvent> {
+        self.inner.response_broadcast.subscribe()
     }
 
     /// Enqueue a reliable event for the active server to sequence and retain.

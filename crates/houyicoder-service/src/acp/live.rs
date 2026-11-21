@@ -59,6 +59,13 @@ impl AcpLiveStream {
         (AcpStreamSink { tx }, AcpLiveStream { rx })
     }
 
+    /// Build a consumer from an existing receiver, so a caller that has its
+    /// own producer (a broadcast forwarding task, for instance) can feed the
+    /// serve loop without installing a new handler on the runner.
+    pub fn from_receiver(rx: UnboundedReceiver<ResponseStreamEvent>) -> Self {
+        AcpLiveStream { rx }
+    }
+
     /// Read the next delta. None when every sink has been dropped.
     pub async fn recv(&mut self) -> Option<ResponseStreamEvent> {
         self.rx.recv().await

@@ -240,7 +240,9 @@ fn test_parse_attach() {
     ])
     .expect("must parse");
     match cmd {
-        CliCommand::Attach { endpoint, session } => {
+        CliCommand::Attach {
+            endpoint, session, ..
+        } => {
             assert_eq!(endpoint, "/tmp/s.sock");
             assert_eq!(session, "abc-123");
         }

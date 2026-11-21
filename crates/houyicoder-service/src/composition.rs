@@ -38,6 +38,7 @@ mod paths;
 mod session_host;
 pub(crate) use containment::ContainmentAdapter;
 use containment::build_session_fences;
+pub(crate) use session_host::RunnerHandleClone;
 pub use session_host::SessionHost;
 
 pub use resume::{

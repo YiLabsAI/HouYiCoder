@@ -797,3 +797,22 @@ fn test_queue_level_rejects_repeat() {
         "reports append in stamp order, and the repeated stamp is dropped"
     );
 }
+
+/// A subscriber to the response broadcast receives the same delta the
+/// sequencer enqueues, and a dropped receiver auto-unsubscribes so the
+/// sequencer never blocks on a stale subscriber.
+#[tokio::test]
+async fn test_broadcast_delivers_delta() {
+    let sequencer = EventSequencer::new();
+    let mut rx = sequencer.subscribe_response_stream();
+    sequencer.handle(ResponseStreamEvent::AssistantTextDelta { text: "hi".into() });
+    let delta = rx.recv().await.expect("delta delivered");
+    assert_eq!(
+        delta,
+        ResponseStreamEvent::AssistantTextDelta { text: "hi".into() }
+    );
+    drop(rx);
+    // A second delta with no subscriber is a no-op, not an error.
+    sequencer.handle(ResponseStreamEvent::AssistantTextDelta { text: "lo".into() });
+}
+}

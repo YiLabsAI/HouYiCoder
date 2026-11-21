@@ -28,7 +28,13 @@ pub(crate) enum CliCommand {
         no_sandbox: bool,
     },
     /// Attach a TUI to a detached session.
-    Attach { endpoint: String, session: String },
+    Attach {
+        endpoint: String,
+        session: String,
+        /// Pipe the Agent Client Protocol over stdio instead of running the
+        /// TUI: the process bridges an external ACP client to the host.
+        acp: bool,
+    },
     /// List detached session ids + pids.
     Ps,
     /// Resume a session. --resume <file> resumes from an exported transcript
@@ -184,7 +190,21 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
     if first.as_deref() == Some("attach") {
         let endpoint = iter.next().ok_or("-- attach needs an endpoint")?;
         let session = iter.next().ok_or("-- attach needs a session id")?;
-        return Ok(CliCommand::Attach { endpoint, session });
+        let mut acp = false;
+        for arg in iter.by_ref() {
+            if arg == "--acp" {
+                acp = true;
+            } else {
+                return Err(format!(
+                    "attach: unknown argument: {arg} (use --acp to pipe the Agent Client Protocol)"
+                ));
+            }
+        }
+        return Ok(CliCommand::Attach {
+            endpoint,
+            session,
+            acp,
+        });
     }
     if first.as_deref() == Some("ps") {
         return Ok(CliCommand::Ps);
