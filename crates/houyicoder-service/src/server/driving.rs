@@ -10,9 +10,8 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
-use std::time::Duration;
 
+use crate::lifecycle::{CLOSE_SETTLE_BUDGET, settle_on_disconnect};
 use futures::future::Either;
 use futures::future::pending;
 use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
@@ -20,7 +19,6 @@ use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::envelope::ClientFrame;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::timeout;
 
 use super::FrameCarrier;
 use super::Server;
@@ -39,11 +37,6 @@ pub(super) enum OnClose {
     /// dropping the future would leave a call no result answers.
     Settle,
 }
-
-/// How long a closed connection waits for cancelled work to record its
-/// outcome. The cancel resolves a command that honors it promptly; the bound
-/// keeps a tool that ignores it from holding the connection teardown open.
-const CLOSE_SETTLE_BUDGET: Duration = Duration::from_secs(5);
 
 impl Server {
     /// Drive one host operation to completion while the connection stays live:
@@ -131,25 +124,6 @@ impl Server {
         F: Future,
         F::Output: Debug,
     {
-        // The first poll is where the operation installs the cancel handle it
-        // watches. Aborting before that poll reaches the slot the previous
-        // operation left, or nothing, and the command runs on uncancelled: a
-        // client that leaves before its request is first polled would get a
-        // command it never saw answered. Work that finishes on this poll has
-        // nothing left to cancel.
-        if let Poll::Ready(outcome) = futures::poll!(work.as_mut()) {
-            tracing::debug!(?outcome, "work finished as the client left");
-            return;
-        }
-        self.runner.abort();
-        match timeout(CLOSE_SETTLE_BUDGET, work).await {
-            Ok(outcome) => {
-                tracing::debug!(?outcome, "cancelled work stopped after the client left")
-            }
-            Err(_) => tracing::warn!(
-                budget_secs = CLOSE_SETTLE_BUDGET.as_secs(),
-                "cancelled work did not stop within the settle budget"
-            ),
-        }
+        settle_on_disconnect(work, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
     }
 }

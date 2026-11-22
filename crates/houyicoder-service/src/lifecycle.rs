@@ -14,9 +14,12 @@ pub mod repair;
 
 mod record;
 mod registry;
+mod settle;
 mod state;
 mod store;
 mod transitions;
+
+pub(crate) use settle::{CLOSE_SETTLE_BUDGET, settle_on_disconnect};
 
 #[cfg(test)]
 mod tests;

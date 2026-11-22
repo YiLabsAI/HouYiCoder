@@ -22,6 +22,7 @@ use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::consent::{ChildPermissionRx, ConsentPolicy};
+use crate::lifecycle::{CLOSE_SETTLE_BUDGET, settle_on_disconnect};
 use crate::protocol_adapter::{
     map_run_error, map_run_result, map_session_update, map_stream_event, tool_title,
 };
@@ -449,6 +450,12 @@ impl AcpServer {
                         }
                     }
                     None => {
+                        // Settle the in-flight run before failing the
+                        // connection: a tool that already appended its call
+                        // gets the budget to append its paired result, so the
+                        // durable trail closes and the next resume sees no
+                        // orphan.
+                        settle_on_disconnect(&mut run_fut, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
                         self.live = live;
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
@@ -515,6 +522,7 @@ impl AcpServer {
                         }
                     }
                     None => {
+                        settle_on_disconnect(&mut resume_fut, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
                         self.live = live;
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
