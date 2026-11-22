@@ -6,6 +6,9 @@ use crate::lifecycle::SessionLeaseStore;
 use crate::server::EventSequencer;
 use crate::server::recap::{RecapSession, RecapSettings};
 use futures::stream;
+use houyicoder_api::agent_event::{
+    EventHandler, ResponseStreamEvent, ToolExecutionEvent, UserNoticeEvent,
+};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
 use houyicoder_async::PStream;
@@ -281,8 +284,9 @@ fn attach_epoch() -> ConnectionEpoch {
     }
 }
 
-/// Build a host with a registered session running the given provider.
-fn host_with(provider: Arc<dyn ModelProvider>) -> (Arc<SessionHost>, SessionId) {
+/// Build a host with a registered session running the given provider, plus
+/// the sequencer its live events go through.
+fn host_with(provider: Arc<dyn ModelProvider>) -> (Arc<SessionHost>, SessionId, EventSequencer) {
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();
     let mut runner = Runner::new(
@@ -308,8 +312,15 @@ fn host_with(provider: Arc<dyn ModelProvider>) -> (Arc<SessionHost>, SessionId) 
     ));
     let append_notify = Arc::new(Notify::new());
     let host = Arc::new(SessionHost::new(SessionLeaseStore::new()));
-    host.insert(session, runner, event_sequencer, gate, append_notify, recap);
-    (host, session)
+    host.insert(
+        session,
+        runner,
+        event_sequencer.clone(),
+        gate,
+        append_notify,
+        recap,
+    );
+    (host, session, event_sequencer)
 }
 
 async fn send_frame(write: &mut (impl AsyncWrite + Unpin), frame: &str) {
@@ -332,7 +343,7 @@ async fn read_line(reader: &mut (impl AsyncBufRead + Unpin)) -> String {
 /// session/update chunks and the prompt replies with end_turn.
 #[tokio::test]
 async fn test_acp_attach_full_chain() {
-    let (host, session) = host_with(Arc::new(StreamingProvider {
+    let (host, session, _sequencer) = host_with(Arc::new(StreamingProvider {
         text: "hello".into(),
     }));
     let (client, server) = duplex(65536);
@@ -395,10 +406,158 @@ async fn test_acp_attach_full_chain() {
     }
 }
 
+/// Tool progress and user notices reach an attached client, not only the
+/// response text: the host's sequencer fans every live domain to the
+/// connection.
+#[tokio::test]
+async fn test_acp_attach_live_domains() {
+    let (host, session, sequencer) = host_with(Arc::new(StreamingProvider {
+        text: "hello".into(),
+    }));
+    let (client, server) = duplex(65536);
+    let (client_read, mut client_write) = split(client);
+    let mut client_reader = BufReader::new(client_read);
+    let serving = tokio::spawn(async move {
+        if let Err(e) = serve_local_stream(host, session, server, attach_epoch()).await {
+            tracing::debug!(error = %e, "serve ended");
+        }
+    });
+
+    send_frame(
+        &mut client_write,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+    )
+    .await;
+    drop(
+        timeout(Duration::from_secs(5), read_line(&mut client_reader))
+            .await
+            .expect("initialize reply"),
+    );
+    let new_session = r#"{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/work","mcpServers":[]}}"#;
+    send_frame(&mut client_write, new_session).await;
+    drop(
+        timeout(Duration::from_secs(5), read_line(&mut client_reader))
+            .await
+            .expect("session/new reply"),
+    );
+
+    // The connection subscribed during the handshake, so these reach it.
+    EventHandler::<ToolExecutionEvent>::handle(
+        &sequencer,
+        ToolExecutionEvent::Progress {
+            call_id: "call-1".into(),
+            elapsed_secs: 1,
+            timeout_secs: None,
+            tail: vec!["partial output".into()],
+        },
+    );
+    EventHandler::<UserNoticeEvent>::handle(
+        &sequencer,
+        UserNoticeEvent {
+            message: "heads up".into(),
+        },
+    );
+
+    let prompt = format!(
+        r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"hi"}}]}}}}"#
+    );
+    send_frame(&mut client_write, &prompt).await;
+    let mut saw_progress = false;
+    let mut saw_notice = false;
+    for _ in 0..64 {
+        let line = timeout(Duration::from_secs(5), read_line(&mut client_reader))
+            .await
+            .expect("prompt frame within 5s");
+        saw_progress |= line.contains("tool_call_update") && line.contains("partial output");
+        saw_notice |= line.contains("heads up");
+        if line.contains(r#""id":3"#) {
+            break;
+        }
+    }
+    assert!(saw_progress, "tool progress reached the attached client");
+    assert!(saw_notice, "a user notice reached the attached client");
+
+    drop(client_write);
+    drop(client_reader);
+    if timeout(Duration::from_secs(2), serving).await.is_err() {
+        // The serve task outlived the test's wait; the assertions above hold.
+    }
+}
+
+/// An attached connection that falls behind at the host's broadcast still
+/// delivers the durable reply: the upstream loss counts as the connection's
+/// own, so the durable copy is not suppressed.
+#[tokio::test]
+async fn test_attach_lag_keeps_durable() {
+    let (host, session, sequencer) = host_with(Arc::new(StreamingProvider {
+        text: "hello".into(),
+    }));
+    let (client, server) = duplex(65536);
+    let (client_read, mut client_write) = split(client);
+    let mut client_reader = BufReader::new(client_read);
+    let serving = tokio::spawn(async move {
+        if let Err(e) = serve_local_stream(host, session, server, attach_epoch()).await {
+            tracing::debug!(error = %e, "serve ended");
+        }
+    });
+
+    send_frame(
+        &mut client_write,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+    )
+    .await;
+    drop(
+        timeout(Duration::from_secs(5), read_line(&mut client_reader))
+            .await
+            .expect("initialize reply"),
+    );
+    let new_session = r#"{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/work","mcpServers":[]}}"#;
+    send_frame(&mut client_write, new_session).await;
+    drop(
+        timeout(Duration::from_secs(5), read_line(&mut client_reader))
+            .await
+            .expect("session/new reply"),
+    );
+
+    // More events than the host broadcast holds, published without awaiting,
+    // so the forwarding task cannot keep up and reports the loss.
+    for _ in 0..600 {
+        EventHandler::<ResponseStreamEvent>::handle(
+            &sequencer,
+            ResponseStreamEvent::AssistantTextDelta { text: "x".into() },
+        );
+    }
+
+    let prompt = format!(
+        r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"{session}","prompt":[{{"type":"text","text":"hi"}}]}}}}"#
+    );
+    send_frame(&mut client_write, &prompt).await;
+    let mut saw_durable = false;
+    for _ in 0..1024 {
+        let line = timeout(Duration::from_secs(5), read_line(&mut client_reader))
+            .await
+            .expect("prompt frame within 5s");
+        saw_durable |= line.contains(r#""text":"hello""#);
+        if line.contains(r#""id":3"#) {
+            break;
+        }
+    }
+    assert!(
+        saw_durable,
+        "the durable reply arrives after the upstream lag"
+    );
+
+    drop(client_write);
+    drop(client_reader);
+    if timeout(Duration::from_secs(2), serving).await.is_err() {
+        // The serve task outlived the test's wait; the assertions above hold.
+    }
+}
+
 /// An empty stream is a clean close, not an error.
 #[tokio::test]
 async fn test_acp_empty_stream_closes() {
-    let (host, session) = host_with(Arc::new(FakeProvider::text("x")));
+    let (host, session, _sequencer) = host_with(Arc::new(FakeProvider::text("x")));
     let (client, server) = duplex(1024);
     drop(client);
     let result = timeout(
@@ -414,7 +573,7 @@ async fn test_acp_empty_stream_closes() {
 /// the connection is routed.
 #[tokio::test]
 async fn test_acp_oversized_frame_rejected() {
-    let (host, session) = host_with(Arc::new(FakeProvider::text("x")));
+    let (host, session, _sequencer) = host_with(Arc::new(FakeProvider::text("x")));
     let (client, server) = duplex(MAX_MESSAGE_BYTES + 4096);
     let serving =
         tokio::spawn(
@@ -436,7 +595,7 @@ async fn test_acp_oversized_frame_rejected() {
 /// ACP server.
 #[tokio::test]
 async fn test_acp_nonacp_routes_rich() {
-    let (host, session) = host_with(Arc::new(FakeProvider::text("x")));
+    let (host, session, _sequencer) = host_with(Arc::new(FakeProvider::text("x")));
     let (client, server) = duplex(8192);
     let serving =
         tokio::spawn(

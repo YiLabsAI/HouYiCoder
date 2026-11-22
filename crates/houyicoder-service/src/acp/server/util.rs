@@ -5,7 +5,6 @@ use std::future::pending;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_context::SessionId;
 use houyicoder_protocol::acp_wire::AcpNotification;
 use houyicoder_protocol::error::ErrorCategory;
@@ -13,7 +12,7 @@ use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
-use crate::acp::live::AcpLiveStream;
+use crate::turn_events::{TurnEventSubscriber, TurnStreamEvent};
 
 /// The plain text of a prompt, or an error message naming the first non-text
 /// block the agent does not accept. The agent declared promptCapabilities
@@ -41,15 +40,19 @@ pub(super) fn prompt_text(prompt: Vec<ContentBlock>) -> Result<String, String> {
     Ok(text)
 }
 
-/// The next live delta, or pending forever when no stream is installed. A
+/// The next live event, or pending forever when no stream is installed. A
 /// select branch that never resolves keeps the run future and the frame
 /// reader as the only live branches, so the absence of a stream costs
-/// nothing.
-pub(super) async fn next_delta(live: &mut Option<AcpLiveStream>) -> Option<ResponseStreamEvent> {
-    match live {
-        Some(stream) => stream.recv().await,
-        None => pending().await,
+/// nothing. A stream whose producer is gone is dropped here rather than
+/// polling a closed receiver on every turn of the loop.
+pub(super) async fn next_turn_event(events: &mut Option<TurnEventSubscriber>) -> TurnStreamEvent {
+    if let Some(stream) = events.as_mut()
+        && let Some(event) = stream.recv().await
+    {
+        return event;
     }
+    *events = None;
+    pending().await
 }
 
 /// A session/update notification in the envelope the base protocol defines:

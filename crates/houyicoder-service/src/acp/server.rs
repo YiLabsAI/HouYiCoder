@@ -14,11 +14,13 @@
 
 #![allow(dead_code)] // pub server type consumed by other crates and tests; locally unused
 
+use std::collections::HashSet;
 use std::future::pending;
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::Duration;
 
 use crate::acp::adapter::AcpAdapter;
-use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::consent::{ChildPermissionRx, ConsentPolicy};
@@ -26,6 +28,7 @@ use crate::lifecycle::{CLOSE_SETTLE_BUDGET, settle_on_disconnect};
 use crate::protocol_adapter::{
     map_run_error, map_run_result, map_session_update, map_stream_event, tool_title,
 };
+use crate::turn_events::TurnEventSubscriber;
 use futures::future::Either;
 use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::session::TrajectoryPages;
@@ -69,14 +72,25 @@ pub struct AcpServer {
     /// before it was sent. An absolute ordinal of the session's own history,
     /// so it survives the log state dropping its oldest rows.
     pushed_through: TrajectoryPosition,
-    /// The live model-output stream, when the composition root installed one
-    /// on the runner. None in tests that drive a stub provider without a
-    /// stream sink; the serve loop sends only the durable events then.
-    live: Option<AcpLiveStream>,
+    /// The run's live events, when the composition root subscribed this
+    /// connection to them. None when the runner has no stream installed; the
+    /// serve loop sends only the durable events then.
+    events: Option<TurnEventSubscriber>,
+    /// Pacing for tool progress updates, so a fast-reporting tool cannot
+    /// fill the client stream with snapshots it cannot render.
+    progress: ToolProgressThrottle,
     /// True once a live delta was sent this turn, so the durable Assistant
     /// and Reasoning events are suppressed to avoid sending the turn text
     /// twice (as deltas and again as a whole message).
     streamed_text: AtomicBool,
+    /// True once this turn's live stream dropped events. The suppression
+    /// above then stops applying: a client missing deltas needs the durable
+    /// copy, which is the only remaining place the text exists.
+    stream_lossy: bool,
+    /// Tool calls whose durable result was already pushed this turn. A
+    /// progress snapshot that arrives after that must not overwrite the
+    /// completed status with a running one.
+    completed_calls: HashSet<String>,
     /// The model ids the client may switch to through session/set_config_option.
     /// Empty when the composition root supplied no catalog; a switch is then
     /// rejected rather than silently accepted for an unknown id.
@@ -121,8 +135,11 @@ impl AcpServer {
             bus: None,
             child_perm_rx: Arc::new(ChildPermissionRx::default()),
             pushed_through: TrajectoryPosition::start(),
-            live: None,
+            events: None,
+            progress: ToolProgressThrottle::new(),
             streamed_text: AtomicBool::new(false),
+            stream_lossy: false,
+            completed_calls: HashSet::new(),
             model_options: Vec::new(),
             cancel_requested: AtomicBool::new(false),
         }
@@ -148,12 +165,21 @@ impl AcpServer {
         )
     }
 
-    /// Install the live model-output stream the runner reports deltas
-    /// through. The composition root builds the pair and installs the sink
-    /// on the runner before wrapping it in Arc; the serve loop drains the
-    /// receiver this holds.
-    pub fn with_live_stream(mut self, live: AcpLiveStream) -> Self {
-        self.live = Some(live);
+    /// Subscribe this connection to the run's live events. The stdio path
+    /// installs the producer on the runner before wrapping it in Arc and
+    /// hands the subscriber here; an attached connection forwards the host's
+    /// own event sources into a subscriber instead. The serve loop sends what
+    /// it receives while a turn is live.
+    pub fn with_events(mut self, events: TurnEventSubscriber) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    /// Replace the interval between tool progress updates. A test sets it
+    /// explicitly so a burst can be held inside one window.
+    #[cfg(test)]
+    pub(super) fn with_progress_interval(mut self, interval: Duration) -> Self {
+        self.progress.set_interval(interval);
         self
     }
 
@@ -309,6 +335,9 @@ impl AcpServer {
         // reaches the run select below, so resetting here loses nothing.
         self.cancel_requested.store(false, Ordering::Relaxed);
         self.streamed_text.store(false, Ordering::Relaxed);
+        self.progress.reset();
+        self.stream_lossy = false;
+        self.completed_calls.clear();
         // The engine run takes plain text today. A non-text block is not silently
         // dropped: the agent declared promptCapabilities.image false at
         // initialize, so a client that sends one is told which block it must
@@ -381,25 +410,9 @@ impl AcpServer {
         }
     }
 
-    /// Drain deltas the model pushed in its final frame before the run future
-    /// resolved. Without this the last few characters are lost when the
-    /// durable Assistant message is suppressed by streamed_text.
-    pub(super) async fn drain_live_tail(
-        &self,
-        io: &mut AcpDuplexPump,
-        live: &mut Option<AcpLiveStream>,
-    ) -> Result<(), ProtocolError> {
-        if let Some(stream) = live.as_mut() {
-            while let Some(delta) = stream.try_recv() {
-                self.push_delta(io, &delta).await?;
-            }
-        }
-        Ok(())
-    }
-
     /// Drive the run future to completion while reading inbound frames and live
-    /// deltas concurrently. A session/cancel notification aborts the run; any
-    /// other frame mid-run is a protocol violation. The live stream is taken
+    /// events concurrently. A session/cancel notification aborts the run; any
+    /// other frame mid-run is a protocol violation. The subscriber is taken
     /// out of self so its borrow does not collide with the &self calls inside
     /// the select, and restored on the normal path. Returns the run's own
     /// outcome inside a transport result: the outer error ends the serve loop.
@@ -413,7 +426,7 @@ impl AcpServer {
         let runner = Arc::clone(&self.runner);
         let run_fut = runner.run(self.session, text);
         tokio::pin!(run_fut);
-        let mut live = self.live.take();
+        let mut events = self.events.take();
         let perm_owner = Arc::clone(&self.child_perm_rx);
         let mut perm_lease = perm_owner.lease(self.bus.as_ref());
         // biased: poll the run future first so a ready run resolves before an
@@ -428,20 +441,14 @@ impl AcpServer {
             tokio::select! {
                 biased;
                 r = &mut run_fut => break r,
-                delta = next_delta(&mut live) => {
-                    if let Some(delta) = delta {
-                        self.push_delta(io, &delta).await?;
-                        // A step's tool events land in the durable trail while
-                        // the model keeps streaming, so draining after each
-                        // delta puts them on the client stream at the point
-                        // the turn reached them instead of after its reply.
-                        self.push_pending(io).await?;
-                    }
+                event = next_turn_event(&mut events) => {
+                    self.note_stream_lag(&mut events);
+                    self.push_stream_event(io, &event).await?;
                 }
                 frame = io.next_frame() => match frame {
                     Some(f) => {
                         if !self.route_cancel_frame(&f).await? {
-                            self.live = live;
+                            self.events = events;
                             return Err(ProtocolError::new(
                                 ErrorCategory::InvalidFrame,
                                 "unexpected frame mid-run",
@@ -456,7 +463,7 @@ impl AcpServer {
                         // durable trail closes and the next resume sees no
                         // orphan.
                         settle_on_disconnect(&mut run_fut, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
-                        self.live = live;
+                        self.events = events;
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
                             "client closed mid-run",
@@ -473,14 +480,14 @@ impl AcpServer {
                 },
             }
         };
-        // Drain deltas the model pushed in its final frame before the run
+        // Drain events the model pushed in its final frame before the run
         // future resolved, so the tail is not lost to streamed_text suppression.
-        self.drain_live_tail(io, &mut live).await?;
-        self.live = live;
+        self.drain_event_tail(io, &mut events).await?;
+        self.events = events;
         Ok(outcome)
     }
 
-    /// Drive the resumed turn and stream its deltas. A cancel that arrived
+    /// Drive the resumed turn and stream its live events. A cancel that arrived
     /// during the ask skips resume and ends the turn cancelled.
     async fn resume_run(
         &mut self,
@@ -493,7 +500,7 @@ impl AcpServer {
         let runner = Arc::clone(&self.runner);
         let resume_fut = runner.resume(self.session, decisions);
         tokio::pin!(resume_fut);
-        let mut live = self.live.take();
+        let mut events = self.events.take();
         let perm_owner = Arc::clone(&self.child_perm_rx);
         let mut perm_lease = perm_owner.lease(self.bus.as_ref());
         let outcome = loop {
@@ -504,16 +511,14 @@ impl AcpServer {
             tokio::select! {
                 biased;
                 r = &mut resume_fut => break r,
-                delta = next_delta(&mut live) => {
-                    if let Some(delta) = delta {
-                        self.push_delta(io, &delta).await?;
-                        self.push_pending(io).await?;
-                    }
+                event = next_turn_event(&mut events) => {
+                    self.note_stream_lag(&mut events);
+                    self.push_stream_event(io, &event).await?;
                 }
                 frame = io.next_frame() => match frame {
                     Some(f) => {
                         if !self.route_cancel_frame(&f).await? {
-                            self.live = live;
+                            self.events = events;
                             return Err(ProtocolError::new(
                                 ErrorCategory::InvalidFrame,
                                 "unexpected frame mid-resume",
@@ -523,7 +528,7 @@ impl AcpServer {
                     }
                     None => {
                         settle_on_disconnect(&mut resume_fut, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
-                        self.live = live;
+                        self.events = events;
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
                             "client closed mid-resume",
@@ -540,8 +545,8 @@ impl AcpServer {
                 },
             }
         };
-        self.drain_live_tail(io, &mut live).await?;
-        self.live = live;
+        self.drain_event_tail(io, &mut events).await?;
+        self.events = events;
         Ok(outcome)
     }
 
@@ -599,7 +604,7 @@ impl AcpServer {
     async fn push_pending(&mut self, io: &mut AcpDuplexPump) -> Result<(), ProtocolError> {
         let events = self.drain_pushed();
         for ev in &events {
-            self.push_turn_event(io, ev).await?;
+            self.push_durable_event(io, ev).await?;
         }
         Ok(())
     }
@@ -627,7 +632,7 @@ impl AcpServer {
     /// channel — that mapping lands with the acpx serve integration; a
     /// pure-ACP client ignores it anyway, so the base stream here is complete
     /// for the first cut.
-    async fn push_turn_event(
+    async fn push_durable_event(
         &mut self,
         io: &mut AcpDuplexPump,
         ev: &SessionLogEntry,
@@ -637,16 +642,16 @@ impl AcpServer {
         if matches!(ev.event, SessionEvent::UserInput { .. }) {
             return Ok(());
         }
+        // A finished call is remembered so a progress snapshot that was
+        // already queued cannot downgrade its status back to running.
+        if let SessionEvent::ToolResult { call_id, .. } = &ev.event {
+            self.completed_calls.insert(call_id.clone());
+        }
         // When the live stream carried the turn text as deltas, the durable
         // Assistant and Reasoning events would repeat it as a whole message;
         // suppress them so the client does not render the turn twice. Other
         // durable events (tool calls, results, run completion) still push.
-        if self.streamed_text.load(Ordering::Relaxed)
-            && matches!(
-                ev.event,
-                SessionEvent::AssistantMessage { .. } | SessionEvent::Reasoning { .. }
-            )
-        {
+        if self.suppresses_durable(&ev.event) {
             return Ok(());
         }
         if let Some(mut update) = map_session_update(&ev.event) {
@@ -661,6 +666,19 @@ impl AcpServer {
             self.send_typed(io, &notification).await?;
         }
         Ok(())
+    }
+
+    /// Whether a durable turn record repeats text the live stream already sent
+    /// and must therefore be suppressed. A turn whose stream dropped events
+    /// keeps its durable copy: the client is missing text, and this is where
+    /// the full message is.
+    fn suppresses_durable(&self, event: &SessionEvent) -> bool {
+        !self.stream_lossy
+            && self.streamed_text.load(Ordering::Relaxed)
+            && matches!(
+                event,
+                SessionEvent::AssistantMessage { .. } | SessionEvent::Reasoning { .. }
+            )
     }
 
     /// Forward one live response delta as a session/update notification. Text
@@ -727,9 +745,12 @@ impl AcpServer {
 
 mod config;
 mod permission;
+mod progress;
+mod stream;
 mod util;
 
-use util::next_delta;
+use progress::ToolProgressThrottle;
+use util::next_turn_event;
 use util::prompt_text;
 use util::session_update;
 

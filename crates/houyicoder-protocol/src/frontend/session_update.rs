@@ -239,6 +239,10 @@ pub struct ToolCallUpdateFields {
     pub raw_input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_output: Option<Value>,
+    /// Content the update adds to the call, such as the output lines a
+    /// running command has printed so far.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<ToolCallContent>,
     /// Wall-clock duration of the call this update answers, in ms. Set on the
     /// completion update only, so a client can show how long the call took
     /// without reading the session log. Absent when the host did not time it.
@@ -276,6 +280,12 @@ impl ToolCallUpdateFields {
 
     pub fn raw_output(mut self, output: Value) -> Self {
         self.raw_output = Some(output);
+        self
+    }
+
+    /// Content the update adds to the call, such as partial output.
+    pub fn content(mut self, content: Vec<ToolCallContent>) -> Self {
+        self.content = content;
         self
     }
 

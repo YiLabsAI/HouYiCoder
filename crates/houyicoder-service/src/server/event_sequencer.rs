@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use crate::turn_events::TurnStreamEvent;
 use houyicoder_api::agent_event::{
     self, AgentEventHandlers, EventHandler, MemoryChangedEvent, NotificationQueueEvent,
     ResponseStreamEvent, ToolExecutionEvent, UserNoticeEvent,
@@ -189,10 +190,11 @@ struct SequencerState {
 struct SequencerInner {
     state: Mutex<SequencerState>,
     notify: Notify,
-    /// A fan-out for response deltas so an attach connection can subscribe
-    /// without replacing the handler the rich frontend installed. No
+    /// One fan-out of every live event domain, so an attach connection
+    /// subscribes without replacing the handler the rich frontend installed
+    /// and still receives the events in the order the run produced them. No
     /// subscribers means send is a no-op; a dropped receiver auto-unsubscribes.
-    response_broadcast: broadcast::Sender<ResponseStreamEvent>,
+    live_broadcast: broadcast::Sender<TurnStreamEvent>,
 }
 
 fn agent_status_id(event: &FrontendEvent) -> Option<&str> {
@@ -224,9 +226,14 @@ pub struct EventSequencer {
 impl EventHandler<ResponseStreamEvent> for EventSequencer {
     fn handle(&self, event: ResponseStreamEvent) {
         // Fan out to any attach connections subscribed to the live stream.
-        // No subscribers makes send a no-op error that is safe to drop.
-        if self.inner.response_broadcast.send(event.clone()).is_err() {
-            // No subscribers: the delta reaches only the sequencer's window.
+        // The common single-frontend case has no subscriber, so the check
+        // keeps it from paying a clone per event.
+        if self.live_subscribed() {
+            drop(
+                self.inner
+                    .live_broadcast
+                    .send(TurnStreamEvent::Response(event.clone())),
+            );
         }
         let (method, text) = match event {
             ResponseStreamEvent::AssistantTextDelta { text } => (AcpxMethod::LlmTextDelta, text),
@@ -241,6 +248,13 @@ impl EventHandler<ResponseStreamEvent> for EventSequencer {
 
 impl EventHandler<ToolExecutionEvent> for EventSequencer {
     fn handle(&self, event: ToolExecutionEvent) {
+        if self.live_subscribed() {
+            drop(
+                self.inner
+                    .live_broadcast
+                    .send(TurnStreamEvent::ToolProgress(event.clone())),
+            );
+        }
         let ToolExecutionEvent::Progress {
             call_id,
             elapsed_secs,
@@ -290,6 +304,13 @@ impl EventHandler<MemoryChangedEvent> for EventSequencer {
 
 impl EventHandler<UserNoticeEvent> for EventSequencer {
     fn handle(&self, event: UserNoticeEvent) {
+        if self.live_subscribed() {
+            drop(
+                self.inner
+                    .live_broadcast
+                    .send(TurnStreamEvent::Notice(event.clone())),
+            );
+        }
         self.enqueue_reliable(FrontendEvent::SystemLine {
             text: event.message,
         });
@@ -379,7 +400,7 @@ impl EventSequencer {
                     ..SequencerState::default()
                 }),
                 notify: Notify::new(),
-                response_broadcast: broadcast::channel(256).0,
+                live_broadcast: broadcast::channel(256).0,
             }),
         }
     }
@@ -395,12 +416,17 @@ impl EventSequencer {
         runner.set_event_handlers(handlers);
     }
 
-    /// Subscribe to the live response-delta stream. An attach connection
-    /// calls this to receive the same deltas the rich frontend's sequencer
-    /// sees, without replacing its handler. The receiver auto-unsubscribes
-    /// when dropped.
-    pub fn subscribe_response_stream(&self) -> broadcast::Receiver<ResponseStreamEvent> {
-        self.inner.response_broadcast.subscribe()
+    /// Subscribe to every live event the run reports, in production order. An
+    /// attach connection calls this to receive the same deltas, tool progress,
+    /// and notices the rich frontend's sequencer sees, without replacing its
+    /// handlers. The receiver auto-unsubscribes when dropped.
+    pub fn subscribe_live(&self) -> broadcast::Receiver<TurnStreamEvent> {
+        self.inner.live_broadcast.subscribe()
+    }
+
+    /// Whether any connection is listening to the live stream.
+    fn live_subscribed(&self) -> bool {
+        self.inner.live_broadcast.receiver_count() > 0
     }
 
     /// Enqueue a reliable event for the active server to sequence and retain.

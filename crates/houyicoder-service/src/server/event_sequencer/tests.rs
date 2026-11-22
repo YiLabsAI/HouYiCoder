@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use crate::turn_events::TurnStreamEvent;
 use agent_event::{
     MemoryChangeCausality as AgentCausality, MemoryChangeOrigin as AgentOrigin,
     MemoryOperation as AgentOperation,
@@ -573,6 +574,42 @@ fn test_notice_event_carries_line() {
     ));
 }
 
+/// An attach connection subscribed to the live stream receives every domain
+/// the rich frontend sees, in the order the run produced them.
+#[test]
+fn test_live_domains_keep_order() {
+    let sequencer = EventSequencer::new();
+    let mut rx = sequencer.subscribe_live();
+    EventHandler::<ToolExecutionEvent>::handle(
+        &sequencer,
+        ToolExecutionEvent::Progress {
+            call_id: "call-1".into(),
+            elapsed_secs: 2,
+            timeout_secs: None,
+            tail: vec!["half".into()],
+        },
+    );
+    EventHandler::<UserNoticeEvent>::handle(
+        &sequencer,
+        UserNoticeEvent {
+            message: "heads up".into(),
+        },
+    );
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(TurnStreamEvent::ToolProgress(
+            ToolExecutionEvent::Progress { ref call_id, .. }
+        )) if call_id == "call-1"
+    ));
+    assert_eq!(
+        rx.try_recv().expect("notice reaches subscribers"),
+        TurnStreamEvent::Notice(UserNoticeEvent {
+            message: "heads up".into()
+        })
+    );
+}
+
 #[test]
 fn test_runner_events_defer_sequence() {
     let sequencer = EventSequencer::new();
@@ -798,18 +835,18 @@ fn test_queue_level_rejects_repeat() {
     );
 }
 
-/// A subscriber to the response broadcast receives the same delta the
-/// sequencer enqueues, and a dropped receiver auto-unsubscribes so the
-/// sequencer never blocks on a stale subscriber.
+/// A subscriber to the live broadcast receives the same delta the sequencer
+/// enqueues, and a dropped receiver auto-unsubscribes so the sequencer never
+/// blocks on a stale subscriber.
 #[tokio::test]
 async fn test_broadcast_delivers_delta() {
     let sequencer = EventSequencer::new();
-    let mut rx = sequencer.subscribe_response_stream();
+    let mut rx = sequencer.subscribe_live();
     sequencer.handle(ResponseStreamEvent::AssistantTextDelta { text: "hi".into() });
-    let delta = rx.recv().await.expect("delta delivered");
+    let event = rx.recv().await.expect("delta delivered");
     assert_eq!(
-        delta,
-        ResponseStreamEvent::AssistantTextDelta { text: "hi".into() }
+        event,
+        TurnStreamEvent::Response(ResponseStreamEvent::AssistantTextDelta { text: "hi".into() })
     );
     drop(rx);
     // A second delta with no subscriber is a no-op, not an error.

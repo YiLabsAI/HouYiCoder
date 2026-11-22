@@ -5,16 +5,18 @@
 
 #![cfg(test)]
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::stream;
+use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_async::PStream;
 use houyicoder_async::bus::MessageBus;
-use houyicoder_context::{PermissionVerdict, SessionEvent, SessionId};
+use houyicoder_context::{EventId, PermissionVerdict, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, permission_request_topic, permission_response_topic,
 };
@@ -54,9 +56,10 @@ use super::AcpServer;
 #[cfg(feature = "acp-cross-decode")]
 use super::util;
 use crate::acp::adapter::AcpAdapter;
-use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::from_line_channels;
 use crate::lifecycle::SessionLeaseStore;
+use crate::turn_events::{TurnEventSubscriber, TurnEvents, TurnStreamEvent};
+use houyicoder_api::agent_event::{ToolExecutionEvent, UserNoticeEvent};
 use tokio::time::timeout;
 
 /// A tool that always needs a human verdict, so a run suspends at
@@ -209,6 +212,32 @@ fn blocking_runner() -> (Arc<Runner>, Arc<Notify>, oneshot::Sender<()>) {
     (runner, entered, release_tx)
 }
 
+/// The blocking runner with the live event stream installed before the
+/// runner is shared, for tests that push live events while a turn runs.
+fn blocking_runner_live(events: &TurnEvents) -> (Arc<Runner>, Arc<Notify>, oneshot::Sender<()>) {
+    let (tool, entered, release_tx) = blocking_latch();
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(tool));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![
+        tool_call_response("toolu_1", "acp_blocking"),
+        text_response("late"),
+    ]));
+    let mut runner = Runner::new(
+        store,
+        provider,
+        tools,
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    );
+    events.install_on(&mut runner);
+    (Arc::new(runner), entered, release_tx)
+}
+
 /// A runner that first parks at a permission ask and, once approved, blocks
 /// inside a tool on the resumed run.
 fn guarded_blocking_runner() -> (Arc<Runner>, Arc<Notify>, oneshot::Sender<()>) {
@@ -234,12 +263,33 @@ fn spawn_server(
     mpsc::Sender<String>,
     mpsc::Receiver<String>,
 ) {
+    spawn_server_events(runner, session, None, None)
+}
+
+/// Spawn a server, optionally subscribed to the live event stream and pacing
+/// tool progress with the given interval.
+fn spawn_server_events(
+    runner: Arc<Runner>,
+    session: SessionId,
+    stream: Option<TurnEventSubscriber>,
+    interval: Option<Duration>,
+) -> (
+    JoinHandle<Result<(), ProtocolError>>,
+    mpsc::Sender<String>,
+    mpsc::Receiver<String>,
+) {
     let adapter = Arc::new(AcpAdapter::new(
         AcpxCapabilities::default(),
         1,
         SessionLeaseStore::new(),
     ));
-    let srv = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
+    let mut srv = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session);
+    if let Some(stream) = stream {
+        srv = srv.with_events(stream);
+    }
+    if let Some(interval) = interval {
+        srv = srv.with_progress_interval(interval);
+    }
     let (client_tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, client_rx) = mpsc::channel::<String>(256);
     let mut io = from_line_channels(server_rx, server_tx);
@@ -1082,8 +1132,9 @@ async fn test_live_stream_sends_deltas() {
             ..RunnerConfig::default()
         },
     );
-    let (sink, live) = AcpLiveStream::channel();
-    sink.install_on(&mut runner);
+    let events = TurnEvents::new();
+    events.install_on(&mut runner);
+    let live = events.subscribe();
     let runner = Arc::new(runner);
     let adapter = Arc::new(AcpAdapter::new(
         AcpxCapabilities::default(),
@@ -1091,7 +1142,7 @@ async fn test_live_stream_sends_deltas() {
         SessionLeaseStore::new(),
     ));
     let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
-        .with_live_stream(live);
+        .with_events(live);
     let (tx, server_rx) = mpsc::channel::<String>(256);
     let (server_tx, mut rx) = mpsc::channel::<String>(256);
     let mut io = from_line_channels(server_rx, server_tx);
@@ -1127,6 +1178,357 @@ async fn test_live_stream_sends_deltas() {
     assert!(
         !chunk_lines.iter().any(|l| l.contains(r#""text":"hello""#)),
         "the durable full message was suppressed: {chunk_lines:?}"
+    );
+
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A tool progress snapshot reaches the client as an update on the running
+/// call while the turn is live.
+#[tokio::test]
+async fn test_progress_reaches_client() {
+    let session = SessionId::new();
+    let events = TurnEvents::new();
+    let (runner, entered, release) = blocking_runner_live(&events);
+    let publisher = events.clone();
+    let stream = events.subscribe();
+    let (handle, tx, mut rx) = spawn_server_events(runner, session, Some(stream), None);
+
+    send(&tx, &prompt_request(session, 1)).await;
+    entered.notified().await;
+    publisher.publish(TurnStreamEvent::ToolProgress(
+        ToolExecutionEvent::Progress {
+            call_id: "toolu_1".into(),
+            elapsed_secs: 2,
+            timeout_secs: Some(60),
+            tail: vec!["partial output".into()],
+        },
+    ));
+
+    let line = loop {
+        let line = recv(&mut rx).await;
+        if line.contains("tool_call_update") {
+            break line;
+        }
+    };
+    assert!(line.contains(r#""status":"in_progress""#), "{line}");
+    assert!(line.contains("partial output"), "{line}");
+
+    let _ = release.send(());
+    recv_prompt_result(&mut rx, 1).await;
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A burst of progress snapshots inside one pacing window becomes a single
+/// update, so a fast-reporting tool cannot fill the client stream.
+#[tokio::test]
+async fn test_progress_burst_throttled() {
+    let session = SessionId::new();
+    let events = TurnEvents::new();
+    let (runner, entered, release) = blocking_runner_live(&events);
+    let publisher = events.clone();
+    let stream = events.subscribe();
+    let (handle, tx, mut rx) = spawn_server_events(
+        runner,
+        session,
+        Some(stream),
+        Some(Duration::from_secs(3600)),
+    );
+
+    send(&tx, &prompt_request(session, 1)).await;
+    entered.notified().await;
+    for _ in 0..3 {
+        publisher.publish(TurnStreamEvent::ToolProgress(
+            ToolExecutionEvent::Progress {
+                call_id: "toolu_1".into(),
+                elapsed_secs: 1,
+                timeout_secs: None,
+                tail: vec!["tick".into()],
+            },
+        ));
+    }
+    // The first snapshot must reach the client while the call still runs, so
+    // wait for it before releasing the tool.
+    let first = loop {
+        let line = recv(&mut rx).await;
+        if line.contains("tool_call_update") {
+            break line;
+        }
+    };
+    assert!(first.contains("in_progress"), "{first}");
+    let _ = release.send(());
+
+    let mut updates = 0;
+    loop {
+        let line = recv(&mut rx).await;
+        if line.contains("tool_call_update") && line.contains("in_progress") {
+            updates += 1;
+        }
+        if let Ok(AcpResponse::Result {
+            id: AcpRequestId::Number(1),
+            ..
+        }) = serde_json::from_str::<AcpResponse>(&line)
+        {
+            break;
+        }
+    }
+    assert_eq!(updates, 0, "no further update inside the pacing window");
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A user notice reaches the client as conversation text while the turn is
+/// live.
+#[tokio::test]
+async fn test_notice_reaches_client() {
+    let session = SessionId::new();
+    let events = TurnEvents::new();
+    let (runner, entered, release) = blocking_runner_live(&events);
+    let publisher = events.clone();
+    let stream = events.subscribe();
+    let (handle, tx, mut rx) = spawn_server_events(runner, session, Some(stream), None);
+
+    send(&tx, &prompt_request(session, 1)).await;
+    entered.notified().await;
+    publisher.publish(TurnStreamEvent::Notice(UserNoticeEvent {
+        message: "sandbox widened".into(),
+    }));
+
+    let line = loop {
+        let line = recv(&mut rx).await;
+        if line.contains("sandbox widened") {
+            break line;
+        }
+    };
+    assert!(line.contains("agent_message_chunk"), "{line}");
+
+    let _ = release.send(());
+    recv_prompt_result(&mut rx, 1).await;
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A turn whose live stream dropped events keeps its durable copy, so the
+/// client still receives the whole message after losing some deltas.
+#[test]
+fn test_lossy_turn_keeps_durable() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let mut server = AcpServer::new(
+        Arc::new(AcpAdapter::new(
+            AcpxCapabilities::default(),
+            1,
+            SessionLeaseStore::new(),
+        )),
+        runner,
+        Arc::new(DefaultModeGate::new()),
+        session,
+    );
+    let message = SessionEvent::AssistantMessage {
+        text: "hello".into(),
+        thinking: None,
+    };
+    server.streamed_text.store(true, Ordering::Relaxed);
+    assert!(
+        server.suppresses_durable(&message),
+        "a fully streamed turn suppresses the duplicate"
+    );
+    server.stream_lossy = true;
+    assert!(
+        !server.suppresses_durable(&message),
+        "a lossy turn keeps the durable copy"
+    );
+}
+
+/// A progress snapshot for a call whose durable result was already pushed is
+/// dropped, so a completed card never goes back to running.
+#[tokio::test]
+async fn test_progress_after_result_dropped() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let mut server = AcpServer::new(
+        Arc::new(AcpAdapter::new(
+            AcpxCapabilities::default(),
+            1,
+            SessionLeaseStore::new(),
+        )),
+        runner,
+        Arc::new(DefaultModeGate::new()),
+        session,
+    );
+    let (_client_tx, server_rx) = mpsc::channel::<String>(16);
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(16);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let result = SessionLogEntry {
+        id: EventId::new(),
+        session,
+        ts: 0,
+        prev_hash: None,
+        event: SessionEvent::ToolResult {
+            call_id: "toolu_1".into(),
+            output: json!({"ok": true}),
+            duration_ms: 1,
+        },
+    };
+    server
+        .push_durable_event(&mut io, &result)
+        .await
+        .expect("durable result pushed");
+    let completed = client_rx.recv().await.expect("completed update");
+    assert!(completed.contains("completed"), "{completed}");
+
+    server
+        .push_progress(
+            &mut io,
+            &ToolExecutionEvent::Progress {
+                call_id: "toolu_1".into(),
+                elapsed_secs: 1,
+                timeout_secs: None,
+                tail: vec!["tick".into()],
+            },
+        )
+        .await
+        .expect("push completes");
+    assert!(
+        client_rx.try_recv().is_err(),
+        "no update follows the completed status"
+    );
+}
+
+/// A multi-step turn that fell behind delivers the first step's durable
+/// message while the turn is still running, not only at its end, so the
+/// in-loop lag note is load-bearing and not just the tail drain.
+#[tokio::test]
+async fn test_lag_keeps_first_step() {
+    let session = SessionId::new();
+    let (tool, entered, release) = blocking_latch();
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(tool));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![
+        CompletionResponse {
+            output: vec![
+                OutputItem::Text {
+                    text: "step one".into(),
+                },
+                OutputItem::ToolCall {
+                    id: "toolu_1".into(),
+                    name: "acp_blocking".into(),
+                    input: json!({}),
+                },
+            ],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        text_response("second"),
+    ]));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let mut runner = Runner::new(
+        store,
+        provider,
+        tools,
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    );
+    let events = TurnEvents::new();
+    events.install_on(&mut runner);
+    let stream = events.subscribe();
+    for _ in 0..600 {
+        events.publish(TurnStreamEvent::Response(
+            ResponseStreamEvent::AssistantTextDelta { text: "x".into() },
+        ));
+    }
+    let (handle, tx, mut rx) = spawn_server_events(Arc::new(runner), session, Some(stream), None);
+
+    send(&tx, &prompt_request(session, 1)).await;
+    entered.notified().await;
+    // The tool holds the turn open, so this proof must come from the run's
+    // own drain rather than its tail.
+    let mut saw_first_step = false;
+    for _ in 0..1024 {
+        let line = recv(&mut rx).await;
+        if line.contains("agent_message_chunk") && line.contains("step one") {
+            saw_first_step = true;
+            break;
+        }
+    }
+    assert!(
+        saw_first_step,
+        "the first step's durable text arrives before the turn ends"
+    );
+
+    let _ = release.send(());
+    recv_prompt_result(&mut rx, 1).await;
+    drop(tx);
+    handle.await.expect("join").expect("clean close");
+}
+
+/// A turn whose live stream fell behind still delivers the durable copy of
+/// the reply, so a client that lost deltas receives the whole text.
+#[tokio::test]
+async fn test_lagged_stream_keeps_durable() {
+    let session = SessionId::new();
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let provider: Arc<dyn ModelProvider> = Arc::new(StreamingProvider {
+        text: "hello".into(),
+    });
+    let mut runner = Runner::new(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "test".into(),
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    );
+    let events = TurnEvents::new();
+    events.install_on(&mut runner);
+    let stream = events.subscribe();
+    // More events than the stream holds, published before the turn reads
+    // any, so the first read of the turn is a lag.
+    for _ in 0..600 {
+        events.publish(TurnStreamEvent::Response(
+            ResponseStreamEvent::AssistantTextDelta { text: "x".into() },
+        ));
+    }
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let server = AcpServer::new(
+        adapter,
+        Arc::new(runner),
+        Arc::new(DefaultModeGate::new()),
+        session,
+    )
+    .with_events(stream);
+    let (tx, server_rx) = mpsc::channel::<String>(256);
+    let (server_tx, mut rx) = mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let handle = tokio::spawn(async move { server.serve(&mut io).await });
+
+    send(&tx, &prompt_request(session, 1)).await;
+    let mut chunks: Vec<String> = Vec::new();
+    loop {
+        let line = recv(&mut rx).await;
+        if line.contains(r#""id":1"#) {
+            break;
+        }
+        if line.contains("agent_message_chunk") {
+            chunks.push(line);
+        }
+    }
+    assert!(
+        chunks.iter().any(|line| line.contains(r#""text":"hello""#)),
+        "the durable reply arrives after the lag: {chunks:?}"
     );
 
     drop(tx);

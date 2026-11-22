@@ -7,7 +7,8 @@
 
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::{
-    ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ContentChunk, SessionUpdate, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields,
 };
 use serde_json::Value;
 
@@ -69,6 +70,28 @@ fn test_tool_update_round_trips() {
             .raw_output(Value::String("done".into())),
     ));
     round_trips(&u);
+}
+
+/// A progress update carrying partial output content round-trips with the
+/// content intact, so a client renders the preview the producer sent.
+#[test]
+fn test_tool_update_content_trips() {
+    let u = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "toolu_1",
+        ToolCallUpdateFields::new()
+            .status(ToolCallStatus::InProgress)
+            .content(vec![ToolCallContent::Content {
+                content: ContentBlock::Text {
+                    text: "line one\nline two".into(),
+                },
+            }]),
+    ));
+    round_trips(&u);
+    let json = serde_json::to_string(&u).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"sessionUpdate":"tool_call_update","toolCallId":"toolu_1","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"line one\nline two"}}]}"#
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ use std::sync::atomic::Ordering;
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
-use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_context::SessionId;
 use houyicoder_platform::ipc::LocalListener;
 use houyicoder_protocol::acp_wire::AcpRequest;
@@ -32,7 +31,9 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::io::split;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc as tokio_mpsc;
+use tokio::task::JoinHandle;
 
 use crate::acp::adapter::AcpAdapter;
 use crate::acp::adapter::SessionFacts;
@@ -40,13 +41,14 @@ use crate::acp::adapter::SessionView;
 use crate::acp::adapter::model_options;
 use crate::acp::adapter::session_config_options;
 use crate::acp::adapter::session_modes;
-use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::from_line_channels;
 use crate::acp::server::AcpServer;
 use crate::composition::RunnerHandleClone;
 use crate::composition::SessionHost;
+use crate::server::EventSequencer;
 use crate::server::FrameCarrier;
 use crate::server::session::serve_session;
+use crate::turn_events::TurnEvents;
 
 /// The connection's place in the accept order. A newer connection to the same
 /// session bumps the shared counter, so an older connection sees itself as
@@ -237,6 +239,28 @@ where
     FrameCarrier::new(outbound_tx, inbound_rx)
 }
 
+/// Forward the host's live events into this connection's own stream. A
+/// source that falls behind keeps forwarding from the newest event instead of
+/// ending the stream, and the loss it reports reaches the connection's own
+/// count, so a damaged turn still gets its durable copy. The caller aborts the
+/// task when the connection ends.
+fn forward_live_events(sequencer: EventSequencer, events: TurnEvents) -> JoinHandle<()> {
+    let mut rx = sequencer.subscribe_live();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if !events.publish(event) {
+                        return;
+                    }
+                }
+                Err(RecvError::Lagged(count)) => events.note_upstream_lag(count),
+                Err(RecvError::Closed) => return,
+            }
+        }
+    })
+}
+
 async fn serve_acp_attach<R, W>(
     host: Arc<SessionHost>,
     handle: RunnerHandleClone,
@@ -269,18 +293,13 @@ where
             .with_session_facts(facts)
             .with_session_binding(binding),
     );
-    let mut broadcast_rx = handle.event_sequencer.subscribe_response_stream();
-    let (live_tx, live_rx) = tokio_mpsc::unbounded_channel::<ResponseStreamEvent>();
-    tokio::spawn(async move {
-        while let Ok(delta) = broadcast_rx.recv().await {
-            if live_tx.send(delta).is_err() {
-                return;
-            }
-        }
-    });
-    let live = AcpLiveStream::from_receiver(live_rx);
+    // The attached session's runner already reports its live events through the
+    // host's sequencer, so the connection forwards all three domains into its
+    // own stream rather than replacing the host's handlers.
+    let events = TurnEvents::new();
+    let forwarder = forward_live_events(handle.event_sequencer.clone(), events.clone());
     let server = AcpServer::new(adapter, runner, gate, session)
-        .with_live_stream(live)
+        .with_events(events.subscribe())
         .with_model_options(models)
         .with_bus(host.bus().cloned());
     let (inbound_tx, inbound_rx) = tokio_mpsc::channel::<String>(16);
@@ -345,7 +364,9 @@ where
         drop(writer.shutdown().await);
     });
     let mut pump = from_line_channels(inbound_rx, outbound_tx);
-    server.serve(&mut pump).await
+    let served = server.serve(&mut pump).await;
+    forwarder.abort();
+    served
 }
 
 #[cfg(test)]

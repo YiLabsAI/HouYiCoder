@@ -26,6 +26,7 @@ pub mod local_ipc;
 pub mod protocol_adapter;
 pub mod sandbox_policy;
 pub mod server;
+pub mod turn_events;
 
 /// Re-exported so the binary entry can mint a cancel token for the serve
 /// path without a direct dependency on the async foundation crate.

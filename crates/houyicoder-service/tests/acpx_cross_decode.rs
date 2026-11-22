@@ -22,6 +22,7 @@
 
 #![cfg(feature = "acp-cross-decode")]
 
+use acp::Content;
 use acp::ContentBlock;
 use acp::ContentChunk;
 use acp::Cost;
@@ -33,6 +34,7 @@ use acp::SetSessionConfigOptionResponse as AcpSetSessionConfigOptionResponse;
 use acp::SetSessionModeResponse as AcpSetSessionModeResponse;
 use acp::TextContent;
 use acp::ToolCall;
+use acp::ToolCallContent;
 use acp::ToolCallId;
 use acp::ToolCallStatus;
 use acp::ToolCallUpdate;
@@ -261,6 +263,34 @@ fn test_acp_ours_tool_update() {
         }
         _ => panic!("expected ToolCallUpdate, got {ours:?}"),
     }
+}
+
+/// A tool update carrying partial output content crosses both ways: the
+/// official peer's content block decodes into ours, and ours decodes into the
+/// peer's, with the text intact.
+#[test]
+fn test_tool_update_content_crosses() {
+    let acp_val = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        ToolCallId::new("toolu_1"),
+        ToolCallUpdateFields::new()
+            .status(ToolCallStatus::InProgress)
+            .content(vec![ToolCallContent::Content(Content::new(
+                ContentBlock::Text(TextContent::new("partial output")),
+            ))]),
+    ));
+    let ours = acp_to_ours(&acp_val);
+    let OurSessionUpdate::ToolCallUpdate(update) = &ours else {
+        panic!("expected ToolCallUpdate, got {ours:?}");
+    };
+    let text = serde_json::to_string(&update.fields.content).expect("content serializes");
+    assert!(text.contains("partial output"), "content carried: {text}");
+
+    let back = ours_to_acp(&ours);
+    let SessionUpdate::ToolCallUpdate(update) = back else {
+        panic!("expected ToolCallUpdate");
+    };
+    let text = serde_json::to_string(&update.fields.content).expect("content serializes");
+    assert!(text.contains("partial output"), "content returned: {text}");
 }
 
 #[test]

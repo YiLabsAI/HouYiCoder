@@ -41,10 +41,10 @@ use houyicoder_service::acp::adapter::SessionView;
 use houyicoder_service::acp::adapter::model_options;
 use houyicoder_service::acp::adapter::session_config_options;
 use houyicoder_service::acp::adapter::session_modes;
-use houyicoder_service::acp::live::AcpLiveStream;
 use houyicoder_service::acp::pump::spawn_pump;
 use houyicoder_service::acp::server::AcpServer;
 use houyicoder_service::lifecycle::SessionLeaseStore;
+use houyicoder_service::turn_events::TurnEvents;
 use houyicoder_session::SessionStore;
 
 /// A provider that streams one text delta then never yields again, so a run
@@ -113,10 +113,11 @@ async fn main() {
         },
     );
     let models = model_options(&runner);
-    // Install the live sink before the runner is shared so each response
-    // delta reaches the serve loop as a session/update chunk.
-    let (sink, live) = AcpLiveStream::channel();
-    sink.install_on(&mut runner);
+    // Route the live events before the runner is shared so response deltas,
+    // tool progress, and user notices all reach the serve loop.
+    let events = TurnEvents::new();
+    events.install_on(&mut runner);
+    let stream = events.subscribe();
     let runner = Arc::new(runner);
     let runner_for_binding = Arc::clone(&runner);
     let binding_session = session;
@@ -151,7 +152,7 @@ async fn main() {
     // never deadlocks.
     let mut pump = spawn_pump(BufReader::new(stdin()), stdout());
     let server = AcpServer::new(adapter, runner, gate, session)
-        .with_live_stream(live)
+        .with_events(stream)
         .with_model_options(models);
     drop(server.serve(&mut pump).await);
     pump.close().await;

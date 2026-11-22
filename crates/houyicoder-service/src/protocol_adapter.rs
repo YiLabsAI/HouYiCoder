@@ -26,7 +26,7 @@ pub(crate) use crate::consent::{DurableGrant, consent_rule_for, durable_grant, i
 pub(crate) use crate::consent::{FENCED, UNFENCED};
 use AcpxMethod::*;
 pub(crate) use acp_permission::{acp_permission_response_to_decision, approval_to_acp_permission};
-use houyicoder_api::agent_event::ResponseStreamEvent;
+use houyicoder_api::agent_event::{ResponseStreamEvent, ToolExecutionEvent, UserNoticeEvent};
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
 use houyicoder_context::SessionEvent;
@@ -53,7 +53,8 @@ use houyicoder_protocol::frontend::run::{
     ApprovalDecision, ApprovalRequest, ContentBlock, RunError, RunOutcome, RunResult, StopReason,
 };
 use houyicoder_protocol::frontend::session_update::{
-    ContentChunk, SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    ContentChunk, SessionUpdate, ToolCall, ToolCallContent, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields,
 };
 use houyicoder_protocol::frontend::status::{
     ApprovalAuditView, SessionAuditView, StatusSnapshot as ProtocolStatusSnapshot, TurnAuditView,
@@ -508,6 +509,31 @@ pub fn map_stream_event(event: &ResponseStreamEvent) -> Option<SessionUpdate> {
         }
         ResponseStreamEvent::ToolInputDelta { .. } => return None,
     })
+}
+
+/// Map one tool progress snapshot to the update a client renders in place on
+/// the running call. The tool's latest output lines ride the update content,
+/// and the call's completion carries the final status.
+pub fn map_tool_progress(event: &ToolExecutionEvent) -> SessionUpdate {
+    let ToolExecutionEvent::Progress { call_id, tail, .. } = event;
+    let mut fields = ToolCallUpdateFields::new().status(ToolCallStatus::InProgress);
+    if !tail.is_empty() {
+        fields = fields.content(vec![ToolCallContent::Content {
+            content: ContentBlock::Text {
+                text: tail.join("\n"),
+            },
+        }]);
+    }
+    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(call_id.clone(), fields))
+}
+
+/// Map one user notice to agent text. The session stream has no standard
+/// system-message kind, so a notice travels as a message chunk and the client
+/// renders it in the conversation.
+pub fn map_notice(event: &UserNoticeEvent) -> SessionUpdate {
+    SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
+        text: event.message.clone(),
+    }))
 }
 
 /// Map a session event to its session/update form. Standard event kinds map

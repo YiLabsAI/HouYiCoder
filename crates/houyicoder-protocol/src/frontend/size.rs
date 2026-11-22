@@ -146,6 +146,12 @@ fn tool_update_bytes(update: &ToolCallUpdate) -> usize {
         + update.fields.title.as_ref().map_or(0, String::len)
         + update.fields.raw_input.as_ref().map_or(0, json_bytes)
         + update.fields.raw_output.as_ref().map_or(0, json_bytes)
+        + update
+            .fields
+            .content
+            .iter()
+            .map(tool_content_bytes)
+            .sum::<usize>()
 }
 
 /// The bytes of a plan, whose entries carry the step text a reader sees.

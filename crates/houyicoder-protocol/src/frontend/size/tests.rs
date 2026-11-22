@@ -79,6 +79,7 @@ fn test_update_carries_payload() {
                 locations: Vec::new(),
                 raw_input: Some(json!({ "path": filler.clone() })),
                 raw_output: Some(json!({ "stdout": filler.clone() })),
+                content: Vec::new(),
                 duration_ms: None,
             },
         )),
@@ -241,6 +242,7 @@ fn test_nested_arguments_count() {
             locations: Vec::new(),
             raw_input: Some(json!({ "edits": [{ "path": filler }] })),
             raw_output: None,
+            content: Vec::new(),
             duration_ms: None,
         },
     ));

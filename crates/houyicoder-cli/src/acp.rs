@@ -26,7 +26,6 @@ use houyicoder_service::acp::adapter::SessionFacts;
 use houyicoder_service::acp::adapter::SessionView;
 use houyicoder_service::acp::adapter::session_config_options;
 use houyicoder_service::acp::adapter::session_modes;
-use houyicoder_service::acp::live::AcpLiveStream;
 use houyicoder_service::acp::pump::AcpDuplexPump;
 use houyicoder_service::acp::pump::InboundFrame;
 use houyicoder_service::acp::pump::spawn_pump;
@@ -36,6 +35,7 @@ use houyicoder_service::composition::build_runner;
 use houyicoder_service::composition::resolve_provider;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::lifecycle::SessionLeaseStore;
+use houyicoder_service::turn_events::TurnEvents;
 use tokio::runtime::Builder;
 
 use crate::production_runner;
@@ -91,7 +91,7 @@ pub(crate) fn run_acp_stdio(
             send_acp_frame(&mut pump, &reply).await?;
             fire_after_bundle(parts.session);
             let server = AcpServer::new(parts.adapter, parts.runner, parts.gate, parts.session)
-                .with_live_stream(parts.live)
+                .with_events(parts.events.subscribe())
                 .with_model_options(parts.model_options)
                 .with_bus(parts.bus);
             drop(server.serve(&mut pump).await);
@@ -130,7 +130,7 @@ struct AcpSessionParts {
     runner: Arc<Runner>,
     gate: Arc<dyn ModeGate>,
     session: SessionId,
-    live: AcpLiveStream,
+    events: TurnEvents,
     model_options: Vec<String>,
     background_tasks: Arc<BackgroundTasks>,
     bus: Option<Arc<AgentBus>>,
@@ -155,11 +155,12 @@ fn build_acp_session(
     }
     let session = bundle.session;
     let gate: Arc<dyn ModeGate> = bundle.gate;
-    // Install the live model-output sink before the runner is shared, so each
-    // response delta the provider emits reaches the serve loop as a
-    // session/update chunk instead of only the assembled message at turn end.
-    let (sink, live) = AcpLiveStream::channel();
-    sink.install_on(&mut bundle.runner);
+    // Route the run's live events before the runner is shared, so each
+    // response delta, tool progress snapshot, and user notice reaches the
+    // serve loop as a session/update instead of only the assembled message at
+    // turn end.
+    let events = TurnEvents::new();
+    events.install_on(&mut bundle.runner);
     let model_options = acp_model_options(&bundle.runner);
     let runner = Arc::new(bundle.runner);
     // The ACP server has no frontend event stream to publish a task's state
@@ -213,7 +214,7 @@ fn build_acp_session(
         runner,
         gate,
         session,
-        live,
+        events,
         model_options,
         background_tasks: bundle.background_tasks,
         bus: bundle.bus,
