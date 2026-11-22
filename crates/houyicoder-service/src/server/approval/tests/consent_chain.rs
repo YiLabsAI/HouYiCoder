@@ -3,6 +3,7 @@
 //! capabilities reach the final filesystem effect.
 
 use super::super::*;
+use crate::composition::ContainmentAdapter;
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::sandbox::SandboxSession;

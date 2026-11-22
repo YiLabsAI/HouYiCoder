@@ -7,7 +7,6 @@ pub(crate) mod agents;
 pub(crate) mod cas_usage;
 pub(crate) mod checkpoint_view;
 pub(crate) mod compaction;
-mod durable_grant;
 pub(crate) mod hooks;
 pub(crate) mod memory_view;
 pub(crate) mod redundancy;
@@ -20,17 +19,16 @@ use trajectory_row::{event_name, hex_short};
 
 use houyicoder_core::agent::RunOutcome as EngineOutcome;
 
+pub(crate) use crate::consent::{CardFence, approval_options};
+#[cfg(test)]
+pub(crate) use crate::consent::{DurableGrant, consent_rule_for, durable_grant, installed_scope};
+#[cfg(test)]
+pub(crate) use crate::consent::{FENCED, UNFENCED};
 use AcpxMethod::*;
 pub(crate) use acp_permission::{acp_permission_response_to_decision, approval_to_acp_permission};
-pub(crate) use durable_grant::{
-    CardFence, DurableGrant, approval_options, durable_grant, installed_scope,
-};
-#[cfg(test)]
-pub(crate) use durable_grant::{FENCED, UNFENCED};
 use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::sandbox::BoundaryGrant;
 use houyicoder_api::session::TrajectorySummary;
-use houyicoder_api::tool::is_shell_tool;
 use houyicoder_context::SessionEvent;
 use houyicoder_core::agent::{
     ApprovalRequest as EngineApprovalRequest, RunError as EngineRunError, StatusSnapshot,
@@ -417,36 +415,6 @@ pub(crate) fn permission_mode_from_wire(
         W::Auto => M::Auto,
         // non_exhaustive: an unknown wire variant fails safe to Manual.
         _ => M::Manual,
-    }
-}
-
-/// Build the durable rule a remember answer on this call installs. Bash-family
-/// tools scope to a command prefix (compound or destructive commands yield
-/// None, so the call is approved this once only); the skill tool scopes to the
-/// skill name; other tools get a content-less rule. The caller decides the
-/// lifetime and the store, not this function.
-pub(crate) fn consent_rule_for(
-    tool_name: &str,
-    input: &serde_json::Value,
-) -> Option<houyicoder_permission::Rule> {
-    if is_shell_tool(tool_name) {
-        let command = houyicoder_permission::input_content(tool_name, Some(input));
-        let prefix = houyicoder_permission::bash_always_allow_prefix(&command)?;
-        Rule::with_content(tool_name, RuleContent::Prefix(prefix), Effect::Allow).ok()
-    } else if tool_name.eq_ignore_ascii_case("skill") {
-        // Scope to the specific skill name, not a blanket tool-level rule, and
-        // land at Local (machine-local) so a skill approval never travels
-        // with the repo. A missing skill name installs nothing durable.
-        let skill = input.get("skill").and_then(|v| v.as_str())?;
-        Rule::with_content(
-            tool_name,
-            RuleContent::Exact(skill.to_string()),
-            Effect::Allow,
-        )
-        .ok()
-        .map(|r| r.with_scope(Scope::Local))
-    } else {
-        Rule::new(tool_name, Effect::Allow).ok()
     }
 }
 

@@ -19,6 +19,7 @@
 pub mod acp;
 pub mod agent_registry;
 pub mod composition;
+pub(crate) mod consent;
 pub mod diagnostics;
 pub mod lifecycle;
 pub mod local_ipc;

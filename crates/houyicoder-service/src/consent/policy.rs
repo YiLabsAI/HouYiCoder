@@ -15,8 +15,6 @@ use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_protocol::frontend::run::ApprovalScope;
 
-use super::consent_rule_for;
-
 /// What the session fence will do to the call the card describes, reduced to
 /// the two facts the option list needs. Writes confinement decides whether a
 /// command whose local output is bounded can be remembered at all; an egress
@@ -205,6 +203,36 @@ pub(crate) fn durable_grant(
     match consent_rule_for(tool_name, input) {
         Some(rule) => DurableGrant::Rule(rule.with_scope(Scope::Local)),
         None => DurableGrant::Once,
+    }
+}
+
+/// Build the durable rule a remember answer on this call installs. Bash-family
+/// tools scope to a command prefix (compound or destructive commands yield
+/// None, so the call is approved this once only); the skill tool scopes to the
+/// skill name; other tools get a content-less rule. The caller decides the
+/// lifetime and the store, not this function.
+pub(crate) fn consent_rule_for(
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> Option<houyicoder_permission::Rule> {
+    if is_shell_tool(tool_name) {
+        let command = houyicoder_permission::input_content(tool_name, Some(input));
+        let prefix = houyicoder_permission::bash_always_allow_prefix(&command)?;
+        Rule::with_content(tool_name, RuleContent::Prefix(prefix), Effect::Allow).ok()
+    } else if tool_name.eq_ignore_ascii_case("skill") {
+        // Scope to the specific skill name, not a blanket tool-level rule, and
+        // land at Local (machine-local) so a skill approval never travels
+        // with the repo. A missing skill name installs nothing durable.
+        let skill = input.get("skill").and_then(|v| v.as_str())?;
+        Rule::with_content(
+            tool_name,
+            RuleContent::Exact(skill.to_string()),
+            Effect::Allow,
+        )
+        .ok()
+        .map(|r| r.with_scope(Scope::Local))
+    } else {
+        Rule::new(tool_name, Effect::Allow).ok()
     }
 }
 
