@@ -120,6 +120,7 @@ pub(super) async fn handover_or_wait(
                 tail_lines,
                 waited,
                 launched.duplicate,
+                launched.build_lock_sibling,
             )))
         }
         Err((_returned, refusal)) if budgets.explicit_background => {

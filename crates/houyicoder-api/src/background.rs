@@ -20,8 +20,8 @@ use serde_json::Value;
 
 use crate::capture::{CaptureStop, CaptureVerdict, CapturedStream, RawOutputReceiver};
 
-/// Maximum active background commands one session runs concurrently.
-pub const MAX_RUNNING_BACKGROUND_TASKS: usize = 4;
+/// Default maximum active background commands one session runs concurrently.
+pub const MAX_RUNNING_BACKGROUND_TASKS: usize = 8;
 
 /// Maximum combined raw output bytes a command without a dedicated capture
 /// store may emit before being stopped.
@@ -375,6 +375,9 @@ pub struct LaunchedTask {
     /// Active sibling running the same normalized command, when an automatic
     /// handover kept both alive rather than dropping work already started.
     pub duplicate: Option<RunningTaskSummary>,
+    /// Active sibling running a different Cargo or Make build command in the
+    /// same target directory, surfaced as a non-blocking lock hint.
+    pub build_lock_sibling: Option<RunningTaskSummary>,
 }
 
 /// A host that keeps commands running after the tool call that started them.

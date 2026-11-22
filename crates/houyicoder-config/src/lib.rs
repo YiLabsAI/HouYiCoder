@@ -116,6 +116,9 @@ pub const ENV_HOUYICODER_BASH_FOREGROUND_BUDGET_MS: &str = "HOUYICODER_BASH_FORE
 pub const ENV_HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS: &str =
     "HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS";
 
+/// Env var for the maximum concurrent background shell tasks per session.
+pub const ENV_HOUYICODER_MAX_BACKGROUND_TASKS: &str = "HOUYICODER_MAX_BACKGROUND_TASKS";
+
 /// Env var that overrides the config-home directory (where settings.json
 /// lives). Defaults to a dot-directory under $HOME; a user or CI can point
 /// it at a custom config root.

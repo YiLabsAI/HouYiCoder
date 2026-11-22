@@ -40,6 +40,9 @@ const DEFAULT_BASH_FOREGROUND_BUDGET_MS: u64 = 15_000;
 /// blocking behavior every existing session has.
 const DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS: u64 = 0;
 
+/// Default maximum concurrent background shell tasks per session.
+const DEFAULT_MAX_BACKGROUND_TASKS: usize = 8;
+
 /// Runner-level settings resolved from the merged settings file and env.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerSettings {
@@ -55,6 +58,8 @@ pub struct RunnerSettings {
     /// milliseconds. The settings file wins, then the env, then the default.
     /// 0 keeps every delegation blocking, which is the default.
     pub delegation_foreground_budget_ms: u64,
+    /// Maximum concurrent background shell tasks per session.
+    pub max_background_tasks: usize,
 }
 
 impl Default for RunnerSettings {
@@ -63,6 +68,7 @@ impl Default for RunnerSettings {
             max_turns: DEFAULT_MAX_TURNS,
             bash_foreground_budget_ms: DEFAULT_BASH_FOREGROUND_BUDGET_MS,
             delegation_foreground_budget_ms: DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS,
+            max_background_tasks: DEFAULT_MAX_BACKGROUND_TASKS,
         }
     }
 }
@@ -105,12 +111,18 @@ pub fn load_runner_settings_from(
             .ok()
             .and_then(|raw| parse_env_delegation_budget(&raw, &mut warnings))
     });
+    let max_background = parse_max_background_tasks(&settings, &mut warnings).or_else(|| {
+        var(crate::ENV_HOUYICODER_MAX_BACKGROUND_TASKS)
+            .ok()
+            .and_then(|raw| parse_env_max_background_tasks(&raw, &mut warnings))
+    });
     (
         RunnerSettings {
             max_turns: value.unwrap_or(DEFAULT_MAX_TURNS),
             bash_foreground_budget_ms: budget.unwrap_or(DEFAULT_BASH_FOREGROUND_BUDGET_MS),
             delegation_foreground_budget_ms: delegation_budget
                 .unwrap_or(DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS),
+            max_background_tasks: max_background.unwrap_or(DEFAULT_MAX_BACKGROUND_TASKS),
         },
         warnings,
     )
@@ -193,6 +205,50 @@ fn parse_env_delegation_budget(raw: &str, warnings: &mut Vec<ConfigWarning>) -> 
                 field: crate::ENV_HOUYICODER_DELEGATION_FOREGROUND_BUDGET_MS.into(),
                 reason: format!(
                     "expected a non-negative integer, got {raw:?} — using the default ({DEFAULT_DELEGATION_FOREGROUND_BUDGET_MS})"
+                ),
+            });
+            None
+        }
+    }
+}
+
+fn parse_max_background_tasks(value: &Value, warnings: &mut Vec<ConfigWarning>) -> Option<usize> {
+    match value.get("bash_max_background_tasks") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|v| *v > 0)
+            .or_else(|| {
+                warnings.push(ConfigWarning {
+                    field: "bash_max_background_tasks".into(),
+                    reason: format!(
+                        "expected a positive integer, got {n} — using the default ({DEFAULT_MAX_BACKGROUND_TASKS})"
+                    ),
+                });
+                None
+            }),
+        Some(other) => {
+            warnings.push(ConfigWarning {
+                field: "bash_max_background_tasks".into(),
+                reason: format!(
+                    "expected a number, got {} — using the default ({DEFAULT_MAX_BACKGROUND_TASKS})",
+                    crate::json_type_name(other)
+                ),
+            });
+            None
+        }
+    }
+}
+
+fn parse_env_max_background_tasks(raw: &str, warnings: &mut Vec<ConfigWarning>) -> Option<usize> {
+    match raw.parse::<usize>().ok().filter(|v| *v > 0) {
+        Some(value) => Some(value),
+        None => {
+            warnings.push(ConfigWarning {
+                field: crate::ENV_HOUYICODER_MAX_BACKGROUND_TASKS.into(),
+                reason: format!(
+                    "expected a positive integer, got {raw:?} — using the default ({DEFAULT_MAX_BACKGROUND_TASKS})"
                 ),
             });
             None

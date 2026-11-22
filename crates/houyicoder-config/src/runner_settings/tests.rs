@@ -177,3 +177,27 @@ fn test_delegation_budget_env_parsed() {
     assert_eq!(parse_env_delegation_budget("soon", &mut w), None);
     assert_eq!(w.len(), 1);
 }
+
+#[test]
+fn test_max_background_tasks_setting() {
+    assert_eq!(RunnerSettings::default().max_background_tasks, 8);
+    let p = temp_settings(r#"{"bash_max_background_tasks": 12}"#);
+    let (s, w) = load_runner_settings_from(&p, None);
+    remove_file(&p).ok();
+    assert_eq!(s.max_background_tasks, 12);
+    assert!(w.is_empty());
+
+    let mut zero_w = Vec::new();
+    assert_eq!(
+        parse_max_background_tasks(
+            &serde_json::json!({"bash_max_background_tasks": 0}),
+            &mut zero_w
+        ),
+        None
+    );
+    assert_eq!(zero_w.len(), 1);
+    assert_eq!(
+        parse_env_max_background_tasks("16", &mut Vec::new()),
+        Some(16)
+    );
+}

@@ -155,6 +155,7 @@ pub(super) fn background_output(
     tail: Vec<String>,
     budget: Option<Duration>,
     duplicate: Option<RunningTaskSummary>,
+    build_lock_sibling: Option<RunningTaskSummary>,
 ) -> Value {
     let mut message = match budget {
         Some(waited) => format!(
@@ -172,6 +173,12 @@ pub(super) fn background_output(
             " Note: task {} has already been running the same command for {}s; avoid starting another copy.",
             existing.id.label(),
             existing.elapsed_secs,
+        ));
+    } else if let Some(sibling) = build_lock_sibling {
+        message.push_str(&format!(
+            " Note: task {} has been running a Cargo or Make command in the same target directory for {}s; both may contend on the build lock.",
+            sibling.id.label(),
+            sibling.elapsed_secs,
         ));
     }
     json!({

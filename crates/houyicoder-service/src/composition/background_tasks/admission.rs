@@ -1,5 +1,5 @@
-//! Active-slot capacity checks and duplicate-command detection for background
-//! shell tasks.
+//! Active-slot capacity checks, duplicate detection, and build-lock hints
+//! for background shell tasks.
 
 use std::time::Instant;
 
@@ -7,18 +7,25 @@ use houyicoder_api::background::{BackgroundRefusal, RunningTaskSummary};
 
 use super::TaskRecord;
 
+pub(super) struct LaunchAdvisories {
+    pub duplicate: Option<RunningTaskSummary>,
+    pub build_lock_sibling: Option<RunningTaskSummary>,
+}
+
 /// Evaluate whether a command can enter the active background table, returning
-/// an active duplicate summary when automatic handover allows a matching sibling.
+/// duplicate or same-target build-lock advisories when admitted.
 pub(super) fn judge_launch(
     tasks: &[TaskRecord],
     limit: usize,
     command: &str,
     reject_duplicate: bool,
-) -> Result<Option<RunningTaskSummary>, BackgroundRefusal> {
+) -> Result<LaunchAdvisories, BackgroundRefusal> {
     let now = Instant::now();
     let candidate_sig = normalize_command(command);
+    let candidate_lock = build_lock_domain(&candidate_sig);
     let mut running = Vec::new();
     let mut duplicate = None;
+    let mut build_lock_sibling = None;
 
     for record in tasks.iter().filter(|task| !task.status.is_terminal()) {
         let summary = RunningTaskSummary {
@@ -26,11 +33,17 @@ pub(super) fn judge_launch(
             elapsed_secs: now.saturating_duration_since(record.started).as_secs(),
             command: record.command.clone(),
         };
-        if duplicate.is_none()
-            && !candidate_sig.is_empty()
-            && normalize_command(&record.command) == candidate_sig
-        {
+        let record_sig = normalize_command(&record.command);
+        let is_dup = !candidate_sig.is_empty() && record_sig == candidate_sig;
+        if duplicate.is_none() && is_dup {
             duplicate = Some(summary.clone());
+        }
+        if build_lock_sibling.is_none()
+            && !is_dup
+            && let Some(ref domain) = candidate_lock
+            && build_lock_domain(&record_sig).as_ref() == Some(domain)
+        {
+            build_lock_sibling = Some(summary.clone());
         }
         running.push(summary);
     }
@@ -41,7 +54,49 @@ pub(super) fn judge_launch(
     if running.len() >= limit {
         return Err(BackgroundRefusal::CapacityFull { limit, running });
     }
-    Ok(duplicate)
+    Ok(LaunchAdvisories {
+        duplicate,
+        build_lock_sibling,
+    })
+}
+
+/// Identify the Cargo target lock domain for build/test commands so distinct
+/// invocations sharing the same target directory receive a non-blocking hint.
+fn build_lock_domain(normalized: &str) -> Option<String> {
+    let mut target_dir = "default";
+    let mut uses_cargo_or_make = false;
+    let mut saw_command_word = false;
+    let mut skip_next = false;
+
+    for tok in normalized.split_whitespace() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if matches!(tok, "&&" | "||" | ";" | "|") {
+            saw_command_word = false;
+            continue;
+        }
+        if !saw_command_word {
+            if let Some(dir) = tok.strip_prefix("CARGO_TARGET_DIR=") {
+                target_dir = dir;
+                continue;
+            }
+            if tok.contains('=') {
+                continue;
+            }
+            if tok == "cd" {
+                skip_next = true;
+                saw_command_word = true;
+                continue;
+            }
+            if matches!(tok, "cargo" | "make") {
+                uses_cargo_or_make = true;
+            }
+            saw_command_word = true;
+        }
+    }
+    uses_cargo_or_make.then(|| target_dir.to_string())
 }
 
 /// Collapse whitespace and strip trailing file or stream redirects so two

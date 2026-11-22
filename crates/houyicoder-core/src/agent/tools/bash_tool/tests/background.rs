@@ -93,6 +93,7 @@ impl BackgroundCommandLauncher for RecordingLauncher {
         Ok(LaunchedTask {
             id: self.launch(command),
             duplicate: None,
+            build_lock_sibling: None,
         })
     }
 
@@ -421,5 +422,26 @@ async fn test_full_slots_timeout_stops() {
             .as_str()
             .is_some_and(|s| s.contains("background slots were full")),
         "unexpected stderr: {out}"
+    );
+}
+
+#[test]
+fn test_lock_sibling_notice_shown() {
+    let out = output::background_output(
+        BackgroundTaskId(2),
+        Vec::new(),
+        None,
+        None,
+        Some(RunningTaskSummary {
+            id: BackgroundTaskId(1),
+            elapsed_secs: 12,
+            command: "make check".into(),
+        }),
+    );
+    assert!(
+        out["stderr"]
+            .as_str()
+            .is_some_and(|s| s.contains("task #1") && s.contains("build lock")),
+        "expected lock sibling hint in stderr: {out}"
     );
 }

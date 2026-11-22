@@ -133,6 +133,7 @@ impl EndingReport {
 /// owner of a task's number and state, so both readers see one answer.
 pub struct BackgroundTasks {
     inner: Arc<Inner>,
+    max_running: usize,
     /// Where run state is published once the server exists. A registry
     /// nobody attached still runs commands and answers the list; it just has
     /// nowhere to report.
@@ -149,13 +150,19 @@ impl Default for BackgroundTasks {
 }
 
 impl BackgroundTasks {
-    /// A registry owning no commands yet.
+    /// A registry owning no commands yet with the default active slot cap.
     pub fn new() -> Self {
+        Self::with_max_running(MAX_RUNNING_BACKGROUND_TASKS)
+    }
+
+    /// A registry owning no commands yet with an explicit active slot cap.
+    pub fn with_max_running(max_running: usize) -> Self {
         Self {
             inner: Arc::new(Inner {
                 table: Mutex::new(TaskTable::default()),
                 shutdown: CancellationToken::new(),
             }),
+            max_running: max_running.max(1),
             sequencer: Mutex::new(None),
             runner: Mutex::new(Weak::new()),
         }
@@ -305,7 +312,7 @@ impl BackgroundTasks {
 impl BackgroundCommandLauncher for BackgroundTasks {
     fn check_admission(&self, command: &str) -> Result<(), BackgroundRefusal> {
         let table = self.inner.table.lock().expect("background tasks lock");
-        judge_launch(&table.tasks, MAX_RUNNING_BACKGROUND_TASKS, command, true).map(|_| ())
+        judge_launch(&table.tasks, self.max_running, command, true).map(|_| ())
     }
 
     fn try_launch(
@@ -317,13 +324,17 @@ impl BackgroundCommandLauncher for BackgroundTasks {
             let mut table = self.inner.table.lock().expect("background tasks lock");
             match judge_launch(
                 &table.tasks,
-                MAX_RUNNING_BACKGROUND_TASKS,
+                self.max_running,
                 &command.command,
                 reject_duplicate,
             ) {
-                Ok(duplicate) => {
+                Ok(advisories) => {
                     let id = self.insert_and_watch(&mut table, command);
-                    Ok(LaunchedTask { id, duplicate })
+                    Ok(LaunchedTask {
+                        id,
+                        duplicate: advisories.duplicate,
+                        build_lock_sibling: advisories.build_lock_sibling,
+                    })
                 }
                 Err(refusal) => Err((command, refusal)),
             }

@@ -335,7 +335,9 @@ pub(crate) fn assemble(
     );
     let (runner_settings, runner_settings_warnings) =
         houyicoder_config::load_runner_settings(fences.workspace.as_deref());
-    let background_tasks = Arc::new(BackgroundTasks::new());
+    let background_tasks = Arc::new(BackgroundTasks::with_max_running(
+        runner_settings.max_background_tasks,
+    ));
     let builtin = register_builtin_tools(
         &mut tools,
         &fences,

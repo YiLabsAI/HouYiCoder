@@ -504,34 +504,35 @@ async fn test_shutdown_ends_running_task() {
     .await;
 }
 
-/// Active running slots are capped at four; a fifth run is returned untouched
-/// rather than dropped, and once a slot frees the next launch succeeds.
+/// Active running slots are capped at the default of eight; a ninth run is
+/// returned untouched rather than dropped, and once a slot frees the next
+/// launch succeeds.
 #[tokio::test]
 async fn test_admission_caps_running_slots() {
     let tasks = BackgroundTasks::new();
     let mut ids = Vec::new();
-    for idx in 1..=4 {
+    for idx in 1..=8 {
         let launched = tasks
             .try_launch(
                 detached(
-                    &format!("cargo test -p c{idx}"),
+                    &format!("sleep {idx}"),
                     CommandTail::new(),
                     never_finishes(),
                 ),
                 true,
             )
-            .expect("within the four-slot cap");
+            .expect("within the eight-slot cap");
         ids.push(launched.id);
     }
     assert!(matches!(
-        tasks.check_admission("cargo clippy"),
-        Err(BackgroundRefusal::CapacityFull { limit: 4, .. })
+        tasks.check_admission("sleep 9"),
+        Err(BackgroundRefusal::CapacityFull { limit: 8, .. })
     ));
 
     let dropped = Arc::new(AtomicBool::new(false));
     let probe = DropProbe(Arc::clone(&dropped));
     let overflow = detached(
-        "cargo clippy",
+        "sleep 9",
         CommandTail::new(),
         Box::pin(async move {
             let _probe = probe;
@@ -542,10 +543,10 @@ async fn test_admission_caps_running_slots() {
     let Err((returned, BackgroundRefusal::CapacityFull { limit, running })) =
         tasks.try_launch(overflow, false)
     else {
-        panic!("expected capacity refusal on the fifth active command");
+        panic!("expected capacity refusal on the ninth active command");
     };
-    assert_eq!(limit, 4);
-    assert_eq!(running.len(), 4);
+    assert_eq!(limit, 8);
+    assert_eq!(running.len(), 8);
     assert!(
         !dropped.load(Ordering::Relaxed),
         "refusing handover must return the running future alive"
@@ -561,11 +562,59 @@ async fn test_admission_caps_running_slots() {
     .await;
     let admitted = tasks
         .try_launch(
-            detached("cargo clippy", CommandTail::new(), never_finishes()),
+            detached("sleep 9", CommandTail::new(), never_finishes()),
             true,
         )
         .expect("a freed slot admits the next command");
-    assert_eq!(admitted.id, BackgroundTaskId(5));
+    assert_eq!(admitted.id, BackgroundTaskId(9));
+}
+
+/// Distinct cargo or make commands sharing the default target directory admit
+/// with a non-blocking lock-domain hint instead of being rejected, while an
+/// explicit CARGO_TARGET_DIR avoids the lock hint altogether.
+#[tokio::test]
+async fn test_build_lock_advisory_passes() {
+    let tasks = BackgroundTasks::new();
+    let first = tasks
+        .try_launch(
+            detached(
+                "cd /repo && make check",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("first build runs");
+    assert_eq!(first.id, BackgroundTaskId(1));
+    assert!(tasks.check_admission("cd /repo && cargo fmt").is_ok());
+
+    let sibling = tasks
+        .try_launch(
+            detached(
+                "cd /repo && cargo clippy",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("distinct cargo command is warned, not refused");
+    assert!(sibling.duplicate.is_none());
+    assert_eq!(
+        sibling.build_lock_sibling.map(|s| s.id),
+        Some(BackgroundTaskId(1))
+    );
+
+    let isolated = tasks
+        .try_launch(
+            detached(
+                "cd /repo && CARGO_TARGET_DIR=$TMPDIR/t2 cargo check",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("isolated target dir runs cleanly");
+    assert!(isolated.build_lock_sibling.is_none());
 }
 
 /// Explicit background admission rejects a command whose normalized signature
