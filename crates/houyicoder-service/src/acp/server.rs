@@ -41,6 +41,8 @@ use houyicoder_protocol::llm::Usage;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use crate::consent::ConsentPolicy;
+
 /// The full ACP server. Owns the adapter (shared via Arc so the composition
 /// root and the IO bridge can hold the same one) plus the runner + session +
 /// the reverse-request id counter + the pushed-event cursor. serve runs the
@@ -114,6 +116,19 @@ impl AcpServer {
             model_options: Vec::new(),
             cancel_requested: AtomicBool::new(false),
         }
+    }
+
+    /// Build a consent policy from this server's gate, sandbox session, audit
+    /// log, skill registry, and session id, so the ACP path installs the same
+    /// grant for the same answer the frontend server does.
+    pub(super) fn consent(&self) -> ConsentPolicy {
+        ConsentPolicy::new(
+            self.gate.clone(),
+            self.runner.sandbox_session(),
+            self.runner.store(),
+            self.runner.skill_registry().cloned(),
+            self.session,
+        )
     }
 
     /// Install the live model-output stream the runner reports deltas
@@ -640,7 +655,6 @@ mod permission;
 mod util;
 
 use util::next_delta;
-use util::now_millis;
 use util::prompt_text;
 use util::session_update;
 

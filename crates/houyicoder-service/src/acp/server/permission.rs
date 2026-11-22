@@ -5,14 +5,12 @@
 //! outcome nobody stated.
 
 use super::AcpServer;
-use super::now_millis;
+use super::util::session_update;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::protocol_adapter::acp_permission_response_to_decision;
 use crate::protocol_adapter::approval_to_acp_permission;
-use houyicoder_context::EventId;
-use houyicoder_context::SessionEvent;
-use houyicoder_context::SessionLogEntry;
+use crate::protocol_adapter::parse_approval_decision;
 use houyicoder_core::agent::ApprovalDecision;
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_protocol::acp_wire::AcpErrorCode;
@@ -22,6 +20,8 @@ use houyicoder_protocol::acp_wire::AcpResponse;
 use houyicoder_protocol::acp_wire::RequestPermissionResponse;
 use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use std::sync::atomic::Ordering;
 
 impl AcpServer {
@@ -31,25 +31,6 @@ impl AcpServer {
         let id = self.next_req_id as i64;
         self.next_req_id += 1;
         id
-    }
-
-    /// Append the durable record of one approval card this transport sent. A
-    /// failed write is logged rather than failing the ask: the user still
-    /// needs the question, and the fold reports the cards it did see.
-    async fn record_asked(&self, approval: &ApprovalRequest) {
-        let record = SessionLogEntry {
-            id: EventId::new(),
-            session: self.session,
-            ts: now_millis(),
-            prev_hash: None,
-            event: SessionEvent::PermissionAsked {
-                call_id: approval.call_id.clone(),
-                tool: approval.tool_name.clone(),
-            },
-        };
-        if let Err(e) = self.runner.store().append(record).await {
-            tracing::warn!("permission-asked audit append failed: {e}");
-        }
     }
 
     /// Send one permission card per pending ask and collect the verdicts.
@@ -62,9 +43,16 @@ impl AcpServer {
     ) -> Result<Option<Vec<ApprovalDecision>>, ProtocolError> {
         let mut decisions = Vec::with_capacity(approvals.len());
         for approval in approvals {
+            let planned = self.consent().plan_ask(&approval, None);
             let ask_id = self.mint_req_id();
             let session_str = self.session.to_string();
-            let params = approval_to_acp_permission(&approval, session_str);
+            let params = approval_to_acp_permission(
+                &approval,
+                session_str,
+                &planned.options,
+                planned.reason.as_ref(),
+                planned.delegation.as_ref(),
+            );
             let params_value = serde_json::to_value(&params).map_err(|e| {
                 ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false)
             })?;
@@ -74,7 +62,7 @@ impl AcpServer {
             // received it: an ask abandoned or cancelled at the client records
             // no verdict, and the audit must still hold the question rather
             // than report that none was ever asked.
-            self.record_asked(&approval).await;
+            self.consent().record_card(&approval).await;
             // A cancel that arrives while the card is up ends the turn
             // without a verdict: the remaining asks are not sent.
             let Some(resp) = self.await_permission(io, ask_id).await? else {
@@ -94,30 +82,29 @@ impl AcpServer {
                 serde_json::from_value(resp_value).map_err(|e| {
                     ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false)
                 })?;
-            // Record the durable PermissionDecision audit event before resume
-            // applies the decision. A cancelled response carries no verdict,
-            // so the card stays on the trail as an outcome nobody stated.
-            let reply = acp_permission_response_to_decision(perm_resp, approval.call_id.clone());
-            if let Some(verdict) = reply.verdict {
-                let audit = SessionLogEntry {
-                    id: EventId::new(),
-                    session: self.session,
-                    ts: now_millis(),
-                    prev_hash: None,
-                    event: SessionEvent::PermissionDecision {
-                        call_id: approval.call_id.clone(),
-                        tool: approval.tool_name.clone(),
-                        verdict,
-                        scope: "once".into(),
-                        validator: None,
-                        reason: None,
-                    },
-                };
-                if let Err(e) = self.runner.store().append(audit).await {
-                    tracing::warn!("permission-decision audit append failed: {e}");
-                }
+            // A cancelled response carries no verdict: the card stays on the
+            // trail as an outcome nobody stated, and the turn ends cancelled.
+            let Some(choice) = acp_permission_response_to_decision(perm_resp, &planned) else {
+                return Ok(None);
+            };
+            // The policy installs the grant the answer keeps (directory
+            // widening, rule persistence with save-failure degradation) and
+            // records the verdict audit with the real scope, validator, and
+            // reason. Notices report a save that fell short or a directory the
+            // fence could not take; they reach the client and the log, never a
+            // silent gap between what the card promised and what the session
+            // holds.
+            let settled = self.consent().settle_answer(&planned, choice).await?;
+            for notice in &settled.notices {
+                tracing::warn!("consent notice: {notice}");
+                let update =
+                    SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
+                        text: notice.clone(),
+                    }));
+                let notification = session_update(self.session, &update)?;
+                self.send_typed(io, &notification).await?;
             }
-            decisions.push(reply.decision);
+            decisions.push(parse_approval_decision(settled.wire_decision));
         }
         Ok(Some(decisions))
     }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::consent::PlannedAsk;
 use houyicoder_api::sandbox::{BoundaryAccess, BoundaryGrant};
 use houyicoder_api::session::{ApprovalAudit, TurnAudit};
 use houyicoder_context::AgentId;
@@ -16,11 +17,12 @@ use houyicoder_permission::PermissionMode as E;
 use houyicoder_permission::{Decision, DefaultModeGate, ModeGate, Outcome, ToolRequest};
 use houyicoder_permission::{Effect, Rule, RuleContent, Scope};
 use houyicoder_protocol::acp_wire::{
-    RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome,
+    PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionResponse,
+    SelectedPermissionOutcome,
 };
 use houyicoder_protocol::acpx::AcpxMethod;
-use houyicoder_protocol::frontend::permission::{AskSource, RuleDestination};
-use houyicoder_protocol::frontend::run::ApprovalScope;
+use houyicoder_protocol::frontend::permission::{AskReason, AskSource, RuleDestination};
+use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
 use houyicoder_protocol::llm::ProviderError;
 use houyicoder_protocol::llm::Usage;
 use serde_json::Value;
@@ -457,7 +459,23 @@ fn test_approval_maps_acp_permission() {
         serde_json::json!({"cmd": "ls"}),
         None,
     );
-    let ask = approval_to_acp_permission(&req, "01S".into());
+    let options = vec![
+        PermissionOption {
+            option_id: "allow_once".into(),
+            name: "Allow once".into(),
+            kind: PermissionOptionKind::AllowOnce,
+            scope: None,
+            meta: None,
+        },
+        PermissionOption {
+            option_id: "reject_once".into(),
+            name: "Reject once".into(),
+            kind: PermissionOptionKind::RejectOnce,
+            scope: None,
+            meta: None,
+        },
+    ];
+    let ask = approval_to_acp_permission(&req, "01S".into(), &options, None, None);
     assert_eq!(ask.session_id, "01S");
     assert_eq!(ask.tool_call.tool_call_id.0, "call_1");
     assert_eq!(
@@ -467,15 +485,97 @@ fn test_approval_maps_acp_permission() {
     assert_eq!(ask.options.len(), 2);
     let ids: Vec<_> = ask.options.iter().map(|o| o.option_id.as_str()).collect();
     assert_eq!(ids, vec!["allow_once", "reject_once"]);
+    assert!(ask.meta.is_none(), "no reason or delegation means no _meta");
+}
+
+/// The plan's disclosed reason and any delegation travel in the request
+/// _meta, so a peer that reads it learns why the call was stopped and which
+/// child agent the ask is for.
+#[test]
+fn test_approval_request_carries_meta() {
+    let req = ApprovalRequest::new(
+        "call_1".into(),
+        "bash".into(),
+        serde_json::json!({"cmd": "ls"}),
+        None,
+    );
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "destructive_command".to_string(),
+        detail: "rm needs confirmation".into(),
+        containment_note: None,
+    };
+    let delegation = DelegationSource {
+        child_id: "child-1".into(),
+        subagent_type: "explore".into(),
+    };
+    let options = vec![PermissionOption {
+        option_id: "allow_once".into(),
+        name: "Allow once".into(),
+        kind: PermissionOptionKind::AllowOnce,
+        scope: None,
+        meta: None,
+    }];
+    let ask = approval_to_acp_permission(
+        &req,
+        "01S".into(),
+        &options,
+        Some(&reason),
+        Some(&delegation),
+    );
+    let meta = ask.meta.expect("meta carries reason and delegation");
+    let reason_back: AskReason =
+        serde_json::from_value(meta.get("reason").cloned().expect("reason value"))
+            .expect("reason round-trips");
+    assert_eq!(reason_back.validator, "destructive_command");
+    let delegation_back: DelegationSource =
+        serde_json::from_value(meta.get("delegation").cloned().expect("delegation value"))
+            .expect("delegation round-trips");
+    assert_eq!(delegation_back.subagent_type, "explore");
+}
+
+/// A plan that offers only one-shot options, for exercising the response
+/// mapper without assembling a full grant.
+fn one_shot_plan() -> PlannedAsk {
+    PlannedAsk {
+        call_id: "c".into(),
+        tool_name: "bash".into(),
+        input: serde_json::json!({}),
+        is_entitlement: false,
+        reason: None,
+        delegation: None,
+        directory_grants: Vec::new(),
+        grant: DurableGrant::Once,
+        options: vec![
+            PermissionOption {
+                option_id: "allow_once".into(),
+                name: "Allow once".into(),
+                kind: PermissionOptionKind::AllowOnce,
+                scope: None,
+                meta: None,
+            },
+            PermissionOption {
+                option_id: "reject_once".into(),
+                name: "Reject once".into(),
+                kind: PermissionOptionKind::RejectOnce,
+                scope: None,
+                meta: None,
+            },
+        ],
+        fence: CardFence {
+            writes_confined: true,
+            egress_blocked: false,
+        },
+    }
 }
 
 #[test]
 fn test_allow_approves_reject_denies() {
-    let call_id = "c".to_string();
+    let planned = one_shot_plan();
     for (option_id, approved) in [
         ("allow_once", true),
         ("reject_once", false),
-        // An id this path never offers fails closed rather than widening a
+        // An id this plan never offers fails closed rather than widening a
         // verdict.
         ("allow_always", false),
         ("reject_always", false),
@@ -487,35 +587,91 @@ fn test_allow_approves_reject_denies() {
             }),
             meta: None,
         };
-        let reply = acp_permission_response_to_decision(resp, call_id.clone());
-        let d = reply.decision;
-        assert_eq!(d.approved, approved, "option {option_id}");
-        assert_eq!(d.call_id, "c");
-        assert!(d.updated_input.is_none());
-        assert!(
-            reply.verdict.is_some(),
-            "an answer is recorded: {option_id}"
-        );
+        let choice = acp_permission_response_to_decision(resp, &planned)
+            .expect("a selected outcome yields a choice");
+        assert_eq!(choice.approved, approved, "option {option_id}");
+        assert!(choice.updated_input.is_none(), "option {option_id}");
     }
 }
 
-/// A cancelled response still vetoes the call, but the user never answered,
-/// so no verdict reaches the audit: the card must stay an unknown outcome
-/// rather than be reported as a denial.
+/// A plan that offers allow_always with a directory grant approves at the
+/// grant's scope when the client picks it: the remember choice installs the
+/// workspace lifetime the card promised, not a silent once.
+fn directory_plan() -> PlannedAsk {
+    PlannedAsk {
+        call_id: "c".into(),
+        tool_name: "write".into(),
+        input: serde_json::json!({}),
+        is_entitlement: false,
+        reason: None,
+        delegation: None,
+        directory_grants: Vec::new(),
+        grant: DurableGrant::Directories,
+        options: vec![
+            PermissionOption {
+                option_id: "allow_once".into(),
+                name: "Allow once".into(),
+                kind: PermissionOptionKind::AllowOnce,
+                scope: None,
+                meta: None,
+            },
+            PermissionOption {
+                option_id: "allow_always".into(),
+                name: "/tmp/shared (this workspace)".into(),
+                kind: PermissionOptionKind::AllowAlways,
+                scope: Some(ApprovalScope::Workspace),
+                meta: None,
+            },
+            PermissionOption {
+                option_id: "reject_once".into(),
+                name: "Reject once".into(),
+                kind: PermissionOptionKind::RejectOnce,
+                scope: None,
+                meta: None,
+            },
+        ],
+        fence: CardFence {
+            writes_confined: true,
+            egress_blocked: false,
+        },
+    }
+}
+
 #[test]
-fn test_cancel_denies_without_verdict() {
+fn test_always_grants_at_scope() {
+    let planned = directory_plan();
+    let resp = RequestPermissionResponse {
+        outcome: RequestPermissionOutcome::Selected(SelectedPermissionOutcome {
+            option_id: "allow_always".into(),
+            meta: None,
+        }),
+        meta: None,
+    };
+    let choice = acp_permission_response_to_decision(resp, &planned)
+        .expect("a selected outcome yields a choice");
+    assert!(
+        choice.approved,
+        "allow_always approves when the plan offers it"
+    );
+    assert_eq!(
+        choice.scope,
+        ApprovalScope::Workspace,
+        "approves at the grant's scope, not a silent once"
+    );
+}
+
+/// A cancelled response carries no choice: the turn ends without a verdict,
+/// so the card stays an unknown outcome rather than a denial.
+#[test]
+fn test_cancel_yields_no_choice() {
+    let planned = one_shot_plan();
     let resp = RequestPermissionResponse {
         outcome: RequestPermissionOutcome::Cancelled,
         meta: None,
     };
-    let reply = acp_permission_response_to_decision(resp, "c".into());
     assert!(
-        !reply.decision.approved,
-        "a cancelled ask must deny the tool"
-    );
-    assert!(
-        reply.verdict.is_none(),
-        "nobody answered the card, so no verdict is recorded"
+        acp_permission_response_to_decision(resp, &planned).is_none(),
+        "nobody answered the card, so no choice is settled"
     );
 }
 

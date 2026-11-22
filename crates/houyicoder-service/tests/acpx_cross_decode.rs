@@ -26,6 +26,8 @@ use acp::ContentBlock;
 use acp::ContentChunk;
 use acp::Cost;
 use acp::ImageContent;
+use acp::PermissionOption;
+use acp::PermissionOptionKind;
 use acp::SessionUpdate;
 use acp::SetSessionConfigOptionResponse as AcpSetSessionConfigOptionResponse;
 use acp::SetSessionModeResponse as AcpSetSessionModeResponse;
@@ -38,10 +40,13 @@ use acp::ToolCallUpdateFields;
 use acp::UsageUpdate;
 use agent_client_protocol::schema::v1 as acp;
 use houyicoder_protocol::acp_wire::{
+    PermissionOption as OurPermissionOption, PermissionOptionKind as OurPermissionOptionKind,
     SetSessionConfigOptionResponse as OurSetSessionConfigOptionResponse,
     SetSessionModeResponse as OurSetSessionModeResponse,
 };
-use houyicoder_protocol::frontend::run::ContentBlock as OurContentBlock;
+use houyicoder_protocol::frontend::run::{
+    ApprovalScope as OurApprovalScope, ContentBlock as OurContentBlock,
+};
 use houyicoder_protocol::frontend::session_update::{
     ContentChunk as OurContentChunk, SessionUpdate as OurSessionUpdate, ToolCall as OurToolCall,
     ToolCallStatus as OurToolCallStatus, ToolCallUpdate as OurToolCallUpdate,
@@ -442,4 +447,44 @@ fn test_config_response_round_trip() {
         serde_json::from_value(value).expect("decode wrapped response");
     assert_eq!(parsed.config_options.len(), 1);
     assert_eq!(parsed.config_options[0].id, "model");
+}
+
+/// A permission option carries a scope the official schema does not name. A
+/// peer using the official SDK ignores the field on decode and never sends
+/// it, so the fields both sides carry match, and the scope survives our own
+/// round-trip. This is the additive-field guarantee a remember option rests
+/// on: the lifetime it promises is visible to peers that know it and invisible
+/// to peers that do not.
+#[test]
+fn test_permission_option_carries_scope() {
+    let our = OurPermissionOption {
+        option_id: "allow_always".into(),
+        name: "cargo test * (this workspace)".into(),
+        kind: OurPermissionOptionKind::AllowAlways,
+        scope: Some(OurApprovalScope::Workspace),
+        meta: None,
+    };
+    let json = serde_json::to_value(&our).expect("encode our option");
+    assert_eq!(json["scope"], "workspace");
+    assert_eq!(json["kind"], "allow_always");
+    assert_eq!(json["optionId"], "allow_always");
+
+    // The official schema decodes the fields it knows and ignores scope.
+    let acp_opt: PermissionOption =
+        serde_json::from_value(json).expect("official schema ignores scope");
+    assert_eq!(acp_opt.option_id.0.as_ref(), "allow_always");
+    assert_eq!(acp_opt.name, "cargo test * (this workspace)");
+    assert_eq!(acp_opt.kind, PermissionOptionKind::AllowAlways);
+
+    // An official option (no scope) decodes into ours with scope None.
+    let acp_json = serde_json::json!({
+        "optionId": "allow_once",
+        "name": "Allow once",
+        "kind": "allow_once",
+    });
+    let back: OurPermissionOption =
+        serde_json::from_value(acp_json).expect("decode official option");
+    assert_eq!(back.option_id, "allow_once");
+    assert_eq!(back.kind, OurPermissionOptionKind::AllowOnce);
+    assert!(back.scope.is_none(), "a peer that omits scope reads none");
 }
