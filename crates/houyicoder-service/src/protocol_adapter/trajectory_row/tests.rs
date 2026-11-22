@@ -72,6 +72,10 @@ fn test_subagent_kinds_labeled() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         }),
         "return"
     );

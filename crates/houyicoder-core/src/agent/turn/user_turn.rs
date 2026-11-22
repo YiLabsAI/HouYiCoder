@@ -20,6 +20,9 @@ pub(crate) struct UserTurn {
     /// Set when a budget watchdog asks this run to stop calling tools and emit
     /// one final text summary before termination.
     wrapping_up: bool,
+    /// Set when wrapping up was triggered by reaching the final turn of the
+    /// turn budget rather than an external timer.
+    turn_limit_wrapped: bool,
     /// Grants one turn beyond max_turns when an external watchdog interrupts
     /// a run that has already spent its final turn.
     extra_wrap_turn: bool,
@@ -46,6 +49,7 @@ impl UserTurn {
         self.calls = 0;
         self.worked = None;
         self.wrapping_up = false;
+        self.turn_limit_wrapped = false;
         self.extra_wrap_turn = false;
         self.wrap_up_notice = None;
     }
@@ -56,9 +60,15 @@ impl UserTurn {
         self.wrapping_up = true;
         if first {
             self.extra_wrap_turn = grant_extra_turn;
+            self.turn_limit_wrapped = !grant_extra_turn;
             self.wrap_up_notice = Some(directive);
         }
         first
+    }
+
+    /// Whether wrapping up was initiated by the turn-budget ceiling.
+    pub(crate) fn turn_limit_wrapped(&self) -> bool {
+        self.turn_limit_wrapped
     }
 
     /// Whether an external watchdog granted one extra turn past max_turns.

@@ -119,6 +119,63 @@ fn resident_ledger(store: &dyn SessionLog, child: &str) -> Option<ChildLedger> {
     })
 }
 
+/// Watchdog and cost-model outcomes recorded on a subagent return boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReturnMetrics {
+    pub cut_axis: Option<String>,
+    pub soft_wrapped: Option<bool>,
+    pub wrap_rescued: Option<bool>,
+    pub effective_tokens: Option<u64>,
+}
+
+/// Aggregated watchdog outcomes across recorded subagent returns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WatchdogMetrics {
+    pub completed_naturally: usize,
+    pub soft_wrap_rescued: usize,
+    pub hard_cut: usize,
+    pub wall_clock_cuts: usize,
+    pub tool_quiet_cuts: usize,
+    pub stream_idle_cuts: usize,
+    pub turn_limit_cuts: usize,
+}
+
+/// Summarize watchdog completion and wrap-up outcomes across a parent log.
+pub fn summarize_watchdog_returns(events: &[SessionLogEntry]) -> WatchdogMetrics {
+    let mut metrics = WatchdogMetrics::default();
+    for entry in events {
+        let SessionEvent::SubagentReturn {
+            status,
+            cut_axis,
+            soft_wrapped,
+            wrap_rescued,
+            ..
+        } = &entry.event
+        else {
+            continue;
+        };
+        match cut_axis.as_deref() {
+            None if status == "completed" => metrics.completed_naturally += 1,
+            Some(axis) => {
+                match axis {
+                    "wall_clock" => metrics.wall_clock_cuts += 1,
+                    "tool_quiet" => metrics.tool_quiet_cuts += 1,
+                    "stream_idle" => metrics.stream_idle_cuts += 1,
+                    "turn_limit" => metrics.turn_limit_cuts += 1,
+                    _ => {}
+                }
+                if *soft_wrapped == Some(true) && *wrap_rescued == Some(true) {
+                    metrics.soft_wrap_rescued += 1;
+                } else {
+                    metrics.hard_cut += 1;
+                }
+            }
+            None => {}
+        }
+    }
+    metrics
+}
+
 /// One delegation boundary as it is written to the parent log.
 struct ReturnRecord<'a> {
     child_session_id: &'a str,
@@ -131,6 +188,7 @@ struct ReturnRecord<'a> {
     /// Whether a reconciliation pass wrote this return instead of the host
     /// that ran the child.
     orphaned: bool,
+    metrics: ReturnMetrics,
 }
 
 /// Append the SubagentReturn boundary to the parent log: the durable marker
@@ -152,6 +210,34 @@ pub async fn record_subagent_return(
     result_ref: &str,
     usage: &Usage,
 ) -> Result<(), SpawnError> {
+    record_subagent_return_with_metrics(
+        store,
+        parent_sid,
+        child_session_id,
+        status,
+        summary,
+        result_ref,
+        usage,
+        ReturnMetrics::default(),
+    )
+    .await
+}
+
+/// Append a SubagentReturn boundary carrying watchdog and cost-model metrics.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "boundary writer forwards all durable fields"
+)]
+pub async fn record_subagent_return_with_metrics(
+    store: &dyn SessionLog,
+    parent_sid: SessionId,
+    child_session_id: &str,
+    status: &str,
+    summary: &str,
+    result_ref: &str,
+    usage: &Usage,
+    metrics: ReturnMetrics,
+) -> Result<(), SpawnError> {
     write_return(
         store,
         parent_sid,
@@ -163,6 +249,7 @@ pub async fn record_subagent_return(
             usage,
             ledger: resident_ledger(store, child_session_id),
             orphaned: false,
+            metrics,
         },
     )
     .await
@@ -247,6 +334,7 @@ pub async fn record_orphaned_child(
                 usage: &usage,
                 ledger: found.ledger,
                 orphaned: true,
+                metrics: ReturnMetrics::default(),
             },
         )
         .await?;
@@ -506,6 +594,10 @@ fn return_event(parent_sid: SessionId, record: &ReturnRecord<'_>) -> SessionLogE
             duration_ms: ledger.duration_ms,
             ledger_measured: record.ledger.is_some(),
             orphaned: record.orphaned,
+            cut_axis: record.metrics.cut_axis.clone(),
+            soft_wrapped: record.metrics.soft_wrapped,
+            wrap_rescued: record.metrics.wrap_rescued,
+            effective_tokens: record.metrics.effective_tokens,
         },
     )
 }

@@ -5,8 +5,10 @@ use std::future::pending;
 use houyicoder_api::tool::Tool;
 use houyicoder_api::tool::progress::ToolProgressUpdate;
 use houyicoder_async::PFut;
-use houyicoder_context::SessionId;
+use houyicoder_context::{SessionId, SessionLogEntry};
+use houyicoder_core::agent::multi_agent::summarize_watchdog_returns;
 use houyicoder_protocol::extension::ToolError;
+use houyicoder_protocol::llm::UsageProvenance;
 use serde_json::{Value, json};
 use tokio::time::sleep;
 
@@ -295,4 +297,167 @@ async fn test_silent_progress_tool_survives() {
         outcome.summary.as_deref(),
         Some("completed after redirected run")
     );
+}
+
+fn runtime_sharing_store(
+    store: Arc<SessionStore>,
+    provider: Arc<dyn ModelProvider>,
+    tools: ToolRegistry,
+) -> MultiAgentRuntime {
+    MultiAgentRuntime::new(MultiAgentDeps {
+        registry: Arc::new(BuiltInRegistry::from_agents(built_in_all())),
+        store: store as Arc<dyn SessionLog>,
+        provider,
+        tools,
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(PathBuf::from("/tmp")),
+        bus: None,
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
+    })
+}
+
+async fn run_for_metrics(
+    store: Arc<SessionStore>,
+    parent_sid: SessionId,
+    provider: Arc<dyn ModelProvider>,
+    tools: ToolRegistry,
+    timeout_secs: Option<u64>,
+) {
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "metric", "metric");
+    args.timeout_secs = timeout_secs;
+    drop(
+        runtime_sharing_store(store, provider, tools)
+            .spawn(&ctx, args)
+            .await
+            .expect("spawn completes"),
+    );
+}
+
+/// Parent return boundaries record watchdog axis, wrap-up rescue status, and
+/// cost-model effective tokens across natural completions, soft-wrap rescues,
+/// and hard cancellations.
+#[tokio::test]
+async fn test_subagent_return_records_metrics() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+    let natural_provider: Arc<dyn ModelProvider> =
+        Arc::new(FakeProvider::new(vec![CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "all clear".into(),
+            }],
+            usage: Usage {
+                input_tokens: 1000,
+                output_tokens: 100,
+                total_tokens: 1100,
+                non_cached_input_tokens: 200,
+                cache_read_input_tokens: 800,
+                cache_write_input_tokens: 0,
+                reasoning_tokens: 0,
+                provenance: UsageProvenance::ALL_REPORTED,
+            },
+            model: "test".into(),
+        }]));
+    run_for_metrics(
+        Arc::clone(&store),
+        parent_sid,
+        natural_provider,
+        ToolRegistry::new(),
+        None,
+    )
+    .await;
+
+    let wrap_provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "tc1".into(),
+                name: "hung_probe".into(),
+                input: json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "Findings: rescued partial report".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(HungTool));
+    run_for_metrics(
+        Arc::clone(&store),
+        parent_sid,
+        wrap_provider,
+        tools,
+        Some(1),
+    )
+    .await;
+
+    let (stall_provider, _stall) = StallAfterFirstProvider::new(vec![vec![OutputItem::ToolCall {
+        id: "tc1".into(),
+        name: "ghost".into(),
+        input: json!({}),
+    }]]);
+    run_for_metrics(
+        Arc::clone(&store),
+        parent_sid,
+        stall_provider,
+        ToolRegistry::new(),
+        Some(1),
+    )
+    .await;
+
+    let parent_events = store.replay(parent_sid).await.expect("parent replay");
+    assert_recorded_metrics(&parent_events);
+}
+
+fn assert_recorded_metrics(parent_events: &[SessionLogEntry]) {
+    let returns: Vec<&SessionEvent> = parent_events
+        .iter()
+        .filter(|e| matches!(e.event, SessionEvent::SubagentReturn { .. }))
+        .map(|e| &e.event)
+        .collect();
+    assert_eq!(returns.len(), 3);
+    assert!(matches!(
+        returns[0],
+        SessionEvent::SubagentReturn {
+            cut_axis: None,
+            soft_wrapped: Some(false),
+            wrap_rescued: None,
+            effective_tokens: Some(780),
+            ..
+        }
+    ));
+    assert!(matches!(
+        returns[1],
+        SessionEvent::SubagentReturn {
+            cut_axis: Some(axis),
+            soft_wrapped: Some(true),
+            wrap_rescued: Some(true),
+            ..
+        } if axis == "tool_quiet"
+    ));
+    assert!(matches!(
+        returns[2],
+        SessionEvent::SubagentReturn {
+            cut_axis: Some(axis),
+            soft_wrapped: Some(true),
+            wrap_rescued: Some(false),
+            ..
+        } if axis == "wall_clock"
+    ));
+
+    let summary = summarize_watchdog_returns(parent_events);
+    assert_eq!(summary.completed_naturally, 1);
+    assert_eq!(summary.soft_wrap_rescued, 1);
+    assert_eq!(summary.hard_cut, 1);
+    assert_eq!(summary.tool_quiet_cuts, 1);
+    assert_eq!(summary.wall_clock_cuts, 1);
 }

@@ -32,8 +32,9 @@ use tracing::warn;
 mod boundary;
 
 pub use boundary::{
-    BoundaryOutcome, ChildLedger, OrphanedChild, RecordOwed, completion_notice_pending,
-    logged_usage, orphaned_summary, record_orphaned_child, record_subagent_return,
+    BoundaryOutcome, ChildLedger, OrphanedChild, RecordOwed, ReturnMetrics, WatchdogMetrics,
+    completion_notice_pending, logged_usage, orphaned_summary, record_orphaned_child,
+    record_subagent_return, record_subagent_return_with_metrics, summarize_watchdog_returns,
 };
 
 /// Cap on spawn nesting. A top-level agent is depth 0; each spawn adds 1.

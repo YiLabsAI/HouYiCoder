@@ -181,6 +181,10 @@ fn test_interrupted_turn_keeps_totals() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     ));
     let summary = fold(&events);
@@ -263,6 +267,10 @@ fn test_leading_partial_turn_unknown() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )];
     let summary = fold(&events);
@@ -638,6 +646,10 @@ fn test_unmeasured_child_keeps_totals() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
         entry(
@@ -681,6 +693,10 @@ fn test_measured_ledger_counted() {
             duration_ms: 900,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )];
     let usage = fold(&events).usage;
@@ -716,6 +732,10 @@ fn test_unmeasured_ledger_not_counted() {
             duration_ms: 900,
             ledger_measured: false,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )];
     let usage = fold(&events).usage;
@@ -807,6 +827,10 @@ fn child_return(ts: u64, input: u64, output: u64, reported: bool) -> SessionLogE
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )
 }
@@ -833,6 +857,10 @@ fn test_delegated_usage_folds() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )];
     let summary = fold(&events);
@@ -863,6 +891,10 @@ fn test_unmeasured_child_flagged() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )];
     assert!(fold(&events).usage.subagent_unmeasured);

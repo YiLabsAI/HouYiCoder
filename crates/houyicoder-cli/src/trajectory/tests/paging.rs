@@ -336,6 +336,10 @@ fn test_subagent_usage_summed() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         )
     };
@@ -436,6 +440,10 @@ fn test_subagent_usage_parent_unknown() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -503,6 +511,10 @@ fn test_subagent_usage_unmeasured_unknown() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -562,6 +574,10 @@ fn test_subagent_usage_unknown() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -608,6 +624,10 @@ fn test_delegated_cache_unknown() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -756,6 +776,10 @@ fn test_disk_delegated_cache() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     }))
     .expect("append");

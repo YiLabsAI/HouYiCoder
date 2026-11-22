@@ -21,8 +21,10 @@ pub mod usage;
 
 pub use spawn::{
     BoundaryOutcome, ChildHandle, ChildLedger, CutReason, OrphanedChild, PartialTranscript,
-    RecordOwed, RunnerInheritance, SpawnError, SpawnRequest, completion_notice_pending,
-    logged_usage, orphaned_summary, record_orphaned_child, record_subagent_return, spawn_child,
+    RecordOwed, ReturnMetrics, RunnerInheritance, SpawnError, SpawnRequest, WatchdogMetrics,
+    completion_notice_pending, logged_usage, orphaned_summary, record_orphaned_child,
+    record_subagent_return, record_subagent_return_with_metrics, spawn_child,
+    summarize_watchdog_returns,
 };
 pub use status_publisher::{ChildStatusPublisher, recorded_cut, timed_out_summary};
 pub use usage::{SubagentUsage, aggregate_subagent_usage};

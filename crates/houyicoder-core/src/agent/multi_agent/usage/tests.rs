@@ -36,6 +36,10 @@ fn child_return(input: u64, output: u64, cache_read: u64) -> SessionEvent {
         duration_ms: 0,
         ledger_measured: true,
         orphaned: false,
+        cut_axis: None,
+        soft_wrapped: None,
+        wrap_rescued: None,
+        effective_tokens: None,
     }
 }
 
@@ -60,6 +64,10 @@ fn child_return_read_unreported(input: u64, output: u64) -> SessionEvent {
         duration_ms: 0,
         ledger_measured: true,
         orphaned: false,
+        cut_axis: None,
+        soft_wrapped: None,
+        wrap_rescued: None,
+        effective_tokens: None,
     }
 }
 

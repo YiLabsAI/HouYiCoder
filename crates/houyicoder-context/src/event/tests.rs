@@ -134,6 +134,10 @@ fn test_subagent_return_round_trip() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -170,6 +174,10 @@ fn test_subagent_return_old_log() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -241,6 +249,10 @@ fn test_return_old_log_measured() {
             duration_ms: 500,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     );
     let json = serde_json::to_string(&e).expect("serialize");
@@ -278,6 +290,65 @@ fn test_return_old_log_measured() {
         }
         other => panic!("expected SubagentReturn, got {other:?}"),
     }
+}
+
+/// Returns written with watchdog and cost-model metrics round-trip cleanly,
+/// while logs serialized before those fields existed deserialize with None.
+#[test]
+fn test_return_watchdog_metrics_roundtrip() {
+    let s = SessionId::new();
+    let e = event(
+        s,
+        EventId::new(),
+        SessionEvent::SubagentReturn {
+            child_session_id: "child-5".into(),
+            status: "timed_out".into(),
+            summary: "partial".into(),
+            result_ref: "child-5".into(),
+            input_tokens: 1000,
+            output_tokens: 100,
+            cache_read_input_tokens: 800,
+            cache_write_input_tokens: 0,
+            reasoning_tokens: 0,
+            input_reported: true,
+            cache_read_reported: true,
+            cache_write_reported: true,
+            tool_calls: 2,
+            tool_failures: 0,
+            duration_ms: 1500,
+            ledger_measured: true,
+            orphaned: false,
+            cut_axis: Some("tool_quiet".into()),
+            soft_wrapped: Some(true),
+            wrap_rescued: Some(true),
+            effective_tokens: Some(780),
+        },
+    );
+    let json = serde_json::to_string(&e).expect("serialize");
+    let back: SessionLogEntry = serde_json::from_str(&json).expect("round-trip");
+    assert_eq!(back, e);
+
+    let mut value = serde_json::from_str::<Value>(&json).expect("parse");
+    let body = value
+        .get_mut("event")
+        .and_then(Value::as_object_mut)
+        .expect("event object");
+    body.remove("cut_axis");
+    body.remove("soft_wrapped");
+    body.remove("wrap_rescued");
+    body.remove("effective_tokens");
+    let old = serde_json::to_string(&value).expect("serialize old");
+    let back_old: SessionLogEntry = serde_json::from_str(&old).expect("old deserializes");
+    assert!(matches!(
+        back_old.event,
+        SessionEvent::SubagentReturn {
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
+            ..
+        }
+    ));
 }
 
 #[test]

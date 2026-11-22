@@ -259,6 +259,10 @@ async fn test_orphan_answers_returned_call() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     ] {
         store
@@ -651,6 +655,10 @@ async fn test_resume_writes_second_return() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
         spawn_event(&child),
     ] {
@@ -1398,6 +1406,10 @@ async fn test_orphan_retries_model_record() {
             duration_ms: 0,
             ledger_measured: false,
             orphaned: true,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     ] {
         store
@@ -1600,6 +1612,10 @@ fn return_event(session: SessionId, child: &SessionId) -> SessionLogEntry {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     )
 }

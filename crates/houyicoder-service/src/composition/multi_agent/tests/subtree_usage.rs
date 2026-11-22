@@ -42,6 +42,10 @@ async fn test_return_usage_covers_subtree() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         })
         .await

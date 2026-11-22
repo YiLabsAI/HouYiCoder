@@ -227,6 +227,10 @@ fn test_unmeasured_child_hides_share() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -295,6 +299,10 @@ fn test_cache_only_child_folds() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -362,6 +370,10 @@ fn test_child_report_hides_share() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];
@@ -415,6 +427,10 @@ fn test_child_report_gates_session() {
                 duration_ms: 0,
                 ledger_measured: true,
                 orphaned: false,
+                cut_axis: None,
+                soft_wrapped: None,
+                wrap_rescued: None,
+                effective_tokens: None,
             },
         ),
     ];

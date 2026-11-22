@@ -949,6 +949,10 @@ fn test_delegated_reports_return() {
         duration_ms: 0,
         ledger_measured: true,
         orphaned: false,
+        cut_axis: None,
+        soft_wrapped: None,
+        wrap_rescued: None,
+        effective_tokens: None,
     })];
     let delegated = builder
         .delegated_context(&events)
@@ -989,6 +993,10 @@ fn test_delegated_unknown_total() {
         duration_ms: 0,
         ledger_measured: true,
         orphaned: false,
+        cut_axis: None,
+        soft_wrapped: None,
+        wrap_rescued: None,
+        effective_tokens: None,
     })];
     let delegated = builder
         .delegated_context(&events)
@@ -1050,6 +1058,10 @@ fn test_turn_skips_conversation_cost() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         }),
     ];
     let turn = b.build_for_turn(&events, None, None, &AssemblyInput::default(), false);

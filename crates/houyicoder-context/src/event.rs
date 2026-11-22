@@ -611,6 +611,20 @@ pub enum SessionEvent {
         /// boundary.
         #[serde(default)]
         orphaned: bool,
+        /// Watchdog or budget axis that stopped this child, or None when it
+        /// ended normally.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cut_axis: Option<String>,
+        /// Whether the child entered a tool-disabled soft wrap-up turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        soft_wrapped: Option<bool>,
+        /// When soft wrap-up ran, whether non-empty assistant output was
+        /// recovered before termination.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wrap_rescued: Option<bool>,
+        /// Effective token spend weighted by the active cost model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effective_tokens: Option<u64>,
     },
     /// This session was delegated to by the named parent: the child side of
     /// the delegation boundary, written as the child session's first durable

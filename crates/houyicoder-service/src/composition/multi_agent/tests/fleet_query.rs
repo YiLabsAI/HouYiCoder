@@ -196,6 +196,10 @@ async fn test_resumed_child_lists_once() {
             duration_ms: 0,
             ledger_measured: true,
             orphaned: false,
+            cut_axis: None,
+            soft_wrapped: None,
+            wrap_rescued: None,
+            effective_tokens: None,
         },
     };
     store.append(seeded).await.expect("seed a counted return");

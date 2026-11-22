@@ -29,7 +29,7 @@ use houyicoder_core::agent::multi_agent::bus_types::spawned_topic;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor};
 use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_core::agent::multi_agent::ending::EndingClaim;
-use houyicoder_core::agent::multi_agent::record_subagent_return;
+use houyicoder_core::agent::multi_agent::record_subagent_return_with_metrics;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
 use houyicoder_core::agent::multi_agent::registry::delegatable_agents;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, RunnerInheritance, TriggerSource};

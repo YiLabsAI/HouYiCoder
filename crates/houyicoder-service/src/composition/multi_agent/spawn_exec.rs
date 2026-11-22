@@ -21,7 +21,7 @@ use houyicoder_core::agent::multi_agent::registry::{IsolationMode, ResolveCtx};
 use houyicoder_core::agent::multi_agent::spawn::TriggerSource;
 use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{
-    CutReason, SpawnRequest, recorded_cut, spawn_child, timed_out_summary,
+    CutReason, ReturnMetrics, SpawnRequest, recorded_cut, spawn_child, timed_out_summary,
 };
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::llm::Usage;
@@ -167,48 +167,112 @@ pub(super) async fn finalize_child(
         }
     };
     let panicked = payload.is_some();
+    let recorded = recorded_cut(&handle.cut_reason);
+    let has_text = has_recovered_text(panicked, &status, &summary, &child_tail);
     let (status, summary) = reconcile_cut_ending(
-        recorded_cut(&handle.cut_reason),
+        recorded.clone(),
         panicked,
         &child_str,
         &child_tail,
         status,
         summary,
     );
-    // The usage the parent records is read from durable state, not from the
-    // run's own result, so a failed, cancelled, or background child reports
-    // what it really spent instead of zeroes. See child_subtree_usage.
     let usage = child_subtree_usage(&handle.runner, child_sid);
+    let metrics = build_return_metrics(&recorded, &status, &handle.runner, has_text, &usage);
     if let (Some(cw), Some(ctrl)) = (handle.worktree, worktree_controller.as_ref()) {
         ctrl.cleanup_child(cw).await;
     }
     super::close_child_inbox(bus.as_ref(), &child_str);
-    super::fire_subagent_stop(
+    finalize_stop_and_boundary(
+        runtime,
         hook_fire.as_ref(),
+        store.as_ref(),
         parent_sid,
         &child_str,
         &subagent_type,
         &status,
-        super::last_assistant_text(&child_tail),
-    )
-    .await;
-    write_return_boundary(
-        runtime,
-        store.as_ref(),
-        parent_sid,
-        &child_str,
-        &status,
         &summary,
+        &child_tail,
         &usage,
+        metrics,
     )
     .await;
     if let Some(payload) = payload {
-        // The child is finalized; the panic continues outward from here, so a
-        // caller awaiting the task still sees it as the panic it is rather
-        // than as an ordinary refusal.
         resume_unwind(payload);
     }
     (status, summary, usage)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "finalization passes the already-resolved child artifacts"
+)]
+async fn finalize_stop_and_boundary(
+    runtime: &MultiAgentRuntime,
+    hook_fire: Option<&Arc<dyn HookFire>>,
+    store: &dyn SessionLog,
+    parent_sid: SessionId,
+    child_str: &str,
+    subagent_type: &str,
+    status: &str,
+    summary: &str,
+    child_tail: &[SessionLogEntry],
+    usage: &Usage,
+    metrics: ReturnMetrics,
+) {
+    super::fire_subagent_stop(
+        hook_fire,
+        parent_sid,
+        child_str,
+        subagent_type,
+        status,
+        super::last_assistant_text(child_tail),
+    )
+    .await;
+    write_return_boundary(
+        runtime, store, parent_sid, child_str, status, summary, usage, metrics,
+    )
+    .await;
+}
+
+fn has_recovered_text(
+    panicked: bool,
+    status: &str,
+    summary: &str,
+    child_tail: &[SessionLogEntry],
+) -> bool {
+    !panicked
+        && ((!summary.trim().is_empty() && status != "interrupted" && status != "max_turns")
+            || super::last_assistant_text(child_tail).is_some_and(|t| !t.trim().is_empty()))
+}
+
+fn build_return_metrics(
+    recorded: &Option<CutReason>,
+    status: &str,
+    runner: &Runner,
+    has_assistant_text: bool,
+    usage: &Usage,
+) -> ReturnMetrics {
+    let soft_wrapped = runner.is_wrapping_up();
+    let turn_wrapped = runner.turn_limit_wrapped();
+    let cut_axis = match recorded {
+        Some(CutReason::TimedOut { stage: None, .. }) => Some("wall_clock".to_string()),
+        Some(CutReason::TimedOut {
+            stage: Some(stage), ..
+        }) => Some(match stage.as_str() {
+            "Tool" => "tool_quiet".to_string(),
+            "Streaming" => "stream_idle".to_string(),
+            other => other.to_ascii_lowercase(),
+        }),
+        None if turn_wrapped || status == "max_turns" => Some("turn_limit".to_string()),
+        None => None,
+    };
+    ReturnMetrics {
+        cut_axis,
+        soft_wrapped: Some(soft_wrapped),
+        wrap_rescued: soft_wrapped.then_some(has_assistant_text),
+        effective_tokens: Some(runner.effective_tokens_for(usage)),
+    }
 }
 
 /// Write the return boundary for a finished child, under the writer claim.
@@ -224,6 +288,10 @@ pub(super) async fn finalize_child(
 /// A refused claim reopens it too: the pass holding the claim may have just
 /// found this child running and backed out, and neither writer would otherwise
 /// write the boundary before the next process start.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "boundary writer forwards all durable fields"
+)]
 async fn write_return_boundary(
     runtime: &MultiAgentRuntime,
     store: &dyn SessionLog,
@@ -232,6 +300,7 @@ async fn write_return_boundary(
     status: &str,
     summary: &str,
     usage: &Usage,
+    metrics: ReturnMetrics,
 ) {
     let Some(_claim) = runtime.boundary_claims.claim(child) else {
         runtime.orphan_scan.reopen();
@@ -241,9 +310,11 @@ async fn write_return_boundary(
         );
         return;
     };
-    if super::record_subagent_return(store, parent_sid, child, status, summary, child, usage)
-        .await
-        .is_err()
+    if super::record_subagent_return_with_metrics(
+        store, parent_sid, child, status, summary, child, usage, metrics,
+    )
+    .await
+    .is_err()
     {
         runtime.orphan_scan.reopen();
         tracing::warn!("subagent return boundary write failed for child {child}");

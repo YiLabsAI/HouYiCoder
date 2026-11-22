@@ -99,11 +99,39 @@ impl Runner {
     }
 
     /// Whether a budget watchdog has asked this run to synthesize and exit.
-    pub(crate) fn is_wrapping_up(&self) -> bool {
+    pub fn is_wrapping_up(&self) -> bool {
         self.user_turn
             .lock()
             .expect("user_turn lock")
             .is_wrapping_up()
+    }
+
+    /// Whether wrap-up was triggered by reaching the final turn-budget turn.
+    pub fn turn_limit_wrapped(&self) -> bool {
+        self.user_turn
+            .lock()
+            .expect("user_turn lock")
+            .turn_limit_wrapped()
+    }
+
+    /// Compute effective token spend weighted by the active cost model.
+    pub fn effective_tokens_for(&self, usage: &Usage) -> u64 {
+        let c = self.cost_model.cost();
+        let cache_read = f64::from(usage.cache_read_input_tokens);
+        let cache_write = f64::from(usage.cache_write_input_tokens);
+        let non_cached = if usage.non_cached_input_tokens > 0
+            || usage.cache_read_input_tokens > 0
+            || usage.cache_write_input_tokens > 0
+        {
+            f64::from(usage.non_cached_input_tokens)
+        } else {
+            (self.cost_model.effective_input_tokens(usage) - cache_read - cache_write).max(0.0)
+        };
+        let weighted = non_cached * c.input
+            + cache_read * c.cache_read
+            + cache_write * c.cache_write_5m
+            + f64::from(usage.output_tokens) * c.output;
+        weighted.round().max(0.0) as u64
     }
 
     /// Whether abort() was called since the last run() entry AND the run was
