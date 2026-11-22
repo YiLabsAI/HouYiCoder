@@ -20,6 +20,9 @@ pub(crate) struct UserTurn {
     /// Set when a budget watchdog asks this run to stop calling tools and emit
     /// one final text summary before termination.
     wrapping_up: bool,
+    /// Grants one turn beyond max_turns when an external watchdog interrupts
+    /// a run that has already spent its final turn.
+    extra_wrap_turn: bool,
     /// Pending internal directive written as MetaUser at the next turn
     /// boundary so wrap-up does not overwrite session intent or render as user
     /// input.
@@ -43,17 +46,24 @@ impl UserTurn {
         self.calls = 0;
         self.worked = None;
         self.wrapping_up = false;
+        self.extra_wrap_turn = false;
         self.wrap_up_notice = None;
     }
 
     /// Enter final wrap-up mode, returning true on the first transition.
-    pub(crate) fn begin_wrap_up(&mut self, directive: String) -> bool {
+    pub(crate) fn begin_wrap_up(&mut self, directive: String, grant_extra_turn: bool) -> bool {
         let first = !self.wrapping_up;
         self.wrapping_up = true;
         if first {
+            self.extra_wrap_turn = grant_extra_turn;
             self.wrap_up_notice = Some(directive);
         }
         first
+    }
+
+    /// Whether an external watchdog granted one extra turn past max_turns.
+    pub(crate) fn extra_wrap_turn(&self) -> bool {
+        self.extra_wrap_turn
     }
 
     /// Take any pending wrap-up directive for injection as a MetaUser event.

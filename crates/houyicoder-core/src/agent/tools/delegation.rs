@@ -119,7 +119,7 @@ impl Tool for DelegationTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "A wall-clock ceiling for this delegation. Omit to use the parent's policy."
+                    "description": "Optional wall-clock ceiling in seconds (floored at 3600s; use only to extend longer runs)."
                 }
             },
             "required": ["description", "prompt"]
@@ -202,22 +202,18 @@ impl Tool for DelegationTool {
     }
 }
 
-/// The wall-clock ceiling this call asks for, when it names one.
-///
-/// The value is the caller's own bound on total run time. When it is absent the
-/// execution path supplies both bounds: a fixed idle window that cuts a run
-/// which stopped producing, and a wall-clock cap that ends one that never
-/// stops. Reporting a ceiling here as well would shadow the idle window with
-/// the same number, so a child that went quiet was cut late and a child that
-/// kept working was cut at a bound nobody asked for.
-///
-/// A non-positive value is ignored the way a missing one is, rather than
-/// turning into an instant timeout.
+/// Minimum wall-clock ceiling honored when a caller passes timeout_secs so a
+/// model estimate cannot cut a healthy long-running delegation short.
+const MIN_DELEGATION_CEILING_SECS: u64 = 3600;
+
+/// The wall-clock ceiling this call asks for, floored at the default 3600s
+/// safety ceiling so a model estimate only extends longer runs.
 fn delegation_ceiling(input: &serde_json::Value) -> Option<u64> {
     input
         .get("timeout_secs")
         .and_then(|v| v.as_u64())
         .filter(|secs| *secs > 0)
+        .map(|secs| secs.max(MIN_DELEGATION_CEILING_SECS))
 }
 
 /// Surface a resolve error as the message the model sees: an unknown type
@@ -360,13 +356,14 @@ fn build_tool_result(outcome: SpawnOutcome, color: Option<&str>, subagent_type: 
     // carry no continuation hint; every other terminal result does. A
     // background launch is not finished, so its result says nothing here.
     let continuation = if background.is_none() {
-        let one_shot = matches!(subagent_type, "explore" | "plan");
+        let completed_one_shot =
+            matches!(subagent_type, "explore" | "plan") && status == "completed";
         let terminal = !status.is_empty() && status != "running";
-        (terminal && !one_shot && !content.is_empty()).then(|| {
+        (terminal && !completed_one_shot && !content.is_empty()).then(|| {
             format!(
-                "To continue this agent's work, call send_message with \
-                 to=\"{child}\"; to read its full output, call task_output with \
-                 task_id=\"{child}\"."
+                "To continue this agent's work, call agent with resume=\"{child}\" \
+                 or send_message with to=\"{child}\"; to read its full output, \
+                 call task_output with task_id=\"{child}\"."
             )
         })
     } else {

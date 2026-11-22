@@ -75,3 +75,67 @@ async fn test_child_turn_cap_wins() {
     // not move when a later change adds or removes an unrelated record.
     assert_eq!(turns, 2, "two turns of work, not the parent's three");
 }
+
+/// Reaching the final allowed turn in a multi-turn child enters tool-disabled
+/// soft wrap-up with a MetaUser directive so the child synthesizes its findings
+/// instead of vanishing with an empty turn-cap status.
+#[tokio::test]
+async fn test_turn_cap_wraps_up() {
+    let mut def = built_in_all()
+        .into_iter()
+        .find(|d| d.subagent_type == "explore")
+        .expect("the explore definition is registered");
+    def.max_turns = Some(2);
+    let registry: Arc<dyn AgentRegistry> = Arc::new(BuiltInRegistry::from_agents(vec![def]));
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "call_1".into(),
+                name: "unknown_read".into(),
+                input: serde_json::json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "Findings: audited module B".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ]));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let child_log = store.clone();
+    let runtime = MultiAgentRuntime::new(MultiAgentDeps {
+        registry,
+        store,
+        provider,
+        tools: ToolRegistry::new(),
+        config: RunnerConfig::default(),
+        worktree_controller: None,
+        workspace: Some(PathBuf::from("/tmp")),
+        bus: None,
+        descriptor_store: Some(Arc::new(InMemoryDescriptorStore::new())),
+        skill_registry: None,
+        conditional: None,
+        hooks: None,
+    });
+    let ctx = ToolCtx::new("c1").with_session(SessionId::new());
+    let args = SpawnArgs::new("explore", "task", "task");
+
+    let outcome = runtime.spawn(&ctx, args).await.expect("spawn");
+    assert_eq!(
+        outcome.summary.as_deref(),
+        Some("Findings: audited module B")
+    );
+    let sid = SessionId::from_display_string(&outcome.child_session_id).expect("sid");
+    let events = child_log.replay(sid).await.expect("replay");
+    assert!(
+        events.iter().any(|ev| matches!(
+            &ev.event,
+            SessionEvent::MetaUser { text } if text.contains("turn budget")
+        )),
+        "expected MetaUser turn-limit wrap-up notice in child log"
+    );
+}

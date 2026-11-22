@@ -507,11 +507,12 @@ impl Runner {
             match next_step {
                 NextStep::RunAgain => {
                     turn += 1;
-                    let limit = self
-                        .config
-                        .max_turns
-                        .saturating_add(u32::from(self.is_wrapping_up()));
-                    if self.bump_user_turn() > limit {
+                    let spent = self.bump_user_turn();
+                    if spent == self.config.max_turns && self.config.max_turns > 1 {
+                        self.begin_turn_limit_wrap_up();
+                    }
+                    let limit = self.effective_turn_limit();
+                    if spent > limit {
                         return Ok(RunResult {
                             outcome: RunOutcome::MaxTurnsReached { turns: turn - 1 },
                             turns: turn - 1,

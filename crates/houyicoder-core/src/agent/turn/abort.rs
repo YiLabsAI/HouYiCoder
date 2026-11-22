@@ -70,10 +70,32 @@ impl Runner {
             .user_turn
             .lock()
             .expect("user_turn lock")
-            .begin_wrap_up(directive.into())
+            .begin_wrap_up(directive.into(), true)
         {
             self.cancel_turn();
         }
+    }
+
+    /// Enter tool-disabled wrap-up at the final turn-budget boundary without
+    /// expanding max_turns.
+    pub(crate) fn begin_turn_limit_wrap_up(&self) {
+        const TURN_WRAP_DIRECTIVE: &str = "Your turn budget has reached its final turn and tool calls are now disabled. Immediately summarize your verified findings and remaining unverified items in plain text.";
+        self.user_turn
+            .lock()
+            .expect("user_turn lock")
+            .begin_wrap_up(TURN_WRAP_DIRECTIVE.to_string(), false);
+    }
+
+    /// Effective max_turns including at most one extra turn granted by an
+    /// external watchdog wrap-up.
+    pub(crate) fn effective_turn_limit(&self) -> u32 {
+        let extra = u32::from(
+            self.user_turn
+                .lock()
+                .expect("user_turn lock")
+                .extra_wrap_turn(),
+        );
+        self.config.max_turns.saturating_add(extra)
     }
 
     /// Whether a budget watchdog has asked this run to synthesize and exit.

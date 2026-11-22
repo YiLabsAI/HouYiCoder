@@ -419,14 +419,17 @@ fn test_ceiling_defaults() {
     );
 }
 
-/// An explicit ceiling wins, so a caller that knows its task is long can ask
-/// for more than the default.
+/// Short explicit timeouts are floored at the default 3600s safety ceiling so
+/// a model estimate cannot prematurely cut a healthy delegation, while longer
+/// explicit timeouts still extend it.
 #[test]
 fn test_ceiling_explicit_wins() {
-    let long = serde_json::json!({"timeout_secs": 3600});
-    assert_eq!(delegation_ceiling(&long), Some(3600));
+    let long = serde_json::json!({"timeout_secs": 7200});
+    assert_eq!(delegation_ceiling(&long), Some(7200));
+    let default = serde_json::json!({"timeout_secs": 3600});
+    assert_eq!(delegation_ceiling(&default), Some(3600));
     let short = serde_json::json!({"timeout_secs": 30});
-    assert_eq!(delegation_ceiling(&short), Some(30));
+    assert_eq!(delegation_ceiling(&short), Some(3600));
 }
 
 /// A zero or negative ceiling falls back to the default rather than becoming
@@ -484,4 +487,22 @@ fn test_continuation_names_tools() {
     assert!(hint.contains("send_message"), "{hint}");
     assert!(hint.contains("task_output"), "{hint}");
     assert!(hint.contains("child-9"), "{hint}");
+}
+
+/// An incomplete explore or plan delegation keeps a continuation hint naming
+/// resume so the parent continues from its saved transcript instead of starting
+/// over.
+#[test]
+fn test_incomplete_explore_keeps_continuation() {
+    for status in ["timed_out", "max_turns"] {
+        let out = build_tool_result(
+            SpawnOutcome::foreground("c-part", status, "partial findings", Usage::default()),
+            None,
+            "explore",
+        );
+        let hint = out["continuation"]
+            .as_str()
+            .expect("incomplete one-shot must carry continuation");
+        assert!(hint.contains("resume=\"c-part\""), "{hint}");
+    }
 }
