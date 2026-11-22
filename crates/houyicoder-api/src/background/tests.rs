@@ -193,3 +193,24 @@ fn test_tailing_finish_reaches_both() {
     tee.end_of_stream();
     assert_eq!(tail.snapshot(), vec!["o\u{fffd}"]);
 }
+
+/// Without a dedicated capture store, the receiver enforces its own byte
+/// ceiling and records the stop so a runaway producer terminates immediately.
+#[test]
+fn test_tailing_byte_limit_stops() {
+    let tail = CommandTail::new();
+    let tee = TailingReceiver::with_byte_limit(tail, None, 16);
+    assert_eq!(
+        tee.receive(CapturedStream::Stdout, &[b'a'; 12]),
+        CaptureVerdict::Continue
+    );
+    assert!(tee.fallback_stop().is_none());
+    let verdict = tee.receive(CapturedStream::Stderr, &[b'b'; 8]);
+    let expected = CaptureStop {
+        reason: CaptureStopReason::ByteBudget,
+        stdout_bytes: 12,
+        stderr_bytes: 8,
+    };
+    assert_eq!(verdict, CaptureVerdict::Stop(expected.clone()));
+    assert_eq!(tee.fallback_stop(), Some(expected));
+}

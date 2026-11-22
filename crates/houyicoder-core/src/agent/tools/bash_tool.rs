@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::background::{
-    BackgroundCommandLauncher, CommandTail, DetachedCommand, TailingReceiver,
+    BackgroundCommandLauncher, CommandCompletion, CommandTail, DetachedCommand, TailingReceiver,
 };
 use houyicoder_api::capture::{RawOutputReceiver, ResultCapture};
 use houyicoder_api::sandbox::SandboxSession;
@@ -26,11 +26,15 @@ use houyicoder_protocol::extension::ToolError;
 use super::bash_snapshot;
 use crate::agent::fallback::FallbackToolOutcome;
 
+mod budget;
 mod output;
 use crate::snapshot::SnapshotStore;
 use crate::snapshot::UndoStack;
 use crate::snapshot::is_destructive_command;
-use output::{background_output, complete_run, completion_output};
+#[cfg(test)]
+use budget::wall_budget_ms;
+use budget::{HandoverOutcome, handover_or_wait, resolve_run_budgets};
+use output::{complete_run, completion_output};
 use std::future::{Future, pending};
 use std::sync::atomic::AtomicI64;
 use std::time::Duration;
@@ -65,20 +69,6 @@ async fn discover_authorizable_if_failed(
 fn looks_like_sandbox_denial(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
     s.contains("not permitted") || s.contains("denied") || s.contains("sandbox")
-}
-
-/// The wall-clock budget this call declares, clamped into the range the
-/// schema advertises. A missing or malformed value keeps the session default,
-/// so a caller that does not think about the budget gets the ordinary one.
-/// The shorter name is accepted alongside the documented one because a budget
-/// that reads as missing is worse than no budget at all: the caller believes
-/// it raised the limit and the command is stopped at the default anyway.
-fn wall_budget_ms(input: &Value) -> u64 {
-    ["timeout_ms", "timeout"]
-        .iter()
-        .find_map(|name| input.get(*name).and_then(Value::as_u64))
-        .map(|ms| ms.clamp(1, MAX_TIMEOUT_MS))
-        .unwrap_or_else(|| ExecConfig::default().wall_timeout_ms)
 }
 
 /// The largest wall-clock budget one call may declare. A build or test run
@@ -166,7 +156,7 @@ impl Tool for BashTool {
     }
     fn description(&self) -> &str {
         "Run a shell command in the sandbox workspace. \
-         Input: {command: string, timeout_ms?: number}. \
+         Input: {command: string, timeout_ms?: number, run_in_background?: boolean}. \
          Returns stdout/stderr/exit_code; a call stopped at its budget returns \
          timed_out and what the command printed before the stop. \
          Use this for builds, tests, git; a source rewrite from here is refused. \
@@ -186,14 +176,14 @@ impl Tool for BashTool {
          session's own writable temporary directory. /tmp is writable too but \
          shared with other processes on the host, so use it only where a tool \
          hard-codes it. \
-         Each call has a wall-clock budget of 120 seconds by default. A build \
-         or test run that legitimately takes longer sets timeout_ms (up to \
-         600000) on that call. A command still running when the foreground \
-         budget ends is moved to the background automatically; the call \
-         answers with the task number and the ending arrives as a task \
-         notification, so do not poll it with sleep. Output over 30 KB is cut \
-         to its tail: the note above it names where the rest was kept, and \
-         conversation_search reads it back in windows."
+         Each foreground call has a wall-clock budget of 120 seconds by default \
+         (up to 600000 via timeout_ms). Set run_in_background to true for known \
+         multi-minute commands such as full test suites or remote pushes, or let \
+         a command crossing the foreground budget move to the background \
+         automatically; the call answers with the task number and the ending \
+         arrives as a task notification, so do not poll it with sleep. Output \
+         over 30 KB is cut to its tail: the note above it names where the rest \
+         was kept, and conversation_search reads it back in windows."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -204,7 +194,11 @@ impl Tool for BashTool {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": MAX_TIMEOUT_MS,
-                    "description": "Wall-clock budget for this call in milliseconds. Omit for the default; a slow build or test run raises it instead of polling with sleep."
+                    "description": "Foreground wall-clock budget in milliseconds. Omit for the default; set run_in_background for known multi-minute commands instead of polling with sleep."
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Start this command in the background immediately and receive a task notification when it finishes."
                 }
             },
             "required": ["command"]
@@ -215,8 +209,7 @@ impl Tool for BashTool {
         let undo_stack = self.undo_stack.clone();
         let snapshot_store = self.snapshot_store.clone();
         let background = self.background.clone();
-        // The progress handle feeds the tick loop below; non-interactive runs
-        // carry none and skip the loop entirely.
+        let has_skill = self.has_active_skill();
         let progress = ctx.progress.clone();
         Box::pin(async move {
             let cmd = input
@@ -224,118 +217,87 @@ impl Tool for BashTool {
                 .and_then(Value::as_str)
                 .ok_or_else(|| ToolError::InvalidInput("bash: command (string) required".into()))?
                 .to_string();
-            // Snapshot a destructive command's writable roots before running
-            // it, so the write can be reverted. A performance skip is a notice
-            // rather than a refusal; a real I/O failure refuses to run,
-            // because the user approved on the premise that undo exists. The
-            // notice is folded into stderr so the transcript shows it.
-            let mut notice: Option<String> = None;
-            if let (Some(store), Some(stack)) = (&snapshot_store, &undo_stack)
-                && is_destructive_command(&cmd)
-            {
-                notice = bash_snapshot::prepare(store, stack, &*session)?;
-            }
-            let timeout_ms = wall_budget_ms(&input);
-            // The sandbox's streaming signature takes a shared stdout line
-            // counter. This tool reads its preview from the tail receiver, so
-            // nothing here reads the counter back.
-            let lines_counter = Arc::new(AtomicI64::new(-1));
-            let exec_config = ExecConfig {
-                wall_timeout_ms: timeout_ms,
-                ..ExecConfig::default()
-            };
-            // Taken before the command starts: the host measures a task from
-            // here, so its duration includes the foreground wait.
-            let started_at = Instant::now();
-            // The capture and the tail ride the same receiver, so previewing a
-            // run costs no bytes from what the host keeps.
-            let capture = begin_capture(&ctx, session.output_encoding());
-            let tail = CommandTail::with_encoding(session.output_encoding());
-            let receiver: Option<Arc<dyn RawOutputReceiver>> =
-                Some(Arc::new(TailingReceiver::new(
-                    tail.clone(),
-                    capture
-                        .clone()
-                        .map(|held| held as Arc<dyn RawOutputReceiver>),
-                )));
-            // Boxed to a 'static future so the host can take it over when the
-            // foreground budget ends; it owns the session and command.
-            let exec_session = Arc::clone(&session);
-            let exec_command = cmd.clone();
-            let exec_lines = Arc::clone(&lines_counter);
-            let mut exec: PFut<'static, Result<ExecResult, SandboxError>> = Box::pin(async move {
-                exec_session
-                    .exec_streaming_captured(&exec_command, exec_lines, exec_config, receiver)
-                    .await
-            });
-            let cancel = ctx.cancel.clone();
-            // A child agent is itself the unit of delegation: the parent can
-            // hand it to the background, stop it, or end it on a ceiling, and
-            // every one of those must reach the command it is running. Handing
-            // the command to the session's task registry would put it beyond
-            // all three, leaving a run nobody can stop once the child is gone.
-            // Depth zero is the root session, which has an identity of its own
-            // with nothing above it; only a child is somebody else's unit.
             let in_child = ctx
                 .agent_identity
                 .as_ref()
                 .is_some_and(|identity| identity.depth > 0);
-            let budget = match in_child {
-                true => None,
-                false => background.as_ref().map(|policy| policy.budget),
+            let budgets = resolve_run_budgets(
+                &input,
+                in_child,
+                background.as_ref().map(|policy| policy.budget),
+            );
+            if budgets.explicit_background
+                && let Some(policy) = background.as_ref()
+            {
+                policy
+                    .launcher
+                    .check_admission(&cmd)
+                    .map_err(|refusal| ToolError::Failed(format!("bash: {refusal}")))?;
+            }
+            let notice = match (&snapshot_store, &undo_stack) {
+                (Some(store), Some(stack)) if is_destructive_command(&cmd) => {
+                    bash_snapshot::prepare(store, stack, &*session)?
+                }
+                _ => None,
             };
+            let started_at = Instant::now();
+            let capture = begin_capture(&ctx, session.output_encoding());
+            let (mut exec, tail, tail_receiver) = start_captured_exec(
+                Arc::clone(&session),
+                cmd.clone(),
+                budgets.exec_wall_ms,
+                &capture,
+            );
+            let call_id = ctx.call_id.clone();
+            let cancel = ctx.cancel.clone();
             let pick = wait_for_run(
                 &mut exec,
                 cancel.as_ref(),
-                budget,
+                budgets.handover_budget,
                 progress.as_ref(),
                 &tail,
                 started_at,
-                timeout_ms,
+                budgets.fallback_foreground_ms,
             )
             .await;
-            let call_id = ctx.call_id.clone();
             let completion = match pick {
                 RunPick::Cancelled => return Ok(FallbackToolOutcome::Interrupted.to_json()),
-                // The host takes the run over; the detached future never
-                // inherits the parent's cancel token, so an Esc on the next
-                // turn cannot kill a command the user was told is running.
                 RunPick::Budget => {
                     let Some(policy) = background.as_ref() else {
                         return Err(ToolError::Failed(
                             "bash: foreground budget without a background host".into(),
                         ));
                     };
-                    let task = policy.launcher.launch(DetachedCommand {
-                        command: cmd,
+                    let detached = build_detached(
+                        cmd,
                         started_at,
-                        tail: tail.clone(),
-                        completion: Box::pin(async move {
-                            let outcome = exec.await;
-                            complete_run(outcome, capture, notice, call_id).await
-                        }),
-                    });
-                    return Ok(background_output(task, tail.snapshot(), policy.budget));
+                        tail,
+                        tail_receiver,
+                        exec,
+                        capture,
+                        notice,
+                        call_id,
+                    );
+                    match handover_or_wait(detached, policy, &budgets, cancel.as_ref()).await? {
+                        HandoverOutcome::Backgrounded(out) => return Ok(out),
+                        HandoverOutcome::Interrupted => {
+                            return Ok(FallbackToolOutcome::Interrupted.to_json());
+                        }
+                        HandoverOutcome::Completed(done) => done,
+                    }
                 }
-                RunPick::Done(outcome) => complete_run(outcome, capture, notice, call_id).await,
-            };
-            if let Some(error) = completion.error {
-                return Err(ToolError::Failed(error));
-            }
-            // A stop at the wall-clock budget answers the call rather than
-            // failing it. It carries what the command printed before it was
-            // stopped: a tool error would teach the model to send the same
-            // call again, the loop the budget exists to shorten.
-            if completion.timed_out {
-                return Ok(completion_output(completion, Vec::new()));
-            }
-            let authorizable = if self.has_active_skill() && !completion.is_success() {
-                discover_authorizable_if_failed(false, &completion.stderr, self.session.clone())
+                RunPick::Done(outcome) => {
+                    complete_run(
+                        outcome,
+                        capture,
+                        tail_receiver.fallback_stop(),
+                        notice,
+                        call_id,
+                    )
                     .await
-            } else {
-                Vec::new()
+                }
             };
-            Ok(completion_output(completion, authorizable))
+            format_foreground_result(completion, has_skill, session).await
         })
     }
     fn is_destructive(&self) -> bool {
@@ -375,6 +337,89 @@ fn begin_capture(ctx: &ToolCtx, encoding: OutputEncoding) -> Option<Arc<dyn Resu
     let source = ctx.result_capture.as_ref()?;
     let session = ctx.session_id?;
     source.begin(session, &ctx.call_id, "bash", encoding)
+}
+
+fn start_captured_exec(
+    session: Arc<dyn SandboxSession>,
+    command: String,
+    wall_timeout_ms: u64,
+    capture: &Option<Arc<dyn ResultCapture>>,
+) -> (
+    PFut<'static, Result<ExecResult, SandboxError>>,
+    CommandTail,
+    Arc<TailingReceiver>,
+) {
+    let lines_counter = Arc::new(AtomicI64::new(-1));
+    let exec_config = ExecConfig {
+        wall_timeout_ms,
+        ..ExecConfig::default()
+    };
+    let tail = CommandTail::with_encoding(session.output_encoding());
+    let tail_receiver = Arc::new(TailingReceiver::new(
+        tail.clone(),
+        capture
+            .clone()
+            .map(|held| held as Arc<dyn RawOutputReceiver>),
+    ));
+    let receiver: Option<Arc<dyn RawOutputReceiver>> =
+        Some(Arc::clone(&tail_receiver) as Arc<dyn RawOutputReceiver>);
+    let exec: PFut<'static, Result<ExecResult, SandboxError>> = Box::pin(async move {
+        session
+            .exec_streaming_captured(&command, lines_counter, exec_config, receiver)
+            .await
+    });
+    (exec, tail, tail_receiver)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the inputs are the run as frozen at launch"
+)]
+fn build_detached(
+    command: String,
+    started_at: Instant,
+    tail: CommandTail,
+    tail_receiver: Arc<TailingReceiver>,
+    exec: PFut<'static, Result<ExecResult, SandboxError>>,
+    capture: Option<Arc<dyn ResultCapture>>,
+    notice: Option<String>,
+    call_id: String,
+) -> DetachedCommand {
+    DetachedCommand {
+        command,
+        started_at,
+        tail,
+        completion: Box::pin(async move {
+            let outcome = exec.await;
+            complete_run(
+                outcome,
+                capture,
+                tail_receiver.fallback_stop(),
+                notice,
+                call_id,
+            )
+            .await
+        }),
+    }
+}
+
+async fn format_foreground_result(
+    completion: CommandCompletion,
+    has_skill: bool,
+    session: Arc<dyn SandboxSession>,
+) -> Result<Value, ToolError> {
+    if let Some(error) = completion.error {
+        return Err(ToolError::Failed(error));
+    }
+    if completion.timed_out {
+        return Ok(completion_output(completion, Vec::new()));
+    }
+    let authorizable = if has_skill && !completion.is_success() {
+        discover_authorizable_if_failed(false, &completion.stderr, session).await
+    } else {
+        Vec::new()
+    };
+    Ok(completion_output(completion, authorizable))
 }
 
 /// Wait for a command to end, to be cancelled, or to reach the foreground

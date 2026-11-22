@@ -201,8 +201,8 @@ fn test_bash_schema_no_workdir() {
         .expect("properties is an object");
     assert_eq!(
         props.len(),
-        2,
-        "the only fields are the command and its wall budget: {schema}"
+        3,
+        "the only fields are command, timeout_ms, and run_in_background: {schema}"
     );
     assert!(
         props.contains_key("command"),
@@ -211,6 +211,10 @@ fn test_bash_schema_no_workdir() {
     assert!(
         props.contains_key("timeout_ms"),
         "the per-call wall budget is advertised: {schema}"
+    );
+    assert!(
+        props.contains_key("run_in_background"),
+        "explicit background execution is advertised: {schema}"
     );
 }
 

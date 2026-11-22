@@ -503,3 +503,109 @@ async fn test_shutdown_ends_running_task() {
     })
     .await;
 }
+
+/// Active running slots are capped at four; a fifth run is returned untouched
+/// rather than dropped, and once a slot frees the next launch succeeds.
+#[tokio::test]
+async fn test_admission_caps_running_slots() {
+    let tasks = BackgroundTasks::new();
+    let mut ids = Vec::new();
+    for idx in 1..=4 {
+        let launched = tasks
+            .try_launch(
+                detached(
+                    &format!("cargo test -p c{idx}"),
+                    CommandTail::new(),
+                    never_finishes(),
+                ),
+                true,
+            )
+            .expect("within the four-slot cap");
+        ids.push(launched.id);
+    }
+    assert!(matches!(
+        tasks.check_admission("cargo clippy"),
+        Err(BackgroundRefusal::CapacityFull { limit: 4, .. })
+    ));
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let probe = DropProbe(Arc::clone(&dropped));
+    let overflow = detached(
+        "cargo clippy",
+        CommandTail::new(),
+        Box::pin(async move {
+            let _probe = probe;
+            pending::<()>().await;
+            completion(Some(0), false)
+        }),
+    );
+    let Err((returned, BackgroundRefusal::CapacityFull { limit, running })) =
+        tasks.try_launch(overflow, false)
+    else {
+        panic!("expected capacity refusal on the fifth active command");
+    };
+    assert_eq!(limit, 4);
+    assert_eq!(running.len(), 4);
+    assert!(
+        !dropped.load(Ordering::Relaxed),
+        "refusing handover must return the running future alive"
+    );
+    drop(returned);
+
+    assert!(tasks.kill(ids[0]));
+    wait_until(|| {
+        tasks
+            .detail(ids[0])
+            .is_some_and(|d| d.status == BackgroundTaskStatus::Killed)
+    })
+    .await;
+    let admitted = tasks
+        .try_launch(
+            detached("cargo clippy", CommandTail::new(), never_finishes()),
+            true,
+        )
+        .expect("a freed slot admits the next command");
+    assert_eq!(admitted.id, BackgroundTaskId(5));
+}
+
+/// Explicit background admission rejects a command whose normalized signature
+/// matches an active run even when redirected to a different log file, whereas
+/// automatic handover keeps the run and surfaces the duplicate warning.
+#[tokio::test]
+async fn test_admission_flags_duplicate_command() {
+    let tasks = BackgroundTasks::new();
+    let first = tasks
+        .try_launch(
+            detached(
+                "cd /repo && make check > $TMPDIR/mc1.log 2>&1",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("first run admitted");
+    assert_eq!(first.id, BackgroundTaskId(1));
+
+    match tasks.check_admission("cd /repo && make check > $TMPDIR/mc2.log 2>&1 < /dev/null") {
+        Err(BackgroundRefusal::DuplicateCommand { existing }) => {
+            assert_eq!(existing.id, BackgroundTaskId(1));
+        }
+        other => panic!("expected duplicate refusal, got {other:?}"),
+    }
+
+    let handover = tasks
+        .try_launch(
+            detached(
+                "cd /repo && make check > $TMPDIR/mc3.log 2>&1",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            false,
+        )
+        .expect("automatic handover admits while slots remain");
+    assert_eq!(
+        handover.duplicate.map(|d| d.id),
+        Some(BackgroundTaskId(1)),
+        "automatic handover records the active duplicate"
+    );
+}

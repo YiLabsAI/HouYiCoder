@@ -7,16 +7,25 @@
 //! implements to take ownership of a run the foreground gives up.
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::mem::take;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use houyicoder_async::PFut;
 use houyicoder_platform::host::text::{OutputEncoding, StreamDecoder};
+use houyicoder_protocol::capture_record::CaptureStopReason;
 use houyicoder_protocol::frontend::BackgroundTaskId;
 use serde_json::Value;
 
-use crate::capture::{CaptureVerdict, CapturedStream, RawOutputReceiver};
+use crate::capture::{CaptureStop, CaptureVerdict, CapturedStream, RawOutputReceiver};
+
+/// Maximum active background commands one session runs concurrently.
+pub const MAX_RUNNING_BACKGROUND_TASKS: usize = 4;
+
+/// Maximum combined raw output bytes a command without a dedicated capture
+/// store may emit before being stopped.
+pub const MAX_BACKGROUND_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Output lines the tail keeps: enough for a reader to see progress, few
 /// enough that the preview never outweighs the transcript row it sits under.
@@ -165,27 +174,76 @@ impl CommandTail {
     }
 }
 
+#[derive(Default)]
+struct ReceiverByteState {
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+    stop: Option<CaptureStop>,
+}
+
 /// A raw-output receiver that feeds a tail and passes every chunk on to the
-/// capture, so previewing a run costs no bytes from what the host keeps.
+/// capture, enforcing a fallback byte ceiling when no capture store is present.
 pub struct TailingReceiver {
     tail: CommandTail,
     capture: Option<Arc<dyn RawOutputReceiver>>,
+    max_bytes: u64,
+    bytes: Mutex<ReceiverByteState>,
 }
 
 impl TailingReceiver {
     /// Wrap the capture receiver, if the host supplied one.
     pub fn new(tail: CommandTail, capture: Option<Arc<dyn RawOutputReceiver>>) -> Self {
-        Self { tail, capture }
+        Self::with_byte_limit(tail, capture, MAX_BACKGROUND_OUTPUT_BYTES)
+    }
+
+    /// Wrap the capture receiver with an explicit fallback byte limit used
+    /// when no capture store is attached.
+    #[must_use]
+    pub fn with_byte_limit(
+        tail: CommandTail,
+        capture: Option<Arc<dyn RawOutputReceiver>>,
+        max_bytes: u64,
+    ) -> Self {
+        Self {
+            tail,
+            capture,
+            max_bytes,
+            bytes: Mutex::new(ReceiverByteState::default()),
+        }
+    }
+
+    /// The byte-limit stop triggered by this receiver when no capture store
+    /// handled the stream.
+    pub fn fallback_stop(&self) -> Option<CaptureStop> {
+        self.bytes.lock().expect("receiver byte lock").stop.clone()
     }
 }
 
 impl RawOutputReceiver for TailingReceiver {
     fn receive(&self, stream: CapturedStream, bytes: &[u8]) -> CaptureVerdict {
         self.tail.push_encoded(stream, bytes);
-        match &self.capture {
-            Some(capture) => capture.receive(stream, bytes),
-            None => CaptureVerdict::Continue,
+        if let Some(capture) = &self.capture {
+            return capture.receive(stream, bytes);
         }
+        let mut state = self.bytes.lock().expect("receiver byte lock");
+        if let Some(stop) = &state.stop {
+            return CaptureVerdict::Stop(stop.clone());
+        }
+        let len = bytes.len() as u64;
+        match stream {
+            CapturedStream::Stdout => state.stdout_bytes = state.stdout_bytes.saturating_add(len),
+            CapturedStream::Stderr => state.stderr_bytes = state.stderr_bytes.saturating_add(len),
+        }
+        if state.stdout_bytes.saturating_add(state.stderr_bytes) > self.max_bytes {
+            let stop = CaptureStop {
+                reason: CaptureStopReason::ByteBudget,
+                stdout_bytes: state.stdout_bytes,
+                stderr_bytes: state.stderr_bytes,
+            };
+            state.stop = Some(stop.clone());
+            return CaptureVerdict::Stop(stop);
+        }
+        CaptureVerdict::Continue
     }
 
     fn end_of_stream(&self) {
@@ -247,15 +305,99 @@ pub struct DetachedCommand {
     pub completion: PFut<'static, CommandCompletion>,
 }
 
+impl fmt::Debug for DetachedCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DetachedCommand")
+            .field("command", &self.command)
+            .field("started_at", &self.started_at)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Summary of one active background task reported during admission checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningTaskSummary {
+    /// Assigned task identifier.
+    pub id: BackgroundTaskId,
+    /// Whole seconds elapsed since the command started.
+    pub elapsed_secs: u64,
+    /// Bounded first line of the command.
+    pub command: String,
+}
+
+/// Why a background command registry refused to admit a new run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackgroundRefusal {
+    /// Active running tasks already occupy every slot.
+    CapacityFull {
+        /// Configured active limit.
+        limit: usize,
+        /// Tasks currently occupying the slots.
+        running: Vec<RunningTaskSummary>,
+    },
+    /// An active task is already running the same normalized command.
+    DuplicateCommand {
+        /// Existing running task.
+        existing: RunningTaskSummary,
+    },
+}
+
+impl fmt::Display for BackgroundRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CapacityFull { limit, running } => {
+                let items: Vec<String> = running
+                    .iter()
+                    .map(|t| format!("{} ({}s): {}", t.id.label(), t.elapsed_secs, t.command))
+                    .collect();
+                write!(
+                    f,
+                    "background command slots full ({limit}/{limit} running: {}); wait for a task notification or stop a stale task before starting another",
+                    items.join(", ")
+                )
+            }
+            Self::DuplicateCommand { existing } => write!(
+                f,
+                "task {} is already running the same command ({}s elapsed: {}); wait for its completion notification instead of starting a duplicate",
+                existing.id.label(),
+                existing.elapsed_secs,
+                existing.command
+            ),
+        }
+    }
+}
+
+/// Outcome when handing a detached command to the host registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchedTask {
+    /// Assigned task number.
+    pub id: BackgroundTaskId,
+    /// Active sibling running the same normalized command, when an automatic
+    /// handover kept both alive rather than dropping work already started.
+    pub duplicate: Option<RunningTaskSummary>,
+}
+
 /// A host that keeps commands running after the tool call that started them.
 ///
 /// The engine passes the run over exactly once and never polls it again, so
 /// the host owns the command's ending: it reports the final state to the
-/// frontend and notifies the model at its next turn boundary. The acceptance
-/// occurs only after the foreground budget ran out, never before.
+/// frontend and notifies the model at its next turn boundary.
 pub trait BackgroundCommandLauncher: Send + Sync {
-    /// Take ownership of a still-running command and return the number the
-    /// host assigned it.
+    /// Check whether an explicit background command can be admitted before
+    /// starting a subprocess.
+    fn check_admission(&self, command: &str) -> Result<(), BackgroundRefusal>;
+
+    /// Atomically check active capacity and take ownership of a running
+    /// command, returning the command untouched on refusal so the caller may
+    /// finish it in the foreground without losing work.
+    fn try_launch(
+        &self,
+        command: DetachedCommand,
+        reject_duplicate: bool,
+    ) -> Result<LaunchedTask, (DetachedCommand, BackgroundRefusal)>;
+
+    /// Take ownership of a still-running command unconditionally and return
+    /// the number the host assigned it.
     fn launch(&self, command: DetachedCommand) -> BackgroundTaskId;
 }
 

@@ -270,7 +270,11 @@ fn test_schema_no_sandbox_escape() {
     let schema = tool.input_schema();
     let properties = schema["properties"].as_object().expect("property map");
     let names: Vec<&str> = properties.keys().map(String::as_str).collect();
-    assert_eq!(names, ["command", "timeout_ms"], "unexpected input fields");
+    assert_eq!(
+        names,
+        ["command", "timeout_ms", "run_in_background"],
+        "unexpected input fields"
+    );
     let text = schema.to_string().to_ascii_lowercase();
     assert!(
         !text.contains("sandbox") && !text.contains("dangerously"),

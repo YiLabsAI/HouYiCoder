@@ -81,8 +81,8 @@ fn test_schema_includes_timeout() {
     assert_eq!(schema["required"], json!(["command"]));
     assert!(
         tool.description()
-            .contains("{command: string, timeout_ms?: number}"),
-        "the input line names the budget: {}",
+            .contains("{command: string, timeout_ms?: number, run_in_background?: boolean}"),
+        "the input line names the budget and background flag: {}",
         tool.description()
     );
     // The prose states the default and the cap in words the model reads as

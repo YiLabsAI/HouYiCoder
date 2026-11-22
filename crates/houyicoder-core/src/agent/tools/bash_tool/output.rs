@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use houyicoder_api::background::CommandCompletion;
+use houyicoder_api::background::{CommandCompletion, RunningTaskSummary};
 use houyicoder_api::capture::{
     CallEnd, CaptureStop, CaptureStopReason, CapturedStreams, ResultCapture,
 };
@@ -39,6 +39,7 @@ pub(super) fn fold_notice(notice: Option<String>, stderr: String) -> String {
 pub(super) async fn complete_run(
     outcome: Result<ExecResult, SandboxError>,
     capture: Option<Arc<dyn ResultCapture>>,
+    fallback_stop: Option<CaptureStop>,
     notice: Option<String>,
     call_id: String,
 ) -> CommandCompletion {
@@ -47,14 +48,23 @@ pub(super) async fn complete_run(
             let drops = model_view_loses_bytes(&result.stdout, &result.stderr);
             let end = CallEnd::Exited(result.exit_code);
             let capture = finish_capture(capture, end, drops).await;
+            let effective_stop = capture.stop().cloned().or(fallback_stop);
+            let stop_notice = capture.notice().or_else(|| {
+                effective_stop.as_ref().map(|stop| {
+                    format!(
+                        "bash: the capture budget was reached after {}KB; the command was stopped and the rest of its output was not kept",
+                        (stop.stdout_bytes + stop.stderr_bytes) / 1024
+                    )
+                })
+            });
             let (stdout, stderr) = bound_bash_output(
                 result.stdout,
                 result.stderr,
-                capture.stop().map(|stop| stop.reason),
+                effective_stop.as_ref().map(|stop| stop.reason),
                 &kept_streams(&capture, &call_id),
                 is_user_shell_call_id(&call_id),
             );
-            let stderr = fold_notice(capture.notice(), fold_notice(notice, stderr));
+            let stderr = fold_notice(stop_notice, fold_notice(notice, stderr));
             CommandCompletion {
                 exit_code: result.exit_code,
                 stdout,
@@ -143,15 +153,30 @@ pub(super) fn completion_output(completion: CommandCompletion, authorizable: Vec
 pub(super) fn background_output(
     task: BackgroundTaskId,
     tail: Vec<String>,
-    budget: Duration,
+    budget: Option<Duration>,
+    duplicate: Option<RunningTaskSummary>,
 ) -> Value {
-    json!({
-        "stdout": "",
-        "stderr": format!(
+    let mut message = match budget {
+        Some(waited) => format!(
             "bash: still running after {}s; moved to the background as task {}. Its ending arrives as a task notification at the start of the next turn; do not poll it.",
-            budget.as_secs(),
+            waited.as_secs(),
             task.label(),
         ),
+        None => format!(
+            "bash: started in the background as task {}. Its ending arrives as a task notification at the start of the next turn; do not poll it.",
+            task.label(),
+        ),
+    };
+    if let Some(existing) = duplicate {
+        message.push_str(&format!(
+            " Note: task {} has already been running the same command for {}s; avoid starting another copy.",
+            existing.id.label(),
+            existing.elapsed_secs,
+        ));
+    }
+    json!({
+        "stdout": "",
+        "stderr": message,
         "background_task": task.0,
         "tail": tail,
     })

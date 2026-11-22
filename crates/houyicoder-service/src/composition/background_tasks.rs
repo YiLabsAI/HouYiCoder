@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use houyicoder_api::background::{
-    BackgroundCommandLauncher, CommandCompletion, CommandTail, DetachedCommand,
+    BackgroundCommandLauncher, BackgroundRefusal, CommandCompletion, CommandTail, DetachedCommand,
+    LaunchedTask, MAX_RUNNING_BACKGROUND_TASKS,
 };
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
@@ -25,6 +26,9 @@ use houyicoder_protocol::tool::bash_exit_succeeded;
 use serde_json::Value;
 
 use crate::server::EventSequencer;
+
+mod admission;
+use admission::judge_launch;
 
 /// Finished commands kept for the tasks list. A session that runs many
 /// commands keeps its newest endings; older ones are released so the list
@@ -254,37 +258,36 @@ impl Drop for BackgroundTasks {
     }
 }
 
-impl BackgroundCommandLauncher for BackgroundTasks {
-    fn launch(&self, command: DetachedCommand) -> BackgroundTaskId {
+impl BackgroundTasks {
+    /// Register an already-admitted command record under a locked table and
+    /// start its background completion watcher.
+    fn insert_and_watch(
+        &self,
+        table: &mut TaskTable,
+        command: DetachedCommand,
+    ) -> BackgroundTaskId {
         let DetachedCommand {
             command,
             started_at,
             tail,
             completion,
         } = command;
-        let (id, cancel) = {
-            let mut table = self.inner.table.lock().expect("background tasks lock");
-            let id = BackgroundTaskId(table.next_id);
-            table.next_id = table.next_id.saturating_add(1);
-            let cancel = self.inner.shutdown.child_token();
-            table.tasks.push(TaskRecord {
-                id,
-                command: first_line(&command),
-                started: started_at,
-                ended_at: None,
-                status: BackgroundTaskStatus::Running,
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                tail: tail.clone(),
-                cancel: cancel.clone(),
-            });
-            (id, cancel)
-        };
-        self.publish(id);
+        let id = BackgroundTaskId(table.next_id);
+        table.next_id = table.next_id.saturating_add(1);
+        let cancel = self.inner.shutdown.child_token();
+        table.tasks.push(TaskRecord {
+            id,
+            command: first_line(&command),
+            started: started_at,
+            ended_at: None,
+            status: BackgroundTaskStatus::Running,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            tail: tail.clone(),
+            cancel: cancel.clone(),
+        });
         tracing::debug!(task = id.0, command = %first_line(&command), "background task started");
-        // The tool that passes a run over runs on the host runtime, so the
-        // finishing driver joins that same runtime and outlives the tool call.
         tokio::spawn(finish_run(
             Arc::clone(&self.inner),
             self.sequencer.lock().expect("sequencer slot").clone(),
@@ -295,6 +298,48 @@ impl BackgroundCommandLauncher for BackgroundTasks {
             command,
             tail,
         ));
+        id
+    }
+}
+
+impl BackgroundCommandLauncher for BackgroundTasks {
+    fn check_admission(&self, command: &str) -> Result<(), BackgroundRefusal> {
+        let table = self.inner.table.lock().expect("background tasks lock");
+        judge_launch(&table.tasks, MAX_RUNNING_BACKGROUND_TASKS, command, true).map(|_| ())
+    }
+
+    fn try_launch(
+        &self,
+        command: DetachedCommand,
+        reject_duplicate: bool,
+    ) -> Result<LaunchedTask, (DetachedCommand, BackgroundRefusal)> {
+        let outcome = {
+            let mut table = self.inner.table.lock().expect("background tasks lock");
+            match judge_launch(
+                &table.tasks,
+                MAX_RUNNING_BACKGROUND_TASKS,
+                &command.command,
+                reject_duplicate,
+            ) {
+                Ok(duplicate) => {
+                    let id = self.insert_and_watch(&mut table, command);
+                    Ok(LaunchedTask { id, duplicate })
+                }
+                Err(refusal) => Err((command, refusal)),
+            }
+        };
+        if let Ok(launched) = &outcome {
+            self.publish(launched.id);
+        }
+        outcome
+    }
+
+    fn launch(&self, command: DetachedCommand) -> BackgroundTaskId {
+        let id = {
+            let mut table = self.inner.table.lock().expect("background tasks lock");
+            self.insert_and_watch(&mut table, command)
+        };
+        self.publish(id);
         id
     }
 }
