@@ -15,13 +15,11 @@ use super::tool_kind;
 use super::tool_locations;
 use super::tool_title;
 
-/// The four verdict options the agent offers on every permission ask. The
-/// option ids are stable strings so the server maps a selected id back to an
-/// approved/rejected verdict without stashing the offered list per ask. The
-/// names track the wire wording so a stock client renders them verbatim. No
-/// option states a lifetime: this set is built without the ask's plan, and a
-/// client that picks the remember option leaves the lifetime to the server,
-/// which keeps it no longer than the plan allows.
+/// The verdict options the ACP path offers. Only verdicts this path honors
+/// are listed: a durable remember choice needs a scope derived from the ask
+/// and installed in the rule store, and the ACP server does not install one
+/// yet, so offering it would collect an answer the gate ignores next time.
+/// The one-shot options are the whole honored set until that wiring lands.
 fn standard_permission_options() -> Vec<PermissionOption> {
     vec![
         PermissionOption {
@@ -32,23 +30,9 @@ fn standard_permission_options() -> Vec<PermissionOption> {
             meta: None,
         },
         PermissionOption {
-            option_id: "allow_always".into(),
-            name: "Always allow".into(),
-            kind: PermissionOptionKind::AllowAlways,
-            scope: None,
-            meta: None,
-        },
-        PermissionOption {
             option_id: "reject_once".into(),
             name: "Reject once".into(),
             kind: PermissionOptionKind::RejectOnce,
-            scope: None,
-            meta: None,
-        },
-        PermissionOption {
-            option_id: "reject_always".into(),
-            name: "Always reject".into(),
-            kind: PermissionOptionKind::RejectAlways,
             scope: None,
             meta: None,
         },
@@ -93,8 +77,9 @@ pub(crate) struct AcpPermissionReply {
 }
 
 /// Map the client's permission response back to the engine decision the
-/// resume path consumes. Selected maps the option id to approved/rejected
-/// (allow options approve; reject options deny), and that answer is the
+/// resume path consumes. Only the offered allow option approves; every other
+/// selected id denies, so a client that replies with an id this path never
+/// offered fails closed rather than widening a verdict. The answer is the
 /// verdict the audit holds. Cancelled is a reap (the run was cancelled, not
 /// answered) — the tool still sees a veto so the turn can end, but no verdict
 /// is recorded, so a cancelled card counts as an unknown outcome rather than
@@ -107,13 +92,13 @@ pub(crate) fn acp_permission_response_to_decision(
 ) -> AcpPermissionReply {
     let verdict = match resp.outcome {
         RequestPermissionOutcome::Cancelled => None,
-        RequestPermissionOutcome::Selected(SelectedPermissionOutcome { option_id, .. }) => Some(
-            if matches!(option_id.as_str(), "allow_once" | "allow_always") {
+        RequestPermissionOutcome::Selected(SelectedPermissionOutcome { option_id, .. }) => {
+            Some(if option_id == "allow_once" {
                 PermissionVerdict::Approved
             } else {
                 PermissionVerdict::Denied
-            },
-        ),
+            })
+        }
     };
     AcpPermissionReply {
         decision: EngineApprovalDecision {

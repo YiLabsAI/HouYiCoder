@@ -464,12 +464,9 @@ fn test_approval_maps_acp_permission() {
         ask.tool_call.fields.raw_input,
         Some(serde_json::json!({"cmd": "ls"}))
     );
-    assert_eq!(ask.options.len(), 4);
+    assert_eq!(ask.options.len(), 2);
     let ids: Vec<_> = ask.options.iter().map(|o| o.option_id.as_str()).collect();
-    assert_eq!(
-        ids,
-        vec!["allow_once", "allow_always", "reject_once", "reject_always"]
-    );
+    assert_eq!(ids, vec!["allow_once", "reject_once"]);
 }
 
 #[test]
@@ -477,8 +474,10 @@ fn test_allow_approves_reject_denies() {
     let call_id = "c".to_string();
     for (option_id, approved) in [
         ("allow_once", true),
-        ("allow_always", true),
         ("reject_once", false),
+        // An id this path never offers fails closed rather than widening a
+        // verdict.
+        ("allow_always", false),
         ("reject_always", false),
     ] {
         let resp = RequestPermissionResponse {
