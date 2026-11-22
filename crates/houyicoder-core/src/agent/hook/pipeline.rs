@@ -19,7 +19,7 @@
 //! return). Trigger async-fire machinery lands with the trigger-dispatch cut.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use houyicoder_api::agent_event::{
@@ -56,7 +56,6 @@ struct ToolExecutionReporter {
     call_id: String,
     handler: Option<Arc<dyn EventHandler<ToolExecutionEvent>>>,
     lifecycle: Option<Arc<dyn EventHandler<RunLifecycleEvent>>>,
-    last_tail: Mutex<Option<Vec<String>>>,
 }
 
 impl ToolExecutionReporter {
@@ -69,21 +68,12 @@ impl ToolExecutionReporter {
             call_id,
             handler,
             lifecycle,
-            last_tail: Mutex::new(None),
         }
     }
 }
 
 impl ToolProgressReporter for ToolExecutionReporter {
     fn update(&self, update: ToolProgressUpdate) {
-        let output_changed = {
-            let mut prev = self.last_tail.lock().expect("tool reporter tail lock");
-            let changed = prev.as_ref() != Some(&update.tail);
-            if changed {
-                *prev = Some(update.tail.clone());
-            }
-            changed
-        };
         if let Some(handler) = &self.handler {
             handler.handle(ToolExecutionEvent::Progress {
                 call_id: self.call_id.clone(),
@@ -92,10 +82,10 @@ impl ToolProgressReporter for ToolExecutionReporter {
                 tail: update.tail,
             });
         }
-        // Refresh the liveness clock only when new output lines arrived (or on
-        // the opening tick), so a silent stalled subprocess still trips the
-        // tool quiet window while an actively printing build stays alive.
-        if output_changed && let Some(lifecycle) = &self.lifecycle {
+        // Every progress tick proves the tool is still executing under its own
+        // timeout, including silent redirected commands whose pipe produces no
+        // tail output.
+        if let Some(lifecycle) = &self.lifecycle {
             lifecycle.handle(RunLifecycleEvent::Heartbeat {
                 phase: LivenessPhase::Tool,
             });

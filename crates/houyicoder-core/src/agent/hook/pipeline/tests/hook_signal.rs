@@ -2,10 +2,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use houyicoder_api::agent_event::{AgentEventHandlers, UserNoticeEvent};
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, EventHandler, LivenessPhase, RunLifecycleEvent, UserNoticeEvent,
+};
+use houyicoder_api::tool::progress::{ToolProgressReporter, ToolProgressUpdate};
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, Usage};
 
+use super::super::ToolExecutionReporter;
 use crate::agent::ToolRegistry;
 use crate::agent::hook::{HookError, HookEvent, HookOutcome, HookVerdict};
 use crate::agent::tests::runner_with;
@@ -202,5 +206,47 @@ async fn test_observe_error_warn_user() {
             .iter()
             .any(|l| l.contains("broken") && l.contains("failed")),
         "error system line names the hook + failure: {lines:?}"
+    );
+}
+
+struct RecordingLifecycle(Arc<Mutex<Vec<RunLifecycleEvent>>>);
+
+impl EventHandler<RunLifecycleEvent> for RecordingLifecycle {
+    fn handle(&self, event: RunLifecycleEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+/// Every tool progress tick refreshes the tool heartbeat even when stdout
+/// stays empty across ticks, so redirected commands do not trip the quiet
+/// window while actively reporting progress.
+#[test]
+fn test_progress_refreshes_unchanged_tail() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let reporter = ToolExecutionReporter::new(
+        "c1".into(),
+        None,
+        Some(Arc::new(RecordingLifecycle(Arc::clone(&seen)))),
+    );
+    reporter.update(ToolProgressUpdate {
+        elapsed_secs: 1,
+        timeout_secs: Some(600),
+        tail: Vec::new(),
+    });
+    reporter.update(ToolProgressUpdate {
+        elapsed_secs: 2,
+        timeout_secs: Some(600),
+        tail: Vec::new(),
+    });
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            RunLifecycleEvent::Heartbeat {
+                phase: LivenessPhase::Tool,
+            },
+            RunLifecycleEvent::Heartbeat {
+                phase: LivenessPhase::Tool,
+            },
+        ]
     );
 }

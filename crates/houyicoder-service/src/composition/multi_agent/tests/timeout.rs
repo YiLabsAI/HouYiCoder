@@ -3,9 +3,12 @@
 use std::future::pending;
 
 use houyicoder_api::tool::Tool;
+use houyicoder_api::tool::progress::ToolProgressUpdate;
 use houyicoder_async::PFut;
+use houyicoder_context::SessionId;
 use houyicoder_protocol::extension::ToolError;
 use serde_json::{Value, json};
+use tokio::time::sleep;
 
 use super::*;
 
@@ -192,7 +195,7 @@ async fn test_stalled_tool_wraps_up() {
     ]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(HungTool));
-    let (runtime, _store, parent_sid) = runtime_with(provider, None, tools);
+    let (runtime, store, parent_sid) = runtime_with(provider, None, tools);
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let mut args = SpawnArgs::new("explore", "audit", "audit");
     args.timeout_secs = Some(1);
@@ -203,5 +206,93 @@ async fn test_stalled_tool_wraps_up() {
     assert!(
         summary.contains("Findings: verified module A"),
         "expected synthesized wrap-up report in timed-out summary, got: {summary}"
+    );
+    let child_sid =
+        SessionId::from_display_string(&outcome.child_session_id).expect("valid child sid");
+    let child_events = store.replay(child_sid).await.expect("child replay");
+    assert!(
+        child_events.iter().any(|ev| matches!(
+            &ev.event,
+            SessionEvent::MetaUser { text } if text.contains("time budget has ended")
+        )),
+        "wrap-up directive must be logged as MetaUser"
+    );
+    assert!(
+        !child_events
+            .iter()
+            .any(|ev| matches!(&ev.event, SessionEvent::MidTurnInput { .. })),
+        "wrap-up directive must never be logged as MidTurnInput"
+    );
+}
+
+struct SilentProgressTool;
+
+impl Tool for SilentProgressTool {
+    fn name(&self) -> &str {
+        "silent_progress"
+    }
+    fn description(&self) -> &str {
+        "emits empty-tail progress ticks across the quiet window"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    fn execute(&self, ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async move {
+            for elapsed in 0..8 {
+                if let Some(progress) = &ctx.progress {
+                    progress.update(ToolProgressUpdate {
+                        elapsed_secs: elapsed,
+                        timeout_secs: Some(600),
+                        tail: Vec::new(),
+                    });
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+            Ok(json!({"ok": true}))
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    fn requires_approval(&self) -> bool {
+        false
+    }
+}
+
+/// A redirected command that emits progress ticks with no new pipe output
+/// survives past the tool quiet window rather than being cut prematurely.
+#[tokio::test]
+async fn test_silent_progress_tool_survives() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "tc1".into(),
+                name: "silent_progress".into(),
+                input: json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "completed after redirected run".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(SilentProgressTool));
+    let (runtime, _store, parent_sid) = runtime_with(provider, None, tools);
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "verify", "verify");
+    args.timeout_secs = Some(2);
+
+    let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
+    assert_eq!(outcome.status.as_deref(), Some("completed"));
+    assert_eq!(
+        outcome.summary.as_deref(),
+        Some("completed after redirected run")
     );
 }

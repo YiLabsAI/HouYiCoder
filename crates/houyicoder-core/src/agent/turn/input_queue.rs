@@ -4,11 +4,11 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use houyicoder_api::agent_event::NotificationQueueEvent;
-use houyicoder_context::{NotificationTopic, SessionId};
+use houyicoder_context::{NotificationTopic, SessionEvent, SessionId};
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput};
 use serde_json::Value;
 
-use crate::agent::{RunError, RunOutcome, RunResult, Runner};
+use crate::agent::{RunError, RunOutcome, RunResult, Runner, new_event};
 
 /// One notification waiting for a turn boundary: what produced it, why it
 /// exists, and the text the model reads. The reason travels with the text so
@@ -267,6 +267,11 @@ impl Runner {
     pub(crate) async fn drain_turn_boundary(&self, session: SessionId) -> Result<bool, RunError> {
         let pending_user: Vec<QueuedInput> = self.drain_pending_input();
         let inbox_pending = self.drain_inbox();
+        let wrap_up_notice = self
+            .user_turn
+            .lock()
+            .expect("user_turn lock")
+            .take_wrap_up_notice();
         let pending_notifications: Vec<QueuedNotification> = if pending_user.is_empty() {
             let (drained, generation, left) = {
                 let mut q = self
@@ -305,6 +310,11 @@ impl Runner {
                 notification.capture,
             )
             .await?;
+        }
+        if let Some(text) = wrap_up_notice {
+            self.store
+                .append(new_event(session, SessionEvent::MetaUser { text }))
+                .await?;
         }
         if had_pending {
             self.memory.recall(session).await?;

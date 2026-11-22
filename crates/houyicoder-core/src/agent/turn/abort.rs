@@ -17,7 +17,6 @@ use std::sync::atomic::Ordering;
 use crate::agent::RunOutcome;
 use crate::agent::RunResult;
 use crate::agent::{RunError, Runner};
-use houyicoder_protocol::frontend::QueuedInput;
 use houyicoder_protocol::llm::Usage;
 use tokio_util::sync::CancellationToken;
 
@@ -65,15 +64,14 @@ impl Runner {
     }
 
     /// Cancel the active step without ending the run and queue one final
-    /// synthesis directive so the model reports partial findings in text.
+    /// synthesis directive as an internal MetaUser event.
     pub fn request_wrap_up(&self, directive: impl Into<String>) {
         if self
             .user_turn
             .lock()
             .expect("user_turn lock")
-            .begin_wrap_up()
+            .begin_wrap_up(directive.into())
         {
-            self.enqueue_input(QueuedInput::new(directive));
             self.cancel_turn();
         }
     }
