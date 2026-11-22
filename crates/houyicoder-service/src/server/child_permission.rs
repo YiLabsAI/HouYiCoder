@@ -1,67 +1,17 @@
 //! Parent-side bridge for a child's permission ask: a PermissionRequest on the
 //! bus is routed through the server's existing wire-approval flow, and the
 //! decision is published back on the per-request response topic so the child
-//! resumes. Mirrors the parent's own approval path (handle_approval); a
-//! child ask is just another wire Permission the TUI answers.
+//! resumes. The prepare/publish split lives in the consent kernel so the ACP
+//! server shares it; this module holds the server's own ask path.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use houyicoder_async::bus::MessageBus;
-use houyicoder_core::agent::ApprovalRequest;
-use houyicoder_core::agent::multi_agent::bus_types::{
-    AgentBus, BusMessage, permission_request_topic, permission_response_topic,
-};
-use tokio::sync::broadcast::Receiver;
+use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
+
+use crate::consent::{deny_delegated_ask, prepare_delegated_ask, publish_delegated_response};
 
 use super::frame_carrier::FrameCarrier;
 use super::{ProtocolError, Server};
-use houyicoder_protocol::frontend::run::DelegationSource;
-
-/// Connection-scoped receiver for child permission asks, shared across idle
-/// waits and active turns so every published ask is consumed once per server.
-#[derive(Default)]
-pub(crate) struct ChildPermissionRx {
-    slot: Mutex<Option<Receiver<BusMessage>>>,
-    subscribed: AtomicBool,
-}
-
-impl ChildPermissionRx {
-    pub(crate) fn lease(&self, bus: Option<&Arc<AgentBus>>) -> PermissionLease<'_> {
-        let rx = if !self.subscribed.swap(true, Ordering::AcqRel) {
-            bus.map(|b| b.subscribe(permission_request_topic()))
-        } else {
-            self.slot.lock().ok().and_then(|mut s| s.take())
-        };
-        PermissionLease {
-            owner: &self.slot,
-            rx,
-        }
-    }
-}
-
-/// Drop guard that returns the shared broadcast receiver to its slot on every
-/// exit path, including cancellation at an await point.
-pub(crate) struct PermissionLease<'a> {
-    owner: &'a Mutex<Option<Receiver<BusMessage>>>,
-    rx: Option<Receiver<BusMessage>>,
-}
-
-impl PermissionLease<'_> {
-    pub(crate) fn receiver(&mut self) -> Option<&mut Receiver<BusMessage>> {
-        self.rx.as_mut()
-    }
-}
-
-impl Drop for PermissionLease<'_> {
-    fn drop(&mut self) {
-        if let Some(rx) = self.rx.take()
-            && let Ok(mut slot) = self.owner.lock()
-        {
-            *slot = Some(rx);
-        }
-    }
-}
 
 impl Server {
     /// Wire the shared multi-agent bus so a child's permission ask reaches
@@ -72,7 +22,7 @@ impl Server {
     }
 }
 
-/// Handle one child permission request: reconstruct the ApprovalRequest,
+/// Handle one child permission request: reconstruct the approval request,
 /// drive it through the wire-approval flow (the TUI answers), and publish the
 /// decision on the per-request response topic the child is awaiting. On a
 /// wire failure (client closed mid-ask) publish a deny so the child resumes
@@ -82,72 +32,29 @@ pub(crate) async fn handle(
     io: &mut FrameCarrier,
     req: BusMessage,
 ) -> Result<(), ProtocolError> {
-    let BusMessage::PermissionRequest {
-        child_id,
-        subagent_type,
-        call_id,
-        tool,
-        input,
-        reason,
-    } = req
-    else {
-        // A non-request message on the permission topic: ignore.
+    let Some(ask) = prepare_delegated_ask(&server.runner, req) else {
         return Ok(());
     };
-    if let Some(spawn_handle) = server.runner.spawn_handle() {
-        let waiting = spawn_handle
-            .take_pending_child_permissions()
-            .iter()
-            .any(|p| p.child_id == child_id && p.call_id == call_id);
-        if !waiting {
-            return Ok(());
+    let result = server
+        .handle_approval(io, &ask.approval, Some(ask.delegation))
+        .await;
+    let bus = server.bus.as_ref();
+    match result {
+        Ok(d) => {
+            publish_delegated_response(
+                bus,
+                &ask.child_id,
+                &ask.call_id,
+                d.approved,
+                d.updated_input,
+            );
+            Ok(())
         }
-    }
-    let approval = ApprovalRequest::new(call_id.clone(), tool.clone(), input.clone(), reason);
-    // Label the ask with its origin so the TUI card shows which delegation
-    // the ask belongs to (a child ask vs the parent's own tool call).
-    let delegation = DelegationSource {
-        child_id: child_id.clone(),
-        subagent_type: subagent_type.clone(),
-    };
-    let (approved, updated_input) = match server
-        .handle_approval(io, &approval, Some(delegation))
-        .await
-    {
-        Ok(d) => (d.approved, d.updated_input),
         Err(e) => {
-            // Fail-closed: publish a deny so the child resumes (rejected)
-            // rather than hanging. The error still propagates so the caller
-            // can surface a wire failure.
-            if let Some(bus) = server.bus.as_ref() {
-                bus.publish(
-                    &permission_response_topic(&child_id, &call_id),
-                    BusMessage::PermissionResponse {
-                        call_id,
-                        approved: false,
-                        updated_input: None,
-                        scope: "once".to_string(),
-                    },
-                );
-            }
-            return Err(e);
+            deny_delegated_ask(bus, &ask.child_id, &ask.call_id);
+            Err(e)
         }
-    };
-    if let Some(bus) = server.bus.as_ref() {
-        bus.publish(
-            &permission_response_topic(&child_id, &call_id),
-            BusMessage::PermissionResponse {
-                call_id,
-                approved,
-                updated_input,
-                // The scope chosen at the TUI is applied by handle_approval's
-                // consent routing on the shared gate; the child's resume only
-                // reads approved + updated_input.
-                scope: "once".to_string(),
-            },
-        );
     }
-    Ok(())
 }
 
 #[cfg(test)]

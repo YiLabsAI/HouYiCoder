@@ -13,12 +13,12 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
 use crate::composition::SessionHost;
+use crate::consent::ChildPermissionRx;
 use crate::consent::disclose_directory_grants;
 use crate::diagnostics::handle;
 use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
-use crate::server::child_permission::ChildPermissionRx;
 use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_context::SessionDescriptorStore;

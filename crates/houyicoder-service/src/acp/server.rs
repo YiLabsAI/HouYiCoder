@@ -14,21 +14,25 @@
 
 #![allow(dead_code)] // pub server type consumed by other crates and tests; locally unused
 
+use std::future::pending;
 use std::sync::Arc;
 
 use crate::acp::adapter::AcpAdapter;
 use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
+use crate::consent::{ChildPermissionRx, ConsentPolicy};
 use crate::protocol_adapter::{
     map_run_error, map_run_result, map_session_update, map_stream_event, tool_title,
 };
+use futures::future::Either;
 use houyicoder_api::agent_event::ResponseStreamEvent;
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::RunError;
 use houyicoder_core::agent::RunResult;
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::{ApprovalDecision, RunOutcome, Runner};
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acp_wire::{
@@ -40,8 +44,6 @@ use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::llm::Usage;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-
-use crate::consent::ConsentPolicy;
 
 /// The full ACP server. Owns the adapter (shared via Arc so the composition
 /// root and the IO bridge can hold the same one) plus the runner + session +
@@ -57,6 +59,11 @@ pub struct AcpServer {
     gate: Arc<dyn ModeGate>,
     session: SessionId,
     next_req_id: u64,
+    /// The multi-agent bus a child's permission ask arrives on, and the
+    /// connection-scoped receiver that consumes it. None on the single-agent
+    /// path: no bus means no child can publish, so no ask arrives.
+    bus: Option<Arc<AgentBus>>,
+    child_perm_rx: Arc<ChildPermissionRx>,
     /// The position the client has been pushed up to: every durable record
     /// before it was sent. An absolute ordinal of the session's own history,
     /// so it survives the log state dropping its oldest rows.
@@ -110,12 +117,21 @@ impl AcpServer {
             gate,
             session,
             next_req_id: 0,
+            bus: None,
+            child_perm_rx: Arc::new(ChildPermissionRx::default()),
             pushed_through: TrajectoryPosition::start(),
             live: None,
             streamed_text: AtomicBool::new(false),
             model_options: Vec::new(),
             cancel_requested: AtomicBool::new(false),
         }
+    }
+
+    /// Wire the shared multi-agent bus so a child's permission ask reaches the
+    /// ACP approval flow. None on the single-agent path.
+    pub fn with_bus(mut self, bus: Option<Arc<AgentBus>>) -> Self {
+        self.bus = bus;
+        self
     }
 
     /// Build a consent policy from this server's gate, sandbox session, audit
@@ -155,52 +171,76 @@ impl AcpServer {
     /// its waiter. Returns Ok for a clean close, Err for a pump-level
     /// failure.
     pub async fn serve(mut self, pump: &mut AcpDuplexPump) -> Result<(), ProtocolError> {
+        let perm_owner = Arc::clone(&self.child_perm_rx);
         loop {
-            let Some(frame) = pump.next_frame().await else {
-                return Ok(());
+            // A child's permission ask can arrive while the host is idle
+            // between prompts, not only mid-run. Race the next inbound frame
+            // against the permission receiver so a child is never left
+            // waiting for the next prompt to start a drive loop.
+            let mut perm_lease = perm_owner.lease(self.bus.as_ref());
+            let permission_fut = match perm_lease.receiver() {
+                Some(receiver) => Either::Left(receiver.recv()),
+                None => Either::Right(pending()),
             };
-            match frame {
-                InboundFrame::Request(req) => match req.method.as_str() {
-                    "session/prompt" => {
-                        if let Err(e) = self.handle_prompt(pump, &req).await {
-                            self.send_protocol_error(pump, e.clone()).await.ok();
-                            return Err(e);
+            tokio::select! {
+                biased;
+                frame = pump.next_frame() => {
+                    let Some(frame) = frame else {
+                        return Ok(());
+                    };
+                    match frame {
+                        InboundFrame::Request(req) => match req.method.as_str() {
+                            "session/prompt" => {
+                                if let Err(e) = self.handle_prompt(pump, &req).await {
+                                    self.send_protocol_error(pump, e.clone()).await.ok();
+                                    return Err(e);
+                                }
+                            }
+                            "session/set_mode" => self.handle_set_mode(pump, &req).await?,
+                            "session/set_config_option" => {
+                                self.handle_set_config_option(pump, &req).await?
+                            }
+                            _ => {
+                                let resp = self.adapter.handle(&req).await;
+                                self.send_response(pump, &resp).await?;
+                            }
+                        },
+                        InboundFrame::Notification(notif) => {
+                            // An idle cancel has no drive loop to observe the
+                            // token, so abort here: the next run starts
+                            // un-cancelled, and a cancel that races a run's
+                            // start still reaches it.
+                            if notif.method == "session/cancel" {
+                                self.runner.abort();
+                            }
+                            self.adapter.handle_notification(&notif).await;
+                        }
+                        InboundFrame::Response(resp) => {
+                            if !pump.deliver_response(resp) {
+                                tracing::warn!("response matched no pending reverse request");
+                            }
+                        }
+                        InboundFrame::Unparseable(line) => {
+                            // JSON-RPC 2.0 answers a frame that is not valid
+                            // JSON-RPC with a parse error on the null id, so
+                            // the peer learns the frame was rejected rather
+                            // than waiting for a reply.
+                            tracing::warn!(bytes = line.len(), "inbound frame did not parse");
+                            let resp = AcpResponse::err(
+                                AcpRequestId::Null,
+                                AcpErrorCode::ParseError,
+                                "frame did not parse as a request, response, or notification",
+                            );
+                            self.send_response(pump, &resp).await?;
                         }
                     }
-                    "session/set_mode" => self.handle_set_mode(pump, &req).await?,
-                    "session/set_config_option" => {
-                        self.handle_set_config_option(pump, &req).await?
-                    }
-                    _ => {
-                        let resp = self.adapter.handle(&req).await;
-                        self.send_response(pump, &resp).await?;
-                    }
-                },
-                InboundFrame::Notification(notif) => {
-                    // An idle cancel has no drive loop to observe the token,
-                    // so abort here: the next run starts un-cancelled, and a
-                    // cancel that races a run's start still reaches it.
-                    if notif.method == "session/cancel" {
-                        self.runner.abort();
-                    }
-                    self.adapter.handle_notification(&notif).await;
                 }
-                InboundFrame::Response(resp) => {
-                    if !pump.deliver_response(resp) {
-                        tracing::warn!("response matched no pending reverse request");
+                msg = permission_fut => {
+                    if let Ok(msg) = msg
+                        && let Err(e) = self.route_child_permission(pump, msg).await
+                    {
+                        tracing::warn!("child permission ask failed: {e}");
                     }
-                }
-                InboundFrame::Unparseable(line) => {
-                    // JSON-RPC 2.0 answers a frame that is not valid JSON-RPC
-                    // with a parse error on the null id, so the peer learns
-                    // the frame was rejected rather than waiting for a reply.
-                    tracing::warn!(bytes = line.len(), "inbound frame did not parse");
-                    let resp = AcpResponse::err(
-                        AcpRequestId::Null,
-                        AcpErrorCode::ParseError,
-                        "frame did not parse as a request, response, or notification",
-                    );
-                    self.send_response(pump, &resp).await?;
                 }
             }
         }
@@ -297,7 +337,8 @@ impl AcpServer {
             match result {
                 Ok(run) => match run.outcome {
                     RunOutcome::Interruption(approvals) => {
-                        let Some(decisions) = self.ask_permissions(io, approvals).await? else {
+                        let Some(decisions) = self.ask_permissions(io, approvals, None).await?
+                        else {
                             tracing::debug!("permission ask cancelled; turn ends without resume");
                             result = Ok(cancelled_run());
                             continue;
@@ -372,11 +413,17 @@ impl AcpServer {
         let run_fut = runner.run(self.session, text);
         tokio::pin!(run_fut);
         let mut live = self.live.take();
+        let perm_owner = Arc::clone(&self.child_perm_rx);
+        let mut perm_lease = perm_owner.lease(self.bus.as_ref());
         // biased: poll the run future first so a ready run resolves before an
         // inbound EOF frame wins the race (without this, a fast stub run plus
         // an immediate stdin close can drop the real reply for a spurious
         // client-closed error).
         let outcome = loop {
+            let permission_fut = match perm_lease.receiver() {
+                Some(receiver) => Either::Left(receiver.recv()),
+                None => Either::Right(pending()),
+            };
             tokio::select! {
                 biased;
                 r = &mut run_fut => break r,
@@ -410,6 +457,13 @@ impl AcpServer {
                         ));
                     }
                 },
+                req = permission_fut => {
+                    if let Ok(msg) = req
+                        && let Err(e) = self.route_child_permission(io, msg).await
+                    {
+                        tracing::warn!("child permission ask failed: {e}");
+                    }
+                },
             }
         };
         // Drain deltas the model pushed in its final frame before the run
@@ -433,7 +487,13 @@ impl AcpServer {
         let resume_fut = runner.resume(self.session, decisions);
         tokio::pin!(resume_fut);
         let mut live = self.live.take();
+        let perm_owner = Arc::clone(&self.child_perm_rx);
+        let mut perm_lease = perm_owner.lease(self.bus.as_ref());
         let outcome = loop {
+            let permission_fut = match perm_lease.receiver() {
+                Some(receiver) => Either::Left(receiver.recv()),
+                None => Either::Right(pending()),
+            };
             tokio::select! {
                 biased;
                 r = &mut resume_fut => break r,
@@ -461,6 +521,13 @@ impl AcpServer {
                             "client closed mid-resume",
                             false,
                         ));
+                    }
+                },
+                req = permission_fut => {
+                    if let Ok(msg) = req
+                        && let Err(e) = self.route_child_permission(io, msg).await
+                    {
+                        tracing::warn!("child permission ask failed: {e}");
                     }
                 },
             }

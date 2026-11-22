@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acp_wire::AcpErrorCode;
 use houyicoder_protocol::acp_wire::AcpRequest;
@@ -91,7 +92,8 @@ pub(crate) fn run_acp_stdio(
             fire_after_bundle(parts.session);
             let server = AcpServer::new(parts.adapter, parts.runner, parts.gate, parts.session)
                 .with_live_stream(parts.live)
-                .with_model_options(parts.model_options);
+                .with_model_options(parts.model_options)
+                .with_bus(parts.bus);
             drop(server.serve(&mut pump).await);
             parts.background_tasks.shutdown();
             // serve returns when the client closes stdin; close waits for the
@@ -131,6 +133,7 @@ struct AcpSessionParts {
     live: AcpLiveStream,
     model_options: Vec<String>,
     background_tasks: Arc<BackgroundTasks>,
+    bus: Option<Arc<AgentBus>>,
 }
 
 /// Build the runner, fences, and adapter for one workspace. The session log,
@@ -213,6 +216,7 @@ fn build_acp_session(
         live,
         model_options,
         background_tasks: bundle.background_tasks,
+        bus: bundle.bus,
     })
 }
 

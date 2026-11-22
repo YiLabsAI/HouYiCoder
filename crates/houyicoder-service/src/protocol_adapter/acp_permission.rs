@@ -28,10 +28,17 @@ pub(crate) fn approval_to_acp_permission(
     reason: Option<&AskReason>,
     delegation: Option<&DelegationSource>,
 ) -> RequestPermissionRequest {
+    let base_title = tool_title(&req.tool_name, Some(&req.input));
+    let title = match delegation {
+        // A child ask's card names the delegation it belongs to, so a host
+        // answers a child tool call knowing which subagent raised it.
+        Some(d) => format!("[child: {}] {base_title}", d.subagent_type),
+        None => base_title,
+    };
     let tool_call = ToolCallUpdate {
         tool_call_id: req.call_id.clone().into(),
         fields: ToolCallUpdateFields {
-            title: Some(tool_title(&req.tool_name, Some(&req.input))),
+            title: Some(title),
             kind: Some(tool_kind(&req.tool_name)),
             locations: tool_locations(&req.tool_name, Some(&req.input)),
             raw_input: Some(req.input.clone()),

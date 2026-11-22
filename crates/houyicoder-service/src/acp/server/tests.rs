@@ -13,7 +13,11 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
 use houyicoder_async::PStream;
+use houyicoder_async::bus::MessageBus;
 use houyicoder_context::{PermissionVerdict, SessionEvent, SessionId};
+use houyicoder_core::agent::multi_agent::bus_types::{
+    AgentBus, BusMessage, permission_request_topic, permission_response_topic,
+};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -327,6 +331,188 @@ fn cancelled(ask_id: AcpRequestId) -> AcpResponse {
         })
         .expect("permission response serializes"),
     )
+}
+
+/// A child agent's permission ask arrives on the bus, surfaces as one card
+/// whose title names the delegation, and the host's verdict reaches the child
+/// on the per-request response topic.
+#[tokio::test]
+async fn test_child_ask_publishes() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let bus: Arc<AgentBus> = Arc::new(Default::default());
+    let mut resp_rx = bus.subscribe(&permission_response_topic("c1", "call-1"));
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let mut server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
+        .with_bus(Some(bus.clone()));
+    let (client_tx, server_rx) = mpsc::channel::<String>(256);
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let msg = BusMessage::PermissionRequest {
+        child_id: "c1".into(),
+        subagent_type: "explore".into(),
+        call_id: "call-1".into(),
+        tool: "bash".into(),
+        input: json!({"command": "echo"}),
+        reason: None,
+    };
+    let route = tokio::spawn(async move { server.route_child_permission(&mut io, msg).await });
+    let ask = recv_ask(&mut client_rx).await;
+    let params = ask.params.expect("params");
+    let title = params
+        .get("toolCall")
+        .and_then(|t| t.get("title"))
+        .and_then(|t| t.as_str())
+        .expect("title");
+    assert!(
+        title.contains("[child: explore]"),
+        "the card title names the delegation: {title}"
+    );
+    send(&client_tx, &allow_once(ask.id)).await;
+    let result = timeout(Duration::from_secs(2), route)
+        .await
+        .expect("route completes")
+        .expect("join");
+    assert!(result.is_ok(), "route_child_permission succeeded");
+    let published = timeout(Duration::from_secs(2), resp_rx.recv())
+        .await
+        .expect("response published")
+        .expect("recv ok");
+    match published {
+        BusMessage::PermissionResponse { approved, .. } => assert!(approved),
+        _ => panic!("expected a permission response"),
+    }
+}
+
+/// A child ask the client cancels publishes a deny so the child resumes
+/// instead of waiting on a verdict that will not come.
+#[tokio::test]
+async fn test_child_ask_cancel_denies() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let bus: Arc<AgentBus> = Arc::new(Default::default());
+    let mut resp_rx = bus.subscribe(&permission_response_topic("c1", "call-1"));
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let mut server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
+        .with_bus(Some(bus.clone()));
+    let (client_tx, server_rx) = mpsc::channel::<String>(256);
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let msg = BusMessage::PermissionRequest {
+        child_id: "c1".into(),
+        subagent_type: "explore".into(),
+        call_id: "call-1".into(),
+        tool: "bash".into(),
+        input: json!({"command": "echo"}),
+        reason: None,
+    };
+    let route = tokio::spawn(async move { server.route_child_permission(&mut io, msg).await });
+    let ask = recv_ask(&mut client_rx).await;
+    send(&client_tx, &cancelled(ask.id)).await;
+    timeout(Duration::from_secs(2), route)
+        .await
+        .expect("route completes")
+        .expect("join")
+        .expect("route ok");
+    let published = timeout(Duration::from_secs(2), resp_rx.recv())
+        .await
+        .expect("response published")
+        .expect("recv ok");
+    match published {
+        BusMessage::PermissionResponse { approved, .. } => assert!(!approved),
+        _ => panic!("expected a permission response"),
+    }
+}
+
+/// The leased receiver delivers a child ask the bus published, so the drive
+/// and serve loops' permission branch has a message to route.
+#[tokio::test]
+async fn test_perm_lease_delivers() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let bus: Arc<AgentBus> = Arc::new(Default::default());
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
+        .with_bus(Some(bus.clone()));
+    let mut lease = server.child_perm_rx.lease(Some(&bus));
+    let receiver = lease.receiver().expect("receiver present with a bus");
+    bus.publish(
+        permission_request_topic(),
+        BusMessage::PermissionRequest {
+            child_id: "c1".into(),
+            subagent_type: "explore".into(),
+            call_id: "call-1".into(),
+            tool: "bash".into(),
+            input: json!({}),
+            reason: None,
+        },
+    );
+    let msg = timeout(Duration::from_secs(2), receiver.recv())
+        .await
+        .expect("ask delivered")
+        .expect("recv ok");
+    assert!(matches!(
+        msg,
+        BusMessage::PermissionRequest { ref child_id, .. } if child_id == "c1"
+    ));
+}
+
+/// A client that closes while a child card is pending publishes a deny so the
+/// child resumes, and the route returns the wire error.
+#[tokio::test]
+async fn test_child_ask_close_denies() {
+    let session = SessionId::new();
+    let runner = runner_with(FakeProvider::text("ok"), ToolRegistry::new());
+    let bus: Arc<AgentBus> = Arc::new(Default::default());
+    let mut resp_rx = bus.subscribe(&permission_response_topic("c1", "call-1"));
+    let adapter = Arc::new(AcpAdapter::new(
+        AcpxCapabilities::default(),
+        1,
+        SessionLeaseStore::new(),
+    ));
+    let mut server = AcpServer::new(adapter, runner, Arc::new(DefaultModeGate::new()), session)
+        .with_bus(Some(bus.clone()));
+    let (client_tx, server_rx) = mpsc::channel::<String>(256);
+    let (server_tx, mut client_rx) = mpsc::channel::<String>(256);
+    let mut io = from_line_channels(server_rx, server_tx);
+    let msg = BusMessage::PermissionRequest {
+        child_id: "c1".into(),
+        subagent_type: "explore".into(),
+        call_id: "call-1".into(),
+        tool: "bash".into(),
+        input: json!({"command": "echo"}),
+        reason: None,
+    };
+    let route = tokio::spawn(async move { server.route_child_permission(&mut io, msg).await });
+    let _ask = recv_ask(&mut client_rx).await;
+    // Closing the client makes the next frame read return None, so the ask
+    // fails and the child gets a deny.
+    drop(client_tx);
+    let result = timeout(Duration::from_secs(2), route)
+        .await
+        .expect("route completes")
+        .expect("join");
+    assert!(result.is_err(), "route returns the wire error on close");
+    let published = timeout(Duration::from_secs(2), resp_rx.recv())
+        .await
+        .expect("deny published")
+        .expect("recv ok");
+    match published {
+        BusMessage::PermissionResponse { approved, .. } => assert!(!approved),
+        _ => panic!("expected a permission response"),
+    }
 }
 
 /// The prompt happy path: the run streams its turn events and the request id

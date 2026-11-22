@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::composition::multi_agent::permission_request_from;
-use child_permission::ChildPermissionRx;
+use crate::consent::ChildPermissionRx;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
 
 use tokio::sync::Notify;

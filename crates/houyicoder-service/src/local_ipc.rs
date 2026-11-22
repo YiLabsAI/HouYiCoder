@@ -281,7 +281,8 @@ where
     let live = AcpLiveStream::from_receiver(live_rx);
     let server = AcpServer::new(adapter, runner, gate, session)
         .with_live_stream(live)
-        .with_model_options(models);
+        .with_model_options(models)
+        .with_bus(host.bus().cloned());
     let (inbound_tx, inbound_rx) = tokio_mpsc::channel::<String>(16);
     let (outbound_tx, outbound_rx) = tokio_mpsc::channel::<String>(16);
     drop(inbound_tx.send(first_frame).await);

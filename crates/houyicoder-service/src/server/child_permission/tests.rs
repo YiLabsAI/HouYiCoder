@@ -6,6 +6,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
+use houyicoder_async::bus::MessageBus;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;

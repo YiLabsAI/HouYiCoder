@@ -4,6 +4,7 @@
 //! session, audit log, skill registry, and session id, so the frontend and
 //! ACP endpoints install the same grant for the same answer.
 
+mod delegation;
 mod grant_install;
 mod policy;
 
@@ -22,6 +23,9 @@ use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope, DelegationSource};
 
+pub(crate) use delegation::{
+    ChildPermissionRx, deny_delegated_ask, prepare_delegated_ask, publish_delegated_response,
+};
 pub(crate) use grant_install::ConsentInstall;
 pub(crate) use policy::{
     CardFence, DurableGrant, approval_options, durable_grant, installed_scope,
