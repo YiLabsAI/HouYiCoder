@@ -45,30 +45,15 @@ fn test_background_delegation_completes() {
         "parent should continue past a background delegation:\n{}",
         s.output()
     );
-    // Give the detached task time to run the child to completion + the
-    // injector time to enqueue the notification. Each user message starts a
-    // run whose first turn boundary drains the notification queue, so send a
-    // few + poll each — the notification lands whenever the detached task
-    // finishes (timing-sensitive under parallel PTY load, hence the loop).
-    let mut drained = false;
-    for _ in 0..5 {
-        s.send_str("any update");
-        s.send_str("\r");
-        if s.wait_for_plain("Subagent", RENDER_TIMEOUT * 2) {
-            drained = true;
-            break;
-        }
-    }
     assert!(
-        drained,
-        "background child completion notification should drain into the parent \
-         transcript across several turn boundaries:\n{}",
-        s.output()
+        s.wait_for_screen("Agent \"find auth\" finished", RENDER_TIMEOUT * 2),
+        "background child completion should leave the one-row trace in the parent transcript:\n{}",
+        s.screen().contents()
     );
     assert!(
-        s.output_plain().contains("completed"),
-        "notification carries the terminal status:\n{}",
-        s.output()
+        !s.screen().contents().contains("Subagent explore"),
+        "child report must not render as a user-authored line:\n{}",
+        s.screen().contents()
     );
 }
 
@@ -96,20 +81,16 @@ fn test_background_spawn_unblocks_parent() {
     );
 }
 
-/// The background completion notification carries the child's result text,
-/// not just the terminal status, so the parent transcript shows what the
-/// child produced. Distinct from the status-only assertion.
+/// The background completion notification wakes the parent without pasting the
+/// child report into the parent transcript, while Enter on the finished trace
+/// opens the child transcript holding what the child produced.
 #[test]
 #[ignore]
 fn test_background_output_reaches_parent() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
         [{"type":"Text","text":"background child produced this"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
+        [{"type":"Text","text":"parent synthesized answer"}],
         [{"type":"Text","text":"ok"}]
     ]"#;
     let mut s = pty_session_scripted(script);
@@ -117,19 +98,23 @@ fn test_background_output_reaches_parent() {
     s.send_str("find auth");
     s.send_str("\r");
     assert!(s.wait_for_compact("parentcontinues", RENDER_TIMEOUT * 2));
-    let mut drained = false;
-    for _ in 0..6 {
-        s.send_str("update");
-        s.send_str("\r");
-        if s.wait_for_compact("backgroundchildproducedthis", RENDER_TIMEOUT * 2) {
-            drained = true;
-            break;
-        }
-    }
     assert!(
-        drained,
-        "background notification should carry the child result text:\n{}",
-        s.output()
+        s.wait_for_screen("parent synthesized answer", RENDER_TIMEOUT * 2),
+        "parent should wake on the drained completion notice and reply:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        !s.screen()
+            .contents()
+            .contains("background child produced this"),
+        "raw child body stays out of the parent transcript:\n{}",
+        s.screen().contents()
+    );
+    s.send_str("\r");
+    assert!(
+        s.wait_for_screen("background child produced this", RENDER_TIMEOUT * 2),
+        "drilling into the finished trace reveals the child output:\n{}",
+        s.screen().contents()
     );
 }
 
@@ -165,28 +150,38 @@ fn test_background_spawn_reports_start() {
 fn test_background_notice_arrives_once() {
     let script = r#"[
         [{"type":"ToolCall","id":"toolu_1","name":"agent","input":{"subagent_type":"explore","prompt":"find auth","description":"find auth","run_in_background":true}},{"type":"Text","text":"parent continues"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}],
-        [{"type":"Text","text":"ok"}]
+        [{"type":"Text","text":"child finished"}],
+        [{"type":"Text","text":"parent noticed ending"}],
+        [{"type":"Text","text":"follow up reply"}]
     ]"#;
     let mut s = pty_session_scripted(script);
     assert!(s.wait_for("let's build", RENDER_TIMEOUT));
     s.send_str("find auth");
     s.send_str("\r");
     assert!(s.wait_for_compact("parentcontinues", RENDER_TIMEOUT * 2));
-    let mut drained = false;
-    for _ in 0..6 {
-        s.send_str("update");
-        s.send_str("\r");
-        if s.wait_for_compact("completed", RENDER_TIMEOUT * 2) {
-            drained = true;
-            break;
-        }
-    }
-    assert!(drained, "notification should drain:\n{}", s.output());
+    assert!(
+        s.wait_for_screen("parent noticed ending", RENDER_TIMEOUT * 2),
+        "completion notice should wake the parent once:\n{}",
+        s.screen().contents()
+    );
+    s.send_str("update");
+    s.send_str("\r");
+    assert!(
+        s.wait_for_screen("follow up reply", RENDER_TIMEOUT * 2),
+        "later prompt runs cleanly:\n{}",
+        s.screen().contents()
+    );
+    let traces = s
+        .screen()
+        .contents()
+        .matches("Agent \"find auth\" finished")
+        .count();
+    assert_eq!(
+        traces,
+        1,
+        "finished trace appears once on screen:\n{}",
+        s.screen().contents()
+    );
 }
 
 /// A foreground delegation that outlives the configured wait budget releases
