@@ -542,10 +542,14 @@ fn test_mixed_readonly_fenced_segments() {
         other => panic!("expected protected_path Ask for unsafe mix, got {other:?}"),
     }
 
-    let rsync_skill = "rsync -a -t /tmp/src/ .claude/skills/foo/";
-    assert_ne!(
-        ws.fenced_gate().decide(&bash_req(rsync_skill)).outcome(),
-        Outcome::Allow,
-        "rsync writing a fence-denied skill dir must not allow: {rsync_skill}"
-    );
+    for rsync_skill in [
+        "rsync -a -t /tmp/src/ .claude/skills/foo/",
+        "rsync -a /tmp/src/ .claude/skills/foo/ --exclude bar",
+    ] {
+        assert_ne!(
+            ws.fenced_gate().decide(&bash_req(rsync_skill)).outcome(),
+            Outcome::Allow,
+            "rsync writing a fence-denied skill dir must not allow: {rsync_skill}"
+        );
+    }
 }

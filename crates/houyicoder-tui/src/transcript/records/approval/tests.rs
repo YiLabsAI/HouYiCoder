@@ -86,15 +86,18 @@ fn test_local_checkpoint_level1() {
         .auto_approve_eligible(),
         "commit message mentioning push -f must stay Level 1"
     );
-    assert!(
-        !card(
-            "git_checkpoint",
-            None,
-            r#"{"command":"bash -c \"git push --force origin main\""}"#
-        )
-        .auto_approve_eligible(),
-        "wrapped forced push must stay Level 2"
-    );
+    for forced in [
+        r#"{"command":"bash -c \"git push --force origin main\""}"#,
+        r#"{"command":"/usr/bin/git push --force origin main"}"#,
+        r#"{"command":"git.exe push -f origin main"}"#,
+        r#"{"command":"git --namespace ns push --force origin main"}"#,
+        r#"{"command":"/bin/bash -c \"git push --force origin main\""}"#,
+    ] {
+        assert!(
+            !card("git_checkpoint", None, forced).auto_approve_eligible(),
+            "forced push variant must stay Level 2: {forced}"
+        );
+    }
 }
 
 /// A native tool call is Level 1 only when it discards uncommitted work the

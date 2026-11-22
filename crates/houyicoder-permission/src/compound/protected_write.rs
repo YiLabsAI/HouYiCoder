@@ -81,9 +81,9 @@ fn segment_writes_denied_path(segment: &str) -> bool {
         // The source of a copy or a link is read; only the destination is
         // written. A backup of a control file is the user's own business.
         "cp" | "install" | "ln" => destination(&words).is_some_and(names_denied),
-        // rsync writes its final operand and uses -t for --times rather than
-        // --target-directory.
-        "rsync" => last_operand(&words).is_some_and(names_denied),
+        // rsync accepts trailing options with values (such as --exclude), so
+        // fail closed whenever any operand names a fence-denied path.
+        "rsync" => words[1..].iter().any(names_denied),
         // A move takes the source away as well, so both ends change.
         "mv" => words[1..].iter().any(names_denied),
         // dd names its destination in its own of= operand, while its if=

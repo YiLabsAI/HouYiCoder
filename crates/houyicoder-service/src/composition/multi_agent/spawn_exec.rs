@@ -297,7 +297,7 @@ fn build_return_metrics(
         cut_axis,
         soft_wrapped: Some(soft_wrapped),
         wrap_rescued: soft_wrapped.then_some(has_assistant_text),
-        effective_tokens: Some(runner.effective_tokens_for(usage)),
+        effective_tokens: Some(runner.effective_tokens(usage)),
     }
 }
 

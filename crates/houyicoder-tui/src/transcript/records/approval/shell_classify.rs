@@ -47,7 +47,7 @@ pub(super) fn reads_network(command: &str) -> bool {
             continue;
         };
         let args = &words[1..];
-        match first.to_ascii_lowercase().as_str() {
+        match program_name(first).to_ascii_lowercase().as_str() {
             "git" => match git_subcommand(args) {
                 "push" => {
                     if !git_push_dry_run(args) {
@@ -134,15 +134,18 @@ pub(super) fn command_has_forced_push(command: &str, depth: u8) -> bool {
         let Some(&first) = words.first() else {
             continue;
         };
+        let prog = program_name(first);
         let args = &words[1..];
-        if first.eq_ignore_ascii_case("git") && git_subcommand(args).eq_ignore_ascii_case("push") {
+        if prog.eq_ignore_ascii_case("git") && git_subcommand(args).eq_ignore_ascii_case("push") {
             let sub_args = git_subcommand_args(args);
             if push_args_force(sub_args) {
                 return true;
             }
         }
-        if matches!(first, "bash" | "sh" | "dash" | "zsh")
-            && let Some(pos) = args.iter().position(|a| *a == "-c" || *a == "-lc")
+        if matches!(
+            prog.to_ascii_lowercase().as_str(),
+            "bash" | "sh" | "dash" | "zsh"
+        ) && let Some(pos) = args.iter().position(|a| *a == "-c" || *a == "-lc")
             && let Some(inner) = args.get(pos + 1)
             && command_has_forced_push(inner, depth - 1)
         {
@@ -341,13 +344,24 @@ fn is_local_consumer(word: &str) -> bool {
     )
 }
 
+/// Bare executable name stripped of directory prefix and .exe suffix.
+fn program_name(word: &str) -> &str {
+    let file = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    file.strip_suffix(".exe")
+        .or_else(|| file.strip_suffix(".EXE"))
+        .unwrap_or(file)
+}
+
 /// The subcommand a git invocation runs, past the flags that precede it.
 fn git_subcommand<'a>(args: &[&'a str]) -> &'a str {
     let mut index = 0;
     while index < args.len() {
         let arg = args[index];
         if arg.starts_with('-') {
-            index += if matches!(arg, "-C" | "-c" | "--git-dir" | "--work-tree") {
+            index += if matches!(
+                arg,
+                "-C" | "-c" | "--exec-path" | "--git-dir" | "--namespace" | "--work-tree"
+            ) {
                 2
             } else {
                 1
@@ -384,7 +398,10 @@ fn git_subcommand_args<'a, 'b>(args: &'a [&'b str]) -> &'a [&'b str] {
     while index < args.len() {
         let arg = args[index];
         if arg.starts_with('-') {
-            index += if matches!(arg, "-C" | "-c" | "--git-dir" | "--work-tree") {
+            index += if matches!(
+                arg,
+                "-C" | "-c" | "--exec-path" | "--git-dir" | "--namespace" | "--work-tree"
+            ) {
                 2
             } else {
                 1
@@ -415,11 +432,23 @@ fn push_args_force(args: &[&str]) -> bool {
 
 fn rsync_uses_remote(args: &[&str]) -> bool {
     args.iter().any(|&arg| {
-        arg == "-e"
-            || arg == "--rsh"
-            || arg.starts_with("--rsh=")
-            || arg == "--daemon"
-            || arg.starts_with("--rsync-path")
+        matches!(
+            arg,
+            "-e" | "--rsh"
+                | "--rsync-path"
+                | "--daemon"
+                | "--port"
+                | "--address"
+                | "--sockopts"
+                | "--connect-program"
+                | "--password-file"
+        ) || arg.starts_with("--rsh=")
+            || arg.starts_with("--rsync-path=")
+            || arg.starts_with("--port=")
+            || arg.starts_with("--address=")
+            || arg.starts_with("--sockopts=")
+            || arg.starts_with("--connect-program=")
+            || arg.starts_with("--password-file=")
             || (!arg.starts_with("--") && arg.starts_with('-') && arg.contains('e'))
             || arg.contains(':')
     })

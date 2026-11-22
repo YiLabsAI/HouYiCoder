@@ -140,7 +140,7 @@ impl Runner {
     }
 
     /// Compute effective token spend weighted by the active cost model.
-    pub fn effective_tokens_for(&self, usage: &Usage) -> u64 {
+    pub fn effective_tokens(&self, usage: &Usage) -> u64 {
         let c = self.cost_model.cost();
         let cache_read = f64::from(usage.cache_read_input_tokens);
         let cache_write = f64::from(usage.cache_write_input_tokens);

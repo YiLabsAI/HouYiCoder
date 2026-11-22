@@ -493,7 +493,7 @@ fn test_continuation_names_tools() {
 /// resume so the parent continues from its saved transcript instead of starting
 /// over.
 #[test]
-fn test_incomplete_explore_keeps_continuation() {
+fn test_incomplete_explore_resumable() {
     for status in ["timed_out", "max_turns"] {
         let out = build_tool_result(
             SpawnOutcome::foreground("c-part", status, "partial findings", Usage::default()),
