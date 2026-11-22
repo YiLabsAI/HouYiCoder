@@ -33,15 +33,14 @@ pub(super) fn judge_launch(
             elapsed_secs: now.saturating_duration_since(record.started).as_secs(),
             command: record.command.clone(),
         };
-        let record_sig = normalize_command(&record.command);
-        let is_dup = !candidate_sig.is_empty() && record_sig == candidate_sig;
+        let is_dup = !candidate_sig.is_empty() && record.signature == candidate_sig;
         if duplicate.is_none() && is_dup {
             duplicate = Some(summary.clone());
         }
         if build_lock_sibling.is_none()
             && !is_dup
             && let Some(ref domain) = candidate_lock
-            && build_lock_domain(&record_sig).as_ref() == Some(domain)
+            && build_lock_domain(&record.signature).as_ref() == Some(domain)
         {
             build_lock_sibling = Some(summary.clone());
         }
@@ -61,69 +60,119 @@ pub(super) fn judge_launch(
 }
 
 /// Identify the Cargo target lock domain for build/test commands so distinct
-/// invocations sharing the same target directory receive a non-blocking hint.
+/// invocations sharing the same workspace or target directory receive a
+/// non-blocking hint.
 fn build_lock_domain(normalized: &str) -> Option<String> {
-    let mut target_dir = "default";
+    let mut target_dir: Option<&str> = None;
+    let mut cwd: Option<&str> = None;
     let mut uses_cargo_or_make = false;
-    let mut saw_command_word = false;
-    let mut skip_next = false;
 
-    for tok in normalized.split_whitespace() {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if matches!(tok, "&&" | "||" | ";" | "|") {
-            saw_command_word = false;
-            continue;
-        }
-        if !saw_command_word {
-            if let Some(dir) = tok.strip_prefix("CARGO_TARGET_DIR=") {
-                target_dir = dir;
+    for line in normalized.lines() {
+        let mut saw_command_word = false;
+        let mut expect_cd_dir = false;
+        for tok in line.split_whitespace() {
+            if expect_cd_dir {
+                expect_cd_dir = false;
+                if !tok.starts_with('-') {
+                    cwd = Some(tok);
+                }
                 continue;
             }
-            if tok.contains('=') {
+            if matches!(tok, "&&" | "||" | ";" | "|") {
+                saw_command_word = false;
                 continue;
             }
-            if tok == "cd" {
-                skip_next = true;
+            if !saw_command_word {
+                if let Some(dir) = tok.strip_prefix("CARGO_TARGET_DIR=") {
+                    target_dir = Some(dir);
+                    continue;
+                }
+                if tok.contains('=') {
+                    continue;
+                }
+                if tok == "cd" {
+                    expect_cd_dir = true;
+                    saw_command_word = true;
+                    continue;
+                }
+                if matches!(tok, "cargo" | "make") {
+                    uses_cargo_or_make = true;
+                }
                 saw_command_word = true;
-                continue;
             }
-            if matches!(tok, "cargo" | "make") {
-                uses_cargo_or_make = true;
-            }
-            saw_command_word = true;
         }
     }
-    uses_cargo_or_make.then(|| target_dir.to_string())
+    if !uses_cargo_or_make {
+        return None;
+    }
+    Some(match target_dir {
+        Some(dir) => format!("target:{dir}"),
+        None => format!("cwd:{}", cwd.unwrap_or(".")),
+    })
 }
 
-/// Collapse whitespace and strip trailing file or stream redirects so two
-/// runs of the same build or push redirected to different log files still
-/// compare equal.
-fn normalize_command(command: &str) -> String {
-    let first = command.lines().next().unwrap_or_default().trim();
-    let mut kept = Vec::new();
-    let tokens: Vec<&str> = first.split_whitespace().collect();
-    let mut idx = 0;
-    while idx < tokens.len() {
-        let tok = tokens[idx];
-        if matches!(tok, ">" | ">>" | "<" | "1>" | "2>" | "&>") {
-            idx += 2;
+/// Collapse whitespace across all lines and strip output redirects (plus
+/// null-stdin guards) so identical commands logged to different files match
+/// while distinct lines or file inputs stay separate.
+pub(super) fn normalize_command(command: &str) -> String {
+    let mut normalized_lines = Vec::new();
+    for raw_line in command.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        if tok.starts_with('>')
-            || tok.starts_with('<')
-            || tok.starts_with("1>")
-            || tok.starts_with("2>")
-            || tok.starts_with("&>")
-        {
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        let mut kept = Vec::new();
+        let mut idx = 0;
+        while idx < tokens.len() {
+            let tok = tokens[idx];
+            if is_output_redirect_op(tok) {
+                if tokens
+                    .get(idx + 1)
+                    .is_some_and(|next| !matches!(*next, "&&" | "||" | ";" | "|"))
+                {
+                    idx += 2;
+                } else {
+                    idx += 1;
+                }
+                continue;
+            }
+            if is_attached_output_redirect(tok) {
+                idx += 1;
+                continue;
+            }
+            if matches!(tok, "<" | "0<")
+                && tokens.get(idx + 1).is_some_and(|next| is_null_device(next))
+            {
+                idx += 2;
+                continue;
+            }
+            if tok
+                .strip_prefix("0<")
+                .or_else(|| tok.strip_prefix('<'))
+                .is_some_and(is_null_device)
+            {
+                idx += 1;
+                continue;
+            }
+            kept.push(tok);
             idx += 1;
-            continue;
         }
-        kept.push(tok);
-        idx += 1;
+        if !kept.is_empty() {
+            normalized_lines.push(kept.join(" "));
+        }
     }
-    kept.join(" ")
+    normalized_lines.join("\n")
+}
+
+fn is_output_redirect_op(tok: &str) -> bool {
+    matches!(tok, ">" | ">>" | "1>" | "1>>" | "2>" | "2>>" | "&>" | "&>>")
+}
+
+fn is_attached_output_redirect(tok: &str) -> bool {
+    tok.starts_with('>') || tok.starts_with("1>") || tok.starts_with("2>") || tok.starts_with("&>")
+}
+
+fn is_null_device(target: &str) -> bool {
+    target == "/dev/null" || target.eq_ignore_ascii_case("nul")
 }

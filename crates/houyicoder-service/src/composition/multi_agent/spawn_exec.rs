@@ -10,8 +10,7 @@ use houyicoder_api::hook_fire::HookFire;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::spawn::{SpawnArgs, SpawnFailure, SpawnOutcome};
 use houyicoder_async::bus::MessageBus;
-use houyicoder_context::{SessionId, SessionLogEntry};
-use houyicoder_core::agent::Runner;
+use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, ChildDescriptor, ChildRunMode, completed_topic,
 };
@@ -23,6 +22,7 @@ use houyicoder_core::agent::multi_agent::status_publisher::ChildStatusPublisher;
 use houyicoder_core::agent::multi_agent::{
     CutReason, ReturnMetrics, SpawnRequest, recorded_cut, spawn_child, timed_out_summary,
 };
+use houyicoder_core::agent::{RunError, RunResult, Runner};
 use houyicoder_protocol::frontend::completion::CompletionStatus;
 use houyicoder_protocol::llm::Usage;
 use tokio::sync::Notify;
@@ -49,6 +49,9 @@ mod ceiling;
 mod execution;
 pub(super) mod handover;
 mod request;
+pub(super) use ceiling::DEFAULT_MAX_WALL_CLOCK;
+#[cfg(test)]
+pub(super) use ceiling::effective_wall_clock;
 use execution::ChildExecution;
 use handover::ParentCancelLink;
 use request::{ChildRunSpec, build_spawn_request, map_registry_err, map_spawn_err};
@@ -133,42 +136,22 @@ pub(super) async fn finalize_child(
     // knows whether it owes one.
     let run_published = terminal.as_mut().is_some_and(|rx| rx.try_recv().is_ok());
     let child_tail = store.trajectory_tail(child_sid);
-    let (status, summary, payload) = match result {
-        Ok(Ok(r)) => {
-            let (status, summary) = super::terminal_summary(r, &child_tail);
-            (status, summary, None)
-        }
-        Ok(Err(e)) => {
-            let summary = failure_summary(&format!("run failed: {e}"), &child_tail);
-            report_failed_terminal(
-                bus.as_ref(),
-                &child,
-                &handle.ending,
-                &summary,
-                run_published,
-            );
-            ("failed".to_string(), summary, None)
-        }
-        Err(payload) => {
-            let summary = failure_summary(
-                &format!("run panicked: {}", panic_message(payload.as_ref())),
-                &child_tail,
-            );
-            let reason = panic_message(payload.as_ref());
-            tracing::error!("child {child_str} run panicked: {reason}");
-            report_failed_terminal(
-                bus.as_ref(),
-                &child,
-                &handle.ending,
-                &summary,
-                run_published,
-            );
-            ("failed".to_string(), summary, Some(payload))
-        }
-    };
+    let (status, summary, payload, run_failed) = resolve_drive_outcome(
+        result,
+        &handle,
+        bus.as_ref(),
+        &child,
+        &child_tail,
+        run_published,
+    );
     let panicked = payload.is_some();
     let recorded = recorded_cut(&handle.cut_reason);
-    let has_text = has_recovered_text(panicked, &status, &summary, &child_tail);
+    let rescued_text = has_rescued_wrap_output(
+        panicked,
+        run_failed,
+        handle.runner.wrap_up_event_id(),
+        &child_tail,
+    );
     let (status, summary) = reconcile_cut_ending(
         recorded.clone(),
         panicked,
@@ -178,7 +161,7 @@ pub(super) async fn finalize_child(
         summary,
     );
     let usage = child_subtree_usage(&handle.runner, child_sid);
-    let metrics = build_return_metrics(&recorded, &status, &handle.runner, has_text, &usage);
+    let metrics = build_return_metrics(&recorded, &status, &handle.runner, rescued_text, &usage);
     if let (Some(cw), Some(ctrl)) = (handle.worktree, worktree_controller.as_ref()) {
         ctrl.cleanup_child(cw).await;
     }
@@ -201,6 +184,37 @@ pub(super) async fn finalize_child(
         resume_unwind(payload);
     }
     (status, summary, usage)
+}
+
+fn resolve_drive_outcome(
+    result: Result<Result<RunResult, RunError>, Box<dyn Any + Send>>,
+    handle: &super::ChildHandle,
+    bus: Option<&Arc<AgentBus>>,
+    child: &ChildDescriptor,
+    child_tail: &[SessionLogEntry],
+    run_published: bool,
+) -> (String, String, Option<Box<dyn Any + Send>>, bool) {
+    match result {
+        Ok(Ok(r)) => {
+            let (mut status, summary) = super::terminal_summary(r, child_tail);
+            if status == "completed" && handle.runner.turn_limit_wrapped() {
+                status = "max_turns".to_string();
+            }
+            (status, summary, None, false)
+        }
+        Ok(Err(e)) => {
+            let summary = failure_summary(&format!("run failed: {e}"), child_tail);
+            report_failed_terminal(bus, child, &handle.ending, &summary, run_published);
+            ("failed".to_string(), summary, None, true)
+        }
+        Err(payload) => {
+            let reason = panic_message(payload.as_ref());
+            let summary = failure_summary(&format!("run panicked: {reason}"), child_tail);
+            tracing::error!("child {} run panicked: {reason}", child.agent_id);
+            report_failed_terminal(bus, child, &handle.ending, &summary, run_published);
+            ("failed".to_string(), summary, Some(payload), true)
+        }
+    }
 }
 
 #[expect(
@@ -235,15 +249,27 @@ async fn finalize_stop_and_boundary(
     .await;
 }
 
-fn has_recovered_text(
+fn has_rescued_wrap_output(
     panicked: bool,
-    status: &str,
-    summary: &str,
+    run_failed: bool,
+    wrap_up_event: Option<EventId>,
     child_tail: &[SessionLogEntry],
 ) -> bool {
-    !panicked
-        && ((!summary.trim().is_empty() && status != "interrupted" && status != "max_turns")
-            || super::last_assistant_text(child_tail).is_some_and(|t| !t.trim().is_empty()))
+    if panicked || run_failed {
+        return false;
+    }
+    let Some(marker_id) = wrap_up_event else {
+        return false;
+    };
+    let Some(pos) = child_tail.iter().position(|entry| entry.id == marker_id) else {
+        return false;
+    };
+    child_tail[pos + 1..].iter().any(|entry| {
+        matches!(
+            &entry.event,
+            SessionEvent::AssistantMessage { text, .. } if !text.trim().is_empty()
+        )
+    })
 }
 
 fn build_return_metrics(

@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::agent::multi_agent::spawn::completion_notice_pending;
 use crate::agent::turn::result::run_completion_status;
-use houyicoder_api::agent_event::{AgentEventHandlers, RunLifecycleEvent};
+use houyicoder_api::agent_event::{AgentEventHandlers, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_context::{EventId, NotificationTopic, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{OutputItem, Usage};
 use houyicoder_protocol::tool::is_user_shell_call_id;
@@ -76,7 +76,11 @@ impl Runner {
                 if matches!(run.outcome, RunOutcome::Interruption(_)) {
                     return;
                 }
-                run.outcome.terminal_status()
+                let (mut status, summary) = run.outcome.terminal_status();
+                if self.turn_limit_wrapped() && matches!(run.outcome, RunOutcome::FinalOutput(_)) {
+                    status = RunCompletionStatus::TurnLimitReached;
+                }
+                (status, summary)
             }
             Err(error) => (run_completion_status(result), error.to_string()),
         };

@@ -131,6 +131,8 @@ pub struct MultiAgentRuntime {
     orphan_scan: ScanGeneration,
     boundary_claims: BoundaryClaims,
     pending_permissions: Arc<Mutex<Vec<PendingChildPermission>>>,
+    #[cfg(test)]
+    wall_clock_floor: Duration,
 }
 
 /// One live child: its runner (Weak, so a finished child drops the entry's
@@ -166,6 +168,25 @@ impl MultiAgentRuntime {
             orphan_scan: ScanGeneration::default(),
             boundary_claims: BoundaryClaims::default(),
             pending_permissions: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(test)]
+            wall_clock_floor: spawn_exec::DEFAULT_MAX_WALL_CLOCK,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_wall_clock(mut self, floor: Duration) -> Self {
+        self.wall_clock_floor = floor;
+        self
+    }
+
+    pub(super) fn wall_clock_floor(&self) -> Duration {
+        #[cfg(test)]
+        {
+            self.wall_clock_floor
+        }
+        #[cfg(not(test))]
+        {
+            spawn_exec::DEFAULT_MAX_WALL_CLOCK
         }
     }
 

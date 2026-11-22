@@ -507,18 +507,13 @@ impl Runner {
             match next_step {
                 NextStep::RunAgain => {
                     turn += 1;
-                    let spent = self.bump_user_turn();
-                    if spent == self.config.max_turns && self.config.max_turns > 1 {
-                        self.begin_turn_limit_wrap_up();
-                    }
-                    let limit = self.effective_turn_limit();
-                    if spent > limit {
+                    let Some(limit) = self.advance_turn_budget() else {
                         return Ok(RunResult {
                             outcome: RunOutcome::MaxTurnsReached { turns: turn - 1 },
                             turns: turn - 1,
                             usage,
                         });
-                    }
+                    };
                     if !self.is_wrapping_up()
                         && let Some(budgeted) = self.check_run_budget(turn - 1, &usage)
                     {

@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering;
 use crate::agent::RunOutcome;
 use crate::agent::RunResult;
 use crate::agent::{RunError, Runner};
+use houyicoder_context::EventId;
 use houyicoder_protocol::llm::Usage;
 use tokio_util::sync::CancellationToken;
 
@@ -70,24 +71,24 @@ impl Runner {
             .user_turn
             .lock()
             .expect("user_turn lock")
-            .begin_wrap_up(directive.into(), true)
+            .begin_wrap_up(directive.into(), true, false)
         {
             self.cancel_turn();
         }
     }
 
-    /// Enter tool-disabled wrap-up at the final turn-budget boundary without
-    /// expanding max_turns.
+    /// Enter tool-disabled wrap-up after exhausting the subagent turn budget,
+    /// granting one extra synthesis turn beyond max_turns.
     pub(crate) fn begin_turn_limit_wrap_up(&self) {
-        const TURN_WRAP_DIRECTIVE: &str = "Your turn budget has reached its final turn and tool calls are now disabled. Immediately summarize your verified findings and remaining unverified items in plain text.";
+        const TURN_WRAP_DIRECTIVE: &str = "Your turn budget has ended and tool calls are now disabled. Immediately summarize your verified findings and remaining unverified items in plain text.";
         self.user_turn
             .lock()
             .expect("user_turn lock")
-            .begin_wrap_up(TURN_WRAP_DIRECTIVE.to_string(), false);
+            .begin_wrap_up(TURN_WRAP_DIRECTIVE.to_string(), true, true);
     }
 
-    /// Effective max_turns including at most one extra turn granted by an
-    /// external watchdog wrap-up.
+    /// Effective max_turns including at most one extra synthesis turn granted
+    /// by a watchdog or subagent turn-limit wrap-up.
     pub(crate) fn effective_turn_limit(&self) -> u32 {
         let extra = u32::from(
             self.user_turn
@@ -98,6 +99,22 @@ impl Runner {
         self.config.max_turns.saturating_add(extra)
     }
 
+    /// Advance the turn counter and return the active turn limit if the turn
+    /// may proceed, entering tool-disabled wrap-up when a subagent exhausts
+    /// its configured turn budget.
+    pub(crate) fn advance_turn_budget(&self) -> Option<u32> {
+        let spent = self.bump_user_turn();
+        if spent > self.config.max_turns
+            && self.agent_identity.depth > 0
+            && self.config.max_turns > 0
+            && !self.is_wrapping_up()
+        {
+            self.begin_turn_limit_wrap_up();
+        }
+        let limit = self.effective_turn_limit();
+        (spent <= limit).then_some(limit)
+    }
+
     /// Whether a budget watchdog has asked this run to synthesize and exit.
     pub fn is_wrapping_up(&self) -> bool {
         self.user_turn
@@ -106,12 +123,20 @@ impl Runner {
             .is_wrapping_up()
     }
 
-    /// Whether wrap-up was triggered by reaching the final turn-budget turn.
+    /// Whether wrap-up was triggered by exhausting the subagent turn budget.
     pub fn turn_limit_wrapped(&self) -> bool {
         self.user_turn
             .lock()
             .expect("user_turn lock")
             .turn_limit_wrapped()
+    }
+
+    /// The durable event id of the MetaUser wrap-up directive, when written.
+    pub fn wrap_up_event_id(&self) -> Option<EventId> {
+        self.user_turn
+            .lock()
+            .expect("user_turn lock")
+            .wrap_up_event_id()
     }
 
     /// Compute effective token spend weighted by the active cost model.

@@ -17,7 +17,9 @@ use crate::agent::runner_config::{
 use crate::agent::skill_slash::SkillSlashOutcome;
 use crate::agent::turn::result::run_completion_status;
 use crate::agent::*;
-use houyicoder_api::agent_event::{AgentEventHandlers, LivenessPhase, RunLifecycleEvent};
+use houyicoder_api::agent_event::{
+    AgentEventHandlers, LivenessPhase, RunCompletionStatus, RunLifecycleEvent,
+};
 use houyicoder_api::cache_policy::AutoCachePolicy;
 use houyicoder_api::cost_model::AnthropicCostModel;
 use houyicoder_api::provider::ModelProvider;
@@ -398,13 +400,19 @@ impl Runner {
             turn.take_worked()
                 .map(|worked| worked.as_millis().min(u64::MAX as u128) as u64)
         };
+        let mut outcome = run_completion_status(result);
+        if self.turn_limit_wrapped()
+            && matches!(result, Ok(run) if matches!(run.outcome, RunOutcome::FinalOutput(_)))
+        {
+            outcome = RunCompletionStatus::TurnLimitReached;
+        }
         if let Err(e) = self
             .store
             .append(new_event(
                 session,
                 SessionEvent::RunCompleted {
                     ms,
-                    outcome: Some(run_completion_status(result)),
+                    outcome: Some(outcome),
                 },
             ))
             .await

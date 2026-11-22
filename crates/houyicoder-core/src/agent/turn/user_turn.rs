@@ -7,6 +7,7 @@
 //! two legs is the time the user spent deciding, and counting it would make a
 //! turn that waited an hour read as an hour of thinking.
 
+use houyicoder_context::EventId;
 use std::time::Duration;
 
 /// The per-user-turn facts. The runner holds one behind a lock, so a turn's
@@ -30,6 +31,8 @@ pub(crate) struct UserTurn {
     /// boundary so wrap-up does not overwrite session intent or render as user
     /// input.
     wrap_up_notice: Option<String>,
+    /// Durable event id of the MetaUser wrap-up directive once written.
+    wrap_up_event_id: Option<EventId>,
 }
 
 impl UserTurn {
@@ -52,15 +55,21 @@ impl UserTurn {
         self.turn_limit_wrapped = false;
         self.extra_wrap_turn = false;
         self.wrap_up_notice = None;
+        self.wrap_up_event_id = None;
     }
 
     /// Enter final wrap-up mode, returning true on the first transition.
-    pub(crate) fn begin_wrap_up(&mut self, directive: String, grant_extra_turn: bool) -> bool {
+    pub(crate) fn begin_wrap_up(
+        &mut self,
+        directive: String,
+        grant_extra_turn: bool,
+        is_turn_limit: bool,
+    ) -> bool {
         let first = !self.wrapping_up;
         self.wrapping_up = true;
         if first {
             self.extra_wrap_turn = grant_extra_turn;
-            self.turn_limit_wrapped = !grant_extra_turn;
+            self.turn_limit_wrapped = is_turn_limit;
             self.wrap_up_notice = Some(directive);
         }
         first
@@ -79,6 +88,16 @@ impl UserTurn {
     /// Take any pending wrap-up directive for injection as a MetaUser event.
     pub(crate) fn take_wrap_up_notice(&mut self) -> Option<String> {
         self.wrap_up_notice.take()
+    }
+
+    /// Record the durable event id of the written MetaUser wrap-up directive.
+    pub(crate) fn record_wrap_up_event(&mut self, id: EventId) {
+        self.wrap_up_event_id = Some(id);
+    }
+
+    /// The durable event id of the MetaUser wrap-up directive, if written.
+    pub(crate) fn wrap_up_event_id(&self) -> Option<EventId> {
+        self.wrap_up_event_id
     }
 
     /// Whether this run has entered final wrap-up mode.

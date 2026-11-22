@@ -183,12 +183,12 @@ async fn test_ceiling_spares_the_turn() {
         5_000,
     ));
     let (runtime, _store, parent_sid) = runtime_with(provider, None, ToolRegistry::new());
+    let runtime = runtime.with_test_wall_clock(Duration::from_secs(1));
     let turn = CancellationToken::new();
     let ctx = ToolCtx::new("c1")
         .with_session(parent_sid)
         .with_cancel(turn.clone());
-    let mut args = SpawnArgs::new("explore", "task", "task");
-    args.timeout_secs = Some(1);
+    let args = SpawnArgs::new("explore", "task", "task");
 
     let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
 
@@ -222,11 +222,11 @@ async fn test_detached_child_respects_ceiling() {
     ));
     let (runtime, _store, parent_sid) =
         runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let runtime = runtime.with_test_wall_clock(Duration::from_secs(1));
     let mut completed = bus.subscribe(global_completed_topic());
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let mut args = SpawnArgs::new("explore", "task", "task");
     args.run_in_background = true;
-    args.timeout_secs = Some(1);
 
     let launch = runtime
         .spawn(&ctx, args)

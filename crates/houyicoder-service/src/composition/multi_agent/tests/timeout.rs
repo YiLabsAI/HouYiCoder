@@ -2,17 +2,57 @@
 
 use std::future::pending;
 
+use futures::stream::once;
+use houyicoder_api::provider::stream_from_response;
 use houyicoder_api::tool::Tool;
 use houyicoder_api::tool::progress::ToolProgressUpdate;
-use houyicoder_async::PFut;
+use houyicoder_async::{PFut, PStream};
 use houyicoder_context::{SessionId, SessionLogEntry};
 use houyicoder_core::agent::multi_agent::summarize_watchdog_returns;
 use houyicoder_protocol::extension::ToolError;
-use houyicoder_protocol::llm::UsageProvenance;
+use houyicoder_protocol::llm::{
+    CompletionRequest, LlmEvent, ModelCapabilities, ProviderError, UsageProvenance,
+};
 use serde_json::{Value, json};
 use tokio::time::sleep;
 
 use super::*;
+
+/// A short timeout_secs hint passed directly to the runtime is floored at the
+/// 3600s safety ceiling rather than cutting off a healthy delegation early.
+#[tokio::test]
+async fn test_runtime_floors_short_timeout() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new_with_delay(
+        vec![CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "finished past 1s".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        }],
+        1_100,
+    ));
+    let (runtime, _store, parent_sid) = runtime_with(provider, None, ToolRegistry::new());
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "task", "task");
+    args.timeout_secs = Some(1);
+
+    let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
+    assert_eq!(
+        outcome.status.as_deref(),
+        Some("completed"),
+        "short runtime timeout_secs must floor at 3600s instead of cutting at 1s"
+    );
+    assert_eq!(outcome.summary.as_deref(), Some("finished past 1s"));
+    assert_eq!(
+        spawn_exec::effective_wall_clock(Some(30), spawn_exec::DEFAULT_MAX_WALL_CLOCK),
+        Duration::from_secs(3600)
+    );
+    assert_eq!(
+        spawn_exec::effective_wall_clock(Some(7200), spawn_exec::DEFAULT_MAX_WALL_CLOCK),
+        Duration::from_secs(7200)
+    );
+}
 
 /// A child that outlives its ceiling is stopped and reported as such.
 ///
@@ -36,9 +76,9 @@ async fn test_ceiling_stops_child() {
         5_000,
     ));
     let (runtime, _store, parent_sid) = runtime_with(provider, None, ToolRegistry::new());
+    let runtime = runtime.with_test_wall_clock(Duration::from_secs(1));
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
-    let mut args = SpawnArgs::new("explore", "task", "task");
-    args.timeout_secs = Some(1);
+    let args = SpawnArgs::new("explore", "task", "task");
 
     let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
 
@@ -85,9 +125,9 @@ async fn test_timeout_keeps_partial() {
     let mut completed = bus.subscribe(global_completed_topic());
     let (runtime, _store, parent_sid) =
         runtime_with(provider, Some(Arc::clone(&bus)), ToolRegistry::new());
+    let runtime = runtime.with_test_wall_clock(Duration::from_secs(1));
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
-    let mut args = SpawnArgs::new("explore", "task", "task");
-    args.timeout_secs = Some(1);
+    let args = SpawnArgs::new("explore", "task", "task");
 
     let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
 
@@ -325,17 +365,15 @@ async fn run_for_metrics(
     parent_sid: SessionId,
     provider: Arc<dyn ModelProvider>,
     tools: ToolRegistry,
-    timeout_secs: Option<u64>,
+    test_floor: Option<Duration>,
 ) {
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
-    let mut args = SpawnArgs::new("explore", "metric", "metric");
-    args.timeout_secs = timeout_secs;
-    drop(
-        runtime_sharing_store(store, provider, tools)
-            .spawn(&ctx, args)
-            .await
-            .expect("spawn completes"),
-    );
+    let args = SpawnArgs::new("explore", "metric", "metric");
+    let mut runtime = runtime_sharing_store(store, provider, tools);
+    if let Some(floor) = test_floor {
+        runtime = runtime.with_test_wall_clock(floor);
+    }
+    drop(runtime.spawn(&ctx, args).await.expect("spawn completes"));
 }
 
 /// Parent return boundaries record watchdog axis, wrap-up rescue status, and
@@ -391,14 +429,7 @@ async fn test_subagent_return_records_metrics() {
     ]));
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(HungTool));
-    run_for_metrics(
-        Arc::clone(&store),
-        parent_sid,
-        wrap_provider,
-        tools,
-        Some(1),
-    )
-    .await;
+    run_for_metrics(Arc::clone(&store), parent_sid, wrap_provider, tools, None).await;
 
     let (stall_provider, _stall) = StallAfterFirstProvider::new(vec![vec![OutputItem::ToolCall {
         id: "tc1".into(),
@@ -410,7 +441,7 @@ async fn test_subagent_return_records_metrics() {
         parent_sid,
         stall_provider,
         ToolRegistry::new(),
-        Some(1),
+        Some(Duration::from_secs(1)),
     )
     .await;
 
@@ -460,4 +491,120 @@ fn assert_recorded_metrics(parent_events: &[SessionLogEntry]) {
     assert_eq!(summary.hard_cut, 1);
     assert_eq!(summary.tool_quiet_cuts, 1);
     assert_eq!(summary.wall_clock_cuts, 1);
+}
+
+/// Earlier assistant text or a provider error message after wrap-up must not
+/// inflate wrap_rescued: only new non-empty assistant text emitted after the
+/// wrap-up MetaUser directive counts as a rescue.
+#[tokio::test]
+async fn test_rescue_requires_new_text() {
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let parent_sid = SessionId::new();
+
+    // Child 1 emits text on turn 1 before stalling on turn 2; wrap-up stalls
+    // too and gets hard-cut. The stale turn-1 text must not count as rescued.
+    let (stale_provider, _stall) = StallAfterFirstProvider::new(vec![vec![
+        OutputItem::Text {
+            text: "half an answer".into(),
+        },
+        OutputItem::ToolCall {
+            id: "tc1".into(),
+            name: "ghost".into(),
+            input: json!({}),
+        },
+    ]]);
+    run_for_metrics(
+        Arc::clone(&store),
+        parent_sid,
+        stale_provider,
+        ToolRegistry::new(),
+        Some(Duration::from_secs(1)),
+    )
+    .await;
+
+    // Child 2 enters tool-quiet wrap-up and then fails with a provider error;
+    // the "run failed: ..." error summary must not count as rescued.
+    let fail_after_wrap: Arc<dyn ModelProvider> =
+        Arc::new(FailAfterFirstProvider::new(vec![CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "tc1".into(),
+                name: "hung_probe".into(),
+                input: json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        }]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(HungTool));
+    run_for_metrics(Arc::clone(&store), parent_sid, fail_after_wrap, tools, None).await;
+
+    let events = store.replay(parent_sid).await.expect("parent replay");
+    let returns: Vec<&SessionEvent> = events
+        .iter()
+        .filter(|e| matches!(e.event, SessionEvent::SubagentReturn { .. }))
+        .map(|e| &e.event)
+        .collect();
+    assert_eq!(returns.len(), 2);
+    assert!(
+        matches!(
+            returns[0],
+            SessionEvent::SubagentReturn {
+                soft_wrapped: Some(true),
+                wrap_rescued: Some(false),
+                summary,
+                ..
+            } if summary.contains("half an answer")
+        ),
+        "stale earlier text must not mark wrap_rescued=true: {:?}",
+        returns[0]
+    );
+    assert!(
+        matches!(
+            returns[1],
+            SessionEvent::SubagentReturn {
+                soft_wrapped: Some(true),
+                wrap_rescued: Some(false),
+                ..
+            }
+        ),
+        "provider failure during wrap-up must not mark wrap_rescued=true: {:?}",
+        returns[1]
+    );
+}
+
+struct FailAfterFirstProvider {
+    first: Mutex<Option<CompletionResponse>>,
+}
+
+impl FailAfterFirstProvider {
+    fn new(mut items: Vec<CompletionResponse>) -> Self {
+        Self {
+            first: Mutex::new(items.drain(..).next()),
+        }
+    }
+}
+
+impl ModelProvider for FailAfterFirstProvider {
+    fn complete(
+        &self,
+        _req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let next = self.first.lock().expect("first lock").take();
+        Box::pin(async move {
+            match next {
+                Some(resp) => Ok(resp),
+                None => Err(ProviderError::Auth),
+            }
+        })
+    }
+    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        let next = self.first.lock().expect("first lock").take();
+        match next {
+            Some(resp) => stream_from_response(resp),
+            None => Box::pin(once(async { Err(ProviderError::Auth) })),
+        }
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
 }

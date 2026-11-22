@@ -312,9 +312,13 @@ impl Runner {
             .await?;
         }
         if let Some(text) = wrap_up_notice {
-            self.store
-                .append(new_event(session, SessionEvent::MetaUser { text }))
-                .await?;
+            let entry = new_event(session, SessionEvent::MetaUser { text });
+            let id = entry.id;
+            self.store.append(entry).await?;
+            self.user_turn
+                .lock()
+                .expect("user_turn lock")
+                .record_wrap_up_event(id);
         }
         if had_pending {
             self.memory.recall(session).await?;

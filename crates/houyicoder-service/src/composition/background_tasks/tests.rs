@@ -658,3 +658,74 @@ async fn test_admission_flags_duplicate_command() {
         "automatic handover records the active duplicate"
     );
 }
+
+/// Admission compares full-command signatures rather than the truncated first
+/// line, keeps input redirects distinct, and scopes lock advisories by cwd.
+#[tokio::test]
+async fn test_dedup_uses_full_signature() {
+    let tasks = BackgroundTasks::new();
+    let _first = tasks
+        .try_launch(
+            detached(
+                "cd /work/repo\ncargo test",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("multiline task starts");
+
+    let second = tasks
+        .try_launch(
+            detached(
+                "cd /work/repo\ncargo fmt",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("distinct second line is not a duplicate");
+    assert_eq!(
+        second.build_lock_sibling.map(|s| s.id),
+        Some(BackgroundTaskId(1)),
+        "multiline cargo commands in same repo share lock advisory"
+    );
+
+    let other_repo = tasks
+        .try_launch(
+            detached(
+                "cd /work/other && cargo clippy",
+                CommandTail::new(),
+                never_finishes(),
+            ),
+            true,
+        )
+        .expect("other repo admits");
+    assert!(
+        other_repo.build_lock_sibling.is_none(),
+        "different working directories do not warn on shared default target"
+    );
+
+    tasks
+        .try_launch(
+            detached("sort < a.txt", CommandTail::new(), never_finishes()),
+            true,
+        )
+        .expect("sort a starts");
+    assert!(
+        tasks.check_admission("sort < b.txt").is_ok(),
+        "different input redirects are distinct commands"
+    );
+
+    let long = format!("echo {}", "a".repeat(210));
+    tasks
+        .try_launch(detached(&long, CommandTail::new(), never_finishes()), true)
+        .expect("long command starts");
+    assert!(
+        matches!(
+            tasks.check_admission(&long),
+            Err(BackgroundRefusal::DuplicateCommand { .. })
+        ),
+        "identical command longer than 200 chars must be rejected"
+    );
+}

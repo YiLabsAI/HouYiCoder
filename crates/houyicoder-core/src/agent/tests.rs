@@ -30,6 +30,7 @@ use std::process::id;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::Poll;
 pub(crate) mod abort_tool;
 mod ask_question;
@@ -1112,4 +1113,66 @@ fn test_snapshot_override_drives_prune() {
         "size cap 0 override should prune snapshots (before={before}, after={after})"
     );
     remove_dir_all(&tmp).ok();
+}
+
+/// Top-level runs execute all max_turns working turns without entering
+/// subagent turn-limit wrap-up, preserving the MaxTurnsReached contract.
+#[tokio::test]
+async fn test_parent_keeps_turn_budget() {
+    struct CountTool(Arc<AtomicU32>);
+    impl Tool for CountTool {
+        fn name(&self) -> &str {
+            "count_probe"
+        }
+        fn description(&self) -> &str {
+            "counts calls"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn execute(
+            &self,
+            _ctx: ToolCtx,
+            _input: serde_json::Value,
+        ) -> houyicoder_async::PFut<'_, Result<serde_json::Value, ToolError>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async { Ok(serde_json::json!({"ok": true})) })
+        }
+    }
+    let count = Arc::new(AtomicU32::new(0));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(CountTool(Arc::clone(&count))));
+    let resp = CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "c1".into(),
+            name: "count_probe".into(),
+            input: serde_json::json!({}),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let runner = Runner::new(
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
+        Arc::new(FakeProvider::new(vec![resp])),
+        tools,
+        RunnerConfig {
+            max_turns: 2,
+            ..runner_with_cfg0()
+        },
+    );
+    let session = SessionId::new();
+    let result = runner.run(session, "work".into()).await.expect("run");
+    assert!(matches!(
+        result.outcome,
+        RunOutcome::MaxTurnsReached { turns: 2 }
+    ));
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+    let events = runner.store().replay(session).await.expect("replay");
+    assert!(
+        !events.iter().any(|ev| matches!(
+            &ev.event,
+            SessionEvent::MetaUser { text } if text.contains("turn budget")
+        )),
+        "top-level runner must not inject turn-limit wrap-up MetaUser"
+    );
 }

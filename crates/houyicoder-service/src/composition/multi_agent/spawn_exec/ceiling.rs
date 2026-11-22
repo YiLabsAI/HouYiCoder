@@ -37,7 +37,17 @@ const TOOL_QUIET_WINDOW: Duration = Duration::from_secs(225);
 const TOOL_QUIET_WINDOW: Duration = Duration::from_millis(120);
 
 pub(super) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
-pub(super) const DEFAULT_MAX_WALL_CLOCK: Duration = Duration::from_secs(3600);
+pub(crate) const DEFAULT_MAX_WALL_CLOCK: Duration = Duration::from_secs(3600);
+
+/// Resolve a child run's active wall-clock ceiling so explicit timeout hints
+/// can extend above the safety floor without shortening it.
+pub(crate) fn effective_wall_clock(timeout_secs: Option<u64>, floor: Duration) -> Duration {
+    timeout_secs
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .map(|d| d.max(floor))
+        .unwrap_or(floor)
+}
 
 ///Bounded grace window granted to a responsive child to emit a final plain-text
 /// summary after a budget or quiet-window stop cancels its active step.

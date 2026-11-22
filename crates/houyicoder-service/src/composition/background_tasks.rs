@@ -28,7 +28,7 @@ use serde_json::Value;
 use crate::server::EventSequencer;
 
 mod admission;
-use admission::judge_launch;
+use admission::{judge_launch, normalize_command};
 
 /// Finished commands kept for the tasks list. A session that runs many
 /// commands keeps its newest endings; older ones are released so the list
@@ -42,8 +42,10 @@ const COMMAND_LINE_CHARS: usize = 200;
 /// One command the registry owns.
 struct TaskRecord {
     id: BackgroundTaskId,
-    /// The first line of the command, bounded.
+    /// The first line of the command, bounded for display.
     command: String,
+    /// Full normalized command signature for active duplicate and lock checks.
+    signature: String,
     started: Instant,
     /// Frozen when the command ended; None while it runs.
     ended_at: Option<Instant>,
@@ -285,6 +287,7 @@ impl BackgroundTasks {
         table.tasks.push(TaskRecord {
             id,
             command: first_line(&command),
+            signature: normalize_command(&command),
             started: started_at,
             ended_at: None,
             status: BackgroundTaskStatus::Running,
@@ -400,6 +403,7 @@ async fn finish_run(
             .find(|task| task.id == id)
             .map(|record| {
                 record.status = status;
+                record.signature.clear();
                 record.ended_at = Some(Instant::now());
                 record.exit_code = exit_code;
                 record.stdout = report.stdout;

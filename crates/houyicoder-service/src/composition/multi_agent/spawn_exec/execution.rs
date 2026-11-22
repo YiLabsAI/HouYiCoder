@@ -6,11 +6,9 @@
 //! task of its own, and that task holds the concurrency slot, the admission
 //! slot, and the completion signal until the child is finished.
 
-use std::time::Duration;
-
 use super::super::{AdmissionLease, ChildHandle};
 use super::ceiling::{
-    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_WALL_CLOCK, WRAP_UP_DIRECTIVE, watch_liveness,
+    DEFAULT_IDLE_TIMEOUT, WRAP_UP_DIRECTIVE, effective_wall_clock, watch_liveness,
 };
 use super::handover::EndingBinding;
 use super::*;
@@ -69,10 +67,7 @@ impl ChildExecution {
         // producing, the wall clock caps one that never stops. A caller's
         // timeout_secs is the second, not the first.
         let idle_timeout = DEFAULT_IDLE_TIMEOUT;
-        let max_wall_clock = request
-            .timeout_secs
-            .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_MAX_WALL_CLOCK);
+        let max_wall_clock = effective_wall_clock(request.timeout_secs, runtime.wall_clock_floor());
         tokio::spawn(async move {
             // The completion signal fires when this task ends, however it ends:
             // the guard rides the whole task, so the shutdown join's wait on it
@@ -180,10 +175,7 @@ impl ChildExecution {
         // producing, the wall clock caps one that never stops. A caller's
         // timeout_secs is the second, not the first.
         let idle_timeout = DEFAULT_IDLE_TIMEOUT;
-        let max_wall_clock = request
-            .timeout_secs
-            .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_MAX_WALL_CLOCK);
+        let max_wall_clock = effective_wall_clock(request.timeout_secs, runtime.wall_clock_floor());
         tokio::spawn(async move {
             // The completion signal fires when this task ends, however it ends:
             // the guard rides the whole task, so the shutdown join's wait on it
