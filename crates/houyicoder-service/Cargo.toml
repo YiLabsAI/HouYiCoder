@@ -25,6 +25,10 @@ path = "tests/worktree_contract.rs"
 name = "diagnostics_reload"
 path = "tests/diagnostics_reload.rs"
 
+[[test]]
+name = "consent_parity"
+path = "tests/consent_parity.rs"
+
 [lib]
 path = "src/lib.rs"
 

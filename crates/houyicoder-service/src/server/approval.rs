@@ -31,9 +31,15 @@ impl Server {
     /// Build a consent policy from this server's gate, sandbox session, audit
     /// log, skill registry, and session id.
     pub(crate) fn consent(&self) -> ConsentPolicy {
+        // The runner's sandbox session is the fence the tools execute under, so
+        // it wins when both handles exist; a connection that attached its own
+        // handle (an embedder or a test) is the fallback for a runner built
+        // without one.
         ConsentPolicy::new(
             self.gate.clone(),
-            self.sandbox_session.clone(),
+            self.runner
+                .sandbox_session()
+                .or_else(|| self.sandbox_session.clone()),
             self.runner.store(),
             self.runner.skill_registry().cloned(),
             self.session,
