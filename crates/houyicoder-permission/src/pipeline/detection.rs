@@ -46,9 +46,9 @@ pub(crate) fn writes_confined(containment: &Option<Arc<dyn Containment>>) -> boo
 /// shell passes to another program, not a call.
 const DESTRUCTIVE_PROGRAMS: &[&str] = &["dd", "rm", "rmdir", "su", "sudo", "truncate", "unlink"];
 
-/// Programs that leave the machine.
+/// Programs that leave the machine unconditionally.
 const EGRESS_TOOLS: &[&str] = &[
-    "curl", "ftp", "httpie", "nc", "netcat", "rsync", "scp", "sftp", "ssh", "telnet", "wget",
+    "curl", "ftp", "httpie", "nc", "netcat", "scp", "sftp", "ssh", "telnet", "wget",
 ];
 
 /// Destructive verbs (rm, sudo, dd, …) escalate to Ask even when the mode
@@ -93,6 +93,9 @@ fn reaches_network(command: &ShellCommand) -> bool {
     if command.runs("ssh") {
         return !ssh_prints_local_config(&word_refs(command.args()));
     }
+    if command.runs("rsync") {
+        return rsync_reaches_network(&word_refs(command.args()));
+    }
     if command.is_one_of(EGRESS_TOOLS) {
         return true;
     }
@@ -136,6 +139,66 @@ fn word_is(command: &ShellCommand, index: usize, name: &str) -> bool {
 /// plain word slice.
 fn word_refs(words: &[String]) -> Vec<&str> {
     words.iter().map(String::as_str).collect()
+}
+
+/// Whether an rsync invocation names a remote host, daemon module, or remote
+/// shell/transport flag rather than copying exclusively between local paths.
+fn rsync_reaches_network(args: &[&str]) -> bool {
+    let mut options_done = false;
+    for &arg in args {
+        if !options_done {
+            if arg == "--" {
+                options_done = true;
+                continue;
+            }
+            if matches!(
+                arg,
+                "-e" | "--rsh"
+                    | "--rsync-path"
+                    | "--daemon"
+                    | "--port"
+                    | "--address"
+                    | "--sockopts"
+                    | "--connect-program"
+                    | "--password-file"
+            ) || arg.starts_with("--rsh=")
+                || arg.starts_with("--rsync-path=")
+                || arg.starts_with("--port=")
+                || arg.starts_with("--address=")
+                || arg.starts_with("--sockopts=")
+                || arg.starts_with("--connect-program=")
+                || arg.starts_with("--password-file=")
+                || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('e'))
+            {
+                return true;
+            }
+            if let Some((_, value)) = arg.strip_prefix("--").and_then(|rest| rest.split_once('=')) {
+                if is_remote_rsync_target(value) {
+                    return true;
+                }
+                continue;
+            }
+            if arg.starts_with('-') {
+                continue;
+            }
+        }
+        if is_remote_rsync_target(arg) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_remote_rsync_target(arg: &str) -> bool {
+    if arg.contains("://") || arg.contains("::") {
+        return true;
+    }
+    arg.contains(':') && !is_windows_drive_path(arg)
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
 }
 
 /// Detect network-egress commands in bash: curl, wget, git push, package

@@ -6,8 +6,11 @@
 //! their own.
 
 mod control_flow;
+mod git;
 
 pub(crate) use control_flow::expand_readonly_clauses;
+pub(crate) use git::git_config_reads_only;
+use git::git_reads_only;
 
 use super::effect::{is_safe_input_redirect, read_redirect_token};
 use super::quotes_balanced;
@@ -82,43 +85,6 @@ const READONLY_COMMANDS: &[&str] = &[
     "whereis",
     "which",
     "whoami",
-];
-
-/// Repository subcommands that only inspect a repository. The hash form is
-/// included because without its write flag it prints the hash instead of
-/// storing the object; the writing form is rejected by the argument rule.
-const GIT_READ_SUBCOMMANDS: &[&str] = &[
-    "status",
-    "diff",
-    "show",
-    "log",
-    "ls-files",
-    "ls-tree",
-    "rev-parse",
-    "rev-list",
-    "hash-object",
-    "check-ignore",
-    "check-attr",
-    "describe",
-    "merge-base",
-    "for-each-ref",
-    // A fetch or a remote listing against a configured remote only moves local
-    // refs. A call that names an outside source is caught by the network check,
-    // which runs before this one, so the destination is never assumed here.
-    "fetch",
-    "ls-remote",
-];
-
-/// Repository options that write a file, run a program the user did not
-/// choose, or inject configuration. Matched by prefix so an abbreviation that
-/// could reach one of them is treated as the writer it may be.
-const GIT_WRITE_OPTIONS: &[&str] = &[
-    "-o",
-    "--output",
-    "--ext-diff",
-    "--textconv",
-    "-c",
-    "--exec-path",
 ];
 
 /// Predicates that delete a file, run a program, or write output into one.
@@ -263,100 +229,6 @@ fn sed_reads_only(args: &[&str]) -> bool {
     true
 }
 
-fn git_reads_only(args: &[&str]) -> bool {
-    if args.iter().any(|arg| git_writes(arg)) {
-        return false;
-    }
-    let mut idx = 0;
-    while idx < args.len() {
-        let arg = args[idx];
-        if matches!(arg, "-C" | "--git-dir" | "--work-tree") {
-            if args.get(idx + 1).is_none() {
-                return false;
-            }
-            idx += 2;
-            continue;
-        }
-        if matches!(arg, "--no-pager" | "-P" | "--bare") {
-            idx += 1;
-            continue;
-        }
-        break;
-    }
-    let Some(&sub) = args.get(idx) else {
-        return false;
-    };
-    let rest = &args[idx + 1..];
-    match sub {
-        "config" => return git_config_reads_only(rest),
-        "stash" => {
-            let sub_verb = rest.iter().find(|a| !a.starts_with('-')).copied();
-            return matches!(sub_verb, Some("list" | "show") | None if matches!(sub_verb, Some("list" | "show")));
-        }
-        "hash-object" => return !rest.iter().any(|arg| short_cluster_has(arg, 'w')),
-        _ => {}
-    }
-    GIT_READ_SUBCOMMANDS.contains(&sub)
-}
-
-/// Whether arguments passed to git config strictly query existing values
-/// without modifying or opening an editor on any configuration file.
-pub(crate) fn git_config_reads_only(args: &[&str]) -> bool {
-    let mut saw_read_flag = false;
-    for &arg in args {
-        if arg == "--" {
-            break;
-        }
-        if matches!(
-            arg,
-            "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
-        ) {
-            saw_read_flag = true;
-            continue;
-        }
-        if matches!(
-            arg,
-            "--add"
-                | "--replace-all"
-                | "--unset"
-                | "--unset-all"
-                | "--rename-section"
-                | "--remove-section"
-                | "--edit"
-                | "-e"
-                | "--file"
-                | "-f"
-                | "--blob"
-        ) || arg.starts_with("--file=")
-            || arg.starts_with("--blob=")
-        {
-            return false;
-        }
-    }
-    saw_read_flag
-}
-
-/// Whether one repository argument asks for a write, an outside program, or
-/// injected configuration. A long option is matched with and without its
-/// attached value. A short one is matched by its leading letter, because an
-/// attached value leaves no separator to check.
-fn git_writes(arg: &str) -> bool {
-    if let Some(long) = arg.strip_prefix("--") {
-        return GIT_WRITE_OPTIONS.iter().any(|option| {
-            option
-                .strip_prefix("--")
-                .is_some_and(|name| long == name || long.starts_with(&format!("{name}=")))
-        });
-    }
-    let Some(short) = arg.strip_prefix('-') else {
-        return false;
-    };
-    GIT_WRITE_OPTIONS
-        .iter()
-        .filter_map(|option| option.strip_prefix('-'))
-        .any(|letter| short.starts_with(letter))
-}
-
 /// Whether the network client would write, upload, or send a body. A request
 /// reads only as a plain fetch whose every operand is an http or https URL and
 /// whose text carries no expansion: a substitution inside the URL is what
@@ -423,8 +295,8 @@ fn is_http_url(arg: &str) -> bool {
     arg.starts_with("http://") || arg.starts_with("https://")
 }
 
-/// Whether a short option cluster carries the given letter.
-fn short_cluster_has(arg: &str, letter: char) -> bool {
+/// Whether a single-dash short option group carries the given flag letter.
+pub(super) fn has_short_flag(arg: &str, letter: char) -> bool {
     arg.strip_prefix('-')
         .is_some_and(|cluster| !cluster.starts_with('-') && cluster.contains(letter))
 }

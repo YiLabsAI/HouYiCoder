@@ -533,6 +533,10 @@ fn test_readonly_repository_commands() {
         "git show HEAD:file",
         "git rev-parse HEAD",
         "git hash-object file",
+        "git config user.name",
+        "git config --global user.name",
+        "git config get user.name",
+        "git config list",
     ] {
         let segs = split_compound(cmd);
         let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
@@ -548,7 +552,8 @@ fn test_not_readonly_repository_writes() {
         "git diff --textconv",
         "git log --ext-diff",
         "git log -o.claude/settings.json",
-        "git config user.name",
+        "git config user.name Alice",
+        "git config set user.name Alice",
         "git add .",
     ] {
         let segs = split_compound(cmd);

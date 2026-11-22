@@ -68,6 +68,33 @@ fn test_local_checkpoint_level1() {
         card("git_checkpoint", None, "git branch -d topic").auto_approve_eligible(),
         "a safe branch delete is local"
     );
+    assert!(
+        card(
+            "git_checkpoint",
+            None,
+            r#"{"command":"cd /repo && rm -f tmp.rs; git stash push -u -m probe"}"#
+        )
+        .auto_approve_eligible(),
+        "rm -f beside git stash push must stay Level 1"
+    );
+    assert!(
+        card(
+            "git_checkpoint",
+            None,
+            r#"{"command":"git commit -m 'avoid git push -f'"}"#
+        )
+        .auto_approve_eligible(),
+        "commit message mentioning push -f must stay Level 1"
+    );
+    assert!(
+        !card(
+            "git_checkpoint",
+            None,
+            r#"{"command":"bash -c \"git push --force origin main\""}"#
+        )
+        .auto_approve_eligible(),
+        "wrapped forced push must stay Level 2"
+    );
 }
 
 /// A native tool call is Level 1 only when it discards uncommitted work the

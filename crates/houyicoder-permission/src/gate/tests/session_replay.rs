@@ -642,6 +642,12 @@ fn test_session_readonly_checks_allow() {
         "echo \"GIT_CONFIG_GLOBAL=/work/x\" && git fetch",
         "git stash list | head -5",
         "git stash show -p",
+        "git config --global user.name",
+        "git config --local core.sshCommand",
+        "git config get user.name",
+        "git config list",
+        "rsync -a src/ \"$TMPDIR/copy/\"",
+        "cd /work/repo && rm -rf \"$TMPDIR/cmp-head\" && rsync -a --exclude target /ws/ \"$TMPDIR/cmp-head/\"",
     ] {
         let decision = gate.decide(&bash_req(command));
         assert_eq!(
@@ -679,6 +685,14 @@ fn test_session_security_boundaries_ask() {
         "env GIT_CONFIG_GLOBAL=/work/repo/.git/info/x.inc git fetch",
         "env GIT_SSH_COMMAND='sh -c evil' git fetch",
         "printf -v TMPDIR '%s' /work/repo && wc -l < $TMPDIR/.env",
+        "rsync -a src/ user@host:/dst/",
+        "rsync -e \"ssh -p 22\" a b",
+        "rsync a b::mod",
+        "git config --global user.name Alice",
+        "git config --local core.sshCommand example",
+        "git config set user.name Alice",
+        "git config --file /etc/passwd --list",
+        "rsync -a /tmp/x .claude/hooks/",
     ] {
         let decision = gate.decide(&bash_req(command));
         assert_eq!(
