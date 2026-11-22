@@ -32,8 +32,7 @@ use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::{ApprovalDecision, RunOutcome, Runner};
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acp_wire::{
-    AcpErrorCode, AcpNotification, AcpRequest, AcpRequestId, AcpResponse, PromptRequest,
-    PromptResponse,
+    AcpErrorCode, AcpRequest, AcpRequestId, AcpResponse, PromptRequest, PromptResponse,
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
@@ -526,11 +525,8 @@ impl AcpServer {
             text: text.to_string(),
         };
         if let Some(update) = map_session_update(&event) {
-            let params = serde_json::to_value(&update).map_err(|e| {
-                ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false)
-            })?;
-            self.send_typed(io, &AcpNotification::new("session/update", params))
-                .await?;
+            let notification = session_update(self.session, &update)?;
+            self.send_typed(io, &notification).await?;
         }
         Ok(())
     }
@@ -571,9 +567,8 @@ impl AcpServer {
             {
                 call.title = tool_title(tool, Some(input));
             }
-            let params = serde_json::to_value(&update).expect("session update serialize");
-            let notif = AcpNotification::new("session/update", params);
-            self.send_typed(io, &notif).await?;
+            let notification = session_update(self.session, &update)?;
+            self.send_typed(io, &notification).await?;
         }
         Ok(())
     }
@@ -600,9 +595,8 @@ impl AcpServer {
             self.streamed_text.store(true, Ordering::Relaxed);
         }
         if let Some(update) = map_stream_event(delta) {
-            let params = serde_json::to_value(&update).expect("stream update serialize");
-            let notif = AcpNotification::new("session/update", params);
-            self.send_typed(io, &notif).await?;
+            let notification = session_update(self.session, &update)?;
+            self.send_typed(io, &notification).await?;
         }
         Ok(())
     }
@@ -648,6 +642,7 @@ mod util;
 use util::next_delta;
 use util::now_millis;
 use util::prompt_text;
+use util::session_update;
 
 #[cfg(test)]
 mod tests;

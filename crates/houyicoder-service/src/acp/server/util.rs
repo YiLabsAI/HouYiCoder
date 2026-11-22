@@ -6,7 +6,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use houyicoder_api::agent_event::ResponseStreamEvent;
+use houyicoder_context::SessionId;
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::error::ErrorCategory;
+use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 use crate::acp::live::AcpLiveStream;
 
@@ -45,6 +50,22 @@ pub(super) async fn next_delta(live: &mut Option<AcpLiveStream>) -> Option<Respo
         Some(stream) => stream.recv().await,
         None => pending().await,
     }
+}
+
+/// A session/update notification in the envelope the base protocol defines:
+/// the session it belongs to, and the update nested under its own key. A
+/// client that reads the envelope drops an update sent without it.
+pub(super) fn session_update(
+    session: SessionId,
+    update: &SessionUpdate,
+) -> Result<AcpNotification, ProtocolError> {
+    let params = serde_json::json!({
+        "sessionId": session.to_string(),
+        "update": serde_json::to_value(update).map_err(|e| {
+            ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false)
+        })?,
+    });
+    Ok(AcpNotification::new("session/update", params))
 }
 
 /// The current wall clock as milliseconds since the Unix epoch.

@@ -26,7 +26,11 @@ use houyicoder_protocol::acpx::AcpxCapabilities;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::framing::encode;
+#[cfg(feature = "acp-cross-decode")]
+use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::run::StopReason;
+#[cfg(feature = "acp-cross-decode")]
+use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
     Usage,
@@ -39,7 +43,12 @@ use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
+#[cfg(feature = "acp-cross-decode")]
+use agent_client_protocol::schema::v1::SessionNotification;
+
 use super::AcpServer;
+#[cfg(feature = "acp-cross-decode")]
+use super::util;
 use crate::acp::adapter::AcpAdapter;
 use crate::acp::live::AcpLiveStream;
 use crate::acp::pump::from_line_channels;
@@ -355,7 +364,13 @@ async fn test_prompt_echoes_user_once() {
             continue;
         };
         if msg.get("method") == Some(&json!("session/update")) {
-            let update = &msg["params"];
+            let expected = session.to_string();
+            assert_eq!(
+                msg["params"]["sessionId"].as_str(),
+                Some(expected.as_str()),
+                "the envelope names the session"
+            );
+            let update = &msg["params"]["update"];
             let kind = update["sessionUpdate"].as_str().unwrap_or_default();
             if kind == "user_message_chunk" {
                 user_text.push_str(update["content"]["text"].as_str().unwrap_or_default());
@@ -382,6 +397,23 @@ async fn test_prompt_echoes_user_once() {
 
     drop(tx);
     handle.await.expect("join").expect("clean close");
+}
+
+/// The session-update notification this server builds is the envelope the
+/// schema crate defines. Sending the bare update is what a host drops in
+/// silence, so the schema itself decodes this one.
+#[cfg(feature = "acp-cross-decode")]
+#[test]
+fn test_session_update_envelope() {
+    let session = SessionId::new();
+    let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
+        text: "hi".into(),
+    }));
+    let notification = util::session_update(session, &update).expect("build");
+    let wire = serde_json::to_value(&notification).expect("serialize");
+    let decoded: SessionNotification =
+        serde_json::from_value(wire["params"].clone()).expect("the schema decodes the envelope");
+    assert_eq!(decoded.session_id.to_string(), session.to_string());
 }
 
 /// A shell tool whose call carries a command, as a real engine turn does.
@@ -426,9 +458,11 @@ async fn test_tool_update_carries_title() {
             continue;
         };
         if msg.get("method") == Some(&json!("session/update"))
-            && msg["params"]["sessionUpdate"] == json!("tool_call")
+            && msg["params"]["update"]["sessionUpdate"] == json!("tool_call")
         {
-            titled = msg["params"]["title"].as_str().map(str::to_string);
+            titled = msg["params"]["update"]["title"]
+                .as_str()
+                .map(str::to_string);
             break;
         }
         if msg.get("id") == Some(&json!(9)) {

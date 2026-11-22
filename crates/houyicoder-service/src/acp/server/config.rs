@@ -4,13 +4,13 @@
 //! to them by method name.
 
 use super::AcpServer;
+use super::session_update;
 use crate::acp::adapter::session_config_options;
 use crate::acp::pump::AcpDuplexPump;
 use houyicoder_permission::PermissionMode;
 use houyicoder_protocol::acp_wire::{
-    AcpErrorCode, AcpNotification, AcpRequest, AcpResponse, SessionConfigOptionValue,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
-    SetSessionModeResponse,
+    AcpErrorCode, AcpRequest, AcpResponse, SessionConfigOptionValue, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse,
 };
 use houyicoder_protocol::error::ProtocolError;
 use houyicoder_protocol::frontend::session_update::{CurrentModeUpdate, SessionUpdate};
@@ -88,11 +88,8 @@ impl AcpServer {
             current_mode_id: params.mode_id,
             meta: None,
         });
-        let notif = AcpNotification::new(
-            "session/update",
-            serde_json::to_value(&update).expect("mode update serialize"),
-        );
-        self.send_typed(io, &notif).await?;
+        let notification = session_update(self.session, &update)?;
+        self.send_typed(io, &notification).await?;
         self.send_response(
             io,
             &AcpResponse::ok(
