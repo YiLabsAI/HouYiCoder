@@ -40,7 +40,7 @@ fn binary_path() -> PathBuf {
                 current_dir().expect("current dir").join(dir)
             }
         }
-        None => root.clone(),
+        None => root.join("target"),
     };
     let name = if cfg!(windows) {
         "acp_stdio.exe"
