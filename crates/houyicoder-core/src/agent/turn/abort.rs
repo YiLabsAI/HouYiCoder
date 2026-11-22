@@ -17,7 +17,9 @@ use std::sync::atomic::Ordering;
 use crate::agent::RunOutcome;
 use crate::agent::RunResult;
 use crate::agent::{RunError, Runner};
+use houyicoder_protocol::frontend::QueuedInput;
 use houyicoder_protocol::llm::Usage;
+use tokio_util::sync::CancellationToken;
 
 impl Runner {
     /// Cancel the in-flight run, if any, AND — only when the run is paused on
@@ -54,6 +56,34 @@ impl Runner {
         {
             t.cancel();
         }
+    }
+
+    pub(crate) fn set_turn_cancel(&self, token: Option<CancellationToken>) {
+        if let Ok(mut guard) = self.turn_cancel.lock() {
+            *guard = token;
+        }
+    }
+
+    /// Cancel the active step without ending the run and queue one final
+    /// synthesis directive so the model reports partial findings in text.
+    pub fn request_wrap_up(&self, directive: impl Into<String>) {
+        if self
+            .user_turn
+            .lock()
+            .expect("user_turn lock")
+            .begin_wrap_up()
+        {
+            self.enqueue_input(QueuedInput::new(directive));
+            self.cancel_turn();
+        }
+    }
+
+    /// Whether a budget watchdog has asked this run to synthesize and exit.
+    pub(crate) fn is_wrapping_up(&self) -> bool {
+        self.user_turn
+            .lock()
+            .expect("user_turn lock")
+            .is_wrapping_up()
     }
 
     /// Whether abort() was called since the last run() entry AND the run was

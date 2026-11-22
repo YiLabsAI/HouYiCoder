@@ -17,6 +17,9 @@ pub(crate) struct UserTurn {
     /// The turn's drive legs added up. None until a leg of this turn ends, so
     /// a turn nobody measured reports no duration rather than a claimed zero.
     worked: Option<Duration>,
+    /// Set when a budget watchdog asks this run to stop calling tools and emit
+    /// one final text summary before termination.
+    wrapping_up: bool,
 }
 
 impl UserTurn {
@@ -31,10 +34,23 @@ impl UserTurn {
         self.calls
     }
 
-    /// Start a fresh turn: no calls spent, no work measured.
+    /// Start a fresh turn: no calls spent, no work measured, not wrapping up.
     pub(crate) fn begin(&mut self) {
         self.calls = 0;
         self.worked = None;
+        self.wrapping_up = false;
+    }
+
+    /// Enter final wrap-up mode, returning true on the first transition.
+    pub(crate) fn begin_wrap_up(&mut self) -> bool {
+        let first = !self.wrapping_up;
+        self.wrapping_up = true;
+        first
+    }
+
+    /// Whether this run has entered final wrap-up mode.
+    pub(crate) fn is_wrapping_up(&self) -> bool {
+        self.wrapping_up
     }
 
     /// Add a finished drive leg's duration to the turn's work.

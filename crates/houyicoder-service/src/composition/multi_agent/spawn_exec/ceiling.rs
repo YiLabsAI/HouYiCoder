@@ -38,9 +38,17 @@ const TOOL_QUIET_WINDOW: Duration = Duration::from_millis(120);
 
 pub(super) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 pub(super) const DEFAULT_MAX_WALL_CLOCK: Duration = Duration::from_secs(3600);
-/// How long a child may wait on a human answer before the watchdog ends
-/// it. Matches the approval timeout the routing path enforces.
-const APPROVAL_WINDOW: Duration = Duration::from_secs(300);
+
+///Bounded grace window granted to a responsive child to emit a final plain-text
+/// summary after a budget or quiet-window stop cancels its active step.
+#[cfg(not(test))]
+const WRAP_UP_WINDOW: Duration = Duration::from_secs(45);
+#[cfg(test)]
+const WRAP_UP_WINDOW: Duration = Duration::from_millis(80);
+
+/// Directive injected into a child session when its active budget runs out so
+/// it synthesizes verified findings and remaining gaps instead of vanishing.
+pub(super) const WRAP_UP_DIRECTIVE: &str = "Your time budget has ended and tool calls are now disabled. Immediately write a concise final report covering: (1) verified findings and completed work so far, and (2) remaining unverified items.";
 
 /// The probe interval at a given stall depth. The base doubles each probe
 /// that finds no new heartbeat, capped at MAX_PROBE: 15s, 30s, 60s, 120s, 120s.
@@ -49,12 +57,10 @@ fn probe_interval(stalled: u32) -> Duration {
     (BASE_PROBE * (1u32 << shift)).min(MAX_PROBE)
 }
 
-/// Await a child's drive under a liveness watchdog. A child that keeps
-/// producing heartbeats may run past the old fixed deadline; the watchdog cuts
-/// only when the child goes quiet for the phase's window. The probe cadence
-/// backs off while a long tool runs so a healthy build or test suite is not
-/// polled at the streaming rate, and snaps back to the base the moment output
-/// arrives. An absolute cap still bounds the total.
+/// Await a child's drive under a liveness watchdog. Time spent waiting on a
+/// human approval is excluded from active wall-clock accounting; when an idle
+/// or active wall-clock limit trips, an optional soft wrap-up trigger gets one
+/// bounded window to synthesize partial findings before hard cancellation.
 pub(super) async fn watch_liveness(
     drive: impl std::future::Future<Output = (String, String, Usage)>,
     liveness: Arc<ChildLiveness>,
@@ -62,9 +68,12 @@ pub(super) async fn watch_liveness(
     max_wall_clock: Duration,
     cancel: CancellationToken,
     cut_reason: Arc<Mutex<Option<CutReason>>>,
+    mut wrap_up: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> (String, String, Usage) {
     let mut drive = Box::pin(drive);
-    let start = Instant::now();
+    let mut last_tick = Instant::now();
+    let mut active_elapsed = Duration::ZERO;
+    let mut wrap_deadline: Option<Instant> = None;
     let mut stalled_probes = 0u32;
     let mut last_heartbeat = liveness.last_heartbeat_ms();
     let mut last_phase = liveness.phase();
@@ -74,23 +83,39 @@ pub(super) async fn watch_liveness(
             last_phase = phase;
             stalled_probes = 0;
         }
-        // A long tool backs off; a streaming or approval wait stays agile so a
-        // stall is caught at the streaming rate, not the tool rate.
-        let probe = if phase == LivenessPhase::Tool {
+        let probe = if wrap_deadline.is_some() {
+            BASE_PROBE
+        } else if phase == LivenessPhase::Tool {
             probe_interval(stalled_probes)
         } else {
             BASE_PROBE
-        };
-        let probe = probe.min(max_wall_clock);
+        }
+        .min(max_wall_clock);
         tokio::select! {
             biased;
             done = &mut drive => return done,
             _ = cancel.cancelled() => return drive.await,
             _ = sleep(probe) => {
-                let elapsed = start.elapsed();
+                let now = Instant::now();
+                let tick_dt = now.saturating_duration_since(last_tick);
+                last_tick = now;
+                if let Some(deadline) = wrap_deadline {
+                    if now >= deadline {
+                        cancel.cancel();
+                        return drive.await;
+                    }
+                    continue;
+                }
+                let phase = liveness.phase();
+                if phase == LivenessPhase::Approval {
+                    // Human decision latency is not agent compute and is
+                    // bounded by the bus approval router itself.
+                    last_heartbeat = liveness.last_heartbeat_ms();
+                    continue;
+                }
+                active_elapsed = active_elapsed.saturating_add(tick_dt);
                 let now_heartbeat = liveness.last_heartbeat_ms();
                 if now_heartbeat != last_heartbeat {
-                    // Output arrived since the last probe: reset the backoff.
                     stalled_probes = 0;
                     last_heartbeat = now_heartbeat;
                 } else if phase == LivenessPhase::Tool {
@@ -98,23 +123,30 @@ pub(super) async fn watch_liveness(
                 }
                 let idle = elapsed_from_ms(liveness.last_heartbeat_ms());
                 let window = match phase {
-                    LivenessPhase::Approval => APPROVAL_WINDOW,
                     LivenessPhase::Tool => TOOL_QUIET_WINDOW,
                     _ => idle_timeout,
                 };
-                if idle >= window {
-                    record_cut(&cut_reason, CutReason::TimedOut {
+                let cut = if idle >= window {
+                    Some(CutReason::TimedOut {
                         secs: window.as_secs(),
                         stage: Some(format!("{phase:?}")),
-                    });
-                    cancel.cancel();
-                    return drive.await;
-                }
-                if elapsed >= max_wall_clock {
-                    record_cut(&cut_reason, CutReason::TimedOut {
+                    })
+                } else if active_elapsed >= max_wall_clock {
+                    Some(CutReason::TimedOut {
                         secs: max_wall_clock.as_secs(),
                         stage: None,
-                    });
+                    })
+                } else {
+                    None
+                };
+                if let Some(reason) = cut {
+                    record_cut(&cut_reason, reason);
+                    if let Some(trigger) = wrap_up.take() {
+                        liveness.record(LivenessPhase::Streaming);
+                        trigger();
+                        wrap_deadline = Some(Instant::now() + WRAP_UP_WINDOW);
+                        continue;
+                    }
                     cancel.cancel();
                     return drive.await;
                 }

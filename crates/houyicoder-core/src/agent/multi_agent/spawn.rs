@@ -326,31 +326,17 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         runner = runner.with_hooks(hooks);
     }
     runner = inherit_compaction(runner, &req.inherited);
-    let mut ending = Arc::new(EndingClaim::new(child.run_mode));
-    // Written by whoever stops the child and read by the ending it publishes.
-    // It exists on every handle, so a spawn with no bus pays one allocation
-    // and the foreground path reports a cut to its caller the same way.
     let cut_reason = Arc::new(Mutex::new(None));
     let liveness = Arc::new(ChildLiveness::new());
-    if let Some(bus) = bus {
-        let mut events = AgentEventHandlers::default();
-        let publisher = ChildStatusPublisher::new(bus.clone(), child)
-            .with_cut_report(Arc::clone(&cut_reason), req.partial_transcript.clone())
-            .with_liveness(Arc::clone(&liveness));
-        // The publisher owns the mode its ending is published with, so the
-        // handle carries the publisher's own claim rather than a second copy
-        // that could disagree with it.
-        ending = publisher.ending();
-        events.set_run_lifecycle(Arc::new(publisher));
-        runner.set_event_handlers(events);
-        // Register a point-to-point inbox so the parent can steer this
-        // child mid-task: the drive loop drains the receiver at each turn
-        // boundary, appending each Inbox text as a user message. The bus
-        // routes send_inbox calls to the registered sender.
-        let (tx, rx) = unbounded_channel::<BusMessage>();
-        bus.register_inbox(&child_sid.to_string(), tx);
-        runner.set_inbox(rx);
-    }
+    let ending = attach_child_events(
+        &mut runner,
+        bus,
+        child,
+        child_sid,
+        &cut_reason,
+        req.partial_transcript.clone(),
+        &liveness,
+    );
     let runner = Arc::new(runner);
     // Children run at the lowest effort tier: a fan-out of sub-agents must
     // not multiply reasoning-token spend. Sticky on the runner so every
@@ -404,6 +390,36 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         cut_reason,
         liveness,
     })
+}
+
+fn attach_child_events(
+    runner: &mut Runner,
+    bus: Option<Arc<AgentBus>>,
+    child: ChildDescriptor,
+    child_sid: SessionId,
+    cut_reason: &Arc<Mutex<Option<CutReason>>>,
+    partial_transcript: Option<Arc<dyn PartialTranscript>>,
+    liveness: &Arc<ChildLiveness>,
+) -> Arc<EndingClaim> {
+    if let Some(bus) = bus {
+        let mut events = AgentEventHandlers::default();
+        let publisher = ChildStatusPublisher::new(bus.clone(), child)
+            .with_cut_report(Arc::clone(cut_reason), partial_transcript)
+            .with_liveness(Arc::clone(liveness));
+        let ending = publisher.ending();
+        events.set_run_lifecycle(Arc::new(publisher));
+        runner.set_event_handlers(events);
+        let (tx, rx) = unbounded_channel::<BusMessage>();
+        bus.register_inbox(&child_sid.to_string(), tx);
+        runner.set_inbox(rx);
+        ending
+    } else {
+        let ending = Arc::new(EndingClaim::new(child.run_mode));
+        let mut events = AgentEventHandlers::default();
+        events.set_run_lifecycle(liveness.clone());
+        runner.set_event_handlers(events);
+        ending
+    }
 }
 
 /// Enter the per-child worktree when the spawn asked for one.

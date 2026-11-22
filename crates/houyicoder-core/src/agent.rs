@@ -507,48 +507,30 @@ impl Runner {
             match next_step {
                 NextStep::RunAgain => {
                     turn += 1;
-                    if self.bump_user_turn() > self.config.max_turns {
-                        // Graceful max-turns result (not a crash): the run
-                        // is resumable and carries the turns + usage so
-                        // the caller can surface cost statistics.
+                    let limit = self
+                        .config
+                        .max_turns
+                        .saturating_add(u32::from(self.is_wrapping_up()));
+                    if self.bump_user_turn() > limit {
                         return Ok(RunResult {
                             outcome: RunOutcome::MaxTurnsReached { turns: turn - 1 },
                             turns: turn - 1,
                             usage,
                         });
                     }
-                    if let Some(budgeted) = self.check_run_budget(turn - 1, &usage) {
+                    if !self.is_wrapping_up()
+                        && let Some(budgeted) = self.check_run_budget(turn - 1, &usage)
+                    {
                         return Ok(budgeted);
                     }
-                    // Mid-turn interjection: drain the host-submitted queue,
-                    // the bus inbox, + lower-priority completion notifications,
-                    // appending each as a user message before the next model
-                    // call. Extracted so the drive loop body stays readable.
                     if self.drain_turn_boundary(session).await? {
                         todo_continuations = 0;
                     }
-                    // Arm the per-turn abort token so an external cancel_turn
-                    // (the viewed-child Esc path) can abort this turn's model
-                    // fetch without killing the run. Cleared after the call.
-                    let turn_token = CancellationToken::new();
-                    if let Ok(mut guard) = self.turn_cancel.lock() {
-                        *guard = Some(turn_token.clone());
-                    }
+                    let turn_token = token.child_token();
+                    self.set_turn_cancel(Some(turn_token.clone()));
                     let called = self
-                        .model_call_stream(session, turn, self.config.max_turns, token, &turn_token)
+                        .model_call_stream(session, turn, limit, token, &turn_token)
                         .await?;
-                    if let Ok(mut guard) = self.turn_cancel.lock() {
-                        *guard = None;
-                    }
-                    // The turn's billed calls reach the totals here, once: a reply
-                    // recovered from an output-cap cut is part of the same turn, so
-                    // dropping the cut call would make the run total the one figure
-                    // that skips retry waste, and a session reopened from the log
-                    // (which records it) would read higher than the run that wrote
-                    // it. An interrupted turn carries no usage, and folding a zero
-                    // in its place would merge an unreported provenance into the
-                    // session total and clear the window footprint the status bar
-                    // reads there.
                     if let Some(billed) = &called.usage {
                         accumulate_usage(&mut usage, billed);
                         if let Ok(mut acc) = self.usage.lock() {
@@ -558,11 +540,7 @@ impl Runner {
                     let response = match called.response {
                         Some(r) => r,
                         None if token.is_cancelled() => {
-                            // Lifecycle abort: reconcile orphan results so the
-                            // session log stays lossless (no ToolCall without a
-                            // ToolResult) then surface the interruption. The
-                            // server buffer is cleared at the run/resume exit
-                            // (finalize_input_buffer) — Interrupted is terminal.
+                            self.set_turn_cancel(None);
                             self.reconcile_tool_results(session).await?;
                             return Ok(RunResult {
                                 outcome: RunOutcome::Interrupted("interrupted by user".to_string()),
@@ -571,20 +549,16 @@ impl Runner {
                             });
                         }
                         None => {
-                            // Per-turn abort: the viewed-child Esc cancelled
-                            // the turn token (not the lifecycle). Drop a
-                            // durable marker so the transcript shows the
-                            // interrupt + start the next turn with a fresh
-                            // token. Non-terminal: the run continues.
+                            self.set_turn_cancel(None);
                             self.append_turn_interrupted(session).await?;
                             next_step = NextStep::RunAgain;
                             continue;
                         }
                     };
-                    next_step = self.resolve_turn(session, &response, token).await?;
+                    let resolved = self.resolve_turn(session, &response, &turn_token).await;
+                    self.set_turn_cancel(None);
+                    next_step = resolved?;
                     if matches!(next_step, NextStep::RunAgain) {
-                        // Tools may finish normally after cancellation and still yield RunAgain.
-                        // Reconcile their durable results before ending the run.
                         if token.is_cancelled() {
                             return self.interrupted_at_boundary(session, turn, usage).await;
                         }
@@ -592,9 +566,10 @@ impl Runner {
                     }
                 }
                 NextStep::FinalOutput(text) => {
-                    if let Some(continued) = self
-                        .try_continue_incomplete(session, turn, &mut todo_continuations, token)
-                        .await?
+                    if !self.is_wrapping_up()
+                        && let Some(continued) = self
+                            .try_continue_incomplete(session, turn, &mut todo_continuations, token)
+                            .await?
                     {
                         next_step = continued;
                         continue;

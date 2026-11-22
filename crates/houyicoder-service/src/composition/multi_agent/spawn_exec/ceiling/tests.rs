@@ -50,6 +50,7 @@ async fn test_heartbeat_drive_survives() {
         Duration::from_secs(30),
         cancel.clone(),
         cut_reason.clone(),
+        None,
     )
     .await;
     assert!(
@@ -78,6 +79,7 @@ async fn test_dead_drive_is_cut() {
         Duration::from_secs(30),
         cancel,
         cut_reason.clone(),
+        None,
     )
     .await;
     let reason = cut_reason.lock().unwrap().clone();
@@ -85,4 +87,78 @@ async fn test_dead_drive_is_cut() {
         matches!(reason, Some(CutReason::TimedOut { .. })),
         "a dead drive is cut with a timeout reason, got {reason:?}"
     );
+}
+
+/// Time spent parked in LivenessPhase::Approval waiting on a human answer does
+/// not count against max_wall_clock and does not trigger a watchdog cut.
+#[tokio::test]
+async fn test_approval_pause_spares_clock() {
+    let liveness = Arc::new(ChildLiveness::new());
+    liveness.record(LivenessPhase::Approval);
+    let cancel = CancellationToken::new();
+    let cut_reason: Arc<Mutex<Option<CutReason>>> = Arc::new(Mutex::new(None));
+    let liv = Arc::clone(&liveness);
+    let cancel_for_drive = cancel.clone();
+    let drive = async move {
+        tokio::select! {
+            _ = cancel_for_drive.cancelled() => ("cut".into(), String::new(), Usage::default()),
+            _ = sleep(Duration::from_millis(120)) => {
+                liv.record(LivenessPhase::Streaming);
+                ("approved".into(), "done".into(), Usage::default())
+            }
+        }
+    };
+    let (status, summary, _) = watch_liveness(
+        drive,
+        liveness,
+        Duration::from_millis(80),
+        Duration::from_millis(50),
+        cancel,
+        cut_reason.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, "approved");
+    assert_eq!(summary, "done");
+    assert!(
+        cut_reason.lock().unwrap().is_none(),
+        "human approval wait must not spend active wall clock"
+    );
+}
+
+/// When a wrap-up trigger is supplied, reaching the budget invokes it first so
+/// the child can synthesize partial findings before the hard cancel fires.
+#[tokio::test]
+async fn test_soft_wrap_synthesizes() {
+    let liveness = Arc::new(ChildLiveness::new());
+    let cancel = CancellationToken::new();
+    let cut_reason: Arc<Mutex<Option<CutReason>>> = Arc::new(Mutex::new(None));
+    let wrap_signal = Arc::new(tokio::sync::Notify::new());
+    let wrap_for_drive = Arc::clone(&wrap_signal);
+    let cancel_for_drive = cancel.clone();
+    let drive = async move {
+        tokio::select! {
+            _ = cancel_for_drive.cancelled() => ("hard_cut".into(), String::new(), Usage::default()),
+            _ = wrap_for_drive.notified() => ("wrapped".into(), "partial synthesis".into(), Usage::default()),
+        }
+    };
+    let trigger: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        wrap_signal.notify_one();
+    });
+    let (status, summary, _) = watch_liveness(
+        drive,
+        liveness,
+        Duration::from_millis(40),
+        Duration::from_secs(30),
+        cancel,
+        cut_reason.clone(),
+        Some(trigger),
+    )
+    .await;
+    assert_eq!(status, "wrapped");
+    assert_eq!(summary, "partial synthesis");
+    assert!(matches!(
+        *cut_reason.lock().unwrap(),
+        Some(CutReason::TimedOut { .. })
+    ));
 }

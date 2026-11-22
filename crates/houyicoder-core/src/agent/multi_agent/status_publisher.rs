@@ -60,6 +60,14 @@ impl ChildLiveness {
     }
 }
 
+impl EventHandler<RunLifecycleEvent> for ChildLiveness {
+    fn handle(&self, event: RunLifecycleEvent) {
+        if let RunLifecycleEvent::Heartbeat { phase } = event {
+            self.record(phase);
+        }
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

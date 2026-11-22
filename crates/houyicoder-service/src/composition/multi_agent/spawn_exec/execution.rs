@@ -9,7 +9,9 @@
 use std::time::Duration;
 
 use super::super::{AdmissionLease, ChildHandle};
-use super::ceiling::{DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_WALL_CLOCK, watch_liveness};
+use super::ceiling::{
+    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_WALL_CLOCK, WRAP_UP_DIRECTIVE, watch_liveness,
+};
 use super::handover::EndingBinding;
 use super::*;
 
@@ -130,6 +132,10 @@ impl ChildExecution {
             let ceiling = handle.cancel.clone();
             let cut_reason = Arc::clone(&handle.cut_reason);
             let liveness = Arc::clone(&handle.liveness);
+            let wrap_runner = Arc::clone(&handle.runner);
+            let wrap_up: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                wrap_runner.request_wrap_up(WRAP_UP_DIRECTIVE);
+            });
             let run = finalize_child(&runtime, handle, parent, child_sid, child, hooks, task);
             watch_liveness(
                 run,
@@ -138,6 +144,7 @@ impl ChildExecution {
                 max_wall_clock,
                 ceiling,
                 cut_reason,
+                Some(wrap_up),
             )
             .await;
         })
@@ -240,6 +247,10 @@ impl ChildExecution {
             let ceiling = handle.cancel.clone();
             let cut_reason = Arc::clone(&handle.cut_reason);
             let liveness = Arc::clone(&handle.liveness);
+            let wrap_runner = Arc::clone(&handle.runner);
+            let wrap_up: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                wrap_runner.request_wrap_up(WRAP_UP_DIRECTIVE);
+            });
             let run = finalize_child(&runtime, handle, parent, child_sid, child, hooks, task);
             let (status, summary, usage) = watch_liveness(
                 run,
@@ -248,6 +259,7 @@ impl ChildExecution {
                 max_wall_clock,
                 ceiling,
                 cut_reason,
+                Some(wrap_up),
             )
             .await;
             Ok(SpawnOutcome::foreground(child_str, status, summary, usage))

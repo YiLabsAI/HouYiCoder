@@ -1,5 +1,12 @@
 //! What a delegation reports when its own ceiling ends the run.
 
+use std::future::pending;
+
+use houyicoder_api::tool::Tool;
+use houyicoder_async::PFut;
+use houyicoder_protocol::extension::ToolError;
+use serde_json::{Value, json};
+
 use super::*;
 
 /// A child that outlives its ceiling is stopped and reported as such.
@@ -119,4 +126,82 @@ async fn test_ceiling_leaves_finished_alone() {
         "a run inside its ceiling keeps its own ending"
     );
     assert_eq!(outcome.summary.as_deref(), Some("done"));
+}
+
+struct HungTool;
+
+impl Tool for HungTool {
+    fn name(&self) -> &str {
+        "hung_probe"
+    }
+    fn description(&self) -> &str {
+        "stalls until cancelled"
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    fn execute(&self, ctx: ToolCtx, _input: Value) -> PFut<'_, Result<Value, ToolError>> {
+        Box::pin(async move {
+            match ctx.cancel {
+                Some(token) => token.cancelled().await,
+                None => pending::<()>().await,
+            }
+            Ok(json!({"interrupted": true}))
+        })
+    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
+    fn requires_approval(&self) -> bool {
+        false
+    }
+}
+
+/// When a child subagent stalls inside a quiet tool call before emitting any
+/// assistant text, the watchdog triggers a soft wrap-up turn that cancels the
+/// stuck tool, refuses any further tool attempts during wrap-up, and lets the
+/// responsive model synthesize its partial report.
+#[tokio::test]
+async fn test_stalled_tool_wraps_up() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "tc1".into(),
+                name: "hung_probe".into(),
+                input: json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::ToolCall {
+                id: "tc2".into(),
+                name: "hung_probe".into(),
+                input: json!({}),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+        CompletionResponse {
+            output: vec![OutputItem::Text {
+                text: "Findings: verified module A; Unverified: hung_probe timed out.".into(),
+            }],
+            usage: Usage::default(),
+            model: "test".into(),
+        },
+    ]));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(HungTool));
+    let (runtime, _store, parent_sid) = runtime_with(provider, None, tools);
+    let ctx = ToolCtx::new("c1").with_session(parent_sid);
+    let mut args = SpawnArgs::new("explore", "audit", "audit");
+    args.timeout_secs = Some(1);
+
+    let outcome = runtime.spawn(&ctx, args).await.expect("the spawn runs");
+    assert_eq!(outcome.status.as_deref(), Some("timed_out"));
+    let summary = outcome.summary.unwrap_or_default();
+    assert!(
+        summary.contains("Findings: verified module A"),
+        "expected synthesized wrap-up report in timed-out summary, got: {summary}"
+    );
 }

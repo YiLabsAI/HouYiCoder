@@ -56,6 +56,49 @@ pub(crate) fn resolved_input(tool: Option<&Arc<dyn Tool>>, input: &Value) -> Val
         .unwrap_or_else(|| input.clone())
 }
 
+fn partition_turn_plans(
+    plans: Vec<ToolCallPlan>,
+    wrapping_up: bool,
+) -> (
+    Vec<ToolCallPlan>,
+    Vec<ApprovalRequest>,
+    Vec<(String, Value)>,
+) {
+    let mut exec = Vec::new();
+    let mut approvals = Vec::new();
+    let mut unrunnable = Vec::new();
+    for plan in plans {
+        if wrapping_up {
+            unrunnable.push((
+                plan.id,
+                tool_error_json(&ToolError::Failed(
+                    "time budget reached: tool calls disabled during final wrap-up; output your synthesis in plain text now".into(),
+                )),
+            ));
+        } else if !plan.invalid_arguments.is_empty() {
+            let message = format!(
+                "{}: {} required",
+                plan.tool.name(),
+                plan.invalid_arguments.join(", ")
+            );
+            unrunnable.push((plan.id, tool_error_json(&ToolError::InvalidInput(message))));
+        } else if let Some(reason) = plan.approval {
+            let ToolCallPlan {
+                id, tool, input, ..
+            } = plan;
+            approvals.push(ApprovalRequest::new(
+                id,
+                tool.name().to_string(),
+                input,
+                Some(reason),
+            ));
+        } else {
+            exec.push(plan);
+        }
+    }
+    (exec, approvals, unrunnable)
+}
+
 impl ToolCallPlan {
     pub(crate) fn new(id: String, tool: Arc<dyn Tool>, input: Value) -> Self {
         // The text the host runs may differ from the one the model wrote (a
@@ -141,35 +184,8 @@ impl Runner {
         // included: a rule that refuses a call outranks a decision on it, so
         // nobody is asked to approve what the rule already refused.
         let blocked = self.run_pre_tool_use_gate(session, &mut plans).await;
-        // The survivors split: a call its own tool gates on the input becomes
-        // an approval request the caller resolves via resume(); the rest run.
-        let mut approvals: Vec<ApprovalRequest> = Vec::new();
-        let mut exec: Vec<ToolCallPlan> = Vec::new();
-        // A call that cannot run is answered with the schema error the tool
-        // would have raised, without executing it or asking anyone about it.
-        let mut unrunnable: Vec<(String, Value)> = Vec::new();
-        for plan in plans {
-            if !plan.invalid_arguments.is_empty() {
-                let message = format!(
-                    "{}: {} required",
-                    plan.tool.name(),
-                    plan.invalid_arguments.join(", ")
-                );
-                unrunnable.push((plan.id, tool_error_json(&ToolError::InvalidInput(message))));
-            } else if let Some(reason) = plan.approval {
-                let ToolCallPlan {
-                    id, tool, input, ..
-                } = plan;
-                approvals.push(ApprovalRequest::new(
-                    id,
-                    tool.name().to_string(),
-                    input,
-                    Some(reason),
-                ));
-            } else {
-                exec.push(plan);
-            }
-        }
+        let (mut exec, mut approvals, unrunnable) =
+            partition_turn_plans(plans, self.is_wrapping_up());
         // Execute in partition-by-safety batches (concurrency-safe runs
         // concurrent, non-safe serial); each result appends as it completes,
         // so the live delta renders per-tool progress rather than a batch
@@ -243,17 +259,26 @@ impl Runner {
                 .await?;
             approvals.push(req);
         }
+        if self.is_wrapping_up() && !approvals.is_empty() {
+            let skipped: Vec<(String, Value)> = approvals
+                .drain(..)
+                .map(|req| {
+                    (
+                        req.call_id,
+                        tool_error_json(&ToolError::Failed(
+                            "time budget reached: skipped approval during final wrap-up".into(),
+                        )),
+                    )
+                })
+                .collect();
+            self.append_not_run(session, &skipped, &call_names).await?;
+        }
         if !approvals.is_empty() {
             return Ok(NextStep::Interruption(approvals));
         }
         if response.has_tool_calls() {
             return Ok(NextStep::RunAgain);
         }
-        // No pending tools and no approval requests: the turn is final only if
-        // the model emitted text. A turn with no Text and no ToolCalls (e.g.
-        // only Reasoning, or empty) is "model said nothing usable" ⇒
-        // run_again; max_turns is the backstop. Returning FinalOutput("")
-        // here would silently end the run with an empty answer.
         match extract_final_text(&response.output) {
             Some(text) => Ok(NextStep::FinalOutput(text)),
             None => Ok(NextStep::RunAgain),
