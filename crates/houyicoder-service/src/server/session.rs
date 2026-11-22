@@ -13,11 +13,11 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
 use crate::composition::SessionHost;
+use crate::consent::disclose_directory_grants;
 use crate::diagnostics::handle;
 use crate::lifecycle::LifecycleError;
 use crate::lifecycle::{LifecycleState, PendingPermission, PendingTurn};
 use crate::protocol_adapter::{build_approval_request, parse_approval_decision};
-use crate::server::approval::disclose_directory_grants;
 use crate::server::child_permission::ChildPermissionRx;
 use crate::server::recap::RecapSession;
 use crate::server::{EventSequencer, FrameCarrier, Server};
@@ -211,7 +211,7 @@ async fn reemit_and_settle_ask(
     // Recording satisfies the card audit for asks that reached the client
     // only through a re-emit, and the fold counts one card per call id, so a
     // card the first connection already recorded is not counted twice.
-    server.record_card(&engine_approval).await;
+    server.consent().record_card(&engine_approval).await;
     let (decision, cancelled) = await_reemit_verdict(server, io, ask_id, &ask_perm.call_id).await?;
     if cancelled {
         // Esc on a re-emitted card: the run resumes with a deny so it does
