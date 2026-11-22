@@ -87,10 +87,6 @@ fn clip_step_head(segment: &str) -> String {
 }
 
 pub(super) fn describe_egress_reason(content: &str, outputs_safe: bool) -> String {
-    if !outputs_safe {
-        return "this command writes a local file; origin approval does not authorize file output"
-            .into();
-    }
     let scan = canonical_scan(content);
     for command in scan.commands() {
         if let Some(reason) = git_reason(command) {
@@ -112,6 +108,10 @@ pub(super) fn describe_egress_reason(content: &str, outputs_safe: bool) -> Strin
             }
             _ => {}
         }
+    }
+    if !outputs_safe {
+        return "this command writes a local file; origin approval does not authorize file output"
+            .into();
     }
     "this command reaches the network".into()
 }

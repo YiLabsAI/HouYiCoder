@@ -14,11 +14,16 @@ pub(super) struct ScratchStep<'a> {
 }
 
 /// Split a command string on shell separators while recording whether each
-/// segment is reached exclusively through an and-and operator.
+/// segment is reached exclusively through an and-and operator. Quoted regex
+/// alternations and text stay inside their segment, while command
+/// substitutions inside double quotes still split into separate steps.
 pub(super) fn split_steps(text: &str) -> Vec<ScratchStep<'_>> {
     let is_sep = |c: char| matches!(c, '&' | ';' | '|' | '\n' | '(' | ')' | '`' | '{' | '}');
     let mut steps = Vec::new();
     let mut chained = false;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut subst_paren_depth = 0usize;
     let mut i = 0;
     let bytes = text.as_bytes();
     while i < bytes.len() {
@@ -26,7 +31,61 @@ pub(super) fn split_steps(text: &str) -> Vec<ScratchStep<'_>> {
             i += 1;
         }
         let start = i;
-        while i < bytes.len() && !is_sep(bytes[i] as char) {
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_single {
+                if b == b'\'' {
+                    in_single = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_double {
+                if b == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if b == b'"' && subst_paren_depth == 0 {
+                    in_double = false;
+                    i += 1;
+                    continue;
+                }
+                if b == b'`' {
+                    break;
+                }
+                if b == b'$' && bytes.get(i + 1) == Some(&b'(') {
+                    subst_paren_depth += 1;
+                    i += 1;
+                    break;
+                }
+                if subst_paren_depth > 0 && is_sep(b as char) {
+                    if b == b')' {
+                        subst_paren_depth -= 1;
+                    } else if b == b'(' {
+                        subst_paren_depth += 1;
+                    }
+                    break;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b'\\' {
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+            if b == b'\'' {
+                in_single = true;
+                i += 1;
+                continue;
+            }
+            if b == b'"' {
+                in_double = true;
+                i += 1;
+                continue;
+            }
+            if is_sep(b as char) {
+                break;
+            }
             i += 1;
         }
         let seg = text[start..i].trim();
@@ -35,6 +94,13 @@ pub(super) fn split_steps(text: &str) -> Vec<ScratchStep<'_>> {
         }
         let sep_start = i;
         while i < bytes.len() && (is_sep(bytes[i] as char) || bytes[i].is_ascii_whitespace()) {
+            if in_double && subst_paren_depth > 0 {
+                if bytes[i] == b')' {
+                    subst_paren_depth = subst_paren_depth.saturating_sub(1);
+                } else if bytes[i] == b'(' && i != sep_start {
+                    subst_paren_depth += 1;
+                }
+            }
             i += 1;
         }
         let gap: String = text[sep_start..i]
@@ -42,6 +108,9 @@ pub(super) fn split_steps(text: &str) -> Vec<ScratchStep<'_>> {
             .filter(|c| !c.is_ascii_whitespace())
             .collect();
         chained = !seg.is_empty() && gap == "&&";
+    }
+    if in_single || in_double {
+        return Vec::new();
     }
     steps
 }

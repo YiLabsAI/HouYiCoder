@@ -14,14 +14,18 @@ use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
 use crate::shell::{substitution_bodies, unwrap_clause};
 
 mod effect;
+mod protected_read;
 mod protected_write;
 mod readonly;
 mod temp_cwd;
 
-pub use effect::{is_effect_safe, reads_only_protected, removes_only_temp};
+pub use effect::{is_effect_safe, removes_only_temp};
 pub(crate) use effect::{sets_tmpdir, starts_with_supported_command};
+pub(crate) use protected_read::reads_credential_content;
+pub use protected_read::reads_only_protected;
 pub(crate) use protected_write::writes_fence_denied_path;
 pub use readonly::is_readonly_compound;
+pub(crate) use readonly::{git_config_reads_only, ssh_prints_local_config};
 pub(crate) use temp_cwd::{TempCwd, chain_links, scratch_target, starts_a_subshell};
 
 /// Split a compound command into its top-level segments on and/or, semicolon,
@@ -330,11 +334,18 @@ pub(crate) fn is_env_assignment(word: &str) -> bool {
             | "https_proxy"
             | "all_proxy"
             | "GIT_SSH_COMMAND"
+            | "GIT_SSH"
+            | "GIT_ASKPASS"
+            | "SSH_ASKPASS"
+            | "GIT_DIR"
+            | "GIT_WORK_TREE"
+            | "GIT_EXEC_PATH"
             | "LD_PRELOAD"
             | "LD_LIBRARY_PATH"
             | "DYLD_INSERT_LIBRARIES"
             | "DYLD_LIBRARY_PATH"
-    ) || name.contains('[')
+    ) || name.starts_with("GIT_CONFIG")
+        || name.contains('[')
     {
         return false;
     }

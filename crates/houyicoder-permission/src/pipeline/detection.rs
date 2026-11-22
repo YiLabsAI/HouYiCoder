@@ -11,7 +11,9 @@ use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
 
 use super::attribution::{compound_unverified_step, describe_destructive, describe_egress_reason};
-use crate::compound::{compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp};
+use crate::compound::{
+    compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp, ssh_prints_local_config,
+};
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::egress::{egress_outputs_safe, egress_scope_list};
 use crate::git_safety::collect_git_ask_ops;
@@ -86,6 +88,9 @@ fn destructive_command(scan: &ShellScan) -> Option<&ShellCommand> {
 
 /// Whether an invocation reaches outside the machine.
 fn reaches_network(command: &ShellCommand) -> bool {
+    if command.runs("ssh") {
+        return !ssh_prints_local_config(&word_refs(command.args()));
+    }
     if command.is_one_of(EGRESS_TOOLS) {
         return true;
     }
@@ -145,7 +150,14 @@ pub(crate) fn should_ask_egress(tool_name: &str, content: &str) -> bool {
         return false;
     }
     let scan = canonical_scan(content);
-    scan.commands().iter().any(reaches_network)
+    let external = egress_names_external_source(content);
+    scan.commands().iter().any(|cmd| {
+        reaches_network(cmd)
+            || (external
+                && cmd.git_subcommand().is_some_and(|(sub, _)| {
+                    matches!(sub.to_ascii_lowercase().as_str(), "fetch" | "ls-remote")
+                }))
+    })
 }
 
 /// The git subcommands that reach a remote, as the words the card and the
@@ -183,9 +195,17 @@ pub fn egress_remote_op(content: &str) -> Option<&'static str> {
 /// names an arbitrary host.
 pub fn egress_names_external_source(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
-    // Rebinding the transport picks the program that speaks to the remote, so
-    // the destination is no longer the one the repository configured.
-    if lower.contains("git_ssh_command=") || lower.contains("git_ssh=") {
+    // Rebinding the transport or git configuration picks the program that
+    // speaks to the remote, so the destination is no longer the one the
+    // repository configured.
+    if lower.contains("git_ssh_command=")
+        || lower.contains("git_ssh=")
+        || lower.contains("git_config=")
+        || lower.contains("git_config_global=")
+        || lower.contains("git_config_system=")
+        || lower.contains("git_config_count=")
+        || lower.contains("git_exec_path=")
+    {
         return true;
     }
     canonical_scan(content).commands().iter().any(|command| {

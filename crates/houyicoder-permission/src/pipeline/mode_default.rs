@@ -10,7 +10,7 @@ use houyicoder_api::sandbox::names_credential_path;
 use houyicoder_api::shell::Shell;
 use houyicoder_api::tool::is_shell_tool;
 
-use crate::compound::is_readonly_compound;
+use crate::compound::{is_readonly_compound, reads_credential_content};
 use crate::decision::{AllowReason, Decision};
 use crate::egress::http_origin;
 use crate::gate::mode_policy::mode_default;
@@ -84,5 +84,5 @@ fn readonly_shell(req: &ToolRequest<'_>, ctx: &GateCtx<'_>) -> bool {
         return powershell_read_only(ctx.content) && !names_credential_path(ctx.content);
     }
     let segments: Vec<&str> = ctx.segments.iter().map(String::as_str).collect();
-    is_readonly_compound(&segments) && !names_credential_path(ctx.content)
+    is_readonly_compound(&segments) && !reads_credential_content(ctx.content)
 }

@@ -13,8 +13,9 @@ use houyicoder_api::sandbox::protected_path_hits;
 use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
 use houyicoder_api::tool::is_shell_tool;
 
-use crate::compound::{is_readonly_compound, split_compound};
+use crate::compound::{git_config_reads_only, is_readonly_compound, split_compound};
 use crate::rule::{Effect, input_content};
+use crate::shell::canonical_scan;
 
 /// Whether a tool call touches a protected path. Returns Ask when the call's
 /// primary content string names one of the bypass-immune paths; None
@@ -42,6 +43,9 @@ pub fn safety_check(tool_name: &str, input: Option<&Value>) -> Option<Effect> {
     if hits.control || hits.startup {
         return Some(Effect::Ask);
     }
+    if shell && writes_git_config(&content) {
+        return Some(Effect::Ask);
+    }
     // An instruction file or a memory store is protected from being
     // rewritten, which is how an approval would change every later decision.
     // Reading one decides nothing, so a command that only reads does not
@@ -50,6 +54,20 @@ pub fn safety_check(tool_name: &str, input: Option<&Value>) -> Option<Effect> {
         return Some(Effect::Ask);
     }
     None
+}
+
+/// Whether a shell command runs git config without an explicit read-only flag,
+/// which writes repository or user git configuration even though the file path
+/// does not appear on the command line.
+fn writes_git_config(content: &str) -> bool {
+    canonical_scan(content).commands().iter().any(|cmd| {
+        cmd.git_subcommand().is_some_and(|(sub, args)| {
+            sub.eq_ignore_ascii_case("config") && {
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                !git_config_reads_only(&refs)
+            }
+        })
+    })
 }
 
 /// Whether a shell command is one the read-only classifier statically

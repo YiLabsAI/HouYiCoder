@@ -19,12 +19,10 @@
 
 use std::sync::Arc;
 
-use houyicoder_api::sandbox::{
-    Containment, FenceAxis, fence_covers_all_hits, names_credential_path,
-};
+use houyicoder_api::sandbox::{Containment, FenceAxis, fence_covers_all_hits};
 use houyicoder_api::tool::{is_shell_tool, writes_files};
 
-use crate::compound::{reads_only_protected, writes_fence_denied_path};
+use crate::compound::{reads_credential_content, reads_only_protected, writes_fence_denied_path};
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
@@ -118,13 +116,19 @@ impl Validator for ProtectedPathValidator {
             return None;
         }
         let shell = is_shell_tool(req.tool_name);
+        let credential_read = shell && reads_credential_content(ctx.content);
         // The segments that name a protected path are proven read-only, so
         // this command cannot damage the files the markers protect, whatever
         // the mode. A credential is the exception: reading one leaks the
         // secret even though it damages nothing, so a read that names one
         // stays guarded.
         let reads = shell && reads_only_protected(ctx.content);
-        if reads && !names_credential_path(ctx.content) {
+        if reads
+            && !credential_read
+            && !(shell
+                && safety_check(req.tool_name, req.input).is_some()
+                && !marker_hit(ctx.content))
+        {
             return None;
         }
         // A write a fence that closes control paths refuses is evidence on its
@@ -136,7 +140,8 @@ impl Validator for ProtectedPathValidator {
             shell && self.fence_denies_control_writes() && writes_fence_denied_path(ctx.content);
         let hit = safety_check(req.tool_name, req.input).is_some()
             || self.resolved_path(req).is_some_and(|p| marker_hit(&p))
-            || fence_write;
+            || fence_write
+            || credential_read;
         if !hit {
             return None;
         }
@@ -148,7 +153,7 @@ impl Validator for ProtectedPathValidator {
         if shell
             && !reads
             && self.fence_denies_control_writes()
-            && !names_credential_path(ctx.content)
+            && !credential_read
             && fence_covers_all_hits(ctx.content)
             && !writes_fence_denied_path(ctx.content)
         {

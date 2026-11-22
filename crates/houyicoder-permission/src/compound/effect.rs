@@ -7,14 +7,12 @@
 //! decides where a write lands, so the gate only has to exclude constructs
 //! that can change what the fence is asked to open.
 
+use houyicoder_api::sandbox::names_credential_path;
 use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
 
-use super::readonly::{command_reads_only, find_matching_paren};
+use super::readonly::find_matching_paren;
 use super::temp_cwd::{TempCwd, chain_links, scratch_delete};
-use super::{
-    decode_shell_word, is_attestable, is_env_assignment, quotes_balanced, shell_word_spans,
-    split_compound, strip_safe_redirects,
-};
+use super::{is_env_assignment, quotes_balanced, split_compound, strip_safe_redirects};
 use crate::git_safety::should_ask_before_git;
 use crate::pipeline::detection::{should_ask_egress, strip_quotes};
 use crate::safety::marker_hit;
@@ -528,7 +526,7 @@ fn scan_redirect_at(chars: &[char], i: usize) -> Option<usize> {
     is_safe_input_redirect(&target).then_some(next_i)
 }
 
-fn read_redirect_token(chars: &[char], start: usize) -> Option<(String, usize)> {
+pub(crate) fn read_redirect_token(chars: &[char], start: usize) -> Option<(String, usize)> {
     let mut i = start;
     while i < chars.len() && matches!(chars[i], ' ' | '\t') {
         i += 1;
@@ -574,7 +572,13 @@ fn read_redirect_token(chars: &[char], start: usize) -> Option<(String, usize)> 
     Some((token, j))
 }
 
-fn is_safe_input_redirect(target: &str) -> bool {
+pub(crate) fn is_safe_input_redirect(target: &str) -> bool {
+    if marker_hit(target) || names_credential_path(target) {
+        return false;
+    }
+    if is_temp_output_target(target) {
+        return true;
+    }
     !target.is_empty()
         && !target.starts_with("/etc/")
         && !target.starts_with("/private/etc/")
@@ -582,66 +586,11 @@ fn is_safe_input_redirect(target: &str) -> bool {
         && !target.contains('$')
         && !target.contains('`')
         && !target.contains('(')
-        && !marker_hit(target)
 }
 
 fn starts_with_tmpdir_brace(chars: &[char], start: usize) -> bool {
     const TMPDIR_BRACE: [char; 9] = ['$', '{', 'T', 'M', 'P', 'D', 'I', 'R', '}'];
     chars.get(start..start + TMPDIR_BRACE.len()) == Some(&TMPDIR_BRACE)
-}
-
-/// Whether a shell command that references a protected marker only inspects it
-/// with read-only commands and writes nothing to a protected path.
-pub fn reads_only_protected(command: &str) -> bool {
-    let stripped = strip_quoted_heredoc_bodies(command);
-    let segments = split_compound(&stripped);
-    if segments.is_empty() {
-        return false;
-    }
-    let mut saw_protected = false;
-    for segment in &segments {
-        if !marker_hit(segment) {
-            continue;
-        }
-        saw_protected = true;
-        if !is_readonly_protected_segment(segment) {
-            return false;
-        }
-    }
-    saw_protected
-}
-
-fn is_readonly_protected_segment(segment: &str) -> bool {
-    let cleaned = strip_safe_redirects(segment);
-    if !is_attestable(&cleaned) {
-        return false;
-    }
-    let mut words: Vec<String> = Vec::new();
-    for raw in shell_word_spans(&cleaned) {
-        if is_env_assignment(raw) {
-            continue;
-        }
-        let Some(decoded) = decode_shell_word(raw) else {
-            return false;
-        };
-        words.push(decoded);
-    }
-    let Some(cmd) = words.first().map(String::as_str) else {
-        return false;
-    };
-    let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
-    // A move into one directory is read-only when the destination is a literal
-    // path. An expansion or redirect in it would point the move at a path the
-    // check cannot see, and a second argument is not a form cd takes.
-    // command_reads_only does not carry cd, because the compound path treats a
-    // trailing cd as a second command rather than setup, so the move is
-    // recognized here instead of added to the shared table. The attestable
-    // check above refuses backticks and command substitution but not a bare
-    // variable, so the destination is scanned for one here.
-    if cmd == "cd" {
-        return args.len() <= 1 && args.iter().all(|a| !a.contains(['$', '`', '>', '<']));
-    }
-    command_reads_only(cmd, &args, &cleaned, false)
 }
 
 fn first_command_word(segment: &str) -> Option<String> {

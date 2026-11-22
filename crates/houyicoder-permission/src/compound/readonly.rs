@@ -5,6 +5,11 @@
 //! itself is a reader — and because the per-command argument rules grow on
 //! their own.
 
+mod control_flow;
+
+pub(crate) use control_flow::expand_readonly_clauses;
+
+use super::effect::{is_safe_input_redirect, read_redirect_token};
 use super::quotes_balanced;
 use super::shell_word_spans;
 use super::split_compound;
@@ -28,8 +33,11 @@ use crate::pipeline::detection::strip_quotes;
 /// admitted by the argument rule, never by the name alone: the name says what
 /// the command usually does, the rule says what this call does.
 const READONLY_COMMANDS: &[&str] = &[
+    "[",
     "basename",
+    "break",
     "cat",
+    "continue",
     "curl",
     "cut",
     "df",
@@ -61,6 +69,7 @@ const READONLY_COMMANDS: &[&str] = &[
     "sha256sum",
     "shasum",
     "sort",
+    "ssh",
     "stat",
     "strings",
     "tail",
@@ -77,17 +86,22 @@ const READONLY_COMMANDS: &[&str] = &[
 
 /// Repository subcommands that only inspect a repository. The hash form is
 /// included because without its write flag it prints the hash instead of
-/// storing the object; the writing form is rejected by the argument rule. The
-/// configuration reader is absent because its default form writes.
+/// storing the object; the writing form is rejected by the argument rule.
 const GIT_READ_SUBCOMMANDS: &[&str] = &[
     "status",
     "diff",
     "show",
     "log",
     "ls-files",
+    "ls-tree",
     "rev-parse",
     "rev-list",
     "hash-object",
+    "check-ignore",
+    "check-attr",
+    "describe",
+    "merge-base",
+    "for-each-ref",
     // A fetch or a remote listing against a configured remote only moves local
     // refs. A call that names an outside source is caught by the network check,
     // which runs before this one, so the destination is never assumed here.
@@ -147,14 +161,80 @@ pub(super) fn command_reads_only(
         return false;
     }
     match cmd {
+        "[" => args.last() == Some(&"]"),
+        "break" | "continue" => {
+            args.len() <= 1 && args.iter().all(|a| a.chars().all(|c| c.is_ascii_digit()))
+        }
         "sort" | "uniq" | "printf" => !writes_output(cmd, segment),
         "find" => !args.iter().any(|arg| FIND_WRITE_PREDICATES.contains(arg)),
         "git" => git_reads_only(args),
         "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
         "sed" => sed_reads_only(args),
+        "ssh" => ssh_prints_local_config(args),
         "curl" => allow_network && curl_reads_only(segment, args),
         _ => true,
     }
+}
+
+/// Whether an OpenSSH client invocation prints evaluated local configuration or
+/// version text and exits without opening a network socket or running a proxy.
+pub(crate) fn ssh_prints_local_config(args: &[&str]) -> bool {
+    const VALUE_FLAGS: &[&str] = &[
+        "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o",
+        "-p", "-Q", "-R", "-S", "-W", "-w",
+    ];
+    let mut saw_local_flag = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        let lower = arg.to_ascii_lowercase();
+        if lower.contains("proxycommand") || lower.contains("localcommand") {
+            return false;
+        }
+        if arg == "--" {
+            break;
+        }
+        if VALUE_FLAGS.contains(&arg) {
+            let Some(val) = args.get(i + 1) else {
+                return false;
+            };
+            let val_lower = val.to_ascii_lowercase();
+            if val_lower.contains("proxycommand") || val_lower.contains("localcommand") {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(cluster) = arg.strip_prefix('-')
+            && !cluster.starts_with('-')
+            && !cluster.is_empty()
+        {
+            for (pos, ch) in cluster.char_indices() {
+                if matches!(ch, 'G' | 'V') {
+                    saw_local_flag = true;
+                }
+                let flag_str = format!("-{ch}");
+                if VALUE_FLAGS.contains(&flag_str.as_str()) {
+                    if pos + ch.len_utf8() == cluster.len() {
+                        i += 1;
+                        if let Some(val) = args.get(i) {
+                            let val_lower = val.to_ascii_lowercase();
+                            if val_lower.contains("proxycommand")
+                                || val_lower.contains("localcommand")
+                            {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        i += 1;
+    }
+    saw_local_flag
 }
 
 /// Whether a sed call only reads. The in-place flags and the script-file flag
@@ -184,21 +264,76 @@ fn sed_reads_only(args: &[&str]) -> bool {
 }
 
 fn git_reads_only(args: &[&str]) -> bool {
-    let Some(sub) = args.first() else {
+    if args.iter().any(|arg| git_writes(arg)) {
+        return false;
+    }
+    let mut idx = 0;
+    while idx < args.len() {
+        let arg = args[idx];
+        if matches!(arg, "-C" | "--git-dir" | "--work-tree") {
+            if args.get(idx + 1).is_none() {
+                return false;
+            }
+            idx += 2;
+            continue;
+        }
+        if matches!(arg, "--no-pager" | "-P" | "--bare") {
+            idx += 1;
+            continue;
+        }
+        break;
+    }
+    let Some(&sub) = args.get(idx) else {
         return false;
     };
-    if !GIT_READ_SUBCOMMANDS.contains(sub) {
-        return false;
+    let rest = &args[idx + 1..];
+    match sub {
+        "config" => return git_config_reads_only(rest),
+        "stash" => {
+            let sub_verb = rest.iter().find(|a| !a.starts_with('-')).copied();
+            return matches!(sub_verb, Some("list" | "show") | None if matches!(sub_verb, Some("list" | "show")));
+        }
+        "hash-object" => return !rest.iter().any(|arg| short_cluster_has(arg, 'w')),
+        _ => {}
     }
-    let rest = &args[1..];
-    if rest.iter().any(|arg| git_writes(arg)) {
-        return false;
+    GIT_READ_SUBCOMMANDS.contains(&sub)
+}
+
+/// Whether arguments passed to git config strictly query existing values
+/// without modifying or opening an editor on any configuration file.
+pub(crate) fn git_config_reads_only(args: &[&str]) -> bool {
+    let mut saw_read_flag = false;
+    for &arg in args {
+        if arg == "--" {
+            break;
+        }
+        if matches!(
+            arg,
+            "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
+        ) {
+            saw_read_flag = true;
+            continue;
+        }
+        if matches!(
+            arg,
+            "--add"
+                | "--replace-all"
+                | "--unset"
+                | "--unset-all"
+                | "--rename-section"
+                | "--remove-section"
+                | "--edit"
+                | "-e"
+                | "--file"
+                | "-f"
+                | "--blob"
+        ) || arg.starts_with("--file=")
+            || arg.starts_with("--blob=")
+        {
+            return false;
+        }
     }
-    // Only the hash form writes the object database, and only when asked to.
-    if *sub == "hash-object" {
-        return !rest.iter().any(|arg| short_cluster_has(arg, 'w'));
-    }
-    true
+    saw_read_flag
 }
 
 /// Whether one repository argument asks for a write, an outside program, or
@@ -368,7 +503,11 @@ const READONLY_DEPTH: u8 = 3;
 /// validator catches network tools at the top level, so a read-only shell
 /// around a destructive substitution still asks via the inner scan.
 pub fn is_readonly_compound(segments: &[&str]) -> bool {
-    is_readonly_compound_depth(segments, READONLY_DEPTH)
+    let Some(expanded) = expand_readonly_clauses(segments) else {
+        return false;
+    };
+    let refs: Vec<&str> = expanded.iter().map(String::as_str).collect();
+    is_readonly_compound_depth(&refs, READONLY_DEPTH)
 }
 
 fn is_readonly_compound_depth(segments: &[&str], depth: u8) -> bool {
@@ -396,80 +535,131 @@ fn is_literal_cd(segment: &str) -> bool {
     }
 }
 
-/// Whether one segment is read-only at the given recursion depth. Strips
-/// safe redirects, rejects unquoted file redirects, process substitution, and
-/// a leading environment assignment, extracts command-substitution and
-/// backtick bodies for recursive read-only checks, and requires the command
-/// token plus its arguments to pass the read-only rule.
-fn is_readonly_segment(seg: &str, depth: u8) -> bool {
-    if depth == 0 {
-        return false;
-    }
-    // Quoting this scan cannot follow may hide a separator, which would make
-    // one segment two commands the shell runs.
-    if !quotes_balanced(seg) {
-        return false;
-    }
-    let stripped = strip_safe_redirects(seg);
+/// Extract safe input redirects, read-only process substitutions, and command
+/// substitutions from a cleaned segment, returning the command line with
+/// redirects removed and process substitutions replaced by a neutral file
+/// descriptor operand alongside all nested substitution bodies.
+pub(super) fn strip_readonly_constructs(stripped: &str) -> Option<(String, Vec<String>)> {
     let chars: Vec<char> = stripped.chars().collect();
     let n = chars.len();
     let mut i = 0;
     let mut in_single = false;
     let mut in_double = false;
+    let mut rewritten = String::with_capacity(stripped.len());
     let mut substs: Vec<String> = Vec::new();
     while i < n {
         let c = chars[i];
         match c {
             '\'' if !in_double => {
                 in_single = !in_single;
+                rewritten.push(c);
                 i += 1;
                 continue;
             }
             '"' if !in_single => {
                 in_double = !in_double;
+                rewritten.push(c);
                 i += 1;
                 continue;
             }
             _ => {}
         }
         if in_single {
+            rewritten.push(c);
             i += 1;
+            continue;
+        }
+        if in_double && c == '\\' {
+            rewritten.push(c);
+            if let Some(&next) = chars.get(i + 1) {
+                rewritten.push(next);
+                i += 2;
+            } else {
+                i += 1;
+            }
             continue;
         }
         // Command substitution and backticks execute inside double quotes too.
         if c == '$' && i + 1 < n && chars[i + 1] == '(' {
-            let Some(end) = find_matching_paren(&chars, i + 1) else {
-                return false;
-            };
+            let end = find_matching_paren(&chars, i + 1)?;
             substs.push(chars[i + 2..end].iter().collect());
+            if in_double {
+                rewritten.push_str("subst");
+            } else {
+                rewritten.push_str("\"subst\"");
+            }
             i = end + 1;
             continue;
         }
         if c == '`' {
-            let Some(rel) = chars[i + 1..].iter().position(|&ch| ch == '`') else {
-                return false;
-            };
+            let rel = chars[i + 1..].iter().position(|&ch| ch == '`')?;
             let end = i + 1 + rel;
             substs.push(chars[i + 1..end].iter().collect());
+            if in_double {
+                rewritten.push_str("subst");
+            } else {
+                rewritten.push_str("\"subst\"");
+            }
             i = end + 1;
             continue;
         }
         if in_double {
+            rewritten.push(c);
             i += 1;
             continue;
         }
-        // Unquoted file redirect or process substitution writes or talks;
-        // not read-only. Safe redirects were already stripped.
-        if c == '>' || c == '<' {
-            return false;
+        if c == '<' && chars.get(i + 1) == Some(&'(') {
+            let end = find_matching_paren(&chars, i + 1)?;
+            substs.push(chars[i + 2..end].iter().collect());
+            rewritten.push_str("/dev/fd/0");
+            i = end + 1;
+            continue;
         }
+        if c == '<' && chars.get(i + 1) != Some(&'<') {
+            let (target, next_i) = read_redirect_token(&chars, i + 1)?;
+            if !is_safe_input_redirect(&target) {
+                return None;
+            }
+            i = next_i;
+            continue;
+        }
+        if c == '>' || c == '<' {
+            return None;
+        }
+        rewritten.push(c);
         i += 1;
     }
-    // A leading environment assignment is refused outright rather than
-    // skipped. A variable set for one command can redirect the repository
-    // directory, the shell startup file, or the loader search path, so the
-    // same argv would no longer describe what runs; asking is the safe answer.
-    let tokens: Vec<&str> = shell_word_spans(&stripped);
+    Some((rewritten, substs))
+}
+
+pub(super) fn substitutions_read_only(bodies: &[String]) -> bool {
+    substitutions_read_only_depth(bodies, READONLY_DEPTH - 1)
+}
+
+fn substitutions_read_only_depth(bodies: &[String], depth: u8) -> bool {
+    for body in bodies {
+        let segs = split_compound(body);
+        let refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+        let Some(expanded) = expand_readonly_clauses(&refs) else {
+            return false;
+        };
+        let exp_refs: Vec<&str> = expanded.iter().map(String::as_str).collect();
+        if !is_readonly_compound_depth(&exp_refs, depth) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_readonly_segment(seg: &str, depth: u8) -> bool {
+    if depth == 0 || !quotes_balanced(seg) {
+        return false;
+    }
+    let stripped = strip_safe_redirects(seg);
+    let Some((rewritten, bodies)) = strip_readonly_constructs(&stripped) else {
+        return false;
+    };
+    let tokens: Vec<&str> = shell_word_spans(&rewritten);
     let Some(first) = tokens.first() else {
         return false;
     };
@@ -478,19 +668,10 @@ fn is_readonly_segment(seg: &str, depth: u8) -> bool {
     }
     let cmd = strip_quotes(first);
     let args: Vec<&str> = tokens[1..].iter().map(|t| strip_quotes(t)).collect();
-    if !command_reads_only(cmd, &args, &stripped, depth >= READONLY_DEPTH) {
+    if !command_reads_only(cmd, &args, &rewritten, depth >= READONLY_DEPTH) {
         return false;
     }
-    // Every substitution body is itself a read-only compound (split on pipes,
-    // and-or, and semicolon so each stage is checked, depth-limited).
-    for s in &substs {
-        let segs = split_compound(s);
-        let refs: Vec<&str> = segs.iter().map(|x| x.as_str()).collect();
-        if !is_readonly_compound_depth(&refs, depth - 1) {
-            return false;
-        }
-    }
-    true
+    substitutions_read_only_depth(&bodies, depth - 1)
 }
 
 /// Find the index of the close paren matching the open paren at the given

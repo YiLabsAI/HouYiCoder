@@ -2,11 +2,13 @@
 
 use std::time::{Duration, Instant};
 
+use houyicoder_api::sandbox::{ProtectedPathHits, names_credential_path, protected_path_hits};
 use houyicoder_api::shell::interpreter::without_read_only_code;
 use houyicoder_protocol::acp_wire::{PermissionOption, PermissionOptionKind};
 use houyicoder_protocol::extension::ENTITLEMENT_TOOL;
 use houyicoder_protocol::frontend::permission::AskSource;
 use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
+use serde_json::Value;
 
 /// Tool-approval prompt state. Three options: approve, reject, or
 /// always-allow (approve + add a permission rule so the same tool no
@@ -116,8 +118,11 @@ impl Approval {
     /// checkpoint, a discard-flagged native call) recover or stay inside the
     /// fence, so a countdown that lands on Yes-once is safe.
     pub fn auto_approve_eligible(&self) -> bool {
-        if matches!(self.source, Some(AskSource::SystemSafety)) || self.is_entitlement() {
+        if self.is_entitlement() {
             return false;
+        }
+        if matches!(self.source, Some(AskSource::SystemSafety)) {
+            return self.writes_memory_note();
         }
         match self.validator.as_deref() {
             Some(
@@ -153,12 +158,12 @@ impl Approval {
     /// the two are not interchangeable. A record that does not parse falls back
     /// to its own text, which still contains the command.
     fn egress_command(&self) -> String {
-        serde_json::from_str::<serde_json::Value>(&self.args)
+        serde_json::from_str::<Value>(&self.args)
             .ok()
             .and_then(|value| {
                 value
                     .get("command")
-                    .and_then(|c| c.as_str())
+                    .and_then(Value::as_str)
                     .map(str::to_string)
             })
             .unwrap_or_else(|| self.args.clone())
@@ -180,6 +185,43 @@ impl Approval {
     /// flag a native tool call uses to say it throws uncommitted work away.
     fn discards_changes(&self) -> bool {
         self.args.contains("\"discard_changes\"") && self.args.contains("true")
+    }
+
+    /// Whether a safety ask is a direct file-tool update to a markdown note
+    /// inside the agent memory directory, touching no control, startup,
+    /// instruction, or credential path.
+    fn writes_memory_note(&self) -> bool {
+        if self.validator.as_deref() != Some("protected_path") {
+            return false;
+        }
+        if !self.tool.eq_ignore_ascii_case("write") && !self.tool.eq_ignore_ascii_case("edit") {
+            return false;
+        }
+        let Some(path) = serde_json::from_str::<Value>(&self.args)
+            .ok()
+            .and_then(|val| {
+                val.get("file_path")
+                    .or_else(|| val.get("path"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+        else {
+            return false;
+        };
+        if path.contains("..") || path.contains(['$', '`', '\0']) {
+            return false;
+        }
+        if !path.to_ascii_lowercase().ends_with(".md") {
+            return false;
+        }
+        !names_credential_path(&path)
+            && protected_path_hits(&path)
+                == ProtectedPathHits {
+                    control: false,
+                    startup: false,
+                    instruction: false,
+                    memory: true,
+                }
     }
 
     /// Start the auto-approve countdown if the card is eligible and the delay
@@ -352,7 +394,12 @@ fn reads_network(command: &str) -> bool {
         let args = &words[1..];
         match first.to_ascii_lowercase().as_str() {
             "git" => match git_subcommand(args) {
-                "push" => return false,
+                "push" => {
+                    if !git_push_dry_run(args) {
+                        return false;
+                    }
+                    saw_network_read = true;
+                }
                 "pull" | "fetch" | "clone" | "ls-remote" => saw_network_read = true,
                 // A local repository verb says nothing about a destination.
                 _ => {}
@@ -466,6 +513,26 @@ fn is_assignment(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
         return false;
     };
+    if matches!(
+        name,
+        "GIT_SSH_COMMAND"
+            | "GIT_SSH"
+            | "GIT_EXEC_PATH"
+            | "GIT_ASKPASS"
+            | "SSH_ASKPASS"
+            | "CURL_HOME"
+            | "HTTP_PROXY"
+            | "HTTPS_PROXY"
+            | "ALL_PROXY"
+            | "http_proxy"
+            | "https_proxy"
+            | "all_proxy"
+    ) || name.starts_with("GIT_CONFIG")
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+    {
+        return false;
+    }
     !name.is_empty()
         && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -612,6 +679,26 @@ fn git_subcommand<'a>(args: &[&'a str]) -> &'a str {
         return arg;
     }
     ""
+}
+
+fn git_push_dry_run(args: &[&str]) -> bool {
+    let mut saw_dry_run = false;
+    for &arg in args {
+        if arg == "--" {
+            break;
+        }
+        if matches!(arg, "--dry-run" | "-n") {
+            saw_dry_run = true;
+        }
+        if matches!(
+            arg,
+            "-f" | "--force" | "--force-with-lease" | "--force-if-includes" | "--no-verify"
+        ) || arg.starts_with("--force-with-lease=")
+        {
+            return false;
+        }
+    }
+    saw_dry_run
 }
 
 /// Whether an argument turns a curl or wget request into an upload or a write

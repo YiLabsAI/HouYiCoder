@@ -407,3 +407,93 @@ fn test_timeout_wrapper_reads() {
         );
     }
 }
+
+/// A dry-run push transmits no objects and updates no remote ref, so its card
+/// may count down while a real or forced push waits for a human press.
+#[test]
+fn test_dry_run_push_countdown() {
+    for cmd in [
+        "git push --dry-run origin refs/heads/main:refs/heads/probe",
+        "cd /work/repo && GIT_TRACE_PACKET=0 GIT_TRACE=1 git push --dry-run origin refs/heads/main:refs/heads/probe 2>&1 | grep -E \"run_command|pre-push\" | head -8",
+        "git push -n origin dev",
+    ] {
+        assert!(
+            card("network_egress", None, cmd).auto_approve_eligible(),
+            "{cmd} is a dry run and may count down"
+        );
+    }
+    for held in [
+        "git push origin dev",
+        "git push --dry-run --force origin main",
+        "git push -n --no-verify origin main",
+        "GIT_SSH_COMMAND='sh -c id' git push --dry-run origin main",
+    ] {
+        assert!(
+            !card("network_egress", None, held).auto_approve_eligible(),
+            "{held} must wait for a human press"
+        );
+    }
+}
+
+/// Native writes to markdown notes inside the agent memory store may count
+/// down in autonomous mode while keeping the two-option non-persistent card,
+/// whereas control files, instruction files, and shell writes wait for a human.
+#[test]
+fn test_memory_note_counts_down() {
+    for (tool, args) in [
+        (
+            "write",
+            r#"{"file_path":"/work/repo/.houyicoder/memory/feedback-review.md","content":"note"}"#,
+        ),
+        (
+            "edit",
+            r#"{"file_path":"/home/dev/.houyicoder/projects/hicoder/memory/lesson-push.md"}"#,
+        ),
+        (
+            "write",
+            r#"{"path":".houyicoder/memory/MEMORY.md","content":"index"}"#,
+        ),
+    ] {
+        let mut c = card("protected_path", Some(AskSource::SystemSafety), args);
+        c.tool = tool.into();
+        assert!(
+            c.auto_approve_eligible(),
+            "{tool} {args} is a memory note and may count down"
+        );
+        assert!(
+            c.remember_hidden(),
+            "memory notes keep the non-persistent two-option card"
+        );
+    }
+
+    for (tool, args) in [
+        (
+            "write",
+            r#"{"file_path":"/work/repo/.houyicoder/settings.json"}"#,
+        ),
+        (
+            "edit",
+            r#"{"file_path":"/work/repo/.houyicoder/skills/x/SKILL.md"}"#,
+        ),
+        ("edit", r#"{"file_path":"/work/repo/AGENTS.md"}"#),
+        (
+            "write",
+            r#"{"file_path":"/work/repo/.houyicoder/memory/../settings.json"}"#,
+        ),
+        (
+            "write",
+            r#"{"file_path":"/work/repo/.houyicoder/memory/run.sh"}"#,
+        ),
+        (
+            "bash",
+            r#"{"command":"echo x >> .houyicoder/memory/feedback.md"}"#,
+        ),
+    ] {
+        let mut c = card("protected_path", Some(AskSource::SystemSafety), args);
+        c.tool = tool.into();
+        assert!(
+            !c.auto_approve_eligible(),
+            "{tool} {args} must require manual confirmation"
+        );
+    }
+}

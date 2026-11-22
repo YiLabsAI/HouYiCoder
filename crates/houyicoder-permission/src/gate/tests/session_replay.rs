@@ -617,3 +617,80 @@ fn test_self_hosted_writes_ask() {
         "a sed write command is not read-only"
     );
 }
+
+/// Read-only inspections observed in autonomous sessions: checking ignore
+/// rules or process-substituted diffs on skill files, probing file mode bits
+/// across configuration paths, reading session temporary logs through input
+/// redirection, and printing evaluated OpenSSH client configuration locally.
+#[test]
+fn test_session_readonly_checks_allow() {
+    let gate = auto_fenced();
+    for command in [
+        "cd /work/repo/.houyicoder/worktrees/fix-wake && ls .houyicoder/dr/deep-review/overlays/; git check-ignore -v .houyicoder/dr/deep-review/SKILL.md",
+        "cd /work/repo/.houyicoder/worktrees/fix-wake && diff <(cat .houyicoder/dr/deep-review/SKILL.md) <(cat /home/dev/.claude/skills/deep-review/SKILL.md) > /dev/null && echo identical || echo differs; ls .houyicoder/dr/deep-review/overlays/",
+        "cd /work/repo && echo \"=== check ~/.ssh/config ===\"; test -w ~/.ssh/config && echo writable || echo \"NOT writable\"; echo \"=== check .git/config ===\"; test -w .git/config && echo writable || echo \"NOT writable\"; echo \"=== global git config ===\"; git config --global --get core.sshCommand || echo \"(unset)\"",
+        "cd /work/repo && echo \"=== writability ===\"; for p in ~/.gitconfig .git/config ~/.ssh/config ~/.houyicoder/settings.json .houyicoder/settings.json; do if [ -e \"$p\" ]; then test -w \"$p\" && echo \"$p writable\" || echo \"$p readonly\"; else echo \"$p absent\"; fi; done; echo \"cwd=$(pwd)\"; echo \"TMPDIR=$TMPDIR\"",
+        "cd /work/repo && for p in .git .git/hooks .git/info; do test -w \"$p\" && echo \"$p writable\" || echo \"$p readonly\"; done",
+        "sleep 14; cd /work/repo && grep -E \"test result:\" $TMPDIR/dev_mc.log | tail -2; wc -l < $TMPDIR/dev_mc.log",
+        "cd /work/repo && for f in push_dev.log push_dev2.log push_main.log; do p=$TMPDIR/$f; [ -f \"$p\" ] || continue; wc -l < \"$p\"; grep -cE \"test result: ok\" \"$p\"; done",
+        "cd /work/repo && echo \"=== current ssh -G github.com ===\"; ssh -G github.com 2>/dev/null | grep -E \"^(hostname|port|serveraliveinterval|serveralivecountmax|tcpkeepalive) \"; ssh -v -G github.com 2>&1 >/dev/null | grep -iE \"reading configuration data|include\" | head -8",
+        "cd /work/repo && ssh -G github.com 2>/dev/null | head -12; grep -rn \"ServerAliveInterval\" /etc/ssh/ssh_config /etc/ssh/ssh_config.d/* 2>/dev/null | head",
+        "git stash list | head -5",
+        "git stash show -p",
+    ] {
+        let decision = gate.decide(&bash_req(command));
+        assert_eq!(
+            decision.outcome(),
+            Outcome::Allow,
+            "{command} => {decision:?}"
+        );
+    }
+}
+
+/// True security boundaries observed beside those inspections: appending to
+/// repository config, planting files under git info, overriding git config via
+/// environment variables to run custom transport commands, reading credential
+/// file bytes, and opening real remote SSH sessions must keep asking.
+#[test]
+fn test_session_security_boundaries_ask() {
+    let gate = auto_fenced();
+    for command in [
+        "cd /work/repo && ls -la .git/config 2>/dev/null; printf '# probe\\n' >> .git/config 2>&1 | head -2 || echo denied",
+        "cd /work/repo && printf '[core]\\n\\tsshCommand = ssh -o ServerAliveInterval=15\\n' > .git/info/sshkeepalive.inc",
+        "cd /work/repo && GIT_CONFIG_GLOBAL=/work/repo/.git/info/sshkeepalive.inc git ls-remote origin refs/heads/main",
+        "cat ~/.ssh/config",
+        "grep -nE \"Host |Port\" ~/.ssh/config",
+        "diff <(cat ~/.ssh/config) /dev/null",
+        "diff >(tee .houyicoder/settings.json) /dev/null",
+        "git config --global core.sshCommand 'ssh -o ServerAliveInterval=15'",
+        "ssh -o BatchMode=yes git@github.com git-receive-pack 'example-org/example-repo.git'",
+        "ssh -G -o ProxyCommand='sh -c id' github.com",
+        "TMPDIR=/work/repo && wc -l < $TMPDIR/.env",
+        "wc -l < ~/.ssh/id_ed25519",
+    ] {
+        let decision = gate.decide(&bash_req(command));
+        assert_eq!(
+            decision.outcome(),
+            Outcome::Ask,
+            "{command} must keep asking => {decision:?}"
+        );
+    }
+
+    // Publishing commits keeps its remote-publish reason even when stdout is
+    // redirected to a log file or TMPDIR is overridden on the command line.
+    for push_cmd in [
+        "cd /work/repo && git push origin dev > $TMPDIR/push_dev.log 2>&1; echo \"EXIT=$?\"; tail -6 $TMPDIR/push_dev.log",
+        "cd /work/repo && mkdir -p /tmp/psh && TMPDIR=/tmp/psh git push origin dev > /tmp/push2.log 2>&1",
+    ] {
+        match gate.decide(&bash_req(push_cmd)) {
+            Decision::Ask(reason) => {
+                assert_eq!(reason.validator, "network_egress");
+                assert_eq!(
+                    reason.detail, "git push publishes local commits to a remote repository",
+                    "unexpected detail on {push_cmd}"
+                );
+            }
+            other => panic!("expected Ask for {push_cmd}, got {other:?}"),
+        }
+    }
+}
