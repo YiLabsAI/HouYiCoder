@@ -52,7 +52,8 @@ impl HookFire for HookDispatcher {
             let Some(ctx) = build_context(event, &payload) else {
                 return;
             };
-            let outcomes = self.hooks.dispatch(&ctx);
+            let hook_event = ctx.event;
+            let outcomes = self.hooks.dispatch_blocking(ctx).await;
             if let Some(skipped) = self.hooks.take_skipped_untrusted() {
                 emit_user_notice(
                     &self.events,
@@ -64,7 +65,7 @@ impl HookFire for HookDispatcher {
                 &self.obs,
                 &self.events,
                 payload.session,
-                ctx.event,
+                hook_event,
                 None,
                 &outcomes,
             )

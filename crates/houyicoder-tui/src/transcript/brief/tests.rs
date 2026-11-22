@@ -285,6 +285,9 @@ fn test_summary_write_lines() {
     // Without the lines field, no summary (the body is the display).
     let no_lines = serde_json::json!({"path": "x", "bytes": 10});
     assert_eq!(result_summary("write", &no_lines), None);
+    let errored = serde_json::json!({"error": "blocked by hook: rule"});
+    assert_eq!(result_summary("glob", &errored), None);
+    assert_eq!(result_summary("read", &errored), None);
 }
 
 #[test]

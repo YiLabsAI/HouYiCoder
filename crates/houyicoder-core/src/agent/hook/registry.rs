@@ -10,6 +10,8 @@ use std::sync::RwLock;
 use std::sync::mpsc::Receiver;
 use std::thread::spawn;
 use std::time::Duration;
+use tokio::runtime::Handle;
+use tokio::task::spawn_blocking;
 
 /// A stable handle for a registered hook. Stable across removals (unlike a
 /// Vec index), so a caller can hold the id and unregister later — the
@@ -18,12 +20,13 @@ use std::time::Duration;
 pub struct HookId(u64);
 
 /// A hook awaiting its result during parallel dispatch. Carries the
-/// receiver channel, the hook name, the per-hook timeout duration, and
-/// the configured limit in milliseconds (for the Timeout error report).
+/// receiver channel, the hook name, the absolute deadline computed from
+/// dispatch start, and the configured limit in milliseconds for timeout
+/// error reporting.
 struct PendingHook {
     rx: Receiver<Result<HookVerdict, HookError>>,
     name: String,
-    hook_timeout: Duration,
+    deadline: Instant,
     configured_limit_ms: u64,
 }
 
@@ -214,10 +217,10 @@ impl HookRegistry {
     /// (verdict + hook_name) in registration order. Filters by policy and
     /// trust (Disabled empty; ManagedOnly/PluginOnly restrict source;
     /// Untrusted skips Project/Local). timeout_ms > 0 runs hooks in parallel
-    /// under per-hook deadlines (a hook's own timeout or the registry
-    /// default, whichever is earlier) — an unfinished hook is abandoned
-    /// (thread leaks, acceptable for misconfigured hooks; true interruption
-    /// needs WASM fuel, future work). timeout_ms == 0 is sequential.
+    /// under per-hook deadlines (a hook's own timeout when configured, else
+    /// the registry default) — an unfinished hook is abandoned (thread leaks,
+    /// acceptable for misconfigured hooks; true interruption needs WASM fuel,
+    /// future work). timeout_ms == 0 is sequential.
     pub fn dispatch(&self, ctx: &HookContext) -> Vec<HookOutcome> {
         if self.policy == HookPolicy::Disabled {
             return Vec::new();
@@ -299,7 +302,7 @@ impl HookRegistry {
         // run forever; for a misconfigured infinite hook this is acceptable
         // because dispatch already returned to the caller.
         let ctx = Arc::new(ctx.clone());
-        let dispatch_deadline = Instant::now() + Duration::from_millis(self.timeout_ms);
+        let started = Instant::now();
         let registry_timeout_ms = self.timeout_ms;
 
         let receivers: Vec<PendingHook> = cloned
@@ -314,6 +317,7 @@ impl HookRegistry {
                     .timeout()
                     .unwrap_or_else(|| Duration::from_millis(registry_timeout_ms));
                 let configured_limit_ms = hook_timeout.as_millis() as u64;
+                let deadline = started + hook_timeout;
                 spawn(move || {
                     let result = catch_panic(|| hook.evaluate(&ctx), &thread_name);
                     drop(tx.send(result));
@@ -321,7 +325,7 @@ impl HookRegistry {
                 PendingHook {
                     rx,
                     name,
-                    hook_timeout,
+                    deadline,
                     configured_limit_ms,
                 }
             })
@@ -330,25 +334,14 @@ impl HookRegistry {
         receivers
             .into_iter()
             .map(|pending| {
-                // The per-hook deadline is the earlier of the hook's own
-                // timeout and the remaining dispatch budget. This bounds
-                // the total dispatch while respecting a tighter per-hook
-                // limit.
-                let per_hook_deadline = Instant::now() + pending.hook_timeout;
-                let deadline = if per_hook_deadline < dispatch_deadline {
-                    per_hook_deadline
-                } else {
-                    dispatch_deadline
-                };
-                let remaining = deadline.saturating_duration_since(Instant::now());
+                // Every hook started together at dispatch entry, so each waits
+                // up to its own deadline measured from that instant: N default
+                // hooks still complete within one default budget rather than N
+                // times it, while an explicit longer per-hook timeout is
+                // honored instead of being cut short at the default.
+                let remaining = pending.deadline.saturating_duration_since(Instant::now());
                 let result = match pending.rx.recv_timeout(remaining) {
                     Ok(result) => result,
-                    // The Timeout error flows to the durable HookSignal and
-                    // a system line at the append layer, so the user sees
-                    // which hook was abandoned. The reported limit is the
-                    // configured per-hook timeout, not the remaining time
-                    // at the moment of timeout, so the user sees the
-                    // configured value they can adjust.
                     Err(_) => Err(HookError::Timeout {
                         hook_name: pending.name.clone(),
                         limit_ms: pending.configured_limit_ms,
@@ -360,6 +353,34 @@ impl HookRegistry {
                 }
             })
             .collect()
+    }
+
+    /// Dispatch an event off the async worker pool when a Tokio runtime is
+    /// active. Returns immediately without thread handoff when policy disables
+    /// hooks or no hook subscribes to the event after reload.
+    pub async fn dispatch_blocking(self: &Arc<Self>, ctx: HookContext) -> Vec<HookOutcome> {
+        if self.policy == HookPolicy::Disabled {
+            return Vec::new();
+        }
+        self.refresh_configured();
+        let has_matching = self
+            .inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .by_event
+            .get(&ctx.event)
+            .is_some_and(|ids| !ids.is_empty());
+        if !has_matching {
+            return Vec::new();
+        }
+        if Handle::try_current().is_ok() {
+            let reg = Arc::clone(self);
+            spawn_blocking(move || reg.dispatch(&ctx))
+                .await
+                .unwrap_or_default()
+        } else {
+            self.dispatch(&ctx)
+        }
     }
 
     /// How many hooks are registered.

@@ -132,6 +132,21 @@ pub fn tool_result_refused(output: &Value) -> bool {
         .is_some_and(|refused| refused.is_object())
 }
 
+/// Whether a durable tool result says a hook blocked the call before it ran.
+///
+/// Both a user rejection on an approval card and a hook block record a refusal
+/// object so the session tallies keep them out of execution failures. On
+/// screen the two carry different meaning: a user rejection is the operator's
+/// own choice, whereas a hook block is a policy violation whose full diagnostic
+/// body needs error-grade emphasis.
+pub fn is_hook_refusal(output: &Value) -> bool {
+    output
+        .get("refused")
+        .and_then(|refused| refused.get("by"))
+        .and_then(Value::as_str)
+        == Some("hook")
+}
+
 /// Whether a bash command's non-zero exit is a semantic success (the command
 /// did its job), not a failure. grep exits 1 when no matches are found; diff
 /// exits 1 when files differ; both are the command reporting a result, not

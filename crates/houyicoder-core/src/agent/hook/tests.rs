@@ -774,6 +774,47 @@ fn test_timeout_bounded_wall_clock() {
     );
 }
 
+struct CustomTimeoutHook {
+    sleep_ms: u64,
+    limit: Duration,
+}
+
+impl Hook for CustomTimeoutHook {
+    fn name(&self) -> &str {
+        "custom-timeout"
+    }
+    fn events(&self) -> &[HookEvent] {
+        &[HookEvent::PreToolUse]
+    }
+    fn timeout(&self) -> Option<Duration> {
+        Some(self.limit)
+    }
+    fn evaluate(&self, _ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        sleep(Duration::from_millis(self.sleep_ms));
+        Ok(HookVerdict::Deny("gate-violation".into()))
+    }
+    fn source(&self) -> HookSource {
+        HookSource::User
+    }
+}
+
+#[test]
+fn test_hook_timeout_exceeds_default() {
+    let hook = Arc::new(CustomTimeoutHook {
+        sleep_ms: 80,
+        limit: Duration::from_millis(500),
+    });
+    let reg = HookRegistry::new().with_timeout(20);
+    reg.register(hook);
+    let ctx = session_ctx(HookEvent::PreToolUse, HookPayload::Setup);
+    let results: Vec<_> = reg.dispatch(&ctx).into_iter().map(|o| o.result).collect();
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        Ok(HookVerdict::Deny(reason)) => assert_eq!(reason, "gate-violation"),
+        other => panic!("explicit per-hook timeout above default must be honored, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_panic_returns_guest_panic() {
     let panic_hook = Arc::new(PanicHook {

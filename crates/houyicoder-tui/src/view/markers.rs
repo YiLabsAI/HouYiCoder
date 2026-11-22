@@ -29,9 +29,9 @@ use diff_plan::{DiffKind, PlanKind, PlanRow, plan_diff_body};
 use std::mem::take;
 
 /// One planned display row: the selection tag, the row text (gutter + content
-/// for stable width + copy), the per-row outcome (Some only on the summary),
-/// the result call_id (Some only on the summary, for Ctrl+O), and the word-
-/// level diff parts (Some on a paired remove+add below the change threshold).
+/// for stable width + copy), the per-row outcome (Some on the summary, and on
+/// error or hook-blocked continuations), the result call_id (for Ctrl+O), and
+/// the word-level diff parts (Some on a paired remove+add below threshold).
 pub(crate) type PlannedRow = (
     u8,
     String,
@@ -40,13 +40,21 @@ pub(crate) type PlannedRow = (
     Option<Vec<WordDiffPart>>,
 );
 
-/// Always collapse a tool result body to the head (COLLAPSE_SHOW lines)
-/// plus a Ctrl+O hint — caps at 3 wrapped lines always (no threshold below
-/// which the full body shows).
-/// A 5-line find output still shows 3 + "… +2 lines" so the transcript
-/// never buries the rest. Expanded per-result via Ctrl+O (keyed by
-/// call_id, survives the transcript rebuild on each event batch).
+/// Always collapse a normal tool result body to the head (COLLAPSE_SHOW lines)
+/// plus a Ctrl+O hint — caps at 3 wrapped lines so regular output never buries
+/// the conversation. Error and hook-blocked diagnostics keep a taller head
+/// (ERROR_COLLAPSE_SHOW lines) so multi-rule gate violations and their rewrite
+/// guidance remain readable without manual expansion.
 pub(crate) const COLLAPSE_SHOW: usize = 3;
+pub(crate) const ERROR_COLLAPSE_SHOW: usize = 10;
+
+/// Visible wrapped-row budget before a tool result body collapses.
+pub(crate) fn collapse_limit(outcome: Option<ToolOutcome>) -> usize {
+    match outcome {
+        Some(ToolOutcome::Error | ToolOutcome::Blocked) => ERROR_COLLAPSE_SHOW,
+        _ => COLLAPSE_SHOW,
+    }
+}
 
 /// Pre-truncate a body's logical lines to a byte budget (a maxChars pre-cut
 /// of COLLAPSE_SHOW * wrap_width * 4). Stops at the last line that fits within
@@ -79,12 +87,11 @@ fn pretruncate_lines(blines: &[&str], max_chars: usize) -> (Vec<String>, bool) {
 
 /// Style a glyph-led row (⏺ call or ⎿ continuation/result) with outcome-based
 /// colors: the call glyph ⏺ is colored by the call's resolved outcome (running
-/// cyan, success green, error red) + the tool name BOLD; the result gutter ⎿ is
-/// dim with the body in the default foreground for success (stdout is just
-/// text, not a semantic signal — coloring it green drowns out the one channel
-/// reserved for errors) and red only for errors. An Edit diff summary bolds
-/// the counts. Other rows return None so the caller falls back to
-/// highlighted_line.
+/// cyan, success green, user refusal yellow, error or hook block red) + the
+/// tool name BOLD; the result gutter ⎿ is dim with the body in the default
+/// foreground for success and red for errors and hook blocks, including their
+/// indented continuation lines. An Edit diff summary bolds the counts. Other
+/// rows return None so the caller falls back to highlighted_line.
 pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line<'static>> {
     let cyan = Style::new().fg(Color::Cyan);
     let bold = Style::new().add_modifier(Modifier::BOLD);
@@ -93,9 +100,9 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
     let red = Style::new().fg(ERROR_RED);
     let glyph_style = match outcome {
         Some(ToolOutcome::Success) => green,
-        Some(ToolOutcome::Error) => red,
-        // A refusal is a decision the user can revisit, so it reads as a
-        // warning rather than as a failure the tool reported.
+        Some(ToolOutcome::Error | ToolOutcome::Blocked) => red,
+        // A user refusal is a choice the operator can revisit, so it reads as
+        // a warning rather than as a failure or policy violation.
         Some(ToolOutcome::Refused) => Style::new().fg(Color::Yellow),
         Some(ToolOutcome::NotRun) => dim,
         Some(ToolOutcome::Running) | None => cyan,
@@ -127,7 +134,7 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
         // reserved for errors), and red only for Error. An Edit diff
         // summary ("Added N lines, removed M lines") bolds the counts.
         let body_style = match outcome {
-            Some(ToolOutcome::Error) => red,
+            Some(ToolOutcome::Error | ToolOutcome::Blocked) => red,
             _ if rest == "(no output)" => dim,
             _ => Style::new().fg(Color::Reset),
         };
@@ -143,6 +150,14 @@ pub(crate) fn styled_row(row: &str, outcome: Option<ToolOutcome>) -> Option<Line
     let hidden = format!("     {} +", set.ellipsis());
     if row.starts_with(hidden.as_str()) && row.ends_with(" lines") {
         return Some(Line::from(Span::styled(row.to_string(), dim)));
+    }
+    if matches!(outcome, Some(ToolOutcome::Error | ToolOutcome::Blocked))
+        && let Some(rest) = row.strip_prefix("     ")
+    {
+        return Some(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(rest.to_string(), red),
+        ]));
     }
     None
 }
@@ -177,11 +192,11 @@ fn bold_digit_spans(text: &str, base: Style) -> Vec<Span<'static>> {
 /// continuation indent). Pure (no App borrow) so the layout is unit-testable.
 /// Returns one row per visible line as (tag, text, outcome, callid): the
 /// summary row carries the ⎿ gutter + the result's outcome + the call_id (so
-/// Ctrl+O can target it); continuation rows are 5-space indented with no
-/// outcome; a long collapsed body ends in a ⎿ … Ctrl+O hint row. For an Edit
-/// diff body the continuation rows carry a line-number + sigil gutter and a
-/// dim "..." separates hunks; expanded bodies show every row; bodies at or
-/// under COLLAPSE_SHOW never collapse.
+/// Ctrl+O can target it); continuation rows are 5-space indented and carry the
+/// outcome only for error or hook-blocked bodies; a collapsed body ends in a
+/// dim +N lines hint row. For an Edit diff body the continuation rows carry a
+/// line-number + sigil gutter and a dim "..." separates hunks; expanded bodies
+/// show every row; bodies at or under collapse_limit(outcome) never collapse.
 pub(crate) fn result_body_rows(
     body: &str,
     call_id: &str,
@@ -216,6 +231,7 @@ pub(crate) fn result_body_rows(
     // make the count path wrap the whole thing; the remaining count is
     // estimated from the original length. The EXPANDED path wraps the full
     // body; the 4000-row viewable cap bounds the transcript as a whole.
+    let limit = collapse_limit(outcome);
     let total_chars = trimmed.chars().count();
     let (wrows, hidden) = if expanded {
         let mut w = Vec::new();
@@ -228,7 +244,7 @@ pub(crate) fn result_body_rows(
         }
         (w, 0)
     } else {
-        let max_chars = COLLAPSE_SHOW.saturating_mul(avail).saturating_mul(4);
+        let max_chars = limit.saturating_mul(avail).saturating_mul(4);
         let (pre, was_truncated) = pretruncate_lines(&blines, max_chars);
         let mut w = Vec::new();
         for l in &pre {
@@ -238,10 +254,10 @@ pub(crate) fn result_body_rows(
                 w.extend(wrap_line(l, avail));
             }
         }
-        let remaining_after_wrap = w.len().saturating_sub(COLLAPSE_SHOW);
+        let remaining_after_wrap = w.len().saturating_sub(limit);
         let estimated = if was_truncated {
             let est_total_rows = total_chars.max(1).div_ceil(avail.max(1));
-            remaining_after_wrap.max(est_total_rows.saturating_sub(COLLAPSE_SHOW))
+            remaining_after_wrap.max(est_total_rows.saturating_sub(limit))
         } else {
             remaining_after_wrap
         };
@@ -255,9 +271,9 @@ pub(crate) fn result_body_rows(
     let shown = if expanded {
         wrows.len()
     } else if show_extra {
-        (COLLAPSE_SHOW + 1).min(wrows.len())
+        (limit + 1).min(wrows.len())
     } else {
-        COLLAPSE_SHOW.min(wrows.len())
+        limit.min(wrows.len())
     };
     let suppress_hint = show_extra;
     let mut out = Vec::with_capacity(shown + usize::from(hidden > 0 && !suppress_hint));
@@ -280,6 +296,7 @@ pub(crate) fn result_body_rows(
         Some(call_id.to_string()),
         None,
     ));
+    let cont_outcome = outcome.filter(|o| matches!(o, ToolOutcome::Error | ToolOutcome::Blocked));
     for l in wrows.iter().skip(1).take(shown.saturating_sub(1)) {
         // Continuation rows align to the result-text column (a 5-space indent
         // matching the 2-space ⎿ gutter + the ⎿ glyph + two spaces) with no
@@ -288,7 +305,7 @@ pub(crate) fn result_body_rows(
         out.push((
             plain,
             format!("     {l}"),
-            None,
+            cont_outcome,
             foldable.then(|| call_id.to_string()),
             None,
         ));

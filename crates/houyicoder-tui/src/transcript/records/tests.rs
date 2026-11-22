@@ -65,6 +65,20 @@ fn test_outcome_refused() {
 }
 
 #[test]
+fn test_outcome_hook_blocked() {
+    let out = serde_json::json!({
+        "error": "blocked by hook: backtick in comment",
+        "not_run": true,
+        "refused": { "by": "hook", "verdict": "policy" },
+    });
+    assert_eq!(
+        ToolOutcome::from_output_with(&out, "write", &Value::Null),
+        ToolOutcome::Blocked,
+        "a hook refusal resolves to Blocked rather than user Refused"
+    );
+}
+
+#[test]
 fn test_diff_differ_success() {
     let out = serde_json::json!({
         "stdout": "1c1\n< a\n---\n> b\n",

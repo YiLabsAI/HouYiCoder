@@ -114,7 +114,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .zip(visible.pre_rendered())
         .enumerate()
-        .map(|(idx, ((tag, r, _), pre))| {
+        .map(|(idx, ((tag, r, o), pre))| {
             let row = top + idx;
             let is_current = focused_range
                 .as_ref()
@@ -135,8 +135,7 @@ pub(super) fn draw_history_window(f: &mut Frame, area: Rect, app: &App) {
                     }
                     _ => {
                         if q.is_empty() {
-                            styled_row(r, None)
-                                .unwrap_or_else(|| highlighted_line(r, &q, is_current))
+                            styled_row(r, *o).unwrap_or_else(|| highlighted_line(r, &q, is_current))
                         } else {
                             highlighted_line(r, &q, is_current)
                         }

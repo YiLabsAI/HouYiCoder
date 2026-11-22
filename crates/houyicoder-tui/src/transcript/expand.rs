@@ -11,7 +11,7 @@ use crate::fold::{DisplaySlot, display_slots};
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::ui::selection::anchor_row;
-use crate::view::markers::COLLAPSE_SHOW;
+use crate::view::markers::collapse_limit;
 use crate::view::todo_list::TODO_FOLD_KEY;
 use houyicoder_protocol::frontend::SessionId;
 
@@ -223,15 +223,8 @@ impl App {
             // A result row whose body folds (more than the always-shown head)
             // competes by position with the other tail blocks, so a chord with
             // the cursor elsewhere still reaches the newest collapsible result.
-            if let Some(idx) = lines.iter().rposition(|l| {
-                matches!(
-                    l,
-                    TranscriptLine::Tool { name, body, call_id, .. }
-                    if name.as_str() == "result"
-                        && !call_id.is_empty()
-                        && body.lines().count() > COLLAPSE_SHOW
-                )
-            }) && let TranscriptLine::Tool { call_id, .. } = &lines[idx]
+            if let Some(idx) = lines.iter().rposition(has_folded_result_body)
+                && let TranscriptLine::Tool { call_id, .. } = &lines[idx]
             {
                 candidates.push((idx, TailTarget::Result(call_id.clone())));
             }
@@ -518,4 +511,20 @@ impl App {
         self.ui.selection.transcript.clear();
         true
     }
+}
+
+fn has_folded_result_body(line: &TranscriptLine) -> bool {
+    matches!(
+        line,
+        TranscriptLine::Tool {
+            name,
+            body,
+            call_id,
+            outcome,
+            ..
+        }
+        if name.as_str() == "result"
+            && !call_id.is_empty()
+            && body.lines().count() > collapse_limit(Some(*outcome))
+    )
 }

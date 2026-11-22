@@ -336,7 +336,7 @@ impl Runner {
             },
             session,
         };
-        let outcomes = self.dispatch_hooks(reg, &ctx);
+        let outcomes = self.run_hooks(reg, ctx).await;
         self.append_hook_signals(session, HookEvent::PreCompact, None, &outcomes)
             .await;
         let _verdict = combine_verdicts(outcomes.iter().map(|o| o.result.clone()));
@@ -381,7 +381,7 @@ impl Runner {
             },
             session,
         };
-        let outcomes = self.dispatch_hooks(reg, &ctx);
+        let outcomes = self.run_hooks(reg, ctx).await;
         self.append_hook_signals(session, HookEvent::PostCompact, None, &outcomes)
             .await;
         let _verdict = combine_verdicts(outcomes.into_iter().map(|o| o.result));

@@ -23,6 +23,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::thread;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -201,24 +202,34 @@ impl CommandHook {
         }
         // Drop the stdin handle so the child sees EOF and exits.
         pipes.stdin.take();
-        let stdout = pipes
-            .stdout
-            .as_mut()
-            .ok_or_else(|| HookError::ProcessError {
-                hook_name: self.name.clone(),
-                reason: "launcher returned no stdout pipe".into(),
-            })?;
-        let mut buf = String::new();
-        stdout
-            .read_to_string(&mut buf)
-            .map_err(|e| HookError::ProcessError {
-                hook_name: self.name.clone(),
-                reason: format!("stdout read: {e}"),
-            })?;
-        let mut stderr_buf = String::new();
-        if let Some(stderr) = pipes.stderr.as_mut() {
-            drop(stderr.read_to_string(&mut stderr_buf));
-        }
+        let mut stdout = pipes.stdout.take().ok_or_else(|| HookError::ProcessError {
+            hook_name: self.name.clone(),
+            reason: "launcher returned no stdout pipe".into(),
+        })?;
+        let stderr = pipes.stderr.take();
+        // Drain stdout and stderr concurrently: a gate hook that writes a large
+        // violation report to stderr fills the operating system pipe buffer and
+        // blocks waiting for a reader before closing stdout, so sequential
+        // reads would deadlock until timeout.
+        let (stdout_res, stderr_buf) = thread::scope(|scope| {
+            let err_reader = stderr.map(|mut err| {
+                scope.spawn(move || {
+                    let mut out = String::new();
+                    drop(err.read_to_string(&mut out));
+                    out
+                })
+            });
+            let mut out = String::new();
+            let res = stdout.read_to_string(&mut out).map(|_| out);
+            let err_out = err_reader
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default();
+            (res, err_out)
+        });
+        let buf = stdout_res.map_err(|e| HookError::ProcessError {
+            hook_name: self.name.clone(),
+            reason: format!("stdout read: {e}"),
+        })?;
         // Wait for the child so its exit code is available. The stdout
         // read already blocked to EOF so the child has exited; wait()
         // resolves immediately. pollster::block_on is fine in this sync

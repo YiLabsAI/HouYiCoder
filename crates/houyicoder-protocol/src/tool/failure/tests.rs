@@ -232,3 +232,20 @@ fn test_plain_results_are_unrefused() {
     ));
     assert!(!tool_result_refused(&serde_json::json!({ "stdout": "hi" })));
 }
+
+#[test]
+fn test_hook_refusal_predicates() {
+    let hook = serde_json::json!({
+        "error": "blocked by hook: no writes",
+        "not_run": true,
+        "refused": { "by": "hook", "verdict": "policy" }
+    });
+    let user = serde_json::json!({
+        "error": "rejected by user",
+        "not_run": true,
+        "refused": { "by": "user", "verdict": "reject" }
+    });
+    assert!(is_hook_refusal(&hook));
+    assert!(!is_hook_refusal(&user));
+    assert!(!is_hook_refusal(&serde_json::json!({ "error": "boom" })));
+}

@@ -12,6 +12,7 @@ use crate::state::App;
 use crate::state::Screen;
 use crate::test_harness::{render_buffer, render_text};
 use crate::transcript::shell_result::ShellStorage;
+use crate::view::ERROR_RED;
 
 fn shell_line(
     command: &str,
@@ -319,6 +320,69 @@ fn test_shell_row_refused_yellow() {
     let row = find_shell_row(&out);
     assert!(row.ends_with("refused · 0ms"), "{row:?}");
     assert_eq!(verdict_color(&app), Color::Yellow, "a refusal reads yellow");
+}
+
+#[test]
+fn test_shell_row_blocked_red() {
+    let mut app = composition::app();
+    app.ui.navigation.screen = Screen::Working;
+    app.sessions.current.transcript = vec![shell_line(
+        "python3 -c 'open(\"src/lib.rs\",\"w\")'",
+        ToolOutcome::Blocked,
+        Some(0),
+        None,
+    )]
+    .into();
+    let out = render_text(&app, 80, 24);
+    let row = find_shell_row(&out);
+    assert!(row.ends_with("blocked · 0ms"), "{row:?}");
+    assert_eq!(verdict_color(&app), ERROR_RED, "a hook block reads red");
+}
+
+#[test]
+fn test_blocked_tail_expand_limit() {
+    let mut app = composition::app();
+    let six_lines = (0..6)
+        .map(|i| format!("rule {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.sessions.current.transcript = vec![TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "write".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Blocked,
+        call_id: "c1".into(),
+        background_task: None,
+        body: six_lines,
+        is_diff: false,
+    }]
+    .into();
+    assert!(
+        !app.toggle_tail_expand(),
+        "a 6-line hook block is already uncollapsed under the 10-line limit"
+    );
+
+    let twelve_lines = (0..12)
+        .map(|i| format!("rule {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.sessions.current.transcript = vec![TranscriptLine::Tool {
+        name: "result".into(),
+        tool: "write".into(),
+        status: String::new(),
+        invocation: String::new(),
+        outcome: ToolOutcome::Blocked,
+        call_id: "c2".into(),
+        background_task: None,
+        body: twelve_lines,
+        is_diff: false,
+    }]
+    .into();
+    assert!(
+        app.toggle_tail_expand(),
+        "a 12-line hook block exceeds the 10-line limit and toggles on tail expand"
+    );
 }
 
 /// The block-store address is a storage detail for the /context and

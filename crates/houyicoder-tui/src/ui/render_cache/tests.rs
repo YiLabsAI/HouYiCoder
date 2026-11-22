@@ -56,8 +56,13 @@ fn test_tool_cache_round_trips() {
 fn test_tool_cache_keys_outcome() {
     let body = "command output";
     let mut cache = RenderCache::default();
+    let blocked = cache.tool_rows(body, "call_1", Some(ToolOutcome::Blocked), false, false, 80);
     let refused = cache.tool_rows(body, "call_1", Some(ToolOutcome::Refused), false, false, 80);
     let not_run = cache.tool_rows(body, "call_1", Some(ToolOutcome::NotRun), false, false, 80);
+    assert_eq!(
+        blocked.first().and_then(|row| row.2),
+        Some(ToolOutcome::Blocked)
+    );
     assert_eq!(
         refused.first().and_then(|row| row.2),
         Some(ToolOutcome::Refused)

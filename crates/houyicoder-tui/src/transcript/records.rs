@@ -346,17 +346,18 @@ pub struct TeammateView {
     pub seen_messages: Option<ChildUnseenBaseline>,
 }
 
-/// A tool call's resolved outcome, for chip coloring. Running = no matching
-/// result yet; Success/Error = the matching ToolResult's verdict; Refused =
-/// a decision kept the call from running (the user declined the approval
-/// card, a hook denied it); NotRun = the call never ran for a reason other
-/// than a refusal (the run ended, the tool is gone, the edit it followed did
-/// not complete), so it carries no verdict either.
+/// A tool call's resolved outcome, for chip and result coloring. Running means
+/// no matching result has arrived yet; Success and Error reflect an executed
+/// call's verdict; Blocked means a policy hook stopped the call before it ran;
+/// Refused means the user declined the approval card; NotRun means the call
+/// never ran for another reason (the run ended, the tool is absent, or a prior
+/// edit failed), so it carries no verdict either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolOutcome {
     Running,
     Success,
     Error,
+    Blocked,
     Refused,
     NotRun,
 }
@@ -392,7 +393,9 @@ impl ToolOutcome {
         // One failure rule, shared through the tool protocol: the trajectory
         // header counts failures by the same definition, so a chip cannot
         // disagree with the header about one result.
-        if tool_result_refused(output) {
+        if is_hook_refusal(output) {
+            Self::Blocked
+        } else if tool_result_refused(output) {
             Self::Refused
         } else if tool_result_not_run(output) {
             Self::NotRun
@@ -662,6 +665,7 @@ pub use crate::ask_question_model::{AskQuestion, OTHER_LABEL, QuestionCard, Ques
 use crate::brief::fold_summary;
 use crate::view::line_wrap::truncate_width;
 use crate::view::line_wrap::wrap_plain_block;
+use houyicoder_protocol::tool::is_hook_refusal;
 use houyicoder_protocol::tool::tool_result_failed;
 use houyicoder_protocol::tool::tool_result_not_run;
 use houyicoder_protocol::tool::tool_result_refused;

@@ -301,6 +301,9 @@ pub(crate) fn result_summary(tool: &str, output: &Value) -> Option<String> {
 /// The summary before terminal control sequences are removed, so the chip and
 /// the expanded body are sanitised the same way.
 fn raw_result_summary(tool: &str, output: &Value) -> Option<String> {
+    if output.get("error").is_some() {
+        return None;
+    }
     if MEMORY_LABEL_TOOLS.contains(&tool) {
         return memory_result_label(tool, output);
     }

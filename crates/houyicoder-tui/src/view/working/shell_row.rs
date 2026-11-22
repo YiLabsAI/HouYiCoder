@@ -67,6 +67,7 @@ impl<'a> ShellRow<'a> {
         let verdict = match self.outcome {
             ToolOutcome::Running if self.cancelling => "stopping".to_string(),
             ToolOutcome::Running => "running".to_string(),
+            ToolOutcome::Blocked => "blocked".to_string(),
             ToolOutcome::Refused => "refused".to_string(),
             ToolOutcome::NotRun => "stopped".to_string(),
             ToolOutcome::Success => self
@@ -98,7 +99,7 @@ fn status_style(outcome: ToolOutcome, timed_out: bool, cancelling: bool) -> Styl
     match outcome {
         ToolOutcome::Success => Style::new().fg(SUCCESS_GREEN),
         ToolOutcome::Error if timed_out => yellow,
-        ToolOutcome::Error => Style::new().fg(ERROR_RED),
+        ToolOutcome::Error | ToolOutcome::Blocked => Style::new().fg(ERROR_RED),
         ToolOutcome::Refused => yellow,
         ToolOutcome::NotRun => dim,
         ToolOutcome::Running if cancelling => yellow,

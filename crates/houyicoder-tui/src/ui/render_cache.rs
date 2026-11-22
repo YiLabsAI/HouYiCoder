@@ -112,6 +112,7 @@ fn outcome_byte(o: Option<ToolOutcome>) -> u8 {
         Some(ToolOutcome::Error) => 3,
         Some(ToolOutcome::Refused) => 4,
         Some(ToolOutcome::NotRun) => 5,
+        Some(ToolOutcome::Blocked) => 6,
     }
 }
 
@@ -215,9 +216,8 @@ impl RenderCache {
     }
 
     /// Planned result row count for the count path (no clone). Pass the real
-    /// call_id + outcome so the count path and render path share one cache
-    /// entry per result (call_id/outcome do not affect the row count, only
-    /// the row content, so the length is correct for both).
+    /// call_id and outcome so the count path and render path share one cache
+    /// entry per result and apply the same outcome-specific collapse limit.
     pub fn tool_row_count(
         &mut self,
         body: &str,

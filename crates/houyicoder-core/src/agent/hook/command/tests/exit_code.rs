@@ -8,6 +8,7 @@ use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::io::sink;
+use std::sync::mpsc;
 
 /// A stub launcher that returns non-JSON stdout plus an exit code and
 /// stderr, simulating a shell-style hook that uses the exit-code contract
@@ -152,4 +153,93 @@ async fn test_json_verdict_wins_over() {
         matches!(v, HookVerdict::Allow),
         "JSON verdict wins over exit code 2"
     );
+}
+
+struct BlockingStdoutUntilStderrDrained {
+    stderr_drained: mpsc::Receiver<()>,
+}
+
+impl Read for BlockingStdoutUntilStderrDrained {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        let _ = self.stderr_drained.recv();
+        Ok(0)
+    }
+}
+
+struct SignalStderr {
+    payload: Cursor<Vec<u8>>,
+    done: Option<mpsc::SyncSender<()>>,
+}
+
+impl Read for SignalStderr {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.payload.read(buf)?;
+        if n == 0
+            && let Some(tx) = self.done.take()
+        {
+            let _ = tx.send(());
+        }
+        Ok(n)
+    }
+}
+
+struct BlockingPipeLauncher {
+    stderr: String,
+}
+
+impl ProcessLauncher for BlockingPipeLauncher {
+    fn spawn(&self, _req: SpawnRequest, _policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let stdout: Box<dyn Read + Send> =
+            Box::new(BlockingStdoutUntilStderrDrained { stderr_drained: rx });
+        let stderr: Box<dyn Read + Send> = Box::new(SignalStderr {
+            payload: Cursor::new(self.stderr.clone().into_bytes()),
+            done: Some(tx),
+        });
+        let pipes = StdioPipes {
+            stdin: Some(Box::new(sink())),
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+        };
+        Ok(LauncherChild::with_pipes(
+            None,
+            pipes,
+            Box::pin(async {
+                Ok(LauncherExit {
+                    exit_code: Some(2),
+                    stdout: None,
+                    stderr: None,
+                })
+            }),
+        ))
+    }
+}
+
+/// A child whose stderr fills its pipe buffer cannot exit (and close stdout)
+/// until the parent drains stderr. Concurrent pipe reads complete cleanly
+/// where sequential stdout-then-stderr reads deadlock.
+#[test]
+fn test_concurrent_pipe_drain() {
+    let report = "blocked write: violation line\n".repeat(4096);
+    let launcher = Arc::new(BlockingPipeLauncher {
+        stderr: report.clone(),
+    }) as Arc<dyn ProcessLauncher>;
+    let hook = CommandHook::new(
+        "large-stderr-gate",
+        vec![HookEvent::PreToolUse],
+        "sh",
+        vec![],
+        launcher,
+        HookSource::User,
+    );
+    let reg = HookRegistry::new().with_timeout(500);
+    reg.register(Arc::new(hook));
+    let outcomes = reg.dispatch(&ctx_pre_tool_use());
+    assert_eq!(outcomes.len(), 1);
+    match &outcomes[0].result {
+        Ok(HookVerdict::Deny(reason)) => {
+            assert_eq!(reason.lines().count(), 4096);
+        }
+        other => panic!("expected full stderr Deny without timeout deadlock, got {other:?}"),
+    }
 }

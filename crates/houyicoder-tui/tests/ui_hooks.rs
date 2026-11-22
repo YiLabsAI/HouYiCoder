@@ -114,15 +114,61 @@ fn test_pretooluse_deny_blocks_tool() {
     let mut s = launch_with_hooks(hooks, script);
     s.send_str("run echo hi");
     s.send_key(&Key::Enter);
-    // The denial is not a failed execution, so its body renders in the
-    // default foreground: the terminal writes only the colored cells and
-    // skips the plain spaces between words, which leaves the raw byte
-    // stream as fragments. Read the reconstructed screen, where the words
-    // and their spaces are one line.
+    // A hook denial colors its body in error red; the terminal writes only
+    // the cells that changed on each frame, so the reconstructed screen is
+    // where the full line is read.
     assert!(
         s.wait_for_screen("blocked by hook: no bash allowed", RENDER_TIMEOUT),
         "deny reason should render:\n{}",
         s.output()
+    );
+    drop(s);
+}
+
+/// An exit-2 PreToolUse gate on Write blocks file creation, keeps the
+/// unwritten draft off the screen and off disk, and renders the multi-line
+/// violation report plus rewrite guidance in full.
+#[test]
+#[ignore]
+fn test_pretooluse_blocks_write() {
+    let gate_cmd = concat!(
+        "cat >/dev/null; ",
+        "printf 'blocked write to src/bad.rs: backtick in comment\\n",
+        "  -> /// bad comment\\n",
+        "blocked write to src/bad.rs: deep qualified path\\n",
+        "  -> std::time::Instant\\n\\n",
+        "Rewrite: plain English comments\\n' >&2; ",
+        "exit 2"
+    );
+    let hooks = serde_json::json!({
+        "PreToolUse": [
+            {"matcher": "Edit|Write|MultiEdit", "hooks": [{"type":"command","command": gate_cmd}]}
+        ]
+    });
+    let script = r#"[
+        [{"type":"ToolCall","id":"w1","name":"write","input":{"path":"src/bad.rs","content":"/// bad\npub fn discarded_draft_marker() {}\n"}}],
+        [{"type":"Text","text":"fixed"}]
+    ]"#;
+    let mut s = launch_with_hooks(hooks, script);
+    s.send_str("write bad file");
+    s.send_key(&Key::Enter);
+    assert!(
+        s.wait_for_screen(
+            "blocked by hook: blocked write to src/bad.rs",
+            RENDER_TIMEOUT
+        ),
+        "write gate violation should render:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        s.wait_for_screen("Rewrite: plain English comments", RENDER_TIMEOUT),
+        "multi-line violation tail should stay visible under the 10-line error limit:\n{}",
+        s.screen().contents()
+    );
+    assert!(
+        !s.screen().contents().contains("discarded_draft_marker"),
+        "blocked write must not dump the discarded file draft:\n{}",
+        s.screen().contents()
     );
     drop(s);
 }

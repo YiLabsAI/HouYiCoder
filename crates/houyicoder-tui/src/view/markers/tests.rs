@@ -56,6 +56,49 @@ fn test_row_call_refused_yellow() {
 }
 
 #[test]
+fn test_blocked_rows_render_red() {
+    let call = styled_row(
+        &format!("{}Write(src/lib.rs)", call_prefix()),
+        Some(ToolOutcome::Blocked),
+    )
+    .expect("call chip");
+    assert_eq!(call.spans[0].style.fg, Some(ERROR_RED));
+
+    let body = "blocked by hook: backtick in comment\n  -> /// bad\n\nRewrite: plain English\nline5\nline6";
+    let rows = result_body_rows(body, "c1", Some(ToolOutcome::Blocked), false, false, 100);
+    assert_eq!(
+        rows.len(),
+        6,
+        "a 6-line hook block stays open under the 10-line error limit"
+    );
+    for (idx, (_, text, oc, _, _)) in rows.iter().enumerate() {
+        assert_eq!(*oc, Some(ToolOutcome::Blocked), "row {idx} keeps Blocked");
+        let styled = styled_row(text, *oc).expect("blocked row styled");
+        assert_eq!(
+            styled.spans.last().unwrap().style.fg,
+            Some(ERROR_RED),
+            "row {idx} body renders red: {styled:?}"
+        );
+    }
+    // Wrapped verbose call continuations pass outcome None and must not turn red.
+    assert!(
+        styled_row("        src/lib.rs)", None).is_none(),
+        "plain wrapped call arguments keep default styling"
+    );
+
+    let tall = (0..14)
+        .map(|i| format!("violation {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let collapsed = result_body_rows(&tall, "c2", Some(ToolOutcome::Blocked), false, false, 100);
+    assert_eq!(collapsed.len(), ERROR_COLLAPSE_SHOW + 1);
+    let hint = collapsed.last().unwrap();
+    assert_eq!(hint.2, None, "collapse hint stays neutral");
+    let hint_styled = styled_row(&hint.1, hint.2).expect("hint styled");
+    assert_eq!(hint_styled.spans[0].style.fg, Some(Color::DarkGray));
+}
+
+#[test]
 fn test_row_result_success_default() {
     // A successful result body uses the default foreground (Reset), not
     // green — stdout is plain text, not a semantic signal. Green-washing

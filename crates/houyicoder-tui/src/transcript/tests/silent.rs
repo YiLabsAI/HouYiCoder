@@ -4,7 +4,7 @@ use houyicoder_protocol::frontend::session_update::{
     SessionUpdate, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 
-use crate::records::TranscriptLine;
+use crate::records::{ToolOutcome, TranscriptLine};
 use crate::transcript::call_rows::tool_result_line;
 use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::transcript_from_frames;
@@ -115,4 +115,43 @@ fn test_diff_language_absent() {
         None,
         "a shell-printed diff names no language"
     );
+}
+
+#[test]
+fn test_blocked_write_shows_reason() {
+    let output = serde_json::json!({
+        "error": "blocked by hook: backtick in comment\n  -> /// bad",
+        "not_run": true,
+        "refused": { "by": "hook", "verdict": "policy" }
+    });
+    let input = serde_json::json!({
+        "path": "crates/foo/src/lib.rs",
+        "content": "/// bad\npub fn ignored_draft() {}\n"
+    });
+    let line = tool_result_line("c1", "write", &output, Some(&input));
+    match line {
+        TranscriptLine::Tool { body, outcome, .. } => {
+            assert_eq!(outcome, ToolOutcome::Blocked);
+            assert_eq!(body, "blocked by hook: backtick in comment\n  -> /// bad");
+            assert!(!body.contains("ignored_draft"));
+        }
+        other => panic!("expected tool result row, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_blocked_glob_skips_summary() {
+    let output = serde_json::json!({
+        "error": "blocked by hook: glob denied",
+        "not_run": true,
+        "refused": { "by": "hook", "verdict": "policy" }
+    });
+    let line = tool_result_line("c1", "glob", &output, None);
+    match line {
+        TranscriptLine::Tool { body, outcome, .. } => {
+            assert_eq!(outcome, ToolOutcome::Blocked);
+            assert_eq!(body, "blocked by hook: glob denied");
+        }
+        other => panic!("expected tool result row, got {other:?}"),
+    }
 }

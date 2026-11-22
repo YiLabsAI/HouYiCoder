@@ -100,6 +100,21 @@ impl Runner {
     /// without re-writing the notice logic.
     pub(crate) fn dispatch_hooks(&self, reg: &HookRegistry, ctx: &HookContext) -> Vec<HookOutcome> {
         let outcomes = reg.dispatch(ctx);
+        self.drain_skipped_hooks(reg);
+        outcomes
+    }
+
+    pub(crate) async fn run_hooks(
+        &self,
+        reg: &Arc<HookRegistry>,
+        ctx: HookContext,
+    ) -> Vec<HookOutcome> {
+        let outcomes = reg.dispatch_blocking(ctx).await;
+        self.drain_skipped_hooks(reg);
+        outcomes
+    }
+
+    fn drain_skipped_hooks(&self, reg: &HookRegistry) {
         if let Some(skipped) = reg.take_skipped_untrusted() {
             // The trust gate (TrustState::Untrusted) is scaffolded but not
             // enforced today: no project-level hook source is wired yet, and
@@ -112,7 +127,6 @@ impl Runner {
                 skipped.join(", ")
             ));
         }
-        outcomes
     }
 
     /// Fire PreToolUse for every tool about to execute, merge the verdicts,
@@ -141,7 +155,7 @@ impl Runner {
                 },
                 session,
             };
-            let outcomes = self.dispatch_hooks(reg, &ctx);
+            let outcomes = self.run_hooks(reg, ctx).await;
             self.append_hook_signals(session, HookEvent::PreToolUse, Some(&tool_name), &outcomes)
                 .await;
             let verdict = combine_verdicts(outcomes.into_iter().map(|o| o.result));
@@ -524,7 +538,7 @@ impl Runner {
             payload,
             session,
         };
-        let outcomes = self.dispatch_hooks(reg, &ctx);
+        let outcomes = self.run_hooks(reg, ctx).await;
         self.append_hook_signals(session, event, Some(tool_name), &outcomes)
             .await;
         // PostToolUse is non-blocking: combine_verdicts collects triggers for the

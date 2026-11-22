@@ -485,9 +485,9 @@ fn hands_over_to_task(lines: &[TranscriptLine], i: usize, call_id: &str) -> bool
 /// whose reason the summary would hide, or a call that never ran, which the
 /// execution count would otherwise read as done.
 fn outcome_renders_alone(outcome: Option<ToolOutcome>) -> bool {
-    matches!(
+    !matches!(
         outcome,
-        Some(ToolOutcome::Error | ToolOutcome::Refused | ToolOutcome::NotRun)
+        None | Some(ToolOutcome::Running | ToolOutcome::Success)
     )
 }
 

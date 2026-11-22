@@ -433,8 +433,13 @@ pub(crate) fn push_line_rows(
         return true;
     }
     if let Some(rows) = rendered_tool_rows(line, grp, width, app) {
-        for row in rows {
-            sink.push(Row::new(tag, row).outcome(outcome).group(grp_key.clone()));
+        for (idx, row) in rows.into_iter().enumerate() {
+            let row_outcome = if idx == 0 { outcome } else { None };
+            sink.push(
+                Row::new(tag, row)
+                    .outcome(row_outcome)
+                    .group(grp_key.clone()),
+            );
         }
         return true;
     }

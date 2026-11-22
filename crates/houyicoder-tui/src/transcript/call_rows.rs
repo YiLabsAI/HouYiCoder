@@ -45,12 +45,10 @@ pub(super) fn tool_result_line(
         .map(BackgroundTaskId);
     let body = if let Some(task) = background_task {
         background_row_body(task)
+    } else if output.get("error").is_some() {
+        raw
     } else if tool_name == "read" {
-        if output.get("error").is_some() {
-            raw
-        } else {
-            result_summary(tool_name, output).unwrap_or_default()
-        }
+        result_summary(tool_name, output).unwrap_or_default()
     } else if tool_name == "bash" {
         if raw.is_empty() && command_is_silent_success(call_input, output) {
             "done".to_string()
