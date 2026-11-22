@@ -25,6 +25,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::FetchError;
 use super::MAX_REDIRECTS;
 use super::Redirect;
+use super::connect_error_kind;
 use super::fetch_following;
 use super::is_connection_refused;
 use super::is_local_proxy_refusal;
@@ -86,6 +87,140 @@ fn test_loopback_timeout_is_refusal() {
     let wrapped = WrappedIo(IoError::from(ErrorKind::TimedOut));
     assert!(is_local_proxy_refusal(&wrapped));
     assert!(!is_connection_refused(&wrapped));
+}
+
+/// When reqwest's outer connect deadline expires before any TCP-layer I/O
+/// error is produced (producing hyper_util's Connect error wrapping reqwest's
+/// private TimedOut with no io::Error in the source chain), a loopback system
+/// proxy still classifies as absent and falls back to direct.
+#[test]
+fn test_connect_deadline_falls_back() {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listener");
+        let port = listener.local_addr().expect("address").port();
+        // Accept sockets and keep them open silently so TCP connect succeeds
+        // immediately while the HTTPS proxy connect stalls until reqwest's
+        // outer connect_timeout fires with its private TimedOut type.
+        let holder = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let proxy_url = format!("https://127.0.0.1:{port}");
+        let proxy_http = Client::builder()
+            .proxy(Proxy::all(&proxy_url).expect("proxy"))
+            .connect_timeout(Duration::from_millis(50))
+            .build()
+            .expect("proxy client");
+
+        // Probe the exact error shape reqwest emits on outer connect timeout.
+        let raw_err = proxy_http
+            .get("http://example.test/ok")
+            .send()
+            .await
+            .expect_err("stalled https proxy must hit connect timeout");
+        assert!(raw_err.is_connect(), "expected connect error: {raw_err:?}");
+        assert!(raw_err.is_timeout(), "expected timeout error: {raw_err:?}");
+        assert_eq!(
+            connect_error_kind(&raw_err),
+            None,
+            "outer connect deadline must carry no io::Error in chain: {raw_err:?}"
+        );
+        assert!(
+            is_local_proxy_refusal(&raw_err),
+            "client connect deadline must count as local proxy refusal: {raw_err:?}"
+        );
+
+        let direct = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("direct"))
+            .mount(&direct)
+            .await;
+        let direct_client = test_client(*direct.address());
+        let url = format!("http://example.test:{}/ok", direct.address().port());
+        let system_proxy = proxy_client(ProxySource::System, proxy_http, true);
+        let mut fell_back = false;
+        let response = fetch_following(
+            &direct_client,
+            Some(&system_proxy),
+            None,
+            &url,
+            &mut fell_back,
+        )
+        .await
+        .expect("connect deadline timeout on loopback system proxy falls back");
+        assert!(fell_back);
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(read_body(response).await.expect("body"), "direct");
+        holder.abort();
+    });
+}
+
+/// A response timeout after connecting to a working loopback system proxy is
+/// not a connect error and must never bypass the proxy.
+#[test]
+fn test_response_timeout_no_fallback() {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let proxy = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(250)))
+            .mount(&proxy)
+            .await;
+        let direct = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("direct"))
+            .mount(&direct)
+            .await;
+        let direct_client = test_client(*direct.address());
+        let proxy_url = format!("http://{}", proxy.address());
+        let proxy_http = Client::builder()
+            .proxy(Proxy::all(&proxy_url).expect("proxy"))
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_millis(60))
+            .build()
+            .expect("proxy client");
+        let system_proxy = proxy_client(ProxySource::System, proxy_http, true);
+        let mut fell_back = false;
+        match send_request(
+            &direct_client,
+            Some(&system_proxy),
+            "http://example.test/slow",
+            &mut fell_back,
+        )
+        .await
+        {
+            Err(FetchError::Transport(error)) => {
+                assert!(error.is_timeout(), "expected timeout error: {error:?}");
+                assert!(
+                    !error.is_connect(),
+                    "response timeout must not classify as connect error: {error:?}"
+                );
+            }
+            other => panic!("expected transport timeout, got {other:?}"),
+        }
+        assert!(
+            !fell_back,
+            "response timeout must never fall back to direct"
+        );
+        assert!(
+            direct
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty(),
+            "direct server must not be contacted after a response timeout"
+        );
+    });
 }
 
 /// A redirect is followed only while the count is under the cap and the target

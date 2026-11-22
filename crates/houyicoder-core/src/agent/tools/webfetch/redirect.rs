@@ -2,6 +2,7 @@
 //! and the resolved-address screen each hop passes before it is sent.
 
 use super::*;
+use reqwest::Error as ReqwestError;
 use reqwest::Url;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
@@ -163,14 +164,24 @@ fn is_connection_refused(error: &(dyn Error + 'static)) -> bool {
     connect_error_kind(error).is_some_and(|kind| kind == ErrorKind::ConnectionRefused)
 }
 
-/// Whether a loopback system proxy is absent. A refused connection is one
-/// sign; a connect timeout is the other, because Windows surfaces a loopback
-/// refusal as a connect timeout rather than a refusal. Used only in the
-/// loopback fallback arm, so a remote proxy that merely times out still fails
-/// closed.
+/// Whether a loopback system proxy is absent or unreachable at connect time.
+///
+/// A refused connection surfaces as ErrorKind::ConnectionRefused. A connect
+/// timeout surfaces in two shapes: either an I/O ErrorKind::TimedOut from the
+/// TCP layer, or reqwest's private TimedOut wrapped inside hyper_util's
+/// Connect error with no io::Error in the source chain (which happens on
+/// Windows when a closed loopback port holds SYN past the outer connect
+/// deadline, or whenever the outer connect deadline beats the TCP layer).
+/// Callers guard this check with error.is_connect() and
+/// proxy_client.may_fall_back(), so response timeouts and remote or env
+/// proxies never enter this branch.
 fn is_local_proxy_refusal(error: &(dyn Error + 'static)) -> bool {
-    connect_error_kind(error)
-        .is_some_and(|kind| matches!(kind, ErrorKind::ConnectionRefused | ErrorKind::TimedOut))
+    matches!(
+        connect_error_kind(error),
+        Some(ErrorKind::ConnectionRefused | ErrorKind::TimedOut)
+    ) || error
+        .downcast_ref::<ReqwestError>()
+        .is_some_and(ReqwestError::is_timeout)
 }
 
 /// Send direct, retrying one connect failure once after a short pause.
