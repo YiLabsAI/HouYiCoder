@@ -441,6 +441,13 @@ fn writes_output(cmd: &str, segment: &str) -> bool {
         return false;
     }
     let raw_args: Vec<&str> = shell_word_spans(segment).into_iter().skip(1).collect();
+    let args: Vec<String> = raw_args
+        .iter()
+        .map(|raw| raw.chars().filter(|&c| c != '"' && c != '\'').collect())
+        .collect();
+    if cmd == "printf" {
+        return args.iter().any(|arg| arg == "-v" || arg.starts_with("-v"));
+    }
     // Fail closed when an argument carries a backslash escape or shell
     // expansion: a static check cannot prove that the expanded token is not
     // an output flag or a second path argument.
@@ -450,15 +457,10 @@ fn writes_output(cmd: &str, segment: &str) -> bool {
     {
         return true;
     }
-    let args: Vec<String> = raw_args
-        .into_iter()
-        .map(|raw| raw.chars().filter(|&c| c != '"' && c != '\'').collect())
-        .collect();
     match cmd {
         "sort" => args.iter().any(|arg| sort_writes(arg)),
         // uniq [OPTION]... [INPUT [OUTPUT]]: the second path argument is a file.
         "uniq" => args.iter().filter(|arg| is_path_arg(arg)).count() > 1,
-        "printf" => args.iter().any(|arg| arg == "-v"),
         _ => false,
     }
 }

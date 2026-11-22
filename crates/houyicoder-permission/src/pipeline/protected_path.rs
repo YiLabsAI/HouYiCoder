@@ -19,15 +19,17 @@
 
 use std::sync::Arc;
 
-use houyicoder_api::sandbox::{Containment, FenceAxis, fence_covers_all_hits};
+use houyicoder_api::sandbox::{Containment, FenceAxis};
 use houyicoder_api::tool::{is_shell_tool, writes_files};
 
-use crate::compound::{reads_credential_content, reads_only_protected, writes_fence_denied_path};
+use crate::compound::{
+    protected_segments_waived, reads_credential_content, writes_fence_denied_path,
+};
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::mode::ToolRequest;
 use crate::pipeline::{GateCtx, Immunity, Stage, Validator};
 use crate::rule::input_content;
-use crate::safety::{marker_hit, safety_check};
+use crate::safety::{marker_hit, safety_check, writes_git_config};
 use dunce::canonicalize;
 
 /// Protected paths: the version-control directory, the agent's own config
@@ -117,27 +119,8 @@ impl Validator for ProtectedPathValidator {
         }
         let shell = is_shell_tool(req.tool_name);
         let credential_read = shell && reads_credential_content(ctx.content);
-        // The segments that name a protected path are proven read-only, so
-        // this command cannot damage the files the markers protect, whatever
-        // the mode. A credential is the exception: reading one leaks the
-        // secret even though it damages nothing, so a read that names one
-        // stays guarded.
-        let reads = shell && reads_only_protected(ctx.content);
-        if reads
-            && !credential_read
-            && !(shell
-                && safety_check(req.tool_name, req.input).is_some()
-                && !marker_hit(ctx.content))
-        {
-            return None;
-        }
-        // A write a fence that closes control paths refuses is evidence on its
-        // own. The text scan strips quoted heredoc bodies, so a script that
-        // replaces a control file inside one leaves no marker behind for the
-        // scan to see, while the write detection reads the body as the code
-        // the interpreter runs.
-        let fence_write =
-            shell && self.fence_denies_control_writes() && writes_fence_denied_path(ctx.content);
+        let fence_denies_control = self.fence_denies_control_writes();
+        let fence_write = shell && fence_denies_control && writes_fence_denied_path(ctx.content);
         let hit = safety_check(req.tool_name, req.input).is_some()
             || self.resolved_path(req).is_some_and(|p| marker_hit(&p))
             || fence_write
@@ -145,17 +128,16 @@ impl Validator for ProtectedPathValidator {
         if !hit {
             return None;
         }
-        // A fence that closes control paths covers every one the command
-        // names, and the command writes none of them, so an approval adds
-        // nothing: the kernel boundary holds with or without the answer. A
-        // credential or startup file keeps its question, since reading one
-        // leaks a secret without writing anything.
+        // Each segment that names a protected path is evaluated on its own:
+        // static read-only probes, literal stdout output, and kernel-fenced
+        // non-write segments compose cleanly across a compound command as long
+        // as no segment reads credential bytes, writes a fenced control path,
+        // or writes git config.
         if shell
-            && !reads
-            && self.fence_denies_control_writes()
             && !credential_read
-            && fence_covers_all_hits(ctx.content)
-            && !writes_fence_denied_path(ctx.content)
+            && !fence_write
+            && !writes_git_config(ctx.content)
+            && protected_segments_waived(ctx.content, fence_denies_control)
         {
             return None;
         }

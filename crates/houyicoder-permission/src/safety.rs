@@ -59,7 +59,7 @@ pub fn safety_check(tool_name: &str, input: Option<&Value>) -> Option<Effect> {
 /// Whether a shell command runs git config without an explicit read-only flag,
 /// which writes repository or user git configuration even though the file path
 /// does not appear on the command line.
-fn writes_git_config(content: &str) -> bool {
+pub(crate) fn writes_git_config(content: &str) -> bool {
     canonical_scan(content).commands().iter().any(|cmd| {
         cmd.git_subcommand().is_some_and(|(sub, args)| {
             sub.eq_ignore_ascii_case("config") && {

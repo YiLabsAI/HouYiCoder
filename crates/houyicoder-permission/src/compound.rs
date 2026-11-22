@@ -21,8 +21,11 @@ mod temp_cwd;
 
 pub use effect::{is_effect_safe, removes_only_temp};
 pub(crate) use effect::{sets_tmpdir, starts_with_supported_command};
-pub(crate) use protected_read::reads_credential_content;
-pub use protected_read::reads_only_protected;
+#[cfg(test)]
+pub(crate) use protected_read::reads_only_protected;
+pub(crate) use protected_read::{
+    is_literal_output_segment, protected_segments_waived, reads_credential_content,
+};
 pub(crate) use protected_write::writes_fence_denied_path;
 pub use readonly::is_readonly_compound;
 pub(crate) use readonly::{git_config_reads_only, ssh_prints_local_config};

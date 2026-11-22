@@ -635,6 +635,11 @@ fn test_session_readonly_checks_allow() {
         "cd /work/repo && for f in push_dev.log push_dev2.log push_main.log; do p=$TMPDIR/$f; [ -f \"$p\" ] || continue; wc -l < \"$p\"; grep -cE \"test result: ok\" \"$p\"; done",
         "cd /work/repo && echo \"=== current ssh -G github.com ===\"; ssh -G github.com 2>/dev/null | grep -E \"^(hostname|port|serveraliveinterval|serveralivecountmax|tcpkeepalive) \"; ssh -v -G github.com 2>&1 >/dev/null | grep -iE \"reading configuration data|include\" | head -8",
         "cd /work/repo && ssh -G github.com 2>/dev/null | head -12; grep -rn \"ServerAliveInterval\" /etc/ssh/ssh_config /etc/ssh/ssh_config.d/* 2>/dev/null | head",
+        "cd /work/repo && echo \"=== actual commands ===\"; echo \"1) git config --local core.sshCommand ... -> operation not permitted\"; echo \"2) GIT_CONFIG_GLOBAL=\\$G git config --get -> ?\"; echo \"3) ssh -G github.com -> ?\"; echo \"4) ls -la ~/.ssh -> ?\"; echo \"5) git config --global core.sshCommand ... -> ?\"; git log -1 --format='%B' 9dd11b0e6 | grep -oE \"(git inspection verbs|bracket tests)\"",
+        "cd /work/repo && echo \"=== verify ===\"; echo \"--- ssh -G ---\"; ssh -G github.com 2>/dev/null | head -2; echo \"rc=$?\"; echo \"--- ls -la ~/.ssh ---\"; ls -la ~/.ssh 2>&1 | head -2; echo \"rc=$?\"",
+        "printf '%s\\n' \"check ~/.ssh/config -> ok\"",
+        "stat ~/.ssh/config",
+        "echo \"GIT_CONFIG_GLOBAL=/work/x\" && git fetch",
         "git stash list | head -5",
         "git stash show -p",
     ] {
@@ -667,6 +672,13 @@ fn test_session_security_boundaries_ask() {
         "ssh -G -o ProxyCommand='sh -c id' github.com",
         "TMPDIR=/work/repo && wc -l < $TMPDIR/.env",
         "wc -l < ~/.ssh/id_ed25519",
+        "cp ~/.ssh/id_ed25519 $TMPDIR/key",
+        "ls $(cat ~/.ssh/id_ed25519)",
+        "stat ~/.ssh/config > /tmp/out",
+        "echo \"read .claude/settings.json\" && cat ~/.ssh/id_ed25519",
+        "env GIT_CONFIG_GLOBAL=/work/repo/.git/info/x.inc git fetch",
+        "env GIT_SSH_COMMAND='sh -c evil' git fetch",
+        "printf -v TMPDIR '%s' /work/repo && wc -l < $TMPDIR/.env",
     ] {
         let decision = gate.decide(&bash_req(command));
         assert_eq!(

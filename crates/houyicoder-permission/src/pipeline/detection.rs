@@ -7,12 +7,14 @@
 use houyicoder_api::sandbox::{
     BoundaryAccess, BoundaryGrant, Containment, FenceAxis, boundary_grants_for,
 };
+use houyicoder_api::shell::heredoc::strip_quoted_heredoc_bodies;
 use houyicoder_api::tool::is_shell_tool;
 use std::sync::Arc;
 
 use super::attribution::{compound_unverified_step, describe_destructive, describe_egress_reason};
 use crate::compound::{
-    compound_safe, is_effect_safe, is_readonly_compound, removes_only_temp, ssh_prints_local_config,
+    compound_safe, is_effect_safe, is_literal_output_segment, is_readonly_compound,
+    removes_only_temp, split_compound, ssh_prints_local_config,
 };
 use crate::decision::{AskReason, AskSource, Decision};
 use crate::egress::{egress_outputs_safe, egress_scope_list};
@@ -194,18 +196,21 @@ pub fn egress_remote_op(content: &str) -> Option<&'static str> {
 /// a session answer about configured remotes must not cover a later call that
 /// names an arbitrary host.
 pub fn egress_names_external_source(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    // Rebinding the transport or git configuration picks the program that
-    // speaks to the remote, so the destination is no longer the one the
-    // repository configured.
-    if lower.contains("git_ssh_command=")
-        || lower.contains("git_ssh=")
-        || lower.contains("git_config=")
-        || lower.contains("git_config_global=")
-        || lower.contains("git_config_system=")
-        || lower.contains("git_config_count=")
-        || lower.contains("git_exec_path=")
-    {
+    let stripped = strip_quoted_heredoc_bodies(content);
+    let overrides_transport = split_compound(&stripped).iter().any(|segment| {
+        if is_literal_output_segment(segment) {
+            return false;
+        }
+        let lower = segment.to_ascii_lowercase();
+        lower.contains("git_ssh_command=")
+            || lower.contains("git_ssh=")
+            || lower.contains("git_config=")
+            || lower.contains("git_config_global=")
+            || lower.contains("git_config_system=")
+            || lower.contains("git_config_count=")
+            || lower.contains("git_exec_path=")
+    });
+    if overrides_transport {
         return true;
     }
     canonical_scan(content).commands().iter().any(|command| {

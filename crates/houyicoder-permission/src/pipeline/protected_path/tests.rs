@@ -517,3 +517,31 @@ fn test_git_config_write_asks() {
     let d = ws.fenced_gate().decide(&bash_req("echo x >> .git/config"));
     assert_eq!(d.outcome(), Outcome::Ask, "not fence-denied: {d:?}");
 }
+
+/// Combining a read-only probe of hooks with a fence-covered script that reads
+/// settings must not escalate to SystemSafety protected_path, while combining
+/// a read-only probe with a real write to hooks still asks via SystemSafety.
+#[test]
+fn test_mixed_readonly_fenced_segments() {
+    let ws = Workspace::new(line!());
+    let cmd = "cd /work/repo && echo \"=== recent ===\"; git log --oneline -40 | grep -iE \"hook|pretool|permission|sandbox|prompt|hint|refus|deny\"; echo \"=== hooks ===\"; ls -la .claude/hooks/ 2>/dev/null | head -20; echo \"--- settings ---\"; python3 -c \"import json\nfor p in ['.claude/settings.json','.houyicoder/settings.json']:\n print(p, json.load(open(p)))\"";
+    let d = ws.fenced_gate().decide(&bash_req(cmd));
+    if let Decision::Ask(reason) = &d {
+        assert_ne!(
+            reason.validator, "protected_path",
+            "mixed readonly + fence-covered segments must not trigger SystemSafety: {d:?}"
+        );
+    }
+
+    let direct = "ls -la .claude/hooks/ 2>/dev/null; cat .claude/settings.json";
+    assert_eq!(
+        ws.fenced_gate().decide(&bash_req(direct)).outcome(),
+        Outcome::Allow
+    );
+
+    let unsafe_mix = "ls -la .claude/hooks/ 2>/dev/null; echo x > .claude/hooks/pre-commit";
+    match ws.fenced_gate().decide(&bash_req(unsafe_mix)) {
+        Decision::Ask(reason) => assert_eq!(reason.validator, "protected_path"),
+        other => panic!("expected protected_path Ask for unsafe mix, got {other:?}"),
+    }
+}
