@@ -815,4 +815,3 @@ async fn test_broadcast_delivers_delta() {
     // A second delta with no subscriber is a no-op, not an error.
     sequencer.handle(ResponseStreamEvent::AssistantTextDelta { text: "lo".into() });
 }
-}
