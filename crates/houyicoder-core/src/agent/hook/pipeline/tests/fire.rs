@@ -732,7 +732,7 @@ async fn test_recover_reply_not_reexecute() {
 /// A PreToolUse Deny feeds signal B: the memory provider's
 /// record_gate_violation counter accumulates for the denied rule. Closes
 /// the U7 loop where a rule the agent keeps violating finally accumulates
-/// enough violations for the dream to promote it into the always-on carrier.
+/// enough violations for the dream to promote it into the project scope.
 #[tokio::test]
 async fn test_deny_records_gate_violation() {
     /// A recording memory that captures every record_gate_violation call

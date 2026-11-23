@@ -24,7 +24,10 @@ fn test_no_memory_file_identity() {
         p.memory_blocks.is_empty(),
         "scratch dir has no memory file to report"
     );
-    assert!(p.text.contains("agent"));
+    assert!(
+        p.text.contains("You are houyicoder"),
+        "identity section names the assistant"
+    );
     assert!(
         !p.text.contains("# Project context"),
         "no project context section when no memory file"

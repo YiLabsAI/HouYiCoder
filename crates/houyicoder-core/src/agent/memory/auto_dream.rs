@@ -265,7 +265,7 @@ pub(crate) fn format_listing(listing: &[MemorySummary]) -> String {
 /// recalled). Capped at 200 rows so a large store does not bloat the prompt.
 /// The gate_violations column surfaces signal B: rules the agent keeps
 /// violating (a PreToolUse gate denied a call on that rule) are promotion
-/// candidates — the rule should move into the always-on carrier so it stops
+/// candidates — the rule should move into the project scope so it stops
 /// relying on recall luck.
 fn format_recall_stats(stats: &[MemoryRecallStats], now: u64) -> String {
     if stats.is_empty() {
@@ -323,7 +323,7 @@ pub(crate) fn merge_cross_session_reward(
 /// Orient (scan the memory store + recall-frequency stats), Consolidate
 /// (merge near-duplicates, resolve contradictions), Prune (drop dead weight
 /// surfaced by the recall-frequency stats via delete_memory), and Scope-flow
-/// (promote high-recall entries into the always-on carrier so the rule no
+/// (promote high-recall entries into the project scope so the rule no
 /// longer relies on recall luck).
 pub(crate) fn build_consolidation_prompt(
     memory_root: &str,
@@ -375,21 +375,20 @@ pub(crate) fn build_consolidation_prompt(
         recall-on-demand auto scope into the always-on project carrier; rules \
         that have decayed move back. Use the recall-frequency block to decide:\n\
         - Call promote_memory for rules with high recall frequency (the rule \
-        is referenced often, so it should be always-on rather than rely on \
-        recall luck) or for rules you see cited repeatedly across the listing. \
-        Promotion merges the rule's first line into the project memory file \
-        (agent.md) so the rule is always-on, and moves the topic into the \
-        project memory dir so it is still recallable.\n\
+        is referenced often) or for rules you see cited repeatedly across the \
+        listing. Promotion moves the topic into the project memory dir, where \
+        the project scope outranks the automatic one on a key collision, so \
+        the rule survives an automatic rewrite of the same key.\n\
         - Call promote_memory for rules with a high gate-violations count \
-        (the agent keeps violating a PreToolUse gate on that rule — the rule \
-        is missing from the always-on carrier or recall is missing it, so it \
-        should be promoted so the agent sees it before acting). This closes \
+        (the agent keeps violating a PreToolUse gate on that rule — recall is \
+        missing it, so it should be promoted so the agent sees it before \
+        acting). This closes \
         the loop where a rule the agent keeps violating finally stops relying \
         on recall luck.\n\
         - Call demote_memory for rules that have decayed: long unstirred in \
-        recall and no recent gate violations. Demotion removes the rule line \
-        from the always-on carrier (freeing prefix budget) and moves the \
-        topic back into the auto scope so it is recall-on-demand only.\n\
+        recall and no recent gate violations. Demotion moves the topic back \
+        into the auto scope and out of the project root, so it is \
+        recall-on-demand only.\n\
         - When refreshing a topic that is already in the project scope (one \
         you promoted earlier), just call save_memory with the updated \
         content: the host routes that refresh into the project root in \

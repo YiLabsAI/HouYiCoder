@@ -1,23 +1,12 @@
-//! The structured memory scope-flow tools the forked consolidation dream
-//! uses to move a topic between the auto and project storage scopes. The
-//! dream emits a structured call with a key; the tool routes it through the
-//! memory provider promote_memory or demote_memory method, which owns the
-//! file-op sequence: merge or strip the rule sentence in the project memory
-//! file (the always-on carrier), move the topic file between the auto and
-//! project roots, and regenerate the derived indexes. The tool holds no
-//! path logic of its own — the provider owns every path — so there is no
-//! path-escape surface for the agent to probe.
-//!
-//! Destructive-but-reversible (a promote moves a topic, a demote moves it
-//! back; the rule sentence in the carrier file is append-only on promote
-//! and line-removal on demote) and auto-approve: the forked dream runs
-//! autonomously off the hot path; a per-call approval gate would queue
-//! approvals no one answers and starve scope flow. Safety comes from the
-//! structured capability plus the dream prompt's promote-when / demote-when
-//! guidance, not from a human checkpoint here.
-//!
-//! The provider is shared (Arc) with the runner that owns it, so the
-//! forked dream mutates the same store the main runner reads.
+//! Scope-flow tools the forked consolidation dream uses to move a topic
+//! between the auto and project scopes. The tool routes a structured call to
+//! the provider, which owns the file move and index rebuild, so the tool
+//! holds no path logic and offers no path-escape surface. The project scope
+//! outranks auto on a key collision, so a promoted topic survives an
+//! automatic rewrite of the same key. AGENTS.md is not written here.
+
+//! Auto-approve because the forked dream runs off the hot path, and a
+//! per-call gate would queue approvals no one answers.
 
 use std::sync::Arc;
 
@@ -31,10 +20,9 @@ use crate::agent::memory::MutationLog;
 use houyicoder_api::agent_event::MemoryOperation;
 
 /// A structured scope-promote tool. The forked consolidation dream calls it
-/// when a rule has crossed the promotion threshold (high recall frequency,
-/// or repeated gate violations): the topic moves from the auto scope into
-/// the project scope, and the rule sentence lands in the project memory
-/// file so the rule is always-on rather than recall-on-demand.
+/// when a rule crosses the promotion threshold. The topic moves from the auto
+/// scope into the project scope, where it outranks an automatic rewrite of
+/// the same key.
 pub struct PromoteMemoryTool {
     provider: Arc<dyn MemoryProvider>,
     /// Optional write recorder the caller threads in to learn how many
@@ -67,15 +55,11 @@ impl Tool for PromoteMemoryTool {
         "promote_memory"
     }
     fn description(&self) -> &str {
-        "Promote one stored memory from the auto scope into the project scope \
-         (the always-on carrier). Use for rules that have crossed the \
-         promotion threshold: high recall frequency, or repeated PreToolUse \
-         gate violations on that rule. The operation merges the rule \
-         sentence (the first content line) into the project memory file so \
-         the rule is always-on rather than recall-on-demand, and moves the \
-         topic file into the project memory dir so recall still finds it. \
-         Idempotent: a topic already in the project scope only refreshes the \
-         carrier line."
+        "Promote one stored memory from the auto scope into the project scope. \
+         Use for rules with high recall frequency or repeated PreToolUse gate \
+         violations. The topic moves into the project memory dir, where the \
+         project scope outranks the automatic one on a key collision, so the \
+         rule survives an automatic rewrite of the same key. Idempotent."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -127,10 +111,9 @@ impl Tool for PromoteMemoryTool {
 }
 
 /// A structured scope-demote tool. The forked consolidation dream calls it
-/// when an always-on rule has decayed (long unstirred + no gate violations):
-/// the rule sentence leaves the project memory file (freeing always-on
-/// prefix budget) and the topic file moves back into the auto scope so the
-/// topic is recall-on-demand only. The reverse of promote_memory.
+/// when a project rule has decayed and is long unstirred with no gate
+/// violations. The topic moves back into the auto scope so it is
+/// recall-on-demand only. The reverse of promote_memory.
 pub struct DemoteMemoryTool {
     provider: Arc<dyn MemoryProvider>,
     recorder: Option<Arc<MutationLog>>,
@@ -155,12 +138,9 @@ impl Tool for DemoteMemoryTool {
     }
     fn description(&self) -> &str {
         "Demote one stored memory from the project scope back into the auto \
-         scope. Use for rules that have decayed: long unstirred in recall, \
-         no recent gate violations. The operation removes the rule sentence \
-         from the project memory file (freeing always-on prefix budget) \
-         and moves the topic file back into the auto memory dir so the \
-         topic is recall-on-demand only. Idempotent: a topic already in \
-         the auto scope only strips the carrier line."
+         scope. Use for decayed rules that are long unstirred in recall with \
+         no recent gate violations. The topic moves back into the auto memory \
+         dir so it is recall-on-demand only. Idempotent."
     }
     fn input_schema(&self) -> Value {
         json!({

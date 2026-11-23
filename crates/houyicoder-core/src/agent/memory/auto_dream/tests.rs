@@ -307,7 +307,7 @@ fn test_prompt_has_phases_root() {
         "Prune phase references the recall-frequency signal"
     );
     // Phase 4 (Scope flow) instructs promote/demote so the dream moves
-    // high-recall or high-violation rules into the always-on carrier.
+    // high-recall or high-violation rules into the project scope.
     assert!(
         prompt.contains("Phase 4"),
         "Scope-flow phase is present in the prompt"

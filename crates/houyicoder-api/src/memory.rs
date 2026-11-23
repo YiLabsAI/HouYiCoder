@@ -105,25 +105,20 @@ pub trait MemoryProvider: Send + Sync {
         self.add_in_scope(entry, scope)?;
         Ok(MemoryWriteOutcome::Created)
     }
-    /// Promote a memory from the auto scope into the project scope (the
-    /// always-on carrier). The dream calls this when a rule has crossed the
-    /// promotion threshold (high recall frequency, or repeated gate
-    /// violations). The operation merges the topic's rule sentence into the
-    /// project memory file (agent.md), moves the topic file from the auto
-    /// root into the project root so recall still finds it, and regenerates
-    /// the derived indexes. Default NotFound for providers without a
-    /// multi-scope filesystem backend.
+    /// Promote a memory from the auto scope into the project scope. The dream
+    /// calls this when a rule crosses the promotion threshold. The topic file
+    /// moves into the project root and the indexes regenerate. The project
+    /// scope outranks auto on a key collision, so an automatic write never
+    /// replaces the user's statement. Default NotFound for providers without
+    /// a multi-scope filesystem backend.
     fn promote_memory(&self, _key: &str) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
     }
     /// Demote a memory from the project scope back into the auto scope. The
-    /// dream calls this when an always-on rule has decayed (long unstirred
-    /// and no gate violations): removing it from the always-on carrier frees
-    /// prefix budget while keeping the topic recallable. The operation
-    /// removes the rule sentence from the project memory file, moves the
-    /// topic file from the project root into the auto root, and regenerates
-    /// the derived indexes. Default NotFound for providers without a
-    ///   multi-scope filesystem backend.
+    /// dream calls this when a project rule has decayed and is long unstirred
+    /// with no gate violations. The topic file moves back into the auto root
+    /// and the indexes regenerate. Default NotFound for providers without a
+    /// multi-scope filesystem backend.
     fn demote_memory(&self, _key: &str) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
     }
@@ -231,18 +226,16 @@ pub trait MemoryProvider: Send + Sync {
         Vec::new()
     }
     /// Increment recall_hits and update last_access_ts for the given keys
-    /// (the keys a recall just surfaced). Best-effort: a write failure logs
-    /// and the counters re-accumulate next time, never failing the recall
-    /// path. Default no-op for providers without a sidecar.
+    /// (the keys a recall just surfaced). The write is best-effort, so a
+    /// failure logs and the counters re-accumulate next time, never failing
+    /// the recall path. Default no-op for providers without a sidecar.
     fn record_recall_hits(&self, _keys: &[String]) {}
-    /// Increment gate_violations for one key (signal B: a PreToolUse gate
-    /// denied a call because the agent violated the rule that key names).
-    /// The dream reads the cumulative count to nominate rules for
-    /// promotion into the always-on carrier — closing the loop where a
-    /// rule the agent keeps violating (but recall misses) gets promoted
-    /// so it is always-on rather than recall-on-demand. Best-effort: a
-    /// write failure logs and the counter re-accumulates, never failing
-    /// the gate path. Default no-op for providers without a sidecar.
+    /// Increment gate_violations for one key. A PreToolUse gate denied a call
+    /// because the agent violated the rule that key names. The dream reads the
+    /// cumulative count to nominate rules for promotion, closing the loop where
+    /// a rule the agent keeps violating stops relying on recall. The write is
+    /// best-effort, so a failure logs and the counter re-accumulates, never
+    /// failing the gate path. Default no-op for providers without a sidecar.
     fn record_gate_violation(&self, _key: &str) {}
 }
 

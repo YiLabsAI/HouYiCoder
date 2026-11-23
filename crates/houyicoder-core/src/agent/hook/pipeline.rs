@@ -172,7 +172,7 @@ impl Runner {
                     // Signal B: a PreToolUse gate denied a call. Record a
                     // violation against the deny reason (the rule the agent
                     // violated) so the consolidation dream can nominate the
-                    // rule for promotion into the always-on carrier. The
+                    // rule for promotion into the project scope. The
                     // reason is best-effort sanitized to a memory key; a
                     // hook whose deny reason names the rule key lands a
                     // precise counter, a free-text reason lands a coarse

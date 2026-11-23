@@ -99,7 +99,7 @@ impl MarkdownMemoryProvider {
         }
         // Reconcile the topic files. When both roots hold a copy, the auto
         // copy is the recall-on-demand target, so the project copy goes and
-        // the always-on scope no longer carries the topic. When only the
+        // the project root no longer carries the topic. When only the
         // project copy exists, it moves into the auto root. When only the
         // auto copy exists, the move changes nothing, which makes a repeated
         // demote idempotent.
