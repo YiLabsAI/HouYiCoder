@@ -534,6 +534,127 @@ fn test_approval_request_carries_meta() {
     assert_eq!(delegation_back.subagent_type, "explore");
 }
 
+/// The approval reason rides the card content so a standard client that
+/// does not read _meta still sees why the call is gated.
+#[test]
+fn test_permission_card_carries_reason() {
+    let req = ApprovalRequest::new(
+        "call_1".into(),
+        "bash".into(),
+        serde_json::json!({"cmd": "ls"}),
+        None,
+    );
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "destructive_command".to_string(),
+        detail: "rm needs confirmation".into(),
+        containment_note: Some("writes are fenced".into()),
+    };
+    let options = vec![PermissionOption {
+        option_id: "allow_once".into(),
+        name: "Allow once".into(),
+        kind: PermissionOptionKind::AllowOnce,
+        scope: None,
+        meta: None,
+    }];
+    let ask = approval_to_acp_permission(&req, "s".into(), &options, Some(&reason), None);
+    let content = &ask.tool_call.fields.content;
+    assert_eq!(content.len(), 1, "one content block carries the reason");
+    let text = match &content[0] {
+        ToolCallContent::Content { content } => match content {
+            ContentBlock::Text { text } => text.clone(),
+            _ => panic!("expected a text content block"),
+        },
+        _ => panic!("expected a content variant"),
+    };
+    assert!(
+        text.contains("rm needs confirmation"),
+        "detail in content: {text}"
+    );
+    assert!(
+        text.contains("writes are fenced"),
+        "containment note in content: {text}"
+    );
+}
+
+/// A card for an ask with no reason carries no content, so the card body
+/// stays clean.
+#[test]
+fn test_card_empty_no_reason() {
+    let req = ApprovalRequest::new(
+        "call_1".into(),
+        "bash".into(),
+        serde_json::json!({"cmd": "ls"}),
+        None,
+    );
+    let options = vec![PermissionOption {
+        option_id: "allow_once".into(),
+        name: "Allow once".into(),
+        kind: PermissionOptionKind::AllowOnce,
+        scope: None,
+        meta: None,
+    }];
+    let ask = approval_to_acp_permission(&req, "s".into(), &options, None, None);
+    assert!(
+        ask.tool_call.fields.content.is_empty(),
+        "no reason means no content"
+    );
+}
+
+/// A reason whose detail is empty produces no content, so the card body
+/// stays clean even when the engine attached a reason struct with no text.
+#[test]
+fn test_card_reason_empty_detail() {
+    let req = ApprovalRequest::new(
+        "call_1".into(),
+        "bash".into(),
+        serde_json::json!({"cmd": "ls"}),
+        None,
+    );
+    let reason = AskReason {
+        source: AskSource::Detection,
+        validator: "v".into(),
+        detail: String::new(),
+        containment_note: None,
+    };
+    let options = vec![PermissionOption {
+        option_id: "allow_once".into(),
+        name: "Allow once".into(),
+        kind: PermissionOptionKind::AllowOnce,
+        scope: None,
+        meta: None,
+    }];
+    let ask = approval_to_acp_permission(&req, "s".into(), &options, Some(&reason), None);
+    assert!(
+        ask.tool_call.fields.content.is_empty(),
+        "empty detail means no content"
+    );
+}
+
+/// A notice is blockquoted so a client renders it apart from the model text.
+#[test]
+fn test_notice_formats_blockquote() {
+    let notice = UserNoticeEvent {
+        message: "sandbox widened".into(),
+    };
+    let update = map_notice(&notice);
+    let SessionUpdate::AgentMessageChunk(chunk) = update else {
+        panic!("notice maps to an agent message chunk");
+    };
+    let text = match chunk.content {
+        ContentBlock::Text { text } => text,
+        _ => panic!("expected a text content block"),
+    };
+    assert!(
+        text.starts_with("> **[Notice]**"),
+        "notice is blockquoted: {text}"
+    );
+    assert!(
+        text.contains("sandbox widened"),
+        "notice text preserved: {text}"
+    );
+}
+
 /// A plan that offers only one-shot options, for exercising the response
 /// mapper without assembling a full grant.
 fn one_shot_plan() -> PlannedAsk {

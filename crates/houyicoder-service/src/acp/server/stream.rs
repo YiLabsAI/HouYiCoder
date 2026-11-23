@@ -17,6 +17,7 @@ use houyicoder_api::agent_event::{ResponseStreamEvent, ToolExecutionEvent, UserN
 use houyicoder_api::session::TrajectoryPages;
 use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::acpx::AcpxMethod;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
@@ -242,13 +243,25 @@ impl AcpServer {
 
     /// Forward one user-facing notice as agent text. The diagnostic log keeps
     /// the same text for a reader who was not connected.
-    async fn push_notice(
+    /// Forward one user-facing notice as a blockquoted agent message. A
+    /// client that negotiated acpx receives a second copy on the extension
+    /// channel so it can render the notice with system styling.
+    pub(super) async fn push_notice(
         &self,
         io: &mut AcpDuplexPump,
         notice: &UserNoticeEvent,
     ) -> Result<(), ProtocolError> {
         tracing::warn!("user notice: {}", notice.message);
         let notification = session_notification(self.session, &map_notice(notice))?;
-        self.send_typed(io, &notification).await
+        self.send_typed(io, &notification).await?;
+        if self.client_acpx {
+            let method = serde_json::to_value(&AcpxMethod::ContextUserNotice)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            let acpx = AcpNotification::new(method, serde_json::json!({ "text": &notice.message }));
+            self.send_typed(io, &acpx).await?;
+        }
+        Ok(())
     }
 }

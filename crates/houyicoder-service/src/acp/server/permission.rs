@@ -5,26 +5,22 @@
 //! outcome nobody stated.
 
 use super::AcpServer;
-use super::stream::session_notification;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::consent::{deny_delegated_ask, prepare_delegated_ask, publish_delegated_response};
 use crate::protocol_adapter::acp_permission_response_to_decision;
 use crate::protocol_adapter::approval_to_acp_permission;
 use crate::protocol_adapter::parse_approval_decision;
+use houyicoder_api::agent_event::UserNoticeEvent;
 use houyicoder_core::agent::ApprovalDecision;
 use houyicoder_core::agent::ApprovalRequest;
 use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
-use houyicoder_protocol::acp_wire::AcpErrorCode;
-use houyicoder_protocol::acp_wire::AcpRequest;
-use houyicoder_protocol::acp_wire::AcpRequestId;
-use houyicoder_protocol::acp_wire::AcpResponse;
-use houyicoder_protocol::acp_wire::RequestPermissionResponse;
+use houyicoder_protocol::acp_wire::{
+    AcpErrorCode, AcpRequest, AcpRequestId, AcpResponse, RequestPermissionResponse,
+};
 use houyicoder_protocol::error::ErrorCategory;
 use houyicoder_protocol::error::ProtocolError;
-use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::run::DelegationSource;
-use houyicoder_protocol::frontend::session_update::{ContentChunk, SessionUpdate};
 use std::sync::atomic::Ordering;
 
 impl AcpServer {
@@ -100,13 +96,13 @@ impl AcpServer {
             // holds.
             let settled = self.consent().settle_answer(&planned, choice).await?;
             for notice in &settled.notices {
-                tracing::warn!("consent notice: {notice}");
-                let update =
-                    SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
-                        text: notice.clone(),
-                    }));
-                let notification = session_notification(self.session, &update)?;
-                self.send_typed(io, &notification).await?;
+                self.push_notice(
+                    io,
+                    &UserNoticeEvent {
+                        message: notice.clone(),
+                    },
+                )
+                .await?;
             }
             decisions.push(parse_approval_decision(settled.wire_decision));
         }
@@ -166,12 +162,14 @@ impl AcpServer {
                         );
                         self.send_response(io, &resp).await?;
                     }
-                    Some(_) => {
-                        return Err(ProtocolError::new(
-                            ErrorCategory::InvalidFrame,
-                            "unexpected frame while a permission ask is pending",
-                            false,
-                        ));
+                    Some(other) => {
+                        if !self.route_turn_frame(io, &other).await? {
+                            return Err(ProtocolError::new(
+                                ErrorCategory::InvalidFrame,
+                                "unexpected frame while a permission ask is pending",
+                                false,
+                            ));
+                        }
                     }
                     None => {
                         return Err(ProtocolError::new(

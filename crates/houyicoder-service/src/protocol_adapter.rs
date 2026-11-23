@@ -527,12 +527,12 @@ pub fn map_tool_progress(event: &ToolExecutionEvent) -> SessionUpdate {
     SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(call_id.clone(), fields))
 }
 
-/// Map one user notice to agent text. The session stream has no standard
-/// system-message kind, so a notice travels as a message chunk and the client
-/// renders it in the conversation.
+/// Map one user notice to a blockquoted agent message, so a client renders
+/// it with visual distinction from the model's reply rather than appending it
+/// to the conversation text.
 pub fn map_notice(event: &UserNoticeEvent) -> SessionUpdate {
     SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
-        text: event.message.clone(),
+        text: format!("> **[Notice]** {}", event.message),
     }))
 }
 

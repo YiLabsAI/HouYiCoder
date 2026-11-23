@@ -8,8 +8,11 @@ use houyicoder_protocol::acp_wire::{
     RequestPermissionResponse, SelectedPermissionOutcome,
 };
 use houyicoder_protocol::frontend::permission::AskReason;
+use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
-use houyicoder_protocol::frontend::session_update::{ToolCallUpdate, ToolCallUpdateFields};
+use houyicoder_protocol::frontend::session_update::{
+    ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
+};
 use serde_json::Map;
 
 use crate::consent::{ALLOW_ALWAYS, ALLOW_ONCE, PlannedAsk, RawConsentChoice};
@@ -42,6 +45,7 @@ pub(crate) fn approval_to_acp_permission(
             kind: Some(tool_kind(&req.tool_name)),
             locations: tool_locations(&req.tool_name, Some(&req.input)),
             raw_input: Some(req.input.clone()),
+            content: reason_content(reason),
             ..Default::default()
         },
     };
@@ -69,6 +73,30 @@ pub(crate) fn approval_to_acp_permission(
         options: options.to_vec(),
         meta,
     }
+}
+
+/// The approval reason rendered as card content, so a standard client that
+/// does not read _meta still sees why the call is gated. The detail line
+/// leads; a containment note the fence produced follows on its own line.
+fn reason_content(reason: Option<&AskReason>) -> Vec<ToolCallContent> {
+    let Some(r) = reason else {
+        return Vec::new();
+    };
+    let mut text = r.detail.clone();
+    if let Some(note) = &r.containment_note
+        && !note.is_empty()
+    {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(note);
+    }
+    if text.is_empty() {
+        return Vec::new();
+    }
+    vec![ToolCallContent::Content {
+        content: ContentBlock::Text { text },
+    }]
 }
 
 /// Map the client's permission response to the choice the consent policy

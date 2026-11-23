@@ -125,6 +125,12 @@ pub enum AcpxMethod {
     /// turn into two summary rows.
     #[serde(rename = "_acpx/context/turn_interrupted")]
     ContextTurnInterrupted,
+    /// A user-visible notice the host surfaced (a consent degradation, a
+    /// directory refusal). Rides the extension channel beside the standard
+    /// session/update blockquote so an acpx-aware client renders it with
+    /// system styling rather than as model text.
+    #[serde(rename = "_acpx/context/user_notice")]
+    ContextUserNotice,
 
     // acpx/a2a/*, acpx/trajectory/*, acpx/cas/* — placeholder namespaces;
     // payload shapes land with their respective subsystems.

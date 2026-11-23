@@ -5,6 +5,8 @@
 
 #![cfg(test)]
 
+mod card_notice;
+
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

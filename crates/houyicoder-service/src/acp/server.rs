@@ -98,6 +98,10 @@ pub struct AcpServer {
     /// only fires when the run is paused on an ask, so an idle cancel is a
     /// no-op on the flag.)
     cancel_requested: AtomicBool,
+    /// True when the client negotiated _meta.acpx at initialize, so notices
+    /// and other extension notifications ride the acpx channel beside the
+    /// standard session/update stream.
+    client_acpx: bool,
 }
 
 /// The turn result a cancel during a permission ask produces: the turn ended
@@ -136,6 +140,7 @@ impl AcpServer {
             completed_calls: HashSet::new(),
             model_options: Vec::new(),
             cancel_requested: AtomicBool::new(false),
+            client_acpx: false,
         }
     }
 
@@ -220,6 +225,11 @@ impl AcpServer {
                             "session/set_mode" => self.handle_set_mode(pump, &req).await?,
                             "session/set_config_option" => {
                                 self.handle_set_config_option(pump, &req).await?
+                            }
+                            "initialize" => {
+                                let resp = self.adapter.handle(&req).await;
+                                self.note_client_acpx(&req);
+                                self.send_response(pump, &resp).await?;
                             }
                             _ => {
                                 let resp = self.adapter.handle(&req).await;
@@ -473,7 +483,7 @@ impl AcpServer {
                 }
                 frame = io.next_frame() => match frame {
                     Some(f) => {
-                        if !self.route_cancel_frame(&f).await? {
+                        if !self.route_turn_frame(io, &f).await? {
                             self.events = events;
                             return Err(ProtocolError::new(
                                 ErrorCategory::InvalidFrame,
@@ -509,24 +519,59 @@ impl AcpServer {
     }
 
     /// Inspect one inbound frame read mid-run (or mid-resume) for a
-    /// session/cancel notification. Returns Ok(true) when the frame was a
-    /// cancel (the run future keeps polling, the drive loop observes the
-    /// cancelled token, and resolves Interrupted) and Ok(false) for any other
-    /// frame, which the caller treats as a protocol violation (fail-closed).
-    /// The store is reaped so lifecycle state reflects Cancelled. A cancel
-    /// arriving while a permission card is pending is handled by the ask
-    /// wait, not here.
-    async fn route_cancel_frame(&self, frame: &InboundFrame) -> Result<bool, ProtocolError> {
-        let InboundFrame::Notification(notif) = frame else {
-            return Ok(false);
-        };
-        if notif.method != "session/cancel" {
-            return Ok(false);
+    /// session/cancel notification, a mid-run mode or model switch, or a
+    /// prompt that arrives while a turn is live. Returns true when the frame
+    /// was handled (the drive loop continues); false when it is a protocol
+    /// violation the caller must fail on.
+    async fn route_turn_frame(
+        &mut self,
+        io: &mut AcpDuplexPump,
+        frame: &InboundFrame,
+    ) -> Result<bool, ProtocolError> {
+        match frame {
+            InboundFrame::Notification(notif) if notif.method == "session/cancel" => {
+                self.runner.abort();
+                self.adapter.handle_notification(notif).await;
+                self.cancel_requested.store(true, Ordering::Relaxed);
+                Ok(true)
+            }
+            InboundFrame::Request(req) => match req.method.as_str() {
+                "session/set_mode" => {
+                    self.handle_set_mode(io, req).await?;
+                    Ok(true)
+                }
+                "session/set_config_option" => {
+                    self.handle_set_config_option(io, req).await?;
+                    Ok(true)
+                }
+                "session/prompt" => {
+                    self.send_response(
+                        io,
+                        &AcpResponse::err(
+                            req.id.clone(),
+                            AcpErrorCode::InvalidRequest,
+                            "a turn is already running",
+                        ),
+                    )
+                    .await?;
+                    Ok(true)
+                }
+                _ => Ok(false),
+            },
+            _ => Ok(false),
         }
-        self.runner.abort();
-        self.adapter.handle_notification(notif).await;
-        self.cancel_requested.store(true, Ordering::Relaxed);
-        Ok(true)
+    }
+
+    /// Record whether the client negotiated _meta.acpx in its initialize
+    /// request, so notices can ride the extension channel beside the standard
+    /// session/update stream.
+    fn note_client_acpx(&mut self, req: &AcpRequest) {
+        if let Some(params) = &req.params
+            && let Some(meta) = params.get("_meta")
+            && meta.get("acpx").is_some()
+        {
+            self.client_acpx = true;
+        }
     }
 
     /// Send a response paired to a request by id.
