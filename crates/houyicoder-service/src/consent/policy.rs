@@ -287,6 +287,13 @@ fn durable_label(grant: &DurableGrant, grants: &[BoundaryGrant]) -> Option<Strin
     Some(format!("{effect} ({lifetime})"))
 }
 
+/// The option id that approves this one call.
+pub(crate) const ALLOW_ONCE: &str = "allow_once";
+/// The option id that approves and installs the plan's durable grant.
+pub(crate) const ALLOW_ALWAYS: &str = "allow_always";
+/// The option id that refuses this one call.
+pub(crate) const REJECT_ONCE: &str = "reject_once";
+
 /// The verdict options the card offers for this ask. The remember option is
 /// present only when the server can install the scope it names, so the card
 /// never offers a choice the gate would ignore.
@@ -298,7 +305,7 @@ pub(crate) fn approval_options(
     grants: &[BoundaryGrant],
 ) -> Vec<PermissionOption> {
     let mut options = vec![PermissionOption {
-        option_id: "allow_once".into(),
+        option_id: ALLOW_ONCE.into(),
         name: "Allow once".into(),
         kind: PermissionOptionKind::AllowOnce,
         scope: None,
@@ -307,7 +314,7 @@ pub(crate) fn approval_options(
     let grant = durable_grant(tool_name, input, reason, fence, grants);
     if let Some(label) = durable_label(&grant, grants) {
         options.push(PermissionOption {
-            option_id: "allow_always".into(),
+            option_id: ALLOW_ALWAYS.into(),
             name: label,
             kind: PermissionOptionKind::AllowAlways,
             scope: grant.scope(),
@@ -315,7 +322,7 @@ pub(crate) fn approval_options(
         });
     }
     options.push(PermissionOption {
-        option_id: "reject_once".into(),
+        option_id: REJECT_ONCE.into(),
         name: "Reject once".into(),
         kind: PermissionOptionKind::RejectOnce,
         scope: None,

@@ -28,7 +28,8 @@ pub(crate) use delegation::{
 };
 pub(crate) use grant_install::ConsentInstall;
 pub(crate) use policy::{
-    CardFence, DurableGrant, approval_options, durable_grant, installed_scope,
+    ALLOW_ALWAYS, ALLOW_ONCE, CardFence, DurableGrant, approval_options, durable_grant,
+    installed_scope,
 };
 #[cfg(test)]
 pub(crate) use policy::{FENCED, UNFENCED, consent_rule_for};

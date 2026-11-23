@@ -12,7 +12,7 @@ use houyicoder_protocol::frontend::run::{ApprovalScope, DelegationSource};
 use houyicoder_protocol::frontend::session_update::{ToolCallUpdate, ToolCallUpdateFields};
 use serde_json::Map;
 
-use crate::consent::{PlannedAsk, RawConsentChoice};
+use crate::consent::{ALLOW_ALWAYS, ALLOW_ONCE, PlannedAsk, RawConsentChoice};
 
 use super::{tool_kind, tool_locations, tool_title};
 
@@ -87,13 +87,10 @@ pub(crate) fn acp_permission_response_to_decision(
     else {
         return None;
     };
-    let offered_always = planned
-        .options
-        .iter()
-        .any(|o| o.option_id == "allow_always");
-    let (approved, scope) = if option_id == "allow_once" {
+    let offered_always = planned.options.iter().any(|o| o.option_id == ALLOW_ALWAYS);
+    let (approved, scope) = if option_id == ALLOW_ONCE {
         (true, ApprovalScope::Once)
-    } else if option_id == "allow_always" && offered_always {
+    } else if option_id == ALLOW_ALWAYS && offered_always {
         (true, planned.grant.scope().unwrap_or(ApprovalScope::Once))
     } else {
         (false, ApprovalScope::Once)
