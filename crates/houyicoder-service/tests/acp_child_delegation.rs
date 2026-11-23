@@ -9,22 +9,16 @@
 //! current_exe with an argv mode switch: --server serves this crate's own
 //! northbound server, --stub serves the minimal child that reaches the paths
 //! the server's canned provider cannot.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "test scaffolding spawns this binary, not an engine call"
-)]
 
-#[path = "common/acp_stub_server.rs"]
-mod acp_stub_server;
+#[path = "common/acp_child_fixture.rs"]
+mod acp_child_fixture;
 mod common;
 
 use std::env::current_exe;
 use std::env::vars;
 use std::fs::read_dir;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use houyicoder_api::launcher::{ProcessLauncher, StdProcessLauncher};
@@ -46,6 +40,7 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{DefaultModeGate, ModeGate, PermissionMode};
+use houyicoder_platform::process::alive as process_alive;
 use houyicoder_provider::FakeProvider;
 use houyicoder_service::acp::client::session::{AcpChildSession, PermissionFence};
 use houyicoder_service::composition::multi_agent::{MultiAgentDeps, MultiAgentRuntime};
@@ -81,13 +76,14 @@ fn external_definition(args: Vec<String>) -> AgentDefinition {
             program: program.display().to_string(),
             args,
             passthrough_env: vec![],
+            env: Vec::new(),
             handshake_timeout_ms: 10_000,
         }),
     }
 }
 
 fn stub_args(mode: &[&str]) -> Vec<String> {
-    let mut args = vec![acp_stub_server::STUB_ARG.to_string()];
+    let mut args = vec![acp_child_fixture::STUB_ARG.to_string()];
     args.extend(mode.iter().map(|s| s.to_string()));
     args
 }
@@ -221,6 +217,10 @@ async fn test_child_ask_reaches_parent() {
     );
     // Subscribed before the spawn, so the ask cannot land before the listener.
     let mut asks = bus.subscribe(permission_request_topic());
+    // The parent's own table is read at the moment the ask arrives: a host
+    // that holds a spawn handle verifies against it, so an ask missing here
+    // is one the real host would discard as stale.
+    let pending = harness.runtime.pending_child_permissions();
     let ctx = ToolCtx::new("c1").with_session(SessionId::new());
     let args = SpawnArgs::new("review", "write inside", "ask");
     let handle = tokio::spawn(async move { harness.runtime.spawn(&ctx, args).await });
@@ -234,6 +234,14 @@ async fn test_child_ask_reaches_parent() {
     else {
         panic!("expected a permission request, got {ask:?}");
     };
+    assert!(
+        pending
+            .lock()
+            .expect("the table locks")
+            .iter()
+            .any(|p| p.call_id == call_id),
+        "the ask is parked before it is published, or the host would drop it"
+    );
     bus.publish(
         &permission_response_topic(&child_id, &call_id),
         BusMessage::PermissionResponse {
@@ -249,6 +257,10 @@ async fn test_child_ask_reaches_parent() {
         .expect("spawn task joined")
         .expect("spawn succeeds");
     assert_eq!(outcome.status.as_deref(), Some("completed"));
+    assert!(
+        pending.lock().expect("the table locks").is_empty(),
+        "the answered ask leaves nothing parked"
+    );
 }
 
 /// A cancel during a live turn stops the child and reaps its process.
@@ -262,6 +274,7 @@ async fn test_acp_child_kill_reaps() {
             .to_string(),
         args: stub_args(&["--hang", "--touch", &spoke.display().to_string()]),
         passthrough_env: vec![],
+        env: Vec::new(),
         handshake_timeout_ms: 10_000,
     };
     let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
@@ -280,6 +293,8 @@ async fn test_acp_child_kill_reaps() {
             workspace_root: root.clone(),
             gate: Some(gate),
             bus: None,
+            pending: Arc::new(Mutex::new(Vec::new())),
+            cancel: cancel_for_task.clone(),
             child_id: child_sid.to_string(),
             agent_type: "review".into(),
         };
@@ -306,17 +321,13 @@ async fn test_acp_child_kill_reaps() {
         .expect_err("a cancelled child does not end normally");
     assert!(format!("{err}").contains("cancel"), "{err}");
     // The session is gone with the task; its drop is the launcher's kill path.
-    // Poll for the pid to disappear rather than assuming the drop ran and the
-    // kernel finished reaping in the same instant.
+    // Poll the platform's own liveness probe rather than assuming the drop
+    // ran and the kernel finished reaping in the same instant. The probe reads
+    // the process table, so it answers on every platform this suite builds.
+    let pid = i32::try_from(pid).expect("the pid fits an i32");
     let mut alive = true;
     for _ in 0..100 {
-        alive = Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        alive = process_alive(pid);
         if !alive {
             break;
         }
@@ -334,6 +345,7 @@ async fn test_acp_child_missing_program() {
         program: "no-such-acp-program-xyz".into(),
         args: vec![],
         passthrough_env: vec![],
+        env: Vec::new(),
         handshake_timeout_ms: 2_000,
     });
     let harness = runtime(definition, root, None, None, None);
@@ -356,11 +368,11 @@ async fn test_acp_child_missing_program() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--server") {
-        acp_stub_server::serve_stdio_server();
+        acp_child_fixture::serve_stdio_server();
         return;
     }
-    if args.iter().any(|arg| arg == acp_stub_server::STUB_ARG) {
-        acp_stub_server::serve_child_stub();
+    if args.iter().any(|arg| arg == acp_child_fixture::STUB_ARG) {
+        acp_child_fixture::serve_child_stub();
         return;
     }
     let runtime = RuntimeBuilder::new_current_thread()

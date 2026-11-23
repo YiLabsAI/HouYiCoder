@@ -301,6 +301,12 @@ impl MultiAgentRuntime {
 
     /// Override the foreground delegation wait budget. Tests drive a small
     /// budget to exercise the auto-background path in milliseconds.
+    /// The parent's parked-ask table, shared with a process child so an ask
+    /// it publishes is one the host can verify rather than discard.
+    pub fn pending_child_permissions(&self) -> Arc<Mutex<Vec<PendingChildPermission>>> {
+        Arc::clone(&self.pending_permissions)
+    }
+
     pub(super) fn with_delegation_wait_ms(mut self, ms: u64) -> Self {
         self.delegation_wait_ms = ms;
         self

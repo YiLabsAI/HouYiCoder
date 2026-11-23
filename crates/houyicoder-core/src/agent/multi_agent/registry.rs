@@ -112,6 +112,11 @@ pub struct ExternalAcpSpec {
     /// runtime set. No variable outside this list and the base set crosses the
     /// process boundary, so a host secret never leaks to a child.
     pub passthrough_env: Vec<String>,
+    /// Variables this definition sets on every child it launches, whatever
+    /// the host environment holds. They cross the boundary in addition to the
+    /// passthrough list, so a user can configure the external program from the
+    /// definition instead of exporting state for it.
+    pub env: Vec<(String, String)>,
     /// Milliseconds to wait for the external process to finish its initialize
     /// and session/new handshake before declaring it unresponsive.
     pub handshake_timeout_ms: u64,
@@ -123,14 +128,16 @@ impl Default for ExternalAcpSpec {
             program: String::new(),
             args: Vec::new(),
             passthrough_env: Vec::new(),
+            env: Vec::new(),
             handshake_timeout_ms: 15_000,
         }
     }
 }
 
 /// The environment variables a child process receives. The base runtime set
-/// the process needs to function, plus the ones the spec names from the host
-/// environment. No other host variable crosses the boundary.
+/// the process needs to function, the ones the spec passes through from the
+/// host environment, and the ones it sets itself, which win over both. No
+/// other host variable crosses the boundary.
 pub fn child_environment(
     spec: &ExternalAcpSpec,
     host_env: &[(String, String)],
@@ -151,12 +158,17 @@ pub fn child_environment(
         .copied()
         .chain(spec.passthrough_env.iter().map(String::as_str))
         .collect();
-    host_env
+    let mut env: Vec<(String, String)> = host_env
         .iter()
         .filter(|(key, _)| allowed.contains(key.as_str()))
         .filter(|(_, value)| !value.is_empty())
         .cloned()
-        .collect()
+        .collect();
+    for (key, value) in &spec.env {
+        env.retain(|(existing, _)| existing != key);
+        env.push((key.clone(), value.clone()));
+    }
+    env
 }
 
 /// Why a resolve call did not yield a definition.

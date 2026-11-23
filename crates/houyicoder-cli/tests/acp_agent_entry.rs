@@ -5,12 +5,7 @@
 //!
 //! The binary runs harness-free so the environment a child inherits is set
 //! once, before any thread reads it.
-#![expect(
-    unsafe_code,
-    reason = "the child environment is set once before any thread starts"
-)]
 
-use std::env::set_var;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -71,11 +66,20 @@ async fn test_houyi_acp_child_round_trip() {
         backend: AgentBackend::ExternalAcp(ExternalAcpSpec {
             program: env!("CARGO_BIN_EXE_houyi").to_string(),
             args: vec!["--acp".to_string()],
-            // The child's environment is the base runtime set plus exactly
-            // these names; the test sets each of them before spawning.
-            passthrough_env: vec![
-                "HOUYICODER_SESSIONS_DIR".into(),
-                "HOUYICODER_TEST_STUB_RESPONSE_SCRIPT".into(),
+            passthrough_env: Vec::new(),
+            // The definition sets what the child needs; the host environment
+            // is never read for these, so the test process stays untouched.
+            env: vec![
+                (
+                    "HOUYICODER_SESSIONS_DIR".into(),
+                    home.join("sessions").display().to_string(),
+                ),
+                (
+                    "HOUYICODER_TEST_STUB_RESPONSE_SCRIPT".into(),
+                    SCRIPT.to_string(),
+                ),
+                ("HOME".into(), home.display().to_string()),
+                ("USERPROFILE".into(), home.display().to_string()),
             ],
             handshake_timeout_ms: 20_000,
         }),
@@ -129,17 +133,6 @@ fn main() {
         .is_none_or(|name| name == "test_houyi_acp_child_round_trip");
     if !named {
         return;
-    }
-    // The child's environment is a whitelist read from this process, so the
-    // two values it needs are set once, before any thread starts.
-    let home = scratch("home-env");
-    // SAFETY: no other thread reads or writes the environment here; the test
-    // runtime starts below.
-    unsafe {
-        set_var("HOUYICODER_SESSIONS_DIR", home.join("sessions"));
-        set_var("HOUYICODER_TEST_STUB_RESPONSE_SCRIPT", SCRIPT);
-        set_var("HOME", &home);
-        set_var("USERPROFILE", &home);
     }
     let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()

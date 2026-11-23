@@ -10,13 +10,13 @@ use std::path::PathBuf;
 use std::process::id;
 use std::sync::Arc;
 
-use super::{InterceptedVerdict, check_fence, check_gate, verdict_response};
+use super::{InterceptedVerdict, check_fence, check_gate, tool_name_of, verdict_response};
 use houyicoder_permission::{DefaultModeGate, ModeGate, PermissionMode};
 use houyicoder_protocol::acp_wire::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
 };
 use houyicoder_protocol::frontend::session_update::{
-    ToolCallId, ToolCallLocation, ToolCallUpdate, ToolCallUpdateFields,
+    ToolCallId, ToolCallLocation, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use serde_json::json;
 
@@ -178,4 +178,57 @@ fn test_no_gate_refuses() {
         matches!(check_gate(None, &ask), Some(InterceptedVerdict::Reject)),
         "an unwired gate is a refusal, never an allow"
     );
+}
+
+/// A standard ACP ask describes its call by kind, not by a tool name. The
+/// host's rules and the card title are keyed on its own tool names, so the
+/// kind has to map onto them; reading a field only a test stub sends left
+/// every real child's ask unnamed.
+#[test]
+fn test_tool_name_from_kind() {
+    for (kind, expected) in [
+        (ToolKind::Execute, "bash"),
+        (ToolKind::Edit, "write"),
+        (ToolKind::Delete, "write"),
+        (ToolKind::Move, "write"),
+        (ToolKind::Read, "read"),
+        (ToolKind::Search, "grep"),
+        (ToolKind::Fetch, "webfetch"),
+    ] {
+        let mut ask = ask_with(vec![], None);
+        ask.tool_call.fields.kind = Some(kind);
+        assert_eq!(tool_name_of(&ask), expected, "{kind:?} maps to a host tool");
+    }
+    let mut unnamed = ask_with(vec![], None);
+    unnamed.tool_call.fields.kind = Some(ToolKind::Think);
+    assert_eq!(
+        tool_name_of(&unnamed),
+        "",
+        "a kind with no tool stays unnamed"
+    );
+}
+
+/// An execute ask carries its paths in the command line, so a command that
+/// reaches outside the root is refused like a location that does.
+#[test]
+fn test_fence_reads_execute_command() {
+    let root = temp_root("exec");
+    let inside = ask_with(vec![], Some(json!({"command": "cat notes.txt"})));
+    let mut inside = inside;
+    inside.tool_call.fields.kind = Some(ToolKind::Execute);
+    assert!(
+        check_fence(&inside, &root).is_none(),
+        "a bare word is no path"
+    );
+    let outside = ask_with(vec![], Some(json!({"command": "cat /etc/passwd"})));
+    let mut outside = outside;
+    outside.tool_call.fields.kind = Some(ToolKind::Execute);
+    assert!(
+        matches!(
+            check_fence(&outside, &root),
+            Some(InterceptedVerdict::Reject)
+        ),
+        "an absolute path in the command is an escape"
+    );
+    remove_dir_all(&root).ok();
 }

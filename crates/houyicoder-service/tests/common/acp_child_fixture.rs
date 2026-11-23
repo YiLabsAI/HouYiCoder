@@ -1,4 +1,4 @@
-//! The ACP processes the cross-layer tests drive as children.
+//! The ACP peers the cross-layer tests drive as child processes.
 //!
 //! serve_stdio_server is this crate's own northbound ACP server over stdio:
 //! a stock client can drive it, and the southbound client can delegate to it,

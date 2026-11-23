@@ -271,6 +271,10 @@ fn test_child_env_filters_strictly() {
         program: "review".into(),
         args: Vec::new(),
         passthrough_env: vec!["REVIEW_TOKEN".into()],
+        env: vec![
+            ("MODE".to_string(), "review".to_string()),
+            ("REVIEW_TOKEN".to_string(), "from-spec".to_string()),
+        ],
         handshake_timeout_ms: 5000,
     };
     let host = vec![
@@ -292,4 +296,19 @@ fn test_child_env_filters_strictly() {
     );
     assert!(!keys.contains(&"SECRET_KEY"), "host secret is blocked");
     assert!(!keys.contains(&"EMPTY_VAR"), "empty value is dropped");
+    assert_eq!(
+        env.iter()
+            .find(|(k, _)| k == "MODE")
+            .map(|(_, v)| v.as_str()),
+        Some("review"),
+        "a variable the definition sets reaches the child"
+    );
+    assert_eq!(
+        env.iter()
+            .filter(|(k, _)| k == "REVIEW_TOKEN")
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>(),
+        vec!["from-spec"],
+        "the definition wins over the host value, and appears once"
+    );
 }

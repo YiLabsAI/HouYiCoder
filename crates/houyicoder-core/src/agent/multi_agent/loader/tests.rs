@@ -135,6 +135,7 @@ backend: external_acp\n\
 program: devin\n\
 args: acp, --agent-type, review\n\
 passthrough_env: REVIEW_TOKEN, GITHUB_TOKEN\n\
+env: MODE=review, EMPTY=\n\
 handshake_timeout_ms: 30000\n\
 ---\nbody";
     let def = parse_agent_definition(text).expect("parses");
@@ -143,6 +144,14 @@ handshake_timeout_ms: 30000\n\
             assert_eq!(spec.program, "devin");
             assert_eq!(spec.args, vec!["acp", "--agent-type", "review"]);
             assert_eq!(spec.passthrough_env, vec!["REVIEW_TOKEN", "GITHUB_TOKEN"]);
+            assert_eq!(
+                spec.env,
+                vec![
+                    ("MODE".to_string(), "review".to_string()),
+                    ("EMPTY".to_string(), String::new()),
+                ],
+                "a definition sets the variables its child receives"
+            );
             assert_eq!(spec.handshake_timeout_ms, 30000);
         }
         other => panic!("expected ExternalAcp, got {other:?}"),

@@ -193,6 +193,7 @@ fn parse_backend(fields: &[(&str, &str)]) -> Result<AgentBackend, LoadError> {
                 .or_else(|| get("passthroughEnv"))
                 .map(split_commas)
                 .unwrap_or_default();
+            let env = get("env").map(parse_env).unwrap_or_default();
             let handshake_timeout_ms = get("handshake_timeout_ms")
                 .or_else(|| get("handshakeTimeoutMs"))
                 .and_then(|v| v.parse::<u64>().ok())
@@ -201,11 +202,25 @@ fn parse_backend(fields: &[(&str, &str)]) -> Result<AgentBackend, LoadError> {
                 program: program.to_string(),
                 args,
                 passthrough_env,
+                env,
                 handshake_timeout_ms,
             }))
         }
         other => Err(LoadError::Corrupt(format!("unknown backend: {other}"))),
     }
+}
+
+/// Parse an env list written as comma-separated key=value pairs. A pair
+/// with no value sets an empty variable, which is how a child clears one.
+fn parse_env(raw: &str) -> Vec<(String, String)> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| match pair.split_once('=') {
+            Some((key, value)) => (key.trim().to_string(), value.trim().to_string()),
+            None => (pair.to_string(), String::new()),
+        })
+        .collect()
 }
 
 /// Collects definitions across sources and merges by precedence. Higher-

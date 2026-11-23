@@ -7,9 +7,8 @@ use std::future::pending;
 use std::io::Cursor;
 use std::io::Write;
 use std::io::sink;
-use std::path::Path;
 use std::process::id;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::super::transcript::TranscriptFold;
 use super::*;
@@ -23,6 +22,10 @@ use houyicoder_permission::{DefaultModeGate, ModeGate, PermissionMode};
 use houyicoder_session::SessionStore;
 use tokio::sync::mpsc;
 
+/// The grace window these tests allow: long enough for a channel round trip,
+/// far below the wall-clock a production grace would add to the suite.
+const TEST_GRACE: Duration = Duration::from_millis(15);
+
 fn channel_session() -> (
     AcpChildSession,
     mpsc::Sender<String>,
@@ -31,7 +34,11 @@ fn channel_session() -> (
     let (client_tx, server_rx) = mpsc::channel::<String>(16);
     let (server_tx, client_rx) = mpsc::channel::<String>(16);
     let pump = from_line_channels(server_rx, server_tx);
-    (AcpChildSession::from_pump(pump), client_tx, client_rx)
+    (
+        AcpChildSession::from_pump(pump).with_graces(TEST_GRACE, TEST_GRACE),
+        client_tx,
+        client_rx,
+    )
 }
 
 /// Read outbound frames until one contains the marker, proving the task
@@ -123,8 +130,8 @@ async fn test_await_response_eof_errors() {
 #[tokio::test]
 async fn test_banner_skipped_during_handshake() {
     let (mut session, tx, mut rx) = channel_session();
-    let workspace = Path::new("/tmp");
-    let task = tokio::spawn(async move { session.handshake_inner(workspace).await });
+    let workspace = temp_dir();
+    let task = tokio::spawn(async move { session.handshake_inner(&workspace).await });
     tx.send("starting up...\n".into()).await.unwrap();
     tx.send("ready\n".into()).await.unwrap();
     let init_resp = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#;
@@ -143,10 +150,10 @@ async fn test_handshake_completes() {
     let (mut session, tx, mut rx) = channel_session();
     let init_resp = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#;
     let new_resp = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"01JTESTSESSIONID01"}}"#;
-    let workspace = Path::new("/tmp");
+    let workspace = temp_dir();
     let task = tokio::spawn(async move {
         session
-            .handshake_inner(workspace)
+            .handshake_inner(&workspace)
             .await
             .expect("handshake completes")
     });
@@ -165,8 +172,8 @@ async fn test_handshake_adopts_child_id() {
     let known = SessionId::new().to_string();
     let init_resp = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#;
     let new_resp = format!(r#"{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"{known}"}}}}"#);
-    let workspace = Path::new("/tmp");
-    let task = tokio::spawn(async move { session.handshake_inner(workspace).await });
+    let workspace = temp_dir();
+    let task = tokio::spawn(async move { session.handshake_inner(&workspace).await });
     tx.send(format!("{init_resp}\n")).await.unwrap();
     await_outbound(&mut rx, "session/new").await;
     tx.send(format!("{new_resp}\n")).await.unwrap();
@@ -181,8 +188,8 @@ async fn test_handshake_mints_local_id() {
     let (mut session, tx, mut rx) = channel_session();
     let init_resp = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#;
     let new_resp = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"codex-session-1"}}"#;
-    let workspace = Path::new("/tmp");
-    let task = tokio::spawn(async move { session.handshake_inner(workspace).await });
+    let workspace = temp_dir();
+    let task = tokio::spawn(async move { session.handshake_inner(&workspace).await });
     tx.send(format!("{init_resp}\n")).await.unwrap();
     await_outbound(&mut rx, "session/new").await;
     tx.send(format!("{new_resp}\n")).await.unwrap();
@@ -199,11 +206,12 @@ async fn test_handshake_times_out() {
         program: "test".into(),
         args: Vec::new(),
         passthrough_env: Vec::new(),
+        env: Vec::new(),
         handshake_timeout_ms: 50,
     };
-    let workspace = Path::new("/tmp");
+    let workspace = temp_dir();
     let err = session
-        .handshake(&spec, workspace)
+        .handshake(&spec, &workspace)
         .await
         .expect_err("must time out");
     assert!(matches!(err, AcpClientError::HandshakeTimedOut));
@@ -214,8 +222,8 @@ async fn test_handshake_times_out() {
 async fn test_handshake_bad_init() {
     let (mut session, tx, _rx) = channel_session();
     let bad_resp = r#"{"jsonrpc":"2.0","id":1,"result":"not an object"}"#;
-    let workspace = Path::new("/tmp");
-    let task = tokio::spawn(async move { session.handshake_inner(workspace).await });
+    let workspace = temp_dir();
+    let task = tokio::spawn(async move { session.handshake_inner(&workspace).await });
     tx.send(format!("{bad_resp}\n")).await.unwrap();
     let err = task.await.unwrap().unwrap_err();
     assert!(matches!(err, AcpClientError::Protocol(_)));
@@ -379,9 +387,10 @@ async fn test_connect_wires_pipes() {
         program: "test-prog".into(),
         args: vec!["--flag".into()],
         passthrough_env: vec!["TOKEN".into()],
+        env: Vec::new(),
         handshake_timeout_ms: 100,
     };
-    let session = AcpChildSession::connect(&launcher, &spec, Path::new("/tmp"), &[]).unwrap();
+    let session = AcpChildSession::connect(&launcher, &spec, &temp_dir(), &[]).unwrap();
     session.shutdown().await;
 }
 
@@ -403,9 +412,10 @@ async fn test_connect_failed_reports_program() {
         program: "missing-prog".into(),
         args: Vec::new(),
         passthrough_env: Vec::new(),
+        env: Vec::new(),
         handshake_timeout_ms: 100,
     };
-    let result = AcpChildSession::connect(&launcher, &spec, Path::new("/tmp"), &[]);
+    let result = AcpChildSession::connect(&launcher, &spec, &temp_dir(), &[]);
     match result {
         Err(AcpClientError::ConstructionFailed { program }) => assert_eq!(program, "missing-prog"),
         Err(other) => panic!("expected ConstructionFailed, got {other:?}"),
@@ -436,7 +446,7 @@ async fn test_connect_no_pipes_reports() {
     }
     let launcher: Arc<dyn ProcessLauncher> = Arc::new(NoPipesLauncher);
     let spec = ExternalAcpSpec::default();
-    let result = AcpChildSession::connect(&launcher, &spec, Path::new("/tmp"), &[]);
+    let result = AcpChildSession::connect(&launcher, &spec, &temp_dir(), &[]);
     assert!(matches!(
         result,
         Err(AcpClientError::ConstructionFailed { .. })
@@ -477,6 +487,8 @@ async fn test_delegated_ask_round_trip() {
         workspace_root: root.clone(),
         gate: Some(gate),
         bus: Some(bus.clone()),
+        pending: Arc::new(Mutex::new(Vec::new())),
+        cancel: CancellationToken::new(),
         child_id: "c1".into(),
         agent_type: "review".into(),
     };
@@ -523,6 +535,90 @@ fn fold_holder() -> TranscriptFold {
     TranscriptFold::new(SessionId::new(), store)
 }
 
+/// A stock client may issue a string id on its reverse ask. The answer comes
+/// back under that same id; answering under a numeric id, or not at all,
+/// leaves the child waiting for a reply that never matches its request.
+#[tokio::test]
+async fn test_ask_keeps_string_id() {
+    let (mut session, tx, mut rx) = channel_session();
+    let prompt_id = session.next_request_id();
+    // Manual mode with no bus reaches the fail-closed answer, which is the
+    // path that has to carry the child's id spelling back.
+    let fence = PermissionFence {
+        workspace_root: temp_dir(),
+        gate: Some(Arc::new(DefaultModeGate::with_mode(PermissionMode::Manual))),
+        bus: None,
+        pending: Arc::new(Mutex::new(Vec::new())),
+        cancel: CancellationToken::new(),
+        child_id: "c1".into(),
+        agent_type: "review".into(),
+    };
+    let task = tokio::spawn(async move {
+        session
+            .recv_until_prompt(prompt_id, &mut fold_holder(), Some(&fence))
+            .await
+    });
+    let ask = r#"{"jsonrpc":"2.0","id":"ask-7","method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"call-1","title":"bash"},"options":[{"optionId":"reject_once","name":"Reject","kind":"reject_once"}]}}"#;
+    tx.send(format!("{ask}\n")).await.unwrap();
+    let answered = rx.recv().await.expect("an answer is sent");
+    assert!(
+        answered.contains(r#""id":"ask-7""#),
+        "the reply keeps the child's own id: {answered}"
+    );
+    let resp =
+        format!(r#"{{"jsonrpc":"2.0","id":{prompt_id},"result":{{"stopReason":"end_turn"}}}}"#);
+    tx.send(format!("{resp}\n")).await.unwrap();
+    let stop = task
+        .await
+        .expect("the receive task joined")
+        .expect("the turn ends");
+    assert_eq!(stop, "end_turn");
+}
+
+/// A stop while the child waits for the user ends the wait at once, so the
+/// child gets its cancelled answer instead of sitting out the parent timeout.
+#[tokio::test]
+async fn test_stop_ends_parent_wait() {
+    let (mut session, tx, mut rx) = channel_session();
+    let prompt_id = session.next_request_id();
+    let bus: Arc<AgentBus> = Arc::new(Default::default());
+    // Subscribed before the run, so the published ask is the latch that says
+    // the child has reached the parent wait.
+    let mut asks = bus.subscribe(permission_request_topic());
+    let stop = CancellationToken::new();
+    let fence = PermissionFence {
+        workspace_root: temp_dir(),
+        gate: Some(Arc::new(DefaultModeGate::with_mode(PermissionMode::Manual))),
+        bus: Some(bus),
+        pending: Arc::new(Mutex::new(Vec::new())),
+        cancel: stop.clone(),
+        child_id: "c1".into(),
+        agent_type: "review".into(),
+    };
+    let task = tokio::spawn(async move {
+        session
+            .recv_until_prompt(prompt_id, &mut fold_holder(), Some(&fence))
+            .await
+    });
+    let ask = r#"{"jsonrpc":"2.0","id":9,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"call-1","title":"bash"},"options":[{"optionId":"allow_once","name":"Allow","kind":"allow_once"}]}}"#;
+    tx.send(format!("{ask}\n")).await.unwrap();
+    drop(
+        asks.recv()
+            .await
+            .expect("the ask is published while the child waits"),
+    );
+    stop.cancel();
+    let answered = rx.recv().await.expect("an answer is sent");
+    assert!(
+        answered.contains("cancelled"),
+        "the waiting child is answered with a cancel: {answered}"
+    );
+    let resp =
+        format!(r#"{{"jsonrpc":"2.0","id":{prompt_id},"result":{{"stopReason":"end_turn"}}}}"#);
+    tx.send(format!("{resp}\n")).await.unwrap();
+    drop(task.await);
+}
+
 /// Every wire stop reason reads as the word the summary and the fleet show,
 /// so a model or a user never sees a Rust variant name.
 #[test]
@@ -565,10 +661,12 @@ async fn test_shutdown_kills_unresponsive_child() {
         program: "never-exits".into(),
         args: vec![],
         passthrough_env: vec![],
+        env: Vec::new(),
         handshake_timeout_ms: 100,
     };
-    let session =
-        AcpChildSession::connect(&launcher, &spec, Path::new("/tmp"), &[]).expect("connect");
+    let session = AcpChildSession::connect(&launcher, &spec, &temp_dir(), &[])
+        .expect("connect")
+        .with_graces(TEST_GRACE, TEST_GRACE);
     let started = std::time::Instant::now();
     session.shutdown().await;
     assert!(

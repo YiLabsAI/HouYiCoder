@@ -13,6 +13,7 @@ use houyicoder_core::agent::multi_agent::registry::{
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
+use std::env::temp_dir;
 use std::io::Cursor;
 use std::io::Write;
 use std::io::sink;
@@ -89,6 +90,7 @@ fn external_definition(program: &str) -> AgentDefinition {
             program: program.into(),
             args: vec![],
             passthrough_env: vec![],
+            env: Vec::new(),
             handshake_timeout_ms: 5000,
         }),
     }
@@ -111,7 +113,7 @@ fn runtime_over_with_launcher(
         tools: ToolRegistry::new(),
         config: RunnerConfig::default(),
         worktree_controller: None,
-        workspace: Some(std::path::PathBuf::from("/tmp")),
+        workspace: Some(temp_dir()),
         bus: None,
         descriptor_store: None,
         skill_registry: None,

@@ -11,6 +11,7 @@ use houyicoder_protocol::acp_wire::{
     PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
 };
+use houyicoder_protocol::frontend::session_update::ToolKind;
 use serde_json::Value;
 
 /// The parent's verdict for one intercepted permission ask, as the option id
@@ -51,6 +52,18 @@ pub fn check_fence(
     if let Some(p) = input_path {
         candidates.push(p);
     }
+    // An execute ask names its paths inside the command line rather than in
+    // the locations list, so each word that looks like a path is judged too.
+    if let Some(command) = ask
+        .tool_call
+        .fields
+        .raw_input
+        .as_ref()
+        .and_then(|input| input.get("command"))
+        .and_then(Value::as_str)
+    {
+        candidates.extend(command_paths(command));
+    }
     for candidate in candidates {
         if candidate.is_empty() {
             continue;
@@ -61,6 +74,18 @@ pub fn check_fence(
         }
     }
     None
+}
+
+/// The words of one shell command line that name a path. A word is a
+/// candidate when it is absolute or starts with a parent hop; option flags
+/// and bare program names are not paths a child can escape through.
+fn command_paths(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c| c == '"' || c == '\''))
+        .filter(|word| word.starts_with('/') || word.starts_with("~/") || word.starts_with("../"))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Whether a candidate path lands outside the workspace root once symlinks
@@ -125,17 +150,32 @@ pub fn check_gate(
     }
 }
 
-/// The tool name the child's ask carries, taken from the raw input or the
-/// card title when the input names none.
-fn tool_name_of(ask: &RequestPermissionRequest) -> String {
-    ask.tool_call
+/// The tool name the child's ask names, as this host spells it.
+///
+/// A standard ACP client describes a call by its kind, not by a tool name:
+/// the wire carries read, edit, delete, move, search, execute, and fetch. The
+/// host's own permission rules are keyed on its tool names, so the kind is
+/// what maps an ask onto a rule. A raw input that names a tool directly wins,
+/// because a child that spells one is more specific than its kind.
+pub(super) fn tool_name_of(ask: &RequestPermissionRequest) -> String {
+    if let Some(named) = ask
+        .tool_call
         .fields
         .raw_input
         .as_ref()
         .and_then(|v| v.get("tool_name"))
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default()
+    {
+        return named.to_string();
+    }
+    match ask.tool_call.fields.kind {
+        Some(ToolKind::Execute) => "bash".to_string(),
+        Some(ToolKind::Edit | ToolKind::Delete | ToolKind::Move) => "write".to_string(),
+        Some(ToolKind::Read) => "read".to_string(),
+        Some(ToolKind::Search) => "grep".to_string(),
+        Some(ToolKind::Fetch) => "webfetch".to_string(),
+        _ => String::new(),
+    }
 }
 
 /// Build the response that answers one intercepted ask with the verdict the

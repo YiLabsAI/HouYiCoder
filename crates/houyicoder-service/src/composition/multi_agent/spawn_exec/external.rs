@@ -134,13 +134,20 @@ async fn drive_in_workspace(
                 reason: e.to_string(),
             })?;
     let child_string = child_sid.to_string();
+    // The fleet's stop and the turn's stop both end the child; the ceiling
+    // ends it too, so a wedged child cannot hold the turn forever.
+    let stop = CancellationToken::new();
     // The fence is built after the handshake, so its child id is the child's
     // own session id and two children of one type cannot answer each other's
-    // asks.
+    // asks. It carries the stop token, so a stop during a user wait ends the
+    // wait, and the parent's parked-ask table, so a host that verifies an ask
+    // against it holds this one.
     let fence = PermissionFence {
         workspace_root: workspace.to_path_buf(),
         gate: this.mode_gate.clone(),
         bus: this.bus.clone(),
+        pending: this.pending_child_permissions(),
+        cancel: stop.clone(),
         child_id: child_string.clone(),
         agent_type: args.subagent_type.clone(),
     };
@@ -152,9 +159,6 @@ async fn drive_in_workspace(
     .with_description(args.prompt_summary.clone())
     .with_backend(super::program_label(&spec.program));
     super::announce_spawn(this.bus.as_ref(), descriptor.clone());
-    // The fleet's stop and the turn's stop both end the child; the ceiling
-    // ends it too, so a wedged child cannot hold the turn forever.
-    let stop = CancellationToken::new();
     let ceiling_hit = Arc::new(AtomicBool::new(false));
     this.register_external_child(child_string.clone(), stop.clone());
     let budget = args

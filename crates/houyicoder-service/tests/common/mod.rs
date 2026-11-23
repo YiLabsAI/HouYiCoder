@@ -17,7 +17,9 @@
 
 use std::env::current_exe;
 use std::env::temp_dir;
+use std::fs::copy;
 use std::fs::create_dir_all;
+use std::fs::read_dir;
 use std::fs::remove_dir_all;
 use std::panic::catch_unwind;
 use std::path::{Path, PathBuf};
@@ -26,6 +28,8 @@ use std::process::exit;
 use std::process::id;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures::SinkExt;
 use futures::StreamExt;
@@ -161,39 +165,68 @@ impl SandboxSession for StubSandbox {
 }
 
 /// A throwaway git repository with one empty commit, so a linked worktree has
-/// a HEAD to branch from. The git calls are test scaffolding that prepares a
-/// directory, not an engine spawn.
+/// a HEAD to branch from.
+///
+/// One template lives for the test binary's lifetime and each test takes a
+/// file copy, because process creation is the expensive part of the fixture
+/// and five tests would otherwise cost fifteen spawns.
+pub fn make_git_repo(tag: &str) -> PathBuf {
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let template = TEMPLATE.get_or_init(|| {
+        let dir = temp_dir().join(format!("houyi-service-wt-template-{}", id()));
+        drop(remove_dir_all(&dir));
+        create_dir_all(&dir).expect("create the template dir");
+        // No template directory of its own: a developer's global git template
+        // can carry hooks and symlinks that would run in every fixture.
+        for args in [
+            ["-c", "init.templateDir=", "init", "-q"].as_slice(),
+            ["config", "user.email", "t@t"].as_slice(),
+            ["config", "user.name", "t"].as_slice(),
+            ["commit", "--allow-empty", "-m", "init", "-q"].as_slice(),
+        ] {
+            git(&dir, args);
+        }
+        dir
+    });
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = temp_dir().join(format!("houyi-service-wt-{tag}-{}-{n}", id()));
+    drop(remove_dir_all(&dir));
+    copy_tree(template, &dir);
+    dir
+}
+
+/// Copy a directory tree. The template holds only small files, so a plain
+/// recursive copy is faster than any spawn and needs no extra dependency.
+fn copy_tree(from: &Path, to: &Path) {
+    create_dir_all(to).expect("create the copy dir");
+    for entry in read_dir(from).expect("read the template") {
+        let entry = entry.expect("template entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("template file type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            copy(entry.path(), &target).expect("copy a template file");
+        }
+    }
+}
+
+/// Run one git command against the template repository. This prepares a
+/// directory; it is not an engine spawn.
 #[expect(
     clippy::disallowed_methods,
     reason = "fixture setup, not a model-driven spawn"
 )]
-pub fn make_git_repo(tag: &str) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-service-wt-{}-{tag}", id()));
-    drop(remove_dir_all(&dir));
-    create_dir_all(&dir).expect("mkdir the repository");
-    let run = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("git runs");
-    };
-    run(&["init", "-q"]);
-    run(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "--allow-empty",
-        "-q",
-        "-m",
-        "init",
-    ]);
-    dir
+fn git(repo: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git {args:?} succeeds");
 }
 
 /// Run this binary's tests without a test harness. A child process spawned

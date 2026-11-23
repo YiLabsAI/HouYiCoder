@@ -4,13 +4,14 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use houyicoder_api::launcher::{LauncherChild, ProcessLauncher, SpawnPolicy, SpawnRequest};
 #[cfg(test)]
 use houyicoder_api::launcher::{LauncherExit, SpawnError};
 use houyicoder_api::session::SessionLog;
+use houyicoder_api::spawn::PendingChildPermission;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::bus::MessageBus;
 use houyicoder_context::SessionId;
@@ -31,7 +32,7 @@ use houyicoder_protocol::frontend::run::{ContentBlock, StopReason};
 use serde_json::Value;
 use tokio::time::{sleep, timeout};
 
-use super::permission::{check_fence, check_gate, verdict_response};
+use super::permission::{check_fence, check_gate, tool_name_of, verdict_response};
 use super::transcript::TranscriptFold;
 use crate::acp::pump::{AcpDuplexPump, InboundFrame, spawn_pump};
 
@@ -63,6 +64,13 @@ pub struct PermissionFence {
     pub gate: Option<Arc<dyn ModeGate>>,
     /// The multi-agent bus to publish delegated asks on.
     pub bus: Option<Arc<AgentBus>>,
+    /// The parent's parked-ask table. A parent with a spawn handle verifies a
+    /// published ask against it and drops one it does not hold, so the ask is
+    /// parked here before it is published.
+    pub pending: Arc<Mutex<Vec<PendingChildPermission>>>,
+    /// The child's stop token. A stop while the child waits for the user ends
+    /// the wait instead of leaving the child blocked.
+    pub cancel: CancellationToken,
     /// The child identity delegated asks carry.
     pub child_id: String,
     /// The agent type delegated asks report.
@@ -109,6 +117,11 @@ pub struct AcpChildSession {
     child: LauncherChild,
     session: SessionId,
     next_req_id: i64,
+    /// How long a cancelled turn waits for the child's own end before the
+    /// session is torn down.
+    cancel_grace: Duration,
+    /// How long shutdown waits for the child to exit after its stdin closes.
+    shutdown_grace: Duration,
 }
 
 impl AcpChildSession {
@@ -156,7 +169,18 @@ impl AcpChildSession {
             child,
             session: SessionId::new(),
             next_req_id: 1,
+            cancel_grace: CANCEL_GRACE,
+            shutdown_grace: SHUTDOWN_GRACE,
         })
+    }
+
+    /// Set the two grace windows this session allows: how long a cancelled
+    /// turn waits for the child's own end, and how long shutdown waits after
+    /// closing the child's stdin.
+    pub fn with_graces(mut self, cancel: Duration, shutdown: Duration) -> Self {
+        self.cancel_grace = cancel;
+        self.shutdown_grace = shutdown;
+        self
     }
 
     /// Run initialize and session/new under the spec's handshake budget and
@@ -238,7 +262,7 @@ impl AcpChildSession {
             biased;
             _ = &mut cancel_fut => {
                 self.send_notification("session/cancel", &serde_json::json!({})).await?;
-                match timeout(CANCEL_GRACE, self.recv_until_prompt(prompt_id, &mut fold, fence)).await {
+                match timeout(self.cancel_grace, self.recv_until_prompt(prompt_id, &mut fold, fence)).await {
                     Ok(Ok(stop)) => Ok(stop),
                     _ => Err(AcpClientError::ChildExited("cancelled and killed".into())),
                 }
@@ -337,13 +361,12 @@ impl AcpChildSession {
             Some(v) => verdict_response(&ask, &v),
             None => self.delegate_to_parent(&ask, fence).await?,
         };
-        let resp_id = match &req.id {
-            AcpRequestId::Number(n) => *n,
-            _ => return Ok(()),
-        };
         let params = serde_json::to_value(&resp)
             .map_err(|e| AcpClientError::Protocol(protocol_err(format!("ask resp: {e}"))))?;
-        let resp_frame = AcpResponse::ok(AcpRequestId::Number(resp_id), params);
+        // The reply carries the id the child sent, in its own spelling: a
+        // stock ACP client may issue a string id, and any other answer leaves
+        // that child waiting forever.
+        let resp_frame = AcpResponse::ok(req.id.clone(), params);
         let frame = encode(&resp_frame)
             .map_err(|e| AcpClientError::Protocol(protocol_err(e.to_string())))?;
         self.pump.send_frame(frame).await?;
@@ -365,40 +388,58 @@ impl AcpChildSession {
             });
         };
         let call_id = ask.tool_call.tool_call_id.0.clone();
+        let tool = tool_name_of(ask);
+        let input = ask
+            .tool_call
+            .fields
+            .raw_input
+            .clone()
+            .unwrap_or(Value::Null);
         let mut rx = bus.subscribe(&permission_response_topic(&fence.child_id, &call_id));
+        // The ask is parked in the parent's own table before it is published.
+        // A parent that holds a spawn handle verifies against that table and
+        // drops an unregistered ask as stale, so publishing first would hand
+        // the user a card the host then refuses to show.
+        if let Ok(mut parked) = fence.pending.lock() {
+            parked.push(PendingChildPermission {
+                child_id: fence.child_id.clone(),
+                subagent_type: fence.agent_type.clone(),
+                call_id: call_id.clone(),
+                tool: tool.clone(),
+                input: input.clone(),
+                reason: None,
+            });
+        }
         bus.publish(
             permission_request_topic(),
             BusMessage::PermissionRequest {
                 child_id: fence.child_id.clone(),
                 subagent_type: fence.agent_type.clone(),
                 call_id: call_id.clone(),
-                tool: ask
-                    .tool_call
-                    .fields
-                    .raw_input
-                    .as_ref()
-                    .and_then(|v| v.get("tool_name"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_default(),
-                input: ask
-                    .tool_call
-                    .fields
-                    .raw_input
-                    .clone()
-                    .unwrap_or(Value::Null),
+                tool,
+                input,
                 reason: None,
             },
         );
         let resp = tokio::select! {
+            biased;
+            _ = fence.cancel.cancelled() => {
+                Self::clear_pending(&fence.pending, &call_id);
+                return Ok(RequestPermissionResponse {
+                    outcome: RequestPermissionOutcome::Cancelled,
+                    meta: None,
+                });
+            }
             r = rx.recv() => r,
             _ = sleep(PARENT_ASK_TIMEOUT) => {
+                Self::clear_pending(&fence.pending, &call_id);
                 return Ok(RequestPermissionResponse {
                     outcome: RequestPermissionOutcome::Cancelled,
                     meta: None,
                 });
             }
         };
+        Self::clear_pending(&fence.pending, &call_id);
         let Ok(BusMessage::PermissionResponse { approved, .. }) = resp else {
             return Ok(RequestPermissionResponse {
                 outcome: RequestPermissionOutcome::Cancelled,
@@ -428,6 +469,14 @@ impl AcpChildSession {
                 meta: None,
             },
         })
+    }
+
+    /// Drop one parked ask by call id, so a wait that ended without an answer
+    /// leaves nothing behind for a reconnecting host to re-announce.
+    fn clear_pending(pending: &Arc<Mutex<Vec<PendingChildPermission>>>, call_id: &str) {
+        if let Ok(mut parked) = pending.lock() {
+            parked.retain(|p| p.call_id != call_id);
+        }
     }
 
     fn next_request_id(&mut self) -> i64 {
@@ -517,7 +566,10 @@ impl AcpChildSession {
         // A child that ignores the closed pipe must not hold the caller: the
         // wait future is dropped after the grace, and dropping the launcher
         // handle is its documented kill path.
-        if timeout(SHUTDOWN_GRACE, self.child.wait()).await.is_err() {
+        if timeout(self.shutdown_grace, self.child.wait())
+            .await
+            .is_err()
+        {
             tracing::warn!("external child ignored its closed stdin; killed");
         }
     }
@@ -548,6 +600,8 @@ impl AcpChildSession {
             child: LauncherChild::new(None, waiter),
             session: SessionId::new(),
             next_req_id: 1,
+            cancel_grace: CANCEL_GRACE,
+            shutdown_grace: SHUTDOWN_GRACE,
         }
     }
 }
