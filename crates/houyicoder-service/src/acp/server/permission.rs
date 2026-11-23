@@ -5,7 +5,7 @@
 //! outcome nobody stated.
 
 use super::AcpServer;
-use super::util::session_update;
+use super::message::session_update;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::consent::{deny_delegated_ask, prepare_delegated_ask, publish_delegated_response};

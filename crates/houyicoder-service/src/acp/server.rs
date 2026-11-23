@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::acp::adapter::AcpAdapter;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
-use crate::consent::{ChildPermissionRx, ConsentPolicy};
+use crate::consent::{ConsentPolicy, DelegatedAskReceiver};
 use crate::lifecycle::{CLOSE_SETTLE_BUDGET, settle_on_disconnect};
 use crate::protocol_adapter::{
     map_run_error, map_run_result, map_session_update, map_stream_event, tool_title,
@@ -67,7 +67,7 @@ pub struct AcpServer {
     /// connection-scoped receiver that consumes it. None on the single-agent
     /// path: no bus means no child can publish, so no ask arrives.
     bus: Option<Arc<AgentBus>>,
-    child_perm_rx: Arc<ChildPermissionRx>,
+    child_perm_rx: Arc<DelegatedAskReceiver>,
     /// The position the client has been pushed up to: every durable record
     /// before it was sent. An absolute ordinal of the session's own history,
     /// so it survives the log state dropping its oldest rows.
@@ -133,7 +133,7 @@ impl AcpServer {
             session,
             next_req_id: 0,
             bus: None,
-            child_perm_rx: Arc::new(ChildPermissionRx::default()),
+            child_perm_rx: Arc::new(DelegatedAskReceiver::default()),
             pushed_through: TrajectoryPosition::start(),
             events: None,
             progress: ToolProgressThrottle::new(),
@@ -744,15 +744,15 @@ impl AcpServer {
 }
 
 mod config;
+mod message;
 mod permission;
 mod progress;
 mod stream;
-mod util;
 
+use message::next_turn_event;
+use message::prompt_text;
+use message::session_update;
 use progress::ToolProgressThrottle;
-use util::next_turn_event;
-use util::prompt_text;
-use util::session_update;
 
 #[cfg(test)]
 mod tests;

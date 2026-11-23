@@ -22,12 +22,12 @@ use tokio::sync::broadcast::Receiver;
 /// Connection-scoped receiver for child permission asks, shared across idle
 /// waits and active turns so every published ask is consumed once per host.
 #[derive(Default)]
-pub(crate) struct ChildPermissionRx {
+pub(crate) struct DelegatedAskReceiver {
     slot: Mutex<Option<Receiver<BusMessage>>>,
     subscribed: AtomicBool,
 }
 
-impl ChildPermissionRx {
+impl DelegatedAskReceiver {
     pub(crate) fn lease(&self, bus: Option<&Arc<AgentBus>>) -> PermissionLease<'_> {
         let rx = if !self.subscribed.swap(true, Ordering::AcqRel) {
             bus.map(|b| b.subscribe(permission_request_topic()))

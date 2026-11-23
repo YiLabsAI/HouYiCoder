@@ -24,7 +24,7 @@ use houyicoder_protocol::frontend::permission::{AskReason, AskSource};
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope, DelegationSource};
 
 pub(crate) use delegation::{
-    ChildPermissionRx, deny_delegated_ask, prepare_delegated_ask, publish_delegated_response,
+    DelegatedAskReceiver, deny_delegated_ask, prepare_delegated_ask, publish_delegated_response,
 };
 pub(crate) use grant_install::ConsentInstall;
 pub(crate) use policy::{

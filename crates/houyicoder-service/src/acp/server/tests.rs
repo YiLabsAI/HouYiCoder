@@ -54,7 +54,7 @@ use agent_client_protocol::schema::v1::SessionNotification;
 
 use super::AcpServer;
 #[cfg(feature = "acp-cross-decode")]
-use super::util;
+use super::message::session_update;
 use crate::acp::adapter::AcpAdapter;
 use crate::acp::pump::from_line_channels;
 use crate::lifecycle::SessionLeaseStore;
@@ -645,7 +645,7 @@ fn test_session_update_envelope() {
     let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
         text: "hi".into(),
     }));
-    let notification = util::session_update(session, &update).expect("build");
+    let notification = session_update(session, &update).expect("build");
     let wire = serde_json::to_value(&notification).expect("serialize");
     let decoded: SessionNotification =
         serde_json::from_value(wire["params"].clone()).expect("the schema decodes the envelope");

@@ -13,7 +13,7 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 
 use crate::composition::SessionHost;
-use crate::consent::ChildPermissionRx;
+use crate::consent::DelegatedAskReceiver;
 use crate::consent::disclose_directory_grants;
 use crate::diagnostics::handle;
 use crate::lifecycle::LifecycleError;
@@ -71,7 +71,7 @@ impl Server {
             // Set by serve_session from the host, which is where the
             // process-scoped bus lives for a detached session.
             bus: None,
-            child_perm_rx: Arc::new(ChildPermissionRx::default()),
+            child_perm_rx: Arc::new(DelegatedAskReceiver::default()),
             // Attached by serve_session from the host, which is where the
             // process-scoped registry lives for a detached session.
             background_tasks: None,

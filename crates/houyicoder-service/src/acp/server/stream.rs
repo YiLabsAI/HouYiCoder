@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use super::AcpServer;
-use super::util::session_update;
+use super::message::session_update;
 use crate::acp::pump::AcpDuplexPump;
 use crate::protocol_adapter::{map_notice, map_tool_progress};
 use crate::turn_events::{TurnEventSubscriber, TurnStreamEvent};

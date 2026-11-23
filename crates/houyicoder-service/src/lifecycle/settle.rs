@@ -1,7 +1,7 @@
 //! Settling an in-flight turn when the client connection drops: arm the
 //! cancel slot, abort the runner, and wait within a budget for the paired
 //! tool result to land so the durable trail closes cleanly. Shared by the
-//! frontend server's driving loop and the ACP server's drive and resume
+//! frontend server's turn loop and the ACP server's drive and resume
 //! loops, so a disconnect leaves no orphaned tool call that breaks resume.
 
 use std::fmt::Debug;

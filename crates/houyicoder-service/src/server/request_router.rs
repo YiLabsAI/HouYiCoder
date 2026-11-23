@@ -5,8 +5,8 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::model::EffectiveFrom;
 use houyicoder_protocol::frontend::{BackgroundTaskId, FrontendRequest, SessionId};
 
-use super::driving::OnClose;
 use super::model_apply::ModelSelection;
+use super::turn_loop::OnClose;
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
 use houyicoder_api::session::TrajectoryPages;

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::composition::multi_agent::permission_request_from;
-use crate::consent::ChildPermissionRx;
+use crate::consent::DelegatedAskReceiver;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
 
 use tokio::sync::Notify;
@@ -63,7 +63,7 @@ use std::time::UNIX_EPOCH;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 
-use driving::OnClose;
+use turn_loop::OnClose;
 
 use crate::server::recap::RecapAttachment;
 use crate::server::recap::RecapSession;
@@ -99,7 +99,7 @@ mod approval;
 mod trust;
 
 /// The wait loop that keeps a running host operation answered.
-mod driving;
+mod turn_loop;
 
 /// The notification-consumption turn an idle client asked for.
 mod notification_turn;
@@ -137,7 +137,7 @@ pub struct Server {
     descriptor_store: Option<Arc<dyn houyicoder_context::SessionDescriptorStore>>,
     diagnostics: Option<DiagnosticsHandle>,
     bus: Option<Arc<AgentBus>>,
-    child_perm_rx: Arc<ChildPermissionRx>,
+    child_perm_rx: Arc<DelegatedAskReceiver>,
     /// The session's recap state. One instance per session, shared across
     /// connections; None on a server assembled without the feature, which
     /// never starts a request.
@@ -195,7 +195,7 @@ impl Server {
             descriptor_store: None,
             diagnostics: handle(),
             bus: None,
-            child_perm_rx: Arc::new(ChildPermissionRx::default()),
+            child_perm_rx: Arc::new(DelegatedAskReceiver::default()),
             recap: None,
             recap_client: None,
             background_tasks: None,
