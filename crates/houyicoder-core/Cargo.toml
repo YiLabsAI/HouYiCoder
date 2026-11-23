@@ -59,3 +59,6 @@ tokio = { version = "1", features = ["rt", "macros", "rt-multi-thread", "process
 # object that reports what it recognized. Test-only; the same version the
 # provider crate already uses.
 wiremock = "0.6"
+# Build a canned response in memory, so a reader over a response body runs
+# without a socket. Already in the graph through the HTTP client.
+http = "1"

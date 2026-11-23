@@ -1,7 +1,7 @@
 //! The web fetch transport: one client rebuilt per proxy generation, with a
 //! direct fallback that fires only when a local system proxy refused.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use houyicoder_platform::host::net::{
@@ -49,10 +49,10 @@ impl ProxyClient {
 }
 
 /// The single web fetch transport. One lock guards the cached proxy client and
-/// the bounded fallback window. The direct client is always present and serves
-/// both the no-proxy path and the fallback path.
+/// the bounded fallback window. The direct client is built on first use and
+/// serves both the no-proxy path and the fallback path.
 pub(crate) struct FetchClient {
-    direct: Client,
+    direct: OnceLock<Client>,
     resolver: Arc<PublicResolver>,
     cache: Arc<ProxyConfigCache>,
     state: Mutex<FetchState>,
@@ -70,9 +70,26 @@ struct FetchState {
 }
 
 impl FetchClient {
+    /// Whether the direct transport has been created. A test asserts that
+    /// assembling a tool leaves it unbuilt, so a later eager build is caught.
+    #[cfg(test)]
+    pub(crate) fn transport_built(&self) -> bool {
+        self.direct.get().is_some()
+    }
+
+    /// The direct transport, created on the first request. Loading the
+    /// platform trust store is the expensive part of building one, and a
+    /// session that never fetches a page must not pay it at assembly. The
+    /// first request therefore carries that load on the runtime thread that
+    /// makes it; every later request reads the initialized transport.
+    fn direct_client(&self) -> &Client {
+        self.direct
+            .get_or_init(|| direct_client(Arc::clone(&self.resolver)))
+    }
+
     pub(crate) fn new(resolver: Arc<PublicResolver>, cache: Arc<ProxyConfigCache>) -> Self {
         Self {
-            direct: direct_client(Arc::clone(&resolver)),
+            direct: OnceLock::new(),
             resolver,
             cache,
             state: Mutex::new(FetchState::default()),
@@ -92,7 +109,7 @@ impl FetchClient {
         let active = if in_cooldown { None } else { proxy.as_ref() };
         let mut fell_back = false;
         let response = fetch_following(
-            &self.direct,
+            self.direct_client(),
             active,
             Some(&self.resolver),
             target,
@@ -169,11 +186,7 @@ fn build_proxy_client(
         return Ok(None);
     };
     let client = client_from_config(proxy, resolver)?;
-    let loopback = proxy
-        .http
-        .iter()
-        .chain(proxy.https.iter())
-        .all(|endpoint| is_loopback_endpoint(endpoint));
+    let loopback = loopback_only(proxy);
     Ok(Some(ProxyClient {
         client,
         source: snapshot.source(),
@@ -184,6 +197,16 @@ fn build_proxy_client(
 /// Build a client that sends each configured scheme through its endpoint. A
 /// scheme with no endpoint sends direct by the standard semantics, so a user
 /// who sets only the TLS proxy still reaches a local plain model endpoint.
+/// Whether every configured endpoint is on this machine. Split from the
+/// client so the rule is stated without building a transport.
+fn loopback_only(proxy: &ProxyConfig) -> bool {
+    proxy
+        .http
+        .iter()
+        .chain(proxy.https.iter())
+        .all(|endpoint| is_loopback_endpoint(endpoint))
+}
+
 fn client_from_config(
     proxy: &ProxyConfig,
     resolver: Arc<PublicResolver>,

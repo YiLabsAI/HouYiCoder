@@ -316,7 +316,14 @@ async fn test_truncated_body_is_network() {
             b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\nContent-Type: application/json\r\n\r\n{\"partial\":",
         ));
     });
-    let err = reqwest::Client::new()
+    // No system trust store: this fixture never completes a TLS handshake,
+    // and loading the store per client is what made the suite contend on the
+    // platform keychain.
+    let err = reqwest::Client::builder()
+        .tls_built_in_root_certs(false)
+        .no_proxy()
+        .build()
+        .expect("client")
         .get(format!("http://{addr}/"))
         .send()
         .await

@@ -1346,6 +1346,7 @@ dependencies = [
  "houyicoder-resilience",
  "houyicoder-sandbox",
  "houyicoder-session",
+ "http",
  "ignore",
  "pollster",
  "reflink-copy",

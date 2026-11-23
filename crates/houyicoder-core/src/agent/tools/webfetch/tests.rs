@@ -5,8 +5,6 @@ use houyicoder_protocol::tool::tool_result_failed;
 use pollster::block_on;
 use std::time::Duration;
 use tokio::runtime::Builder;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn test_schema_has_url_prompt() {
@@ -484,31 +482,29 @@ fn test_host_check_families() {
     assert!(!is_private_host("example.com"));
 }
 
-/// The body reader takes a real response in chunks and decodes it as text.
+/// The body reader takes a response in chunks and decodes it as text. The
+/// response is built in memory, so the reader runs without a socket.
 #[test]
 fn test_read_body_from_response() {
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
-    runtime.block_on(async {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
-            .mount(&server)
-            .await;
-        let resp = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("client")
-            .get(format!("{}/", server.uri()))
-            .send()
-            .await
-            .expect("request");
-        let body = read_body(resp).await.expect("body");
-        assert_eq!(body, "hello");
-    });
+    let response = reqwest::Response::from(
+        http::Response::builder()
+            .status(200)
+            .body(reqwest::Body::from("hello".to_string()))
+            .expect("a canned response"),
+    );
+    let body = block_on(read_body(response)).expect("body");
+    assert_eq!(body, "hello");
+}
+
+/// Assembling a tool must not build the fetch transport: the trust store is
+/// loaded on the first request, not while the runner is assembled.
+#[test]
+fn test_new_defers_transport() {
+    let tool = WebFetchTool::new();
+    assert!(
+        !tool.client.transport_built(),
+        "assembly must not build the fetch transport"
+    );
 }
 
 /// A name whose answer is loopback is refused by the resolver the connection

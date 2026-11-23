@@ -1,5 +1,3 @@
-mod mock;
-
 use super::*;
 use houyicoder_config::load_ids_at;
 use std::env::temp_dir;
