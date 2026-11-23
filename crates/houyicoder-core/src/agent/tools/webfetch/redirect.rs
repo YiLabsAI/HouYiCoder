@@ -73,6 +73,20 @@ pub(crate) enum FetchError {
     Transport(reqwest::Error),
 }
 
+/// A provider of the direct HTTP transport, invoked only when a request
+/// cannot route through a proxy or when a local proxy refused connection.
+pub(crate) trait DirectTransport {
+    /// The transport for a request that connects directly; may initialize it
+    /// on first call.
+    fn transport(&self) -> &Client;
+}
+
+impl DirectTransport for Client {
+    fn transport(&self) -> &Client {
+        self
+    }
+}
+
 /// Request a target, following redirects by hand so every request passes the
 /// URL rule and the resolved-address screen before it is sent.
 ///
@@ -80,8 +94,8 @@ pub(crate) enum FetchError {
 /// desktop system proxy falls back only when a local proxy refused the
 /// connection itself, and the caller learns that a fallback happened through
 /// fell_back so it can warn and bound the window.
-pub(crate) async fn fetch_following(
-    direct: &Client,
+pub(crate) async fn follow_redirects<D: DirectTransport>(
+    direct: &D,
     proxy: Option<&ProxyClient>,
     resolver: Option<&PublicResolver>,
     start: &str,
@@ -115,10 +129,10 @@ pub(crate) async fn fetch_following(
 /// Send one GET request according to the proxy policy. A proxy client routes
 /// each scheme through its configured endpoint and sends an unconfigured
 /// scheme direct, so a target whose scheme has no endpoint is never refused
-/// here. The direct client is used only when no proxy exists, or after a local
-/// system proxy refused the connection.
-async fn send_request(
-    direct: &Client,
+/// here. The direct transport is used only when no proxy exists, or after a
+/// local system proxy refused the connection.
+async fn send_request<D: DirectTransport>(
+    direct: &D,
     proxy: Option<&ProxyClient>,
     target: &str,
     fell_back: &mut bool,
@@ -136,7 +150,7 @@ async fn send_request(
             Err(error) => return Err(FetchError::Transport(error)),
         }
     }
-    direct_with_retry(direct, target)
+    direct_with_retry(direct.transport(), target)
         .await
         .map_err(FetchError::Transport)
 }

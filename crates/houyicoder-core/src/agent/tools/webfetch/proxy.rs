@@ -13,7 +13,7 @@ use reqwest::{Client, NoProxy, Proxy};
 use super::CONNECT_TIMEOUT_SECS;
 use super::FETCH_TIMEOUT_SECS;
 use super::TCP_KEEPALIVE_SECS;
-use super::redirect::{FetchError, fetch_following};
+use super::redirect::{DirectTransport, FetchError, follow_redirects};
 use super::resolver::PublicResolver;
 use super::response::proxy_config_payload;
 
@@ -73,7 +73,7 @@ impl FetchClient {
     /// Whether the direct transport has been created. A test asserts that
     /// assembling a tool leaves it unbuilt, so a later eager build is caught.
     #[cfg(test)]
-    pub(crate) fn transport_built(&self) -> bool {
+    pub(crate) fn has_direct_transport(&self) -> bool {
         self.direct.get().is_some()
     }
 
@@ -82,9 +82,9 @@ impl FetchClient {
     /// session that never fetches a page must not pay it at assembly. The
     /// first request therefore carries that load on the runtime thread that
     /// makes it; every later request reads the initialized transport.
-    fn direct_client(&self) -> &Client {
+    fn direct_transport(&self) -> &Client {
         self.direct
-            .get_or_init(|| direct_client(Arc::clone(&self.resolver)))
+            .get_or_init(|| build_direct_transport(Arc::clone(&self.resolver)))
     }
 
     pub(crate) fn new(resolver: Arc<PublicResolver>, cache: Arc<ProxyConfigCache>) -> Self {
@@ -108,14 +108,8 @@ impl FetchClient {
         }
         let active = if in_cooldown { None } else { proxy.as_ref() };
         let mut fell_back = false;
-        let response = fetch_following(
-            self.direct_client(),
-            active,
-            Some(&self.resolver),
-            target,
-            &mut fell_back,
-        )
-        .await?;
+        let response =
+            follow_redirects(self, active, Some(&self.resolver), target, &mut fell_back).await?;
         let warning = if fell_back {
             self.note_fallback();
             Some(fallback_warning())
@@ -154,6 +148,12 @@ impl FetchClient {
     }
 }
 
+impl DirectTransport for FetchClient {
+    fn transport(&self) -> &Client {
+        self.direct_transport()
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -163,14 +163,22 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The builder every direct fetch client starts from. The system proxy is
 /// turned off on this client so it serves as the clean fallback whenever no
 /// proxy is configured or a local proxy refused the connection.
-fn direct_client(resolver: Arc<PublicResolver>) -> Client {
-    Client::builder()
+fn build_direct_transport(resolver: Arc<PublicResolver>) -> Client {
+    let builder = Client::builder()
         .redirect(Policy::none())
         .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
         .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .tcp_keepalive(Duration::from_secs(TCP_KEEPALIVE_SECS))
         .no_proxy()
-        .dns_resolver(resolver)
+        .dns_resolver(resolver);
+    #[cfg(test)]
+    let builder = {
+        // Skip the platform trust store in unit tests: mock servers use plain
+        // HTTP or loopback sockets, and reading the store per test is what
+        // contends on the platform keychain.
+        builder.tls_built_in_root_certs(false)
+    };
+    builder
         .build()
         .expect("HTTP client construction failed (TLS backend error)")
 }

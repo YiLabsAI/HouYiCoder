@@ -8,7 +8,8 @@ use houyicoder_platform::host::net::{
 };
 use reqwest::Client;
 
-use super::{ProxyClient, PublicResolver, build_proxy_client, loopback_only};
+use super::{FetchClient, ProxyClient, PublicResolver, build_proxy_client, loopback_only};
+use crate::agent::tools::webfetch::redirect::DirectTransport;
 
 fn snapshot_of(resolution: ProxyResolution) -> Arc<ProxySnapshot> {
     ProxyConfigCache::with_query(
@@ -98,4 +99,14 @@ fn test_pac_diagnostic() {
         message.contains("HTTPS_PROXY"),
         "the diagnostic names the env var to set: {message}"
     );
+}
+
+/// The direct transport is created on demand and its initialized state is
+/// observable.
+#[test]
+fn test_direct_transport_lazy_init() {
+    let client = FetchClient::new(resolver(), ProxyConfigCache::direct());
+    assert!(!client.has_direct_transport());
+    let _ = client.transport();
+    assert!(client.has_direct_transport());
 }

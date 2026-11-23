@@ -234,6 +234,10 @@ fn test_execute_serves_cached_page() {
     assert_eq!(out["content"], "cached body");
     assert_eq!(out["cached"], true);
     assert!(out.get("error").is_none(), "a cache hit is not a failure");
+    assert!(
+        !tool.client.has_direct_transport(),
+        "a cache hit must not build the direct transport"
+    );
 }
 
 /// A URL whose connection just failed is answered from that failure instead
@@ -256,6 +260,10 @@ fn test_execute_serves_cached_failure() {
     assert!(
         out["error"].as_str().expect("error").contains("tls"),
         "the payload names the stage: {out}"
+    );
+    assert!(
+        !tool.client.has_direct_transport(),
+        "a cached failure must not build the direct transport"
     );
 }
 
@@ -502,7 +510,7 @@ fn test_read_body_from_response() {
 fn test_new_defers_transport() {
     let tool = WebFetchTool::new();
     assert!(
-        !tool.client.transport_built(),
+        !tool.client.has_direct_transport(),
         "assembly must not build the fetch transport"
     );
 }
@@ -511,7 +519,7 @@ fn test_new_defers_transport() {
 /// uses, and the host is looked up exactly once, so no second answer can point
 /// somewhere the screen never saw.
 #[test]
-fn test_private_answer_refused() {
+fn test_private_resolution_refused() {
     let resolver = Arc::new(PublicResolver::with_fixed(vec![
         "127.0.0.1:80".parse().expect("address parses"),
     ]));
@@ -534,6 +542,10 @@ fn test_private_answer_refused() {
         resolver.lookup_count(),
         1,
         "one lookup per hop, which is the lookup the connection uses"
+    );
+    assert!(
+        !tool.client.has_direct_transport(),
+        "a refused target must not construct the direct transport"
     );
 }
 

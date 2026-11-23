@@ -26,7 +26,7 @@ use super::FetchError;
 use super::MAX_REDIRECTS;
 use super::Redirect;
 use super::connect_error_kind;
-use super::fetch_following;
+use super::follow_redirects;
 use super::is_connection_refused;
 use super::is_local_proxy_refusal;
 use super::next_redirect;
@@ -148,7 +148,7 @@ fn test_connect_deadline_falls_back() {
         let url = format!("http://example.test:{}/ok", direct.address().port());
         let system_proxy = proxy_client(ProxySource::System, proxy_http, true);
         let mut fell_back = false;
-        let response = fetch_following(
+        let response = follow_redirects(
             &direct_client,
             Some(&system_proxy),
             None,
@@ -276,7 +276,7 @@ fn test_next_redirect_refused() {
             .await;
         let client = test_client(*server.address());
         let url = format!("http://example.test:{}/start", server.address().port());
-        let refused = fetch_following(&client, None, None, &url, &mut false)
+        let refused = follow_redirects(&client, None, None, &url, &mut false)
             .await
             .expect_err("the redirect is refused");
         match refused {
@@ -309,7 +309,7 @@ fn test_follows_relative_redirect() {
             .await;
         let client = test_client(*server.address());
         let url = format!("http://example.test:{}/start", server.address().port());
-        let response = fetch_following(&client, None, None, &url, &mut false)
+        let response = follow_redirects(&client, None, None, &url, &mut false)
             .await
             .expect("response");
         assert_eq!(response.status().as_u16(), 200);
@@ -343,7 +343,7 @@ fn test_env_proxy_never_direct() {
         let env_proxy = proxy_client(ProxySource::Env, unreachable, true);
         let mut fell_back = false;
         assert!(
-            fetch_following(&direct, Some(&env_proxy), None, &url, &mut fell_back)
+            follow_redirects(&direct, Some(&env_proxy), None, &url, &mut fell_back)
                 .await
                 .is_err(),
             "explicit env proxy must not bypass a failing proxy"
@@ -385,7 +385,7 @@ fn test_system_loopback_falls_back() {
             .expect("proxy client");
         let system_proxy = proxy_client(ProxySource::System, unreachable, true);
         let mut fell_back = false;
-        let response = fetch_following(&direct, Some(&system_proxy), None, &url, &mut fell_back)
+        let response = follow_redirects(&direct, Some(&system_proxy), None, &url, &mut fell_back)
             .await
             .expect("local proxy refusal falls back to direct");
         assert!(fell_back, "the caller learns the fallback happened");
@@ -420,7 +420,7 @@ fn test_system_remote_no_fallback() {
         let system_proxy = proxy_client(ProxySource::System, gateway, false);
         let mut fell_back = false;
         assert!(
-            fetch_following(&direct, Some(&system_proxy), None, &url, &mut fell_back)
+            follow_redirects(&direct, Some(&system_proxy), None, &url, &mut fell_back)
                 .await
                 .is_err(),
             "an unreachable enterprise gateway fails closed"
@@ -464,7 +464,7 @@ fn test_https_proxy_direct_http() {
             .expect("proxy client");
         let system_proxy = proxy_client(ProxySource::System, proxy_http, true);
         let mut fell_back = false;
-        let response = fetch_following(&direct, Some(&system_proxy), None, &url, &mut fell_back)
+        let response = follow_redirects(&direct, Some(&system_proxy), None, &url, &mut fell_back)
             .await
             .expect("a plain target with a TLS-only proxy goes direct");
         assert_eq!(response.status().as_u16(), 200);
@@ -506,7 +506,7 @@ fn test_proxy_status_no_fallback() {
             .expect("proxy client");
         let system_proxy = proxy_client(ProxySource::System, proxy_http, true);
         let mut fell_back = false;
-        let response = fetch_following(
+        let response = follow_redirects(
             &direct_client,
             Some(&system_proxy),
             None,
@@ -614,7 +614,7 @@ fn test_direct_connect_retries() {
             .build()
             .expect("closed client");
         assert!(
-            fetch_following(&closed, None, None, "http://127.0.0.1:1/closed", &mut false)
+            follow_redirects(&closed, None, None, "http://127.0.0.1:1/closed", &mut false)
                 .await
                 .is_err(),
             "direct connect failure retries once then returns error"
