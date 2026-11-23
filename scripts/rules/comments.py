@@ -22,6 +22,9 @@ import subprocess
 import tokenize
 from pathlib import Path
 
+# The character a comment must not contain, named without a literal.
+BACKTICK = chr(96)
+
 # Codename / stage / internal-ref patterns banned from .rs comments.
 # Case-sensitive on purpose: uppercase letter+digit is a task/sprint tag;
 # lowercase p99/p95 (a perf percentile metric) does not match, so perf
@@ -211,7 +214,7 @@ def line_violations(line: str, *, check_cjk: bool = True):
     stripped = line.strip()
     if check_cjk and has_cjk(line):
         yield ("raw CJK in .rs comment; use \\uXXXX escapes (AGENTS.md)", stripped)
-    if "`" in line:
+    if BACKTICK in line:
         yield ("backtick in .rs comment; write bare identifiers, no markup (AGENTS.md)", stripped)
     m = CODENAME.search(line)
     if m:

@@ -2,8 +2,8 @@
 """Regression tests for the orphan module check.
 
 The resolver is pure over a directory tree, so a small fixture pins the two
-lookup rules that are easy to get wrong: a `mod name;` in X.rs looks in
-X/name.rs, and a `#[path]` is relative to the declaring file's directory.
+lookup rules that are easy to get wrong: a mod name; in X.rs looks in
+X/name.rs, and a #[path] is relative to the declaring file's directory.
 """
 import sys
 import tempfile

@@ -2,7 +2,7 @@
 """Regression test: a gate timeout must reap cargo's test-binary
 grandchildren, not orphan them under init or block on pipe holders.
 
-run_tests.py launches `cargo test` under start_new_session so cargo is its
+run_tests.py launches cargo test under start_new_session so cargo is its
 own session leader; on timeout it kills the whole session group. The bug it
 fixes: subprocess.run(timeout=...) killed only cargo, leaving test binaries
 reparented to init - they kept a PTY + the houyi binary alive, accumulated

@@ -22,7 +22,7 @@ Covered logics:
   - integration tests (tests/) do not count
   - both baseline verdicts: tolerate the grandfathered count AND fail one
     over it (the injection contract -- _check_flat_test_peer must read the
-    `baseline` parameter, not the module global)
+    baseline parameter, not the module global)
 
 Run: python3 scripts/test_flat_test_peer.py  (wired into make check as
 flat-test-peer-tests). Exit 0 = pass, 1 = fail.
@@ -86,7 +86,7 @@ def main() -> int:
 
     # 3. both baseline verdicts (the injection contract): at the grandfathered
     # count the gate passes, one over it fails. This pins that the check reads
-    # the `baseline` parameter, not the module global -- if it read the global
+    # the baseline parameter, not the module global -- if it read the global
     # (132), a tree with one pair would still be under it and never fire.
     root = _make_tree({"crate/src/foo.rs": FLAT})
     if _errs(root, 1):

@@ -21,6 +21,9 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent / "commit_msg_lint.py"
 
 
+BT = chr(96)
+
+
 def _lint(msg: str) -> int:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
         tf.write(msg)
@@ -82,7 +85,7 @@ def main() -> int:
         failures.append("em-dash in body was blocked (false positive)")
 
     # Backticks, file names, and banned vocabulary are blocked.
-    if _lint("fix(tui): update the footer\n\nCalls `foo` in bar.rs.\n") == 0:
+    if _lint(f"fix(tui): update the footer\n\nCalls {BT}foo{BT} in bar.rs.\n") == 0:
         failures.append("backticks / file name in body should block, did not")
     if _lint("fix(tui): wire the footer pill seam\n") == 0:
         failures.append("banned jargon (wire/pill/seam) should block, did not")

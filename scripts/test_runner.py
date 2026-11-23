@@ -3,15 +3,15 @@
 
 Every gate script that runs a bundle of inline test_* functions prints the
 same one-line verdict so make check's script-tests step is uniform: a single
-`[<gate>-tests] ok` on success, or the failure list on failure. Collected
+[<gate>-tests] ok on success, or the failure list on failure. Collected
 (not first-fail-stop) so one run surfaces every break, not just the earliest.
 """
 import sys
 
 
 def run(gate: str, scope: dict) -> int:
-    """Run every test_* callable in `scope` (the caller's globals), collect
-    failures, and print `[<gate>-tests] ok` or the failure list. Returns 0
+    """Run every test_* callable in scope (the caller's globals), collect
+    failures, and print [<gate>-tests] ok or the failure list. Returns 0
     on success, 1 on any failure."""
     names = sorted(n for n in scope if n.startswith("test_"))
     failures = []

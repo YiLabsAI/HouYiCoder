@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Orphan module check: every .rs under src/ must be reachable from a root.
 
-A file that no `mod` declares is never compiled, so its contents are dead
+A file that no mod declares is never compiled, so its contents are dead
 weight that looks alive: a test file beside its owner reads as the test
 suite, and an undeclared module reads as part of its owner. This happened when a test
 module was extracted while the owner kept its inline copy -- the extracted
@@ -9,7 +9,7 @@ file was not declared, so the inline copy was the only one that ran, and
 every gate stayed green.
 
 The module tree is resolved from each crate root (lib.rs or main.rs)
-following `mod name;` and `#[path = "..."]`, so a file reached only through
+following mod name; and #[path = "..."], so a file reached only through
 a nested module counts as reachable. A src/bin/*.rs is its own root and is
 exempt: cargo compiles each one on its own, declared or not.
 """
@@ -19,10 +19,10 @@ import re
 import sys
 from pathlib import Path
 
-# `mod name;` (no body) and `#[path = "file.rs"]` above a `mod`.
+# mod name; (no body) and #[path = "file.rs"] above a mod.
 _MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
 _PATH_RE = re.compile(r'^\s*#\[path\s*=\s*"([^"]+)"\]')
-# `mod name { .. }` is inline: it declares no file.
+# mod name { .. } is inline: it declares no file.
 _INLINE_MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{")
 
 
@@ -58,7 +58,7 @@ def _declared(path: Path) -> list[tuple[Path, bool]]:
 def reachable(root: Path) -> set[Path]:
     """Every .rs the crate root can reach, resolving nested modules.
 
-    A `mod name;` in X.rs resolves to X/name.rs or X/name/mod.rs -- rustc
+    A mod name; in X.rs resolves to X/name.rs or X/name/mod.rs -- rustc
     looks inside a directory named after the declaring file. A crate root
     (lib.rs, main.rs) has no such directory: its children sit beside it.
     """
@@ -74,7 +74,7 @@ def reachable(root: Path) -> set[Path]:
             stem_dir = current.parent / current.stem
         for rel, from_path in _declared(current):
             base = current.parent if from_path else stem_dir
-            # `mod name;` is name.rs or name/mod.rs; a #[path] names the file.
+            # mod name; is name.rs or name/mod.rs; a #[path] names the file.
             candidates = [base / rel]
             if rel.suffix == ".rs":
                 candidates.append(base / rel.with_suffix("") / "mod.rs")

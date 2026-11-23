@@ -47,7 +47,7 @@ TARGETS = [
 def extract_field_names(struct_name: str, path: Path) -> list[str]:
     """Return the field names of a struct by scanning its source file.
 
-    Finds `pub struct <name> {` (or `struct <name> {`), then collects
+    Finds pub struct <name> { (or struct <name> {), then collects
     field names until the matching closing brace. A field name is the
     identifier before the colon on a line that is not a comment or blank.
     """

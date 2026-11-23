@@ -20,7 +20,7 @@ Covered logics:
   - _tests parent exemption (a parent ending in _tests is a test family)
   - tests/ exclusion (each tests/*.rs is its own binary, not a module)
   - both baseline verdicts: tolerate a listed pair AND fail a dead line
-    (the injection contract -- _check_flat_prefix must read the `baseline`
+    (the injection contract -- _check_flat_prefix must read the baseline
     parameter, not the module global)
 
 Run: python3 scripts/test_flat_prefix.py  (wired into make check as
@@ -95,7 +95,7 @@ def main() -> int:
 
     # 5. both baseline verdicts (the injection contract): a pair listed in
     # the INJECTED baseline is tolerated, a dead line is failed. This pins
-    # that _check_flat_prefix reads the `baseline` parameter, not the module
+    # that _check_flat_prefix reads the baseline parameter, not the module
     # global -- if it reads the global, the listed pair still errors.
     root = _make_tree({"crate/src": ["foo", "foo_bar"]})
     listed = (root / "crate/src/foo_bar.rs").as_posix()

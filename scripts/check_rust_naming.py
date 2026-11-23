@@ -3,8 +3,8 @@
 warns.
 
 A test fn is identified by its #[test] / #[tokio::test] attribute. It
-MUST carry a `test_` name prefix — the repo convention, 100% enforced
-since the prefix-normalize pass (a `#[test] fn foo()` fails this gate).
+MUST carry a test_ name prefix — the repo convention, 100% enforced
+since the prefix-normalize pass (a #[test] fn foo() fails this gate).
 The attribute marks the fn as a test to rustc; the prefix marks it to
 grep + test-output readers and keeps the suite uniform. The gate also
 enforces segment/length caps on every test fn.

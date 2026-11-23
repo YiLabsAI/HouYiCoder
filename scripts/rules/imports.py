@@ -34,7 +34,7 @@ _CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 # Rust puts these names in scope in every file without an import (the
 # prelude). Importing a different item under one of them hides the automatic
 # one: a file that writes Result<T, E> everywhere stops compiling the moment
-# `use std::fmt::Result` lands, because that Result takes no type arguments.
+# use std::fmt::Result lands, because that Result takes no type arguments.
 # Such a name is left qualified rather than imported. Only names the language
 # really provides belong here -- std::fmt::Formatter is NOT one, and importing
 # it is legal, so it must stay a finding.
@@ -298,7 +298,7 @@ def repeated_deep_paths(text):
         text,
     ):
         defined.add(m.group(1))
-    # A bare `use super::*;` covers every name the parent module re-exports: a
+    # A bare use super::*; covers every name the parent module re-exports: a
     # chain whose bare name that glob may already provide stays qualified,
     # because importing it would shadow whatever the glob brought in.
     parent_glob = bool(

@@ -46,7 +46,7 @@ def main(paths):
                 # CJK is owned by check_no_cjk (cross-filetype); the other
                 # 5 arms are .rs-comment-specific.
                 errors.append(f"{p}:{lineno}: {message}")
-    # Growth-only ratchet on `Phase N` in .rs comments (whole-tree, not just
+    # Growth-only ratchet on Phase N in .rs comments (whole-tree, not just
     # changed files): the baseline is the dream-consolidation prompt's own
     # four-phase structure; a new roadmap ref blocks until dropped or the
     # baseline is bumped with a reason.

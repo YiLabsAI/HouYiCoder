@@ -81,6 +81,9 @@ _BANNED_VOCAB = re.compile(
 # by shape, not by literal. Without stripping, the lint scans the diff
 # itself - and a commit that erases a name from a .rs comment would trip
 # its own removed line.
+# The character the message must not contain, named without a literal.
+BACKTICK = chr(96)
+
 _SCISSORS = re.compile(r"^\s*\S?\s*-{4,}\s*>8\s*-{4,}", re.MULTILINE)
 
 
@@ -175,7 +178,7 @@ def main() -> int:
     # 4. No backticks, file names, or banned vocabulary in subject or body.
     for lineno, line in lines:
         where = "subject" if lineno == 1 else f"body line {lineno}"
-        if "`" in line:
+        if BACKTICK in line:
             print(
                 f"ERROR: commit message contains backticks ({where}). "
                 f"Write plain English prose without code markup.",

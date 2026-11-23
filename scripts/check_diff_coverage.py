@@ -6,7 +6,7 @@ is not new code and is left out of the measured set; see is_path_rewrite.
 
 Unit-dominated: normally consumes the merged lcov check_coverage.sh left
 behind (lib suite plus the sandbox integration exception recorded there);
-the standalone fallback runs `cargo llvm-cov --lib`, so integration tests
+the standalone fallback runs cargo llvm-cov --lib, so integration tests
 count only through that recorded exception, never as a substitute for the
 unit tests a module owes.
 The gate fails when the coverage of NEW or MODIFIED lines (the diff vs

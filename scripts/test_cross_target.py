@@ -23,15 +23,15 @@ from check_cross_target import (  # noqa: E402
     gated_crates,
 )
 
-RUSTC_ERROR = """error[E0425]: cannot find type `Mutex` in this scope
+RUSTC_ERROR = """error[E0425]: cannot find type Mutex in this scope
   --> crates/houyicoder-tui/src/selection/linux.rs:15:20
 """
 TWO_RUSTC_ERRORS = RUSTC_ERROR + RUSTC_ERROR
-UNUSED_IMPORT_WARNING = """warning: unused import: `houyicoder_api::launcher::SpawnRequest`
+UNUSED_IMPORT_WARNING = """warning: unused import: houyicoder_api::launcher::SpawnRequest
   --> crates/houyicoder-core/src/agent/tools/webfetch/route.rs:22:5
 """
 BUILD_SCRIPT_FAILURE = """warning: ring@0.17.14: Compiler family detection failed
-error: failed to run custom build command for `ring v0.17.14`
+error: failed to run custom build command for ring v0.17.14
 warning: build failed, waiting for other jobs to finish...
 Caused by:
   process didn't exit successfully: build-script-build
@@ -57,7 +57,7 @@ def test_a_build_script_failure_is_not_a_rustc_diagnostic():
 def test_a_plain_error_without_a_code_is_not_counted():
     # A build-script line and a summary line both start with "error"; neither
     # is a finding of its own.
-    assert len(_DIAG_RE.findall("error: could not compile `x`\n")) == 0
+    assert len(_DIAG_RE.findall("error: could not compile x\n")) == 0
     assert len(_DIAG_RE.findall("error: aborting due to 3 previous errors\n")) == 0
     assert len(_DIAG_RE.findall("warning: 3 warnings emitted\n")) == 0
 
@@ -94,7 +94,7 @@ def test_nonzero_exit_without_error_code_still_counts():
 
     with patch(
         "check_cross_target.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 101, "", "error: unused import: `Foo`\n"),
+        return_value=subprocess.CompletedProcess([], 101, "", "error: unused import: Foo\n"),
     ):
         assert crate_error_count("example", "x86_64-unknown-linux-gnu", Path(".")) == 2
 

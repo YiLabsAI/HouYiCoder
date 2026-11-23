@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-target compile ratchet: a cfg-gated module must compile everywhere.
 
-A module behind `#[cfg(target_os = "linux")]` is invisible to a check that
+A module behind #[cfg(target_os = "linux")] is invisible to a check that
 compiles the host only, so an import can be dropped from it and every gate
 stays green on the developer's machine while the crate stops building on
 Linux. This check compiles for each target that is installed and counts the
@@ -15,7 +15,7 @@ user on the other platform is an unused-import warning locally and a build
 failure in CI, so a run that leaves warnings as warnings counts nothing and
 reports a clean sweep over a real break.
 
-The Windows target needs a sysroot. A bare `cargo check --target` stops at
+The Windows target needs a sysroot. A bare cargo check --target stops at
 the first dependency whose build script needs a Windows C toolchain, which
 skips the crates most likely to hold the break. cargo-xwin supplies that
 sysroot, so when it is installed the Windows target is compiled through it
@@ -121,7 +121,7 @@ def crate_error_count(crate: str, target: str, root: Path) -> int | None:
 
     Both scopes are linted: a cfg-gated break or unused import lives in a
     library as often as in a test module, and a test-only one is invisible to
-    `--lib`.
+    --lib.
     """
     total = 0
     has_lib = (root / "crates" / crate / "src" / "lib.rs").is_file()
