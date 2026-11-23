@@ -4,6 +4,7 @@ use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::remove_file;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::process::id;
