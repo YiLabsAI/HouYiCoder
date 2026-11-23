@@ -3,6 +3,7 @@ use crate::agent::tools::{EnterWorktreeTool, ExitWorktreeTool};
 use crate::agent::worktree::preview::preview_remove_worktree;
 use crate::agent::worktree::record::lease_path;
 use crate::agent::worktree::session::WorktreeError;
+use crate::agent::worktree::test_support::make_repo;
 use houyicoder_api::sandbox::WorktreeFenceGuard;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
@@ -10,14 +11,12 @@ use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError, Session
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
 use serde_json::json;
-use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::id;
 use std::sync::Barrier;
 use std::sync::atomic::AtomicU64;
 use std::thread;
@@ -77,45 +76,10 @@ impl SandboxSession for StubSandbox {
     }
 }
 
-pub(crate) fn make_repo(tag: u64) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-wt-ctrl-{}-{tag}", id()));
-    drop(remove_dir_all(&dir));
-    create_dir_all(&dir).expect("mkdir");
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q"])
-            .status(),
-    );
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["config", "user.email", "t@x"])
-            .status(),
-    );
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["config", "user.name", "t"])
-            .status(),
-    );
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["commit", "--allow-empty", "-m", "init", "-q"])
-            .status(),
-    );
-    dir
-}
-
-/// Build a controller wired to a throwaway repo + a stub sandbox + a real
+/// Build a controller over a throwaway repo + a stub sandbox + a real
 /// in-memory session store. Returns the controller, the store (for replay
 /// assertions), + the shared cwd Arc.
-pub(crate) fn wired(
+pub(crate) fn test_controller(
     repo: &Path,
     in_flight: usize,
 ) -> (
@@ -123,16 +87,16 @@ pub(crate) fn wired(
     Arc<SessionStore>,
     Arc<RwLock<PathBuf>>,
 ) {
-    wired_opt(repo, in_flight, false)
+    build_controller(repo, in_flight, false)
 }
 
-/// Same as wired but with a sandbox whose narrow always fails -- for the
+/// Same as test_controller but with a sandbox whose narrow always fails -- for the
 /// fail-closed path (a fence failure must reject, not degrade).
-pub(crate) fn wired_err(repo: &Path) -> Arc<WorktreeController> {
-    wired_opt(repo, 0, true).0
+pub(crate) fn failing_controller(repo: &Path) -> Arc<WorktreeController> {
+    build_controller(repo, 0, true).0
 }
 
-fn wired_opt(
+fn build_controller(
     repo: &Path,
     in_flight: usize,
     narrow_err: bool,
@@ -167,7 +131,7 @@ fn wired_opt(
 #[tokio::test]
 async fn test_enter_exit_round_trip() {
     let repo = make_repo(1);
-    let (controller, _store, cwd) = wired(&repo, 0);
+    let (controller, _store, cwd) = test_controller(&repo, 0);
     let r = controller
         .enter(Some("feat-a".into()))
         .await
@@ -192,7 +156,7 @@ async fn test_enter_exit_round_trip() {
 #[tokio::test]
 async fn test_failed_enter_releases_lease() {
     let repo = make_repo(17);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let slug = "feat-collide";
     let taken = Command::new("git")
         .arg("-C")
@@ -223,7 +187,7 @@ async fn test_failed_enter_releases_lease() {
 #[tokio::test]
 async fn test_child_enter_releases_lease() {
     let repo = make_repo(18);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let slug = "child-collide";
     let taken = Command::new("git")
         .arg("-C")
@@ -249,7 +213,7 @@ async fn test_child_enter_releases_lease() {
 #[tokio::test]
 async fn test_exit_remove_clean_succeeds() {
     let repo = make_repo(2);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     controller
         .enter(Some("feat-r".into()))
         .await
@@ -316,7 +280,7 @@ fn test_exit_action_names_states() {
 #[tokio::test]
 async fn test_failed_remove_ends_session() {
     let repo = make_repo(16);
-    let (controller, store, _cwd) = wired(&repo, 0);
+    let (controller, store, _cwd) = test_controller(&repo, 0);
     let entered = controller
         .enter(Some("feat-held".into()))
         .await
@@ -375,7 +339,7 @@ async fn test_failed_remove_ends_session() {
 #[tokio::test]
 async fn test_branch_lock_keeps_tree() {
     let repo = make_repo(19);
-    let (controller, store, _cwd) = wired(&repo, 0);
+    let (controller, store, _cwd) = test_controller(&repo, 0);
     let entered = controller
         .enter(Some("feat-branch-held".into()))
         .await
@@ -414,7 +378,7 @@ async fn test_branch_lock_keeps_tree() {
 #[tokio::test]
 async fn test_second_enter_refused() {
     let repo = make_repo(3);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     controller
         .enter(Some("feat-s".into()))
         .await
@@ -433,7 +397,7 @@ async fn test_second_enter_refused() {
 #[test]
 fn test_second_enter_refused_concurrently() {
     let repo = make_repo(50);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let start = Barrier::new(2);
     let results = thread::scope(|scope| {
         let handles: Vec<_> = ["feat-p", "feat-q"]
@@ -474,7 +438,7 @@ fn test_second_enter_refused_concurrently() {
 #[tokio::test]
 async fn test_enter_refused_while_running() {
     let repo = make_repo(4);
-    let (controller, _store, _cwd) = wired(&repo, 1);
+    let (controller, _store, _cwd) = test_controller(&repo, 1);
     let err = controller
         .enter(Some("feat-b".into()))
         .await
@@ -486,7 +450,7 @@ async fn test_enter_refused_while_running() {
 #[tokio::test]
 async fn test_remove_refuses_without_discard() {
     let repo = make_repo(7);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let r = controller
         .enter(Some("feat-d".into()))
         .await
@@ -533,7 +497,7 @@ async fn test_remove_refuses_without_discard() {
 #[tokio::test]
 async fn test_exit_without_session_noop() {
     let repo = make_repo(5);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let outcome = controller
         .exit(ExitAction::Keep, false)
         .await
@@ -545,7 +509,7 @@ async fn test_exit_without_session_noop() {
 #[tokio::test]
 async fn test_tools_execute_through_controller() {
     let repo = make_repo(6);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let enter = EnterWorktreeTool::new(controller.clone());
     let out = enter
         .execute(ToolCtx::new("call-1"), json!({ "name": "tool-wt" }))
@@ -574,7 +538,7 @@ async fn test_tools_execute_through_controller() {
 #[tokio::test]
 async fn test_exit_warns_history_rewrite() {
     let repo = make_repo(8);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     // Enter the worktree.
     controller.enter(None).await.expect("enter");
     // Rewrite the main branch ref while isolated (simulates the agent

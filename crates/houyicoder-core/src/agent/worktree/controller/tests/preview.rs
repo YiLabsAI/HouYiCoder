@@ -18,7 +18,7 @@ use crate::agent::worktree::session::WorktreeError;
 use super::super::ExitAction;
 use super::child::RecordingHookFire;
 use super::make_repo;
-use super::wired;
+use super::test_controller;
 
 /// The tree this session works in is refused, and the answer says so instead
 /// of naming another process. The session holds that tree's lease, so a verb
@@ -28,7 +28,7 @@ use super::wired;
 #[tokio::test]
 async fn test_removal_refuses_active_tree() {
     let repo = make_repo(41);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let entered = controller
         .enter(Some("pane-active".into()))
         .await
@@ -63,7 +63,7 @@ async fn test_removal_refuses_active_tree() {
 #[tokio::test]
 async fn test_removal_runs_after_exit() {
     let repo = make_repo(42);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let entered = controller
         .enter(Some("pane-released".into()))
         .await
@@ -120,7 +120,7 @@ fn branch_exists(repo: &Path, name: &str) -> bool {
 #[tokio::test]
 async fn test_pane_refuses_main_checkout() {
     let repo = make_repo(44);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
 
     let preview = controller.preview_at(&repo).map(|_| ());
     assert!(
@@ -148,7 +148,7 @@ async fn test_pane_refuses_main_checkout() {
 async fn test_adopt_foreign_tree() {
     let repo = make_repo(45);
     let tree = foreign_tree(&repo, "adopted");
-    let (controller, _store, cwd) = wired(&repo, 0);
+    let (controller, _store, cwd) = test_controller(&repo, 0);
 
     let prepared = controller.enter_at_prepared(&tree).expect("enter the tree");
     let entered = controller
@@ -184,7 +184,7 @@ async fn test_adopt_foreign_tree() {
 #[tokio::test]
 async fn test_pane_removal_fires_remove() {
     let repo = make_repo(43);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let entered = controller
         .enter(Some("pane-fire".into()))
         .await

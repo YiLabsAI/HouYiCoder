@@ -1,14 +1,12 @@
 //! What a removal preview reports for a managed worktree, and which states it
 //! refuses to preview at all.
 
-use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::id;
 
 #[cfg(unix)]
 use std::{fs::rename, os::unix::fs::symlink};
@@ -26,19 +24,7 @@ use super::super::session::get_or_create_worktree;
 use super::super::session::worktree_branch_name;
 use super::super::session::worktree_path_for;
 use super::*;
-
-/// A throwaway repository with one commit, so a preview has a base branch and
-/// a commit to ask its merge question against.
-fn make_repo(tag: &str) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-wt-preview-{tag}-{}", id()));
-    drop(remove_dir_all(&dir));
-    create_dir_all(&dir).expect("repo dir");
-    git(&dir, &["init", "-q"]);
-    git(&dir, &["config", "user.email", "t@x"]);
-    git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["commit", "--allow-empty", "-m", "init", "-q"]);
-    dir
-}
+use crate::agent::worktree::test_support::make_repo;
 
 #[expect(
     clippy::disallowed_methods,

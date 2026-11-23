@@ -4,48 +4,12 @@ use super::super::preview::MergeState;
 use super::super::preview::preview_remove_worktree;
 use super::super::record::{WorktreeLease, read_managed_worktree, record_path, state_dir};
 use super::*;
+use crate::agent::worktree::test_support::make_repo;
 use std::env::temp_dir;
 use std::fs;
 use std::process::id;
 
 mod removal;
-
-/// A throwaway git repo with one commit, so a remove test runs its body
-/// deterministically instead of skipping outside a live work tree.
-fn make_repo(tag: &str) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-wts-{tag}-{}", id()));
-    drop(fs::remove_dir_all(&dir));
-    fs::create_dir_all(&dir).expect("repo dir");
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["init", "-q"])
-            .status(),
-    );
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["config", "user.email", "t@x"])
-            .status(),
-    );
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["config", "user.name", "t"])
-            .status(),
-    );
-    drop(
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["commit", "--allow-empty", "-m", "init", "-q"])
-            .status(),
-    );
-    dir
-}
 
 #[test]
 fn test_validates_legal_slugs() {

@@ -11,8 +11,8 @@ use houyicoder_context::SessionId;
 use serde_json::json;
 
 use super::ExitWorktreeTool;
-use crate::agent::worktree::controller::tests::make_repo;
-use crate::agent::worktree::controller::tests::wired;
+use crate::agent::worktree::controller::tests::test_controller;
+use crate::agent::worktree::test_support::make_repo;
 use crate::agent::worktree_controller::ExitAction;
 
 /// A remove with no tree behind it removes nothing, so asking the user to
@@ -22,7 +22,7 @@ use crate::agent::worktree_controller::ExitAction;
 #[test]
 fn test_remove_untracked_asks_nothing() {
     let repo = make_repo(91);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let tool = ExitWorktreeTool::new(controller);
     assert!(
         !tool.requires_approval_for(&json!({"action": "remove"})),
@@ -36,7 +36,7 @@ fn test_remove_untracked_asks_nothing() {
 #[test]
 fn test_keep_needs_no_approval() {
     let repo = make_repo(92);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let tool = ExitWorktreeTool::new(controller);
     assert!(!tool.requires_approval_for(&json!({"action": "keep"})));
     drop(remove_dir_all(&repo));
@@ -49,7 +49,7 @@ fn test_keep_needs_no_approval() {
 #[test]
 fn test_named_remove_needs_approval() {
     let repo = make_repo(93);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let tool = ExitWorktreeTool::new(controller);
     assert!(tool.requires_approval_for(&json!({
         "action": "remove",
@@ -71,7 +71,7 @@ fn test_named_remove_needs_approval() {
 #[tokio::test]
 async fn test_named_remove_clears_tree() {
     let repo = make_repo(94);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     // A tree this product created, so the managed path owns its record.
     let created = controller
         .enter(Some("left-behind".into()))
@@ -118,7 +118,7 @@ async fn test_named_remove_clears_tree() {
 #[tokio::test]
 async fn test_named_remove_keeps_work() {
     let repo = make_repo(95);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let created = controller
         .enter(Some("with-work".into()))
         .await

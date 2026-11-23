@@ -1,6 +1,7 @@
 //! Per-child worktree + fence tests. Reuses the sibling test module's
-//! harness (make_repo, wired, wired_err); the helpers are pub(crate).
+//! harness (failing_controller, make_repo, test_controller); the helpers are pub(crate).
 
+use crate::agent::worktree::test_support::make_repo;
 use houyicoder_api::hook_fire::HookFire;
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{HookEventKind, HookFirePayload, SessionEvent, SessionId};
@@ -32,7 +33,7 @@ use super::super::ExitAction;
 use super::super::child::reclaim::{
     WorktreeReclaimRecord, resumes_leftover, run_conservative_reclaim,
 };
-use super::super::tests::{make_repo, wired, wired_err};
+use super::super::tests::{failing_controller, test_controller};
 use crate::agent::worktree::cleanup::PendingCleanup;
 use crate::agent::worktree::cleanup::RemovalIntent;
 use crate::agent::worktree::cleanup::write_pending;
@@ -50,7 +51,7 @@ use std::fs::write;
 #[tokio::test]
 async fn test_enter_child_leaves_parent() {
     let repo = make_repo(10);
-    let (controller, _store, cwd) = wired(&repo, 0);
+    let (controller, _store, cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-deadbeef".into())
         .await
@@ -75,7 +76,7 @@ async fn test_enter_child_leaves_parent() {
 #[tokio::test]
 async fn test_enter_child_refused_inflight() {
     let repo = make_repo(11);
-    let (controller, _store, _cwd) = wired(&repo, 1);
+    let (controller, _store, _cwd) = test_controller(&repo, 1);
     match controller.enter_for_child("agent-inflight".into()).await {
         Ok(_) => panic!("in-flight must refuse"),
         Err(e) => assert!(e.to_string().contains("in flight"), "{e}"),
@@ -89,7 +90,7 @@ async fn test_enter_child_refused_inflight() {
 #[tokio::test]
 async fn test_child_refused_when_leased() {
     let repo = make_repo(14);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let slug = "agent-leased";
     let holder = WorktreeLease::acquire(&repo, slug).expect("hold the lease");
 
@@ -111,7 +112,7 @@ async fn test_child_refused_when_leased() {
 #[tokio::test]
 async fn test_enter_refused_when_leased() {
     let repo = make_repo(15);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let slug = "user-leased";
     let holder = WorktreeLease::acquire(&repo, slug).expect("hold the lease");
 
@@ -134,7 +135,7 @@ async fn test_enter_refused_when_leased() {
 #[tokio::test]
 async fn test_spawn_child_worktree_isolation() {
     let repo = make_repo(12);
-    let (controller, store, _cwd) = wired(&repo, 0);
+    let (controller, store, _cwd) = test_controller(&repo, 0);
     let parent_sid = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
     let req = SpawnRequest {
@@ -188,7 +189,7 @@ async fn test_spawn_child_worktree_isolation() {
 #[tokio::test]
 async fn test_spawn_child_fence_fail() {
     let repo = make_repo(13);
-    let controller = wired_err(&repo);
+    let controller = failing_controller(&repo);
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let parent_sid = SessionId::new();
     let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
@@ -239,7 +240,7 @@ async fn test_spawn_child_fence_fail() {
 #[tokio::test]
 async fn test_cleanup_clean_worktree_removed() {
     let repo = make_repo(20);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-clean".into())
         .await
@@ -260,7 +261,7 @@ async fn test_cleanup_clean_worktree_removed() {
 #[tokio::test]
 async fn test_cleanup_dirty_worktree_kept() {
     let repo = make_repo(21);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-dirty".into())
         .await
@@ -289,7 +290,7 @@ async fn test_cleanup_dirty_worktree_kept() {
 #[tokio::test]
 async fn test_reclaim_removes_clean_worktree() {
     let repo = make_repo(22);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-abandoned".into())
         .await
@@ -312,7 +313,7 @@ async fn test_reclaim_removes_clean_worktree() {
 #[tokio::test]
 async fn test_reclaim_keeps_dirty_worktree() {
     let repo = make_repo(23);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-abandon-dirty".into())
         .await
@@ -500,7 +501,7 @@ fn test_reclaim_keeps_leased_worktree() {
 #[tokio::test]
 async fn test_reclaim_skips_remove_hook() {
     let repo = make_repo(28);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let events = Arc::new(Mutex::new(Vec::new()));
     controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
         events: events.clone(),
@@ -531,7 +532,7 @@ async fn test_reclaim_skips_remove_hook() {
 #[tokio::test]
 async fn test_cleanup_removes_worktree_once() {
     let repo = make_repo(24);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let events = Arc::new(Mutex::new(Vec::new()));
     controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
         events: events.clone(),
@@ -565,7 +566,7 @@ async fn test_cleanup_removes_worktree_once() {
 #[tokio::test]
 async fn test_cleanup_committed_worktree_kept() {
     let repo = make_repo(25);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-committed".into())
         .await
@@ -599,7 +600,7 @@ async fn test_cleanup_committed_worktree_kept() {
 #[tokio::test]
 async fn test_cleanup_missing_worktree_kept() {
     let repo = make_repo(26);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-gone".into())
         .await
@@ -620,7 +621,7 @@ async fn test_cleanup_missing_worktree_kept() {
 #[tokio::test]
 async fn test_cleanup_reused_worktree_kept() {
     let repo = make_repo(27);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     // Create the tree through the user-facing enter (outside the per-child
     // reclaim map), then commit output that advances its tip.
     let entered = controller
@@ -675,7 +676,7 @@ impl HookFire for RecordingHookFire {
 #[tokio::test]
 async fn test_enter_fires_worktree_create() {
     let repo = make_repo(30);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let events = Arc::new(Mutex::new(Vec::new()));
     controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
         events: events.clone(),
@@ -697,7 +698,7 @@ async fn test_enter_fires_worktree_create() {
 #[tokio::test]
 async fn test_cleanup_removed_fires_remove() {
     let repo = make_repo(31);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let events = Arc::new(Mutex::new(Vec::new()));
     controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
         events: events.clone(),
@@ -726,7 +727,7 @@ async fn test_cleanup_removed_fires_remove() {
 #[tokio::test]
 async fn test_toolpath_fires_create_remove() {
     let repo = make_repo(40);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let events = Arc::new(Mutex::new(Vec::new()));
     controller.set_hook_fire(Some(Arc::new(RecordingHookFire {
         events: events.clone(),
@@ -761,7 +762,7 @@ async fn test_toolpath_fires_create_remove() {
 #[tokio::test]
 async fn test_reclaim_awaits_launched_task() {
     let repo = make_repo(50);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-launched-reclaim".into())
         .await
@@ -844,7 +845,7 @@ async fn test_reclaim_awaits_launched_task() {
 #[tokio::test]
 async fn test_child_holds_lease() {
     let repo = make_repo(60);
-    let (controller, _store, _cwd) = wired(&repo, 0);
+    let (controller, _store, _cwd) = test_controller(&repo, 0);
     let cw = controller
         .enter_for_child("agent-leased".into())
         .await

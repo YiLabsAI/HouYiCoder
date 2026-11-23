@@ -12,3 +12,5 @@ pub mod identify;
 pub mod preview;
 pub mod record;
 pub mod session;
+#[cfg(test)]
+pub(crate) mod test_support;

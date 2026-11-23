@@ -1,8 +1,6 @@
 //! Tests for the status snapshot's carried fields.
 
 use super::*;
-use crate::composition::BuildRunnerOptions;
-use crate::composition::build_runner;
 use houyicoder_context::{
     EventId, NameSource, PermissionVerdict, PromptCoverage, PromptRecord, RecapSource, RecapUsage,
     RunCompletionStatus, SessionDescriptor, SessionDescriptorStore, SessionEvent, SessionId,
@@ -15,7 +13,6 @@ use houyicoder_memory::{InMemoryBackend, InMemoryDescriptorStore};
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_provider::FakeProvider;
 use houyicoder_provider::ProviderFacts;
-use houyicoder_provider::ProviderResolution;
 use houyicoder_session::SessionStore;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
@@ -32,20 +29,14 @@ fn test_snapshot_reports_carried_endpoint() {
     let root = temp_dir().join(format!("status-endpoint-{}-{}", id(), line!()));
     drop(remove_dir_all(&root));
     create_dir_all(&root).expect("mkdir root");
-    let options = BuildRunnerOptions {
-        project: Some(root.to_string_lossy().into_owned()),
-        home: Some(root.clone()),
-        provider: Some(ProviderResolution::stub()),
-        ..Default::default()
-    };
-    let bundle = build_runner(options);
+    let log = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let carried = ProviderFacts {
         base_url: "https://team-gateway.example/compatible-mode/v1".into(),
         key_origin: Some("keychain houyicoder/dashscope-team".into()),
     };
     let server = Server::new(
-        Arc::new(bundle.runner),
-        bundle.session,
+        runner_over(log),
+        SessionId::new(),
         Arc::new(DefaultModeGate::new()),
     )
     .with_provider_facts(carried.clone());

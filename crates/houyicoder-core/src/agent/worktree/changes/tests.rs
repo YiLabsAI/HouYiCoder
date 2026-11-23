@@ -1,26 +1,13 @@
 //! How a status listing is split into the classes a removal reports.
 
-use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::path::Path;
-use std::path::PathBuf;
 use std::process::Command;
-use std::process::id;
 
 use super::*;
-
-/// A throwaway repository, empty, so every file written into it is untracked.
-fn make_repo(tag: &str) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-wt-changes-{tag}-{}", id()));
-    drop(remove_dir_all(&dir));
-    create_dir_all(&dir).expect("repo dir");
-    git(&dir, &["init", "-q"]);
-    git(&dir, &["config", "user.email", "t@x"]);
-    git(&dir, &["config", "user.name", "t"]);
-    dir
-}
+use crate::agent::worktree::test_support::make_repo;
 
 #[expect(
     clippy::disallowed_methods,

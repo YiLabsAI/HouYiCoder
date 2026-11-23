@@ -237,12 +237,23 @@ async fn attach_and_read_first_level(endings: usize) -> Option<u32> {
     let handle = tokio::spawn(async move { drop(server.serve(io).await) });
     send_line(&mut client_tx, &Hello::local());
     drop(client_rx.next().await);
+    // A cheap request the host answers at once is the barrier: anything the
+    // attach reported has arrived before its reply, so the empty case is
+    // decided by the reply rather than by waiting out a timeout.
+    send_line(
+        &mut client_tx,
+        &ClientFrame::Request(RequestEnvelope::new(
+            RequestId(11),
+            FrontendRequest::ModelInfo,
+        )),
+    );
     let reported = loop {
-        match timeout(Duration::from_secs(5), recv_frame(&mut client_rx)).await {
+        match timeout(Duration::from_secs(2), recv_frame(&mut client_rx)).await {
             Ok(ServerFrame::Event(envelope)) => match envelope.payload {
                 FrontendEvent::NotificationsPending { count } => break Some(count),
                 _ => continue,
             },
+            Ok(ServerFrame::Response(resp)) if resp.req_id == RequestId(11) => break None,
             Ok(_) => continue,
             Err(_) => break None,
         }
