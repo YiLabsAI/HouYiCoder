@@ -1,12 +1,13 @@
-//! Turning the run's live events into session/update frames: response deltas,
-//! paced tool progress, and user notices, each sent in the order the run
-//! produced it while the turn is live.
+//! The outbound session/update stream: durable turn records and the run's
+//! live events (response deltas, paced tool progress, user notices), each
+//! wrapped in the session notification envelope and sent in the order the
+//! run produced it.
 
+use std::future::pending;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use super::AcpServer;
-use super::message::session_update;
 use crate::acp::pump::AcpDuplexPump;
 use crate::protocol_adapter::{
     map_notice, map_session_update, map_stream_event, map_tool_progress, tool_title,
@@ -14,9 +15,41 @@ use crate::protocol_adapter::{
 use crate::turn_events::{TurnEventSubscriber, TurnStreamEvent};
 use houyicoder_api::agent_event::{ResponseStreamEvent, ToolExecutionEvent, UserNoticeEvent};
 use houyicoder_api::session::TrajectoryPages;
-use houyicoder_context::{SessionEvent, SessionLogEntry};
-use houyicoder_protocol::error::ProtocolError;
+use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_protocol::acp_wire::AcpNotification;
+use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+
+/// A session/update notification in the envelope the base protocol defines:
+/// the session it belongs to, and the update nested under its own key. A
+/// client that reads the envelope drops an update sent without it.
+pub(super) fn session_notification(
+    session: SessionId,
+    update: &SessionUpdate,
+) -> Result<AcpNotification, ProtocolError> {
+    let params = serde_json::json!({
+        "sessionId": session.to_string(),
+        "update": serde_json::to_value(update).map_err(|e| {
+            ProtocolError::new(ErrorCategory::InvalidFrame, e.to_string(), false)
+        })?,
+    });
+    Ok(AcpNotification::new("session/update", params))
+}
+
+/// The next live event, or pending forever when no stream is installed. A
+/// select branch that never resolves keeps the run future and the frame
+/// reader as the only live branches, so the absence of a stream costs
+/// nothing. A stream whose producer is gone is dropped here rather than
+/// polling a closed receiver on every turn of the loop.
+pub(super) async fn next_turn_event(events: &mut Option<TurnEventSubscriber>) -> TurnStreamEvent {
+    if let Some(stream) = events.as_mut()
+        && let Some(event) = stream.recv().await
+    {
+        return event;
+    }
+    *events = None;
+    pending().await
+}
 
 impl AcpServer {
     /// Read every durable event appended since the last drain, advancing the
@@ -67,7 +100,7 @@ impl AcpServer {
             text: text.to_string(),
         };
         if let Some(update) = map_session_update(&event) {
-            let notification = session_update(self.session, &update)?;
+            let notification = session_notification(self.session, &update)?;
             self.send_typed(io, &notification).await?;
         }
         Ok(())
@@ -94,7 +127,7 @@ impl AcpServer {
             {
                 call.title = tool_title(tool, Some(input));
             }
-            let notification = session_update(self.session, &update)?;
+            let notification = session_notification(self.session, &update)?;
             self.send_typed(io, &notification).await?;
         }
         Ok(())
@@ -124,7 +157,7 @@ impl AcpServer {
             self.streamed_text.store(true, Ordering::Relaxed);
         }
         if let Some(update) = map_stream_event(delta) {
-            let notification = session_update(self.session, &update)?;
+            let notification = session_notification(self.session, &update)?;
             self.send_typed(io, &notification).await?;
         }
         Ok(())
@@ -203,7 +236,7 @@ impl AcpServer {
         if !self.progress.allow(call_id, Instant::now()) {
             return Ok(());
         }
-        let notification = session_update(self.session, &map_tool_progress(progress))?;
+        let notification = session_notification(self.session, &map_tool_progress(progress))?;
         self.send_typed(io, &notification).await
     }
 
@@ -215,7 +248,7 @@ impl AcpServer {
         notice: &UserNoticeEvent,
     ) -> Result<(), ProtocolError> {
         tracing::warn!("user notice: {}", notice.message);
-        let notification = session_update(self.session, &map_notice(notice))?;
+        let notification = session_notification(self.session, &map_notice(notice))?;
         self.send_typed(io, &notification).await
     }
 }

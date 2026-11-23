@@ -5,7 +5,7 @@
 //! outcome nobody stated.
 
 use super::AcpServer;
-use super::message::session_update;
+use super::stream::session_notification;
 use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::consent::{deny_delegated_ask, prepare_delegated_ask, publish_delegated_response};
@@ -105,7 +105,7 @@ impl AcpServer {
                     SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text {
                         text: notice.clone(),
                     }));
-                let notification = session_update(self.session, &update)?;
+                let notification = session_notification(self.session, &update)?;
                 self.send_typed(io, &notification).await?;
             }
             decisions.push(parse_approval_decision(settled.wire_decision));

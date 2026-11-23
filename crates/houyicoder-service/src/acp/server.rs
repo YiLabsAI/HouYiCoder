@@ -12,10 +12,9 @@
 //! A session/cancel notification aborts the runner whether it arrives during
 //! the run, while a permission card is pending, or between turns.
 
-#![allow(dead_code)] // pub server type consumed by other crates and tests; locally unused
-
 use std::collections::HashSet;
-use std::future::pending;
+use std::future::{Future, pending};
+use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(test)]
 use std::time::Duration;
@@ -405,12 +404,7 @@ impl AcpServer {
         }
     }
 
-    /// Drive the run future to completion while reading inbound frames and live
-    /// events concurrently. A session/cancel notification aborts the run; any
-    /// other frame mid-run is a protocol violation. The subscriber is taken
-    /// out of self so its borrow does not collide with the &self calls inside
-    /// the select, and restored on the normal path. Returns the run's own
-    /// outcome inside a transport result: the outer error ends the serve loop.
+    /// Run one prompt to its first outcome, streaming the turn as it goes.
     async fn drive_run(
         &mut self,
         io: &mut AcpDuplexPump,
@@ -421,68 +415,10 @@ impl AcpServer {
         let runner = Arc::clone(&self.runner);
         let run_fut = runner.run(self.session, text);
         tokio::pin!(run_fut);
-        let mut events = self.events.take();
-        let perm_owner = Arc::clone(&self.child_perm_rx);
-        let mut perm_lease = perm_owner.lease(self.bus.as_ref());
-        // biased: poll the run future first so a ready run resolves before an
-        // inbound EOF frame wins the race (without this, a fast stub run plus
-        // an immediate stdin close can drop the real reply for a spurious
-        // client-closed error).
-        let outcome = loop {
-            let permission_fut = match perm_lease.receiver() {
-                Some(receiver) => Either::Left(receiver.recv()),
-                None => Either::Right(pending()),
-            };
-            tokio::select! {
-                biased;
-                r = &mut run_fut => break r,
-                event = next_turn_event(&mut events) => {
-                    self.note_stream_lag(&mut events);
-                    self.push_stream_event(io, &event).await?;
-                }
-                frame = io.next_frame() => match frame {
-                    Some(f) => {
-                        if !self.route_cancel_frame(&f).await? {
-                            self.events = events;
-                            return Err(ProtocolError::new(
-                                ErrorCategory::InvalidFrame,
-                                "unexpected frame mid-run",
-                                false,
-                            ));
-                        }
-                    }
-                    None => {
-                        // Settle the in-flight run before failing the
-                        // connection: a tool that already appended its call
-                        // gets the budget to append its paired result, so the
-                        // durable trail closes and the next resume sees no
-                        // orphan.
-                        settle_on_disconnect(&mut run_fut, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
-                        self.events = events;
-                        return Err(ProtocolError::new(
-                            ErrorCategory::Unavailable,
-                            "client closed mid-run",
-                            false,
-                        ));
-                    }
-                },
-                req = permission_fut => {
-                    if let Ok(msg) = req
-                        && let Err(e) = self.route_child_permission(io, msg).await
-                    {
-                        tracing::warn!("child permission ask failed: {e}");
-                    }
-                },
-            }
-        };
-        // Drain events the model pushed in its final frame before the run
-        // future resolved, so the tail is not lost to streamed_text suppression.
-        self.drain_event_tail(io, &mut events).await?;
-        self.events = events;
-        Ok(outcome)
+        self.drive_turn(io, run_fut, "run").await
     }
 
-    /// Drive the resumed turn and stream its live events. A cancel that arrived
+    /// Resume the turn with the collected verdicts. A cancel that arrived
     /// during the ask skips resume and ends the turn cancelled.
     async fn resume_run(
         &mut self,
@@ -495,9 +431,34 @@ impl AcpServer {
         let runner = Arc::clone(&self.runner);
         let resume_fut = runner.resume(self.session, decisions);
         tokio::pin!(resume_fut);
+        self.drive_turn(io, resume_fut, "resume").await
+    }
+
+    /// Drive one engine leg (the first run or a resume) to completion while
+    /// reading inbound frames, live events, and child permission asks
+    /// concurrently. A session/cancel notification aborts the runner; any
+    /// other frame is a protocol violation. A closed connection settles the
+    /// leg before failing, so a tool that already appended its call gets the
+    /// budget to append its paired result. The subscriber is taken out of
+    /// self so its borrow does not collide with the calls inside the select,
+    /// and restored on every exit. Returns the leg's own outcome inside a
+    /// transport result: the outer error ends the serve loop.
+    async fn drive_turn<F>(
+        &mut self,
+        io: &mut AcpDuplexPump,
+        mut leg: Pin<&mut F>,
+        phase: &'static str,
+    ) -> Result<Result<RunResult, RunError>, ProtocolError>
+    where
+        F: Future<Output = Result<RunResult, RunError>>,
+    {
         let mut events = self.events.take();
         let perm_owner = Arc::clone(&self.child_perm_rx);
         let mut perm_lease = perm_owner.lease(self.bus.as_ref());
+        // biased: poll the leg first so a ready outcome resolves before an
+        // inbound EOF frame wins the race (without this, a fast stub run plus
+        // an immediate stdin close can drop the real reply for a spurious
+        // client-closed error).
         let outcome = loop {
             let permission_fut = match perm_lease.receiver() {
                 Some(receiver) => Either::Left(receiver.recv()),
@@ -505,7 +466,7 @@ impl AcpServer {
             };
             tokio::select! {
                 biased;
-                r = &mut resume_fut => break r,
+                r = &mut leg => break r,
                 event = next_turn_event(&mut events) => {
                     self.note_stream_lag(&mut events);
                     self.push_stream_event(io, &event).await?;
@@ -516,17 +477,17 @@ impl AcpServer {
                             self.events = events;
                             return Err(ProtocolError::new(
                                 ErrorCategory::InvalidFrame,
-                                "unexpected frame mid-resume",
+                                format!("unexpected frame mid-{phase}"),
                                 false,
                             ));
                         }
                     }
                     None => {
-                        settle_on_disconnect(&mut resume_fut, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
+                        settle_on_disconnect(&mut leg, CLOSE_SETTLE_BUDGET, || self.runner.abort()).await;
                         self.events = events;
                         return Err(ProtocolError::new(
                             ErrorCategory::Unavailable,
-                            "client closed mid-resume",
+                            format!("client closed mid-{phase}"),
                             false,
                         ));
                     }
@@ -540,6 +501,8 @@ impl AcpServer {
                 },
             }
         };
+        // Drain events the model pushed in its final frame before the leg
+        // resolved, so the tail is not lost to streamed_text suppression.
         self.drain_event_tail(io, &mut events).await?;
         self.events = events;
         Ok(outcome)
@@ -601,15 +564,14 @@ impl AcpServer {
 }
 
 mod config;
-mod message;
 mod permission;
 mod progress;
+mod prompt;
 mod stream;
 
-use message::next_turn_event;
-use message::prompt_text;
-use message::session_update;
 use progress::ToolProgressThrottle;
+use prompt::prompt_text;
+use stream::next_turn_event;
 
 #[cfg(test)]
 mod tests;

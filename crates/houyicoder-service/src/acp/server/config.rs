@@ -4,7 +4,7 @@
 //! to them by method name.
 
 use super::AcpServer;
-use super::session_update;
+use super::stream::session_notification;
 use crate::acp::adapter::session_config_options;
 use crate::acp::pump::AcpDuplexPump;
 use houyicoder_permission::PermissionMode;
@@ -88,7 +88,7 @@ impl AcpServer {
             current_mode_id: params.mode_id,
             meta: None,
         });
-        let notification = session_update(self.session, &update)?;
+        let notification = session_notification(self.session, &update)?;
         self.send_typed(io, &notification).await?;
         self.send_response(
             io,
