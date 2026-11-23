@@ -82,6 +82,81 @@ pub struct AgentDefinition {
     pub omit_project_context: bool,
     pub color: Option<String>,
     pub system_prompt: PromptSource,
+    /// How the sub-agent executes: in the parent's process or as an external
+    /// ACP process. Defaults to in-process so every existing definition stays
+    /// compatible without a field change.
+    pub backend: AgentBackend,
+}
+
+/// How a sub-agent runs: in the parent process or as an external ACP child.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AgentBackend {
+    /// Share the parent's runtime and heap (the only path before external ACP
+    /// support landed). All built-in and user-defined agents default here.
+    #[default]
+    InProcess,
+    /// Spawn an external ACP-compatible process and drive it as a child. The
+    /// spec carries the program, arguments, allowed environment variables, and
+    /// handshake timeout the host uses to launch and fence it.
+    ExternalAcp(ExternalAcpSpec),
+}
+
+/// Configuration for an external ACP sub-agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAcpSpec {
+    /// The executable to launch (resolved on PATH or as an absolute path).
+    pub program: String,
+    /// Argv after the program name.
+    pub args: Vec<String>,
+    /// Host environment variables to pass through, in addition to the base
+    /// runtime set. No variable outside this list and the base set crosses the
+    /// process boundary, so a host secret never leaks to a child.
+    pub passthrough_env: Vec<String>,
+    /// Milliseconds to wait for the external process to finish its initialize
+    /// and session/new handshake before declaring it unresponsive.
+    pub handshake_timeout_ms: u64,
+}
+
+impl Default for ExternalAcpSpec {
+    fn default() -> Self {
+        Self {
+            program: String::new(),
+            args: Vec::new(),
+            passthrough_env: Vec::new(),
+            handshake_timeout_ms: 15_000,
+        }
+    }
+}
+
+/// The environment variables a child process receives: the base runtime set
+/// the process needs to function, plus the ones the spec names from the host
+/// environment. No other host variable crosses the boundary.
+pub fn child_environment(
+    spec: &ExternalAcpSpec,
+    host_env: &[(String, String)],
+) -> Vec<(String, String)> {
+    const BASE_VARS: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "SYSTEMROOT",
+        "COMSPEC",
+    ];
+    let allowed: HashSet<&str> = BASE_VARS
+        .iter()
+        .copied()
+        .chain(spec.passthrough_env.iter().map(String::as_str))
+        .collect();
+    host_env
+        .iter()
+        .filter(|(key, _)| allowed.contains(key.as_str()))
+        .filter(|(_, value)| !value.is_empty())
+        .cloned()
+        .collect()
 }
 
 /// Why a resolve call did not yield a definition.
@@ -247,6 +322,7 @@ pub fn built_in_general_purpose() -> AgentDefinition {
         system_prompt: PromptSource::Owned(
             "You are a sub-agent. Complete the assigned task fully using your tools — not gold-plated, not half-done. When done, reply with a concise report: what you did and any key findings. The caller relays your report, so it only needs the essentials. Prefer editing existing files over creating new ones; do not create documentation files unless explicitly asked.".to_string()
         ),
+        backend: AgentBackend::default(),
     }
 }
 
@@ -277,6 +353,7 @@ pub fn built_in_explore() -> AgentDefinition {
         system_prompt: PromptSource::Owned(
             "You are a read-only codebase search agent. Find files and code by pattern or keyword, read and analyze, report findings concisely. You cannot create, modify, or delete files. Be fast: prefer parallel tool calls, return findings as soon as you have them. Match search breadth to the thoroughness the caller named.".to_string()
         ),
+        backend: AgentBackend::default(),
     }
 }
 
@@ -307,6 +384,7 @@ pub fn built_in_plan() -> AgentDefinition {
         system_prompt: PromptSource::Owned(
             "You are a read-only software architect. Explore the codebase, find existing patterns and conventions, and design an implementation plan for the given requirements. You cannot modify files. End your response with a 'Critical Files for Implementation' section listing 3-5 files most relevant to executing the plan, each with a one-line reason.".to_string()
         ),
+        backend: AgentBackend::default(),
     }
 }
 
@@ -337,6 +415,7 @@ pub fn built_in_verify() -> AgentDefinition {
         system_prompt: PromptSource::Owned(
             "You are an adversarial verification agent. Your job is to break the implementation, not confirm it. Two failure modes to avoid: (1) verification avoidance -- reading code, narrating what you would test, writing PASS without running; (2) being seduced by the first 80% -- a polished surface or passing suite hides the broken 20%. Run real commands, check outputs against expectations, probe edge cases the implementer did not. You may write ephemeral scripts to a temp directory but must not modify the project. End with a line: VERDICT: PASS or VERDICT: FAIL or VERDICT: PARTIAL.".to_string()
         ),
+        backend: AgentBackend::default(),
     }
 }
 
@@ -367,6 +446,7 @@ pub fn built_in_code_guide() -> AgentDefinition {
         system_prompt: PromptSource::Owned(
             "You are the houyi guide agent. Help the user understand and use the tool: configuration, hooks, skills, slash commands, settings, model selection. Fetch the docs map for authoritative answers, keep answers actionable, cite the doc section.".to_string()
         ),
+        backend: AgentBackend::default(),
     }
 }
 

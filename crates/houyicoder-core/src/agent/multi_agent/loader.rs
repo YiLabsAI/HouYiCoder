@@ -11,7 +11,9 @@ use std::path::Path;
 
 use houyicoder_protocol::llm::EffortLevel;
 
-use super::registry::{AgentDefinition, IsolationMode, MemoryScope, PromptSource};
+use super::registry::{
+    AgentBackend, AgentDefinition, ExternalAcpSpec, IsolationMode, MemoryScope, PromptSource,
+};
 use std::collections::BTreeMap;
 use std::fs::read_dir;
 use std::fs::read_to_string;
@@ -106,6 +108,7 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
         .or_else(|| get("omitProjectContext"))
         .is_some_and(|v| v.eq_ignore_ascii_case("true"));
     let color = get("color").map(str::to_string);
+    let backend = parse_backend(&fields)?;
 
     let body = match body_start {
         Some(idx) if idx < collected.len() => collected[idx..].join("\n"),
@@ -130,6 +133,7 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
         omit_project_context,
         color,
         system_prompt: PromptSource::Owned(body),
+        backend,
     })
 }
 
@@ -164,6 +168,43 @@ fn parse_isolation(v: &str) -> Option<IsolationMode> {
         "none" => Some(IsolationMode::None),
         "worktree" => Some(IsolationMode::Worktree),
         _ => None,
+    }
+}
+
+/// Parse the backend field. Absent or "in_process" yields the default; a
+/// declared "external_acp" requires a non-empty program or the file is
+/// corrupt.
+fn parse_backend(fields: &[(&str, &str)]) -> Result<AgentBackend, LoadError> {
+    let get = |key: &str| fields.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+    let Some(backend) = get("backend") else {
+        return Ok(AgentBackend::default());
+    };
+    match backend.to_ascii_lowercase().as_str() {
+        "in_process" | "inprocess" => Ok(AgentBackend::InProcess),
+        "external_acp" | "externalacp" => {
+            let program = get("program").unwrap_or("").trim();
+            if program.is_empty() {
+                return Err(LoadError::Corrupt(
+                    "backend: external_acp requires a non-empty program".into(),
+                ));
+            }
+            let args = get("args").map(split_commas).unwrap_or_default();
+            let passthrough_env = get("passthrough_env")
+                .or_else(|| get("passthroughEnv"))
+                .map(split_commas)
+                .unwrap_or_default();
+            let handshake_timeout_ms = get("handshake_timeout_ms")
+                .or_else(|| get("handshakeTimeoutMs"))
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(15_000);
+            Ok(AgentBackend::ExternalAcp(ExternalAcpSpec {
+                program: program.to_string(),
+                args,
+                passthrough_env,
+                handshake_timeout_ms,
+            }))
+        }
+        other => Err(LoadError::Corrupt(format!("unknown backend: {other}"))),
     }
 }
 

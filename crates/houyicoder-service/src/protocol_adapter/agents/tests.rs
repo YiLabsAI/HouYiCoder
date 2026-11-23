@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_core::agent::multi_agent::registry::{IsolationMode, MemoryScope};
+use houyicoder_core::agent::multi_agent::registry::{AgentBackend, IsolationMode, MemoryScope};
 use houyicoder_protocol::llm::EffortLevel;
 
 fn definition() -> AgentDefinition {
@@ -23,6 +23,7 @@ fn definition() -> AgentDefinition {
         omit_project_context: true,
         color: Some("red".into()),
         system_prompt: PromptSource::Owned("you are an architect".into()),
+        backend: AgentBackend::default(),
     }
 }
 

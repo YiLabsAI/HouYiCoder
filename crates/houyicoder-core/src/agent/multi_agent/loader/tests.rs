@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::{DefinitionSource, LoadError, Loader, load_dir, parse_agent_definition};
-use crate::agent::multi_agent::registry::PromptSource;
+use crate::agent::multi_agent::registry::{AgentBackend, PromptSource};
 use std::env::temp_dir;
 use std::process::id;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -113,6 +113,57 @@ fn test_load_dir_skips_corrupt() {
     assert_eq!(defs[0].1.subagent_type, "good");
     assert!(failures.contains(&dir.join("bad.md").display().to_string()));
     fs::remove_dir_all(&dir).ok();
+}
+
+/// A definition with no backend field defaults to in-process, so every
+/// existing definition file is forward-compatible.
+#[test]
+fn test_parse_defaults_in_process() {
+    let text = "---\nname: test\ndescription: ok\n---\nbody";
+    let def = parse_agent_definition(text).expect("parses");
+    assert!(matches!(def.backend, AgentBackend::InProcess));
+}
+
+/// An external_acp backend with a program and args parses into the spec,
+/// including the passthrough_env list and timeout.
+#[test]
+fn test_parse_external_acp_backend() {
+    let text = "---\n\
+name: review\n\
+description: external reviewer\n\
+backend: external_acp\n\
+program: devin\n\
+args: acp, --agent-type, review\n\
+passthrough_env: REVIEW_TOKEN, GITHUB_TOKEN\n\
+handshake_timeout_ms: 30000\n\
+---\nbody";
+    let def = parse_agent_definition(text).expect("parses");
+    match &def.backend {
+        AgentBackend::ExternalAcp(spec) => {
+            assert_eq!(spec.program, "devin");
+            assert_eq!(spec.args, vec!["acp", "--agent-type", "review"]);
+            assert_eq!(spec.passthrough_env, vec!["REVIEW_TOKEN", "GITHUB_TOKEN"]);
+            assert_eq!(spec.handshake_timeout_ms, 30000);
+        }
+        other => panic!("expected ExternalAcp, got {other:?}"),
+    }
+}
+
+/// An external_acp backend without a program is corrupt, not silently
+/// defaulted: the caller must know the file is broken.
+#[test]
+fn test_parse_acp_without_program() {
+    let text = "---\nname: broken\nbackend: external_acp\n---\nbody";
+    let err = parse_agent_definition(text).expect_err("must fail");
+    assert!(matches!(err, LoadError::Corrupt(ref msg) if msg.contains("program")));
+}
+
+/// An unknown backend value is corrupt, not silently treated as in-process.
+#[test]
+fn test_parse_unknown_backend() {
+    let text = "---\nname: bad\nbackend: docker\n---\nbody";
+    let err = parse_agent_definition(text).expect_err("must fail");
+    assert!(matches!(err, LoadError::Corrupt(ref msg) if msg.contains("unknown backend")));
 }
 
 fn unique_temp_dir() -> PathBuf {

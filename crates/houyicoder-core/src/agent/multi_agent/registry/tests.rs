@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 
 use super::{
-    AgentError, AgentRegistry, BuiltInRegistry, ResolveCtx, built_in_all, built_in_general_purpose,
+    AgentBackend, AgentError, AgentRegistry, BuiltInRegistry, ResolveCtx, built_in_all,
+    built_in_general_purpose,
 };
 
 /// A registered built-in must resolve to its definition, unchanged.
@@ -246,4 +247,49 @@ fn test_readonly_tighter() {
             "{read_only} ({budget}) must stay under general-purpose ({general})"
         );
     }
+}
+
+/// All built-in agents default to the in-process backend, so adding the
+/// backend field does not change any existing definition.
+#[test]
+fn test_builtins_default_in_process() {
+    for def in built_in_all() {
+        assert!(
+            matches!(def.backend, AgentBackend::InProcess),
+            "{} should default to in-process",
+            def.subagent_type
+        );
+    }
+}
+
+/// The environment filter passes only base runtime variables and the ones
+/// the spec names, and drops empty values, so a host secret never reaches
+/// the child.
+#[test]
+fn test_child_env_filters_strictly() {
+    let spec = super::ExternalAcpSpec {
+        program: "review".into(),
+        args: Vec::new(),
+        passthrough_env: vec!["REVIEW_TOKEN".into()],
+        handshake_timeout_ms: 5000,
+    };
+    let host = vec![
+        ("PATH".into(), "/usr/bin".into()),
+        ("HOME".into(), "/home/user".into()),
+        ("SECRET_KEY".into(), "leak-me".into()),
+        ("REVIEW_TOKEN".into(), "abc".into()),
+        ("EMPTY_VAR".into(), String::new()),
+        ("USER".into(), "test".into()),
+    ];
+    let env = super::child_environment(&spec, &host);
+    let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(keys.contains(&"PATH"), "base PATH passes");
+    assert!(keys.contains(&"HOME"), "base HOME passes");
+    assert!(keys.contains(&"USER"), "base USER passes");
+    assert!(
+        keys.contains(&"REVIEW_TOKEN"),
+        "passthrough_env name passes"
+    );
+    assert!(!keys.contains(&"SECRET_KEY"), "host secret is blocked");
+    assert!(!keys.contains(&"EMPTY_VAR"), "empty value is dropped");
 }
