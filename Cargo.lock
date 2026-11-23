@@ -1284,6 +1284,7 @@ dependencies = [
  "houyicoder-permission",
  "houyicoder-platform",
  "houyicoder-protocol",
+ "houyicoder-provider",
  "houyicoder-service",
  "houyicoder-session",
  "houyicoder-tui",

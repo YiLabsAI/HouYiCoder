@@ -201,6 +201,19 @@ pub fn make_git_repo(tag: &str) -> PathBuf {
 /// stdout is the protocol stream; so these binaries run their own list and
 /// report failures the way a harness would.
 pub fn run_tests(tests: &[(&str, fn())]) {
+    let harness = HarnessArgs::parse();
+    if harness.list {
+        for (name, _) in tests {
+            println!("{name}: test");
+        }
+        return;
+    }
+    let selected: Vec<(&str, fn())> = tests
+        .iter()
+        .filter(|(name, _)| harness.wants(name))
+        .copied()
+        .collect();
+    let tests = selected.as_slice();
     let mut failed = 0;
     for (name, test) in tests {
         match catch_unwind(test) {
@@ -241,6 +254,19 @@ pub type BoxedTest = (&'static str, fn() -> BoxTestFuture);
 /// spawned from current_exe must never emit harness banners on stdout,
 /// because that stdout is the protocol stream.
 pub fn run_async_tests(runtime: &Runtime, tests: &[BoxedTest]) {
+    let harness = HarnessArgs::parse();
+    if harness.list {
+        for (name, _) in tests {
+            println!("{name}: test");
+        }
+        return;
+    }
+    let selected: Vec<BoxedTest> = tests
+        .iter()
+        .filter(|(name, _)| harness.wants(name))
+        .copied()
+        .collect();
+    let tests = selected.as_slice();
     let mut failed = 0;
     for (name, test) in tests {
         match catch_unwind(|| runtime.block_on(test())) {
@@ -254,5 +280,30 @@ pub fn run_async_tests(runtime: &Runtime, tests: &[BoxedTest]) {
     println!("{} passed, {failed} failed", tests.len() - failed);
     if failed > 0 {
         exit(1);
+    }
+}
+
+/// The subset of the harness protocol a runner needs from a harness-free
+/// binary: a list pass that names the tests, and an exact filter that runs
+/// one of them.
+struct HarnessArgs {
+    list: bool,
+    exact: Option<String>,
+}
+
+impl HarnessArgs {
+    fn parse() -> Self {
+        let args: Vec<String> = std::env::args().collect();
+        let list = args.iter().any(|arg| arg == "--list");
+        let exact = args
+            .iter()
+            .position(|arg| arg == "--exact")
+            .and_then(|at| args.get(at + 1))
+            .cloned();
+        Self { list, exact }
+    }
+
+    fn wants(&self, name: &str) -> bool {
+        self.exact.as_deref().is_none_or(|wanted| wanted == name)
     }
 }

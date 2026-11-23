@@ -112,6 +112,11 @@ name = "acp_live_duplex"
 path = "tests/acp_live_duplex.rs"
 harness = false
 
+[[test]]
+name = "acp_child_delegation"
+path = "tests/acp_child_delegation.rs"
+harness = false
+
 [dev-dependencies]
 # test-util drives the recap deadline and the away window on a paused clock,
 # so their tests prove the timing without waiting for it.

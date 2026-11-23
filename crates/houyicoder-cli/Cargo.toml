@@ -25,9 +25,15 @@ tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[[test]]
+name = "acp_agent_entry"
+path = "tests/acp_agent_entry.rs"
+harness = false
+
 [dev-dependencies]
 houyicoder-async = { path = "../houyicoder-async" }
 houyicoder-memory = { path = "../houyicoder-memory" }
+houyicoder-provider = { path = "../houyicoder-provider" }
 houyicoder-session = { path = "../houyicoder-session" }
 [lints]
 workspace = true
