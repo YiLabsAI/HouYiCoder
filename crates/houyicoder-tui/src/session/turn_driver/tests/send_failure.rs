@@ -88,6 +88,7 @@ fn test_child_inject_refused() {
         tool_uses: 0,
         last_activity: None,
         completed: None,
+        backend: None,
     }));
     app.spawn_run(" steer text ".into());
     let view = app.ui.teammate_view.as_ref().expect("view stays open");

@@ -484,6 +484,7 @@ impl SkillRuntime {
         workspace: Option<PathBuf>,
         bus: Option<Arc<AgentBus>>,
         descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
+        mode_gate: Arc<dyn ModeGate>,
     ) -> crate::composition::multi_agent::MultiAgentDeps {
         crate::composition::multi_agent::MultiAgentDeps {
             registry,
@@ -498,6 +499,8 @@ impl SkillRuntime {
             skill_registry: Some(Arc::clone(&self.registry) as Arc<dyn SkillRegistry>),
             conditional: Some(Arc::clone(&self.conditional)),
             hooks: Some(Arc::clone(&self.hook_registry)),
+            launcher: Arc::new(StdProcessLauncher::new()),
+            mode_gate: Some(mode_gate),
         }
     }
 

@@ -21,6 +21,7 @@ fn test_emit_submits_reliable_status() {
             tool_uses: 1,
             last_activity: Some("read".into()),
             completed: None,
+            backend: None,
         },
     );
     let frames = sequencer.sequence_pending_for_test();
@@ -49,6 +50,7 @@ async fn test_spawn_translates_completion() {
                 agent_type: "explore".into(),
                 description: String::new(),
                 run_mode: ChildRunMode::Background,
+                backend: None,
             },
         },
     );
@@ -64,6 +66,7 @@ async fn test_spawn_translates_completion() {
                 agent_type: "explore".into(),
                 description: String::new(),
                 run_mode: ChildRunMode::Background,
+                backend: None,
             },
             status: CompletionStatus::Completed,
             summary: "done".into(),
@@ -125,6 +128,7 @@ async fn test_spawn_status_carries_description() {
                 agent_type: "explore".into(),
                 description: "map the auth path".into(),
                 run_mode: ChildRunMode::Background,
+                backend: None,
             },
         },
     );
@@ -163,6 +167,7 @@ async fn test_progress_keeps_description() {
         agent_type: "explore".into(),
         description: description.into(),
         run_mode: ChildRunMode::Background,
+        backend: None,
     };
     bus.publish(
         spawned_topic(),
@@ -199,5 +204,58 @@ async fn test_progress_keeps_description() {
     assert_eq!(
         status, "map the auth path",
         "a status without a summary keeps the label already held"
+    );
+}
+
+/// The program an external child runs behind rides every status frame, so the
+/// fleet row keeps its badge from the spawn through to the ending.
+#[tokio::test]
+async fn test_status_carries_backend() {
+    let bus = Arc::new(AgentBus::new());
+    let sequencer = EventSequencer::new();
+    spawn(
+        Some(Arc::clone(&bus)),
+        sequencer.clone(),
+        Handle::current(),
+        CancellationToken::new(),
+    );
+    let external = || ChildDescriptor {
+        agent_id: "c-acp".into(),
+        agent_type: "review".into(),
+        description: String::new(),
+        run_mode: ChildRunMode::Foreground,
+        backend: Some("codex".into()),
+    };
+    bus.publish(spawned_topic(), BusMessage::Spawned { child: external() });
+    timeout(Duration::from_secs(1), sequencer.notified())
+        .await
+        .expect("spawn status submitted");
+    let spawned = sequencer.sequence_pending_for_test();
+    bus.publish(
+        global_completed_topic(),
+        BusMessage::Completed {
+            child: external(),
+            status: CompletionStatus::Completed,
+            summary: "done".into(),
+        },
+    );
+    timeout(Duration::from_secs(1), sequencer.notified())
+        .await
+        .expect("completion status submitted");
+    let mut frames = spawned;
+    frames.extend(sequencer.sequence_pending_for_test());
+    let badges: Vec<Option<String>> = frames
+        .iter()
+        .filter_map(|f| match &f.payload {
+            FrontendEvent::AgentStatus {
+                agent_id, backend, ..
+            } if agent_id == "c-acp" => Some(backend.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(badges.len(), 2, "one frame per status");
+    assert!(
+        badges.iter().all(|b| b.as_deref() == Some("codex")),
+        "every frame keeps the program: {badges:?}"
     );
 }

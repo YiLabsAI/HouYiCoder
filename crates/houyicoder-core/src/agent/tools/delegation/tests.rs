@@ -406,6 +406,23 @@ fn test_boundary_failure_message() {
     );
 }
 
+/// An external child failure names the reason, so the model can retry with a
+/// fix or fall back to an in-process child.
+#[test]
+fn test_external_failure_message() {
+    let msg = spawn_failure_msg(SpawnFailure::ExternalFailed {
+        reason: "program not found".into(),
+    });
+    assert!(
+        msg.contains("external child failed"),
+        "the refusal names the external child: {msg}"
+    );
+    assert!(
+        msg.contains("program not found"),
+        "the refusal carries the reason: {msg}"
+    );
+}
+
 /// A delegation with no ceiling of its own gets the default. Without one, a
 /// child that stops making progress holds the parent's turn for the rest of
 /// the session with no way to reclaim it.

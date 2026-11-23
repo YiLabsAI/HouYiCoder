@@ -34,6 +34,10 @@ pub struct ChildDescriptor {
     pub description: String,
     /// Product execution mode.
     pub run_mode: ChildRunMode,
+    /// The program an external child runs behind. None for an in-process
+    /// child, whose execution shares the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 impl ChildDescriptor {
@@ -48,12 +52,19 @@ impl ChildDescriptor {
             agent_type: agent_type.into(),
             description: String::new(),
             run_mode,
+            backend: None,
         }
     }
 
     /// Attach the delegating call's task summary.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    /// Attach the external program this child runs behind.
+    pub fn with_backend(mut self, backend: impl Into<String>) -> Self {
+        self.backend = Some(backend.into());
         self
     }
 }

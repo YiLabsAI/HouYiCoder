@@ -379,6 +379,7 @@ fn test_steer_echo_renders() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),

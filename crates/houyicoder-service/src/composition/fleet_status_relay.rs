@@ -38,6 +38,7 @@ pub fn spawn(
                     Ok(BusMessage::Spawned { child }) => {
                         let snap = Snapshot {
                             description: child.description.clone(),
+                            backend: child.backend.clone(),
                             ..Snapshot::default()
                         };
                         emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
@@ -62,6 +63,7 @@ pub fn spawn(
                             .or_insert_with(|| (child.agent_type.clone(), Snapshot::default()));
                         entry.1 = Snapshot {
                             description: if child.description.is_empty() { known } else { child.description.clone() },
+                            backend: child.backend.clone(),
                             turn,
                             tokens,
                             tool_uses,
@@ -79,6 +81,7 @@ pub fn spawn(
                         let mut snap = children
                             .remove(&child.agent_id)
                             .map_or_else(Snapshot::default, |(_, snap)| snap);
+                        snap.backend = child.backend.clone();
                         snap.completed = Some(status);
                         snap.last_activity = Some(summary);
                         emit(&event_sequencer, &child.agent_id, &child.agent_type, &snap);
@@ -103,6 +106,9 @@ struct Snapshot {
     tool_uses: u32,
     last_activity: Option<String>,
     completed: Option<CompletionStatus>,
+    /// The external program the child runs behind, carried so the badge
+    /// survives every snapshot of the row.
+    backend: Option<String>,
 }
 
 fn emit(event_sequencer: &EventSequencer, agent_id: &str, subagent_type: &str, snap: &Snapshot) {
@@ -110,6 +116,7 @@ fn emit(event_sequencer: &EventSequencer, agent_id: &str, subagent_type: &str, s
         agent_id: agent_id.to_string(),
         subagent_type: subagent_type.to_string(),
         description: snap.description.clone(),
+        backend: snap.backend.clone(),
         turn: snap.turn,
         tokens: snap.tokens,
         tool_uses: snap.tool_uses,

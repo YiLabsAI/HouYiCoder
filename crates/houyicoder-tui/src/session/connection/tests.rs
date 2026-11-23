@@ -372,6 +372,7 @@ async fn test_drive_translates_agent_status() {
         agent_id: "c1".into(),
         subagent_type: "explore".into(),
         description: String::new(),
+        backend: None,
         turn: 2,
         tokens: 150,
         tool_uses: 3,

@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use crate::launcher::{SpawnPolicy, SpawnRequest};
+use crate::launcher::{SpawnPolicy, SpawnRequest, StdioConfig, StdioMode};
 use std::env::temp_dir;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
@@ -368,4 +368,52 @@ async fn test_awaited_spawn_spares_group() {
         alive,
         "a finished spawn must not kill work that left its group"
     );
+}
+
+/// A spawn given an environment receives exactly that one: the host's own
+/// variables do not cross the boundary with it.
+#[tokio::test]
+async fn test_capture_env_replaces_host() {
+    let launcher = StdProcessLauncher::new();
+    let req = SpawnRequest::new("sh")
+        .with_args(["-c", "echo ${ONLY_THIS:-unset}"])
+        .with_env(vec![("ONLY_THIS".into(), "named".into())])
+        .piped_output();
+    let child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
+    let exit = child.wait().await.unwrap();
+    assert_eq!(
+        exit.stdout.as_deref(),
+        Some("named\n"),
+        "the named variable reaches the child"
+    );
+    let leaked = SpawnRequest::new("sh")
+        .with_args(["-c", "echo ${HOME:-unset}"])
+        .with_env(vec![("ONLY_THIS".into(), "named".into())])
+        .piped_output();
+    let child = launcher.spawn(leaked, SpawnPolicy::default()).unwrap();
+    let exit = child.wait().await.unwrap();
+    assert_eq!(
+        exit.stdout.as_deref(),
+        Some("unset\n"),
+        "a host variable outside the whitelist does not reach the child"
+    );
+}
+
+/// The interactive path applies the same whitelist: a long-lived child sees
+/// the named variable and not the host's.
+#[tokio::test]
+async fn test_interactive_env_replaces_host() {
+    let launcher = StdProcessLauncher::new();
+    let mut req = SpawnRequest::new("sh")
+        .with_args(["-c", "echo \"$ONLY_THIS $HOME\"; sleep 1"])
+        .with_env(vec![("ONLY_THIS".into(), "named".into())])
+        .interactive();
+    req.stdio = StdioConfig::piped_output();
+    req.stdio.stdin = StdioMode::Piped;
+    let mut child = launcher.spawn(req, SpawnPolicy::default()).unwrap();
+    let pipes = child.take_pipes().expect("interactive pipes");
+    let mut stdout = BufReader::new(pipes.stdout.expect("piped stdout"));
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "named", "only the named variable is set");
 }

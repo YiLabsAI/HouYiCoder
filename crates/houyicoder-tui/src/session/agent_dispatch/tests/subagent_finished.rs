@@ -38,6 +38,7 @@ fn status(completed: Option<CompletionStatus>, tool_uses: u32) -> SessionMessage
         tool_uses,
         last_activity: None,
         completed,
+        backend: None,
     })
 }
 

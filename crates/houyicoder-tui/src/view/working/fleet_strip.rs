@@ -191,11 +191,17 @@ fn build_row<'a>(
     } else {
         "tools"
     };
-    let spend = format!(
-        "{} {calls} · {} tokens",
-        entry.tool_uses,
-        format_tokens(entry.tokens)
-    );
+    // An external child reports no token or tool figures this host can
+    // measure, so its row leaves the spend cell out rather than drawing a
+    // measured zero for it.
+    let spend = match entry.backend {
+        Some(_) => String::new(),
+        None => format!(
+            "{} {calls} · {} tokens",
+            entry.tool_uses,
+            format_tokens(entry.tokens)
+        ),
+    };
     // The label names the job, not the role. The type is what the parent
     // model already chose, so repeating it on every row of a fleet tells the
     // reader nothing they did not just decide; the task summary is the only
@@ -207,21 +213,29 @@ fn build_row<'a>(
     } else {
         entry.description.as_str()
     };
+    // An external child is labelled with the program behind it, so a row that
+    // otherwise reads like any in-process child says which agent is doing the
+    // work.
+    let label = match &entry.backend {
+        Some(program) => format!("{label} [acp:{program}]"),
+        None => label.to_string(),
+    };
+    let gap = if spend.is_empty() { "" } else { " · " };
     let body = if let Some(outcome) = entry.outcome {
-        format!("{label} · {} · {spend}", outcome.label())
+        format!("{label} · {}{gap}{spend}", outcome.label())
     } else if awaiting == Some(entry.agent_id.as_str()) {
         let elapsed = entry
             .started_at
             .map(|t| format!(" · {}", format_span_secs(t.elapsed().as_secs())))
             .unwrap_or_default();
-        format!("{label}: waiting for approval · {spend}{elapsed}")
+        format!("{label}: waiting for approval{gap}{spend}{elapsed}")
     } else {
         let elapsed = entry
             .started_at
             .map(|t| format!(" · {}", format_span_secs(t.elapsed().as_secs())))
             .unwrap_or_default();
         format!(
-            "{label}: {} · {spend} · turn {}{elapsed}",
+            "{label}: {}{gap}{spend} · turn {}{elapsed}",
             verb_for(entry.last_activity.as_deref()),
             entry.turn,
         )

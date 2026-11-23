@@ -1,4 +1,5 @@
-//! Session lifecycle: handshake, prompt driving, and cancellation.
+//! Session lifecycle. Handshake, prompt driving, and cancellation for one
+//! external ACP child.
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -16,7 +17,7 @@ use houyicoder_context::SessionId;
 use houyicoder_core::agent::multi_agent::bus_types::{
     AgentBus, BusMessage, permission_request_topic, permission_response_topic,
 };
-use houyicoder_core::agent::multi_agent::registry::ExternalAcpSpec;
+use houyicoder_core::agent::multi_agent::registry::{ExternalAcpSpec, child_environment};
 use houyicoder_permission::ModeGate;
 use houyicoder_protocol::acp_wire::{
     AcpNotification, AcpRequest, AcpRequestId, AcpResponse, InitializeResponse, NewSessionRequest,
@@ -26,7 +27,7 @@ use houyicoder_protocol::acp_wire::{
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
-use houyicoder_protocol::frontend::run::ContentBlock;
+use houyicoder_protocol::frontend::run::{ContentBlock, StopReason};
 use serde_json::Value;
 use tokio::time::{sleep, timeout};
 
@@ -35,6 +36,20 @@ use super::transcript::TranscriptFold;
 use crate::acp::pump::{AcpDuplexPump, InboundFrame, spawn_pump};
 
 const CANCEL_GRACE: Duration = Duration::from_millis(500);
+
+/// The wire stop reason as the words a reader of the summary expects.
+fn stop_reason_label(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::EndTurn => "end_turn",
+        StopReason::MaxTokens => "max_tokens",
+        StopReason::MaxTurnRequests => "max_turn_requests",
+        StopReason::Refusal => "refusal",
+        StopReason::Cancelled => "cancelled",
+        _ => "unknown",
+    }
+}
+/// How long shutdown waits for a child to exit after its stdin closes.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const MAX_BANNER_LINES: usize = 32;
 /// How long a delegated ask waits for the parent user before failing closed.
 const PARENT_ASK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -43,8 +58,9 @@ const PARENT_ASK_TIMEOUT: Duration = Duration::from_secs(120);
 pub struct PermissionFence {
     /// The workspace root the child is confined to.
     pub workspace_root: PathBuf,
-    /// The parent's gate, consulted before delegating to the user.
-    pub gate: Arc<dyn ModeGate>,
+    /// The parent's gate, consulted before delegating to the user. None
+    /// refuses every ask, because a host with no gate has no policy.
+    pub gate: Option<Arc<dyn ModeGate>>,
     /// The multi-agent bus to publish delegated asks on.
     pub bus: Option<Arc<AgentBus>>,
     /// The child identity delegated asks carry.
@@ -86,6 +102,8 @@ fn protocol_err(msg: impl Into<String>) -> ProtocolError {
     ProtocolError::new(ErrorCategory::InvalidFrame, msg, false)
 }
 
+/// One running external ACP child: its stdio pump, the launcher handle that
+/// owns its process lifetime, and the session the handshake bound.
 pub struct AcpChildSession {
     pump: AcpDuplexPump,
     child: LauncherChild,
@@ -94,15 +112,21 @@ pub struct AcpChildSession {
 }
 
 impl AcpChildSession {
+    /// Launch the child program under the given workspace with the
+    /// environment whitelist the spec names, and start pumping its pipes.
+    /// The child is not yet a session; handshake binds one.
     pub fn connect(
         launcher: &Arc<dyn ProcessLauncher>,
         spec: &ExternalAcpSpec,
         workspace: &Path,
-        _host_env: &[(String, String)],
+        host_env: &[(String, String)],
     ) -> Result<Self, AcpClientError> {
+        // The child gets the base runtime set plus the whitelist the spec
+        // names, and nothing else: a host secret never crosses the boundary.
         let req = SpawnRequest::new(spec.program.clone())
             .with_args(spec.args.clone())
             .with_workspace(workspace.to_path_buf())
+            .with_env(child_environment(spec, host_env))
             .interactive();
         let policy = SpawnPolicy::default().sandboxed();
         let mut child =
@@ -135,6 +159,8 @@ impl AcpChildSession {
         })
     }
 
+    /// Run initialize and session/new under the spec's handshake budget and
+    /// return the bound child session id.
     pub async fn handshake(
         &mut self,
         spec: &ExternalAcpSpec,
@@ -166,10 +192,26 @@ impl AcpChildSession {
         let resp = self.await_response(new_id).await?;
         let session_data: NewSessionResponse =
             serde_json::from_value(resp).map_err(|e| protocol_err(format!("bad new: {e}")))?;
-        self.session = SessionId::from_display_string(&session_data.session_id).unwrap_or_default();
+        // A child names its own session in its own spelling, which need not
+        // be a uuid or ULID. The parent's log keys on its own id space, so an
+        // unparseable id mints a fresh one and the mapping is logged rather
+        // than assumed.
+        self.session = match SessionId::from_display_string(&session_data.session_id) {
+            Some(sid) => sid,
+            None => {
+                tracing::warn!(
+                    child_session = %session_data.session_id,
+                    "child session id is not in this host's id space; using a local id"
+                );
+                SessionId::new()
+            }
+        };
         Ok(self.session)
     }
 
+    /// Send one prompt and fold the child's updates into the log until the
+    /// turn ends, the child asks for permission through the fence, or the
+    /// cancel token fires. Returns the wire stop reason as a word.
     pub async fn drive_prompt(
         &mut self,
         session: SessionId,
@@ -192,7 +234,7 @@ impl AcpChildSession {
         let mut fold = TranscriptFold::new(session, log.clone());
         let cancel_fut = cancel.cancelled();
         tokio::pin!(cancel_fut);
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             _ = &mut cancel_fut => {
                 self.send_notification("session/cancel", &serde_json::json!({})).await?;
@@ -204,7 +246,14 @@ impl AcpChildSession {
             result = self.recv_until_prompt(prompt_id, &mut fold, fence) => {
                 result
             }
-        }
+        };
+        // The turn's own text is held until an append point, so a child that
+        // only talks is persisted here; a cancelled turn keeps the partial
+        // text it managed to produce.
+        fold.flush()
+            .await
+            .map_err(|e| AcpClientError::Protocol(protocol_err(e)))?;
+        result
     }
 
     async fn recv_until_prompt(
@@ -243,7 +292,7 @@ impl AcpChildSession {
                         };
                         let pr: PromptResponse = serde_json::from_value(result)
                             .map_err(|e| protocol_err(format!("bad prompt response: {e}")))?;
-                        return Ok(format!("{:?}", pr.stop_reason));
+                        return Ok(stop_reason_label(pr.stop_reason).to_string());
                     }
                 }
                 InboundFrame::Request(req) => {
@@ -282,8 +331,8 @@ impl AcpChildSession {
                 return Ok(());
             }
         };
-        let verdict =
-            check_fence(&ask, &fence.workspace_root).or_else(|| check_gate(&fence.gate, &ask));
+        let verdict = check_fence(&ask, &fence.workspace_root)
+            .or_else(|| check_gate(fence.gate.as_ref(), &ask));
         let resp = match verdict {
             Some(v) => verdict_response(&ask, &v),
             None => self.delegate_to_parent(&ask, fence).await?,
@@ -413,6 +462,11 @@ impl AcpChildSession {
         let mut banners = 0;
         loop {
             tokio::select! {
+                // biased: the waiter wins. An unbiased select can take the
+                // reader arm on the same poll that a delivered response makes
+                // the waiter ready, so a buffered answer loses to a channel
+                // end and the child is reported closed despite having spoken.
+                biased;
                 resp = &mut response => {
                     let resp = resp.map_err(|_| AcpClientError::ChildExited(
                         "response waiter dropped".into(),
@@ -441,6 +495,10 @@ impl AcpChildSession {
                             }
                         }
                         Some(_) => {}
+                        // The reader ended. The biased select above polls the
+                        // waiter first, so an already delivered response would
+                        // have returned before this arm; a waiter still
+                        // pending here can no longer be answered.
                         None => {
                             return Err(AcpClientError::ChildExited(
                                 "child closed during handshake".into(),
@@ -452,11 +510,25 @@ impl AcpChildSession {
         }
     }
 
+    /// Close the child's stdin, then wait a bounded grace before dropping the
+    /// launcher handle, which is the documented kill path.
     pub async fn shutdown(self) {
         drop(self.pump);
-        self.child.wait().await.ok();
+        // A child that ignores the closed pipe must not hold the caller: the
+        // wait future is dropped after the grace, and dropping the launcher
+        // handle is its documented kill path.
+        if timeout(SHUTDOWN_GRACE, self.child.wait()).await.is_err() {
+            tracing::warn!("external child ignored its closed stdin; killed");
+        }
     }
 
+    /// The operating-system process id the child runs under, when the
+    /// launcher reported one.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.id
+    }
+
+    /// The child session the handshake bound. A fresh id before handshake.
     pub fn session(&self) -> SessionId {
         self.session
     }

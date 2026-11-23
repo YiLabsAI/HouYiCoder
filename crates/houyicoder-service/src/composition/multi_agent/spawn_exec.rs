@@ -2,6 +2,7 @@
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use futures::FutureExt;
@@ -30,14 +31,15 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::oneshot::{Sender, channel};
 use tokio::task::JoinHandle;
 
-use super::announce_spawn;
+use super::bus_announce::{announce_spawn, close_child_inbox};
 use super::drive::{ParentContact, drive_child_to_terminal};
 use super::fire_subagent_start;
-use super::record_provenance;
+use super::provenance::record_provenance;
 use super::{ChildReservation, ChildWatch, MultiAgentRuntime, RunningChildren};
 use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::SpawnError;
 use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
+use houyicoder_core::agent::multi_agent::registry::AgentBackend;
 use houyicoder_core::agent::multi_agent::registry::AgentDefinition;
 use houyicoder_core::agent::multi_agent::registry::AgentError;
 use houyicoder_core::agent::multi_agent::registry::PromptSource;
@@ -47,8 +49,30 @@ use std::time::Duration;
 
 mod ceiling;
 mod execution;
+mod external;
 pub(super) mod handover;
 mod request;
+
+/// The isolation a spawn argument names. An unrecognized spelling is no
+/// isolation, and the one parser serves every spawn path so two paths cannot
+/// disagree about what a spelling means.
+pub(super) fn isolation_mode(raw: &str) -> IsolationMode {
+    match raw {
+        "worktree" => IsolationMode::Worktree,
+        _ => IsolationMode::None,
+    }
+}
+
+/// The badge label for an external program: its file stem when the path names
+/// a file, capped so a long install path cannot shove a footer row past its
+/// budget.
+pub(super) fn program_label(program: &str) -> String {
+    let stem = Path::new(program)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| program.to_string());
+    stem.chars().take(16).collect()
+}
 pub(super) use ceiling::DEFAULT_MAX_WALL_CLOCK;
 #[cfg(test)]
 pub(super) use ceiling::effective_wall_clock;
@@ -165,7 +189,7 @@ pub(super) async fn finalize_child(
     if let (Some(cw), Some(ctrl)) = (handle.worktree, worktree_controller.as_ref()) {
         ctrl.cleanup_child(cw).await;
     }
-    super::close_child_inbox(bus.as_ref(), &child_str);
+    close_child_inbox(bus.as_ref(), &child_str);
     finalize_stop_and_boundary(
         runtime,
         hook_fire.as_ref(),
@@ -448,10 +472,15 @@ pub(super) async fn run_background_spawn(
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
         .map_err(map_registry_err)?;
-    let isolation = match args.isolation.as_str() {
-        "worktree" => IsolationMode::Worktree,
-        _ => IsolationMode::None,
-    };
+    // An external ACP child has no lifecycle that outlives the call: the
+    // background machinery keeps an in-process runner alive, and a process
+    // child has no such runner here. The request is refused rather than
+    // silently run inline, so the model learns the limit and re-asks in the
+    // foreground.
+    if let AgentBackend::ExternalAcp(_) = &def.backend {
+        return Err(SpawnFailure::CapabilityDenied);
+    }
+    let isolation = isolation_mode(&args.isolation);
     // The child's lifecycle token is created before the request, so the request
     // carries the exact token the admission later files as this child's. It
     // exists before any side effect, so a shutdown landing on a statement below
@@ -549,15 +578,19 @@ pub(super) async fn run_foreground_spawn(
         .registry
         .resolve(&args.subagent_type, &ResolveCtx::default())
         .map_err(map_registry_err)?;
+    // An external ACP child takes its own path. It has no in-process runner
+    // and no ending claim, so the definition's spec drives the process and
+    // the outcome returns directly.
+    if let AgentBackend::ExternalAcp(_) = &def.backend {
+        let cancel = cancel.unwrap_or_default();
+        return external::run_external_child(&this, &args, &def, cancel).await;
+    }
     // Refuse a shutdown outright before queueing for a slot. Admitting after
     // the wait is the atomic re-check that also creates the credential.
     if this.is_shutting_down() {
         return Err(SpawnFailure::ShuttingDown);
     }
-    let isolation = match args.isolation.as_str() {
-        "worktree" => IsolationMode::Worktree,
-        _ => IsolationMode::None,
-    };
+    let isolation = isolation_mode(&args.isolation);
     // The child gets a lifecycle token of its own, not the turn's. One token
     // held by both cancels in both directions: a child that reached its own
     // ceiling would stop the turn that started it, and a turn the user stops

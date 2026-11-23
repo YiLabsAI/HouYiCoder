@@ -3,6 +3,7 @@
 use std::future::pending;
 
 use futures::stream::once;
+use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_api::tool::Tool;
 use houyicoder_api::tool::progress::ToolProgressUpdate;
@@ -357,6 +358,8 @@ fn runtime_sharing_store(
         skill_registry: None,
         conditional: None,
         hooks: None,
+        launcher: Arc::new(StdProcessLauncher::new()),
+        mode_gate: None,
     })
 }
 

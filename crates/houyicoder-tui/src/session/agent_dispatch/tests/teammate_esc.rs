@@ -101,6 +101,7 @@ fn test_steer_completed_surfaces_notice() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.spawn_run("steer this".into());
     // The completed child's inbox is closed, so the steer exits the teammate
@@ -227,6 +228,7 @@ fn test_child_transcript_no_row() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(21),
@@ -320,6 +322,7 @@ fn test_view_fleet_type_fallback() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.enter_teammate_view_for_sid("c1", true);
     let view = app
@@ -370,6 +373,7 @@ fn test_view_fold_row_wins() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.enter_teammate_view_for_sid("c1", true);
     let view = app.ui.teammate_view.as_ref().expect("view opens");
@@ -412,6 +416,7 @@ fn test_running_child_starting() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(23),
@@ -461,6 +466,7 @@ fn test_completed_child_unavailable() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(24),
@@ -530,6 +536,7 @@ fn test_ctrl_x_cancels_child() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.kill_viewed_child();
     assert!(
@@ -564,6 +571,7 @@ fn test_ctrl_x_idle_noop() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.kill_viewed_child();
     assert!(

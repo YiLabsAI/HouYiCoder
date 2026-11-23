@@ -349,6 +349,7 @@ fn test_agent_status_updates_fleet() {
         tool_uses: 2,
         last_activity: Some("grep".into()),
         completed: None,
+        backend: None,
     }));
     assert_eq!(app.sessions.current.capabilities.fleet.entries.len(), 1);
     assert_eq!(
@@ -371,6 +372,7 @@ fn test_agent_status_updates_fleet() {
         tool_uses: 5,
         last_activity: Some("edit".into()),
         completed: Some(CompletionStatus::Completed),
+        backend: None,
     }));
     assert_eq!(
         app.sessions.current.capabilities.fleet.entries.len(),
@@ -405,6 +407,7 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 1,
         last_activity: None,
         completed: Some(CompletionStatus::Completed),
+        backend: None,
     }));
     assert!(app.ui.teammate_view.is_some(), "completed stays for review");
     // A failure: the view auto-exits back to the parent.
@@ -417,6 +420,7 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 1,
         last_activity: None,
         completed: Some(CompletionStatus::Failed),
+        backend: None,
     }));
     assert!(
         app.ui.teammate_view.is_none(),
@@ -436,6 +440,7 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 0,
         last_activity: None,
         completed: Some(CompletionStatus::Failed),
+        backend: None,
     }));
     assert!(
         app.ui.teammate_view.is_some(),
@@ -451,6 +456,7 @@ fn test_teammate_view_auto_exit() {
         tool_uses: 4,
         last_activity: None,
         completed: Some(CompletionStatus::TurnLimit),
+        backend: None,
     }));
     assert!(
         app.ui.teammate_view.is_some(),
@@ -478,6 +484,7 @@ fn test_teammate_live_refetch() {
         tool_uses: 1,
         last_activity: None,
         completed: None,
+        backend: None,
     }));
     assert_eq!(
         app.ui
@@ -500,6 +507,7 @@ fn test_teammate_live_refetch() {
         tool_uses: 1,
         last_activity: None,
         completed: None,
+        backend: None,
     }));
     assert_eq!(
         app.ui
@@ -518,6 +526,7 @@ fn test_teammate_live_refetch() {
         tool_uses: 0,
         last_activity: None,
         completed: None,
+        backend: None,
     }));
     assert_eq!(
         app.ui
@@ -545,6 +554,7 @@ fn test_description_reaches_row() {
         tool_uses: 2,
         last_activity: Some("grep".into()),
         completed: None,
+        backend: None,
     }));
     let out = render_text(&app, 100, 30);
     assert!(
@@ -569,6 +579,7 @@ fn test_blank_keeps_label() {
             tool_uses: 2,
             last_activity: Some("grep".into()),
             completed: None,
+            backend: None,
         })
     };
     app.handle_agent_message(frame("map the auth path", 1));

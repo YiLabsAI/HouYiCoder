@@ -1536,6 +1536,7 @@ fn fleet_app(n: usize) -> App {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
     }
     app
@@ -1650,6 +1651,7 @@ fn test_teammate_esc_keeps_child() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "child-0".into(),
@@ -1739,6 +1741,7 @@ fn test_enter_fleet_drills_teammate() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.fleet.set_selected(Some(0));
     handle_working(&mut app, key(KeyCode::Enter));
@@ -1878,6 +1881,7 @@ fn test_down_keeps_history() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.input.editor.set("a".into());
     handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -1909,6 +1913,7 @@ fn test_shift_down_enters_strip() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.input.editor.set("a".into());
     handle_working(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));

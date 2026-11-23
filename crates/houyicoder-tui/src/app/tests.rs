@@ -543,6 +543,7 @@ fn running_fleet_app() -> App {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.fleet.set_selected(Some(0));
     app

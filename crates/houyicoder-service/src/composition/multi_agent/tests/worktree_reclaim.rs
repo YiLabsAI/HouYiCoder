@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, id};
 use std::sync::Arc;
 
+use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_api::sandbox::{SandboxSession, WorktreeFenceGuard};
 use houyicoder_api::spawn::{SpawnArgs, SpawnHandle};
 use houyicoder_api::tool::ToolCtx;
@@ -133,6 +134,8 @@ async fn test_join_reclaims_abandoned_worktree() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        launcher: Arc::new(StdProcessLauncher::new()),
+        mode_gate: None,
     });
     let hook = Arc::new(BlockingStartHook {
         entered: Notify::new(),

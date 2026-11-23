@@ -93,12 +93,14 @@ impl FrontendEvent {
                 subagent_type,
                 last_activity,
                 completed,
+                backend,
                 ..
             } => {
                 agent_id.len()
                     + subagent_type.len()
                     + last_activity.as_ref().map_or(0, String::len)
                     + completed.as_ref().map_or(0, |status| status.as_str().len())
+                    + backend.as_ref().map_or(0, String::len)
             }
             FrontendEvent::BackgroundTaskChanged { task } => task.command.len(),
             FrontendEvent::Metrics { .. } | FrontendEvent::NotificationsPending { .. } => 0,

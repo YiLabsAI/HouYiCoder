@@ -25,6 +25,7 @@ fn push_running(app: &mut App, agent_id: &str) {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
 }
 

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use houyicoder_api::hook_fire::HookFire;
+use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::skill::SkillRegistry;
@@ -20,13 +21,9 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
-use houyicoder_context::{
-    DescriptorUpdate, HookEventKind, HookFirePayload, PromptCoverage, SessionDescriptor,
-    SessionDescriptorStore, SessionId, SessionProvenance,
-};
+use houyicoder_context::{HookEventKind, HookFirePayload, SessionDescriptorStore, SessionId};
+use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
 use houyicoder_core::agent::multi_agent::bus_types::BusMessage;
-use houyicoder_core::agent::multi_agent::bus_types::spawned_topic;
-use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, ChildDescriptor};
 use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_core::agent::multi_agent::ending::EndingClaim;
 use houyicoder_core::agent::multi_agent::record_subagent_return_with_metrics;
@@ -37,11 +34,10 @@ use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::worktree_controller::WorktreeController;
 use houyicoder_core::agent::{ConditionalSkillActivator, HookRegistry};
 use houyicoder_core::agent::{RunOutcome, RunResult, Runner, ToolRegistry};
+use houyicoder_permission::ModeGate;
 use std::env::current_dir;
 use std::mem::take;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tokio::sync::Notify;
 use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::AbortHandle;
@@ -61,7 +57,11 @@ use children::{
     AdmissionLease, ChildAdmission, ChildEntry, ChildReservation, ChildWatch, RunningChildren,
     join_child,
 };
+use external_children::ExternalChildren;
 use orphan_reconcile::ScanGeneration;
+mod bus_announce;
+mod external_children;
+mod provenance;
 mod spawn_exec;
 mod strip;
 pub(crate) use strip::last_assistant_text;
@@ -106,6 +106,13 @@ pub struct MultiAgentDeps {
     /// The parent's hook registry, so a child's own tool calls meet the same
     /// write-time gates instead of becoming a path around them.
     pub hooks: Option<Arc<HookRegistry>>,
+    /// The process launcher an external ACP child spawns through. Defaults
+    /// to the standard launcher when the composition root supplies none.
+    pub launcher: Arc<dyn ProcessLauncher>,
+    /// The parent's permission gate, consulted when an external child's
+    /// permission ask is intercepted. None leaves interception to the fence
+    /// and the bus alone.
+    pub mode_gate: Option<Arc<dyn ModeGate>>,
 }
 
 #[derive(Clone)]
@@ -116,7 +123,6 @@ pub struct MultiAgentRuntime {
     tools: ToolRegistry,
     config: RunnerConfig,
     worktree_controller: Option<Arc<WorktreeController>>,
-    cwd: PathBuf,
     bus: Option<Arc<AgentBus>>,
     gate: Arc<ConcurrencyGate>,
     children: Arc<Mutex<HashMap<String, ChildEntry>>>,
@@ -131,6 +137,15 @@ pub struct MultiAgentRuntime {
     orphan_scan: ScanGeneration,
     boundary_claims: BoundaryClaims,
     pending_permissions: Arc<Mutex<Vec<PendingChildPermission>>>,
+    /// The launcher an external ACP child spawns through.
+    launcher: Arc<dyn ProcessLauncher>,
+    /// The parent's permission gate for intercepting external child asks.
+    mode_gate: Option<Arc<dyn ModeGate>>,
+    /// Live external children, so a fleet stop reaches a process child the
+    /// in-process registry cannot hold.
+    pub(super) external_children: ExternalChildren,
+    /// The workspace an external child runs in, resolved once at construction.
+    pub(super) cwd: PathBuf,
     #[cfg(test)]
     wall_clock_floor: Duration,
 }
@@ -162,6 +177,9 @@ impl MultiAgentRuntime {
             skill_registry: deps.skill_registry,
             conditional: deps.conditional,
             hooks: deps.hooks,
+            launcher: deps.launcher,
+            mode_gate: deps.mode_gate,
+            external_children: ExternalChildren::default(),
             inherited: RunnerInheritance::default(),
             delegation_wait_ms: 0,
             reserved: Arc::new(Mutex::new(HashSet::new())),
@@ -293,28 +311,6 @@ impl MultiAgentRuntime {
 /// denied) on the runner, so the system prompt can announce them and the
 /// /agents command can list them. Session-stable: the registry is fixed for
 /// the session, so the prompt's bytes do not change across turns.
-pub(super) fn install_agent_types(
-    runner: &Runner,
-    registry: &dyn AgentRegistry,
-    denied: &HashSet<String>,
-) {
-    runner.set_agent_types(delegatable_agents(registry, denied));
-}
-
-/// Build the child-spawn port attached to the parent runner, carrying the
-/// parent's compaction components into every child.
-pub(super) fn build_runtime(
-    deps: MultiAgentDeps,
-    inherited: RunnerInheritance,
-    delegation_wait_ms: u64,
-) -> Arc<dyn SpawnHandle> {
-    Arc::new(
-        MultiAgentRuntime::new(deps)
-            .with_inheritance(inherited)
-            .with_delegation_wait_ms(delegation_wait_ms),
-    )
-}
-
 impl SpawnHandle for MultiAgentRuntime {
     fn spawn(
         &self,
@@ -346,99 +342,6 @@ impl SpawnHandle for MultiAgentRuntime {
                 this, parent_sid, depth, cancel, hook_fire, trigger, args,
             ))
         }
-    }
-
-    /// Route a steering text into a running child's inbox via the shared bus.
-    /// The child registered its inbox at spawn; send_inbox errors when the
-    /// child is gone (completed + unregistered) or no bus is attached.
-    fn send_to_child_inbox(&self, child_id: &str, text: String) -> Result<(), String> {
-        match self.bus.as_ref() {
-            Some(bus) => bus.send_inbox(child_id, BusMessage::Inbox { text }),
-            None => Err("no bus wired".into()),
-        }
-    }
-
-    /// Abort the viewed child's current turn via its live runner handle. The
-    /// child's turn-cancel token is set per turn by the drive loop and
-    /// cleared when the turn ends, so this only cancels a running model
-    /// call; the run continues (next turn, fresh token). A stale Weak (the
-    /// child completed and dropped) is pruned so the registry does not leak
-    /// across a long-lived parent.
-    fn cancel_child_turn(&self, child_id: &str) -> bool {
-        let mut registry = match self.children.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        let Some(entry) = registry.get(child_id) else {
-            return false;
-        };
-        match entry.runner.upgrade() {
-            Some(runner) => {
-                runner.cancel_turn();
-                true
-            }
-            None => {
-                registry.remove(child_id);
-                false
-            }
-        }
-    }
-
-    /// Kill a background child: cancel its lifecycle token (abort, terminal)
-    /// via the live runner handle, distinct from cancel_child_turn (per-turn,
-    /// non-terminal). A stale Weak (the child completed and dropped) is pruned.
-    /// The detached child's finalize_child records the SubagentReturn
-    /// boundary (status interrupted), and the concurrency permit releases when
-    /// the task ends.
-    fn kill_child(&self, child_id: &str) -> bool {
-        let mut registry = match self.children.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        let Some(entry) = registry.get(child_id) else {
-            return false;
-        };
-        match entry.runner.upgrade() {
-            Some(runner) => {
-                runner.abort();
-                true
-            }
-            None => {
-                registry.remove(child_id);
-                false
-            }
-        }
-    }
-
-    /// Hand a running foreground child to the background: flip the mode its
-    /// ending is published with and release the spawn call waiting on it. The
-    /// child keeps its runner, slot, and task, so nothing is restarted. A
-    /// child already in the background reports false.
-    fn background_child(&self, child_id: &str) -> bool {
-        // The hand-over promises the child's ending will arrive as a
-        // notification, and the bus is what carries one. Without a bus the
-        // caller would stop waiting on an answer nobody delivers, so a turn
-        // that cannot notify refuses the hand-over.
-        if self.bus.is_none() {
-            return false;
-        }
-        let registry = match self.children.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        let Some(entry) = registry.get(child_id) else {
-            return false;
-        };
-        let (Some(ending), Some(handover)) = (&entry.ending, &entry.handover) else {
-            return false;
-        };
-        // Already in the background, or the ending already finished with the
-        // caller: nothing is waiting on this child any more.
-        if !ending.claim_notification() {
-            return false;
-        }
-        handover.notify_one();
-        true
     }
 
     fn kill_all_children(&self) -> usize {
@@ -574,21 +477,128 @@ impl SpawnHandle for MultiAgentRuntime {
                 .await
         })
     }
-}
+    /// Route a steering text into a running child's inbox via the shared bus.
+    /// The child registered its inbox at spawn; send_inbox errors when the
+    /// child is gone (completed + unregistered) or no bus is attached.
+    fn send_to_child_inbox(&self, child_id: &str, text: String) -> Result<(), String> {
+        match self.bus.as_ref() {
+            Some(bus) => bus.send_inbox(child_id, BusMessage::Inbox { text }),
+            None => Err("no bus wired".into()),
+        }
+    }
 
-/// Announce a child before its first status event can be published.
-pub(super) fn announce_spawn(bus: Option<&Arc<AgentBus>>, child: ChildDescriptor) {
-    if let Some(bus) = bus {
-        bus.publish(spawned_topic(), BusMessage::Spawned { child });
+    /// Abort the viewed child's current turn via its live runner handle. The
+    /// child's turn-cancel token is set per turn by the drive loop and
+    /// cleared when the turn ends, so this only cancels a running model
+    /// call; the run continues (next turn, fresh token). A stale Weak (the
+    /// child completed and dropped) is pruned so the registry does not leak
+    /// across a long-lived parent.
+    fn cancel_child_turn(&self, child_id: &str) -> bool {
+        // A process child holds no runner, so its turn stop is the same
+        // signal the fleet's stop uses: end the child.
+        if self.external_children.stop(child_id) {
+            return true;
+        }
+        let mut registry = match self.children.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let Some(entry) = registry.get(child_id) else {
+            return false;
+        };
+        match entry.runner.upgrade() {
+            Some(runner) => {
+                runner.cancel_turn();
+                true
+            }
+            None => {
+                registry.remove(child_id);
+                false
+            }
+        }
+    }
+
+    /// Kill a background child: cancel its lifecycle token (abort, terminal)
+    /// via the live runner handle, distinct from cancel_child_turn (per-turn,
+    /// non-terminal). A stale Weak (the child completed and dropped) is pruned.
+    /// The detached child's finalize_child records the SubagentReturn
+    /// boundary (status interrupted), and the concurrency permit releases when
+    /// the task ends.
+    fn kill_child(&self, child_id: &str) -> bool {
+        if self.external_children.stop(child_id) {
+            return true;
+        }
+        let mut registry = match self.children.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let Some(entry) = registry.get(child_id) else {
+            return false;
+        };
+        match entry.runner.upgrade() {
+            Some(runner) => {
+                runner.abort();
+                true
+            }
+            None => {
+                registry.remove(child_id);
+                false
+            }
+        }
+    }
+
+    /// Hand a running foreground child to the background: flip the mode its
+    /// ending is published with and release the spawn call waiting on it. The
+    /// child keeps its runner, slot, and task, so nothing is restarted. A
+    /// child already in the background reports false.
+    fn background_child(&self, child_id: &str) -> bool {
+        // The hand-over promises the child's ending will arrive as a
+        // notification, and the bus is what carries one. Without a bus the
+        // caller would stop waiting on an answer nobody delivers, so a turn
+        // that cannot notify refuses the hand-over.
+        if self.bus.is_none() {
+            return false;
+        }
+        let registry = match self.children.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let Some(entry) = registry.get(child_id) else {
+            return false;
+        };
+        let (Some(ending), Some(handover)) = (&entry.ending, &entry.handover) else {
+            return false;
+        };
+        // Already in the background, or the ending already finished with the
+        // caller: nothing is waiting on this child any more.
+        if !ending.claim_notification() {
+            return false;
+        }
+        handover.notify_one();
+        true
     }
 }
 
-/// Close a child's inbox after its run so a parent's send_inbox errors
-/// rather than queueing into a dead receiver. Mirrors announce_spawn.
-fn close_child_inbox(bus: Option<&Arc<AgentBus>>, child_id: &str) {
-    if let Some(bus) = bus {
-        bus.unregister_inbox(child_id);
-    }
+pub(super) fn install_agent_types(
+    runner: &Runner,
+    registry: &dyn AgentRegistry,
+    denied: &HashSet<String>,
+) {
+    runner.set_agent_types(delegatable_agents(registry, denied));
+}
+
+/// Build the child-spawn port attached to the parent runner, carrying the
+/// parent's compaction components into every child.
+pub(super) fn build_runtime(
+    deps: MultiAgentDeps,
+    inherited: RunnerInheritance,
+    delegation_wait_ms: u64,
+) -> Arc<dyn SpawnHandle> {
+    Arc::new(
+        MultiAgentRuntime::new(deps)
+            .with_inheritance(inherited)
+            .with_delegation_wait_ms(delegation_wait_ms),
+    )
 }
 
 /// Fire SubagentStart at the durable spawn boundary. No-op when no hook-fire
@@ -636,52 +646,6 @@ async fn fire_subagent_stop(
             ),
         )
         .await;
-    }
-}
-
-/// Stamp SpawnedBy provenance on a child session's descriptor. Called at the
-/// spawn boundary, before the child runs, so a live child is never read as one
-/// of the user's own sessions. The delegation record the child opens with is
-/// its first durable append, which materializes the descriptor on a store that
-/// materializes one, so the update normally edits a file already there.
-/// Best-effort: a stamp failure logs and continues (the child still ran).
-pub(super) fn record_provenance(
-    descriptor_store: &Option<Arc<dyn SessionDescriptorStore>>,
-    child_sid: SessionId,
-    parent_sid: SessionId,
-    subagent_type: &str,
-    task_id: &str,
-) {
-    if let Some(store) = descriptor_store {
-        let parent_str = parent_sid.to_string();
-        let prov = SessionProvenance::SpawnedBy {
-            parent_session_id: parent_str,
-            subagent_type: subagent_type.to_string(),
-            task_id: task_id.to_string(),
-        };
-        let outcome = store.update_descriptor(child_sid, &mut |descriptor| {
-            descriptor.provenance = prov.clone();
-        });
-        // Written means there was a descriptor to edit, and Unchanged means the
-        // one there already states this provenance. Anything else -- a store
-        // that materializes none on a first append, or an update that failed
-        // -- leaves the provenance unrecorded, so create a descriptor here.
-        // Complete is truthful at this point: the child has written nothing
-        // yet and its runner observes every later append.
-        if !matches!(
-            outcome,
-            Ok(DescriptorUpdate::Written | DescriptorUpdate::Unchanged)
-        ) {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let descriptor =
-                SessionDescriptor::delegated_child(prov, now, PromptCoverage::Complete);
-            if let Err(e) = store.write_descriptor(child_sid, &descriptor) {
-                tracing::warn!("child provenance write failed: {e}");
-            }
-        }
     }
 }
 

@@ -71,6 +71,7 @@ fn fleet_app(n: usize, granted: u16) -> App {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
     }
     app.ui.frame.layout.fleet_granted.set(granted);
@@ -127,6 +128,7 @@ fn test_hint_follows_drawn_grant() {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
     }
     app.ui.frame.layout.fleet_granted.set(0);
@@ -155,6 +157,7 @@ fn test_agents_hint_excludes_completed() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Some(Instant::now()),
         started_at: None,
+        backend: None,
     };
     app.sessions.current.capabilities.fleet.entries.push(done);
     let hint = agents_hint(&app).unwrap();
@@ -232,6 +235,7 @@ fn test_task_count_survives_narrow() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.sessions
         .current

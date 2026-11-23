@@ -1,4 +1,4 @@
-//! Transcript folding: converts ACP session/update notifications into durable
+//! Transcript folding. Converts ACP session/update notifications into durable
 //! SessionLog entries so the child's conversation is recorded in the parent's
 //! session log alongside in-process children.
 

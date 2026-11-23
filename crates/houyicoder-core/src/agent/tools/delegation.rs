@@ -271,6 +271,9 @@ fn spawn_failure_msg(f: SpawnFailure) -> String {
              resume needs the child session id of a delegation this session \
              started, and a child still running cannot be continued"
         ),
+        SpawnFailure::ExternalFailed { reason } => {
+            format!("agent: the external child failed: {reason}")
+        }
     }
 }
 

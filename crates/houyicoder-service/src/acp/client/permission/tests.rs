@@ -118,7 +118,7 @@ fn test_gate_allow_answers() {
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Auto));
     let ask = ask_with(vec![], Some(json!({"tool_name": "bash"})));
     assert!(matches!(
-        check_gate(&gate, &ask),
+        check_gate(Some(&gate), &ask),
         Some(InterceptedVerdict::Allow)
     ));
 }
@@ -166,4 +166,15 @@ fn test_fence_symlink_root() {
     assert!(check_fence(&ask, &link).is_none());
     remove_file(&link).ok();
     remove_dir_all(&root).ok();
+}
+
+/// A host with no gate refuses the ask: a synthesized permissive gate would
+/// grant a process child what the session never approved.
+#[test]
+fn test_no_gate_refuses() {
+    let ask = ask_with(vec![], Some(json!({"tool_name": "bash"})));
+    assert!(
+        matches!(check_gate(None, &ask), Some(InterceptedVerdict::Reject)),
+        "an unwired gate is a refusal, never an allow"
+    );
 }

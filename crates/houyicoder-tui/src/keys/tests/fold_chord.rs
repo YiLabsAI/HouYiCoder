@@ -31,6 +31,7 @@ fn child_app() -> (App, std::sync::mpsc::Receiver<TransportEvent>) {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.fleet.focus(0);
     (app, events)

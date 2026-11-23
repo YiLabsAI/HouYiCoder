@@ -88,11 +88,11 @@ pub struct AgentDefinition {
     pub backend: AgentBackend,
 }
 
-/// How a sub-agent runs: in the parent process or as an external ACP child.
+/// How a sub-agent runs. In the parent process, or as an external ACP child.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum AgentBackend {
-    /// Share the parent's runtime and heap (the only path before external ACP
-    /// support landed). All built-in and user-defined agents default here.
+    /// Share the parent's runtime and heap, the only path before external ACP
+    /// support landed. All built-in and user-defined agents default here.
     #[default]
     InProcess,
     /// Spawn an external ACP-compatible process and drive it as a child. The
@@ -104,7 +104,7 @@ pub enum AgentBackend {
 /// Configuration for an external ACP sub-agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAcpSpec {
-    /// The executable to launch (resolved on PATH or as an absolute path).
+    /// The executable to launch, resolved on PATH or as an absolute path.
     pub program: String,
     /// Argv after the program name.
     pub args: Vec<String>,
@@ -128,7 +128,7 @@ impl Default for ExternalAcpSpec {
     }
 }
 
-/// The environment variables a child process receives: the base runtime set
+/// The environment variables a child process receives. The base runtime set
 /// the process needs to function, plus the ones the spec names from the host
 /// environment. No other host variable crosses the boundary.
 pub fn child_environment(

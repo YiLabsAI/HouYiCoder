@@ -3,6 +3,7 @@
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
+use std::future::pending;
 use std::io::Cursor;
 use std::io::Write;
 use std::io::sink;
@@ -85,6 +86,39 @@ async fn test_await_response_delivers() {
     task.await.unwrap();
 }
 
+/// A response that arrives after the reader has closed is still delivered
+/// through the waiter, because the channel end does not drop a response the
+/// waiter table already holds.
+#[tokio::test]
+async fn test_await_response_after_eof() {
+    let (mut session, tx, _rx) = channel_session();
+    let resp = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
+    let id = session.next_request_id();
+    let task = tokio::spawn(async move {
+        let val = session.await_response(id).await.unwrap();
+        assert_eq!(val["ok"], serde_json::json!(true));
+    });
+    // Deliver the response and close the channel, so the reader ends before
+    // the waiter resolves.
+    tx.send(format!("{resp}\n")).await.unwrap();
+    drop(tx);
+    task.await.unwrap();
+}
+
+/// A reader that ends before the response arrives fails the wait instead of
+/// hanging, because no later frame can answer it.
+#[tokio::test]
+async fn test_await_response_eof_errors() {
+    let (mut session, tx, _rx) = channel_session();
+    let id = session.next_request_id();
+    drop(tx);
+    let err = session
+        .await_response(id)
+        .await
+        .expect_err("a closed reader cannot answer");
+    assert!(format!("{err}").contains("closed"), "{err}");
+}
+
 /// Banner lines before the first response are skipped during handshake.
 #[tokio::test]
 async fn test_banner_skipped_during_handshake() {
@@ -121,6 +155,40 @@ async fn test_handshake_completes() {
     tx.send(format!("{new_resp}\n")).await.unwrap();
     let sid = task.await.unwrap();
     assert!(!sid.to_string().is_empty());
+}
+
+/// A child session id in this host's own id space is adopted as is, so the
+/// child's log lands under the id the child named.
+#[tokio::test]
+async fn test_handshake_adopts_child_id() {
+    let (mut session, tx, mut rx) = channel_session();
+    let known = SessionId::new().to_string();
+    let init_resp = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#;
+    let new_resp = format!(r#"{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"{known}"}}}}"#);
+    let workspace = Path::new("/tmp");
+    let task = tokio::spawn(async move { session.handshake_inner(workspace).await });
+    tx.send(format!("{init_resp}\n")).await.unwrap();
+    await_outbound(&mut rx, "session/new").await;
+    tx.send(format!("{new_resp}\n")).await.unwrap();
+    let sid = task.await.unwrap().expect("handshake completes");
+    assert_eq!(sid.to_string(), known, "the child's own id is adopted");
+}
+
+/// A child session id in another spelling mints a local id rather than
+/// decoupling the log from the child, and the mapping is logged.
+#[tokio::test]
+async fn test_handshake_mints_local_id() {
+    let (mut session, tx, mut rx) = channel_session();
+    let init_resp = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#;
+    let new_resp = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"codex-session-1"}}"#;
+    let workspace = Path::new("/tmp");
+    let task = tokio::spawn(async move { session.handshake_inner(workspace).await });
+    tx.send(format!("{init_resp}\n")).await.unwrap();
+    await_outbound(&mut rx, "session/new").await;
+    tx.send(format!("{new_resp}\n")).await.unwrap();
+    let sid = task.await.unwrap().expect("handshake completes");
+    assert_ne!(sid.to_string(), "codex-session-1");
+    assert!(!sid.to_string().is_empty(), "a local id is minted");
 }
 
 /// The handshake timeout fires when the child does not respond in time.
@@ -171,7 +239,7 @@ async fn test_recv_returns_stop_reason() {
         .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap();
-    assert_eq!(stop, "EndTurn");
+    assert_eq!(stop, "end_turn");
     fold.flush().await.unwrap();
     let entries = store.replay(sid).await.unwrap();
     assert!(!entries.is_empty(), "transcript folded the notification");
@@ -195,7 +263,7 @@ async fn test_child_request_ignored() {
         .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap();
-    assert_eq!(stop, "EndTurn");
+    assert_eq!(stop, "end_turn");
 }
 
 #[tokio::test]
@@ -249,7 +317,7 @@ async fn test_drive_prompt_returns_stop() {
     tx.send(format!("{notif}\n")).await.unwrap();
     tx.send(format!("{resp}\n")).await.unwrap();
     let stop = task.await.unwrap();
-    assert_eq!(stop, "EndTurn");
+    assert_eq!(stop, "end_turn");
 }
 
 /// A cancel during drive_prompt sends session/cancel on the outbound channel.
@@ -394,7 +462,7 @@ async fn test_ask_without_fence_ignored() {
         .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap();
-    assert_eq!(stop, "EndTurn");
+    assert_eq!(stop, "end_turn");
 }
 
 /// A delegated ask publishes on the bus and the parent verdict returns to
@@ -407,7 +475,7 @@ async fn test_delegated_ask_round_trip() {
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Manual));
     let fence = PermissionFence {
         workspace_root: root.clone(),
-        gate,
+        gate: Some(gate),
         bus: Some(bus.clone()),
         child_id: "c1".into(),
         agent_type: "review".into(),
@@ -446,11 +514,65 @@ async fn test_delegated_ask_round_trip() {
     );
     tx.send(format!("{resp}\n")).await.unwrap();
     let stop = task.await.unwrap().unwrap();
-    assert_eq!(stop, "EndTurn");
+    assert_eq!(stop, "end_turn");
     remove_dir_all(&root).ok();
 }
 
 fn fold_holder() -> TranscriptFold {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     TranscriptFold::new(SessionId::new(), store)
+}
+
+/// Every wire stop reason reads as the word the summary and the fleet show,
+/// so a model or a user never sees a Rust variant name.
+#[test]
+fn test_stop_reason_words() {
+    assert_eq!(stop_reason_label(StopReason::EndTurn), "end_turn");
+    assert_eq!(stop_reason_label(StopReason::MaxTokens), "max_tokens");
+    assert_eq!(
+        stop_reason_label(StopReason::MaxTurnRequests),
+        "max_turn_requests"
+    );
+    assert_eq!(stop_reason_label(StopReason::Refusal), "refusal");
+    assert_eq!(stop_reason_label(StopReason::Cancelled), "cancelled");
+}
+
+/// A child that ignores its closed stdin is killed after the grace instead of
+/// holding the caller for as long as it wants.
+#[tokio::test]
+async fn test_shutdown_kills_unresponsive_child() {
+    struct NeverExits;
+    impl ProcessLauncher for NeverExits {
+        fn spawn(
+            &self,
+            _req: houyicoder_api::launcher::SpawnRequest,
+            _policy: houyicoder_api::launcher::SpawnPolicy,
+        ) -> Result<LauncherChild, SpawnError> {
+            let stdout = Box::new(Cursor::new(Vec::new()));
+            let stdin: Box<dyn std::io::Write + Send> = Box::new(sink());
+            let pipes = StdioPipes {
+                stdin: Some(stdin),
+                stdout: Some(stdout),
+                stderr: None,
+            };
+            let waiter: houyicoder_async::PFut<'static, Result<LauncherExit, SpawnError>> =
+                Box::pin(pending());
+            Ok(LauncherChild::with_pipes(Some(1), pipes, waiter))
+        }
+    }
+    let launcher: Arc<dyn ProcessLauncher> = Arc::new(NeverExits);
+    let spec = ExternalAcpSpec {
+        program: "never-exits".into(),
+        args: vec![],
+        passthrough_env: vec![],
+        handshake_timeout_ms: 100,
+    };
+    let session =
+        AcpChildSession::connect(&launcher, &spec, Path::new("/tmp"), &[]).expect("connect");
+    let started = std::time::Instant::now();
+    session.shutdown().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "shutdown returns once the grace passes"
+    );
 }

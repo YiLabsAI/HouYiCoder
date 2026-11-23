@@ -185,7 +185,17 @@ fn list_body(rows: &[AgentRow<'_>], cursor: usize) -> (Vec<Line<'static>>, usize
 /// longest name.
 fn widest_type(rows: &[AgentRow<'_>]) -> usize {
     rows.iter()
-        .map(|row| UnicodeWidthStr::width(row.subagent_type()))
+        .map(|row| {
+            let badge = match row {
+                AgentRow::Running(entry) => entry
+                    .backend
+                    .as_ref()
+                    .map(|program| format!(" [acp:{program}]"))
+                    .unwrap_or_default(),
+                AgentRow::Completed(_) | AgentRow::Available(_) => String::new(),
+            };
+            UnicodeWidthStr::width(row.subagent_type()) + UnicodeWidthStr::width(badge.as_str())
+        })
         .max()
         .unwrap_or(0)
 }
@@ -196,18 +206,35 @@ fn widest_type(rows: &[AgentRow<'_>]) -> usize {
 fn span_row(row: &AgentRow<'_>, spans: &mut Vec<Span<'static>>, type_width: usize) {
     match row {
         AgentRow::Running(entry) => {
+            // The badge rides inside the type cell, so the state column stays
+            // at one x down the whole section.
+            let badge = entry
+                .backend
+                .as_ref()
+                .map(|program| format!(" [acp:{program}]"));
+            let badge_width = badge
+                .as_ref()
+                .map(|b| UnicodeWidthStr::width(b.as_str()))
+                .unwrap_or(0);
             spans.push(Span::styled(
-                pad_width(&entry.subagent_type, type_width),
+                pad_width(&entry.subagent_type, type_width.saturating_sub(badge_width)),
                 Style::new().fg(Color::Yellow),
             ));
-            spans.push(Span::styled(
-                format!(
+            if let Some(badge) = badge {
+                spans.push(Span::styled(badge, Style::new().fg(Color::Cyan)));
+            }
+            // An external child reports no token figures this host can
+            // measure, so its row states what it does know instead of a
+            // measured zero.
+            let state = match entry.backend {
+                Some(_) => format!("  running · turn {}", entry.turn),
+                None => format!(
                     "  running · {} tok · turn {}",
                     format_tokens(entry.tokens),
                     entry.turn
                 ),
-                Style::new().fg(Color::DarkGray),
-            ));
+            };
+            spans.push(Span::styled(state, Style::new().fg(Color::DarkGray)));
         }
         AgentRow::Completed(done) => {
             spans.push(Span::styled(

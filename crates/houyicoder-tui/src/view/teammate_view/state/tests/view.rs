@@ -295,6 +295,7 @@ fn test_search_ignores_fleet_click() {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
     }
     let _working = render_text(&app, 80, 24);

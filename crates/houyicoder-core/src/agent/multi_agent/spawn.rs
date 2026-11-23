@@ -295,6 +295,7 @@ pub async fn spawn_child(req: SpawnRequest) -> Result<ChildHandle, SpawnError> {
         agent_type: req.subagent_type.clone(),
         description: req.prompt_summary.clone(),
         run_mode: req.run_mode,
+        backend: None,
     };
 
     let mut runner = Runner::new(req.parent_store, req.provider, req.tools, req.config)

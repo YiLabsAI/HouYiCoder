@@ -20,6 +20,7 @@ impl App {
             agent_id,
             subagent_type,
             description,
+            backend,
             turn,
             tokens,
             tool_uses,
@@ -60,6 +61,9 @@ impl App {
             if let Some(entry) = entries.iter_mut().find(|e| e.agent_id == agent_id) {
                 entry.turn = turn;
                 entry.tokens = tokens;
+                if backend.is_some() {
+                    entry.backend = backend.clone();
+                }
                 entry.tool_uses = tool_uses;
                 entry.last_activity = last_activity;
                 // A status that carries no summary does not blank the one
@@ -93,6 +97,7 @@ impl App {
                     agent_id: agent_id.clone(),
                     subagent_type: subagent_type.clone(),
                     description: description.clone(),
+                    backend,
                     turn,
                     tokens,
                     tool_uses,

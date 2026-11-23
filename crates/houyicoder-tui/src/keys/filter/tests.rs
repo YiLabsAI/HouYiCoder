@@ -288,6 +288,7 @@ fn test_child_action_repeat_blocked() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     for c in ['k', 'K', 'b'] {
         assert!(
@@ -320,6 +321,7 @@ fn test_altgr_child_action_blocked() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     let alt_gr_kill = KeyEvent::new_with_kind(
         KeyCode::Char('k'),

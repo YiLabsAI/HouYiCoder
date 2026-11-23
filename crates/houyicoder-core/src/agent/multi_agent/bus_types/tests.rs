@@ -15,6 +15,7 @@ fn test_agent_bus_pub_sub() {
                 agent_type: "explore".into(),
                 description: String::new(),
                 run_mode: ChildRunMode::Foreground,
+                backend: None,
             },
             turn: 1,
             tokens: 100,

@@ -21,6 +21,7 @@ fn child(id: &str, run_mode: ChildRunMode) -> ChildDescriptor {
         agent_type: "explore".into(),
         description: String::new(),
         run_mode,
+        backend: None,
     }
 }
 

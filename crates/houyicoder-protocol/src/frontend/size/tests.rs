@@ -28,6 +28,7 @@ fn test_status_frame_counts_ending() {
         tool_uses: 0,
         last_activity: None,
         completed,
+        backend: None,
     };
     let running = status(None).estimated_bytes();
     let finished = status(Some(CompletionStatus::Completed)).estimated_bytes();
@@ -205,6 +206,7 @@ fn test_event_carries_payload() {
             tool_uses: 0,
             last_activity: Some(filler.clone()),
             completed: None,
+            backend: None,
         },
     ];
 

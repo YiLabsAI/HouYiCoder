@@ -107,6 +107,11 @@ pub enum FrontendEvent {
         /// model description reached (a hook- or gate-driven child).
         #[serde(default)]
         description: String,
+        /// The badge an external child carries in its fleet row, naming the
+        /// program behind it. None for an in-process child, which needs no
+        /// label because every child shares the host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        backend: Option<String>,
         turn: u32,
         tokens: u64,
         tool_uses: u32,

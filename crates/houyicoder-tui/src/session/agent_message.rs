@@ -100,6 +100,8 @@ pub(crate) struct AgentStatusSnapshot {
     pub subagent_type: String,
     /// The delegating call's task summary, naming what this child is doing.
     pub description: String,
+    /// The external program the child runs behind, rendered as a badge.
+    pub backend: Option<String>,
     pub turn: u32,
     pub tokens: u64,
     pub tool_uses: u32,
@@ -161,6 +163,9 @@ pub enum ServerEvent {
         /// The delegating call's task summary, naming what this child is
         /// doing. Empty for a spawn no model description reached.
         description: String,
+        /// The external program the child runs behind, rendered as a badge.
+        /// None for an in-process child.
+        backend: Option<String>,
         turn: u32,
         tokens: u64,
         tool_uses: u32,

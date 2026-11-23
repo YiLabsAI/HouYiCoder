@@ -129,6 +129,10 @@ fn spawn_capture(
     if let Some(ws) = &req.workspace {
         cmd.current_dir(ws);
     }
+    if let Some(env) = &req.env {
+        cmd.env_clear();
+        cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    }
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));
     cmd.stderr(stdio_for(req.stdio.stderr));
@@ -238,6 +242,10 @@ fn spawn_async(req: SpawnRequest, fence: Option<FenceConfig>) -> Result<Launcher
     if let Some(ws) = &req.workspace {
         cmd.current_dir(ws);
     }
+    if let Some(env) = &req.env {
+        cmd.env_clear();
+        cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    }
     cmd.kill_on_drop(true);
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));
@@ -300,6 +308,10 @@ fn spawn_interactive(req: SpawnRequest) -> Result<LauncherChild, SpawnError> {
     cmd.args(&req.args);
     if let Some(ws) = &req.workspace {
         cmd.current_dir(ws);
+    }
+    if let Some(env) = &req.env {
+        cmd.env_clear();
+        cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     }
     cmd.stdin(stdio_for(req.stdio.stdin));
     cmd.stdout(stdio_for(req.stdio.stdout));

@@ -33,6 +33,7 @@ mod focus {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         }
     }
 
@@ -163,6 +164,7 @@ mod dispatch {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
         app.ui.fleet.focus(0);
         app
@@ -214,6 +216,7 @@ mod dispatch {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
         app.ui.fleet.focus(0);
         app.ui.input.editor.set("draft".into());

@@ -19,6 +19,7 @@ fn entry(id: &str, kind: &str, turn: u32, tokens: u64, tool: &str) -> FleetEntry
         outcome: None,
         completed_at: None,
         started_at: None,
+        backend: None,
     }
 }
 
@@ -177,6 +178,7 @@ fn test_completed_row_terse() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: None,
         started_at: None,
+        backend: None,
     };
     let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -271,6 +273,7 @@ fn test_grace_drops_expired() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
+        backend: None,
     });
     assert!(fleet.drop_completed(None), "expired entry dropped");
     assert!(fleet.entries.is_empty(), "footer emptied after drop");
@@ -294,6 +297,7 @@ fn test_grace_keeps_recent() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Some(Instant::now()),
         started_at: None,
+        backend: None,
     });
     assert!(!fleet.drop_completed(None), "nothing dropped inside grace");
     assert_eq!(fleet.entries.len(), 2, "running + recent both kept");
@@ -319,6 +323,7 @@ fn test_drop_clamps_selected() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
+        backend: None,
     });
     entries_mut(&mut app.sessions.current).push(entry("c2", "plan", 1, 10, "read"));
     app.ui.fleet.set_selected(Some(0));
@@ -340,6 +345,7 @@ fn test_drop_clamps_selected() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
+        backend: None,
     });
     app.ui.fleet.set_selected(Some(1));
     assert!(app.drop_completed_fleet(), "expired tail dropped");
@@ -368,6 +374,7 @@ fn test_grace_pins_viewed_child() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
+        backend: None,
     });
     fleet.entries.push(FleetEntry {
         agent_id: "c2".into(),
@@ -380,6 +387,7 @@ fn test_grace_pins_viewed_child() {
         outcome: Some(SubagentOutcome::Finished),
         completed_at: Instant::now().checked_sub(Duration::from_secs(6)),
         started_at: None,
+        backend: None,
     });
     assert!(
         fleet.drop_completed(Some("c1")),
@@ -436,6 +444,7 @@ fn test_running_row_shows_elapsed() {
         outcome: None,
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
+        backend: None,
     };
     let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -462,6 +471,7 @@ fn test_row_shows_waiting_approval() {
         outcome: None,
         completed_at: None,
         started_at: Instant::now().checked_sub(Duration::from_secs(7)),
+        backend: None,
     };
     let line = build_row(&e, false, Some("c1"), false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -500,6 +510,7 @@ fn test_row_uses_description() {
         outcome: None,
         completed_at: None,
         started_at: Some(Instant::now()),
+        backend: None,
     };
     let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -524,6 +535,7 @@ fn test_row_type_fallback() {
         outcome: None,
         completed_at: None,
         started_at: Some(Instant::now()),
+        backend: None,
     };
     let line = build_row(&e, false, None, false);
     let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
@@ -603,10 +615,22 @@ fn test_widest_row_fits_narrow() {
     let mut e = entry("c1", "explore", 99, 999_900, "grep");
     e.tool_uses = 999;
     let text = row_text(&e);
-    eprintln!("DBGW widest={} text={text}", text.chars().count());
     assert!(
         text.chars().count() <= 80,
         "the widest row still fits a standard footer: {} cols in {text}",
         text.chars().count()
+    );
+}
+
+/// An external child names the program behind it, so its row is not mistaken
+/// for an in-process child doing the same job.
+#[test]
+fn test_backend_badge_named() {
+    let mut e = entry("c1", "codex-reviewer", 1, 10, "grep");
+    e.backend = Some("codex".into());
+    let text = row_text(&e);
+    assert!(
+        text.contains("[acp:codex]"),
+        "the row names the external program: {text}"
     );
 }

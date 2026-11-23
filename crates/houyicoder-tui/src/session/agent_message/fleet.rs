@@ -38,6 +38,9 @@ pub struct FleetEntry {
     /// tests that do not exercise the elapsed counter. Drives the live
     /// elapsed in the strip: build_row renders started_at.elapsed().
     pub started_at: Option<Instant>,
+    /// The external program the child runs behind, drawn as a badge next to
+    /// the type. None for an in-process child.
+    pub backend: Option<String>,
 }
 
 /// One returned delegation, for the /agents pane's session list: the child

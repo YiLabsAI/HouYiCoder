@@ -264,6 +264,13 @@ pub enum SpawnFailure {
     InvalidResumeTarget {
         reason: String,
     },
+    /// An external ACP child could not be launched or driven: the program is
+    /// missing, the handshake timed out, or the child exited before its
+    /// prompt completed. The reason names which, so the model can retry with
+    /// a fix or fall back to an in-process child.
+    ExternalFailed {
+        reason: String,
+    },
 }
 
 /// The spawn port a tool calls through its ToolCtx. The engine (the runner

@@ -168,6 +168,7 @@ fn test_banner_hint_follows_state() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     let running = render_text(&app, 80, 24);
     assert!(
@@ -229,6 +230,7 @@ fn test_exit_restarts_finished_grace() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(long_ago),
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
@@ -275,6 +277,7 @@ fn test_exit_restarts_only_viewed() {
                 outcome: Some(SubagentOutcome::Finished),
                 completed_at: Some(long_ago),
                 started_at: None,
+                backend: None,
             });
     }
     app.ui.teammate_view = Some(TeammateView {
@@ -314,6 +317,7 @@ fn test_exit_keeps_running_clock() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
@@ -351,6 +355,7 @@ fn test_banner_hint_matches_state() {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
@@ -419,6 +424,7 @@ fn test_banner_names_failed_ending() {
             outcome: Some(SubagentOutcome::Failed),
             completed_at: None,
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
@@ -467,6 +473,7 @@ fn test_exit_with_two_finished() {
                 outcome: Some(SubagentOutcome::Finished),
                 completed_at: Some(long_ago),
                 started_at: None,
+                backend: None,
             });
     }
     app.ui.teammate_view = Some(TeammateView {
@@ -530,6 +537,7 @@ fn test_second_exit_changes_nothing() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(long_ago),
             started_at: None,
+            backend: None,
         });
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),

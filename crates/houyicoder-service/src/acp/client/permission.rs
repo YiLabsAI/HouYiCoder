@@ -97,10 +97,18 @@ fn best_effort_resolve(path: &Path) -> PathBuf {
 /// Ask the parent gate for one intercepted request. A gate allow answers the
 /// child immediately, a deny rejects it, and an ask returns None so the
 /// caller delegates to the parent user.
+///
+/// No gate is a refusal, never an allow: a host that wired none has no policy
+/// to answer with, and a synthesized permissive gate would grant a process
+/// child what the session never approved.
 pub fn check_gate(
-    gate: &Arc<dyn ModeGate>,
+    gate: Option<&Arc<dyn ModeGate>>,
     ask: &RequestPermissionRequest,
 ) -> Option<InterceptedVerdict> {
+    let Some(gate) = gate else {
+        tracing::warn!("external child asked with no parent gate wired; refusing");
+        return Some(InterceptedVerdict::Reject);
+    };
     let tool = tool_name_of(ask);
     let input = ask.tool_call.fields.raw_input.clone();
     let req = ToolRequest {

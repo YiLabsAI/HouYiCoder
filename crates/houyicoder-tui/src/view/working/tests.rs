@@ -1117,6 +1117,7 @@ fn test_fleet_click_selects() {
                 outcome: None,
                 completed_at: None,
                 started_at: None,
+                backend: None,
             });
     }
     drop(render_text(&app, 80, 24));

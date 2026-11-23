@@ -146,6 +146,10 @@ pub struct SpawnRequest {
     /// Piped for the corresponding handle to come back; an unset stream stays
     /// None on the returned pipes.
     pub interactive: bool,
+    /// The whole environment the child receives. Some replaces the host
+    /// environment, so a caller that names a whitelist can be sure no other
+    /// host variable crosses the boundary; None inherits it.
+    pub env: Option<Vec<(String, String)>>,
 }
 
 impl SpawnRequest {
@@ -167,6 +171,12 @@ impl SpawnRequest {
     /// Set the workspace (cwd) for the spawn.
     pub fn with_workspace(mut self, path: impl Into<PathBuf>) -> Self {
         self.workspace = Some(path.into());
+        self
+    }
+
+    /// Give the child exactly this environment, replacing the host's.
+    pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
+        self.env = Some(env);
         self
     }
 

@@ -78,6 +78,7 @@ fn push_running(app: &mut App, agent_id: &str) {
             outcome: None,
             completed_at: None,
             started_at: None,
+            backend: None,
         });
 }
 
@@ -91,6 +92,20 @@ fn push_returned(app: &mut App, child_sid: &str, summary: &str) {
         color: None,
     });
     app.sessions.current.refresh_agents();
+}
+
+/// A running external child carries the program badge beside its type, so a
+/// row the user drills into names which agent is behind it.
+#[test]
+fn test_running_row_shows_backend() {
+    let mut app = composition::app();
+    push_running(&mut app, "c1");
+    app.sessions.current.capabilities.fleet.entries[0].backend = Some("codex".into());
+    let out = render(&app, 60, 12);
+    assert!(
+        out.contains("[acp:codex]"),
+        "the running row names the external program: {out}"
+    );
 }
 
 /// One screen answers what has run and what may be delegated to: the running
@@ -341,6 +356,7 @@ fn test_completed_metrics_render() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(end),
             started_at: Some(start),
+            backend: None,
         });
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c-metrics".into(),
@@ -392,6 +408,7 @@ fn test_spend_words_agree() {
             outcome: Some(SubagentOutcome::Finished),
             completed_at: Some(Instant::now()),
             started_at: Some(Instant::now() - Duration::from_secs(125)),
+            backend: None,
         });
     app.push_transcript_line(TranscriptLine::Subagent {
         child_sid: "c-words".into(),

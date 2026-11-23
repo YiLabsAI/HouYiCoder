@@ -11,6 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::{PFut, PStream};
 use houyicoder_context::SessionId;
@@ -257,6 +258,8 @@ fn build_harness(
             skill_registry: None,
             conditional: None,
             hooks: None,
+            launcher: Arc::new(StdProcessLauncher::new()),
+            mode_gate: None,
         });
         builder = builder.with_spawn_handle(Arc::new(runtime));
         return Harness {

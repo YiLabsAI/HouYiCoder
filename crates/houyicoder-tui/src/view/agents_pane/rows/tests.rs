@@ -15,6 +15,7 @@ fn fleet_entry(agent_id: &str, outcome: Option<SubagentOutcome>) -> FleetEntry {
         outcome,
         completed_at: None,
         started_at: None,
+        backend: None,
     }
 }
 

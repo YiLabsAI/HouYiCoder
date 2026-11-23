@@ -4,7 +4,10 @@ use std::time::{Duration, Instant};
 
 use tokio::time::sleep;
 
+use super::provenance::record_provenance;
 use super::*;
+use houyicoder_api::launcher::StdProcessLauncher;
+use houyicoder_context::{PromptCoverage, SessionDescriptor, SessionProvenance};
 
 /// The child's descriptor carries the prompt the child ran on. The child
 /// runner is built with the parent's descriptor store, so the first user
@@ -28,6 +31,8 @@ async fn test_child_prompt_reaches_descriptor() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        launcher: Arc::new(StdProcessLauncher::new()),
+        mode_gate: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);

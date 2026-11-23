@@ -1,6 +1,7 @@
 //! The turn cap a child inherits, and the one it does not.
 
 use super::*;
+use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_core::agent::DelegationTool;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -76,6 +77,8 @@ async fn test_child_turn_cap_wins() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        launcher: Arc::new(StdProcessLauncher::new()),
+        mode_gate: None,
     });
     let ctx = ToolCtx::new("c1").with_session(SessionId::new());
     let args = SpawnArgs::new("explore", "task", "task");
@@ -151,6 +154,8 @@ async fn test_turn_cap_wraps_up() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        launcher: Arc::new(StdProcessLauncher::new()),
+        mode_gate: None,
     }));
     let tool = DelegationTool::new(registry);
     let ctx = ToolCtx::new("c1")
@@ -228,6 +233,8 @@ async fn test_single_turn_cap_wraps() {
         skill_registry: None,
         conditional: None,
         hooks: None,
+        launcher: Arc::new(StdProcessLauncher::new()),
+        mode_gate: None,
     });
     let ctx = ToolCtx::new("c1").with_session(SessionId::new());
     let outcome = runtime
