@@ -2,14 +2,14 @@
 //! busy, and a refusal that costs the user nothing.
 
 use super::*;
-use crate::test_harness::connected_app_events;
+use crate::test_harness::live_session;
 
 /// The host runs one operation at a time on one cancel slot, so a command
 /// submitted while the agent is working is refused. The refusal names the
 /// wait, and nothing starts running.
 #[test]
 fn test_shell_refused_when_busy() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     app.sessions.current.run.start(RequestId(1), Instant::now());
     assert!(!app.submit_direct_shell("echo hi".into()));
     assert!(
@@ -27,7 +27,7 @@ fn test_shell_refused_when_busy() {
 /// keeps the request id its reply will answer.
 #[test]
 fn test_second_shell_refused() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     assert!(app.submit_direct_shell("sleep 30".into()));
     let first = app.sessions.current.shell.request_id();
     assert!(!app.submit_direct_shell("echo hi".into()));
@@ -42,7 +42,7 @@ fn test_second_shell_refused() {
 /// the host, and the draft stays in the composer.
 #[test]
 fn test_shell_blocks_message_submit() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     assert!(app.submit_direct_shell("sleep 30".into()));
     app.ui.input.editor.set("what changed?".into());
     app.submit_input();
@@ -61,7 +61,7 @@ fn test_shell_blocks_message_submit() {
 /// the command, so the user knows what to stop rather than waiting.
 #[test]
 fn test_compact_refused_during_shell() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     assert!(app.submit_direct_shell("sleep 30".into()));
     app.run_compact();
     let screen = render_text(&app, 80, 24);

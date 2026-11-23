@@ -17,7 +17,7 @@ use crate::evidence::MemoryEntry;
 use crate::keys;
 use crate::state::App;
 use crate::state::{Pane, Screen, Stage, ViewportMode};
-use crate::test_harness::attach_connection;
+use crate::test_harness::connect_session;
 use crate::test_harness::render_text;
 use crate::test_harness::worktree_preview;
 use crate::ui::{RemoveFocus, WorktreeLevel};
@@ -438,7 +438,7 @@ fn test_esc_closes_memory_pane() {
 #[test]
 fn test_esc_closes_memory_busy() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.run_command(SlashCommand::Memory);
     app.start_run_for_test(0);
     assert_eq!(

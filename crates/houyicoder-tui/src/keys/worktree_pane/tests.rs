@@ -10,9 +10,7 @@ use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::composition;
 use crate::keys::handle_working;
 use crate::state::{App, Pane};
-use crate::test_harness::{
-    TransportEvent, connected_app_with_events, wait_for_request, worktree_preview,
-};
+use crate::test_harness::{TransportEvent, live_session, wait_for_request, worktree_preview};
 use crate::ui::{RemoveFocus, WorktreeLevel};
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -22,7 +20,7 @@ fn key(code: KeyCode) -> KeyEvent {
 /// An App on the /worktrees pane with three rows, its own connection so the
 /// pane's requests reach a recording transport, and the cursor on the first.
 fn worktree_app() -> (App, mpsc::Receiver<TransportEvent>) {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Worktree;
     app.sessions.current.capabilities.worktree.entries = vec![
         entry("/w/alpha", "main"),

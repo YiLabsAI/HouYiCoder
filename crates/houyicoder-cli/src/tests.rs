@@ -46,7 +46,7 @@ use houyicoder_client::{Client, InProcTransport};
 #[cfg(unix)]
 use houyicoder_protocol::frontend::SessionId as WireSessionId;
 #[cfg(unix)]
-use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+use houyicoder_tui::composition::{FrontendStartup, SessionHandoff, shared_runtime};
 
 use crate::composition::start_local_server;
 use crate::local_host::{HostLease, HostLeaseScope, HostLeaseSlot};
@@ -613,7 +613,7 @@ fn test_fresh_lock_failure_reclaims() {
     let (tx, rx) = std_channel();
     let (c2s_tx, _) = async_channel(1);
     let (_, s2c_rx) = async_channel(1);
-    let bundle = RunnerBundle {
+    let bundle = SessionHandoff {
         client: Client::new(Box::new(InProcTransport::from_halves(c2s_tx, s2c_rx))),
         agent_tx: tx,
         agent_rx: rx,

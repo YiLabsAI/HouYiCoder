@@ -14,8 +14,8 @@ use crate::keys::handle_working;
 use crate::state::App;
 use crate::state::ViewportMode;
 use crate::state::{Pane, Screen, Stage};
-use crate::test_harness::attach_connection;
-use crate::test_harness::connected_app_events;
+use crate::test_harness::connect_session;
+use crate::test_harness::live_session;
 use crate::test_harness::{render_buffer, render_text};
 
 fn working() -> App {
@@ -28,7 +28,7 @@ fn working() -> App {
 /// local queue (recall + promote path enqueues before mutating the local
 /// copy, so a no-session app refuses the removal).
 fn working_session() -> App {
-    let (app, _events) = connected_app_events();
+    let (app, _events) = live_session();
     app
 }
 
@@ -64,7 +64,7 @@ fn test_idle_esc_keeps() {
 #[test]
 fn test_busy_esc_keeps() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     app.ui.input.queue.push(InputItem::Message("task b".into()));
@@ -101,7 +101,7 @@ fn test_recall_includes_parked() {
 #[test]
 fn test_recall_keeps_command() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.pane = Pane::Queue;
     app.ui
         .input
@@ -126,7 +126,7 @@ fn test_recall_keeps_command() {
 #[test]
 fn test_recall_clear_loses() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.pane = Pane::Queue;
     app.ui
         .input
@@ -536,7 +536,7 @@ fn test_pane_enter_recalls_one() {
 #[test]
 fn test_pane_r_recalls_all() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.pane = Pane::Queue;
     app.ui.input.queue.push(InputItem::Message("a".into()));
     app.ui.input.queue.push(InputItem::Message("b".into()));

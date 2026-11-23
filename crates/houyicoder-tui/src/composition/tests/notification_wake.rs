@@ -5,48 +5,11 @@
 
 use super::super::*;
 use crate::agent_message::{ServerEvent, SessionMessage};
-use crate::composition::local_test_home;
 use crate::records::TranscriptLine;
+use crate::test_harness::live_app;
 use crate::ui::switch_state::{MAX_AUTO_WAKE_TURNS, WAKE_BUDGET_COOLDOWN};
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::SessionId;
-use houyicoder_service::composition::BuildRunnerOptions;
-use houyicoder_service::composition::build_runner;
-use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
-
-fn wired_app() -> App {
-    let mut options = BuildRunnerOptions::default();
-    options.home = Some(local_test_home());
-    let bundle = build_runner(options);
-    let runner = bundle.runner;
-    let session = bundle.session;
-    let gate = bundle.gate;
-    let append_notify = bundle.append_notify;
-    let wire_session = SessionId(session.to_string());
-    let (tx, rx) = mpsc::channel::<SessionMessage>();
-    let (runner, client, startup_warnings) =
-        start_local_server(runner, session, gate, append_notify, None);
-    drop(runner);
-    let bundle = RunnerBundle {
-        client,
-        agent_tx: tx,
-        agent_rx: rx,
-        session: wire_session,
-        model: "test-model".to_string(),
-        trajectory_log: None,
-        export_log: None,
-        snapshot: None,
-        session_catalog: None,
-    };
-    let startup = FrontendStartup {
-        skip_login: false,
-        startup_warnings,
-        history_path: PathBuf::from("/dev/null"),
-    };
-    build_app(bundle, startup)
-}
 
 /// Deliver a pending-notification report the way the driver would.
 fn report_pending(app: &mut App, count: u32) {
@@ -72,7 +35,7 @@ fn age_past_debounce(app: &mut App) {
 /// wake condition.
 #[test]
 fn test_wake_sends_nothing() {
-    let mut app = wired_app();
+    let mut app = live_app();
     let mut dirty = false;
     app.idle_drain(None, &mut dirty);
     assert!(
@@ -86,7 +49,7 @@ fn test_wake_sends_nothing() {
 /// a second ending arriving a moment later must batch into the same turn.
 #[test]
 fn test_wake_debounces() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = true;
     report_pending(&mut app, 1);
     let mut dirty = false;
@@ -103,7 +66,7 @@ fn test_wake_debounces() {
 /// invalidated.
 #[test]
 fn test_wake_restarts_window() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = true;
     report_pending(&mut app, 1);
     let mut dirty = false;
@@ -127,7 +90,7 @@ fn test_wake_restarts_window() {
 /// consecutive budget counts one.
 #[test]
 fn test_wake_sends_after_debounce() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = true;
     report_pending(&mut app, 1);
     age_past_debounce(&mut app);
@@ -150,7 +113,7 @@ fn test_wake_sends_after_debounce() {
 /// user's own running one.
 #[test]
 fn test_wake_waits_for_idle() {
-    let mut app = wired_app();
+    let mut app = live_app();
     report_pending(&mut app, 1);
     age_past_debounce(&mut app);
     app.sessions.current.run.start(RequestId(1), Instant::now());
@@ -166,7 +129,7 @@ fn test_wake_waits_for_idle() {
 /// session may wake again on its own.
 #[test]
 fn test_wake_user_resets_budget() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
     app.ui.notification_wake.user_interrupted();
     assert_eq!(app.ui.notification_wake.auto_wake_turns, 0);
@@ -177,7 +140,7 @@ fn test_wake_user_resets_budget() {
 /// is gated on the same clean-end condition the queued-message drain uses.
 #[test]
 fn test_wake_skips_after_interrupt() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = false;
     report_pending(&mut app, 1);
     age_past_debounce(&mut app);
@@ -195,7 +158,7 @@ fn test_wake_skips_after_interrupt() {
 /// session spins on a wake it will never send.
 #[test]
 fn test_interrupt_closes_window() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = false;
     report_pending(&mut app, 1);
     age_past_debounce(&mut app);
@@ -217,7 +180,7 @@ fn test_interrupt_closes_window() {
 /// parks.
 #[test]
 fn test_wake_budget_stops() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = true;
     app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
     report_pending(&mut app, 1);
@@ -232,7 +195,7 @@ fn test_wake_budget_stops() {
 /// exists.
 #[test]
 fn test_wake_survives_no_connection() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.connection = None;
     report_pending(&mut app, 1);
     age_past_debounce(&mut app);
@@ -247,7 +210,7 @@ fn test_wake_survives_no_connection() {
 /// spins at full CPU on a wake it will never send.
 #[test]
 fn test_wake_cap_closes_window() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = true;
     app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
     report_pending(&mut app, 3);
@@ -289,7 +252,7 @@ fn test_wake_cap_closes_window() {
 /// endings spread through a long session never latch the wake shut.
 #[test]
 fn test_wake_cooldown_resets_budget() {
-    let mut app = wired_app();
+    let mut app = live_app();
     app.sessions.current.last_run_final = true;
     app.ui.notification_wake.auto_wake_turns = MAX_AUTO_WAKE_TURNS;
     app.ui.notification_wake.last_wake_at = Some(

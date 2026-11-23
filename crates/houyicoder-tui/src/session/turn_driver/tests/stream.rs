@@ -6,7 +6,7 @@ use crate::keys::handle_working;
 use crate::records::interrupted_notice;
 use crate::row_id::RowId;
 use crate::state::Screen;
-use crate::test_harness::attach_connection;
+use crate::test_harness::connect_session;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -463,7 +463,7 @@ fn test_live_blocks_restore() {
 #[test]
 fn test_recall_survives_interrupt() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.screen = Screen::Working;
     app.start_run_for_test(0);
     app.sessions.current.last_run_input = Some("first".into());
@@ -572,7 +572,7 @@ fn test_resubmit_avoids_duplicate_interrupt() {
     };
 
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.screen = Screen::Working;
 
     // Turn 1: submit, then interrupt before output -> restore for editing.
@@ -793,7 +793,7 @@ fn test_batch_delivers_via_drain() {
 #[test]
 fn test_submit_clears_lone_interrupt() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.screen = Screen::Working;
     // A run with real output, interrupted: a lone notice, no restore pair.
     app.spawn_run("first".into());

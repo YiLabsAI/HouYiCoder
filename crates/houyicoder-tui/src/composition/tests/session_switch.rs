@@ -1,6 +1,4 @@
 use super::super::*;
-use crate::agent_message::ConnectionEvent;
-use crate::composition::local_test_home;
 use crate::fold::DisplaySlot;
 use crate::fold::display_slots;
 use crate::input::queue::InputItem;
@@ -14,23 +12,16 @@ use crate::state::Pane;
 use crate::state::Screen;
 use crate::state::history_read::{HistoryReadOutcome, HistoryStamp};
 use crate::state::transcript::DiskFront;
-use crate::test_harness::render_text;
+use crate::test_harness::{render_text, test_handoff};
 use crate::todo_view::{TodoStatus, TodoView};
 use crate::transcript::SequencedFrame;
 use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::envelope::DurableEventId;
 use houyicoder_protocol::envelope::RequestId;
-use houyicoder_protocol::frontend::SessionId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
-use houyicoder_service::composition::BuildRunnerOptions;
-use houyicoder_service::composition::build_runner;
-use std::env::temp_dir;
 use std::sync::atomic::Ordering;
-use std::thread::sleep;
-use std::time::Duration;
-use tokio::task::JoinHandle;
 
 /// The resolved target carried by a queued /resume Command at the head.
 fn queued_target(app: &App) -> Option<String> {
@@ -50,86 +41,13 @@ fn enqueue_resume_target(app: &mut App, target: &str) {
         .insert(0, InputItem::Command(format!("/resume {target}")));
 }
 
-fn test_bundle() -> (RunnerBundle, FrontendStartup) {
-    let mut options = BuildRunnerOptions::default();
-    // Memory roots, skill discovery, and the snapshot store resolve under
-    // this temp home instead of the developer's home.
-    options.home = Some(local_test_home());
-    let bundle = build_runner(options);
-    let runner = bundle.runner;
-    let session = bundle.session;
-    let gate = bundle.gate;
-    let append_notify = bundle.append_notify;
-    let wire_session = SessionId(session.to_string());
-    let (tx, rx) = mpsc::channel::<SessionMessage>();
-    let (runner, client, startup_warnings) =
-        start_local_server(runner, session, gate, append_notify, None);
-    drop(runner);
-    (
-        RunnerBundle {
-            client,
-            agent_tx: tx,
-            agent_rx: rx,
-            session: wire_session,
-            model: "test-model".to_string(),
-            trajectory_log: None,
-            export_log: None,
-            snapshot: None,
-            session_catalog: None,
-        },
-        FrontendStartup {
-            skip_login: false,
-            startup_warnings,
-            history_path: temp_dir().join("houyi-history-swap-test.jsonl"),
-        },
-    )
-}
-
 /// Build a working App from the test pairing, applying both the session
 /// bundle and the frontend startup policy the pairing resolved. Mirrors the
 /// production composition root, which never builds a Session without also
 /// resolving the frontend policy.
 fn test_app() -> App {
-    let (bundle, startup) = test_bundle();
+    let (bundle, startup) = test_handoff();
     build_app(bundle, startup)
-}
-
-/// Like test_bundle but returns the server task's JoinHandle so a test can
-/// assert the serve loop exited after the session is torn down.
-fn test_bundle_tracked() -> ((RunnerBundle, FrontendStartup), JoinHandle<()>) {
-    let mut options = BuildRunnerOptions::default();
-    options.home = Some(local_test_home());
-    let bundle = build_runner(options);
-    let runner = bundle.runner;
-    let session = bundle.session;
-    let gate = bundle.gate;
-    let append_notify = bundle.append_notify;
-    let wire_session = SessionId(session.to_string());
-    let (tx, rx) = mpsc::channel::<SessionMessage>();
-    let (runner, client, serve, startup_warnings) =
-        start_local_server_tracked(runner, session, gate, append_notify, None);
-    drop(runner);
-    (
-        (
-            RunnerBundle {
-                client,
-                agent_tx: tx,
-                agent_rx: rx,
-                session: wire_session,
-                model: "test-model".to_string(),
-                trajectory_log: None,
-                export_log: None,
-                snapshot: None,
-                session_catalog: None,
-            },
-            FrontendStartup {
-                skip_login: false,
-                startup_warnings,
-                history_path: temp_dir().join("houyi-history-swap2-test.jsonl"),
-            },
-        ),
-        serve,
-    )
 }
 
 #[test]
@@ -147,7 +65,7 @@ fn test_switch_session_resets_view() {
                 text: "old frame".into(),
             }),
         )));
-    let (new_bundle, new_startup) = test_bundle();
+    let (new_bundle, new_startup) = test_handoff();
     let new_sid = new_bundle.session.0.clone();
     let new_warning_count = new_startup.startup_warnings.len();
     app.switch_session(new_bundle);
@@ -220,7 +138,7 @@ fn test_switch_drops_pending_read() {
         .dispatch(HistoryStamp::new(0, DiskFront::Unloaded, None), rx);
     assert_eq!(app.sessions.current.history_reads.running(), 1);
 
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
 
     assert!(
         !app.sessions.current.history_reads.holds_pending(),
@@ -248,7 +166,7 @@ fn test_swap_bumps_transcript_version() {
     // avoids comparing against the leaving session's count, which depends on
     // platform-dependent startup notices.
     let mut app = test_app();
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
     assert_eq!(
         app.sessions.current.transcript.revision(),
         1,
@@ -261,7 +179,7 @@ fn test_swap_bumps_transcript_version() {
 /// surfaces as a system line instead of silently dropping.
 #[test]
 fn test_build_app_surfaces_warnings() {
-    let (bundle, mut startup) = test_bundle();
+    let (bundle, mut startup) = test_handoff();
     startup
         .startup_warnings
         .push("model.effort_level: bad".into());
@@ -430,7 +348,7 @@ fn test_idle_drain_noop_shell() {
     app.sessions.current.shell.begin(RequestId(1));
     app.ui.input.queue.push(InputItem::Message("queued".into()));
     let mut dirty = false;
-    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
+    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_handoff()));
     app.idle_drain(Some(&*builder), &mut dirty);
     assert!(!dirty, "a running command = no swap and no drain");
     assert!(
@@ -520,7 +438,7 @@ fn test_resume_precedes_queued_message() {
         .queue
         .push(InputItem::Message("queued msg".into()));
     let mut dirty = false;
-    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
+    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_handoff()));
     app.idle_drain(Some(&*builder), &mut dirty);
     assert!(dirty, "swap flagged dirty");
     assert!(
@@ -572,7 +490,7 @@ fn test_clears_session_local_state() {
     assert!(!app.sessions.current.todos.items.is_empty());
     assert!(app.ui.selection.transcript.anchor.is_some());
 
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
 
     assert!(app.sessions.current.todos.items.is_empty(), "todos cleared");
     assert_eq!(
@@ -618,7 +536,7 @@ fn test_swap_carries_pending_across() {
         .push(InputItem::Command("/resume sid-b".into()));
     app.ui.input.queue.push(InputItem::Message("task c".into()));
 
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
 
     assert_eq!(
         app.ui.input.queue,
@@ -629,56 +547,6 @@ fn test_swap_carries_pending_across() {
         ],
         "queue carried across, order preserved; messages demoted to \
          ParkedMessage (new runner's server queue is empty)"
-    );
-}
-
-/// Teardown: a swap drops the old session, which drops the old driver's
-/// command channel, so the old driver exits, which drops the old client,
-/// which drops the wire channel, so the old server's serve loop sees a
-/// clean disconnect and exits. No orphan server task lingers. This is the
-/// foundation that makes abandoning any InjectUser'd queue items safe (the
-/// abandoned items die with the old server). Polled (not async-awaited)
-/// because the shared runtime runs the server task on its own threads.
-#[test]
-fn test_tears_down_old_server() {
-    let ((bundle, bundle_startup), old_serve) = test_bundle_tracked();
-    let mut app = build_app(bundle, bundle_startup);
-    // The old server serves an established session before the swap: wait for
-    // the driver's readiness announcement, which the handshake produces once,
-    // so the server is proven to be serving rather than merely not yet dead.
-    let msg = app
-        .sessions
-        .current
-        .connection
-        .as_mut()
-        .expect("session")
-        .poll_startup(Duration::from_secs(5))
-        .expect("the handshake result arrives");
-    assert!(
-        matches!(msg, SessionMessage::Connection(ConnectionEvent::Ready)),
-        "the driver announces readiness, got {msg:?}"
-    );
-    app.handle_agent_message(msg);
-    assert!(
-        !old_serve.is_finished(),
-        "old server alive before swap (handshake done, waiting on input)"
-    );
-    // Swap: build_app resets self, dropping the old connection. The driver
-    // JoinHandle is detached (the task is not aborted), but the driver exits
-    // when its command channel returns None.
-    app.switch_session(test_bundle().0);
-    // The teardown chain is async on the shared runtime; poll for completion.
-    let mut tries = 0;
-    while !old_serve.is_finished() && tries < 200 {
-        sleep(Duration::from_millis(10));
-        tries += 1;
-    }
-    assert!(
-        old_serve.is_finished(),
-        "old server serve loop must exit after the swap drops the session \
-         (command channel drop -> driver exit -> client drop -> server \
-         disconnect). Polled {tries} times (2s); still running -- orphan \
-         server leak."
     );
 }
 
@@ -729,7 +597,7 @@ fn test_drops_non_resume_commands() {
         .queue
         .push(InputItem::Message("kept msg 2".into()));
 
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
 
     // Messages + /resume stay; /clear + /rewind dropped.
     assert_eq!(
@@ -852,7 +720,7 @@ fn group_body_visible(app: &App) -> bool {
 /// session holds no row at that position.
 #[test]
 fn test_swap_restores_open_keys() {
-    let (first, first_startup) = test_bundle();
+    let (first, first_startup) = test_handoff();
     let first_sid = first.session.clone();
     let mut app = build_app(first, first_startup);
     app.sessions.current.transcript = folded_transcript().into();
@@ -869,7 +737,7 @@ fn test_swap_restores_open_keys() {
         "the open group draws its body rows before the switch"
     );
 
-    let (second, _second_startup) = test_bundle();
+    let (second, _second_startup) = test_handoff();
     let second_sid = second.session.clone();
     assert_ne!(
         first_sid, second_sid,
@@ -903,7 +771,7 @@ fn test_swap_restores_open_keys() {
     }
     assert!(group_body_visible(&app));
 
-    let (mut back, _back_startup) = test_bundle();
+    let (mut back, _back_startup) = test_handoff();
     back.session = first_sid;
     app.switch_session(back);
     app.sessions.current.transcript = folded_transcript().into();
@@ -983,7 +851,7 @@ fn row_of_line(app: &App, needle: &str) -> usize {
 /// its own place -- nothing of the first session's position crosses.
 #[test]
 fn test_swap_restores_place() {
-    let (first, first_startup) = test_bundle();
+    let (first, first_startup) = test_handoff();
     let first_sid = first.session.clone();
     let mut app = build_app(first, first_startup);
     app.ui.navigation.screen = Screen::Working;
@@ -1007,7 +875,7 @@ fn test_swap_restores_place() {
         "and the tail is off screen, so the check below tells the two apart:\n{out}"
     );
 
-    let (second, _second_startup) = test_bundle();
+    let (second, _second_startup) = test_handoff();
     app.switch_session(second);
     named_transcript(&mut app, "new", 40);
     let out = drawn(&app);
@@ -1024,7 +892,7 @@ fn test_swap_restores_place() {
         "nothing of the first session's place crosses:\n{out}"
     );
 
-    let (mut back, _back_startup) = test_bundle();
+    let (mut back, _back_startup) = test_handoff();
     back.session = first_sid;
     app.switch_session(back);
     named_transcript(&mut app, "old", 40);
@@ -1072,13 +940,13 @@ fn test_switch_parking_hygiene() {
         .results
         .insert("child-key".into());
 
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
     assert!(
         app.ui.teammate_view.is_none(),
         "the switch leaves the child view behind"
     );
 
-    let (mut back, _back_startup) = test_bundle();
+    let (mut back, _back_startup) = test_handoff();
     back.session = first_sid;
     app.switch_session(back);
     assert!(
@@ -1127,7 +995,7 @@ fn test_switch_drops_child_park() {
         .insert("child-key".into());
     app.exit_teammate_view();
 
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
     app.sessions
         .current
         .transcript
@@ -1155,7 +1023,7 @@ fn test_switch_drops_child_park() {
 fn test_swap_preserves_terminal_focus() {
     let mut app = test_app();
     app.ui.terminal_focused = false;
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
     assert!(
         !app.ui.terminal_focused,
         "terminal_focused preserved, not reset to the app() default"
@@ -1170,7 +1038,7 @@ fn test_swap_preserves_terminal_focus() {
 fn test_swap_resets_verbose() {
     let mut app = test_app();
     app.ui.verbose = true;
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
     assert!(
         !app.ui.verbose,
         "verbose reset to false, not carried from the search view"
@@ -1186,7 +1054,7 @@ fn test_swap_resets_verbose() {
 fn test_swap_carries_run_final() {
     let mut app = test_app();
     app.sessions.current.last_run_final = false;
-    app.switch_session(test_bundle().0);
+    app.switch_session(test_handoff().0);
     assert!(
         !app.sessions.current.last_run_final,
         "last_run_final carried from the pre-switch value, not forged true"
@@ -1196,7 +1064,7 @@ fn test_swap_carries_run_final() {
     // pre-switch value, so true stays true.
     let mut app2 = test_app();
     app2.sessions.current.last_run_final = true;
-    app2.switch_session(test_bundle().0);
+    app2.switch_session(test_handoff().0);
     assert!(
         app2.sessions.current.last_run_final,
         "true carried, not reset to false"
@@ -1218,7 +1086,7 @@ fn test_switch_drains_carried_queue() {
         .queue
         .push(InputItem::Message("carried".into()));
     let mut dirty = false;
-    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_bundle()));
+    let builder: Box<ResumeBuilderRef> = Box::new(|_| Ok(test_handoff()));
     app.idle_drain(Some(&*builder), &mut dirty);
     assert!(dirty, "swap + drain flagged dirty");
     assert!(queued_target(&app).is_none(), "resume target consumed");

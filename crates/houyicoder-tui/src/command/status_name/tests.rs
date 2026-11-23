@@ -1,6 +1,6 @@
 use super::*;
 use crate::composition::app;
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{live_session, wait_for_request};
 use houyicoder_protocol::frontend::FrontendRequest;
 
 /// enter opens the editor even without an active session; the session
@@ -38,7 +38,7 @@ fn test_commit_no_editor_noop() {
 /// current session id.
 #[test]
 fn test_commit_ships_rename() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     let mut field = InputField::new();
     field.set("my session".into());
     app.ui.navigation.status_pane.name_edit = Some(field);

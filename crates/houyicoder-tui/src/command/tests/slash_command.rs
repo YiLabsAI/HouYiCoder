@@ -11,9 +11,9 @@ use crate::composition;
 use crate::evidence::Verdict;
 use crate::state::App;
 use crate::state::{Pane, Screen, Stage};
-use crate::test_harness::connected_app;
-use crate::test_harness::connection_lost_app;
+use crate::test_harness::dead_session_app;
 use crate::test_harness::install_agent_types;
+use crate::test_harness::live_app;
 use crate::test_harness::{model_caps, model_catalog, model_entry, render_text};
 use houyicoder_protocol::frontend::trajectory::TrajectoryEntry;
 
@@ -59,7 +59,7 @@ fn test_tab_cycle_connected() {
     // push a system line — the status-bar label is the single source of mode
     // truth, so the chat surface stays clean (the cycle itself lands
     // server-side; the label flips when the PermissionMode reply arrives).
-    let mut app = connected_app();
+    let mut app = live_app();
     let before = app.sessions.current.transcript.len();
     app.tab_cycle_mode();
     assert_eq!(
@@ -471,7 +471,7 @@ fn test_trajectory_renders_chain() {
 #[test]
 fn test_compact_connection_lost() {
     // A dead driver refuses the compact: no in-progress line is pushed.
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     let before = app.sessions.current.transcript.len();
     app.run_command(SlashCommand::Compact);
     let out = render(&app);

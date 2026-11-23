@@ -146,3 +146,40 @@ fn test_store_slug_bounds() {
         "a path with no file name still yields a slug: {root}"
     );
 }
+
+#[test]
+fn test_walk_finds_workspace_root() {
+    // The sandbox must pin to the repo root, not the launch subdir. Build a
+    // temp repo: root/Cargo.toml ([workspace]) + root/crate/Cargo.toml, then
+    // walk up from crate/ and assert it returns the workspace root.
+    let root = temp_dir("walk");
+    let crate_dir = root.join("crate");
+    fs::create_dir_all(&crate_dir).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crate\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        crate_dir.join("Cargo.toml"),
+        "[package]\nname = \"crate\"\n",
+    )
+    .unwrap();
+    let found = walk_to_workspace_root(&crate_dir);
+    assert_eq!(found, Some(dunce::canonicalize(&root).unwrap()));
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn test_walk_none_outside_repo() {
+    // A parent chain with no manifest yields None: the walk must not fall back
+    // to the home directory.
+    let d = temp_dir("none");
+    fs::create_dir_all(&d).unwrap();
+    let found = walk_to_workspace_root(&d);
+    assert_eq!(
+        found, None,
+        "walk from a no-manifest dir must return None, got {found:?}"
+    );
+    fs::remove_dir_all(&d).ok();
+}

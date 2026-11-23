@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::composition::app;
 use crate::records::TranscriptLine;
 use crate::state::App;
-use crate::test_harness::connected_app;
+use crate::test_harness::live_app;
 use crate::view::export_log::{ExportLog, ExportPayload};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
@@ -62,7 +62,7 @@ fn test_export_writes_file_reports() {
     ));
     create_dir_all(&dir).unwrap();
     let target = dir.join("out.json");
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "ignored.json".into(),
@@ -101,7 +101,7 @@ fn test_export_disconnected() {
 
 #[test]
 fn test_export_source_gap() {
-    let mut app = connected_app();
+    let mut app = live_app();
     // Connected, but the export source is not installed — a capability gap,
     // not a disconnect.
     app.run_export(None);
@@ -114,7 +114,7 @@ fn test_export_source_gap() {
 
 #[test]
 fn test_unwritable_path_reports_error() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "x.json".into(),
@@ -144,7 +144,7 @@ fn test_dispatched_via_local_command() {
     ));
     create_dir_all(&dir).unwrap();
     let target = dir.join("dispatched.json");
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.persistence.export_log = Some(Arc::new(StubExport {
         payload: ExportPayload {
             filename: "d.json".into(),

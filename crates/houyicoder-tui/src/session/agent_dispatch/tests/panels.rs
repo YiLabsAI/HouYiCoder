@@ -5,9 +5,9 @@ use crate::skills_state::SkillDetail;
 use crate::state::Pane;
 use crate::state::Screen;
 use crate::test_harness::agent_entry;
-use crate::test_harness::connected_app_with_events;
-use crate::test_harness::connection_lost_app;
+use crate::test_harness::dead_session_app;
 use crate::test_harness::install_agent_types;
+use crate::test_harness::live_session;
 use crate::test_harness::render_text;
 use crate::test_harness::worktree_path;
 use crate::test_harness::worktree_preview;
@@ -136,7 +136,7 @@ fn test_open_detail_without_session() {
 /// pane never waits on a reply that cannot arrive.
 #[test]
 fn test_lost_send_settles_detail() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui.navigation.pane = Pane::Skills;
     app.sessions.current.capabilities.skills.entries = vec![skill_entry("alpha")];
     app.open_skill_detail();
@@ -150,7 +150,7 @@ fn test_lost_send_settles_detail() {
 /// A connection loss settles a loading detail, because no reply is coming.
 #[test]
 fn test_loss_settles_skill_detail() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui
         .skills_pane
         .request_detail(RequestId(31), "alpha".into());
@@ -167,7 +167,7 @@ fn test_loss_settles_skill_detail() {
 /// on a reply that cannot arrive.
 #[test]
 fn test_error_settles_skill_detail() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui
         .skills_pane
         .request_detail(RequestId(41), "alpha".into());
@@ -194,7 +194,7 @@ fn test_error_settles_skill_detail() {
 /// reply it waits on is still to come.
 #[test]
 fn test_error_keeps_detail_loading() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui
         .skills_pane
         .request_detail(RequestId(42), "alpha".into());
@@ -509,7 +509,7 @@ fn test_permission_dirs_unchanged() {
 /// user with no way off the page at all.
 #[test]
 fn test_loss_settles_worktree_removal() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     let path = worktree_path("alpha");
     {
         let mut draft = app.ui.worktree_pane.draft.borrow_mut();
@@ -533,7 +533,7 @@ fn test_loss_settles_worktree_removal() {
 /// The same release for the sandbox restore confirmation.
 #[test]
 fn test_loss_settles_restore() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     assert!(app.ui.sandbox_pane.begin_restore(RequestId(43)));
 
     assert!(app.apply_connection_loss("connect failed".into(), Vec::new()));

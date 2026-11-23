@@ -2,12 +2,20 @@
 
 #![cfg(test)]
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use houyicoder_api::provider::ModelProvider;
 use houyicoder_async::PFut;
-use houyicoder_client::{Client, Transport};
+use houyicoder_client::{Client, InProcTransport, Transport};
+use houyicoder_core::SessionId as EngineSessionId;
+use houyicoder_core::agent::Runner;
+use houyicoder_core::agent::ToolRegistry;
+use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::agents::{AgentEntry, AgentPrompt};
 use houyicoder_protocol::frontend::model::{
@@ -18,12 +26,17 @@ use houyicoder_protocol::frontend::model::{
 use houyicoder_protocol::frontend::worktree::WorktreePreviewView;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_protocol::llm::EffortLevel;
+use houyicoder_provider::FakeProvider;
+use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
+use houyicoder_session::SessionStore;
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+use std::env::temp_dir;
+use tokio::sync::Notify;
 
 use crate::agent_message::{ConnectionEvent, SessionMessage};
 use crate::app::apply_selection_overlay;
 use crate::composition::app as composition_app;
-use crate::composition::shared_runtime;
+use crate::composition::{FrontendStartup, SessionHandoff, build_app, shared_runtime};
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
 use crate::state::{App, Screen};
@@ -35,6 +48,7 @@ use crate::view::draw;
 use houyicoder_protocol::envelope::ClientFrame;
 use houyicoder_protocol::envelope::RequestEnvelope;
 use houyicoder_protocol::frontend::FrontendRequest;
+use houyicoder_protocol::frontend::SessionId;
 use std::future::pending;
 use std::sync::mpsc::channel;
 use std::time::Instant;
@@ -367,13 +381,110 @@ impl Transport for RecordingTransport {
 }
 
 /// Build an App with an active negotiated test session.
-pub(crate) fn connected_app() -> App {
-    connected_app_with_events().0
+pub(crate) fn live_app() -> App {
+    live_session().0
 }
 
-/// Same as connected_app_with_events, under the name dev's tests use.
-pub(crate) fn connected_app_events() -> (App, Receiver<TransportEvent>) {
-    connected_app_with_events()
+/// An App over a real in-process server with a scripted provider, for the
+/// behavior that needs the host's own answers (rule persistence). The runner
+/// and the gate stay with the server task; the frontend holds only the client.
+pub(crate) fn server_app() -> App {
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::text("ok"));
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let append_notify = Arc::new(Notify::new());
+    let session = EngineSessionId::new();
+    let runner = Runner::new(
+        store,
+        provider,
+        ToolRegistry::new(),
+        RunnerConfig {
+            model: "test".into(),
+            instructions: "you are a test agent".into(),
+            max_turns: 5,
+            ..RunnerConfig::default()
+        },
+    );
+    let (client, startup_warnings) = pair_server(
+        runner,
+        session,
+        Arc::new(DefaultModeGate::new()),
+        append_notify,
+    );
+    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    build_app(
+        SessionHandoff {
+            client,
+            agent_tx,
+            agent_rx,
+            session: SessionId(session.to_string()),
+            model: "test-model".to_string(),
+            trajectory_log: None,
+            export_log: None,
+            snapshot: None,
+            session_catalog: None,
+        },
+        FrontendStartup {
+            skip_login: false,
+            startup_warnings,
+            history_path: temp_dir()
+                .join(format!("houyi-history-{}-{n}.jsonl", std::process::id())),
+        },
+    )
+}
+
+/// Pair a server and client around a runner over an in-process transport. The
+/// runner and the permission gate stay with the server task.
+pub(crate) fn pair_server(
+    mut runner: Runner,
+    session: EngineSessionId,
+    gate: Arc<DefaultModeGate>,
+    append_notify: Arc<Notify>,
+) -> (Client, Vec<String>) {
+    let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
+    let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
+    let event_sequencer = EventSequencer::new();
+    event_sequencer.install_on(&mut runner);
+    let startup_warnings = runner.drain_startup_warnings();
+    let runner = Arc::new(runner);
+    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
+    let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
+    let server = Server::new_with_event_sequencer(runner, session, gate_dyn, event_sequencer)
+        .with_append_notify(append_notify);
+    shared_runtime().spawn(async move {
+        drop(server.serve(server_io).await);
+    });
+    let transport = InProcTransport::from_halves(c2s_tx, s2c_rx);
+    (Client::new(Box::new(transport)), startup_warnings)
+}
+
+/// A handoff for the session-switch tests: a live connection with no runner
+/// behind it, so a swap exercises the frontend's own commit path.
+pub(crate) fn test_handoff() -> (SessionHandoff, FrontendStartup) {
+    let (events_tx, _events_rx) = mpsc::channel();
+    let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
+    let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    (
+        SessionHandoff {
+            client,
+            agent_tx,
+            agent_rx,
+            session: SessionId(format!("test-session-{n}")),
+            model: "test-model".to_string(),
+            trajectory_log: None,
+            export_log: None,
+            snapshot: None,
+            session_catalog: None,
+        },
+        FrontendStartup {
+            skip_login: false,
+            startup_warnings: Vec::new(),
+            history_path: temp_dir().join(format!("houyi-history-{n}.jsonl")),
+        },
+    )
 }
 
 /// Wait for the connected transport to ship a request frame whose payload
@@ -426,7 +537,7 @@ pub(crate) fn wait_for_notification(
 
 /// Build an App with an active negotiated test session, plus the transport
 /// events it records, so tests can assert on the frames it shipped.
-pub(crate) fn connected_app_with_events() -> (App, Receiver<TransportEvent>) {
+pub(crate) fn live_session() -> (App, Receiver<TransportEvent>) {
     let runtime = shared_runtime();
     let (events_tx, events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
@@ -462,7 +573,7 @@ impl Transport for FailedHandshakeTransport {
 /// paths succeed without rebuilding the App. Use this when a fixture built
 /// its own state (catalog, queues, cards) must now take its connected
 /// branch.
-pub(crate) fn attach_connection(app: &mut App) {
+pub(crate) fn connect_session(app: &mut App) {
     let runtime = shared_runtime();
     let (events_tx, _events_rx) = mpsc::channel();
     let client = Client::new(Box::new(RecordingTransport::new(events_tx)));
@@ -475,7 +586,7 @@ pub(crate) fn attach_connection(app: &mut App) {
 /// present, the connection is lost, and the ConnectionLost event has already
 /// arrived. Send attempts are refused deterministically, so tests can drive
 /// the send-failure branches without racing the scheduler.
-pub(crate) fn connection_lost_app() -> App {
+pub(crate) fn dead_session_app() -> App {
     let runtime = shared_runtime();
     let client = Client::new(Box::new(FailedHandshakeTransport));
     let (agent_tx, agent_rx) = mpsc::channel::<SessionMessage>();
@@ -502,7 +613,7 @@ pub(crate) fn connection_lost_app() -> App {
 
 #[test]
 fn test_harness_sends_frames() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.tab_cycle_mode();
     loop {
         match events
@@ -518,7 +629,7 @@ fn test_harness_sends_frames() {
 
 #[test]
 fn test_harness_stops_driver() {
-    let (app, events) = connected_app_with_events();
+    let (app, events) = live_session();
     drop(app);
     loop {
         match events

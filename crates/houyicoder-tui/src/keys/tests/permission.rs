@@ -19,13 +19,13 @@ use houyicoder_protocol::frontend::run::ApprovalScope;
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition;
-use crate::composition::build_app_for_test;
 use crate::keys::{approval_scope, handle_working};
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, TranscriptLine};
 use crate::state::PermissionTab;
 use crate::state::{App, Pane, PermissionInput, Screen};
-use crate::test_harness::{connection_lost_app, render_buffer, render_text};
+use crate::test_harness::{dead_session_app, render_buffer, render_text};
+use crate::test_harness::{live_app, server_app};
 use houyicoder_protocol::frontend::SlashCommand;
 use houyicoder_protocol::frontend::permission::RuleDestination;
 use ratatui::style::Color;
@@ -88,54 +88,6 @@ fn last_system(app: &App) -> String {
 }
 
 #[test]
-fn test_permission_rule_add_list() {
-    // /permissions add/list/del are wire verbs now (server authority). Drive
-    // them on a connected app + pump the driver between commands so the server's
-    // PermissionRulesResult replies land in rules_cache before the next read.
-    let mut app = build_app_for_test(None);
-    app.ui.navigation.screen = Screen::Working;
-    app.ui.navigation.pane = Pane::Transcript;
-    run(&mut app, "/permissions add bash allow");
-    assert!(last_system(&app).contains("added"));
-    pump_rules(&mut app);
-    run(&mut app, "/permissions list");
-    assert!(last_system(&app).contains("bash"));
-    assert!(last_system(&app).contains("allow"));
-    run(&mut app, "/permissions del 0");
-    assert!(last_system(&app).contains("removed"));
-    pump_rules(&mut app);
-    run(&mut app, "/permissions list");
-    assert!(last_system(&app).contains("no rules"));
-}
-
-/// Pump the driver until the rules cache length changes (the add/del replies
-/// ship a fresh rule set), or the wait times out.
-fn pump_rules(app: &mut App) {
-    let mark = app
-        .sessions
-        .current
-        .capabilities
-        .permission
-        .rules_cache
-        .len();
-    for _ in 0..200 {
-        app.poll_agent();
-        if app
-            .sessions
-            .current
-            .capabilities
-            .permission
-            .rules_cache
-            .len()
-            != mark
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-#[test]
 fn test_permission_view_shows_mode() {
     let mut app = app();
     run(&mut app, "/permissions view");
@@ -165,7 +117,7 @@ fn test_permission_bad_effect_rejected() {
 fn test_status_bar_renders_mode() {
     // A connected app shows the mode label in the agent status bar. Render and
     // confirm the current mode label lands in the bottom status line.
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Auto);
     let text = render_text(&app, 100, 28);
@@ -177,7 +129,7 @@ fn test_status_bar_renders_mode() {
 
 #[test]
 fn test_status_bar_renders_manual() {
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.capabilities.permission.mode_cache = Some(PermissionMode::Manual);
     let (_, manual_mark) = detect_mode_marks();
@@ -203,7 +155,7 @@ fn test_status_bar_renders_manual() {
 
 #[test]
 fn test_approval_popup_no_placeholder() {
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
@@ -242,7 +194,7 @@ fn test_approval_r_binds_reject() {
     // (approve) — else r+Enter silently approves. The internal index
     // is fixed: 0=Yes, 1=No, 2=Yes-don't-ask. No is always 1
     // regardless of card layout.
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
@@ -269,7 +221,7 @@ fn test_approval_r_binds_reject() {
 /// On a two-option entitlement card, 'r' must select No (index 1).
 #[test]
 fn test_entitlement_r_rejects() {
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(0),
@@ -341,7 +293,7 @@ fn scoped_approval() -> Approval {
 }
 
 fn approval_app(approval: Approval) -> App {
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(RequestId(0), approval));
     app
@@ -717,56 +669,6 @@ fn key_press(code: KeyCode) -> KeyEvent {
 }
 
 #[test]
-fn test_permission_add_submode_flow() {
-    // a enters Add, typing fills the input, Enter parses + ships the rule,
-    // sub-mode clears. (In connected mode the pane does not render; asserts state.)
-    let mut app = build_app_for_test(None);
-    app.ui.navigation.screen = Screen::Working;
-    app.ui.navigation.pane = Pane::Permission;
-    handle_working(&mut app, key_press(KeyCode::Char('a')));
-    assert_eq!(app.ui.permission_pane.input, PermissionInput::Add);
-    for c in "bash npm:allow".chars() {
-        handle_working(&mut app, key_press(KeyCode::Char(c)));
-    }
-    assert_eq!(app.ui.input.editor.value(), "bash npm:allow");
-    handle_working(&mut app, key_press(KeyCode::Enter));
-    // Enter on the spec advances to the destination pick (default project),
-    // not a ship — the Add flow is two steps now.
-    assert!(
-        matches!(
-            app.ui.permission_pane.input,
-            PermissionInput::AddDestination {
-                destination: RuleDestination::Project,
-                ..
-            }
-        ),
-        "Add spec Enter advances to destination pick: {:?}",
-        app.ui.permission_pane.input
-    );
-    handle_working(&mut app, key_press(KeyCode::Enter));
-    assert_eq!(
-        app.ui.permission_pane.input,
-        PermissionInput::None,
-        "destination Enter ships + clears sub-mode"
-    );
-    assert!(app.ui.input.editor.is_empty(), "input cleared after submit");
-    pump_rules(&mut app);
-    let added = app
-        .sessions
-        .current
-        .capabilities
-        .permission
-        .rules_cache
-        .iter()
-        .any(|r| r.action == "bash" && matches!(r.effect, PermissionEffect::Allow));
-    assert!(
-        added,
-        "rule landed in cache: {:?}",
-        app.sessions.current.capabilities.permission.rules_cache
-    );
-}
-
-#[test]
 fn test_permission_add_prompt_renders() {
     // Stub app (no runner) renders the pane; the Add sub-mode shows its prompt.
     let mut app = app();
@@ -792,51 +694,101 @@ fn test_permission_add_prompt_renders() {
 }
 
 #[test]
-fn test_permission_remove_submode_deletes() {
-    // 'd' on a focused rule enters Remove (No preselected); Right moves to
-    // Yes, Enter ships the removal. Covers the Remove confirm + the ptr-eq
-    // index resolution.
-    let mut app = build_app_for_test(None);
+fn test_permission_add_bad_effect() {
+    // A bad effect surfaces the parse error as a system line, not a crash,
+    // and leaves the sub-mode.
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
-    run(&mut app, "/permissions add bash allow");
-    pump_rules(&mut app);
-    assert!(
-        !app.sessions
-            .current
-            .capabilities
-            .permission
-            .rules_cache
-            .is_empty()
-    );
-    // Cursor sits on the only rule; 'd' enters Remove (No preselected).
-    handle_working(&mut app, key_press(KeyCode::Char('d')));
-    assert!(matches!(
-        app.ui.permission_pane.input,
-        PermissionInput::Remove { confirm: false, .. }
-    ));
-    // Right moves to Yes; Enter confirms + ships.
-    handle_working(&mut app, key_press(KeyCode::Right));
-    assert!(matches!(
-        app.ui.permission_pane.input,
-        PermissionInput::Remove { confirm: true, .. }
-    ));
+    handle_working(&mut app, key_press(KeyCode::Char('a')));
+    for c in "bash bodge".chars() {
+        handle_working(&mut app, key_press(KeyCode::Char(c)));
+    }
     handle_working(&mut app, key_press(KeyCode::Enter));
-    assert_eq!(
-        app.ui.permission_pane.input,
-        PermissionInput::None,
-        "Remove Enter clears sub-mode"
+    assert_eq!(app.ui.permission_pane.input, PermissionInput::None);
+    let out = last_system(&app);
+    assert!(out.contains("unknown effect"), "error surfaced: {out}");
+}
+
+#[test]
+fn test_permission_palette_opens_pane() {
+    // /permissions is a palette command (SlashCommand::Permission), and
+    // running it opens the interactive pane.
+    assert!(
+        SlashCommand::ALL.contains(&SlashCommand::Permission),
+        "Permission is in the palette"
     );
-    pump_rules(&mut app);
+    assert_eq!(
+        SlashCommand::parse("/permissions"),
+        Some(SlashCommand::Permission)
+    );
+    assert_eq!(SlashCommand::Permission.name(), "/permissions");
+    let mut app = app();
+    app.run_command(SlashCommand::Permission);
+    assert_eq!(
+        app.ui.navigation.pane,
+        Pane::Permission,
+        "run_command opens the pane"
+    );
+}
+
+#[test]
+fn test_permissions_pane_renders_connected() {
+    // In agent-chat mode (a connected session) the main area is the transcript
+    // for most panes, but /permissions takes over the main area like the
+    // artifact pane — so the tab header + rule list render, not the chat
+    // stream. Guards the draw_main overlay routing.
+    let mut app = live_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Permission;
+    let text = render_text(&app, 100, 28);
+    assert!(
+        text.contains("Allow"),
+        "tab header renders in connected mode: {text}"
+    );
+    assert!(text.contains("Recent"), "Recent tab renders: {text}");
+}
+
+#[test]
+fn test_git_toggle_connection_lost() {
+    // A dead driver refuses the toggle: the cached state never moves and the
+    // refusal names the lost connection (no fake success).
+    let mut app = dead_session_app();
     assert!(
         app.sessions
             .current
             .capabilities
             .permission
-            .rules_cache
-            .is_empty(),
-        "rule removed: {:?}",
-        app.sessions.current.capabilities.permission.rules_cache
+            .ask_before_git_enabled,
+        "default on"
+    );
+    app.ui.input.editor.set("/permissions git off".to_string());
+    app.submit_input();
+    assert!(
+        app.sessions
+            .current
+            .capabilities
+            .permission
+            .ask_before_git_enabled,
+        "a failed send must not flip the cached state"
+    );
+    assert!(
+        last_system(&app).contains("permission: connection lost"),
+        "send failure reports connection lost: {}",
+        last_system(&app)
+    );
+}
+
+#[test]
+fn test_git_show_connection_lost() {
+    // A dead driver refuses the refresh, so no cached state line is shown.
+    let mut app = dead_session_app();
+    app.ui.input.editor.set("/permissions git".to_string());
+    app.submit_input();
+    assert!(
+        last_system(&app).contains("permission: connection lost"),
+        "send failure reports connection lost: {}",
+        last_system(&app)
     );
 }
 
@@ -846,7 +798,7 @@ fn test_permission_workspace_add_flow() {
     // Enter ships the path. The request is not an outcome, so nothing is
     // written to the transcript here: the line that names the directory is
     // produced when the host answers with the new list.
-    let mut app = build_app_for_test(None);
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
     app.ui.permission_pane.tab = PermissionTab::Workspace;
@@ -919,101 +871,149 @@ fn test_permission_workspace_remove_flow() {
     );
 }
 
+/// Pump the driver until the rules cache length changes (the add/del replies
+/// ship a fresh rule set), or the wait times out.
+fn pump_rules(app: &mut App) {
+    let mark = app
+        .sessions
+        .current
+        .capabilities
+        .permission
+        .rules_cache
+        .len();
+    for _ in 0..200 {
+        app.poll_agent();
+        if app
+            .sessions
+            .current
+            .capabilities
+            .permission
+            .rules_cache
+            .len()
+            != mark
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
-fn test_permission_add_bad_effect() {
-    // A bad effect surfaces the parse error as a system line, not a crash,
-    // and leaves the sub-mode.
-    let mut app = build_app_for_test(None);
+fn test_permission_rule_add_list() {
+    // /permissions add/list/del are wire verbs now (server authority). Drive
+    // them on a connected app + pump the driver between commands so the server's
+    // PermissionRulesResult replies land in rules_cache before the next read.
+    let mut app = server_app();
+    app.ui.navigation.screen = Screen::Working;
+    app.ui.navigation.pane = Pane::Transcript;
+    run(&mut app, "/permissions add bash allow");
+    assert!(last_system(&app).contains("added"));
+    pump_rules(&mut app);
+    run(&mut app, "/permissions list");
+    assert!(last_system(&app).contains("bash"));
+    assert!(last_system(&app).contains("allow"));
+    run(&mut app, "/permissions del 0");
+    assert!(last_system(&app).contains("removed"));
+    pump_rules(&mut app);
+    run(&mut app, "/permissions list");
+    assert!(last_system(&app).contains("no rules"));
+}
+
+#[test]
+fn test_permission_add_submode_flow() {
+    // a enters Add, typing fills the input, Enter parses + ships the rule,
+    // sub-mode clears. (In connected mode the pane does not render; asserts state.)
+    let mut app = server_app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
     handle_working(&mut app, key_press(KeyCode::Char('a')));
-    for c in "bash bodge".chars() {
+    assert_eq!(app.ui.permission_pane.input, PermissionInput::Add);
+    for c in "bash npm:allow".chars() {
         handle_working(&mut app, key_press(KeyCode::Char(c)));
     }
+    assert_eq!(app.ui.input.editor.value(), "bash npm:allow");
     handle_working(&mut app, key_press(KeyCode::Enter));
-    assert_eq!(app.ui.permission_pane.input, PermissionInput::None);
-    let out = last_system(&app);
-    assert!(out.contains("unknown effect"), "error surfaced: {out}");
-}
-
-#[test]
-fn test_permission_palette_opens_pane() {
-    // /permissions is a palette command (SlashCommand::Permission), and
-    // running it opens the interactive pane.
+    // Enter on the spec advances to the destination pick (default project),
+    // not a ship — the Add flow is two steps now.
     assert!(
-        SlashCommand::ALL.contains(&SlashCommand::Permission),
-        "Permission is in the palette"
+        matches!(
+            app.ui.permission_pane.input,
+            PermissionInput::AddDestination {
+                destination: RuleDestination::Project,
+                ..
+            }
+        ),
+        "Add spec Enter advances to destination pick: {:?}",
+        app.ui.permission_pane.input
     );
+    handle_working(&mut app, key_press(KeyCode::Enter));
     assert_eq!(
-        SlashCommand::parse("/permissions"),
-        Some(SlashCommand::Permission)
+        app.ui.permission_pane.input,
+        PermissionInput::None,
+        "destination Enter ships + clears sub-mode"
     );
-    assert_eq!(SlashCommand::Permission.name(), "/permissions");
-    let mut app = app();
-    app.run_command(SlashCommand::Permission);
-    assert_eq!(
-        app.ui.navigation.pane,
-        Pane::Permission,
-        "run_command opens the pane"
+    assert!(app.ui.input.editor.is_empty(), "input cleared after submit");
+    pump_rules(&mut app);
+    let added = app
+        .sessions
+        .current
+        .capabilities
+        .permission
+        .rules_cache
+        .iter()
+        .any(|r| r.action == "bash" && matches!(r.effect, PermissionEffect::Allow));
+    assert!(
+        added,
+        "rule landed in cache: {:?}",
+        app.sessions.current.capabilities.permission.rules_cache
     );
 }
 
 #[test]
-fn test_permissions_pane_renders_connected() {
-    // In agent-chat mode (a connected session) the main area is the transcript
-    // for most panes, but /permissions takes over the main area like the
-    // artifact pane — so the tab header + rule list render, not the chat
-    // stream. Guards the draw_main overlay routing.
-    let mut app = build_app_for_test(None);
+fn test_permission_remove_submode_deletes() {
+    // 'd' on a focused rule enters Remove (No preselected); Right moves to
+    // Yes, Enter ships the removal. Covers the Remove confirm + the ptr-eq
+    // index resolution.
+    let mut app = server_app();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Permission;
-    let text = render_text(&app, 100, 28);
+    run(&mut app, "/permissions add bash allow");
+    pump_rules(&mut app);
     assert!(
-        text.contains("Allow"),
-        "tab header renders in connected mode: {text}"
+        !app.sessions
+            .current
+            .capabilities
+            .permission
+            .rules_cache
+            .is_empty()
     );
-    assert!(text.contains("Recent"), "Recent tab renders: {text}");
-}
-
-#[test]
-fn test_git_toggle_connection_lost() {
-    // A dead driver refuses the toggle: the cached state never moves and the
-    // refusal names the lost connection (no fake success).
-    let mut app = connection_lost_app();
+    // Cursor sits on the only rule; 'd' enters Remove (No preselected).
+    handle_working(&mut app, key_press(KeyCode::Char('d')));
+    assert!(matches!(
+        app.ui.permission_pane.input,
+        PermissionInput::Remove { confirm: false, .. }
+    ));
+    // Right moves to Yes; Enter confirms + ships.
+    handle_working(&mut app, key_press(KeyCode::Right));
+    assert!(matches!(
+        app.ui.permission_pane.input,
+        PermissionInput::Remove { confirm: true, .. }
+    ));
+    handle_working(&mut app, key_press(KeyCode::Enter));
+    assert_eq!(
+        app.ui.permission_pane.input,
+        PermissionInput::None,
+        "Remove Enter clears sub-mode"
+    );
+    pump_rules(&mut app);
     assert!(
         app.sessions
             .current
             .capabilities
             .permission
-            .ask_before_git_enabled,
-        "default on"
-    );
-    app.ui.input.editor.set("/permissions git off".to_string());
-    app.submit_input();
-    assert!(
-        app.sessions
-            .current
-            .capabilities
-            .permission
-            .ask_before_git_enabled,
-        "a failed send must not flip the cached state"
-    );
-    assert!(
-        last_system(&app).contains("permission: connection lost"),
-        "send failure reports connection lost: {}",
-        last_system(&app)
-    );
-}
-
-#[test]
-fn test_git_show_connection_lost() {
-    // A dead driver refuses the refresh, so no cached state line is shown.
-    let mut app = connection_lost_app();
-    app.ui.input.editor.set("/permissions git".to_string());
-    app.submit_input();
-    assert!(
-        last_system(&app).contains("permission: connection lost"),
-        "send failure reports connection lost: {}",
-        last_system(&app)
+            .rules_cache
+            .is_empty(),
+        "rule removed: {:?}",
+        app.sessions.current.capabilities.permission.rules_cache
     );
 }

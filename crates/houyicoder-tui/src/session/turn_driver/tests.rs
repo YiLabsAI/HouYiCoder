@@ -11,7 +11,8 @@ use crate::session::SessionConnection;
 use crate::state::Pane;
 use crate::state::Screen;
 use crate::state::enums::LiveBlock;
-use crate::test_harness::attach_connection;
+use crate::test_harness::connect_session;
+use crate::test_harness::pair_server;
 use crate::test_harness::render_text;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
@@ -97,11 +98,9 @@ pub(crate) fn app_with_provider_and_tx(
     );
     let (tx, rx) = mpsc::channel::<SessionMessage>();
     let gate = Arc::new(DefaultModeGate::new());
-    let (runner, client, startup_warnings) =
-        composition::start_local_server(runner, session, gate, append_notify, None);
-    drop(runner); // server owns the runner; the TUI holds no engine handle.
+    let (client, startup_warnings) = pair_server(runner, session, gate, append_notify);
     let app = composition::build_app(
-        composition::RunnerBundle {
+        composition::SessionHandoff {
             client,
             agent_tx: tx.clone(),
             agent_rx: rx,
@@ -715,7 +714,7 @@ fn test_resume_after_approval() {
 #[test]
 fn test_resolve_clears_thinking_window() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(1);
     app.sessions.current.prompt = Some(PendingPrompt::permission(RequestId(1), Vec::new()));
     {

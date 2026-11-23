@@ -195,7 +195,7 @@ impl App {
         true
     }
 
-    pub fn switch_session(&mut self, bundle: RunnerBundle) {
+    pub fn switch_session(&mut self, bundle: SessionHandoff) {
         // A swap commits a new session without rebuilding the whole App.
         // reset_session_local clears the session-local fields, set_current
         // commits the new session, and process-level resources (focus,
@@ -220,7 +220,7 @@ impl App {
         // The frontend startup policy (skip-login, warnings, history path)
         // is not here — the caller applies it via apply_frontend_startup so
         // the session commit does not mix lifecycle domains.
-        let RunnerBundle {
+        let SessionHandoff {
             client,
             agent_tx,
             agent_rx,
@@ -260,7 +260,7 @@ impl App {
         self.sessions.catalog = session_catalog;
 
         // Apply the session-scoped bundle data against the new session. The
-        // sandbox is re-set to the wired-runner label (a swap always wires a
+        // sandbox is re-set to the attached-runner label (a swap always attaches a
         // real runner); the applied model is committed beside it; and the run
         // outcome is carried from the pre-switch read above.
         self.sessions.current.sandbox =

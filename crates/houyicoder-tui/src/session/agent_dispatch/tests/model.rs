@@ -10,13 +10,13 @@ use crate::records::TranscriptLine;
 use crate::session::capabilities::model::PendingCommit;
 use crate::state::{Pane, Screen};
 use crate::test_harness::{
-    TransportEvent, connected_app_with_events, model_app, model_caps, model_catalog, model_entry,
+    TransportEvent, live_session, model_app, model_caps, model_catalog, model_entry,
 };
 
 use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::composition::app;
 use crate::keys::handle_working;
-use crate::test_harness::connection_lost_app;
+use crate::test_harness::dead_session_app;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn model_response(req_id: u64, result: ModelApplyResult) -> SessionMessage {
@@ -323,7 +323,7 @@ fn test_picker_draft_isolated() {
 /// flight cannot ship a duplicate switch.
 #[test]
 fn test_model_pending_blocks_repeat() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.open_model_pane();
     // The commit needs the rows the host's query reply carries; seed them as
     // the reply would.
@@ -384,7 +384,7 @@ fn test_model_pending_blocks_repeat() {
 /// for retry, and the refusal names the lost connection.
 #[test]
 fn test_model_send_failure() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.refresh_model_catalog(model_catalog(vec![model_entry(
         "glm-5.2",
         "Fable",
@@ -435,7 +435,7 @@ fn test_model_send_failure() {
 /// downgrade made rather than passing the tier over in silence.
 #[test]
 fn test_fast_degrades_on_commit() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.refresh_model_catalog(model_catalog(vec![
         model_entry("qwen3.8-max", "Max", model_caps(true, true)),
         model_entry("plain-model", "Plain", model_caps(true, false)),

@@ -12,7 +12,7 @@ use houyicoder_protocol::frontend::checkpoint::{
 use crate::composition;
 use crate::keys::handle_working;
 use crate::state::{App, Pane};
-use crate::test_harness::{TransportEvent, connected_app_with_events, render_text};
+use crate::test_harness::{TransportEvent, live_session, render_text};
 use crate::ui::{CheckpointLevel, RestoreFocus, SandboxTab};
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -41,7 +41,7 @@ fn write(operation: &str) -> CheckpointView {
 /// An App with a connection, the pane open on the checkpoints tab with two
 /// rows, and an empty input box.
 fn sandbox_app() -> (App, mpsc::Receiver<TransportEvent>) {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Sandbox;
     app.ui.sandbox_pane.set_tab(SandboxTab::Checkpoints);
     let request = RequestId(71);

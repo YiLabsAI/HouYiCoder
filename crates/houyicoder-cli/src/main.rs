@@ -1,6 +1,6 @@
 //! Binary entry point. The composition root: builds the runner + protocol
 //! server + client, sharing one Arc<Runner> between the server task and the
-//! TUI, then hands the wired bundle to the TUI run loop.
+//! TUI, then hands the session handoff to the TUI run loop.
 //!
 //! Flags:
 //!   --project <path>   Pin the sandbox workspace to <path> so the agent's
@@ -31,7 +31,7 @@ use std::sync::mpsc::channel;
 
 use houyicoder_service::composition::host_lifecycle::HostLifecycle;
 use houyicoder_service::composition::session_log_root;
-use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+use houyicoder_tui::composition::{FrontendStartup, SessionHandoff, shared_runtime};
 use {
     houyicoder_service::composition::notification_drain,
     houyicoder_tui::agent_message::SessionMessage,
@@ -47,7 +47,9 @@ mod session;
 mod trajectory;
 
 pub(crate) use cli_args::{CliCommand, parse_args, print_help};
-pub(crate) use composition::{WiredBundle, assemble_bundle, build_bundle, build_bundle_for_resume};
+pub(crate) use composition::{
+    AssembledSession, assemble_bundle, build_bundle, build_bundle_for_resume,
+};
 pub(crate) use local_host::{HostLease, HostLeaseScope, HostLeaseSlot, LeaseScopeGuard};
 
 use crate::session::admission::{admit_existing_sid, continue_target, unavailable_lines};
@@ -265,21 +267,21 @@ fn run_continue(project: Option<String>, fork: bool) -> Result<(), Box<dyn Error
 /// acquisition fails, the host tasks and any children already started
 /// by the build must be joined and reclaimed so they do not leak.
 fn acquire_fresh_lease(
-    bundle: RunnerBundle,
+    bundle: SessionHandoff,
     startup: FrontendStartup,
     host: HostLifecycle,
     children: Option<Arc<Runner>>,
-) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+) -> Result<(SessionHandoff, FrontendStartup, HostLease), Box<dyn Error>> {
     acquire_fresh_lease_at(bundle, startup, host, children, &session_log_root())
 }
 
 fn acquire_fresh_lease_at(
-    bundle: RunnerBundle,
+    bundle: SessionHandoff,
     startup: FrontendStartup,
     host: HostLifecycle,
     children: Option<Arc<Runner>>,
     sessions_root: &Path,
-) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+) -> Result<(SessionHandoff, FrontendStartup, HostLease), Box<dyn Error>> {
     let sid_str = bundle.session.0.clone();
     let lock = match SessionLock::acquire(&sid_str, sessions_root) {
         Ok(l) => l,
@@ -304,7 +306,7 @@ fn build_lease_for_existing_sid(
     sid: SessionId,
     project: Option<String>,
     provider: ProviderResolution,
-) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+) -> Result<(SessionHandoff, FrontendStartup, HostLease), Box<dyn Error>> {
     build_lease_for_existing_sid_at(sid, project, provider, &session_log_root())
 }
 
@@ -313,7 +315,7 @@ fn build_lease_for_existing_sid_at(
     project: Option<String>,
     provider: ProviderResolution,
     sessions_root: &Path,
-) -> Result<(RunnerBundle, FrontendStartup, HostLease), Box<dyn Error>> {
+) -> Result<(SessionHandoff, FrontendStartup, HostLease), Box<dyn Error>> {
     let lock = admit_existing_sid(&sid, sessions_root)?;
     let (bundle, startup, host, runner) = build_bundle_for_resume_sid(sid, project, provider)?;
     let sid_str = bundle.session.0.clone();
@@ -441,7 +443,7 @@ fn run_attach(endpoint: String, session_id: String, acp: bool) -> Result<(), Box
     let client = Client::new(Box::new(transport));
     let (tx, rx) = channel::<SessionMessage>();
     let wire_session = houyicoder_protocol::frontend::SessionId(session_id);
-    let bundle = RunnerBundle {
+    let bundle = SessionHandoff {
         client,
         agent_tx: tx,
         agent_rx: rx,
@@ -458,7 +460,7 @@ fn run_attach(endpoint: String, session_id: String, acp: bool) -> Result<(), Box
         history_path: houyicoder_config::config_home().join("history.jsonl"),
     };
     // Attach mode has no session_log/descriptor_store, so the /resume picker
-    // cannot open (run_resume reports no store wired); no /resume Command is
+    // cannot open (run_resume reports no store attached); no /resume Command is
     // enqueued.
     drop(run_with_runner(bundle, startup, None)?);
     Ok(())
@@ -466,15 +468,15 @@ fn run_attach(endpoint: String, session_id: String, acp: bool) -> Result<(), Box
 
 /// The TUI run loop. It starts from a lease the entry already admitted (the
 /// lock is held before the loop begins), so it never acquires a lock. The
-/// event loop swaps sessions in-process when a resume_builder is wired (the
+/// event loop swaps sessions in-process when a resume_builder is attached (the
 /// normal path: try_swap_session builds the new bundle + swap_session swaps
 /// in place, no restart). The builder reaps the prior host lifecycle owner
 /// before installing the new one so the old serve, drain, and relay do not
 /// outlive the session that ended: the serve exits when its paired client
 /// drops, the drain and relay end on the cancel token the owner holds. The
 /// Some(target) return is the rebuild fallback for when no builder was
-/// wired. None means a clean quit.
-type ResumeFn = Box<dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>>>;
+/// attached. None means a clean quit.
+type ResumeFn = Box<dyn Fn(&str) -> Result<(SessionHandoff, FrontendStartup), Box<dyn Error>>>;
 
 /// Build a bundle for a resume target, acquiring the target's exclusive
 /// lock before constructing any writer that could write its session dir, and
@@ -495,7 +497,7 @@ fn build_bundle_for_target(
     project: Option<String>,
     provider: ProviderResolution,
     host_slot: &HostLeaseSlot,
-) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>> {
+) -> Result<(SessionHandoff, FrontendStartup), Box<dyn Error>> {
     let sessions_root = session_log_root();
     let path = PathBuf::from(target);
     let (bundle, startup, host, runner, lock) = if path.exists() {
@@ -564,7 +566,7 @@ fn build_bundle_for_target(
 }
 
 fn run_tui_loop(
-    bundle: RunnerBundle,
+    bundle: SessionHandoff,
     startup: FrontendStartup,
     lease: HostLease,
     project: Option<String>,

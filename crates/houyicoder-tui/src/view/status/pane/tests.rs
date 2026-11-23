@@ -12,7 +12,7 @@ use crate::input::InputField;
 use crate::session::agent_message::{ServerResponse, SessionMessage};
 use crate::state::Pane;
 use crate::test_harness::{
-    TransportEvent, connected_app_with_events, render_text, wait_for_request, working_app,
+    TransportEvent, live_session, render_text, wait_for_request, working_app,
 };
 use crate::view::status::config_rows::ConfigRow;
 use houyicoder_platform::desktop::glyphs::detect_glyph_set;
@@ -338,7 +338,7 @@ fn test_timer_row_changes() {
 /// before the pane shows it.
 #[test]
 fn test_recap_rows_act() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Status;
     app.ui.navigation.status_pane.tab = StatusTab::Config;
     app.sync_config_cursor();
@@ -425,7 +425,7 @@ fn test_recap_rows_act() {
 /// a double press meant as on-then-off would land on with two receipts.
 #[test]
 fn test_recap_repeat_press_dropped() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Status;
     app.ui.navigation.status_pane.tab = StatusTab::Config;
     app.sync_config_cursor();

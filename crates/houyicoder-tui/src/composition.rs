@@ -1,8 +1,9 @@
 //! Placeholder data builders for the TUI. The pure-stub app() returns an App
-//! with no runner wired (legacy stub flow, used by Login/Console tests and the
-//! fallback path). build_app_for_test() wires a real agent Runner so the working
-//! screen does real chat: input spawns runner.run, the transcript is rebuilt
-//! from real SessionLogEntries, and approvals come from real Interruptions.
+//! with no runner attached (legacy stub flow, used by Login/Console tests and the
+//! fallback path). build_app() wires the handoff the composition root built, so
+//! the working screen does real chat: input spawns a run, the transcript is
+//! rebuilt from real session entries, and approvals come from real
+//! interruptions.
 
 pub(crate) mod terminal_guard;
 pub(crate) mod terminal_title;
@@ -37,55 +38,19 @@ use crate::state::{App, Pane, Screen, Stage, ViewportMode};
 use crate::transcript::snapshot::TranscriptSnapshot;
 use crate::view::export_log::ExportLog;
 use crate::view::trajectory_pane::TrajectoryLog;
-#[cfg(test)]
-use futures::channel::mpsc::channel;
 use houyicoder_client::Client;
-#[cfg(test)]
-use houyicoder_client::InProcTransport;
-#[cfg(test)]
-use houyicoder_core::SessionId as EngineSessionId;
-#[cfg(test)]
-use houyicoder_core::agent::Runner;
-#[cfg(test)]
-use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
-#[cfg(test)]
-use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::frontend::LoginMode;
 use houyicoder_protocol::frontend::SessionId;
-#[cfg(test)]
-use houyicoder_service::CancellationToken;
-#[cfg(test)]
-use houyicoder_service::composition::fleet_status_relay;
-#[cfg(test)]
-use houyicoder_service::composition::{BuildRunnerOptions, build_runner};
-#[cfg(test)]
-use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use std::env::current_dir;
-#[cfg(test)]
-use std::env::temp_dir;
 use std::env::var;
 use std::error::Error;
-#[cfg(test)]
-use std::fs::create_dir_all;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::process;
 use std::sync::Arc;
 use std::sync::OnceLock;
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-#[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::runtime::{Builder, Runtime};
-#[cfg(test)]
-use tokio::sync::Notify;
-#[cfg(test)]
-use tokio::task::JoinHandle;
 
-/// The wired protocol bundle the composition root (the CLI bin, or the test
+/// The session handoff the composition root (the CLI bin, or a test
 /// pairing helper) builds and hands to the TUI: the protocol client the driver
 /// task owns, the agent message channel the driver ships to, and the session
 /// id. The runner + the permission gate stay with the server task — the TUI
@@ -96,7 +61,7 @@ use tokio::task::JoinHandle;
 /// frontend startup policy (skip-login, startup warnings, history path)
 /// travels separately in FrontendStartup so the session commit does not mix
 /// lifecycle domains.
-pub struct RunnerBundle {
+pub struct SessionHandoff {
     /// The protocol client the driver task owns. Un-connected at hand-off;
     /// the driver performs the Hello handshake on spawn.
     pub client: Client,
@@ -164,16 +129,16 @@ fn cwd_string() -> String {
         .unwrap_or_default()
 }
 
-/// Wire a working-surface App to the wired bundle the composition root built.
+/// Attach a working-surface App to the session handoff the composition root built.
 /// Spawns the long-lived client driver, which owns the protocol client,
 /// performs Hello, and routes ordered server frames onto the agent channel.
 /// Lands on the Login screen like app(), so the login flow is unchanged. The
 /// frontend startup policy (skip-login, warnings, history path) is applied
 /// after the session wiring so the session commit does not mix lifecycle
 /// domains.
-pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
+pub fn build_app(bundle: SessionHandoff, startup: FrontendStartup) -> App {
     let mut app = app();
-    let RunnerBundle {
+    let SessionHandoff {
         client,
         agent_tx,
         agent_rx,
@@ -205,135 +170,8 @@ pub fn build_app(bundle: RunnerBundle, startup: FrontendStartup) -> App {
     app
 }
 
-pub type ResumeBuilderRef = dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>>;
-
-/// Build the runner bundle via the composition root and wire it, matching the
-/// build_app_for_test(project) API so the existing test suite needs
-/// no per-call change. Test-only: the pairing (server spawn + client
-/// construction) uses the service dev-dep; the production composition root
-/// lives in the CLI bin at runtime.
-#[cfg(test)]
-pub fn build_app_for_test(project: Option<String>) -> App {
-    let mut options = BuildRunnerOptions::default();
-    options.project = project;
-    options.home = Some(local_test_home());
-    let bundle = build_runner(options);
-    let wire_session = SessionId(bundle.session.to_string());
-    let (tx, rx) = mpsc::channel::<SessionMessage>();
-    let (runner, client, startup_warnings) = start_local_server(
-        bundle.runner,
-        bundle.session,
-        bundle.gate,
-        bundle.append_notify,
-        bundle.bus,
-    );
-    drop(runner); // server owns the runner; the TUI holds no engine handle.
-    build_app(
-        RunnerBundle {
-            client,
-            agent_tx: tx,
-            agent_rx: rx,
-            session: wire_session,
-            model: "test-model".to_string(),
-            trajectory_log: None,
-            export_log: None,
-            snapshot: None,
-            session_catalog: None,
-        },
-        FrontendStartup {
-            skip_login: false,
-            startup_warnings,
-            history_path: temp_dir().join(format!(
-                "houyi-history-test-{}-{}.jsonl",
-                process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            )),
-        },
-    )
-}
-
-/// Pair an in-memory server and client around a runner. The test-only helper
-/// installs one event sequencer before sharing the runner and gives the same
-/// sequencer to the server, matching the CLI composition root.
-#[cfg(test)]
-pub fn start_local_server(
-    runner: Runner,
-    session: EngineSessionId,
-    gate: Arc<DefaultModeGate>,
-    append_notify: Arc<Notify>,
-    bus: Option<Arc<AgentBus>>,
-) -> (Arc<Runner>, Client, Vec<String>) {
-    let (runner, client, _serve, warnings) =
-        start_local_server_tracked(runner, session, gate, append_notify, bus);
-    (runner, client, warnings)
-}
-
-/// Same as start_local_server but returns the server task's JoinHandle so a
-/// test can assert the serve loop exited (e.g. after a swap drops the old
-/// session: cmd_tx drop -> driver exits -> client drop -> c2s_tx drop ->
-/// server next_frame None -> serve returns). The handle is detached in the
-/// non-tracked variant; tests that need to verify teardown use this one.
-#[cfg(test)]
-pub fn start_local_server_tracked(
-    mut runner: Runner,
-    session: EngineSessionId,
-    gate: Arc<DefaultModeGate>,
-    append_notify: Arc<Notify>,
-    bus: Option<Arc<AgentBus>>,
-) -> (Arc<Runner>, Client, JoinHandle<()>, Vec<String>) {
-    let (c2s_tx, c2s_rx) = channel(16);
-    let (s2c_tx, s2c_rx) = channel(16);
-    let event_sequencer = EventSequencer::new();
-    event_sequencer.install_on(&mut runner);
-    fleet_status_relay::spawn(
-        bus,
-        event_sequencer.clone(),
-        shared_runtime().handle().clone(),
-        CancellationToken::new(),
-    );
-    let startup_warnings = runner.drain_startup_warnings();
-    let runner = Arc::new(runner);
-    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
-    let gate_dyn: Arc<dyn houyicoder_permission::ModeGate> = gate;
-    let server =
-        Server::new_with_event_sequencer(runner.clone(), session, gate_dyn, event_sequencer);
-    // Redirect settings to a temp path so a test persist does not touch the
-    // developer's real config.
-    #[cfg(test)]
-    let server = server.with_settings_path(local_test_settings_path());
-    let server = server.with_append_notify(append_notify);
-    let runtime = shared_runtime();
-    let serve_handle = runtime.spawn(async move {
-        let _serve = server.serve(server_io).await;
-    });
-    let transport = InProcTransport::from_halves(c2s_tx, s2c_rx);
-    let client = Client::new(Box::new(transport));
-    (runner, client, serve_handle, startup_warnings)
-}
-
-/// A unique temp settings path for one in-process test server, so a /model
-/// persist writes the temp file instead of the developer's real config.
-#[cfg(test)]
-fn local_test_settings_path() -> PathBuf {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    temp_dir().join(format!("houyi-settings-{}-{}.json", process::id(), n))
-}
-
-/// A unique temp home for one in-process test assembly, so the runner reads
-/// and writes its user-level state (memory roots, skills, snapshots) there
-/// instead of under the developer's home.
-#[cfg(test)]
-fn local_test_home() -> PathBuf {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = temp_dir().join(format!("houyi-home-{}-{n}", process::id()));
-    drop(create_dir_all(&dir));
-    dir
-}
+pub type ResumeBuilderRef =
+    dyn Fn(&str) -> Result<(SessionHandoff, FrontendStartup), Box<dyn Error>>;
 
 fn spec_context() -> SpecContext {
     SpecContext {

@@ -4,9 +4,7 @@ use houyicoder_protocol::frontend::FrontendRequest;
 use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::composition::{WorktreeEntry, app};
 use crate::state::{Pane, Screen};
-use crate::test_harness::{
-    connected_app_with_events, render_text, wait_for_request, worktree_preview,
-};
+use crate::test_harness::{live_session, render_text, wait_for_request, worktree_preview};
 use crate::ui::WorktreeLevel;
 
 fn row(path: &str) -> WorktreeEntry {
@@ -137,7 +135,7 @@ fn test_enter_needs_connection() {
 /// from the detail returns to the detail rather than the list.
 #[test]
 fn test_close_returns_to_opener() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
     app.ui.worktree_pane.list.cursor = 0;
     app.open_worktree_detail();
@@ -164,7 +162,7 @@ fn test_close_returns_to_opener() {
 /// so its detail opens on what the listing holds and reads nothing.
 #[test]
 fn test_main_detail_reads_nothing() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     let mut main = row("/repo");
     main.is_main = true;
     main.is_current = true;
@@ -186,7 +184,7 @@ fn test_main_detail_reads_nothing() {
 /// including from the detail, and no confirmation opens on the refusal.
 #[test]
 fn test_main_removal_refused() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     let mut main = row("/repo");
     main.is_main = true;
     main.is_current = true;
@@ -239,7 +237,7 @@ fn test_current_removal_refused() {
 /// gesture is answered in the pane rather than sent to the host.
 #[test]
 fn test_enter_refused_for_current() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     let mut current = row("/repo/current");
     current.is_current = true;
     app.sessions.current.capabilities.worktree.entries = vec![current];
@@ -260,7 +258,7 @@ fn test_enter_refused_for_current() {
 /// fresh read would blank the page that states where the removal stands.
 #[test]
 fn test_retry_waits_for_removal() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];
     app.ui.worktree_pane.list.cursor = 0;
     app.open_worktree_detail();
@@ -299,7 +297,7 @@ fn test_retry_waits_for_removal() {
 /// warning flash on a page that has nothing wrong with it.
 #[test]
 fn test_detail_open_is_quiet() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.pane = Pane::Worktree;
     app.sessions.current.capabilities.worktree.entries = vec![row("/some/wt")];

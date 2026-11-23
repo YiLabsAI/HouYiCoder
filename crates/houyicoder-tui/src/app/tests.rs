@@ -16,8 +16,8 @@ use crate::selection::RecordingClipboard;
 use crate::session::{ConnectionStatus, EnqueueError, PollOutcome, SessionConnection};
 use crate::state::{Pane, Screen, Stage, ViewportMode};
 use crate::test_harness::{
-    FailedHandshakeTransport, connected_app_events, connection_lost_app, render_buffer,
-    render_text, wait_for_notification, wait_for_request,
+    FailedHandshakeTransport, dead_session_app, live_session, render_buffer, render_text,
+    wait_for_notification, wait_for_request,
 };
 use crate::todo_view::{TodoStatus, TodoView};
 use crate::ui::selection::ClipboardWriter;
@@ -370,7 +370,7 @@ fn test_ctrl_c_idle_noop() {
 /// as to the run, so the key ends whichever work is under way.
 #[test]
 fn test_ctrl_c_cancels_shell() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     app.sessions.current.shell.begin(RequestId(1));
     handle_key(
         &mut app,
@@ -622,7 +622,7 @@ fn test_kill_all_no_running() {
 /// zeroes the same session the UI just reset locally.
 #[test]
 fn test_clear_ships_session_reset() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     let sid = app.sessions.current.identity.session_id.clone();
     app.run_command(SlashCommand::Clear);
     let req = wait_for_request(&events, |p| {
@@ -642,7 +642,7 @@ fn test_clear_ships_session_reset() {
 /// distinct (#68).
 #[test]
 fn test_exhausted_commands_report() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     app.sessions
         .current
         .connection
@@ -690,7 +690,7 @@ fn test_exhausted_commands_report() {
 /// path and the one-shot flag is already set.
 #[test]
 fn test_exhausted_clear_no_repeat() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     app.sessions
         .current
         .connection
@@ -741,7 +741,7 @@ fn test_enqueue_not_connected() {
 /// its command receiver has closed: the command never left this process.
 #[test]
 fn test_enqueue_closed() {
-    let app = connection_lost_app();
+    let app = dead_session_app();
     let err = app
         .enqueue(ClientCommand::StatusQuery {
             req_id: RequestId(0),
@@ -754,7 +754,7 @@ fn test_enqueue_closed() {
 /// transport delivery or server execution from that result.
 #[test]
 fn test_enqueue_ok_local_queue() {
-    let (app, _events) = connected_app_events();
+    let (app, _events) = live_session();
     assert!(
         app.enqueue(ClientCommand::StatusQuery {
             req_id: RequestId(0)
@@ -784,7 +784,7 @@ fn test_enqueue_failure_line() {
 /// failure is settled at its call site (#68).
 #[test]
 fn test_closed_commands_report_loss() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
 
     // User commands surface a per-command line, never a silent drop.
     app.run_command(SlashCommand::Compact);
@@ -830,7 +830,7 @@ fn test_closed_commands_report_loss() {
 /// refresh adds nothing to the transcript.
 #[test]
 fn test_closed_clear_no_repeat() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.run_command(SlashCommand::Agents);
     app.run_command(SlashCommand::Clear);
     // Auto paths never write a loss line (the ConnectionLost event is the
@@ -863,7 +863,7 @@ fn test_closed_clear_no_repeat() {
 /// adds nothing.
 #[test]
 fn test_auto_refresh_silent() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     // The fixture applied the real death: exactly one loss line landed and
     // the cause is the driver's specific message.
     assert_eq!(
@@ -900,7 +900,7 @@ fn test_auto_refresh_silent() {
 /// confirmation is idempotent.
 #[test]
 fn test_connection_status_ready() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     assert_eq!(
         app.sessions
             .current
@@ -940,7 +940,7 @@ fn test_connection_status_ready() {
 /// the away timer and a summary of an idle session never appears.
 #[test]
 fn test_ready_reports_focus() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     app.ui.terminal_focused = false;
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Ready));
     let params = wait_for_notification(&events, "session/focus");
@@ -956,7 +956,7 @@ fn test_ready_reports_focus() {
 /// next turn would let a summary of an abandoned session appear anyway.
 #[test]
 fn test_focus_change_reports_host() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(
         handle_event(&mut app, Event::FocusLost, &mut KeyFilter::default())
             .expect("focus loss handled")
@@ -984,7 +984,7 @@ fn test_focus_change_reports_host() {
 /// death announcement leaves the status Lost.
 #[test]
 fn test_late_ready_keeps_lost() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     assert!(
         matches!(app.connection_status(), ConnectionStatus::Lost(_)),
         "the failed handshake leaves the connection Lost, got {:?}",
@@ -1002,7 +1002,7 @@ fn test_late_ready_keeps_lost() {
 /// stays quiet and the specific cause survives.
 #[test]
 fn test_first_loss_cause_wins() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     let after_death = app.sessions.current.transcript.len();
     // The closed channel (a second observation after the announced death)
     // must not overwrite the cause or write another line.
@@ -1039,7 +1039,7 @@ fn test_connection_status_disconnected() {
 /// connections behind a None.
 #[test]
 fn test_poll_closed_distinct() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     // The fixture consumed the death announcement. The driver task still
     // holds the channel's sender for the few instructions between that
     // send and its exit, so poll may briefly read Empty before the sender
@@ -1052,7 +1052,7 @@ fn test_poll_closed_distinct() {
     );
     // A live connection's quiet moment is Idle: block for the driver's real
     // ConnectionReady, then poll the quiet channel.
-    let (mut live, _events) = connected_app_events();
+    let (mut live, _events) = live_session();
     let msg = live
         .sessions
         .current
@@ -1230,7 +1230,7 @@ fn test_stop_for_signal() {
     idle.stop_for_signal();
     assert!(!idle.agent_busy(), "an idle app stays idle");
 
-    let (mut running, _events) = connected_app_events();
+    let (mut running, _events) = live_session();
     running.start_run_for_test(0);
     assert!(running.agent_busy(), "the run is in flight");
     running.stop_for_signal();
@@ -1245,7 +1245,7 @@ fn test_stop_for_signal() {
 /// stop that was meant to end it.
 #[test]
 fn test_exit_target_on_signal() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     let signal = crate::termination::TerminationWatch::for_test(true);
     assert_eq!(
         app.exit_target(&signal),

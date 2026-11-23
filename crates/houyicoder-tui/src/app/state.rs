@@ -3,9 +3,11 @@
 //! App is the composition shell; cohesive concerns own their state and
 //! transitions in dedicated types rather than adding parallel fields here.
 
+use crate::agent_message::SessionMessage;
 #[cfg(test)]
 use crate::fold::compute_fold_groups;
 use std::fmt;
+use std::time::Duration;
 use std::time::Instant;
 
 pub use crate::transcript::store as transcript;
@@ -72,6 +74,17 @@ impl App {
     /// callers do not reach through the session value.
     pub fn transcript(&self) -> &transcript::Transcript {
         &self.sessions.current.transcript
+    }
+
+    /// Poll the live connection's startup handshake. A public seam for an
+    /// integration test that must observe the driver's readiness before it
+    /// swaps the session; in-crate paths read the session field directly.
+    pub fn poll_startup(&mut self, timeout: Duration) -> Option<SessionMessage> {
+        self.sessions
+            .current
+            .connection
+            .as_mut()?
+            .poll_startup(timeout)
     }
 
     /// Public read seam for the session-owned returned-delegation rows.

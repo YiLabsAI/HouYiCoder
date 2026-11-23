@@ -1,6 +1,5 @@
 //! Run approval, cancellation, restoration, and completion-state tests.
 
-use std::env::temp_dir;
 use std::thread::sleep;
 
 use super::*;
@@ -12,7 +11,7 @@ use crate::keys::handle_working;
 use crate::pending_prompt::PendingPrompt;
 use crate::records::{Approval, TranscriptLine};
 use crate::state::Screen;
-use crate::test_harness::{attach_connection, dump_buffer, render_buffer, render_text};
+use crate::test_harness::{connect_session, dump_buffer, render_buffer, render_text};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use futures::stream::iter;
@@ -28,9 +27,6 @@ use houyicoder_protocol::llm::ModelCapabilities;
 use houyicoder_protocol::llm::Usage;
 use houyicoder_protocol::llm::{CompletionResponse, OutputItem, ProviderError};
 use houyicoder_provider::FakeProvider;
-use houyicoder_service::composition::walk_to_workspace_root;
-use std::fs;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Pump the event loop until the predicate holds, or the budget runs out.
@@ -45,13 +41,6 @@ fn pump_until(app: &mut App, tries: usize, mut held: impl FnMut(&App) -> bool) -
         sleep(Duration::from_millis(10));
     }
     false
-}
-
-/// Monotonic counter for unique temp-dir names, avoiding same-nanosecond
-/// collisions when tests run in parallel.
-fn unique_seq() -> u64 {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
 #[test]
@@ -329,43 +318,6 @@ fn test_approval_pretext_survives_rebuild() {
         "user input must survive the rebuild, transcript: {:?}",
         app.sessions.current.transcript
     );
-}
-
-#[test]
-fn test_walk_finds_workspace_root() {
-    // The sandbox must pin to the repo root, not the launch subdir. Build a
-    // temp repo: root/Cargo.toml ([workspace]) + root/crate/Cargo.toml, then
-    // walk up from crate/ and assert it returns the workspace root.
-    let root = temp_dir().join(format!("houyi-walk-{seq}", seq = unique_seq()));
-    let crate_dir = root.join("crate");
-    fs::create_dir_all(&crate_dir).unwrap();
-    fs::write(
-        root.join("Cargo.toml"),
-        "[workspace]\nmembers = [\"crate\"]\n",
-    )
-    .unwrap();
-    fs::write(
-        crate_dir.join("Cargo.toml"),
-        "[package]\nname = \"crate\"\n",
-    )
-    .unwrap();
-    let found = walk_to_workspace_root(&crate_dir);
-    assert_eq!(found, Some(dunce::canonicalize(&root).unwrap()));
-    fs::remove_dir_all(&root).ok();
-}
-
-#[test]
-fn test_walk_none_outside_repo() {
-    // A parent chain with no manifest yields None: the walk must not fall back
-    // to the home directory.
-    let d = temp_dir().join(format!("houyi-none-{}", unique_seq()));
-    fs::create_dir_all(&d).unwrap();
-    let found = walk_to_workspace_root(&d);
-    assert_eq!(
-        found, None,
-        "walk from a no-manifest dir must return None, got {found:?}"
-    );
-    fs::remove_dir_all(&d).ok();
 }
 
 #[test]
@@ -760,7 +712,7 @@ fn approval_ask(call_id: &str) -> ApprovalRequest {
 fn test_ask_preserves_start() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(
         app.spawn_run("work".into()),
         "run starts on a live connection"
@@ -794,7 +746,7 @@ fn test_ask_preserves_start() {
 fn test_resolve_resumes_run() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(
         app.spawn_run("work".into()),
         "run starts on a live connection"
@@ -820,7 +772,7 @@ fn test_resolve_resumes_run() {
 fn test_ask_preserves_progress() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Event(ServerEvent::Delta {
         text: "first".into(),
@@ -855,7 +807,7 @@ fn test_ask_preserves_progress() {
 fn test_finish_copies_start() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     let started = app.run_started();
@@ -885,7 +837,7 @@ fn test_finish_copies_start() {
 fn test_final_run_survives_loss() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     app.handle_agent_message(SessionMessage::Response {
@@ -928,7 +880,7 @@ fn test_final_run_survives_loss() {
 fn test_stale_done_settles_nothing() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     let stale = RequestId(run_req.0 + 1);
@@ -975,7 +927,7 @@ fn test_stale_done_settles_nothing() {
 fn test_cycles_preserve_start() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     let first_start = app.run_started();
     for round in 0..2 {
@@ -1005,7 +957,7 @@ fn test_cycles_preserve_start() {
 fn test_waiting_submit_parks() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("first".into()));
     let first_req = app.active_run_req_id();
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
@@ -1027,7 +979,7 @@ fn test_waiting_submit_parks() {
 fn test_busy_submit_parks() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("first".into()));
     app.spawn_run("second".into());
     assert!(app.agent_busy(), "no second run while busy");
@@ -1050,7 +1002,7 @@ fn test_busy_submit_parks() {
 fn test_loss_unsent_vs_unknown() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
 
@@ -1073,7 +1025,7 @@ fn test_loss_unsent_vs_unknown() {
     // Reset for the unknown case.
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     app.handle_agent_message(SessionMessage::Connection(ConnectionEvent::Lost {
         cause: "send failed: pipe broken".into(),
@@ -1099,7 +1051,7 @@ fn test_loss_unsent_vs_unknown() {
 fn test_cancel_during_waiting() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     let run_req = app.active_run_req_id().unwrap();
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
@@ -1122,7 +1074,7 @@ fn test_cancel_during_waiting() {
 fn test_loss_during_waiting_settles() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
     assert!(
@@ -1149,7 +1101,7 @@ fn test_loss_during_waiting_settles() {
 fn test_loss_during_cancelling_settles() {
     let mut app = composition::app();
     app.ui.navigation.screen = Screen::Working;
-    attach_connection(&mut app);
+    connect_session(&mut app);
     assert!(app.spawn_run("work".into()));
     app.raise_agent_approval(approval_ask("c1"), RequestId(1));
     app.abort_run();

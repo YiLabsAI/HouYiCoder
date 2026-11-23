@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use crate::agent_message::ClientCommand;
 use crate::app::event_loop::{BracketedWriter, FRAME_BUFFER_BYTES, TerminalWriter};
 use crate::app::wake::ui_wake;
-use crate::composition::{FrontendStartup, RunnerBundle, build_app};
+use crate::composition::{FrontendStartup, SessionHandoff, build_app};
 use crate::input::terminal_events::EventReader;
 use crate::keys;
 use crate::keys::filter::KeyFilter;
@@ -37,10 +37,10 @@ use crate::ui::selection::paint_regions;
 
 /// Run the alternate-screen TUI and restore terminal state on exit.
 /// Mouse input belongs to in-app scrolling and selection while active.
-type ResumeBuilder = Box<dyn Fn(&str) -> Result<(RunnerBundle, FrontendStartup), Box<dyn Error>>>;
+type ResumeBuilder = Box<dyn Fn(&str) -> Result<(SessionHandoff, FrontendStartup), Box<dyn Error>>>;
 
 pub fn run_with_runner(
-    bundle: RunnerBundle,
+    bundle: SessionHandoff,
     startup: FrontendStartup,
     resume_builder: Option<ResumeBuilder>,
 ) -> io::Result<Option<String>> {

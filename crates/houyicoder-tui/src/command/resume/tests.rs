@@ -7,7 +7,7 @@ use crate::resume_picker::SessionCatalog;
 use crate::resume_picker::SessionRow;
 use crate::state::Pane;
 use crate::state::Screen;
-use crate::test_harness::connected_app;
+use crate::test_harness::live_app;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -89,7 +89,7 @@ fn test_resume_disconnected() {
 /// gap, not a disconnect.
 #[test]
 fn test_resume_catalog_gap() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.run_resume(None);
     assert!(!app.ui.navigation.resume_picker.open);
     assert!(
@@ -103,7 +103,7 @@ fn test_resume_catalog_gap() {
 /// /resume with no arg and no other sessions reports empty + no pane.
 #[test]
 fn test_empty_store_reports_none() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(EmptyCatalog));
     app.run_resume(None);
     assert!(!app.ui.navigation.resume_picker.open);
@@ -113,7 +113,7 @@ fn test_empty_store_reports_none() {
 /// /resume with no arg and sessions opens the Resume pane.
 #[test]
 fn test_opens_pane_with_rows() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
     app.run_resume(None);
     assert!(app.ui.navigation.resume_picker.open);
@@ -141,7 +141,7 @@ fn test_open_loads_rows_once() {
     }
 
     let catalog = Arc::new(CountingCatalog(AtomicUsize::new(0)));
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(catalog.clone());
     app.run_resume(None);
     assert!(app.ui.navigation.resume_picker.open);
@@ -155,7 +155,7 @@ fn test_open_loads_rows_once() {
 /// /resume with a sid arg matches a row by sid and enqueues the switch.
 #[test]
 fn test_matches_sid_directly() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
     app.run_resume(Some("aaaa1111"));
     assert_eq!(queued_target(&app).as_deref(), Some("aaaa1111"));
@@ -165,7 +165,7 @@ fn test_matches_sid_directly() {
 /// /resume with a title substring matches case-insensitively.
 #[test]
 fn test_matches_title_substring() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
     app.run_resume(Some("LOGIN"));
     assert_eq!(queued_target(&app).as_deref(), Some("aaaa1111"));
@@ -174,7 +174,7 @@ fn test_matches_title_substring() {
 /// /resume with a nonexistent token reports no match and does not quit.
 #[test]
 fn test_no_match_reports_error() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
     app.run_resume(Some("zzz"));
     assert!(queued_target(&app).is_none());
@@ -211,7 +211,7 @@ fn test_busy_run_defers_resume() {
 /// (read-only browsing is harmless). Only a specific target defers.
 #[test]
 fn test_busy_bare_opens_picker() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoRowCatalog));
     app.start_run_for_test(0);
     app.ui.navigation.screen = Screen::Working;
@@ -249,7 +249,7 @@ fn test_export_path_enqueues_resume() {
     create_dir_all(&dir).expect("temp dir");
     let path = dir.join("transcript.json");
     write(&path, "[]").expect("write export file");
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(EmptyCatalog));
     let arg = path.to_str().expect("utf8 path").to_string();
     app.run_resume(Some(&arg));
@@ -283,7 +283,7 @@ impl SessionCatalog for ManyRowCatalog {
 /// keeps its own name.
 #[test]
 fn test_many_sessions_all_visible() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(ManyRowCatalog(25)));
     app.run_resume(None);
     assert_eq!(app.ui.navigation.resume_picker.rows.len(), 25);
@@ -323,7 +323,7 @@ impl SessionCatalog for BusyCatalog {
 /// free row is still offered and opening the pane writes no transcript line.
 #[test]
 fn test_picker_skips_unavailable() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(BusyCatalog));
     app.run_resume(None);
     assert!(app.ui.navigation.resume_picker.open);
@@ -358,7 +358,7 @@ fn test_picker_counts_hidden() {
             ]
         }
     }
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoBusy));
     app.run_resume(None);
     assert_eq!(app.ui.navigation.resume_picker.hidden, 2);
@@ -369,7 +369,7 @@ fn test_picker_counts_hidden() {
 /// matches.
 #[test]
 fn test_lookup_finds_unavailable() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(BusyCatalog));
     app.run_resume(Some("busy elsewhere"));
     assert_eq!(queued_target(&app).as_deref(), Some("held1111"));
@@ -391,7 +391,7 @@ fn test_all_unavailable_names_reason() {
             }]
         }
     }
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(AllBusy));
     app.run_resume(None);
     assert!(!app.ui.navigation.resume_picker.open);
@@ -407,7 +407,7 @@ fn test_all_unavailable_names_reason() {
 /// the pane more rows than it renders.
 #[test]
 fn test_picker_caps_rows() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(ManyRowCatalog(VISIBLE_LIMIT + 40)));
     app.run_resume(None);
     assert_eq!(app.ui.navigation.resume_picker.rows.len(), VISIBLE_LIMIT);
@@ -431,7 +431,7 @@ fn test_picker_keeps_full_limit() {
                 .collect()
         }
     }
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.catalog = Some(Arc::new(TwoBusyCatalog(VISIBLE_LIMIT + 40)));
     app.run_resume(None);
     let rows = &app.ui.navigation.resume_picker.rows;

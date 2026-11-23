@@ -13,7 +13,7 @@ use crate::records::{
 };
 use crate::rows::row_set::RowSet;
 use crate::rows::slots_key::SlotsKey;
-use crate::test_harness::{attach_connection, render_buffer, render_text, working_app};
+use crate::test_harness::{connect_session, render_buffer, render_text, working_app};
 use crate::transcript::frame::TranscriptFrame;
 use crate::view::SUCCESS_GREEN;
 use houyicoder_platform::desktop::glyphs::detect_glyph_set;
@@ -362,7 +362,7 @@ fn test_teammate_fill_renders_child() {
 #[test]
 fn test_steer_echo_renders() {
     let mut app = working_app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.sessions
         .current
         .capabilities

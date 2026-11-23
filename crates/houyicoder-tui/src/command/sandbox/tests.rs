@@ -12,7 +12,7 @@ use houyicoder_protocol::frontend::checkpoint::{
 };
 
 use crate::state::{App, Pane};
-use crate::test_harness::{TransportEvent, connected_app_with_events, wait_for_request};
+use crate::test_harness::{TransportEvent, live_session, wait_for_request};
 use crate::ui::{CheckpointLevel, SandboxTab};
 
 fn image(present: bool, hash: Option<&str>) -> CheckpointImage {
@@ -44,7 +44,7 @@ fn listing(writes: Vec<CheckpointView>) -> CheckpointListView {
 /// An App with a connection, its pane open on the checkpoints tab holding the
 /// host's answer already, so the tests below only have to act.
 fn checkpoint_app(writes: Vec<CheckpointView>) -> (App, mpsc::Receiver<TransportEvent>) {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Sandbox;
     app.ui.sandbox_pane.set_tab(SandboxTab::Checkpoints);
     let request = RequestId(70);
@@ -68,7 +68,7 @@ fn restore_frames(events: &mpsc::Receiver<TransportEvent>) -> Vec<RequestEnvelop
 
 #[test]
 fn test_sandbox_opens_boundaries() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.run_command(SlashCommand::Sandbox);
     assert_eq!(app.ui.navigation.pane, Pane::Sandbox);
     assert_eq!(app.ui.sandbox_pane.tab.get(), SandboxTab::Sandbox);
@@ -79,7 +79,7 @@ fn test_sandbox_opens_boundaries() {
 
 #[test]
 fn test_rewind_opens_checkpoints() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.run_command(SlashCommand::Rewind);
     assert_eq!(app.ui.navigation.pane, Pane::Sandbox);
     assert_eq!(
@@ -94,7 +94,7 @@ fn test_rewind_opens_checkpoints() {
 
 #[test]
 fn test_switch_reads_other_tab() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.run_command(SlashCommand::Sandbox);
     app.switch_sandbox_tab(1);
     assert_eq!(app.ui.sandbox_pane.tab.get(), SandboxTab::Checkpoints);
@@ -155,7 +155,7 @@ fn test_unverified_row_refuses_restore() {
 /// was not judged, so the key the footer offers never does nothing.
 #[test]
 fn test_unreadable_row_says_why() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui.navigation.pane = Pane::Sandbox;
     app.ui.sandbox_pane.set_tab(SandboxTab::Checkpoints);
     let request = RequestId(71);
@@ -200,7 +200,7 @@ fn test_detail_requests_sides() {
 /// for nothing.
 #[test]
 fn test_unreadable_detail_reads_nothing() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui.navigation.pane = Pane::Sandbox;
     app.ui.sandbox_pane.set_tab(SandboxTab::Checkpoints);
     let request = RequestId(72);

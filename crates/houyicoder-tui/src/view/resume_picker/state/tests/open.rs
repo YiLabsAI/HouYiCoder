@@ -9,7 +9,7 @@ use crate::input::queue::InputItem;
 use crate::input::queue::resume_command_target;
 use crate::resume_picker::{SessionCatalog, SessionPickerState, SessionRow, TitleSource};
 use crate::state::App;
-use crate::test_harness::connected_app;
+use crate::test_harness::live_app;
 use crate::test_harness::render_text;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
@@ -27,7 +27,7 @@ fn queued_target(app: &App) -> Option<String> {
 fn working() -> App {
     // Picker flows drive run_resume, which needs a live session (the
     // disconnected branch refuses before the catalog logic).
-    connected_app()
+    live_app()
 }
 
 fn render(app: &App) -> String {

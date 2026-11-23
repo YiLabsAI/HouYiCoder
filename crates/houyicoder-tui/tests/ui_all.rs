@@ -8,6 +8,8 @@ mod common;
 
 #[path = "build_runner.rs"]
 mod build_runner;
+#[path = "session_teardown.rs"]
+mod session_teardown;
 #[path = "ui_approval.rs"]
 mod ui_approval;
 #[path = "ui_consent.rs"]

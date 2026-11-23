@@ -3,7 +3,7 @@ use crate::agent_message::{ServerEvent, ServerResponse, SessionMessage};
 use crate::records::TranscriptLine;
 use crate::state::Pane;
 use crate::state::enums::LiveBlock;
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{live_session, wait_for_request};
 use crate::transcript::frame::TranscriptFrame;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::FrontendRequest;
@@ -102,7 +102,7 @@ fn todo_frame(items: &[(&str, &str)]) -> TranscriptFrame {
 /// over the wire so the pane reflects the new entries.
 #[test]
 fn test_memory_change_refreshes_pane() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("change-1".into()),
@@ -124,7 +124,7 @@ fn test_memory_change_refreshes_pane() {
 /// lands alone. Dedup keeps the same change id from writing twice.
 #[test]
 fn test_open_pane_keeps_notice() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.pane = Pane::Memory;
     app.handle_agent_message(SessionMessage::Event(ServerEvent::MemoryChanged {
         id: MemoryChangeId("c1".into()),
@@ -175,7 +175,7 @@ mod subagent_fetch;
 /// reads the busy stretch as a stalled turn and the meter freezes.
 #[test]
 fn test_tool_input_delta_live() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     app.start_run_for_test(0);
     app.handle_agent_message(SessionMessage::Event(ServerEvent::ToolInputDelta {
         text: "{\"path\":\"a.rs\"}".into(),

@@ -34,7 +34,7 @@ fn window(rows: Vec<TranscriptLine>, start_offset: u64, next_offset: u64) -> Win
 
 /// A working App whose session holds a connection-backed receiver, so a read
 /// dispatches to a worker the test then pumps rather than reading inline.
-fn connected_app() -> App {
+fn live_app() -> App {
     let mut app = working_app();
     let (_tx, rx) = channel::<SessionMessage>();
     app.sessions.current.connection = Some(SessionConnection::from_receiver(rx));
@@ -45,7 +45,7 @@ fn connected_app() -> App {
 /// unrelated rows: which rows are on screen says which of the two the view is
 /// showing.
 fn app_over_log(log_bytes: u64, window_rows: Vec<TranscriptLine>) -> App {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.current.transcript = vec![TranscriptLine::User("a live row".into())].into();
     app.sessions.persistence.snapshot = Some(Arc::new(MockSnapshot {
         lines: vec![TranscriptLine::Agent("only the log holds this".into())],
@@ -327,7 +327,7 @@ fn test_unreadable_log_keeps_rows() {
             None
         }
     }
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.current.transcript = vec![TranscriptLine::User("a live row".into())].into();
     app.sessions.persistence.snapshot = Some(Arc::new(UnreadableLog));
 

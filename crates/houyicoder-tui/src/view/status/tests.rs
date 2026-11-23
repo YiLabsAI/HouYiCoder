@@ -12,7 +12,7 @@ use crate::agent_message::fleet::FleetEntry;
 use crate::composition::app;
 use crate::state::App;
 use crate::state::Screen;
-use crate::test_harness::{connected_app, render_text};
+use crate::test_harness::{live_app, render_text};
 use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::envelope::RequestId;
 use std::time::Instant;
@@ -21,7 +21,7 @@ use std::time::Instant;
 /// and drops both as soon as the command answers.
 #[test]
 fn test_status_bar_shows_shell() {
-    let mut app = connected_app();
+    let mut app = live_app();
     let quiet = render_text(&app, 100, 24);
     assert!(
         !quiet.contains("shell running"),
@@ -108,7 +108,7 @@ fn test_hint_follows_drawn_grant() {
     // Seeded with the strip dropped; only the draw can raise it. The
     // hint needs the connected agent bar, so this is the connected
     // working screen rather than the bare fixture.
-    let mut app = connected_app();
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     for i in 0..2 {
         app.sessions
@@ -167,7 +167,7 @@ fn test_agents_hint_excludes_completed() {
 /// task keeps its output in the pane but has nothing left to manage.
 #[test]
 fn test_status_bar_shows_tasks() {
-    let mut app = connected_app();
+    let mut app = live_app();
     let quiet = render_text(&app, 100, 24);
     assert!(
         !quiet.contains("background task"),
@@ -213,7 +213,7 @@ fn test_status_bar_shows_tasks() {
 /// signal.
 #[test]
 fn test_task_count_survives_narrow() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.sessions.current.capabilities.model.catalog.applied.id =
         "claude-opus-5-5-with-a-long-name".into();
     app.sessions

@@ -5,7 +5,7 @@ use houyicoder_protocol::envelope::RequestId;
 use crate::composition;
 use crate::input::paste::PasteStore;
 use crate::state::Screen;
-use crate::test_harness::{connected_app, render_text};
+use crate::test_harness::{live_app, render_text};
 
 /// A reset submitted while a direct shell command runs is deferred rather
 /// than run locally: the host refuses the reset mid-command, so clearing the
@@ -40,7 +40,7 @@ fn test_clear_waits_for_shell() {
 /// expands it, so the retry sends the pasted text instead of the token.
 #[test]
 fn test_refused_submit_restores_draft() {
-    let mut app = connected_app();
+    let mut app = live_app();
     app.ui.navigation.screen = Screen::Working;
     app.sessions.current.shell.begin(RequestId(1));
     let token = app.ui.input.pasted.ingest("first\nsecond\nthird\nfourth");

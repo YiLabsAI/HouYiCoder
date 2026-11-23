@@ -17,8 +17,8 @@ use crate::composition;
 use crate::records::TranscriptLine;
 use crate::state::App;
 use crate::state::Screen;
-use crate::test_harness::attach_connection;
-use crate::test_harness::connected_app_events;
+use crate::test_harness::connect_session;
+use crate::test_harness::live_session;
 use houyicoder_protocol::frontend::QueuedInput;
 
 fn working() -> App {
@@ -31,7 +31,7 @@ fn working() -> App {
 /// before swapping a parked slot to Message, so a no-session app refuses the
 /// promotion and the slot stays parked.
 fn working_session() -> App {
-    let (app, _events) = connected_app_events();
+    let (app, _events) = live_session();
     app
 }
 
@@ -42,7 +42,7 @@ fn working_session() -> App {
 #[test]
 fn test_final_output_defers_drain() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(6);
     app.ui.input.queue.push(InputItem::Message("head".into()));
     app.ui
@@ -87,7 +87,7 @@ fn test_final_output_defers_drain() {
 #[test]
 fn test_interrupt_demotes_then_drains() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(7);
     app.ui.input.queue.push(InputItem::Message("parked".into()));
     app.handle_agent_message(SessionMessage::Response {
@@ -445,7 +445,7 @@ fn test_clear_orphans_pending_mirror() {
 #[test]
 fn test_head_drains_first_fifo() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui
         .input
         .queue
@@ -464,7 +464,7 @@ fn test_head_drains_first_fifo() {
 #[test]
 fn test_parked_head_drains_first() {
     let mut app = working();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui
         .input
         .queue

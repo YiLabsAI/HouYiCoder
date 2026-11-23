@@ -15,7 +15,7 @@ use crate::records::TeammateView;
 use crate::records::{Approval, TranscriptLine};
 use crate::state::App;
 use crate::state::Screen;
-use crate::test_harness::connection_lost_app;
+use crate::test_harness::dead_session_app;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::{ApprovalDecision, ApprovalScope};
@@ -38,7 +38,7 @@ fn last_line(app: &App) -> String {
 /// start, no reserved request, no optimistic echo.
 #[test]
 fn test_spawn_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.spawn_run("hello".into());
     assert!(
         !app.agent_busy(),
@@ -72,7 +72,7 @@ fn test_spawn_refused() {
 /// pending echo behind.
 #[test]
 fn test_child_inject_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()
@@ -111,7 +111,7 @@ fn test_child_inject_refused() {
 /// fake run, no ghost server-mirror removal.
 #[test]
 fn test_drain_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui.input.queue.push(InputItem::Message("head".into()));
     let promoted = app.drain_pending_head();
     assert!(!promoted, "a refused send must not report a promoted turn");
@@ -136,7 +136,7 @@ fn test_drain_refused() {
 /// frontend-only (it had no server mirror to begin with).
 #[test]
 fn test_drain_reparks_parked() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui
         .input
         .queue
@@ -166,7 +166,7 @@ fn test_drain_reparks_parked() {
 /// waiting, so the approval must not disappear.
 #[test]
 fn test_verdict_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.sessions.current.prompt = Some(PendingPrompt::approval_card(
         RequestId(7),
         Approval {
@@ -208,7 +208,7 @@ fn test_verdict_refused() {
 /// waiting, so the answer must not vanish when its verdict cannot ship.
 #[test]
 fn test_question_verdict_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse question");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(7), aq));
@@ -232,7 +232,7 @@ fn test_question_verdict_refused() {
 /// verdict, so it must not vanish the card when that verdict cannot ship.
 #[test]
 fn test_question_cancel_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui.navigation.screen = Screen::Working;
     let aq = AskQuestion::parse("c1", &single_input()).expect("parse question");
     app.sessions.current.prompt = Some(PendingPrompt::question_card(RequestId(7), aq));
@@ -252,7 +252,7 @@ fn test_question_cancel_refused() {
 /// after the rejection was actually delivered.
 #[test]
 fn test_trust_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(3),
         TrustPrompt {
@@ -277,7 +277,7 @@ fn test_trust_refused() {
 /// never reaches the driver cannot wait for a completion that clears it.
 #[test]
 fn test_abort_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.start_run_for_test(0);
     app.abort_run();
     assert!(
@@ -295,7 +295,7 @@ fn test_abort_refused() {
 /// while the server copy stays would duplicate the input on drain.
 #[test]
 fn test_recall_refused() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.ui.input.queue.push(InputItem::Message("head".into()));
     app.pop_queued_to_input();
     assert_eq!(

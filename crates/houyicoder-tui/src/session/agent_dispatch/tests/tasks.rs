@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::state::App;
-use crate::test_harness::{connected_app_events, render_text};
+use crate::test_harness::{live_session, render_text};
 use houyicoder_protocol::frontend::tasks::{
     BackgroundTaskId, BackgroundTaskSnapshot, BackgroundTaskStatus,
 };
@@ -29,7 +29,7 @@ fn apply_tasks(app: &mut App, tasks: Vec<BackgroundTaskSnapshot>) {
 /// learns a command is still working without opening the pane.
 #[test]
 fn test_tasks_reply_shows_count() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     apply_tasks(&mut app, vec![running(1, "cargo build")]);
     let screen = render_text(&app, 120, 24);
     assert!(
@@ -43,7 +43,7 @@ fn test_tasks_reply_shows_count() {
 /// counted.
 #[test]
 fn test_tasks_reply_replaces_set() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     apply_tasks(
         &mut app,
         vec![running(1, "cargo build"), running(2, "cargo test")],
@@ -64,7 +64,7 @@ fn test_tasks_reply_replaces_set() {
 /// every command ended instead of counting tasks the host dropped.
 #[test]
 fn test_tasks_reply_clears() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     apply_tasks(&mut app, vec![running(1, "cargo build")]);
     assert!(
         render_text(&app, 120, 24).contains("/tasks"),

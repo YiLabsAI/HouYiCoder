@@ -20,7 +20,7 @@ use super::*;
 use crate::agent_message::{ConnectionEvent, ServerEvent, ServerRequest, ServerResponse};
 use crate::composition::shared_runtime;
 use crate::test_harness::agent_entry;
-use crate::test_harness::connected_app_events;
+use crate::test_harness::live_session;
 use crate::transcript::SequencedFrame;
 use houyicoder_protocol::acpx::{AcpxMethod, AcpxNotification};
 use houyicoder_protocol::frontend::PendingInputId;
@@ -157,7 +157,7 @@ fn test_focus_notif_shape() {
 /// one per call.
 #[test]
 fn test_request_id_starts_zero() {
-    let (app, _events) = connected_app_events();
+    let (app, _events) = live_session();
     let session = app
         .sessions
         .current
@@ -173,7 +173,7 @@ fn test_request_id_starts_zero() {
 /// call keeps returning Exhausted.
 #[test]
 fn test_request_id_exhaustion_stable() {
-    let (app, _events) = connected_app_events();
+    let (app, _events) = live_session();
     let session = app
         .sessions
         .current
@@ -212,8 +212,8 @@ fn test_request_id_exhaustion_stable() {
 /// fresh connection still issuing from zero.
 #[test]
 fn test_request_id_sequence_independent() {
-    let (a, _ea) = connected_app_events();
-    let (b, _eb) = connected_app_events();
+    let (a, _ea) = live_session();
+    let (b, _eb) = live_session();
     let first = a
         .sessions
         .current

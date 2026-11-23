@@ -2,11 +2,11 @@
 //! and leaves the composer and the queue alone.
 
 use super::*;
-use crate::test_harness::{connected_app_events, render_text};
+use crate::test_harness::{live_session, render_text};
 
 #[test]
 fn test_esc_stops_shell() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     assert!(app.submit_direct_shell("sleep 30".into()));
     assert!(!app.sessions.current.shell.is_cancelling());
     handle_working(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));

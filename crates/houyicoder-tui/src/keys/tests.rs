@@ -16,10 +16,10 @@ use crate::session::todo_view::{TodoStatus, TodoView};
 use crate::state::Screen;
 use crate::state::enums::StatusTab;
 use crate::state::model_draft::ModelSettingFocus;
-use crate::test_harness::attach_connection;
+use crate::test_harness::connect_session;
 use crate::test_harness::render_text;
 use crate::test_harness::{
-    TransportEvent, connected_app_with_events, model_app, model_caps, model_catalog, model_entry,
+    TransportEvent, live_session, model_app, model_caps, model_catalog, model_entry,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
@@ -299,7 +299,7 @@ fn test_model_pane_esc_closes() {
 /// the pane's back.
 #[test]
 fn test_picker_fast_inline() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     let mut catalog = model_catalog(vec![model_entry(
         "glm-5.2",
         "Fable",
@@ -1155,7 +1155,7 @@ fn test_review_rework_key_routes() {
 #[test]
 fn test_repeated_esc_keeps() {
     let mut app = working_app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1178,7 +1178,7 @@ fn test_repeated_esc_keeps() {
 #[test]
 fn test_recall_merges_draft() {
     let mut app = working_app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     app.ui.input.editor.set("half draft".into());
@@ -1196,7 +1196,7 @@ fn test_recall_merges_draft() {
 #[test]
 fn test_esc_cancelling_closes_pane() {
     let mut app = working_app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     // Esc1: interrupt (cancelling, agent_busy still true, queue intact).
@@ -1228,7 +1228,7 @@ fn test_esc_cancelling_closes_pane() {
 #[test]
 fn test_esc_cancelling_backs_trajectory() {
     let mut app = working_app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(0);
     app.ui.input.queue.push(InputItem::Message("task a".into()));
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1478,7 +1478,7 @@ fn test_esc_keeps_input() {
 #[test]
 fn test_busy_esc_keeps_draft() {
     let mut app = working_app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.start_run_for_test(0);
     app.ui.input.editor.set("draft".into());
     handle_working(&mut app, key(KeyCode::Esc));
@@ -1631,7 +1631,7 @@ fn test_teammate_esc_exits_view() {
 /// in the transcript.
 #[test]
 fn test_teammate_esc_keeps_child() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.viewport = ViewportMode::Working;
     app.sessions

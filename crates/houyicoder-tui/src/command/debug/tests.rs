@@ -1,7 +1,7 @@
 use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::records::TranscriptLine;
 use crate::state::App;
-use crate::test_harness::connection_lost_app;
+use crate::test_harness::dead_session_app;
 use crate::test_harness::working_app;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::debug::DebugState;
@@ -108,7 +108,7 @@ fn test_debug_result_renders_path() {
 /// connection instead of failing silently.
 #[test]
 fn test_debug_connection_lost() {
-    let mut app = connection_lost_app();
+    let mut app = dead_session_app();
     app.run_debug("");
     let last = app
         .sessions

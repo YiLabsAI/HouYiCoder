@@ -11,7 +11,7 @@ use crate::records::TranscriptLine;
 use houyicoder_provider::FakeProvider;
 
 use crate::state::Screen;
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{live_session, wait_for_request};
 use crate::turn_driver::tests::app_with_provider;
 use std::thread::sleep;
 use std::time::Duration;
@@ -84,7 +84,7 @@ fn test_expand_fires_child_fetch() {
 /// ChildTranscript request carrying the target session id.
 #[test]
 fn test_teammate_fetch_ships_query() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(app.enter_teammate_view_for_sid("c1", true));
     let req = wait_for_request(&events, |p| {
         matches!(p, FrontendRequest::ChildTranscript { .. })

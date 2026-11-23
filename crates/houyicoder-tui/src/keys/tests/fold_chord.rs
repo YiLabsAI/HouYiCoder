@@ -6,13 +6,13 @@
 
 use super::*;
 use crate::app::handle_key;
-use crate::test_harness::{connected_app_with_events, wait_for_notification};
+use crate::test_harness::{live_session, wait_for_notification};
 
 /// A connected working app holding one running child, selected in the strip.
 /// The connection is real so a key that enqueues a command can be observed on
 /// the wire; the child is real so the kill gesture has a target.
 fn child_app() -> (App, std::sync::mpsc::Receiver<TransportEvent>) {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.ui.navigation.screen = Screen::Working;
     app.ui.navigation.viewport = ViewportMode::Working;
     app.sessions

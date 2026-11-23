@@ -5,7 +5,7 @@ use super::super::handle_input;
 use crate::composition;
 use crate::input::InputMode;
 use crate::state::{App, Screen};
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{live_session, wait_for_request};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::FrontendRequest;
 
@@ -63,7 +63,7 @@ fn test_ctrl_chord_ignored() {
 /// returns the composer to Chat once the host took it.
 #[test]
 fn test_enter_runs_typed() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     app.ui.input.mode = InputMode::DirectShell;
     app.ui.input.editor.set("cargo t".into());
     app.ui.input.ghost = Some("est".into());

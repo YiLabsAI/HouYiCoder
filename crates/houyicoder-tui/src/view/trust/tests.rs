@@ -5,9 +5,7 @@ use crate::app::handle_key;
 use crate::composition;
 use crate::pending_prompt::PendingPrompt;
 use crate::state::{Screen, TrustChoice};
-use crate::test_harness::{
-    TransportEvent, attach_connection, connected_app_with_events, render_text,
-};
+use crate::test_harness::{TransportEvent, connect_session, live_session, render_text};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::trust::TrustPrompt;
@@ -46,7 +44,7 @@ fn test_trust_ask_resets_choice() {
 #[test]
 fn test_trust_down_selects_exit() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(4),
         trust_prompt("/proj"),
@@ -61,7 +59,7 @@ fn test_trust_down_selects_exit() {
 #[test]
 fn test_login_enter_accepts_trust() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.navigation.screen = Screen::Login;
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(5),
@@ -75,7 +73,7 @@ fn test_login_enter_accepts_trust() {
 #[test]
 fn test_resolve_trust_accept_clears() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(7),
         trust_prompt("/proj"),
@@ -93,7 +91,7 @@ fn test_resolve_trust_accept_clears() {
 #[test]
 fn test_resolve_trust_decline_clears() {
     let mut app = composition::app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(9),
         trust_prompt("/proj"),
@@ -152,7 +150,7 @@ fn test_trust_up_selects_accept() {
 /// landed.
 #[test]
 fn test_trust_loss_invalidates() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(11),
         trust_prompt("/secret/proj"),
@@ -190,7 +188,7 @@ fn test_trust_loss_invalidates() {
 /// quits, because handle_key routes past the dead card to the base surface.
 #[test]
 fn test_loss_unblocks_exit() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.sessions.current.prompt = Some(PendingPrompt::trust_ask(
         RequestId(12),
         trust_prompt("/proj"),

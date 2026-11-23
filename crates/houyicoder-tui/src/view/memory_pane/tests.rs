@@ -26,7 +26,7 @@ use crate::session::SessionConnection;
 use crate::state::Screen;
 use crate::state::enums::MemoryScopeTab;
 use crate::state::{App, Pane};
-use crate::test_harness::{connected_app_events, render_buffer, render_text, wait_for_request};
+use crate::test_harness::{live_session, render_buffer, render_text, wait_for_request};
 use crate::view::line_wrap::max_scroll_offset;
 use houyicoder_client::Client;
 use houyicoder_platform::desktop::glyphs::{GlyphSet, detect_glyph_set};
@@ -1018,7 +1018,7 @@ fn test_footer_wraps_when_narrow() {
 /// The /memory <key> show path ships a MemoryShow request naming that key.
 #[test]
 fn test_memory_show_ships_query() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     app.run_tui_local_command("memory setup");
     let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryShow { .. }));
     assert_eq!(req.req_id.0, 0, "first request on a fresh session");

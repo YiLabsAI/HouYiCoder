@@ -6,7 +6,7 @@ use crate::composition::app;
 use crate::records::TeammateView;
 use crate::records::TranscriptLine;
 use crate::state::Screen;
-use crate::test_harness::attach_connection;
+use crate::test_harness::connect_session;
 use crate::transcript::frame::TranscriptFrame;
 use crate::transcript::records::SubagentOutcome;
 use houyicoder_protocol::frontend::ContentBlock;
@@ -80,7 +80,7 @@ fn test_teammate_echo_preserved() {
 #[test]
 fn test_steer_completed_surfaces_notice() {
     let mut app = app();
-    attach_connection(&mut app);
+    connect_session(&mut app);
     app.ui.teammate_view = Some(TeammateView {
         child_sid: "c1".into(),
         ..Default::default()

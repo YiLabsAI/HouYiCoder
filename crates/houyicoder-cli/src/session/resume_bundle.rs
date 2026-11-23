@@ -20,7 +20,7 @@ pub(crate) fn build_bundle_for_resume_sid(
     sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: ProviderResolution,
-) -> Result<crate::WiredBundle, Box<dyn Error>> {
+) -> Result<crate::AssembledSession, Box<dyn Error>> {
     let resumed = build_runner_for_resume_sid(
         sid,
         &session_log_root(),
@@ -43,7 +43,7 @@ pub(crate) fn build_bundle_for_fork(
     source_sid: houyicoder_context::SessionId,
     project: Option<String>,
     provider: ProviderResolution,
-) -> Result<crate::WiredBundle, Box<dyn Error>> {
+) -> Result<crate::AssembledSession, Box<dyn Error>> {
     let resumed = build_runner_for_fork(
         source_sid,
         &session_log_root(),

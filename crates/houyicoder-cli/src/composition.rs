@@ -1,5 +1,5 @@
 //! Composition assembly: build the runner and protocol server, pair an
-//! in-memory client around one shared Arc<Runner>, and return the wired TUI
+//! in-memory client around one shared Arc<Runner>, and return the assembled TUI
 //! bundle alongside the host lifecycle owner for the session's background
 //! tasks. Sits between the CLI entry dispatch and the TUI run loop so the
 //! fresh and resume paths share one wiring and cannot drift.
@@ -21,7 +21,7 @@ use houyicoder_service::composition::{
 };
 use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
-use houyicoder_tui::composition::{FrontendStartup, RunnerBundle, shared_runtime};
+use houyicoder_tui::composition::{FrontendStartup, SessionHandoff, shared_runtime};
 use houyicoder_tui::transcript::snapshot::TranscriptSnapshot;
 use houyicoder_tui::view::export_log::ExportLog;
 use houyicoder_tui::view::trajectory_pane::TrajectoryLog;
@@ -36,24 +36,24 @@ use houyicoder_service::diagnostics;
 use std::env::current_dir;
 use std::panic::{set_hook, take_hook};
 
-/// A wired TUI bundle, the frontend startup policy the TUI applies to its Ui
+/// A assembled session, the frontend startup policy the TUI applies to its Ui
 /// and Input owners, and the host lifecycle owner for the session's background
 /// tasks. The fresh and resume paths both produce this so a session switch can
 /// reap the prior host before installing the new one. The frontend policy
 /// travels alongside the bundle rather than inside it so a Session never
 /// carries frontend startup state.
-pub(crate) type WiredBundle = (RunnerBundle, FrontendStartup, HostLifecycle, Arc<Runner>);
+pub(crate) type AssembledSession = (SessionHandoff, FrontendStartup, HostLifecycle, Arc<Runner>);
 
 /// The composition root: build the runner via the service layer, install its
 /// event handlers, Arc the runner so the server task and the TUI share one, pair an
 /// in-memory server + client around it, spawn the server on the shared
-/// runtime, and return the wired bundle for the TUI. The TUI never constructs
+/// runtime, and return the assembled session for the TUI. The TUI never constructs
 /// these itself; it stays a presentation layer over the protocol client.
 pub(crate) fn build_bundle(
     project: Option<String>,
     model_override: Option<String>,
     provider: ProviderResolution,
-) -> WiredBundle {
+) -> AssembledSession {
     let bundle = build_runner(crate::production_runner(project, provider));
     // --model overrides the settings-seeded active model for a fresh session
     // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
@@ -75,7 +75,7 @@ pub(crate) fn build_bundle_for_resume(
     export_path: &Path,
     project: Option<String>,
     provider: ProviderResolution,
-) -> Result<WiredBundle, Box<dyn Error>> {
+) -> Result<AssembledSession, Box<dyn Error>> {
     let resumed = build_runner_for_resume_export(
         export_path,
         &session_log_root(),
@@ -88,7 +88,7 @@ pub(crate) fn build_bundle_for_resume(
 
 /// Shared TUI wiring: install the agent event handlers, pair the in-memory
 /// server and client, build the trajectory view, the export view, and the
-/// session-log snapshot over the SessionLog, and assemble the RunnerBundle
+/// session-log snapshot over the SessionLog, and assemble the SessionHandoff
 /// the TUI drives. Both the fresh path (build_bundle) and the resume path
 /// (build_bundle_for_resume) route through here so the wiring cannot drift
 /// between them.
@@ -96,7 +96,7 @@ pub(crate) fn assemble_bundle(
     assembled: AssembledRunner,
     model: String,
     skip_login: bool,
-) -> WiredBundle {
+) -> AssembledSession {
     let AssembledRunner {
         runner,
         session,
@@ -156,7 +156,7 @@ pub(crate) fn assemble_bundle(
     // The server task owns the runner + the permission gate; the TUI holds
     // only the protocol client.
     (
-        RunnerBundle {
+        SessionHandoff {
             client,
             agent_tx: tx,
             agent_rx: rx,

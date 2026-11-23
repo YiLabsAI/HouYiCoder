@@ -30,7 +30,7 @@ use houyicoder_service::server::{FrameCarrier, Server};
 use houyicoder_session::SessionStore;
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::FrontendStartup;
-use houyicoder_tui::composition::RunnerBundle;
+use houyicoder_tui::composition::SessionHandoff;
 use houyicoder_tui::composition::build_app;
 use houyicoder_tui::composition::shared_runtime;
 use houyicoder_tui::records::TranscriptLine;
@@ -115,7 +115,7 @@ fn live_app_with_tools(manual: bool) -> App {
     let (runner, client) = pair_inproc(runner, session, gate, tx.clone());
     drop(runner); // server owns the runner; the TUI holds no engine handle.
     build_app(
-        RunnerBundle {
+        SessionHandoff {
             client,
             agent_tx: tx,
             agent_rx: rx,

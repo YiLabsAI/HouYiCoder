@@ -5,13 +5,13 @@ use houyicoder_protocol::frontend::permission::{PermissionEffect, RuleDestinatio
 use super::PermissionDecision;
 use crate::permission_pane_state::PermissionPaneState;
 use crate::state::enums::{PermissionInput, PermissionTab};
-use crate::test_harness::{connected_app_events, wait_for_request};
+use crate::test_harness::{live_session, wait_for_request};
 
 /// Removing a cached working directory ships a PermissionRemoveWorkingDir
 /// request naming its path for the server to drop.
 #[test]
 fn test_remove_dir_ships() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     app.sessions.current.capabilities.permission.dirs_cache = vec!["/tmp/extra".into()];
     app.remove_dir_at(0);
     let req = wait_for_request(&events, |p| {

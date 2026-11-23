@@ -2,13 +2,13 @@
 //! another request leaves it running, and a lost connection ends it.
 
 use super::*;
-use crate::test_harness::{connected_app_events, render_text, wait_for_request};
+use crate::test_harness::{live_session, render_text, wait_for_request};
 
 /// The host answers a finished command with Ack, and that reply is what
 /// clears the running state the status bar advertises.
 #[test]
 fn test_reply_clears_shell() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(app.submit_direct_shell("echo hi".into()));
     let env = wait_for_request(&events, |payload| {
         matches!(payload, FrontendRequest::DirectShellRun { .. })
@@ -28,7 +28,7 @@ fn test_reply_clears_shell() {
 /// request id is what tells two commands apart.
 #[test]
 fn test_stale_reply_leaves_running() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(app.submit_direct_shell("echo hi".into()));
     let env = wait_for_request(&events, |payload| {
         matches!(payload, FrontendRequest::DirectShellRun { .. })
@@ -47,7 +47,7 @@ fn test_stale_reply_leaves_running() {
 /// user learns why nothing ran instead of watching a hint that never clears.
 #[test]
 fn test_error_reports_and_clears() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(app.submit_direct_shell("echo hi".into()));
     let env = wait_for_request(&events, |payload| {
         matches!(payload, FrontendRequest::DirectShellRun { .. })
@@ -71,7 +71,7 @@ fn test_error_reports_and_clears() {
 /// request's error cannot clear a newer command.
 #[test]
 fn test_stale_error_leaves_running() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(app.submit_direct_shell("echo hi".into()));
     let env = wait_for_request(&events, |payload| {
         matches!(payload, FrontendRequest::DirectShellRun { .. })
@@ -93,7 +93,7 @@ fn test_stale_error_leaves_running() {
 /// than claiming an interruption of work that never started.
 #[test]
 fn test_loss_not_sent_shell() {
-    let (mut app, events) = connected_app_events();
+    let (mut app, events) = live_session();
     assert!(app.submit_direct_shell("sleep 30".into()));
     let env = wait_for_request(&events, |payload| {
         matches!(payload, FrontendRequest::DirectShellRun { .. })
@@ -115,7 +115,7 @@ fn test_loss_not_sent_shell() {
 /// rather than leaving the status bar advertising work that is gone.
 #[test]
 fn test_loss_clears_shell() {
-    let (mut app, _events) = connected_app_events();
+    let (mut app, _events) = live_session();
     assert!(app.submit_direct_shell("sleep 30".into()));
     app.apply_connection_loss("server closed the connection".into(), Vec::new());
     assert!(!app.shell_run_active());

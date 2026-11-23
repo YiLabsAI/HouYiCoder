@@ -15,6 +15,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use portable_pty::cmdbuilder::CommandBuilder;
 use portable_pty::{Child, MasterPty, PtySize};
 
+use futures::channel::mpsc::channel;
+use houyicoder_client::{Client, InProcTransport};
+use houyicoder_permission::DefaultModeGate;
+use houyicoder_protocol::frontend::SessionId as WireSessionId;
+use houyicoder_service::CancellationToken;
+use houyicoder_service::composition::{BuildRunnerOptions, build_runner, fleet_status_relay};
+use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
+use houyicoder_tui::agent_message::SessionMessage;
+use houyicoder_tui::composition::{FrontendStartup, SessionHandoff, shared_runtime};
+use std::env::temp_dir;
+use std::sync::mpsc;
+use tokio::task::JoinHandle;
+
 /// Hold a session lock from this test process, which is a different process
 /// from the binary under test. The returned file keeps the lock until it is
 /// dropped.
@@ -1188,4 +1201,78 @@ pub fn tab_to_workspace(s: &mut PtySession) {
         s.wait_for("[Workspace]", RENDER_TIMEOUT),
         "Workspace tab should be the focused one"
     );
+}
+
+/// One session over a real in-process server: the handoff the frontend is
+/// wired with, the startup policy, and the serve loop's handle.
+pub fn server_backed_handoff() -> (SessionHandoff, FrontendStartup, JoinHandle<()>) {
+    let mut options = BuildRunnerOptions::default();
+    options.home = Some(local_test_home());
+    let bundle = build_runner(options);
+    let wire_session = WireSessionId(bundle.session.to_string());
+    let (c2s_tx, c2s_rx) = channel(16);
+    let (s2c_tx, s2c_rx) = channel(16);
+    let event_sequencer = EventSequencer::new();
+    let mut runner = bundle.runner;
+    event_sequencer.install_on(&mut runner);
+    fleet_status_relay::spawn(
+        bundle.bus.clone(),
+        event_sequencer.clone(),
+        shared_runtime().handle().clone(),
+        CancellationToken::new(),
+    );
+    let startup_warnings = runner.drain_startup_warnings();
+    let runner = Arc::new(runner);
+    let server_io = FrameCarrier::new(s2c_tx, c2s_rx);
+    let gate: Arc<DefaultModeGate> = bundle.gate;
+    let server = Server::new_with_event_sequencer(runner, bundle.session, gate, event_sequencer)
+        .with_settings_path(local_test_settings_path())
+        .with_append_notify(bundle.append_notify);
+    let serve = shared_runtime().spawn(async move {
+        drop(server.serve(server_io).await);
+    });
+    let client = Client::new(Box::new(InProcTransport::from_halves(c2s_tx, s2c_rx)));
+    let (tx, rx) = mpsc::channel::<SessionMessage>();
+    let handoff = SessionHandoff {
+        client,
+        agent_tx: tx,
+        agent_rx: rx,
+        session: wire_session,
+        model: "test-model".to_string(),
+        trajectory_log: None,
+        export_log: None,
+        snapshot: None,
+        session_catalog: None,
+    };
+    let startup = FrontendStartup {
+        skip_login: false,
+        startup_warnings,
+        history_path: temp_history_path(),
+    };
+    (handoff, startup, serve)
+}
+
+/// A unique temp settings path for one in-process server, so a persist
+/// writes the temp file instead of the developer's real config.
+fn local_test_settings_path() -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    temp_dir().join(format!("houyi-settings-{}-{n}.json", process::id()))
+}
+
+/// A unique temp home, so the runner reads and writes user-level state there
+/// instead of under the developer's home.
+fn local_test_home() -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = temp_dir().join(format!("houyi-home-{}-{n}", process::id()));
+    drop(fs::create_dir_all(&dir));
+    dir
+}
+
+/// A unique prompt-history path, so one test never appends to another's file.
+fn temp_history_path() -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    temp_dir().join(format!("houyi-history-{}-{n}.jsonl", process::id()))
 }

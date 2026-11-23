@@ -15,9 +15,7 @@ use houyicoder_protocol::frontend::tasks::{
 use crate::composition;
 use crate::keys::handle_working;
 use crate::state::{App, Pane, Screen};
-use crate::test_harness::{
-    TransportEvent, connected_app_with_events, render_text, wait_for_request,
-};
+use crate::test_harness::{TransportEvent, live_session, render_text, wait_for_request};
 
 use super::rows::TaskRow;
 use super::{body_lines, header_line, task_lines};
@@ -188,7 +186,7 @@ fn test_marker_follows_selected_task() {
 /// used to occupy now holds.
 #[test]
 fn test_kill_targets_selected_task() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions.current.capabilities.tasks.replace_all(vec![
         snapshot(1, BackgroundTaskStatus::Running, "doomed", 1_000, None),
         snapshot(2, BackgroundTaskStatus::Running, "survivor", 2_000, None),
@@ -221,7 +219,7 @@ fn test_kill_targets_selected_task() {
 /// selected: the newest running task, even when a newer task has ended.
 #[test]
 fn test_open_selects_first() {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.sessions.current.capabilities.tasks.replace_all(vec![
         snapshot(1, BackgroundTaskStatus::Running, "one", 1_000, None),
         snapshot(2, BackgroundTaskStatus::Finished, "two", 2_000, None),
@@ -487,7 +485,7 @@ fn test_detail_scrolls_output() {
 /// Down on an empty input opens the pane and asks the host for the list.
 #[test]
 fn test_down_opens_tasks_pane() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions
         .current
         .capabilities
@@ -524,7 +522,7 @@ fn test_esc_returns_to_list() {
 /// Enter on a row opens that task's detail and asks the host for its record.
 #[test]
 fn test_enter_opens_task_detail() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions
         .current
         .capabilities
@@ -553,7 +551,7 @@ fn test_enter_opens_task_detail() {
 /// k stops the running task under the cursor by asking the host to kill it.
 #[test]
 fn test_kill_stops_running_task() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions
         .current
         .capabilities
@@ -579,7 +577,7 @@ fn test_kill_stops_running_task() {
 /// why it did nothing.
 #[test]
 fn test_kill_skips_finished_task() {
-    let (mut app, events) = connected_app_with_events();
+    let (mut app, events) = live_session();
     app.sessions
         .current
         .capabilities

@@ -10,7 +10,7 @@ use houyicoder_protocol::frontend::checkpoint::{
 use crate::agent_message::{ServerResponse, SessionMessage};
 use crate::records::TranscriptLine;
 use crate::state::{App, Pane};
-use crate::test_harness::{connected_app_with_events, render_text};
+use crate::test_harness::{live_session, render_text};
 use crate::ui::{CheckpointLevel, SandboxTab};
 
 fn boundaries() -> SandboxBoundariesView {
@@ -77,7 +77,7 @@ fn answer(app: &mut App, request: RequestId, response: ServerResponse) {
 }
 
 fn pane_app() -> App {
-    let (mut app, _events) = connected_app_with_events();
+    let (mut app, _events) = live_session();
     app.ui.navigation.pane = Pane::Sandbox;
     app.ui.sandbox_pane.set_tab(SandboxTab::Checkpoints);
     app
