@@ -4,5 +4,6 @@
 //! agent (a different model, a review tool) under the same fence and
 //! permission gate that governs in-process children.
 
+mod permission;
 mod session;
 mod transcript;

@@ -1,9 +1,13 @@
 //! Tests for session lifecycle and transcript folding.
 
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
 use std::io::Cursor;
 use std::io::Write;
 use std::io::sink;
 use std::path::Path;
+use std::process::id;
 use std::sync::Arc;
 
 use super::super::transcript::TranscriptFold;
@@ -14,6 +18,7 @@ use houyicoder_api::launcher::{
 };
 use houyicoder_api::session::SessionLog;
 use houyicoder_memory::InMemoryBackend;
+use houyicoder_permission::{DefaultModeGate, ModeGate, PermissionMode};
 use houyicoder_session::SessionStore;
 use tokio::sync::mpsc;
 
@@ -163,7 +168,7 @@ async fn test_recv_returns_stop_reason() {
     let sid = SessionId::new();
     let mut fold = TranscriptFold::new(sid, store.clone());
     let stop = session
-        .recv_until_prompt(prompt_id, &mut fold)
+        .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap();
     assert_eq!(stop, "EndTurn");
@@ -187,7 +192,7 @@ async fn test_child_request_ignored() {
     let sid = SessionId::new();
     let mut fold = TranscriptFold::new(sid, store);
     let stop = session
-        .recv_until_prompt(prompt_id, &mut fold)
+        .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap();
     assert_eq!(stop, "EndTurn");
@@ -202,7 +207,7 @@ async fn test_pipe_close_during_recv() {
     let mut fold = TranscriptFold::new(sid, store);
     drop(tx);
     let err = session
-        .recv_until_prompt(prompt_id, &mut fold)
+        .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap_err();
     assert!(matches!(err, AcpClientError::ChildExited(_)));
@@ -221,7 +226,7 @@ async fn test_child_error_response() {
     let sid = SessionId::new();
     let mut fold = TranscriptFold::new(sid, store);
     let err = session
-        .recv_until_prompt(prompt_id, &mut fold)
+        .recv_until_prompt(prompt_id, &mut fold, None)
         .await
         .unwrap_err();
     assert!(matches!(err, AcpClientError::Protocol(_)));
@@ -237,7 +242,7 @@ async fn test_drive_prompt_returns_stop() {
     let resp = r#"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}"#;
     let task = tokio::spawn(async move {
         session
-            .drive_prompt(sid, "go", &store, &cancel)
+            .drive_prompt(sid, "go", &store, &cancel, None)
             .await
             .expect("prompt completes")
     });
@@ -255,7 +260,8 @@ async fn test_cancel_sends_notification() {
     let cancel = CancellationToken::new();
     let sid = SessionId::new();
     let cancel_clone = cancel.clone();
-    let task = tokio::spawn(async move { session.drive_prompt(sid, "go", &store, &cancel).await });
+    let task =
+        tokio::spawn(async move { session.drive_prompt(sid, "go", &store, &cancel, None).await });
     cancel_clone.cancel();
     let mut saw_cancel = false;
     for _ in 0..4 {
@@ -367,4 +373,84 @@ async fn test_connect_no_pipes_reports() {
         result,
         Err(AcpClientError::ConstructionFailed { .. })
     ));
+}
+
+/// A child permission ask with no fence is ignored, not answered.
+#[tokio::test]
+async fn test_ask_without_fence_ignored() {
+    let (mut session, tx, _rx) = channel_session();
+    let prompt_id = session.next_request_id();
+    let ask = r#"{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"call-1","title":"bash"},"options":[]}}"#;
+    tx.send(format!("{ask}\n")).await.unwrap();
+    let resp = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{"stopReason":"end_turn"}}}}"#,
+        prompt_id
+    );
+    tx.send(format!("{resp}\n")).await.unwrap();
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let sid = SessionId::new();
+    let mut fold = TranscriptFold::new(sid, store);
+    let stop = session
+        .recv_until_prompt(prompt_id, &mut fold, None)
+        .await
+        .unwrap();
+    assert_eq!(stop, "EndTurn");
+}
+
+/// A delegated ask publishes on the bus and the parent verdict returns to
+/// the child as the option id the child offered.
+#[tokio::test]
+async fn test_delegated_ask_round_trip() {
+    let bus: Arc<AgentBus> = Arc::new(Default::default());
+    let root = temp_dir().join(format!("fence-rt-{}", id()));
+    create_dir_all(&root).expect("root");
+    let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::with_mode(PermissionMode::Manual));
+    let fence = PermissionFence {
+        workspace_root: root.clone(),
+        gate,
+        bus: Some(bus.clone()),
+        child_id: "c1".into(),
+        agent_type: "review".into(),
+    };
+    let mut parent_rx = bus.subscribe(permission_request_topic());
+    let (mut session, tx, mut rx) = channel_session();
+    let prompt_id = session.next_request_id();
+    let task = tokio::spawn(async move {
+        session
+            .recv_until_prompt(prompt_id, &mut fold_holder(), Some(&fence))
+            .await
+    });
+    let ask = r#"{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"sessionId":"s","toolCall":{"toolCallId":"call-1","title":"bash","rawInput":{"tool_name":"bash"}},"options":[{"optionId":"allow_once","name":"Allow once","kind":"allow_once"},{"optionId":"reject_once","name":"Reject once","kind":"reject_once"}]}}"#;
+    tx.send(format!("{ask}\n")).await.unwrap();
+    // Parent receives the delegated ask and approves it.
+    let msg = parent_rx.recv().await.expect("delegated ask published");
+    let BusMessage::PermissionRequest { call_id, .. } = msg else {
+        panic!("expected a permission request");
+    };
+    bus.publish(
+        &permission_response_topic("c1", &call_id),
+        BusMessage::PermissionResponse {
+            call_id,
+            approved: true,
+            updated_input: None,
+            scope: "once".into(),
+        },
+    );
+    // Child receives the allow answer.
+    let answered = rx.recv().await.expect("answer sent to child");
+    assert!(answered.contains(r#""id":99"#), "{answered}");
+    assert!(answered.contains("allow_once"), "{answered}");
+    let resp = format!(
+        r#"{{"jsonrpc":"2.0","id":{},"result":{{"stopReason":"end_turn"}}}}"#,
+        prompt_id
+    );
+    tx.send(format!("{resp}\n")).await.unwrap();
+    let stop = task.await.unwrap().unwrap();
+    assert_eq!(stop, "EndTurn");
+    remove_dir_all(&root).ok();
+}
+
+fn fold_holder() -> TranscriptFold {
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    TranscriptFold::new(SessionId::new(), store)
 }
