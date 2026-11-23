@@ -1,4 +1,7 @@
 //! Shared helpers for the service integration-test binaries.
+//!
+//! Binaries that also act as a child process run harness-free through
+//! run_tests, and the ACP processes they speak to live in acp_stub_server.
 //! Each tests-binary does mod common; + imports the frame plumbing so the
 //! wire-contract tests share ONE copy of the stub-runner + channel pair +
 //! send/recv helpers instead of duplicating them per binary. Cargo treats
@@ -12,13 +15,25 @@
 
 #![allow(dead_code)] // test fixtures; used by some test binaries, unused from others
 
+use std::env::current_exe;
+use std::env::temp_dir;
+use std::fs::create_dir_all;
+use std::fs::remove_dir_all;
+use std::panic::catch_unwind;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::process::exit;
+use std::process::id;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
-use houyicoder_context::SessionId;
+use houyicoder_api::sandbox::{SandboxSession, WorktreeFenceGuard};
+use houyicoder_async::PFut;
+use houyicoder_context::{DirEntry, ExecConfig, ExecResult, SandboxError, SessionId};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -29,6 +44,7 @@ use houyicoder_provider::FakeProvider;
 use houyicoder_service::server::FrameCarrier;
 use houyicoder_session::SessionStore;
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::time::timeout;
 
 /// A minimal runner over a stub provider so a run completes in one turn (or
@@ -96,4 +112,147 @@ pub async fn send_frame(tx: &mut mpsc::Sender<String>, msg: &impl serde::Seriali
         frame.push('\n');
     }
     tx.send(frame).await.expect("client sends frame");
+}
+
+/// A sandbox whose fence always succeeds. The worktree controller only calls
+/// narrow_to_worktree and active_exec_count; the rest exist so the trait is
+/// satisfied.
+pub struct StubSandbox;
+
+impl SandboxSession for StubSandbox {
+    fn exec_with_config(
+        &self,
+        _command: &str,
+        _config: ExecConfig,
+    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
+        Box::pin(async move {
+            Ok(ExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        })
+    }
+    fn read_file(&self, _path: &str, _max: usize) -> PFut<'_, Result<Vec<u8>, SandboxError>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+    fn write_file(&self, _path: &str, _content: Vec<u8>) -> PFut<'_, Result<(), SandboxError>> {
+        Box::pin(async move { Ok(()) })
+    }
+    fn list_dir(&self, _path: &str) -> PFut<'_, Result<Vec<DirEntry>, SandboxError>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+    fn path_exists(&self, _path: &str) -> PFut<'_, Result<bool, SandboxError>> {
+        Box::pin(async move { Ok(false) })
+    }
+    fn workspace_root(&self) -> Arc<Path> {
+        Arc::from(PathBuf::from("/"))
+    }
+    fn narrow_to_worktree(
+        &self,
+        _worktree: &Path,
+        _git_common_dir: &Path,
+    ) -> Result<WorktreeFenceGuard, SandboxError> {
+        Ok(WorktreeFenceGuard::new(Box::new(|| Ok(()))))
+    }
+    fn active_exec_count(&self) -> usize {
+        0
+    }
+}
+
+/// A throwaway git repository with one empty commit, so a linked worktree has
+/// a HEAD to branch from. The git calls are test scaffolding that prepares a
+/// directory, not an engine spawn.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "fixture setup, not a model-driven spawn"
+)]
+pub fn make_git_repo(tag: &str) -> PathBuf {
+    let dir = temp_dir().join(format!("houyi-service-wt-{}-{tag}", id()));
+    drop(remove_dir_all(&dir));
+    create_dir_all(&dir).expect("mkdir the repository");
+    let run = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("git runs");
+    };
+    run(&["init", "-q"]);
+    run(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "init",
+    ]);
+    dir
+}
+
+/// Run this binary's tests without a test harness. A child process spawned
+/// from current_exe must never emit harness banners on stdout, because that
+/// stdout is the protocol stream; so these binaries run their own list and
+/// report failures the way a harness would.
+pub fn run_tests(tests: &[(&str, fn())]) {
+    let mut failed = 0;
+    for (name, test) in tests {
+        match catch_unwind(test) {
+            Ok(()) => println!("test {name} ... ok"),
+            Err(_) => {
+                failed += 1;
+                println!("test {name} ... FAILED");
+            }
+        }
+    }
+    println!("{} passed, {failed} failed", tests.len() - failed);
+    if failed > 0 {
+        exit(1);
+    }
+}
+
+/// The command that re-runs this binary in one child mode. The test binary
+/// is the fixture, not an engine spawn.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "fixture setup, not a model-driven spawn"
+)]
+pub fn child_command(mode_env: &str) -> Command {
+    let mut cmd = Command::new(current_exe().expect("the test binary path"));
+    cmd.env(mode_env, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    cmd
+}
+
+/// A boxed test future, so a hand-run list can name async tests.
+pub type BoxTestFuture = Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+/// One named async test in a hand-run list.
+pub type BoxedTest = (&'static str, fn() -> BoxTestFuture);
+
+/// Run this binary's async tests without a test harness. A child process
+/// spawned from current_exe must never emit harness banners on stdout,
+/// because that stdout is the protocol stream.
+pub fn run_async_tests(runtime: &Runtime, tests: &[BoxedTest]) {
+    let mut failed = 0;
+    for (name, test) in tests {
+        match catch_unwind(|| runtime.block_on(test())) {
+            Ok(()) => println!("test {name} ... ok"),
+            Err(_) => {
+                failed += 1;
+                println!("test {name} ... FAILED");
+            }
+        }
+    }
+    println!("{} passed, {failed} failed", tests.len() - failed);
+    if failed > 0 {
+        exit(1);
+    }
 }

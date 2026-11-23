@@ -121,12 +121,17 @@ def bench_handshake(name, cmd, n=10, env=None):
     }
 
 
-def bench_protocol(example, n=10):
+STUB_SCRIPT = '[[{"type":"text","text":"hi"}]]'
+
+
+def bench_protocol(server, n=10):
     first = []
     for _ in range(n):
-        env = {**os.environ, "HOUYICODER_TEST_STUB_DELAY_MS": "0"}
+        # The real binary answers through its canned response script, so the
+        # measurement covers the wire path without a network call.
+        env = {**os.environ, "HOUYICODER_TEST_STUB_RESPONSE_SCRIPT": STUB_SCRIPT}
         proc = subprocess.Popen(
-            [example],
+            [server],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=DEVNULL,
@@ -159,7 +164,7 @@ def bench_protocol(example, n=10):
     for _ in range(n):
         env = {**os.environ, "HOUYICODER_ACP_STUB_HANG": "1"}
         proc = subprocess.Popen(
-            [example],
+            [server],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=DEVNULL,
@@ -293,7 +298,7 @@ def fmt(value):
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     houyi = os.path.join(root, "target", "release", "houyi")
-    example = os.path.join(root, "target", "release", "examples", "acp_stdio")
+    acp_server = [houyi, "--acp"]
 
     rows = [
         bench_handshake("houyi --acp (pipe)", [houyi, "--acp"]),
@@ -310,7 +315,7 @@ def main():
             f"| {fmt(row['new_p50'])}/{fmt(row['new_p95'])} | {fmt(row['rss'])} | {row['n']} |"
         )
 
-    proto = bench_protocol(example)
+    proto = bench_protocol(acp_server)
     print()
     print("| path | first delta p50/p95 (ms) | cancel stop p50/p95 (ms) | runs |")
     print("|---|---|---|---|")

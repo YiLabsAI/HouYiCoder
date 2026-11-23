@@ -1,81 +1,38 @@
-//! Real subprocess pipe tests for the ACP server: the stdio entry runs as a
-//! child process and the test drives raw JSON-RPC over its stdin and stdout.
+//! Real subprocess pipe tests for the ACP server: this binary re-runs itself
+//! as the server child and drives raw JSON-RPC over its stdin and stdout.
 //! These cover streaming before EOF, cancel against a live run, mode and
 //! model switching, and typed rejection of non-text content blocks.
 //!
-//! The example is the fixture. It builds on first use and is rebuilt every
-//! run so an earlier revision's binary cannot answer for the current wire.
+//! The binary runs harness-free, so the child's stdout carries only protocol
+//! frames: no nested build, no harness banner.
 
-#![allow(clippy::disallowed_methods)] // test scaffolding spawns the built example, not an engine call
+#![allow(clippy::disallowed_methods)] // test scaffolding spawns this binary, not an engine call
+
+#[path = "common/acp_stub_server.rs"]
+mod acp_stub_server;
+mod common;
+
+use crate::common::child_command;
 
 use std::env::current_dir;
 use std::env::var_os;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
-use std::path::PathBuf;
 use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
-use std::process::{Command, Stdio};
-use std::sync::Once;
 use std::time::Duration;
 use std::time::Instant;
 
 use serde_json::Value;
 use serde_json::json;
 
-/// Resolve the example binary the way the enclosing cargo run placed it,
-/// honouring CARGO_TARGET_DIR so a shared or per-worktree target works.
-fn binary_path() -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root");
-    let base = match var_os("CARGO_TARGET_DIR") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            if dir.is_absolute() {
-                dir
-            } else {
-                current_dir().expect("current dir").join(dir)
-            }
-        }
-        None => root.join("target"),
-    };
-    let name = if cfg!(windows) {
-        "acp_stdio.exe"
-    } else {
-        "acp_stdio"
-    };
-    base.join("debug").join("examples").join(name)
-}
-
-/// Build the example once per test run. Rebuilding rather than reusing a
-/// present binary matters: a binary left from an earlier revision would
-/// exercise the old wire format while these assertions describe the new one.
-fn ensure_built() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let status = Command::new("cargo")
-            .args(["build", "--example", "acp_stdio"])
-            .status()
-            .expect("cargo build --example acp_stdio");
-        assert!(status.success(), "build acp_stdio example");
-    });
-}
-
 /// Spawn the example with the given environment and piped stdio.
 fn spawn_server(env: &[(&str, &str)]) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-    ensure_built();
-    let mut command = Command::new(binary_path());
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    let mut command = child_command(acp_stub_server::SERVER_ENV);
     for (key, value) in env {
         command.env(key, value);
     }
-    let mut child = command.spawn().expect("spawn acp_stdio");
+    let mut child = command.spawn().expect("spawn the ACP server child");
     let stdin = child.stdin.take().expect("stdin piped");
     let stdout = child.stdout.take().expect("stdout piped");
     (child, stdin, BufReader::new(stdout))
@@ -132,7 +89,6 @@ fn prompt_frame(sid: &str, id: i64) -> String {
 
 /// A prompt streams session/update chunks while stdin stays open, and the
 /// final reply ends the turn.
-#[test]
 fn test_acp_streams_before_eof() {
     let (mut child, mut stdin, mut stdout) =
         spawn_server(&[("HOUYICODER_TEST_STUB_DELAY_MS", "30")]);
@@ -166,7 +122,6 @@ fn test_acp_streams_before_eof() {
 
 /// A cancel sent against a live run stops the turn well within the budget
 /// and replies with the cancelled stop reason.
-#[test]
 fn test_acp_cancel_aborts_runner() {
     let (mut child, mut stdin, mut stdout) = spawn_server(&[("HOUYICODER_ACP_STUB_HANG", "1")]);
     let (sid, _) = handshake(&mut stdin, &mut stdout);
@@ -202,7 +157,6 @@ fn test_acp_cancel_aborts_runner() {
 
 /// session/new reports modes and config options; set_mode and
 /// set_config_option reply with schema 1.5 bodies.
-#[test]
 fn test_acp_config_option_switch() {
     let (mut child, mut stdin, mut stdout) = spawn_server(&[]);
     let (sid, result) = handshake(&mut stdin, &mut stdout);
@@ -263,7 +217,6 @@ fn test_acp_config_option_switch() {
 /// A one-mebibyte prompt arrives across many pipe fragments and a cancel
 /// sent alongside it still stops the run, so the reader does not desync on a
 /// large frame or lose the cancel behind it.
-#[test]
 fn test_acp_large_prompt_cancel() {
     let (mut child, mut stdin, mut stdout) = spawn_server(&[("HOUYICODER_ACP_STUB_HANG", "1")]);
     let (sid, _) = handshake(&mut stdin, &mut stdout);
@@ -309,7 +262,6 @@ fn test_acp_large_prompt_cancel() {
 
 /// A prompt carrying an image block is rejected with a typed InvalidParams
 /// rather than dropped silently.
-#[test]
 fn test_acp_rejects_image_block() {
     let (mut child, mut stdin, mut stdout) = spawn_server(&[]);
     let (sid, _) = handshake(&mut stdin, &mut stdout);
@@ -328,4 +280,25 @@ fn test_acp_rejects_image_block() {
 
     drop(stdin);
     drop(child.wait());
+}
+
+/// The tests, run by hand because the binary doubles as its own child.
+fn main() {
+    if var_os(acp_stub_server::SERVER_ENV).is_some() {
+        acp_stub_server::serve_stdio_server();
+        return;
+    }
+    common::run_tests(&[
+        ("test_acp_streams_before_eof", test_acp_streams_before_eof),
+        (
+            "test_acp_cancel_aborts_runner",
+            test_acp_cancel_aborts_runner,
+        ),
+        (
+            "test_acp_config_option_switch",
+            test_acp_config_option_switch,
+        ),
+        ("test_acp_large_prompt_cancel", test_acp_large_prompt_cancel),
+        ("test_acp_rejects_image_block", test_acp_rejects_image_block),
+    ]);
 }

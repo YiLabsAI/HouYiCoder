@@ -1,32 +1,16 @@
 //! The /worktrees verbs across the connection: the client names a directory,
 //! the host answers in the pane's own terms, and none of the three starts a
 //! model turn.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "test setup spawn, not model-driven"
-)]
 
 mod common;
 
-use std::env::temp_dir;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
-use std::process::id;
 use std::sync::Arc;
 
 use futures::channel::mpsc;
 use houyicoder_api::provider::ModelProvider;
-use houyicoder_api::sandbox::SandboxSession;
-use houyicoder_api::sandbox::WorktreeFenceGuard;
 use houyicoder_api::session::SessionLog;
-use houyicoder_async::PFut;
-use houyicoder_context::DirEntry;
-use houyicoder_context::ExecConfig;
-use houyicoder_context::ExecResult;
-use houyicoder_context::SandboxError;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::Runner;
 use houyicoder_core::agent::ToolRegistry;
@@ -49,84 +33,7 @@ use houyicoder_service::server::Server;
 use houyicoder_session::SessionStore;
 use tokio::task::JoinHandle;
 
-use crate::common::{pair, recv_frame, recv_hello, send_frame};
-
-/// A sandbox whose fence always succeeds. The controller only calls
-/// narrow_to_worktree and active_exec_count; the rest exist to satisfy the
-/// trait.
-struct StubSandbox;
-
-impl SandboxSession for StubSandbox {
-    fn exec_with_config(
-        &self,
-        _command: &str,
-        _config: ExecConfig,
-    ) -> PFut<'_, Result<ExecResult, SandboxError>> {
-        Box::pin(async move {
-            Ok(ExecResult {
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: Some(0),
-            })
-        })
-    }
-    fn read_file(&self, _path: &str, _max: usize) -> PFut<'_, Result<Vec<u8>, SandboxError>> {
-        Box::pin(async move { Ok(Vec::new()) })
-    }
-    fn write_file(&self, _path: &str, _content: Vec<u8>) -> PFut<'_, Result<(), SandboxError>> {
-        Box::pin(async move { Ok(()) })
-    }
-    fn list_dir(&self, _path: &str) -> PFut<'_, Result<Vec<DirEntry>, SandboxError>> {
-        Box::pin(async move { Ok(Vec::new()) })
-    }
-    fn path_exists(&self, _path: &str) -> PFut<'_, Result<bool, SandboxError>> {
-        Box::pin(async move { Ok(false) })
-    }
-    fn workspace_root(&self) -> Arc<Path> {
-        Arc::from(PathBuf::from("/"))
-    }
-    fn narrow_to_worktree(
-        &self,
-        _worktree: &Path,
-        _git_common_dir: &Path,
-    ) -> Result<WorktreeFenceGuard, SandboxError> {
-        Ok(WorktreeFenceGuard::new(Box::new(|| Ok(()))))
-    }
-    fn active_exec_count(&self) -> usize {
-        0
-    }
-}
-
-/// A throwaway repository with one empty commit, so a linked worktree has a
-/// HEAD to branch from.
-fn make_repo(tag: &str) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-service-wt-{}-{tag}", id()));
-    drop(fs::remove_dir_all(&dir));
-    fs::create_dir_all(&dir).expect("mkdir the repository");
-    let run = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("git runs");
-    };
-    run(&["init", "-q"]);
-    run(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "--allow-empty",
-        "-q",
-        "-m",
-        "init",
-    ]);
-    dir
-}
+use crate::common::{StubSandbox, make_git_repo, pair, recv_frame, recv_hello, send_frame};
 
 /// A host sharing one repository with the controller it answers through, or a
 /// host with no repository at all. The provider holds no response, so a model
@@ -196,7 +103,7 @@ async fn ask(
 /// takes the tree apart.
 #[tokio::test]
 async fn test_worktree_removal_round_trip() {
-    let repo = make_repo("round-trip");
+    let repo = make_git_repo("round-trip");
     let tree = get_or_create_worktree(&repo, "feat-a").expect("create a managed worktree");
     let tree_path = tree.worktree_path.to_string_lossy().into_owned();
     let (mut tx, mut rx, handle) = open(Some(&repo)).await;
@@ -250,7 +157,7 @@ async fn test_worktree_removal_round_trip() {
 /// Entering answers with the tree the session now works in.
 #[tokio::test]
 async fn test_enter_answer_names_tree() {
-    let repo = make_repo("enter");
+    let repo = make_git_repo("enter");
     let tree = get_or_create_worktree(&repo, "feat-b").expect("create a managed worktree");
     let tree_path = tree.worktree_path.to_string_lossy().into_owned();
     let (mut tx, mut rx, handle) = open(Some(&repo)).await;
@@ -314,7 +221,7 @@ async fn test_requests_refuse_without_repository() {
 /// A directory this product did not create is refused, and it survives.
 #[tokio::test]
 async fn test_preview_refuses_unmanaged() {
-    let repo = make_repo("unmanaged");
+    let repo = make_git_repo("unmanaged");
     let outside = repo.join("hand-made");
     fs::create_dir_all(&outside).expect("a directory outside the managed root");
     let (mut tx, mut rx, handle) = open(Some(&repo)).await;

@@ -1,84 +1,38 @@
 //! Drop-in machine proof: a stock ACP client (a separate process) drives
-//! our server process end-to-end over the real stdio socket. The verify
-//! charter drove this by hand; here a test subprocess spawns the
-//! acp_stdio binary, speaks raw JSON-RPC to its stdin, and asserts the
-//! replies on its stdout — a regression-gated proof that we are a drop-in
-//! ACP agent, not a fork. The session id comes from the session/new reply,
-//! the same way a stock client learns it.
+//! our server process end-to-end over the real stdio socket. This binary
+//! re-runs itself as the server child, speaks raw JSON-RPC to its stdin, and
+//! asserts the replies on its stdout, a regression-gated proof that we are a
+//! drop-in ACP agent, not a fork. The session id comes from the session/new
+//! reply, the same way a stock client learns it.
+//!
+//! The binary runs harness-free, so the child's stdout carries only protocol
+//! frames.
 
-#![cfg(feature = "acp-cross-decode")]
-#![allow(clippy::disallowed_methods)] // test scaffolding spawns the built example, not an engine call
+#![allow(clippy::disallowed_methods)] // test scaffolding spawns this binary, not an engine call
+
+#[path = "common/acp_stub_server.rs"]
+mod acp_stub_server;
+mod common;
+
+use crate::common::child_command;
 
 use serde_json::Value;
 use serde_json::json;
 use std::env::current_dir;
 use std::env::var_os;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
-use std::path::PathBuf;
 use std::process::Child;
 use std::process::ChildStdin;
 use std::process::ChildStdout;
-use std::process::{Command, Stdio};
-use std::sync::Once;
-
-/// Resolve the acp_stdio example binary the way the enclosing cargo run
-/// placed it: honour CARGO_TARGET_DIR when set, otherwise the workspace
-/// target directory. A fixed workspace path would execute a binary left by
-/// a different build while the nested build below writes elsewhere.
-fn binary_path() -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root");
-    // cargo resolves a relative CARGO_TARGET_DIR against the invoking cwd,
-    // not the workspace root, so do the same when locating the artifact.
-    let base = match var_os("CARGO_TARGET_DIR") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            if dir.is_absolute() {
-                dir
-            } else {
-                current_dir().expect("current dir").join(dir)
-            }
-        }
-        None => root.join("target"),
-    };
-    let name = if cfg!(windows) {
-        "acp_stdio.exe"
-    } else {
-        "acp_stdio"
-    };
-    base.join("debug").join("examples").join(name)
-}
-
-/// Build the example once per test run. Rebuilding rather than reusing a
-/// present binary matters: the example is this test's fixture, and a binary
-/// left from an earlier revision would exercise the old wire format while
-/// the assertions describe the new one.
-fn ensure_built() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let status = Command::new("cargo")
-            .args(["build", "--example", "acp_stdio"])
-            .status()
-            .expect("cargo build --example acp_stdio");
-        assert!(status.success(), "build acp_stdio example");
-    });
-}
 
 /// Spawn the acp_stdio binary with piped stdio, run the initialize
 /// handshake, then learn the bound session id from the session/new reply.
 /// The initialize reply comes back with the handles so a test can assert on
 /// the handshake the server already performed.
 fn spawn_server() -> (Child, ChildStdin, BufReader<ChildStdout>, String, String) {
-    ensure_built();
-    let mut child = Command::new(binary_path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+    let mut child = child_command(acp_stub_server::SERVER_ENV)
         .spawn()
-        .expect("spawn acp_stdio");
+        .expect("spawn the ACP server child");
     let mut stdin = child.stdin.take().expect("stdin piped");
     let stdout = child.stdout.take().expect("stdout piped");
     let mut stdout = BufReader::new(stdout);
@@ -132,7 +86,6 @@ fn send_and_recv(
 /// initialize replies with protocolVersion + agentCapabilities; then
 /// session/prompt streams session/update + a PromptResponse with
 /// stopReason end_turn. Proves a stock ACP client drives our server.
-#[test]
 fn test_drop_capabilities_and_prompt() {
     let (mut child, mut stdin, mut stdout, session_id, init_reply) = spawn_server();
 
@@ -161,7 +114,6 @@ fn test_drop_capabilities_and_prompt() {
 
 /// An unknown method replies method-not-found (-32601) on the request id,
 /// not null — the wire behaves as a stock ACP peer expects.
-#[test]
 fn test_drop_unknown_method_fails() {
     let (mut child, mut stdin, mut stdout, _session_id, _init_reply) = spawn_server();
     let bogus = r#"{"jsonrpc":"2.0","id":7,"method":"bogus","params":{}}"#;
@@ -173,11 +125,32 @@ fn test_drop_unknown_method_fails() {
 
 /// Malformed JSON replies ParseError (-32700) on the null id, per
 /// JSON-RPC 2.0.
-#[test]
 fn test_drop_malformed_frame_fails() {
     let (mut child, mut stdin, mut stdout, _session_id, _init_reply) = spawn_server();
     let reply = send_and_recv(&mut stdin, &mut stdout, "not json at all", r#""id":null"#);
     assert!(reply.contains(r#""code":-32700"#), "{reply}");
     drop(stdin);
     drop(child.wait());
+}
+
+/// The tests, run by hand because the binary doubles as its own child.
+fn main() {
+    if var_os(acp_stub_server::SERVER_ENV).is_some() {
+        acp_stub_server::serve_stdio_server();
+        return;
+    }
+    common::run_tests(&[
+        (
+            "test_drop_capabilities_and_prompt",
+            test_drop_capabilities_and_prompt,
+        ),
+        (
+            "test_drop_unknown_method_fails",
+            test_drop_unknown_method_fails,
+        ),
+        (
+            "test_drop_malformed_frame_fails",
+            test_drop_malformed_frame_fails,
+        ),
+    ]);
 }

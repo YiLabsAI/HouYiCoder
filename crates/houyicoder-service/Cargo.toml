@@ -92,6 +92,7 @@ acp-cross-decode = ["dep:agent-client-protocol"]
 [[test]]
 name = "acp_drop_in"
 path = "tests/acp_drop_in.rs"
+harness = false
 required-features = ["acp-cross-decode"]
 [[test]]
 name = "acp_equivalence"
@@ -109,6 +110,7 @@ required-features = ["acp-cross-decode"]
 [[test]]
 name = "acp_live_duplex"
 path = "tests/acp_live_duplex.rs"
+harness = false
 
 [dev-dependencies]
 # test-util drives the recap deadline and the away window on a paused clock,
