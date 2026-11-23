@@ -25,15 +25,11 @@ use crate::acp::pump::AcpDuplexPump;
 use crate::acp::pump::InboundFrame;
 use crate::consent::{ConsentPolicy, DelegatedAskReceiver};
 use crate::lifecycle::{CLOSE_SETTLE_BUDGET, settle_on_disconnect};
-use crate::protocol_adapter::{
-    map_run_error, map_run_result, map_session_update, map_stream_event, tool_title,
-};
+use crate::protocol_adapter::{map_run_error, map_run_result};
 use crate::turn_events::TurnEventSubscriber;
 use futures::future::Either;
-use houyicoder_api::agent_event::ResponseStreamEvent;
-use houyicoder_api::session::TrajectoryPages;
 use houyicoder_api::session::TrajectoryPosition;
-use houyicoder_context::{SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::SessionId;
 use houyicoder_core::agent::RunError;
 use houyicoder_core::agent::RunResult;
 use houyicoder_core::agent::multi_agent::bus_types::AgentBus;
@@ -44,7 +40,6 @@ use houyicoder_protocol::acp_wire::{
 };
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::framing::encode;
-use houyicoder_protocol::frontend::session_update::SessionUpdate;
 use houyicoder_protocol::llm::Usage;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -569,144 +564,6 @@ impl AcpServer {
         self.adapter.handle_notification(notif).await;
         self.cancel_requested.store(true, Ordering::Relaxed);
         Ok(true)
-    }
-
-    /// The session's durable records past the position the client was last
-    /// pushed up to, in append order.
-    ///
-    /// The read starts at an absolute position in the session's own history
-    /// rather than counting from the front of a returned window: the store
-    /// keeps only its newest rows in memory, so counting from a window would
-    /// re-send records the client already saw as soon as the window moved. A
-    /// read that fails leaves the position after the records it did report, so
-    /// the next pass resumes there instead of repeating them.
-    fn drain_pushed(&mut self) -> Vec<SessionLogEntry> {
-        let store = self.runner.store();
-        let pages = TrajectoryPages::new(store.as_ref(), self.session, self.pushed_through);
-        let mut events = Vec::new();
-        for page in pages {
-            match page {
-                Ok(page) => {
-                    self.pushed_through = page.next;
-                    events.extend(page.events);
-                }
-                Err(e) => {
-                    tracing::warn!("durable read for session {} stopped: {e}", self.session);
-                    break;
-                }
-            }
-        }
-        events
-    }
-
-    /// Push every durable turn event the client has not seen yet, in the order
-    /// the engine appended them.
-    async fn push_pending(&mut self, io: &mut AcpDuplexPump) -> Result<(), ProtocolError> {
-        let events = self.drain_pushed();
-        for ev in &events {
-            self.push_durable_event(io, ev).await?;
-        }
-        Ok(())
-    }
-
-    /// Echo the prompt the client just sent as a user message chunk, so the
-    /// host renders it before the answer rather than after it.
-    async fn echo_user_prompt(
-        &self,
-        io: &mut AcpDuplexPump,
-        text: &str,
-    ) -> Result<(), ProtocolError> {
-        let event = SessionEvent::UserInput {
-            text: text.to_string(),
-        };
-        if let Some(update) = map_session_update(&event) {
-            let notification = session_update(self.session, &update)?;
-            self.send_typed(io, &notification).await?;
-        }
-        Ok(())
-    }
-
-    /// Forward one engine turn event as a session/update notification. Kinds
-    /// the base protocol has no standard counterpart for (compaction boundary,
-    /// summary, meta user, permission decision) ride the acpx/context/* side
-    /// channel — that mapping lands with the acpx serve integration; a
-    /// pure-ACP client ignores it anyway, so the base stream here is complete
-    /// for the first cut.
-    async fn push_durable_event(
-        &mut self,
-        io: &mut AcpDuplexPump,
-        ev: &SessionLogEntry,
-    ) -> Result<(), ProtocolError> {
-        // The prompt was echoed when it arrived, so its durable record would
-        // repeat the user's message.
-        if matches!(ev.event, SessionEvent::UserInput { .. }) {
-            return Ok(());
-        }
-        // A finished call is remembered so a progress snapshot that was
-        // already queued cannot downgrade its status back to running.
-        if let SessionEvent::ToolResult { call_id, .. } = &ev.event {
-            self.completed_calls.insert(call_id.clone());
-        }
-        // When the live stream carried the turn text as deltas, the durable
-        // Assistant and Reasoning events would repeat it as a whole message;
-        // suppress them so the client does not render the turn twice. Other
-        // durable events (tool calls, results, run completion) still push.
-        if self.suppresses_durable(&ev.event) {
-            return Ok(());
-        }
-        if let Some(mut update) = map_session_update(&ev.event) {
-            // The frontend keeps its own short tool labels; the ACP client
-            // gets the human title its card protocol defines.
-            if let (SessionEvent::ToolCall { tool, input, .. }, SessionUpdate::ToolCall(call)) =
-                (&ev.event, &mut update)
-            {
-                call.title = tool_title(tool, Some(input));
-            }
-            let notification = session_update(self.session, &update)?;
-            self.send_typed(io, &notification).await?;
-        }
-        Ok(())
-    }
-
-    /// Whether a durable turn record repeats text the live stream already sent
-    /// and must therefore be suppressed. A turn whose stream dropped events
-    /// keeps its durable copy: the client is missing text, and this is where
-    /// the full message is.
-    fn suppresses_durable(&self, event: &SessionEvent) -> bool {
-        !self.stream_lossy
-            && self.streamed_text.load(Ordering::Relaxed)
-            && matches!(
-                event,
-                SessionEvent::AssistantMessage { .. } | SessionEvent::Reasoning { .. }
-            )
-    }
-
-    /// Forward one live response delta as a session/update notification. Text
-    /// deltas become agent message chunks, reasoning deltas become thought
-    /// chunks; tool-input deltas carry raw JSON and stay off the client
-    /// stream. The first text delta marks the turn as streamed so the
-    /// durable copy is suppressed.
-    async fn push_delta(
-        &self,
-        io: &mut AcpDuplexPump,
-        delta: &ResponseStreamEvent,
-    ) -> Result<(), ProtocolError> {
-        // Any text or reasoning delta marks the turn as streamed, so the
-        // durable Assistant and Reasoning events are both suppressed. A
-        // reasoning-only turn still streams its reasoning; without this flag
-        // the durable copy would repeat it.
-        if matches!(
-            delta,
-            ResponseStreamEvent::AssistantTextDelta { .. }
-                | ResponseStreamEvent::ReasoningDelta { .. }
-        ) {
-            self.streamed_text.store(true, Ordering::Relaxed);
-        }
-        if let Some(update) = map_stream_event(delta) {
-            let notification = session_update(self.session, &update)?;
-            self.send_typed(io, &notification).await?;
-        }
-        Ok(())
     }
 
     /// Send a response paired to a request by id.

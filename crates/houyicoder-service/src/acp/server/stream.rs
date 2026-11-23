@@ -2,17 +2,133 @@
 //! paced tool progress, and user notices, each sent in the order the run
 //! produced it while the turn is live.
 
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use super::AcpServer;
 use super::message::session_update;
 use crate::acp::pump::AcpDuplexPump;
-use crate::protocol_adapter::{map_notice, map_tool_progress};
+use crate::protocol_adapter::{
+    map_notice, map_session_update, map_stream_event, map_tool_progress, tool_title,
+};
 use crate::turn_events::{TurnEventSubscriber, TurnStreamEvent};
-use houyicoder_api::agent_event::{ToolExecutionEvent, UserNoticeEvent};
+use houyicoder_api::agent_event::{ResponseStreamEvent, ToolExecutionEvent, UserNoticeEvent};
+use houyicoder_api::session::TrajectoryPages;
+use houyicoder_context::{SessionEvent, SessionLogEntry};
 use houyicoder_protocol::error::ProtocolError;
+use houyicoder_protocol::frontend::session_update::SessionUpdate;
 
 impl AcpServer {
+    /// Read every durable event appended since the last drain, advancing the
+    /// pushed cursor past them. An absolute ordinal of history means drops cannot
+    /// re-send records the client already saw as soon as the window moved. A
+    /// read that fails leaves the position after the records it did report, so
+    /// the next pass resumes there instead of repeating them.
+    pub(super) fn drain_pushed(&mut self) -> Vec<SessionLogEntry> {
+        let store = self.runner.store();
+        let pages = TrajectoryPages::new(store.as_ref(), self.session, self.pushed_through);
+        let mut events = Vec::new();
+        for page in pages {
+            match page {
+                Ok(page) => {
+                    self.pushed_through = page.next;
+                    events.extend(page.events);
+                }
+                Err(e) => {
+                    tracing::warn!("durable read for session {} stopped: {e}", self.session);
+                    break;
+                }
+            }
+        }
+        events
+    }
+
+    /// Push every durable turn event the client has not seen yet, in the order
+    /// the engine appended them.
+    pub(super) async fn push_pending(
+        &mut self,
+        io: &mut AcpDuplexPump,
+    ) -> Result<(), ProtocolError> {
+        let events = self.drain_pushed();
+        for ev in &events {
+            self.push_durable_event(io, ev).await?;
+        }
+        Ok(())
+    }
+
+    /// Echo the prompt the client just sent as a user message chunk, so the
+    /// host renders it before the answer rather than after it.
+    pub(super) async fn echo_user_prompt(
+        &self,
+        io: &mut AcpDuplexPump,
+        text: &str,
+    ) -> Result<(), ProtocolError> {
+        let event = SessionEvent::UserInput {
+            text: text.to_string(),
+        };
+        if let Some(update) = map_session_update(&event) {
+            let notification = session_update(self.session, &update)?;
+            self.send_typed(io, &notification).await?;
+        }
+        Ok(())
+    }
+
+    /// Forward one engine turn event as a session/update notification.
+    pub(super) async fn push_durable_event(
+        &mut self,
+        io: &mut AcpDuplexPump,
+        ev: &SessionLogEntry,
+    ) -> Result<(), ProtocolError> {
+        if matches!(ev.event, SessionEvent::UserInput { .. }) {
+            return Ok(());
+        }
+        if let SessionEvent::ToolResult { call_id, .. } = &ev.event {
+            self.completed_calls.insert(call_id.clone());
+        }
+        if self.suppresses_durable(&ev.event) {
+            return Ok(());
+        }
+        if let Some(mut update) = map_session_update(&ev.event) {
+            if let (SessionEvent::ToolCall { tool, input, .. }, SessionUpdate::ToolCall(call)) =
+                (&ev.event, &mut update)
+            {
+                call.title = tool_title(tool, Some(input));
+            }
+            let notification = session_update(self.session, &update)?;
+            self.send_typed(io, &notification).await?;
+        }
+        Ok(())
+    }
+
+    /// Whether a durable turn record repeats text the live stream already sent.
+    pub(super) fn suppresses_durable(&self, event: &SessionEvent) -> bool {
+        !self.stream_lossy
+            && self.streamed_text.load(Ordering::Relaxed)
+            && matches!(
+                event,
+                SessionEvent::AssistantMessage { .. } | SessionEvent::Reasoning { .. }
+            )
+    }
+
+    /// Forward one live response delta as a session/update notification.
+    pub(super) async fn push_delta(
+        &self,
+        io: &mut AcpDuplexPump,
+        delta: &ResponseStreamEvent,
+    ) -> Result<(), ProtocolError> {
+        if matches!(
+            delta,
+            ResponseStreamEvent::AssistantTextDelta { .. }
+                | ResponseStreamEvent::ReasoningDelta { .. }
+        ) {
+            self.streamed_text.store(true, Ordering::Relaxed);
+        }
+        if let Some(update) = map_stream_event(delta) {
+            let notification = session_update(self.session, &update)?;
+            self.send_typed(io, &notification).await?;
+        }
+        Ok(())
+    }
     /// Forward one live turn event to the client. A tool update is preceded by
     /// the durable records it belongs to, so the call it updates has already
     /// been sent by the time the update arrives.
