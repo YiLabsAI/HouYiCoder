@@ -72,21 +72,24 @@ def cov_env(cov_dir: str, base: dict | None = None) -> dict:
     worktrees: a build-script crate's rmeta embeds paths under the target
     dir, so without the remap every downstream unit's key changes with the
     directory and a new worktree misses the whole dependency graph.
-    Incremental is off because sccache refuses to cache incremental
-    compiles. Debug info is off because coverage line tables come from the
-    coverage mapping section, not DWARF -- dropping it cuts both the compile
-    and the seventeen test-binary links that dominate a cold run."""
-    import shutil
-
+    One stable environment, cold or warm: incremental is set, not inherited,
+    so a shell that exports the other value cannot split the fingerprint. An
+    explicit wrapper is still honored. The wrapper is left out by default:
+    it refuses an incremental compile, and it never hit on the llvm-cov path,
+    so carrying it only pinned incremental off and made every edit a full
+    rebuild. Flipping either value on the same cache dir would also change
+    the profile the build was fingerprinted with, and the next run would
+    rebuild the whole tree to adopt it. Debug info is off because coverage
+    line tables come from the coverage mapping section, not DWARF --
+    dropping it cuts both the compile and the test-binary links that
+    dominate a cold run."""
     env = dict(os.environ if base is None else base)
     env["CARGO_TARGET_DIR"] = cov_dir
     remap = f"--remap-path-prefix={os.path.abspath(cov_dir)}=/houyi-cov"
     flags = env.get("RUSTFLAGS", "")
     if remap not in flags:
         env["RUSTFLAGS"] = f"{flags} {remap}".strip()
-    if shutil.which("sccache") and "RUSTC_WRAPPER" not in env:
-        env["RUSTC_WRAPPER"] = "sccache"
-    env.setdefault("CARGO_INCREMENTAL", "0")
+    env["CARGO_INCREMENTAL"] = "1"
     env.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
     # Every gate that runs the unit suite sets the same two test-only flags,
     # and both live here rather than at each call site. A call site that set

@@ -178,17 +178,36 @@ def main() -> int:
             os.environ["HOUYICODER_COV_DIR"] = prev
 
     # 9. the shared instrumented-build env pins the cache-key inputs -- target
-    #    dir remap, incremental off, debug info off -- so one gate drifting from
+    #    dir remap, incremental on, debug info off -- so one gate drifting from
     #    another lands in the cargo fingerprint and the gates then rebuild each
     #    other's artifacts. The caller's flags survive and are not doubled when
     #    the env is reapplied.
     env = cov_lcov.cov_env("/tmp/covx", {"RUSTFLAGS": "-Cfoo"})
     if env.get("CARGO_TARGET_DIR") != "/tmp/covx":
         failures.append("cov_env: CARGO_TARGET_DIR not pinned to the cov dir")
-    if env.get("CARGO_INCREMENTAL") != "0":
-        failures.append("cov_env: CARGO_INCREMENTAL not pinned off")
+    if env.get("CARGO_INCREMENTAL") != "1":
+        failures.append("cov_env: CARGO_INCREMENTAL not pinned on")
     if env.get("CARGO_PROFILE_DEV_DEBUG") != "0":
         failures.append("cov_env: CARGO_PROFILE_DEV_DEBUG not pinned off")
+
+    # 10. the environment is the same cold and warm: one stable profile, so a
+    #     second run adopts the first run's fingerprints instead of rebuilding
+    #     the whole tree. The wrapper is never carried, because it refuses an
+    #     incremental compile and never hit on this path.
+    for state in ("cold", "warm"):
+        cache = Path(tempfile.mkdtemp(prefix=f"cov-{state}-"))
+        if state == "warm":
+            (cache / "debug" / "deps").mkdir(parents=True)
+        try:
+            shaped = cov_lcov.cov_env(str(cache), {"RUSTFLAGS": "-Cfoo"})
+            if shaped.get("CARGO_INCREMENTAL") != "1":
+                failures.append(f"cov_env: {state} cache is not incremental")
+            if "RUSTC_WRAPPER" in shaped:
+                failures.append(f"cov_env: {state} cache routes through the wrapper")
+        finally:
+            import shutil as _shutil
+
+            _shutil.rmtree(cache, ignore_errors=True)
     if "--remap-path-prefix=/tmp/covx=/houyi-cov" not in env.get("RUSTFLAGS", ""):
         failures.append("cov_env: remap-path pin missing from RUSTFLAGS")
     if "-Cfoo" not in env.get("RUSTFLAGS", ""):
@@ -197,7 +216,7 @@ def main() -> int:
     if again.get("RUSTFLAGS") != env.get("RUSTFLAGS"):
         failures.append("cov_env: reapplying the env doubled a flag")
 
-    # 10. the same env carries the test-only flags. A caller that set one and
+    # 11. the same env carries the test-only flags. A caller that set one and
     #     not the other ran the kernel-fence tests fenced: one such test cannot
     #     apply a second seatbelt inside this process's own fence, so it fails
     #     on the environment and reddens a gate that measures coverage.
