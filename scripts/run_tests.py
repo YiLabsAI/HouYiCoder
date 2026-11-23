@@ -44,16 +44,16 @@ from cov_lcov import cov_env, cov_target_dir, lcov_path
 # Fractional values are accepted so the timeout regression test can drive the
 # timeout path without waiting a whole second for it.
 FULL = "--full" in sys.argv
-GATE_SECS = float(os.environ.get("GATE_SECS", "120" if FULL else "60"))
+GATE_SECS = float(os.environ.get("GATE_SECS", "120" if FULL else "25"))
 
 
 def changed_crates():
     """Crates with .rs changes vs HEAD (staged + unstaged), for scoping the
     coverage pass. Empty on a clean tree (no diff -> no cov needed). Bin-only
-    crates (no src/lib.rs) are dropped: `cargo llvm-cov --lib --package` errors
+    crates (no src/lib.rs) are dropped: cargo llvm-cov --lib --package errors
     on a crate with no library target, so a change confined to a bin-only
     crate (e.g. the cli bin) would break the gate. Those crates' coverage is
-    measured by the whole-workspace `make verify` pass instead."""
+    measured by the whole-workspace make verify pass instead."""
     try:
         out = subprocess.run(
             ["git", "diff", "--name-only", "HEAD", "--", "crates/"],
@@ -66,9 +66,9 @@ def changed_crates():
         parts = line.split("/")
         if len(parts) >= 2 and parts[0] == "crates":
             names.add(parts[1])
-    # Drop bin-only crates: `cargo llvm-cov --lib --package` errors on a crate
+    # Drop bin-only crates: cargo llvm-cov --lib --package errors on a crate
     # with no library target. Those crates are covered by the whole-workspace
-    # `make verify` pass instead of the commit gate.
+    # make verify pass instead of the commit gate.
     with_lib = [
         n for n in sorted(names)
         if os.path.exists(os.path.join("crates", n, "src", "lib.rs"))
@@ -115,7 +115,7 @@ LCOV_PATH = lcov_path(COV_TARGET_DIR)
 # The lcov carries only the changed crates' coverage -- all diff-cov needs,
 # since changed lines live in changed crates. A cross-crate regression in an
 # UNCHANGED dependent (a permission API change breaking tui) is not caught
-# here; run `make check-full` (the whole workspace) before a push. Set
+# here; run make check-full (the whole workspace) before a push. Set
 # FULL_COV=1 to force the whole-workspace coverage pass.
 force_full_cov = os.environ.get("FULL_COV") == "1"
 crates = [] if force_full_cov else changed_crates()

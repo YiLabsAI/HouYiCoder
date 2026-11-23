@@ -12,5 +12,13 @@ slow-timeout = { period = "1s", terminate-after = 20 }
 # stall shows (ten seconds of silence) and the kill sits well above the
 # replay's own runtime.
 [[profile.default.overrides]]
+# A unit test over 200ms is named on the spot. The kill line sits far above
+# that: an ignored kernel-fence test in the verify suite legitimately takes
+# seconds, and the unit gate's own wall-clock ceiling is what fails a suite
+# that drifts.
+filter = 'kind(lib)'
+slow-timeout = { period = "200ms", terminate-after = 100 }
+
+[[profile.default.overrides]]
 filter = 'test(test_history_loads_without_keys)'
 slow-timeout = { period = "10s", terminate-after = 12 }

@@ -132,6 +132,7 @@ SCRIPT_TESTS=(
   test_pre_push_chain.py
   test_measure_turn_dispatch.py
   test_platform_pal.py
+  test_unit_isolation.py
 )
 for script_test in "${SCRIPT_TESTS[@]}"; do
   run_check "script-tests:$script_test" python3 "scripts/$script_test"
@@ -156,6 +157,7 @@ fi
 run_check "commit-gate-tests" python3 scripts/test_hook_commit_gate.py
 run_check "file-size"    python3 scripts/check_file_size.py $RS_FILES
 run_check "dep-graph"    python3 scripts/check_dep_graph.py
+run_check "unit-isolation" python3 scripts/check_unit_isolation.py
 run_check "stderr"       python3 scripts/check_stderr.py
 run_check "gatectx-field-names"  python3 scripts/check_gatectx_field_names.py
 run_rust_check "test"       "test"        python3 scripts/run_tests.py

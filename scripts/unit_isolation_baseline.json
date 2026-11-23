@@ -1,0 +1,12 @@
+{
+  "cross_layer_files": {
+    "houyicoder-service": 4,
+    "houyicoder-tui": 9
+  },
+  "host_in_src": {
+    "houyicoder-tui": 1
+  },
+  "wiremock_in_src": {
+    "houyicoder-core": 1
+  }
+}
