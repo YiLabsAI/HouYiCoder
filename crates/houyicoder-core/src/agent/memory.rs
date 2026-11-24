@@ -1,7 +1,6 @@
 //! Owns memory access, feature gates, preservation, and background work.
 
 pub mod auto_dream;
-pub(crate) mod durable_scan;
 pub mod extract;
 pub(crate) mod extraction_window;
 pub mod extractor;
@@ -13,8 +12,15 @@ mod mutation_log;
 mod recall;
 pub(crate) mod selector;
 
+use std::mem::take;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::task::JoinHandle;
+
+/// How long a turn's background pipeline waits for the extraction pass before
+/// starting the dream. The dream only consolidates what the store holds, so a
+/// pass that outlives this budget is consolidated by the next dream instead.
+const EXTRACTION_BEFORE_DREAM: Duration = Duration::from_secs(60);
 
 use houyicoder_api::agent_event::{
     AgentEventHandlers, EventHandler, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
@@ -87,6 +93,10 @@ pub struct MemoryRuntime {
     primary_recorder: Option<Arc<MutationLog>>,
     memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
     recall_tasks: RecallTasks,
+    /// Handles of the per-turn background pipelines, reaped on the next fire
+    /// and joined at shutdown so an extraction started by the last turn is
+    /// not cut off by process exit.
+    background_pipeline: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl MemoryRuntime {
@@ -102,6 +112,7 @@ impl MemoryRuntime {
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
+            background_pipeline: Mutex::new(Vec::new()),
         }
     }
 
@@ -123,6 +134,7 @@ impl MemoryRuntime {
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
+            background_pipeline: Mutex::new(Vec::new()),
         }
     }
 
@@ -322,17 +334,44 @@ impl MemoryRuntime {
         F: FnOnce() -> RewardSnapshot,
     {
         self.submit_preservation(session).await;
-        if self.gates.auto_dream_enabled()
-            && let Some(dream) = self.background.dream.as_ref()
-        {
-            dream.execute_dream(reward.map(|f| f()), Some(&session.to_string()));
-        }
+        let Some(dream) = self
+            .background
+            .dream
+            .as_ref()
+            .filter(|_| self.gates.auto_dream_enabled())
+            .cloned()
+        else {
+            return;
+        };
+        // One background pipeline per turn: the extraction pass lands first,
+        // then the dream reads the store it just wrote. Firing both at once
+        // let the dream plan against a listing the extractor was still
+        // changing, and put two notices on one turn.
+        let extractor = self.background.extractor.clone();
+        let reward = reward.map(|f| f());
+        let handle = tokio::spawn(async move {
+            if let Some(extractor) = extractor {
+                extractor.drain_pending(EXTRACTION_BEFORE_DREAM).await;
+            }
+            dream.execute_dream(reward);
+        });
+        let mut running = self.background_pipeline.lock().expect("pipeline");
+        running.retain(|h| !h.is_finished());
+        running.push(handle);
     }
 
     /// Await running background tasks — recall selections first, then dream
     /// passes — until they finish or the timeout expires.
     pub(crate) async fn join_background(&self, timeout: Duration) {
         self.recall_tasks.drain(timeout).await;
+        let pipeline: Vec<JoinHandle<()>> =
+            take(&mut *self.background_pipeline.lock().expect("pipeline"));
+        for handle in pipeline {
+            drop(tokio::time::timeout(timeout, handle).await);
+        }
+        if let Some(extractor) = self.background.extractor.as_ref() {
+            extractor.drain_pending(timeout).await;
+        }
         if let Some(dream) = self.background.dream.as_ref() {
             dream.drain_pending(timeout).await;
         }

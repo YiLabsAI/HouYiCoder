@@ -2,6 +2,7 @@ use super::super::*;
 use crate::agent::ToolRegistry;
 use crate::agent::auto_dream::DreamRunner;
 use crate::agent::memory::{MemoryGates, MemoryRuntime, MutationLog};
+use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::reward_snapshot::capture_reward_snapshot;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::tests::run_completion::RefusesResults;
@@ -210,6 +211,19 @@ async fn test_join_dreams_no_inflight() {
         .memory
         .fire_background(SessionId::new(), Some(|| panic!("reward must stay lazy")))
         .await;
+}
+
+/// The turn's background work is one pipeline: the extraction drain runs
+/// first, then the dream, inside a single task. Joining at shutdown awaits
+/// that task, so the last turn's extraction is not cut off by process exit.
+#[tokio::test]
+async fn test_background_pipeline_joins() {
+    let runner = runner_with_empty_dream();
+    runner
+        .memory
+        .fire_background::<fn() -> RewardSnapshot>(SessionId::new(), None)
+        .await;
+    runner.join_dreams(Duration::from_secs(5)).await;
 }
 
 /// fire_background_memory builds the reward closure (env unset) and drives

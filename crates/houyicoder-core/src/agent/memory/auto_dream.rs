@@ -51,7 +51,6 @@ use houyicoder_context::{
 };
 use tokio::task::JoinHandle;
 
-use crate::agent::durable_scan::scan_cross_session_retry;
 use crate::agent::prompt::reward_lesson::build_reward_lesson_prompt;
 use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::reward_snapshot::format_reward;
@@ -292,33 +291,6 @@ fn format_recall_stats(stats: &[MemoryRecallStats], now: u64) -> String {
     out
 }
 
-/// Build the consolidation prompt. The current listing plus the MEMORY.md
-/// index are injected so the Orient phase reads from the prompt (no tool
-/// round-trip just to see what exists). Four phases: Orient, Consolidate,
-/// Merge cross-session retry_after_error from the durable trajectory into
-/// the reward snapshot. When the session log root is set, scans previous
-/// sessions' RewardObservation events (excluding the current session, whose
-/// count already lives in the in-memory snapshot) and ADDS the cumulative
-/// cross-session count to the current snapshot. Adding — not replacing —
-/// keeps the current session's in-memory count (which may be ahead of the
-/// flushed log) and layers the cross-session trend on top, without
-/// double-counting the current session. Best-effort: a missing root or
-/// unreadable logs add nothing (falls back to in-memory only).
-pub(crate) fn merge_cross_session_reward(
-    session_log_root: &Option<PathBuf>,
-    current_session: Option<&str>,
-    reward: &mut Option<RewardSnapshot>,
-) {
-    if let Some(log_root) = session_log_root {
-        let cross = scan_cross_session_retry(log_root, current_session);
-        if cross > 0
-            && let Some(snap) = reward.as_mut()
-        {
-            snap.retry_after_error = snap.retry_after_error.saturating_add(cross);
-        }
-    }
-}
-
 /// Build the consolidation prompt for the forked dream agent. Four phases:
 /// Orient (scan the memory store + recall-frequency stats), Consolidate
 /// (merge near-duplicates, resolve contradictions), Prune (drop dead weight
@@ -473,11 +445,16 @@ pub struct DreamRunner {
     in_progress: Mutex<bool>,
     in_flight: Mutex<Vec<JoinHandle<()>>>,
     last_scan_at: Mutex<u64>,
+    /// Blind-retry count already handed to a reward dream. The in-memory
+    /// snapshot counts retries cumulatively for the session, so without this
+    /// watermark every later turn re-arms the reward gate on the same retries
+    /// and fires an empty consolidation pass.
+    consumed_retries: Mutex<u32>,
     memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
-    /// The durable session log root, so the dream can scan previous
-    /// sessions' RewardObservation events for cross-session retry
-    /// patterns. None in tests or when the session log root is not
-    /// known (the dream falls back to the in-memory snapshot only).
+    /// The durable session log root the session runs against. Reported for
+    /// diagnostics and assembly checks; consolidation no longer reads other
+    /// sessions' logs, because a retry total without the failures behind it
+    /// cannot be turned into a lesson.
     pub(crate) session_log_root: Option<PathBuf>,
 }
 
@@ -502,6 +479,7 @@ impl DreamRunner {
             in_progress: Mutex::new(false),
             in_flight: Mutex::new(Vec::new()),
             last_scan_at: Mutex::new(0),
+            consumed_retries: Mutex::new(0),
             memory_changed: Mutex::new(None),
             session_log_root: None,
         }
@@ -550,22 +528,11 @@ impl DreamRunner {
     /// the gate is closed: one stat (read the lock mtime). When the gate
     /// opens: spawn a forked agent (async, non-blocking) to run the
     /// consolidation. Coalesces if a dream is already in flight.
-    pub fn execute_dream(
-        self: &Arc<Self>,
-        mut reward: Option<RewardSnapshot>,
-        current_session: Option<&str>,
-    ) {
+    pub fn execute_dream(self: &Arc<Self>, reward: Option<RewardSnapshot>) {
         let root = self.memory.memory_root();
         if root.is_empty() {
             return;
         }
-        // Cross-session scan: merge previous sessions' retry_after_error
-        // from the durable trajectory so the dream sees patterns that span
-        // sessions, not just the current one. The current session is
-        // skipped (its count is already in the in-memory snapshot).
-        // Best-effort: a missing root or unreadable logs return 0 (falls
-        // back to in-memory only).
-        merge_cross_session_reward(&self.session_log_root, current_session, &mut reward);
         let now = now_secs();
         let lock = ConsolidationLock::new(Path::new(&root));
         let last_at = lock.last_consolidated_at();
@@ -580,9 +547,11 @@ impl DreamRunner {
         let new_count = self.memory.count_new_since(last_at);
         let base = elapsed >= DEFAULT_MIN_HOURS * 3600 && new_count >= MIN_NEW_MEMORIES;
         let early = elapsed >= EARLY_FIRE_SECS && new_count >= EARLY_FIRE_NEW;
-        let reward_ready = reward
-            .as_ref()
-            .is_some_and(|r| r.retry_after_error >= REWARD_DREAM_RETRY_THRESHOLD);
+        let consumed = *self.consumed_retries.lock().expect("consumed retries");
+        let reward_ready = reward.as_ref().is_some_and(|r| {
+            !r.failures.is_empty()
+                && r.retry_after_error.saturating_sub(consumed) >= REWARD_DREAM_RETRY_THRESHOLD
+        });
         let gate_msg = format!(
             "retry_after_error={} fails={} redundant={} new={} elapsed={} base={} early={} reward_ready={}",
             reward.as_ref().map(|r| r.retry_after_error).unwrap_or(0),
@@ -723,7 +692,12 @@ impl DreamRunner {
             Ok(r) => {
                 let dream_msg = format!("dream outcome: {:?}", r.outcome);
                 tracing::debug!("{dream_msg}");
-                if !is_reward_dream {
+                if is_reward_dream {
+                    if let Some(snapshot) = reward.as_ref() {
+                        *self.consumed_retries.lock().expect("consumed retries") =
+                            snapshot.retry_after_error;
+                    }
+                } else {
                     claim.record_consolidation();
                 }
                 // Deterministic post-pass: regenerate the index from the

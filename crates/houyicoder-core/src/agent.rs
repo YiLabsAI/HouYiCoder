@@ -29,7 +29,7 @@ pub(crate) use context::prompt::cache::PromptHash;
 pub(crate) use context::{cache_liveness, cas_views, prompt, selection, turn_group};
 pub use inference::{effort, model_window};
 pub use memory::{auto_dream, extract, extractor};
-pub(crate) use memory::{durable_scan, extraction_window, fact, reward_snapshot};
+pub(crate) use memory::{extraction_window, fact, reward_snapshot};
 pub(crate) use skill::{
     body as skill_body, conditional_activation, hooks as skill_hooks, reload as skill_reload,
     slash as skill_slash,

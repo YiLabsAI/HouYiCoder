@@ -12,21 +12,16 @@ use houyicoder_protocol::llm::{
 };
 use houyicoder_session::SessionStore;
 
-use crate::agent::memory::MutationLog;
+use crate::agent::reward_snapshot::FailureHotspot;
 use crate::agent::reward_snapshot::RedundantCluster;
 use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::runner_config::RunnerConfig;
-use crate::agent::tools::MemoryAddTool;
 use crate::observability::evolution::RedundancyKind;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::stream_from_response;
-use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::MemoryOrigin;
 use houyicoder_context::MemorySummary;
-use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_memory::MarkdownMemoryProvider;
 use std::env;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
@@ -536,7 +531,7 @@ async fn test_gate_closed_lock_recent() {
         calls: StdMutex::new(0),
     });
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
-    dream.execute_dream(None, None);
+    dream.execute_dream(None);
     dream.drain_pending(Duration::from_secs(1)).await;
     assert_eq!(
         memory.written.lock().expect("w").len(),
@@ -562,12 +557,76 @@ async fn test_reward_dream_blind_retry() {
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
     let reward = RewardSnapshot {
         retry_after_error: 2,
+        failures: vec![FailureHotspot {
+            tool: "bash".into(),
+            fail_count: 2,
+            top_reasons: vec!["exit 1".into()],
+        }],
         ..Default::default()
     };
-    dream.execute_dream(Some(reward), None);
+    dream.execute_dream(Some(reward));
     dream.drain_pending(Duration::from_secs(5)).await;
     let calls = *provider.calls.lock().expect("calls");
     assert!(calls > 0, "reward-dream spawned the forked agent");
+    drop(remove_dir_all(&root));
+}
+
+/// A retry count with no failure hotspot carries no lesson to extract: the
+/// count can come from earlier sessions while the current one saw no
+/// failure. The reward dream must not spend a fork on that empty pass.
+#[tokio::test]
+async fn test_reward_needs_failure() {
+    let root = temp_dir("reward-headless");
+    let memory = Arc::new(FsMemory::new(root.clone()));
+    let provider = Arc::new(DreamProvider {
+        calls: StdMutex::new(0),
+    });
+    let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
+    let reward = RewardSnapshot {
+        retry_after_error: 5,
+        ..Default::default()
+    };
+    dream.execute_dream(Some(reward));
+    dream.drain_pending(Duration::from_secs(5)).await;
+    assert_eq!(
+        *provider.calls.lock().expect("calls"),
+        0,
+        "no failure hotspot means nothing to reflect on"
+    );
+    drop(remove_dir_all(&root));
+}
+
+/// The retry count is cumulative for the session, so the same snapshot
+/// arrives on every later turn. A reward dream that already consumed the
+/// count must not be re-armed by it.
+#[tokio::test]
+async fn test_reward_watermark() {
+    let root = temp_dir("reward-watermark");
+    let memory = Arc::new(FsMemory::new(root.clone()));
+    let provider = Arc::new(DreamProvider {
+        calls: StdMutex::new(0),
+    });
+    let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
+    let snapshot = || RewardSnapshot {
+        retry_after_error: 2,
+        failures: vec![FailureHotspot {
+            tool: "bash".into(),
+            fail_count: 2,
+            top_reasons: vec!["exit 1".into()],
+        }],
+        ..Default::default()
+    };
+    dream.execute_dream(Some(snapshot()));
+    dream.drain_pending(Duration::from_secs(5)).await;
+    let first = *provider.calls.lock().expect("calls");
+    assert!(first > 0, "the first pass reflects on the retries");
+    dream.execute_dream(Some(snapshot()));
+    dream.drain_pending(Duration::from_secs(5)).await;
+    assert_eq!(
+        *provider.calls.lock().expect("calls"),
+        first,
+        "the consumed count does not re-arm the gate"
+    );
     drop(remove_dir_all(&root));
 }
 
@@ -642,7 +701,7 @@ async fn test_reward_skip_redundant_only() {
         ],
         ..Default::default()
     };
-    dream.execute_dream(Some(reward), None);
+    dream.execute_dream(Some(reward));
     dream.drain_pending(Duration::from_secs(5)).await;
     let calls = *provider.calls.lock().expect("calls");
     assert_eq!(calls, 0, "redundant-only snapshot must not fire the gate");
@@ -668,7 +727,7 @@ async fn test_gate_open_fires_stamps() {
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
     let (sink, recording) = RecordingChanges::new();
     dream.set_memory_changed_handler(sink.memory_changed_handler());
-    dream.execute_dream(None, None);
+    dream.execute_dream(None);
     dream.drain_pending(Duration::from_secs(5)).await;
     assert_eq!(
         memory.written.lock().expect("w").len(),
@@ -697,7 +756,7 @@ async fn test_gate_closed_when_quiet() {
         calls: StdMutex::new(0),
     });
     let (dream, _) = dream_runner(memory.clone(), provider.clone() as Arc<dyn ModelProvider>);
-    dream.execute_dream(None, None);
+    dream.execute_dream(None);
     dream.drain_pending(Duration::from_secs(1)).await;
     assert_eq!(
         memory.written.lock().expect("w").len(),
@@ -728,7 +787,7 @@ async fn test_gate_noop_without_root() {
         std::env::temp_dir(),
         RunnerConfig::default(),
     ));
-    dream.execute_dream(None, None);
+    dream.execute_dream(None);
     dream.drain_pending(Duration::from_millis(100)).await;
     assert!(
         dream.in_flight.lock().expect("in_flight").is_empty(),
@@ -748,7 +807,7 @@ async fn test_execute_dream_coalesces_flight() {
     let (dream, _) = dream_runner(memory, provider as Arc<dyn ModelProvider>);
     *dream.in_progress.lock().expect("in_progress") = true;
     let before = dream.in_flight.lock().expect("in_flight").len();
-    dream.execute_dream(None, None);
+    dream.execute_dream(None);
     assert_eq!(
         dream.in_flight.lock().expect("in_flight").len(),
         before,
@@ -791,7 +850,7 @@ async fn test_panic_resets_in_progress() {
         std::env::temp_dir(),
         RunnerConfig::default(),
     ));
-    dream.execute_dream(None, None);
+    dream.execute_dream(None);
     // The spawned task panics in list_memories. Drain waits for the handle
     // to resolve (JoinError from the panic). The guard's Drop ran during
     // the unwinding, so in_progress is false now.
@@ -840,155 +899,6 @@ fn test_dream_reports_memory_operations() {
                 scope: MemoryScope::Auto,
             },
         ]
-    );
-    drop(remove_dir_all(&root));
-}
-
-/// Cross-session scan merges previous sessions' retry_after_error from the
-/// durable trajectory into the reward snapshot. Write a session log with
-/// a RewardObservation event, call merge_cross_session_reward, verify the
-/// count is added to the snapshot.
-#[test]
-fn test_merge_session_adds_retry() {
-    let tmp = std::env::temp_dir().join(format!("merge-cross-{}", id()));
-    let _cleanup = remove_dir_all(&tmp);
-    let dir = tmp.join(SessionId::new().to_string());
-    create_dir_all(&dir).expect("mkdir");
-    let ev = SessionLogEntry {
-        id: EventId::new(),
-        session: SessionId::new(),
-        ts: 0,
-        prev_hash: None,
-        event: SessionEvent::RewardObservation {
-            redundant: 0,
-            retry_after_error: 3,
-        },
-    };
-    let line = serde_json::to_string(&ev).expect("serialize");
-    write(dir.join("log.jsonl"), format!("{line}\n")).expect("write");
-
-    let root = PathBuf::from(&tmp);
-    let mut reward = Some(RewardSnapshot {
-        retry_after_error: 1,
-        ..Default::default()
-    });
-    super::merge_cross_session_reward(&Some(root), None, &mut reward);
-    assert_eq!(
-        reward.as_ref().unwrap().retry_after_error,
-        4,
-        "cross-session 3 + current 1 = 4"
-    );
-    let _cleanup2 = remove_dir_all(&tmp);
-}
-
-/// A None session_log_root is a no-op (tests, forked runners).
-#[test]
-fn test_merge_session_none_noop() {
-    let mut reward = Some(RewardSnapshot {
-        retry_after_error: 2,
-        ..Default::default()
-    });
-    super::merge_cross_session_reward(&None, None, &mut reward);
-    assert_eq!(reward.as_ref().unwrap().retry_after_error, 2);
-}
-
-/// The dream's save tool pins the auto root: the offered schema carries no
-/// scope field, and a scope smuggled into the input is ignored in favor of
-/// the pin, so a dream write can never open the user root. A refresh of a
-/// key already in the project root routes into that root in place.
-#[tokio::test]
-async fn test_dream_pins_save_scope() {
-    let root = temp_dir("pin-scope");
-    let user_root = root.join("user");
-    let project_root = root.join("project");
-    let auto_root = root.join("auto");
-    create_dir_all(&user_root).unwrap();
-    create_dir_all(&project_root).unwrap();
-    create_dir_all(&auto_root).unwrap();
-    let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new_multi(vec![
-        user_root,
-        project_root,
-        auto_root.clone(),
-    ]));
-    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let recorder = Arc::new(MutationLog::new());
-    let runner = super::build_forked_dream_runner(
-        store,
-        Arc::new(FakeProvider::new(vec![])),
-        memory.clone(),
-        &root,
-        RunnerConfig::default(),
-        recorder,
-    );
-    let defs = runner.tools().tool_defs();
-    let save_def = defs
-        .iter()
-        .find(|d| d.name == "save_memory")
-        .expect("dream registers save_memory");
-    let props = save_def.input_schema["properties"].as_object().unwrap();
-    assert!(
-        !props.contains_key("scope"),
-        "the pinned dream tool offers no scope choice: {save_def:?}"
-    );
-    assert!(
-        !props.contains_key("evidence"),
-        "the dream owns no conversation window, so no evidence is demanded: {save_def:?}"
-    );
-
-    let tool = MemoryAddTool::new(memory.clone())
-        .with_origin(MemoryOrigin::Dream)
-        .with_pinned_scope(MemoryScope::Auto);
-    let input = serde_json::json!({
-        "key": "dream-consolidated",
-        "description": "consolidated by the dream",
-        "source": "feedback",
-        "content": "rule body",
-        "scope": "user",
-    });
-    let outcome = tool.execute(ToolCtx::new("dream-pin-test"), input).await;
-    assert!(outcome.is_ok(), "{outcome:?}");
-    let listing = memory.list_memories();
-    let entry = listing
-        .iter()
-        .find(|s| s.key == "dream-consolidated")
-        .expect("dream write landed");
-    assert_eq!(
-        entry.scope,
-        MemoryScope::Auto,
-        "a smuggled scope never overrides the pin"
-    );
-
-    // A refresh of a key already living in the project root routes into
-    // that root in place: writing it into the pinned auto root would shadow
-    // the explicit entry by newest-mtime and lose the refresh.
-    memory
-        .add_in_scope(
-            MemoryEntry::new(
-                "promoted-rule",
-                "explicit project entry body",
-                MemorySource::Feedback,
-            ),
-            MemoryScope::Project,
-        )
-        .expect("seed the project copy");
-    let refresh = serde_json::json!({
-        "key": "promoted-rule",
-        "description": "consolidated refresh",
-        "source": "feedback",
-        "content": "refreshed rule body",
-    });
-    let refresh_outcome = tool
-        .execute(ToolCtx::new("dream-refresh-test"), refresh)
-        .await;
-    assert!(refresh_outcome.is_ok(), "{refresh_outcome:?}");
-    let refreshed = memory.show_memory("promoted-rule").expect("entry readable");
-    assert_eq!(
-        refreshed.content, "refreshed rule body",
-        "the refresh lands in the project root, not a competing auto copy"
-    );
-    assert!(
-        !auto_root.join("promoted-rule.md").exists(),
-        "no shadow copy in the auto root"
     );
     drop(remove_dir_all(&root));
 }

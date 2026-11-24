@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 use crate::session::lock::SessionLock;
 use crate::session::lock::StoreIdentity;
 use std::mem::take;
+use std::time::Duration;
 
 /// A host lifecycle owner holding the session's exclusive lock. The
 /// lock outlives every writer the host owns: releasing the lease joins
@@ -124,6 +125,7 @@ impl HostLease {
             let report = shutdown.await;
             if let Some(runner) = children {
                 runner.join_children().await;
+                runner.join_dreams(Duration::from_secs(5)).await;
             }
             drop(lock);
             report
