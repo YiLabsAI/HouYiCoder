@@ -111,7 +111,8 @@ pub fn git_common_dir(ws: &Path) -> Option<PathBuf> {
 /// is unavailable. Host-side git probing (not a sandboxed tool run), so the
 /// spawn-chokepoint rule is allowed here.
 pub fn git_canonical_slug(ws: &Path) -> String {
-    let root = git_common_root(ws).unwrap_or_else(|| ws.to_path_buf());
+    let root = git_common_root(ws)
+        .unwrap_or_else(|| dunce::canonicalize(ws).unwrap_or_else(|_| ws.to_path_buf()));
     let name = root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

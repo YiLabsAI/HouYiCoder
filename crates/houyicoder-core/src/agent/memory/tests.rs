@@ -8,7 +8,7 @@ fn summary(key: &str, source: MemorySource, scope: MemoryScope) -> MemorySummary
 
 /// One type heading per group, however many scopes carry that type.
 #[test]
-fn test_index_heading_appears_once() {
+fn test_index_heading_once() {
     let rows = vec![
         summary("a", MemorySource::Feedback, MemoryScope::User),
         summary("b", MemorySource::Feedback, MemoryScope::Project),

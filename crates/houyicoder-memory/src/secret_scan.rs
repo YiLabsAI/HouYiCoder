@@ -47,6 +47,9 @@ pub fn first_match(text: &str) -> Option<&'static str> {
     }
     for id in ACCESS_KEY_IDS {
         for (at, _) in text.match_indices(id) {
+            if !starts_word(text, at) {
+                continue;
+            }
             let suffix = &text[at + id.len()..];
             let body: String = suffix
                 .chars()

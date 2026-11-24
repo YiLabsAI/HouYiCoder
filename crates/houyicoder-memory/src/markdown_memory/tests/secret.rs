@@ -116,3 +116,18 @@ fn test_access_key_body() {
     assert!(word.is_ok(), "{word:?}");
     drop(remove_dir_all(&root));
 }
+
+/// An access key id embedded inside a longer identifier is not one: the
+/// prefix has to start a word.
+#[test]
+fn test_access_key_embedded() {
+    let root = root("embedded");
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    let outcome = provider.add(MemoryEntry::new(
+        "embedded",
+        "identifier xAKIAABCDEFGHIJKLMNOP",
+        MemorySource::Reference,
+    ));
+    assert!(outcome.is_ok(), "{outcome:?}");
+    drop(remove_dir_all(&root));
+}
