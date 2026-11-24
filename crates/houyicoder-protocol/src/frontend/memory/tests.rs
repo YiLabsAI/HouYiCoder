@@ -10,6 +10,7 @@ fn test_summary_round_trips() {
         source: "project".into(),
         scope: "project".into(),
         mtime_secs: 0,
+        archived: false,
     };
     let json = serde_json::to_string(&entry).expect("serialize");
     assert!(json.contains("\"key\":\"build-gate\""), "{json}");
@@ -17,6 +18,10 @@ fn test_summary_round_trips() {
     assert!(json.contains("\"scope\":\"project\""), "{json}");
     let back: MemorySummaryEntry = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, entry);
+    // Older host frames without archived default to false.
+    let legacy = r#"{"key":"old","description":"d","source":"user","scope":"user","mtimeSecs":1}"#;
+    let decoded: MemorySummaryEntry = serde_json::from_str(legacy).expect("legacy decode");
+    assert!(!decoded.archived);
 }
 
 #[test]

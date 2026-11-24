@@ -31,6 +31,20 @@ fn test_list_maps_source_label() {
     assert_eq!(wire[1].source, "user");
     assert_eq!(wire[1].scope, "user", "scope flows to wire");
     assert_eq!(wire[1].mtime_secs, 99);
+    assert!(!wire[1].archived);
+
+    let catalog = map_memory_catalog(
+        Vec::new(),
+        vec![MemorySummary::new(
+            "old",
+            "d",
+            MemorySource::Feedback,
+            MemoryScope::Auto,
+            1,
+        )],
+    );
+    assert_eq!(catalog.len(), 1);
+    assert!(catalog[0].archived);
 }
 
 /// The show mapping maps one entry's full body + drops the token

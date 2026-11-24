@@ -54,7 +54,7 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         .collect();
     let header_h = header_rows.len() as u16;
     // Pre-wrap the footer so the reserved height is exactly what renders.
-    let footer_rows: Vec<Line> = memory_footer(area.width)
+    let footer_rows: Vec<Line> = memory_footer(tab)
         .into_iter()
         .flat_map(|line| wrap_styled_line(line, area.width as usize))
         .collect();
@@ -70,8 +70,13 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
     f.render_widget(Paragraph::new(header_rows), chunks[0]);
     if filtered.is_empty() {
+        let empty_label = if tab == MemoryScopeTab::Archived {
+            "  (no archived memories)"
+        } else {
+            "  (no memories yet)"
+        };
         f.render_widget(
-            Paragraph::new("  (no memories yet)").style(Style::new().fg(Color::DarkGray)),
+            Paragraph::new(empty_label).style(Style::new().fg(Color::DarkGray)),
             chunks[1],
         );
     } else {
@@ -91,13 +96,23 @@ pub(super) fn draw_content(f: &mut Frame, area: Rect, app: &App) {
 
 /// Primary list actions use the same footer grammar as sibling panes.
 /// Scope and toggle hints live beside the controls they operate in the header.
-fn memory_footer(_width: u16) -> Vec<Line<'static>> {
-    vec![key_hint(&[
-        ("Up/Down", "select"),
-        ("Enter", "open"),
-        ("d", "forget"),
-        ("Esc", "close"),
-    ])]
+fn memory_footer(tab: MemoryScopeTab) -> Vec<Line<'static>> {
+    if tab == MemoryScopeTab::Archived {
+        vec![key_hint(&[
+            ("Up/Down", "select"),
+            ("Enter", "open"),
+            ("r", "restore"),
+            ("d", "forget"),
+            ("Esc", "close"),
+        ])]
+    } else {
+        vec![key_hint(&[
+            ("Up/Down", "select"),
+            ("Enter", "open"),
+            ("d", "forget"),
+            ("Esc", "close"),
+        ])]
+    }
 }
 
 fn draw_loading(f: &mut Frame, area: Rect, key: &str) {
@@ -182,6 +197,7 @@ fn memory_header(app: &App, tab: MemoryScopeTab, n: usize) -> Vec<Line<'static>>
         (MemoryScopeTab::User, "User"),
         (MemoryScopeTab::Project, "Project"),
         (MemoryScopeTab::Auto, "Auto"),
+        (MemoryScopeTab::Archived, "Archived"),
     ];
     let mut tabs = tab_header(tab, &tabs);
     tabs.spans.push(Span::raw("    "));

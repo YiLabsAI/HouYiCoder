@@ -478,6 +478,11 @@ pub enum ClientCommand {
         key: String,
         scope: String,
     },
+    MemoryRestoreQuery {
+        req_id: RequestId,
+        key: String,
+        scope: String,
+    },
     PermissionCycleModeQuery {
         req_id: RequestId,
     },

@@ -130,6 +130,9 @@ pub struct MemoryEntry {
     pub source: String,
     /// Last modification time in seconds since the Unix epoch.
     pub mtime_secs: u64,
+    /// Whether the entry resides in the archive directory rather than the
+    /// active store.
+    pub archived: bool,
 }
 
 /// One agent in the multi-agent fleet.

@@ -300,10 +300,17 @@ pub enum MemoryScopeTab {
     User,
     Project,
     Auto,
+    Archived,
 }
 
 impl CyclicTab for MemoryScopeTab {
-    const ORDER: &'static [Self] = &[Self::All, Self::User, Self::Project, Self::Auto];
+    const ORDER: &'static [Self] = &[
+        Self::All,
+        Self::User,
+        Self::Project,
+        Self::Auto,
+        Self::Archived,
+    ];
 }
 
 impl MemoryScopeTab {
@@ -314,6 +321,7 @@ impl MemoryScopeTab {
             Self::User => "user",
             Self::Project => "project",
             Self::Auto => "auto",
+            Self::Archived => "archived",
         }
     }
 }

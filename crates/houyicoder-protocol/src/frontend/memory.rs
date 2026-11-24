@@ -167,6 +167,10 @@ pub struct MemorySummaryEntry {
     /// global vs auto-extracted).
     pub scope: String,
     pub mtime_secs: u64,
+    /// Whether this entry currently resides in the archive directory rather
+    /// than the active store. Defaults false on frames from older hosts.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 /// The full body of one memory: key, content, source label, description, and

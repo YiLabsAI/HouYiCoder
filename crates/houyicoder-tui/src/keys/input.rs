@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 
 use crate::input::InputMode;
-use crate::state::enums::{CyclicTab, StatusTab};
+use crate::state::enums::{CyclicTab, MemoryScopeTab, StatusTab};
 use crate::state::{App, Pane};
 use crate::view::skill_origin::display_order;
 
@@ -303,6 +303,13 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
             if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>
         {
             app.forget_memory_at_cursor()
+        }
+        KeyCode::Char('r')
+            if app.ui.navigation.pane == Pane::Memory
+                && app.ui.memory.scope() == MemoryScopeTab::Archived
+                && app.ui.input.editor.is_empty() =>
+        {
+            app.restore_memory_at_cursor()
         }
         KeyCode::Enter
             if app.ui.navigation.pane == Pane::Memory && app.ui.input.editor.is_empty() =>

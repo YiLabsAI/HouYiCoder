@@ -222,6 +222,7 @@ impl Server {
             FrontendRequest::MemoryList
             | FrontendRequest::MemoryShow { .. }
             | FrontendRequest::MemoryForget { .. }
+            | FrontendRequest::MemoryRestore { .. }
             | FrontendRequest::MemoryToggleState
             | FrontendRequest::MemoryToggle { .. }
             | FrontendRequest::RecapConfigSet { .. } => {
@@ -319,6 +320,9 @@ impl Server {
             FrontendRequest::MemoryShow { key } => self.handle_memory_show(io, req_id, key).await,
             FrontendRequest::MemoryForget { key, scope } => {
                 self.handle_memory_forget(io, req_id, key, scope).await
+            }
+            FrontendRequest::MemoryRestore { key, scope } => {
+                self.handle_memory_restore(io, req_id, key, scope).await
             }
             FrontendRequest::MemoryToggleState => self.handle_memory_toggle_state(io, req_id).await,
             FrontendRequest::MemoryToggle { which } => {
@@ -689,6 +693,7 @@ fn does_not_wait_for_turn(payload: &FrontendRequest) -> bool {
             | FrontendRequest::PermissionRemoveWorkingDir { .. }
             | FrontendRequest::MemoryToggle { .. }
             | FrontendRequest::MemoryForget { .. }
+            | FrontendRequest::MemoryRestore { .. }
             | FrontendRequest::DebugSet { .. }
             | FrontendRequest::RecapConfigSet { .. }
     )

@@ -190,3 +190,42 @@ async fn test_gate_off_skips_reconcile() {
     assert!(!root.join("project").join("hot-auto.md").exists());
     drop(remove_dir_all(&root));
 }
+
+#[test]
+fn test_runtime_archived_flow() {
+    let (root, provider) = temp_roots("runtime-archive");
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runtime = MemoryRuntime::from_parts(
+        store,
+        Some(Arc::clone(&provider) as Arc<dyn MemoryProvider>),
+        MemoryGates::new(true, true),
+        None,
+        None,
+    );
+    provider
+        .add(MemoryEntry::new(
+            "arc-k",
+            "Arc body.",
+            MemorySource::Project,
+        ))
+        .expect("seed");
+    provider
+        .archive_memory("arc-k", MemoryScope::Auto)
+        .expect("archive");
+
+    assert_eq!(runtime.list_archived().len(), 1);
+    assert_eq!(
+        runtime.show("arc-k").expect("show archived").content,
+        "Arc body."
+    );
+    runtime.restore("arc-k", "auto").expect("restore");
+    assert!(runtime.list_archived().is_empty());
+    assert_eq!(runtime.list().len(), 1);
+
+    provider
+        .archive_memory("arc-k", MemoryScope::Auto)
+        .expect("re-archive");
+    runtime.forget("arc-k", "auto").expect("forget archived");
+    assert!(runtime.list_archived().is_empty());
+    drop(remove_dir_all(&root));
+}

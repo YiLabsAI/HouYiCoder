@@ -1271,6 +1271,7 @@ async fn test_drive_translates_memory_responses() {
         source: "user".into(),
         scope: "project".into(),
         mtime_secs: 5,
+        archived: false,
     }]));
     engine.response(ResponsePayload::MemoryShow(Some(MemoryDetail {
         key: "topic".into(),

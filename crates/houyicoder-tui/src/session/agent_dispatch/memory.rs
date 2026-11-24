@@ -31,9 +31,17 @@ impl App {
             .capabilities
             .memory
             .take_forget(req_id);
+        let restored = self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .take_restore(req_id);
         self.set_memory_entries(memory_entries_from_wire(&entries));
         if let Some(key) = forgot {
             self.system_line(format!("forgot {key}"));
+        } else if let Some(key) = restored {
+            self.system_line(format!("restored {key}"));
         }
     }
 
@@ -192,6 +200,9 @@ impl App {
             }
             MemoryAction::Forget { key } => {
                 format!("couldn't forget {key} — {message}")
+            }
+            MemoryAction::Restore { key } => {
+                format!("couldn't restore {key} — {message}")
             }
         }
     }

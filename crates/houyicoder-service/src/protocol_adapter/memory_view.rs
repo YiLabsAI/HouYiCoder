@@ -8,6 +8,19 @@ use houyicoder_protocol::frontend::memory::{MemoryDetail, MemorySummaryEntry, To
 /// Map frontmatter-only memory summaries to the wire list form. Pure field
 /// copy plus the source label.
 pub(crate) fn map_memory_list(summaries: Vec<MemorySummary>) -> Vec<MemorySummaryEntry> {
+    map_summaries(summaries, false)
+}
+
+pub(crate) fn map_memory_catalog(
+    active: Vec<MemorySummary>,
+    archived: Vec<MemorySummary>,
+) -> Vec<MemorySummaryEntry> {
+    let mut rows = map_summaries(active, false);
+    rows.extend(map_summaries(archived, true));
+    rows
+}
+
+fn map_summaries(summaries: Vec<MemorySummary>, archived: bool) -> Vec<MemorySummaryEntry> {
     summaries
         .into_iter()
         .map(|s| MemorySummaryEntry {
@@ -16,6 +29,7 @@ pub(crate) fn map_memory_list(summaries: Vec<MemorySummary>) -> Vec<MemorySummar
             source: s.source.as_label().to_string(),
             scope: s.scope.as_label().to_string(),
             mtime_secs: s.mtime_secs,
+            archived,
         })
         .collect()
 }

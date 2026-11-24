@@ -637,6 +637,12 @@ pub enum FrontendRequest {
         key: String,
         scope: String,
     },
+    /// Restore one archived memory back into its active scope and reply with
+    /// the refreshed MemoryList.
+    MemoryRestore {
+        key: String,
+        scope: String,
+    },
     /// Show what removing a managed worktree would discard, plus the token
     /// naming that state. Nothing is written or deleted, so this answer is
     /// safe to ask for while a turn runs.

@@ -132,6 +132,9 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
         ClientCommand::MemoryForgetQuery { req_id, key, scope } => {
             request(req_id, FrontendRequest::MemoryForget { key, scope })
         }
+        ClientCommand::MemoryRestoreQuery { req_id, key, scope } => {
+            request(req_id, FrontendRequest::MemoryRestore { key, scope })
+        }
         ClientCommand::ModelInfoQuery { req_id } => request(req_id, FrontendRequest::ModelInfo),
         ClientCommand::SandboxBoundariesQuery { req_id } => {
             request(req_id, FrontendRequest::SandboxBoundaries)

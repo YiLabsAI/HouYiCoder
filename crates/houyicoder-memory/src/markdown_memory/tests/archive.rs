@@ -94,6 +94,26 @@ fn test_archive_restore_keeps_stats() {
     assert_eq!(row.recall_hits, 1);
     assert_eq!(row.gate_violations, 1);
     assert_eq!(row.occurrences, 1);
+
+    fx.provider
+        .archive_memory("lesson-a", MemoryScope::Auto)
+        .expect("archive again");
+    fx.provider
+        .delete_archived("lesson-a", MemoryScope::Auto)
+        .expect("delete archived");
+    assert!(fx.provider.list_archived().is_empty());
+    assert!(
+        fx.provider
+            .read_recall_stats()
+            .iter()
+            .all(|s| s.key != "lesson-a"),
+        "deleting archived entry prunes stats when no copy remains"
+    );
+    assert!(
+        fx.provider
+            .delete_archived("lesson-a", MemoryScope::Auto)
+            .is_err()
+    );
 }
 
 #[test]

@@ -553,6 +553,11 @@ impl Runner {
         self.memory.list()
     }
 
+    /// List every archived memory across scopes as a frontmatter summary.
+    pub fn memory_archived_list(&self) -> Vec<houyicoder_context::MemorySummary> {
+        self.memory.list_archived()
+    }
+
     /// Fetch the full body of one memory by key, for /memory <key>. None when
     /// no provider is configured or the key is absent.
     pub fn memory_show(&self, key: &str) -> Option<houyicoder_context::MemoryEntry> {
@@ -571,6 +576,15 @@ impl Runner {
         scope: &str,
     ) -> Result<(), houyicoder_context::MemoryError> {
         self.memory.forget(key, scope)
+    }
+
+    /// Restore an archived memory by key and scope back into active use.
+    pub fn memory_restore(
+        &self,
+        key: &str,
+        scope: &str,
+    ) -> Result<(), houyicoder_context::MemoryError> {
+        self.memory.restore(key, scope)
     }
 
     /// Read the memory gate state (auto-memory, auto-dream) for the /memory

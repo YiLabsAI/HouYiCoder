@@ -48,6 +48,10 @@ fn test_default_delete_in_scope() {
         stub.restore_memory("k", MemoryScope::Auto),
         Err(MemoryError::NotFound)
     );
+    assert_eq!(
+        stub.delete_archived("k", MemoryScope::Auto),
+        Err(MemoryError::NotFound)
+    );
     assert!(stub.list_archived().is_empty());
     assert!(stub.show_archived("k", MemoryScope::Auto).is_none());
     assert!(stub.reconcile_scopes(0).is_empty());

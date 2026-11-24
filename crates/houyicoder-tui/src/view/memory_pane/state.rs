@@ -61,8 +61,10 @@ impl MemoryPaneState {
         let needle = self.list.query.to_ascii_lowercase();
         entries
             .iter()
-            .filter(|memory| {
-                self.scope == MemoryScopeTab::All || memory.scope == self.scope.label()
+            .filter(|memory| match self.scope {
+                MemoryScopeTab::Archived => memory.archived,
+                MemoryScopeTab::All => !memory.archived,
+                other => !memory.archived && memory.scope == other.label(),
             })
             .filter(|memory| {
                 needle.is_empty()

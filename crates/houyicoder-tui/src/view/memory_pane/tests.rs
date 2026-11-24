@@ -23,6 +23,7 @@ use crate::composition;
 use crate::keys::handle_working;
 use crate::records::TranscriptLine;
 use crate::session::SessionConnection;
+use crate::session::capabilities::MemoryAction;
 use crate::state::Screen;
 use crate::state::enums::MemoryScopeTab;
 use crate::state::{App, Pane};
@@ -129,6 +130,7 @@ fn test_list_result_resets_cursor() {
                 source: "project".into(),
                 scope: "project".into(),
                 mtime_secs: now,
+                archived: false,
             }],
         },
     });
@@ -521,6 +523,9 @@ fn test_scope_tab_narrows_list() {
     let auto = render(&app);
     assert!(auto.contains("spec-driven"), "auto-scoped shows");
     assert!(auto.contains("[Auto]"), "Auto tab active");
+    app.cycle_memory_scope();
+    let archived = render(&app);
+    assert!(archived.contains("[Archived]"), "Archived tab active");
     app.cycle_memory_scope();
     let back = render(&app);
     assert!(back.contains("[All]"), "cycle wraps to All");
@@ -1004,8 +1009,8 @@ fn test_footer_wraps_when_narrow() {
     for hint in [
         "Up/Down to select",
         "a to toggle",
-        "Tab/Left/Right to",
-        "switch scope",
+        "Tab/",
+        "Left/Right to switch scope",
         "Esc to close",
     ] {
         assert!(
@@ -1026,4 +1031,105 @@ fn test_memory_show_ships_query() {
         FrontendRequest::MemoryShow { key } => assert_eq!(key, "setup"),
         other => panic!("unexpected request: {other:?}"),
     }
+}
+
+/// Archived entries stay hidden from active tabs, render on the Archived tab
+/// with a restore hint, ship MemoryRestore on r, and record a receipt once
+/// confirmed.
+#[test]
+fn test_archived_tab_restores_entry() {
+    let (mut app, events) = live_session();
+    app.run_command(SlashCommand::Memory);
+    let _initial = wait_for_request(&events, |p| matches!(p, FrontendRequest::MemoryList));
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(0),
+        response: ServerResponse::MemoryList {
+            entries: vec![
+                MemorySummaryEntry {
+                    key: "active-rule".into(),
+                    description: "stays in active tabs".into(),
+                    source: "feedback".into(),
+                    scope: "project".into(),
+                    mtime_secs: 10,
+                    archived: false,
+                },
+                MemorySummaryEntry {
+                    key: "archived-lesson".into(),
+                    description: "restorable archived lesson".into(),
+                    source: "feedback".into(),
+                    scope: "auto".into(),
+                    mtime_secs: 9,
+                    archived: true,
+                },
+            ],
+        },
+    });
+    let all_view = render(&app);
+    assert!(all_view.contains("active-rule"));
+    assert!(
+        !all_view.contains("archived-lesson"),
+        "archived entry excluded from All tab:\n{all_view}"
+    );
+
+    // Left from All wraps directly to Archived.
+    handle_working(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(app.ui.memory.scope(), MemoryScopeTab::Archived);
+    let archived_view = render(&app);
+    assert!(archived_view.contains("archived-lesson"));
+    assert!(archived_view.contains("r to restore"));
+
+    handle_working(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
+    let req = wait_for_request(&events, |p| {
+        matches!(p, FrontendRequest::MemoryRestore { .. })
+    });
+    match &req.payload {
+        FrontendRequest::MemoryRestore { key, scope } => {
+            assert_eq!(key, "archived-lesson");
+            assert_eq!(scope, "auto");
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+
+    app.handle_agent_message(SessionMessage::Response {
+        request: req.req_id,
+        response: ServerResponse::MemoryList {
+            entries: vec![MemorySummaryEntry {
+                key: "archived-lesson".into(),
+                description: "restorable archived lesson".into(),
+                source: "feedback".into(),
+                scope: "auto".into(),
+                mtime_secs: 20,
+                archived: false,
+            }],
+        },
+    });
+    let empty_archived = render(&app);
+    assert!(empty_archived.contains("(no archived memories)"));
+    let transcript = format!("{:?}", app.sessions.current.transcript);
+    assert!(
+        transcript.contains("restored archived-lesson"),
+        "confirmed restore writes one transcript receipt: {transcript}"
+    );
+
+    app.run_tui_local_command("memory restore manual-key");
+    let cmd_req = wait_for_request(&events, |p| {
+        matches!(p, FrontendRequest::MemoryRestore { .. })
+    });
+    match cmd_req.payload {
+        FrontendRequest::MemoryRestore { key, scope } => {
+            assert_eq!(key, "manual-key");
+            assert_eq!(scope, "auto");
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+    let fail = App::memory_failure_line(
+        MemoryAction::Restore {
+            key: "manual-key".into(),
+        },
+        "io error",
+    );
+    assert_eq!(fail, "couldn't restore manual-key — io error");
 }

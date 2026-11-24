@@ -283,6 +283,7 @@ pub(crate) enum MemoryAction {
     Toggle { which: MemoryToggleWhich },
     Recap,
     Forget { key: String },
+    Restore { key: String },
 }
 
 /// The session's memory record: the entry list the server refreshes, the two
@@ -330,6 +331,7 @@ fn bootstrap_entries() -> Vec<MemoryEntry> {
             scope: "project".to_string(),
             source: "project".to_string(),
             mtime_secs: 0,
+            archived: false,
         },
         MemoryEntry {
             topic: "comment-style".to_string(),
@@ -337,6 +339,7 @@ fn bootstrap_entries() -> Vec<MemoryEntry> {
             scope: "user".to_string(),
             source: "feedback".to_string(),
             mtime_secs: 0,
+            archived: false,
         },
         MemoryEntry {
             topic: "spec-driven".to_string(),
@@ -344,6 +347,7 @@ fn bootstrap_entries() -> Vec<MemoryEntry> {
             scope: "auto".to_string(),
             source: "reference".to_string(),
             mtime_secs: 0,
+            archived: false,
         },
     ]
 }
@@ -450,6 +454,28 @@ impl MemoryCapability {
         }
     }
 
+    pub(crate) fn begin_restore(&mut self, req_id: RequestId, key: String) -> bool {
+        let pending = self.actions.values().any(
+            |action| matches!(action, MemoryAction::Restore { key: existing } if *existing == key),
+        );
+        if pending {
+            return false;
+        }
+        self.actions.insert(req_id, MemoryAction::Restore { key });
+        true
+    }
+
+    pub(crate) fn take_restore(&mut self, req_id: RequestId) -> Option<String> {
+        match self.actions.get(&req_id) {
+            Some(MemoryAction::Restore { key }) => {
+                let key = key.clone();
+                self.actions.remove(&req_id);
+                Some(key)
+            }
+            _ => None,
+        }
+    }
+
     /// Drop every in-flight mutation mark. Called when the connection dies —
     /// no reply can ever resolve them, and a sticky pending mark would refuse
     /// its switch forever. The pane's loading detail is swept beside this by
@@ -466,7 +492,9 @@ impl MemoryCapability {
             .values()
             .filter_map(|action| match action {
                 MemoryAction::Forget { key } => Some(key.clone()),
-                MemoryAction::Toggle { .. } | MemoryAction::Recap => None,
+                MemoryAction::Toggle { .. }
+                | MemoryAction::Recap
+                | MemoryAction::Restore { .. } => None,
             })
             .collect();
         keys.sort();

@@ -74,6 +74,14 @@ impl App {
             }
             return true;
         }
+        if let Some(key) = body.strip_prefix("restore ").map(str::trim) {
+            if key.is_empty() {
+                self.system_line("memory: usage /memory restore <key>");
+            } else {
+                self.send_memory_restore(key.to_string(), "auto".to_string());
+            }
+            return true;
+        }
         // /memory forget <key>: archive one memory by key (the command form of
         // the pane d action). The server replies with the refreshed list.
         if let Some(key) = body.strip_prefix("forget ").map(str::trim) {
@@ -235,6 +243,52 @@ impl App {
                 .memory
                 .take_forget(req_id);
             self.system_line(format!("couldn't forget {key} — connection lost"));
+        }
+    }
+
+    /// Restore the archived memory row under the cursor (the r action on the
+    /// Archived tab).
+    pub fn restore_memory_at_cursor(&mut self) {
+        let Some(memory) = self.memory_selected() else {
+            return;
+        };
+        if !memory.archived {
+            return;
+        }
+        let key = memory.topic.clone();
+        let scope = memory.scope.clone();
+        self.send_memory_restore(key, scope);
+    }
+
+    fn send_memory_restore(&mut self, key: String, scope: String) {
+        let Some(s) = self.sessions.current.connection.as_ref() else {
+            self.system_line("memory: not connected".to_string());
+            return;
+        };
+        let Ok(req_id) = s.next_request_id() else {
+            self.system_line("memory: request ids exhausted");
+            return;
+        };
+        if !self
+            .sessions
+            .current
+            .capabilities
+            .memory
+            .begin_restore(req_id, key.clone())
+        {
+            return;
+        }
+        if let Err(EnqueueError::Closed) = self.enqueue(ClientCommand::MemoryRestoreQuery {
+            req_id,
+            key: key.clone(),
+            scope,
+        }) {
+            self.sessions
+                .current
+                .capabilities
+                .memory
+                .take_restore(req_id);
+            self.system_line(format!("couldn't restore {key} — connection lost"));
         }
     }
 

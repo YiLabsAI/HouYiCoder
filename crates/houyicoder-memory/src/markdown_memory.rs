@@ -603,6 +603,10 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.restore_impl(key, scope)
     }
 
+    fn delete_archived(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        self.delete_archived_impl(key, scope)
+    }
+
     fn list_archived(&self) -> Vec<MemorySummary> {
         self.list_archived_impl()
     }

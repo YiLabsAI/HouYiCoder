@@ -143,6 +143,10 @@ pub trait MemoryProvider: Send + Sync {
     fn restore_memory(&self, _key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
     }
+    /// Permanently delete an archived memory from the named scope.
+    fn delete_archived(&self, _key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
+        Err(MemoryError::NotFound)
+    }
     /// List every archived memory across scopes as a frontmatter summary.
     fn list_archived(&self) -> Vec<MemorySummary> {
         Vec::new()

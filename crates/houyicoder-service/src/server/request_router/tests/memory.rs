@@ -52,6 +52,13 @@ impl MemoryProvider for MockMemory {
             Ok(())
         }
     }
+    fn restore_memory(&self, key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
+        if key == "fail" {
+            Err(MemoryError::Io)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 fn stub_runner_with_memory() -> Arc<Runner> {
@@ -177,6 +184,17 @@ async fn test_ok_replies_memory_list() {
         }
         other => panic!("expected MemoryList, got {other:?}"),
     }
+    let restored = memory_dispatch(
+        None,
+        vec![FrontendRequest::MemoryRestore {
+            key: "ok".into(),
+            scope: "auto".into(),
+        }],
+    )
+    .await
+    .pop()
+    .expect("one reply");
+    assert!(matches!(restored, ResponsePayload::MemoryList(_)));
 }
 
 /// A forget that hits an Io failure replies with an Error (not a silent

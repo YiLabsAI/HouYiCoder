@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::OpenOptions;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -172,6 +173,34 @@ impl MarkdownMemoryProvider {
         move_topic(&archive_path, &dst_path)?;
         touch_file(&dst_path);
         drop(self.rebuild_index_impl_locked());
+        Ok(())
+    }
+
+    pub(super) fn delete_archived_impl(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+    ) -> Result<(), MemoryError> {
+        let key = sanitize_key(key)?;
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let _root_locks = self.lock_roots()?;
+        let archive_path = self
+            .root_for_scope(scope)
+            .join(ARCHIVE_DIR)
+            .join(format!("{key}.md"));
+        match fs::remove_file(&archive_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                return Err(MemoryError::NotFound);
+            }
+            Err(_) => return Err(MemoryError::Io),
+        }
+        if !self.key_exists_anywhere(&key) {
+            let mut stats = self.load_stats();
+            if stats.remove(&key).is_some() {
+                self.save_stats(&stats);
+            }
+        }
         Ok(())
     }
 

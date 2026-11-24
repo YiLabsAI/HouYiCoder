@@ -152,6 +152,7 @@ fn test_wire_to_pane_rows() {
             source: "project".into(),
             scope: "project".into(),
             mtime_secs: 42,
+            archived: false,
         },
         MemorySummaryEntry {
             key: "bare".into(),
@@ -159,6 +160,7 @@ fn test_wire_to_pane_rows() {
             source: "user".into(),
             scope: "user".into(),
             mtime_secs: 0,
+            archived: true,
         },
     ];
     let rows = memory_entries_from_wire(&entries);

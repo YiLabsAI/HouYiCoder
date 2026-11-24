@@ -566,6 +566,7 @@ fn test_memory_pane_scroll() {
             scope: "project".into(),
             source: "user".into(),
             mtime_secs: 0,
+            archived: false,
         })
         .collect();
     app.set_memory_entries(entries);

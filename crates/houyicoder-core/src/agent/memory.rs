@@ -479,20 +479,52 @@ impl MemoryRuntime {
             .unwrap_or_default()
     }
 
-    /// Fetch the full body of one memory by key. None when no provider is
-    /// configured or the key is absent.
-    pub(crate) fn show(&self, key: &str) -> Option<MemoryEntry> {
-        self.provider.as_ref().and_then(|m| m.show_memory(key))
+    pub(crate) fn list_archived(&self) -> Vec<MemorySummary> {
+        self.provider
+            .as_ref()
+            .map(|m| m.list_archived())
+            .unwrap_or_default()
     }
 
-    /// Forget one memory by key and scope. Returns Ok when no provider is
-    /// configured (no-op) or Err when the delete fails.
+    /// Fetch the full body of one memory by key, checking active roots first
+    /// and falling back to archived copies for detail inspection.
+    pub(crate) fn show(&self, key: &str) -> Option<MemoryEntry> {
+        let memory = self.provider.as_ref()?;
+        memory.show_memory(key).or_else(|| {
+            [MemoryScope::User, MemoryScope::Project, MemoryScope::Auto]
+                .into_iter()
+                .find_map(|scope| memory.show_archived(key, scope))
+        })
+    }
+
+    /// Forget one memory by key and scope, removing either the active copy or
+    /// the archived copy in that scope.
     pub(crate) fn forget(&self, key: &str, scope: &str) -> Result<(), MemoryError> {
         let Some(memory) = &self.provider else {
             return Ok(());
         };
         let scope = MemoryScope::from_label(scope).unwrap_or(MemoryScope::Auto);
-        memory.delete_memory_in_scope(key, scope)
+        let res = match memory.delete_memory_in_scope(key, scope) {
+            Err(MemoryError::NotFound) => memory.delete_archived(key, scope),
+            other => other,
+        };
+        if res.is_ok() {
+            self.invalidate_index_snapshot();
+        }
+        res
+    }
+
+    /// Restore one archived memory back into its active scope.
+    pub(crate) fn restore(&self, key: &str, scope: &str) -> Result<(), MemoryError> {
+        let Some(memory) = &self.provider else {
+            return Ok(());
+        };
+        let scope = MemoryScope::from_label(scope).unwrap_or(MemoryScope::Auto);
+        let res = memory.restore_memory(key, scope);
+        if res.is_ok() {
+            self.invalidate_index_snapshot();
+        }
+        res
     }
 
     /// Start enabled background memory work after a final output.

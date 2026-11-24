@@ -135,6 +135,7 @@ pub(crate) fn memory_entries_from_wire(entries: &[MemorySummaryEntry]) -> Vec<Me
             scope: e.scope.clone(),
             source: e.source.clone(),
             mtime_secs: e.mtime_secs,
+            archived: e.archived,
         })
         .collect()
 }

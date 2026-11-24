@@ -3,23 +3,29 @@
 use houyicoder_config::recap::save_recap_to;
 use houyicoder_protocol::envelope::{RequestId, ResponsePayload};
 use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
-use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
-use houyicoder_protocol::frontend::memory::ToggleState;
+use houyicoder_protocol::frontend::memory::{MemorySummaryEntry, MemoryToggleWhich, ToggleState};
 
 use super::{Server, frame_carrier::FrameCarrier};
 use crate::protocol_adapter as pa;
 use houyicoder_context::MemoryError;
+use pa::memory_view::map_memory_catalog;
 use pa::memory_view::map_memory_entry;
-use pa::memory_view::map_memory_list;
 use pa::memory_view::map_toggle_state;
 
 impl Server {
+    fn current_memory_catalog(&self) -> Vec<MemorySummaryEntry> {
+        map_memory_catalog(
+            self.runner.memory_list(),
+            self.runner.memory_archived_list(),
+        )
+    }
+
     pub(super) async fn handle_memory_list(
         &mut self,
         io: &mut FrameCarrier,
         req_id: RequestId,
     ) -> Result<(), ProtocolError> {
-        let entries = map_memory_list(self.runner.memory_list());
+        let entries = self.current_memory_catalog();
         self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
             .await
     }
@@ -44,7 +50,7 @@ impl Server {
     ) -> Result<(), ProtocolError> {
         match self.runner.memory_forget(&key, &scope) {
             Ok(()) | Err(MemoryError::NotFound) => {
-                let entries = map_memory_list(self.runner.memory_list());
+                let entries = self.current_memory_catalog();
                 self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
                     .await
             }
@@ -55,6 +61,34 @@ impl Server {
                     ResponsePayload::Error(ProtocolError::new(
                         ErrorCategory::Internal,
                         format!("memory forget failed: {e}"),
+                        false,
+                    )),
+                )
+                .await
+            }
+        }
+    }
+
+    pub(super) async fn handle_memory_restore(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        key: String,
+        scope: String,
+    ) -> Result<(), ProtocolError> {
+        match self.runner.memory_restore(&key, &scope) {
+            Ok(()) | Err(MemoryError::NotFound) => {
+                let entries = self.current_memory_catalog();
+                self.send_response(io, req_id, ResponsePayload::MemoryList(entries))
+                    .await
+            }
+            Err(e) => {
+                self.send_response(
+                    io,
+                    req_id,
+                    ResponsePayload::Error(ProtocolError::new(
+                        ErrorCategory::Internal,
+                        format!("memory restore failed: {e}"),
                         false,
                     )),
                 )

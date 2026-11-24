@@ -399,6 +399,7 @@ fn test_memory_list_respects_dismissal() {
                 source: "project".to_string(),
                 scope: "project".to_string(),
                 mtime_secs: 0,
+                archived: false,
             }],
         },
     });
@@ -430,6 +431,7 @@ fn test_memory_list_respects_dismissal() {
                 source: "project".to_string(),
                 scope: "project".to_string(),
                 mtime_secs: 0,
+                archived: false,
             }],
         },
     });

@@ -925,6 +925,7 @@ fn test_forget_ships_queries_connected() {
                 source: "project".into(),
                 scope: "project".into(),
                 mtime_secs: 0,
+                archived: false,
             }],
         },
     });
