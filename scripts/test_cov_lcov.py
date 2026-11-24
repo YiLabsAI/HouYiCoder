@@ -229,6 +229,17 @@ def main() -> int:
     forced = cov_lcov.cov_env("/tmp/covx", {"HOUYICODER_SANDBOX_NO_ENFORCE": "0"})
     if forced.get("HOUYICODER_SANDBOX_NO_ENFORCE") != "0":
         failures.append("cov_env: a caller's explicit fence setting was overridden")
+    # A settings home the runner does not redirect would let a test read or
+    # write the user config under the coverage gate too, so the config home is
+    # pinned under the cov dir by default and still yields to a caller.
+    expected_home = os.path.join(os.path.abspath("/tmp/covx"), "config-home")
+    if env.get("HOUYICODER_CONFIG_HOME") != expected_home:
+        failures.append("cov_env: config home not pinned under the cov dir")
+    if forced.get("HOUYICODER_CONFIG_HOME") != expected_home:
+        failures.append("cov_env: config home not defaulted beside other pinned env")
+    chosen = cov_lcov.cov_env("/tmp/covx", {"HOUYICODER_CONFIG_HOME": "/tmp/elsewhere"})
+    if chosen.get("HOUYICODER_CONFIG_HOME") != "/tmp/elsewhere":
+        failures.append("cov_env: a caller's explicit config home was overridden")
 
     if failures:
         for f in failures:

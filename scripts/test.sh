@@ -3,6 +3,16 @@
 # suites and benchmarks use their own dispatchers.
 set -euo pipefail
 
+# A test that reads or writes the settings file would otherwise reach the
+# user config. Give the run an empty config home unless the caller set one,
+# and remove it on exit. The dry-run path only prints commands, so it needs
+# no directory and stays side-effect free.
+if [ "${HOUYI_DRY_RUN:-0}" != "1" ] && [ -z "${HOUYICODER_CONFIG_HOME:-}" ]; then
+    HOUYICODER_CONFIG_HOME="$(mktemp -d)"
+    export HOUYICODER_CONFIG_HOME
+    trap 'rm -rf "$HOUYICODER_CONFIG_HOME"' EXIT
+fi
+
 if [ "$#" -gt 1 ]; then
     echo "expected one test scope, got: $*" >&2
     exit 2

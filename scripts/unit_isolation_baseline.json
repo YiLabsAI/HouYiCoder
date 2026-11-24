@@ -1,4 +1,7 @@
 {
+  "ambient_settings_files": {
+    "houyicoder-service": 1
+  },
   "cross_layer_files": {
     "houyicoder-service": 4,
     "houyicoder-tui": 9

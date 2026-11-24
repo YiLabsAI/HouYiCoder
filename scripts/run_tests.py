@@ -27,6 +27,7 @@ signal -- prune slow steps or raise CHECK_BUDGET_WARN. The gate covers test
 EXECUTION only: the test binaries are compiled in a separate, ungated pass
 first, so a cold build cannot trip a ceiling meant to catch a slow test.
 """
+import atexit
 import os
 import shutil
 import signal
@@ -214,11 +215,20 @@ else:
 # runner injects it the same way it injects the fast-token switch. Production
 # never sets it.
 runtime_dir = Path(tempfile.mkdtemp(prefix="houyi-runtime-"))
+# HOUYICODER_CONFIG_HOME: the settings file a test would read or write lives
+# under this base instead of the user home, so a server a test builds without
+# an explicit settings path still cannot reach the developer config. The
+# server defaults to no persistence backend, so this fences the remaining
+# ambient readers across the workspace rather than the server alone. The
+# config dir is removed when the run ends. Production never sets it.
+config_dir = Path(tempfile.mkdtemp(prefix="houyi-config-"))
+atexit.register(shutil.rmtree, config_dir, ignore_errors=True)
 env = {
     **os.environ,
     "HOUYICODER_FAST_TOKENS": "1",
     "HOUYICODER_SANDBOX_NO_ENFORCE": "1",
     "HOUYICODER_RUNTIME_DIR": str(runtime_dir),
+    "HOUYICODER_CONFIG_HOME": str(config_dir),
 }
 # A terminal-capability or size probe must not see the developer's own
 # terminal: CI runs headless and the probes behave differently there, so a

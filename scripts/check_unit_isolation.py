@@ -77,6 +77,30 @@ WIREMOCK = re.compile(r"\bwiremock\b")
 START_LOCAL_SERVER = re.compile(r"\bstart_local_server\b")
 BUILD_RUNNER = re.compile(r"\bbuild_runner\w*\b")
 
+# An ambient settings lookup reads the user config path directly instead of
+# receiving the path the server was built with. A business file that calls it
+# escapes the Option injection the server owns, so the test isolation depends
+# on every reader going through the injected path.
+AMBIENT_SETTINGS = re.compile(r"\b(?:settings_path|config_home)\s*\(\s*\)")
+# The definer and the CLI composition root own the ambient path. Within the
+# service crate, only the composition root and the detached host entry may
+# read it.
+AMBIENT_OWNERS = frozenset({"houyicoder-config", "houyicoder-cli"})
+AMBIENT_SERVICE_PREFIXES = (
+    "crates/houyicoder-service/src/composition.rs",
+    "crates/houyicoder-service/src/composition/",
+    "crates/houyicoder-service/src/server/session.rs",
+)
+
+
+def ambient_allowed(crate: str, rel: str) -> bool:
+    """Whether this file may call the ambient settings path."""
+    if crate in AMBIENT_OWNERS:
+        return True
+    if crate == "houyicoder-service":
+        return rel.startswith(AMBIENT_SERVICE_PREFIXES)
+    return False
+
 
 def baseline() -> dict:
     """The pinned stock, or empty when the file is absent."""
@@ -111,6 +135,7 @@ def scan(root: Path = ROOT) -> tuple[list[str], dict[str, dict[str, int]]]:
         "host_in_src": {},
         "wiremock_in_src": {},
         "cross_layer_files": {},
+        "ambient_settings_files": {},
     }
     for crate, rel, text in source_files(root):
         if crate not in PAIRING_OWNERS:
@@ -123,6 +148,10 @@ def scan(root: Path = ROOT) -> tuple[list[str], dict[str, dict[str, int]]]:
             counts["host_in_src"][crate] = counts["host_in_src"].get(crate, 0) + 1
         if WIREMOCK.search(text):
             counts["wiremock_in_src"][crate] = counts["wiremock_in_src"].get(crate, 0) + 1
+        if AMBIENT_SETTINGS.search(text) and not ambient_allowed(crate, rel):
+            counts["ambient_settings_files"][crate] = (
+                counts["ambient_settings_files"].get(crate, 0) + 1
+            )
         allowed = {c.replace("-", "_") for c in WHITELIST.get(crate, set())}
         allowed.add(crate.replace("-", "_"))
         allowed |= {c.replace("-", "_") for c in BOTTOM_CRATES}
@@ -158,12 +187,20 @@ def main() -> int:
         "host_in_src": "host reference in the frontend",
         "wiremock_in_src": "local-endpoint stub import",
         "cross_layer_files": "cross-layer reference",
+        "ambient_settings_files": "ambient settings path call",
+    }
+    remedies = {
+        "ambient_settings_files": (
+            "inject the settings path from the composition root instead of "
+            "calling the ambient lookup"
+        ),
     }
     for key, label in labels.items():
+        remedy = remedies.get(key, "mock the collaborator or move the test to tests/")
         for crate, (count, cap) in sorted(growth(pinned.get(key, {}), counts[key]).items()):
             failures.append(
                 f"{crate}: {count} src/ files with a {label} "
-                f"(baseline {cap}); mock the collaborator or move the test to tests/"
+                f"(baseline {cap}); {remedy}"
             )
 
     if failures:

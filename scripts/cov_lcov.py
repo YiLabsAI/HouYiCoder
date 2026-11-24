@@ -99,6 +99,12 @@ def cov_env(cov_dir: str, base: dict | None = None) -> dict:
     # reason. Keeping them here means a new caller cannot omit one.
     env.setdefault("HOUYICODER_FAST_TOKENS", "1")
     env.setdefault("HOUYICODER_SANDBOX_NO_ENFORCE", "1")
+    # A settings reader a test does not redirect would otherwise reach the
+    # user config. The path is deterministic under the cov dir rather than a
+    # fresh mktemp, so it does not perturb the build fingerprint.
+    env.setdefault(
+        "HOUYICODER_CONFIG_HOME", os.path.join(os.path.abspath(cov_dir), "config-home")
+    )
     return env
 
 

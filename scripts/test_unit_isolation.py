@@ -89,6 +89,28 @@ def test_wiremock_counts() -> None:
     assert counts["wiremock_in_src"].get("houyicoder-tui") == 1, counts
 
 
+def test_ambient_settings_counts() -> None:
+    """A business src/ file that reads the ambient settings path is counted."""
+    _, counts = probe(
+        "handler.rs",
+        "fn f() { let _ = houyicoder_config::settings_path(); }\n",
+    )
+    assert counts["ambient_settings_files"].get("houyicoder-tui") == 1, counts
+
+
+def test_ambient_settings_owners_pass() -> None:
+    """The definer, the CLI root, and the service composition root may read it."""
+    for crate in ("houyicoder-config", "houyicoder-cli"):
+        _, counts = probe("root.rs", "fn f() { let _ = config_home(); }\n", crate=crate)
+        assert counts["ambient_settings_files"] == {}, (crate, counts)
+    _, counts = probe(
+        "composition.rs",
+        "fn f() { let _ = houyicoder_config::settings_path(); }\n",
+        crate="houyicoder-service",
+    )
+    assert counts["ambient_settings_files"] == {}, counts
+
+
 def test_growth_reads_the_cap() -> None:
     """A count at the cap is not growth; one past it is."""
     assert gate.growth({"a": 2}, {"a": 2}) == {}

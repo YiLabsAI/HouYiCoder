@@ -1,6 +1,7 @@
 //! Tests for this module.
 
 use super::*;
+use houyicoder_config::ENV_HOUYICODER_CONFIG_HOME;
 use std::env::current_dir;
 use std::env::var;
 use std::fs;
@@ -79,10 +80,19 @@ fn test_cwd_fallback_canonical() {
 fn test_snapshot_store_location() {
     let dir = temp_dir("snap-store");
     let root = snapshot_store_root(&dir);
-    let home_store = var("HOME")
+    // The config home the store resolves under. An explicit override wins,
+    // then the home default.
+    let home_store = var(ENV_HOUYICODER_CONFIG_HOME)
         .ok()
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .map(|home| home.join(".houyicoder").join("snapshots"));
+        .or_else(|| {
+            var("HOME")
+                .ok()
+                .map(PathBuf::from)
+                .map(|home| home.join(".houyicoder"))
+        })
+        .map(|config| config.join("snapshots"));
     match home_store.filter(|store| same_filesystem(&dir, store)) {
         Some(store) => {
             assert_eq!(

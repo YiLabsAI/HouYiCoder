@@ -243,11 +243,22 @@ fn test_save_failure_returns_err() {
     drop(remove_file(&blocker));
 }
 
-/// config_home + settings_path resolve under the user HOME. Deterministic
-/// (no file I/O, just path construction from HOME which the test env sets).
+/// The config home and the settings path resolve under the user home, unless
+/// the runner redirects the config home variable. The override wins when set
+/// and the home default applies otherwise.
 #[test]
 fn test_config_home_resolves() {
-    assert!(config_home().ends_with(".houyicoder"));
+    match var(ENV_HOUYICODER_CONFIG_HOME) {
+        Ok(over) => assert_eq!(
+            config_home().to_string_lossy().as_ref(),
+            over.as_str(),
+            "the config home override wins when set"
+        ),
+        Err(_) => assert!(
+            config_home().ends_with(".houyicoder"),
+            "the home default applies when no override is set"
+        ),
+    }
     let path = settings_path();
     assert!(path.ends_with("settings.json"));
     assert!(path.starts_with(config_home()));
