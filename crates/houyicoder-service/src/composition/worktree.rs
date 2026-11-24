@@ -111,13 +111,30 @@ pub fn git_common_dir(ws: &Path) -> Option<PathBuf> {
 /// is unavailable. Host-side git probing (not a sandboxed tool run), so the
 /// spawn-chokepoint rule is allowed here.
 pub fn git_canonical_slug(ws: &Path) -> String {
-    let common = git_common_dir(ws);
-    common
-        .as_deref()
-        .and_then(|c| c.parent())
-        .and_then(|root| root.file_name())
+    let root = git_common_root(ws).unwrap_or_else(|| ws.to_path_buf());
+    let name = root
+        .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| canonical_dir_name(ws))
+        .unwrap_or_else(|| canonical_dir_name(ws));
+    format!("{name}-{:08x}", stable_hash(&root.to_string_lossy()))
+}
+
+/// The main worktree root for a workspace, so a project-scope record is the
+/// same from any linked worktree. None when git is unavailable.
+pub fn git_common_root(ws: &Path) -> Option<PathBuf> {
+    git_common_dir(ws).and_then(|dir| dir.parent().map(Path::to_path_buf))
+}
+
+/// A stable 32-bit hash of a path, used only to keep two repositories that
+/// share a directory name apart. FNV-1a needs no dependency and answers the
+/// same on every platform and toolchain.
+fn stable_hash(s: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in s.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
 }
 
 fn canonical_dir_name(p: &Path) -> String {

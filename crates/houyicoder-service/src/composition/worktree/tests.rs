@@ -89,14 +89,27 @@ fn cleanup(main: &Path, wt: &Path) {
     drop(remove_dir_all(main.parent().expect("parent")));
 }
 
-/// A main repo's slug is its own dir name (the git common dir's parent).
+/// A slug names the repository and carries a short hash of its resolved root,
+/// so two repositories that share a directory name do not share one store.
+fn assert_slug_of(name: &str, slug: &str) {
+    let suffix = slug
+        .strip_prefix(&format!("{name}-"))
+        .unwrap_or_else(|| panic!("slug {slug} names {name}"));
+    assert_eq!(suffix.len(), 8, "slug {slug} carries eight hash digits");
+    assert!(
+        suffix.chars().all(|c| c.is_ascii_hexdigit()),
+        "slug {slug} carries a hex hash"
+    );
+}
+
+/// A main repo's slug is its own dir name plus the hash of its root.
 #[test]
 fn test_slug_matches_repo_name() {
     if !git_available() {
         return;
     }
     let repo = temp_git_repo("mainrepo");
-    assert_eq!(git_canonical_slug(&repo), "mainrepo");
+    assert_slug_of("mainrepo", &git_canonical_slug(&repo));
     drop(remove_dir_all(repo.parent().expect("parent")));
 }
 
@@ -119,7 +132,7 @@ fn test_linked_shares_slug() {
         git_canonical_slug(&wt),
         "worktree must share the main repo slug"
     );
-    assert_eq!(main_slug, "sharedmain");
+    assert_slug_of("sharedmain", &main_slug);
     cleanup(&main, &wt);
 }
 
@@ -162,9 +175,9 @@ fn test_slug_non_git_dir() {
     let dir = temp_dir().join(format!("houyi-slug-nogit-{}", id()));
     drop(remove_dir_all(&dir));
     create_dir_all(&dir).expect("mkdir non-git");
-    assert_eq!(
-        git_canonical_slug(&dir),
-        format!("houyi-slug-nogit-{}", id())
+    assert_slug_of(
+        &format!("houyi-slug-nogit-{}", id()),
+        &git_canonical_slug(&dir),
     );
     drop(remove_dir_all(&dir));
 }

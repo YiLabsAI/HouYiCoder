@@ -23,7 +23,13 @@ pub(super) fn memory_provider_for(
         .unwrap_or_else(|| ws.to_path_buf());
     let slug = worktree::git_canonical_slug(ws);
     let user_root = home.join(".houyicoder").join("memory");
-    let project_root = ws.join(".houyicoder").join("memory");
+    // The main worktree's directory, not the active one: a linked worktree
+    // otherwise reads an empty project scope while its siblings hold the
+    // records.
+    let project_root = worktree::git_common_root(ws)
+        .unwrap_or_else(|| ws.to_path_buf())
+        .join(".houyicoder")
+        .join("memory");
     let auto_root = home
         .join(".houyicoder")
         .join("projects")
