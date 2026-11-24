@@ -50,6 +50,7 @@ pub(crate) struct AssemblyParts {
     pub memory_index: Option<String>,
     pub announced_skills: Vec<SkillSnapshot>,
     pub discovered_skills: Vec<SkillSnapshot>,
+    pub mcp_instructions: Option<String>,
 }
 
 impl AssemblyParts {
@@ -60,6 +61,7 @@ impl AssemblyParts {
             memory_index: self.memory_index.as_deref(),
             announced_skills: &self.announced_skills,
             discovered_skills: &self.discovered_skills,
+            mcp_instructions: self.mcp_instructions.as_deref(),
         }
     }
 }
@@ -424,6 +426,7 @@ impl Runner {
             memory_index: self.format_memory_index(),
             announced_skills,
             discovered_skills,
+            mcp_instructions: self.tools.instructions(),
         }
     }
 

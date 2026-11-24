@@ -774,6 +774,7 @@ async fn test_break_names_prefix_half() {
                 memory_index: None,
                 announced_skills: &[],
                 discovered_skills: &[],
+                mcp_instructions: None,
             },
             false,
         );

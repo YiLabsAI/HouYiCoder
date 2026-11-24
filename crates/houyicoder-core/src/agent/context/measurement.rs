@@ -28,6 +28,7 @@ pub struct AssemblyInput<'a> {
     pub memory_index: Option<&'a str>,
     pub announced_skills: &'a [SkillSnapshot],
     pub discovered_skills: &'a [SkillSnapshot],
+    pub mcp_instructions: Option<&'a str>,
 }
 
 /// Measured section of the model context.

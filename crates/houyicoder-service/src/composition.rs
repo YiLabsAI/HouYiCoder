@@ -59,8 +59,8 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
 use houyicoder_config::trust::is_path_trusted;
 use houyicoder_config::{
-    ConfigWarning, ModelSelection, RunnerSettings, load_model_section_from,
-    resolve_model_selection_from, settings_path, settings_path_in,
+    ConfigWarning, ENV_HOUYICODER_MCP_SERVERS, ModelSelection, RunnerSettings,
+    load_model_section_from, resolve_model_selection_from, settings_path, settings_path_in,
 };
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
@@ -372,10 +372,12 @@ pub(crate) fn assemble(
         .workspace
         .as_deref()
         .is_none_or(|workspace| is_path_trusted(&settings_file, workspace));
+    let env_servers = var(ENV_HOUYICODER_MCP_SERVERS).ok();
     let mcp = mcp::start_servers(
         &settings_file,
         fences.workspace.as_deref(),
         workspace_trusted,
+        env_servers.as_deref(),
         runtime.as_ref(),
         Arc::clone(&gate_dyn),
         Arc::clone(&store) as Arc<dyn SessionLog>,

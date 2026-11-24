@@ -219,6 +219,47 @@ impl McpConnections {
         STDERR_TAIL_LINES
     }
 
+    /// Read the instructions exported by connected servers, sorted by server
+    /// name, joined as a single instructions block for the prompt. If allowed_servers
+    /// is supplied, only servers in that list are included. Each server's instructions
+    /// are safely truncated at character boundary to 4,096 characters.
+    pub async fn instructions_for(&self, allowed_servers: Option<&[String]>) -> Option<String> {
+        const MAX_MCP_INSTRUCTIONS_CHARS: usize = 4_096;
+        let slots = self.slots.read().await;
+        let mut sections = Vec::new();
+        for (name, slot) in slots.iter() {
+            if !matches!(slot.state, McpConnectionState::Connected) {
+                continue;
+            }
+            if let Some(allowed) = allowed_servers
+                && !allowed.iter().any(|a| a == name)
+            {
+                continue;
+            }
+            if let Some(instructions) = slot
+                .instructions
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                let trimmed = instructions.trim();
+                let bounded: String = if trimmed.chars().count() > MAX_MCP_INSTRUCTIONS_CHARS {
+                    trimmed.chars().take(MAX_MCP_INSTRUCTIONS_CHARS).collect()
+                } else {
+                    trimmed.to_string()
+                };
+                sections.push(format!("### Server `{name}` instructions:\n{bounded}"));
+            }
+        }
+        if sections.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "# MCP Server Instructions\n\n{}",
+                sections.join("\n\n")
+            ))
+        }
+    }
+
     /// Ask one server to reconnect now, whether it failed or the user wants a
     /// fresh handshake.
     pub async fn reconnect(&self, name: &str) {

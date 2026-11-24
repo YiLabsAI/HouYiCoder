@@ -30,6 +30,7 @@ fn assembly_input<'a>(
         memory_index,
         announced_skills: &[],
         discovered_skills: &[],
+        mcp_instructions: None,
     }
 }
 
@@ -545,6 +546,7 @@ fn test_skill_section_recomputed() {
         memory_index: None,
         announced_skills: &skills,
         discovered_skills: &skills,
+        mcp_instructions: None,
     };
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.measure(&events, None, None, &input);
@@ -628,6 +630,7 @@ fn test_skill_rows_cover_manual() {
         memory_index: None,
         announced_skills: &announced,
         discovered_skills: &discovered,
+        mcp_instructions: None,
     };
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.measure(&events, None, None, &input);
@@ -705,6 +708,7 @@ fn test_skill_section_follows_listing() {
         memory_index: None,
         announced_skills: &skills,
         discovered_skills: &skills,
+        mcp_instructions: None,
     };
     let tok = Tokenizer::new();
     let v = ContextBuilder::new()
@@ -1113,6 +1117,7 @@ fn test_skills_estimate_keeps_messages() {
         memory_index: None,
         announced_skills: &skills,
         discovered_skills: &skills,
+        mcp_instructions: None,
     };
     let b = ContextBuilder::new().with_cwd(scratch.clone());
     let v = b.measure(&events, None, None, &input);

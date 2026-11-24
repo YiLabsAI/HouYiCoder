@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
+use houyicoder_context::BlockHash;
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::ToolSource;
 use houyicoder_memory::InMemoryBackend;
@@ -299,8 +300,8 @@ async fn test_large_result_spills() {
         .expect("the call succeeds");
     assert_eq!(
         out.get(BLOCK_BYTES_KEY).and_then(Value::as_u64),
-        Some(6),
-        "the marker names the stored size, saw {out}"
+        Some(8),
+        "the marker names the stored JSON size, saw {out}"
     );
     let hash = out
         .get(BLOCK_REF_KEY)
@@ -313,6 +314,52 @@ async fn test_large_result_spills() {
         "the marker keeps the text when it fits the preview"
     );
     assert!(out.get(HINT_KEY).and_then(Value::as_str).is_some());
+    peer_task.abort();
+    drop(service.cancel());
+}
+
+/// The block holds the payload as JSON, so the engine's materialize path
+/// reads back exactly the value the server returned rather than a preview,
+/// and the marker's size is the stored length.
+#[tokio::test]
+async fn test_externalized_block_round_trips() {
+    let (service, peer_task) = connected().await;
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let log: Arc<dyn SessionLog> = store.clone();
+    let tool = McpTool::adapt(
+        "graph",
+        &read_only_probe(),
+        service.peer().clone(),
+        Duration::from_secs(5),
+        Some(log),
+    );
+    let ctx = ToolCtx::new("c1").with_session(SessionId::new());
+    let body = "x".repeat(PREVIEW_CHARS + 88);
+    let out = tool.externalize(&ctx, Value::String(body.clone())).await;
+    let hash = out
+        .get(BLOCK_REF_KEY)
+        .and_then(Value::as_str)
+        .expect("the block is named");
+    let bytes = store
+        .backend()
+        .block_get(&BlockHash(hash.to_string()))
+        .await
+        .expect("the block is readable");
+    assert_eq!(
+        out.get(BLOCK_BYTES_KEY).and_then(Value::as_u64),
+        Some(bytes.len() as u64),
+        "the marker reports the stored length"
+    );
+    assert_ne!(bytes.len(), PREVIEW_CHARS, "the block is not the preview");
+    let decoded: Value = serde_json::from_slice(&bytes).expect("the block is a JSON document");
+    assert_eq!(decoded, Value::String(body));
+    assert_eq!(
+        out.get(PREVIEW_KEY)
+            .and_then(Value::as_str)
+            .map(str::chars)
+            .map(Iterator::count),
+        Some(PREVIEW_CHARS)
+    );
     peer_task.abort();
     drop(service.cancel());
 }
@@ -336,7 +383,7 @@ async fn test_externalize_keeps_preview() {
         .execute(ctx, json!({}))
         .await
         .expect("the result survives even though it cannot be stored");
-    assert_eq!(out.get(BLOCK_BYTES_KEY).and_then(Value::as_u64), Some(6));
+    assert_eq!(out.get(BLOCK_BYTES_KEY).and_then(Value::as_u64), Some(8));
     assert_eq!(out.get(PREVIEW_KEY).and_then(Value::as_str), Some("answer"));
     assert!(
         out.get(BLOCK_REF_KEY).is_none(),

@@ -52,6 +52,38 @@ impl ToolSource for CannedSource {
     fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         (self.0.name() == name).then(|| Arc::clone(&self.0))
     }
+
+    fn instructions(&self) -> Option<String> {
+        Some("canned instructions".into())
+    }
+}
+
+#[test]
+fn test_tool_source_instructions_forwarded() {
+    struct DefaultSource;
+    impl ToolSource for DefaultSource {
+        fn tool_defs(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        fn get(&self, _name: &str) -> Option<Arc<dyn Tool>> {
+            None
+        }
+    }
+    let reg_default = ToolRegistry::new().with_source(Arc::new(DefaultSource));
+    assert!(reg_default.instructions().is_none());
+
+    let source: Arc<dyn ToolSource> =
+        Arc::new(CannedSource(Arc::new(StubTool::new("mcp__graph__test"))));
+    let parent = ToolRegistry::new().with_source(Arc::clone(&source));
+    assert_eq!(
+        parent.instructions().as_deref(),
+        Some("canned instructions")
+    );
+    let narrowed = parent.narrow(&["test".into()]);
+    assert_eq!(
+        narrowed.instructions().as_deref(),
+        Some("canned instructions")
+    );
 }
 
 /// What the parent registry learned also reaches a narrowed child: the
@@ -77,6 +109,29 @@ fn test_narrow_filters_source() {
     );
     let kept = parent.narrow(&[]);
     assert!(kept.get("mcp__graph__wipe").is_some());
+}
+
+/// A definition lists built-in leaf names, so a matching leaf withholds a
+/// server tool too; otherwise a child told not to write could write through
+/// a server.
+#[test]
+fn test_narrow_matches_leaf_name() {
+    let source: Arc<dyn ToolSource> =
+        Arc::new(CannedSource(Arc::new(StubTool::new("mcp__graph__write"))));
+    let parent = ToolRegistry::new().with_source(source);
+    let child = parent.narrow(&["write".into()]);
+    assert!(
+        child.get("mcp__graph__write").is_none(),
+        "a leaf restriction reaches the server tool"
+    );
+    assert!(
+        child
+            .tool_defs()
+            .iter()
+            .all(|def| def.name != "mcp__graph__write")
+    );
+    let unrelated = parent.narrow(&["edit".into()]);
+    assert!(unrelated.get("mcp__graph__write").is_some());
 }
 
 #[test]

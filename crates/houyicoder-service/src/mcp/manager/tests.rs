@@ -189,3 +189,71 @@ async fn test_stop_token_fires() {
     assert!(other.is_cancelled());
     assert!(manager.statuses().await.is_empty());
 }
+
+/// Instructions for connected servers are formatted in alphabetical order by
+/// server name, and safely truncated if longer than 4,096 chars.
+#[tokio::test]
+async fn test_instructions_ordering_and_cap() {
+    let manager = manager(Arc::new(NoSpawn));
+    let mut slots = manager.slots.write().await;
+    slots.insert(
+        "zeta".into(),
+        super::ServerSlot {
+            config: config("zeta", false),
+            state: McpConnectionState::Connected,
+            tools: Vec::new(),
+            instructions: Some("zeta instructions".into()),
+            server_version: None,
+            stderr: StderrTail::default(),
+            peer: None,
+            wake: None,
+        },
+    );
+    slots.insert(
+        "alpha".into(),
+        super::ServerSlot {
+            config: config("alpha", false),
+            state: McpConnectionState::Connected,
+            tools: Vec::new(),
+            instructions: Some("alpha instructions".into()),
+            server_version: None,
+            stderr: StderrTail::default(),
+            peer: None,
+            wake: None,
+        },
+    );
+    slots.insert(
+        "beta".into(),
+        super::ServerSlot {
+            config: config("beta", false),
+            state: McpConnectionState::Disabled {
+                reason: "disabled".into(),
+            },
+            tools: Vec::new(),
+            instructions: Some("beta instructions".into()),
+            server_version: None,
+            stderr: StderrTail::default(),
+            peer: None,
+            wake: None,
+        },
+    );
+    drop(slots);
+
+    let all_instructions = manager
+        .instructions_for(None)
+        .await
+        .expect("has instructions");
+    assert!(all_instructions.contains("alpha instructions"));
+    assert!(all_instructions.contains("zeta instructions"));
+    assert!(!all_instructions.contains("beta instructions"));
+    let alpha_pos = all_instructions.find("alpha").unwrap();
+    let zeta_pos = all_instructions.find("zeta").unwrap();
+    assert!(alpha_pos < zeta_pos, "alpha precedes zeta");
+
+    let filtered = manager
+        .instructions_for(Some(&["zeta".into()]))
+        .await
+        .expect("has filtered instructions");
+    assert!(!filtered.contains("alpha instructions"));
+    assert!(filtered.contains("zeta instructions"));
+}

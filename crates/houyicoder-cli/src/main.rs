@@ -330,10 +330,6 @@ fn production_runner(project: Option<String>, provider: ProviderResolution) -> B
     let mut options =
         BuildRunnerOptions::disk(project, Some(Arc::new(FileRuleStore::default_paths())));
     options.provider = Some(provider);
-    // Assembly runs on this plain thread, before the process runtime would
-    // otherwise be used, so the handle is named here rather than discovered
-    // from an ambient context that does not exist yet.
-    options.runtime = Some(shared_runtime().handle().clone());
     options
 }
 

@@ -213,13 +213,23 @@ impl McpTool {
     /// how to reach the rest, so every reader of a result marker finds the
     /// same keys whether it came from here or from the tool runner.
     ///
+    /// The block holds the payload as JSON, the encoding every other
+    /// producer uses, so the engine's materialize path can decode a stored
+    /// result back into the value the server returned. The marker's size is
+    /// the stored length, which the retention budget reads.
+    ///
     /// A store that cannot take the bytes must not cost the model the whole
     /// result: the marker then carries the preview and a hint naming the
     /// failure, the same rule the engine's own large-output externalizer
     /// follows.
-    async fn externalize(&self, ctx: &ToolCtx, text: String) -> Value {
-        let length = text.len();
-        let preview: String = text.chars().take(PREVIEW_CHARS).collect();
+    async fn externalize(&self, ctx: &ToolCtx, payload: Value) -> Value {
+        let rendered = match &payload {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        let preview: String = rendered.chars().take(PREVIEW_CHARS).collect();
+        let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| rendered.into_bytes());
+        let length = bytes.len();
         let Some((log, session)) = self.log.as_ref().zip(ctx.session_id) else {
             return result_marker(
                 None,
@@ -228,7 +238,7 @@ impl McpTool {
                 "the result exceeded the inline budget and no session store is bound to hold it; the preview is all that is available",
             );
         };
-        match log.backend().block_put(text.into_bytes()).await {
+        match log.backend().block_put(bytes).await {
             Ok(hash) => {
                 let hint = format!(
                     "the result exceeded the inline budget; its whole text is stored in block {} of session {}",
@@ -320,7 +330,16 @@ impl McpTool {
     async fn settle(&self, ctx: ToolCtx, result: CallToolResult) -> Result<Value, ToolError> {
         let text = text_of(&result);
         if result.is_error == Some(true) {
-            return Err(ToolError::Failed(text));
+            let detail = if text.is_empty() {
+                result
+                    .structured_content
+                    .as_ref()
+                    .map(Value::to_string)
+                    .unwrap_or_else(|| "the server reported an error without details".into())
+            } else {
+                text
+            };
+            return Err(ToolError::Failed(detail));
         }
         let payload = match (&result.structured_content, text.is_empty()) {
             (Some(structured), _) => structured.clone(),
@@ -338,7 +357,7 @@ impl McpTool {
             other => other.to_string(),
         };
         if exceeds_inline(&rendered, self.inline_budget) {
-            return Ok(self.externalize(&ctx, rendered).await);
+            return Ok(self.externalize(&ctx, payload).await);
         }
         Ok(payload)
     }
@@ -374,6 +393,7 @@ fn type_name(value: &Value) -> &'static str {
 #[derive(Default)]
 pub struct McpToolSource {
     tools: RwLock<BTreeMap<String, Arc<dyn Tool>>>,
+    instructions: RwLock<Option<String>>,
 }
 
 impl McpToolSource {
@@ -381,6 +401,13 @@ impl McpToolSource {
     pub fn replace(&self, tools: BTreeMap<String, Arc<dyn Tool>>) {
         if let Ok(mut current) = self.tools.write() {
             *current = tools;
+        }
+    }
+
+    /// Replace the instructions block from connected servers.
+    pub fn replace_instructions(&self, instructions: Option<String>) {
+        if let Ok(mut current) = self.instructions.write() {
+            *current = instructions;
         }
     }
 
@@ -415,6 +442,10 @@ impl ToolSource for McpToolSource {
             .read()
             .ok()
             .and_then(|tools| tools.get(name).cloned())
+    }
+
+    fn instructions(&self) -> Option<String> {
+        self.instructions.read().ok().and_then(|i| i.clone())
     }
 }
 
@@ -464,7 +495,9 @@ pub fn start_mirror(
                 let guarded = GuardedTool::new(Arc::new(adapter), Arc::clone(&gate));
                 adapters.insert(guarded.name().to_string(), Arc::new(guarded));
             }
+            let instructions = manager.instructions_for(None).await;
             source.replace(adapters);
+            source.replace_instructions(instructions);
             tokio::select! {
                 changed = changes.changed() => {
                     if changed.is_err() {

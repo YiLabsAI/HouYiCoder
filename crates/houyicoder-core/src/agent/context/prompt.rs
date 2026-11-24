@@ -76,7 +76,7 @@ impl SystemPrompt {
     /// context from the first AGENTS.md walking up from cwd) is appended
     /// after the boundary so a cache policy can carve the prefix.
     pub fn build(cwd: &Path) -> SystemPrompt {
-        Self::build_with_memory_index(cwd, None, None, &FrozenPrompt::read(cwd))
+        Self::build_with_mcp_instructions(cwd, None, None, None, &FrozenPrompt::read(cwd))
     }
 
     /// Build the system prompt from the session's frozen inputs. MemoryRuntime
@@ -87,6 +87,17 @@ impl SystemPrompt {
         cwd: &Path,
         index: Option<&str>,
         agent_directory: Option<&str>,
+        freeze: &FrozenPrompt,
+    ) -> SystemPrompt {
+        Self::build_with_mcp_instructions(cwd, index, agent_directory, None, freeze)
+    }
+
+    /// Build the system prompt including optional MCP server instructions.
+    pub fn build_with_mcp_instructions(
+        cwd: &Path,
+        index: Option<&str>,
+        agent_directory: Option<&str>,
+        mcp_instructions: Option<&str>,
         freeze: &FrozenPrompt,
     ) -> SystemPrompt {
         let _ = cwd;
@@ -131,6 +142,14 @@ impl SystemPrompt {
 
         text.push_str("\n\n");
         text.push_str(&tool_docs);
+
+        // MCP server instructions (session-stable, sorted by server name).
+        // Placed in the static prefix right before the dynamic boundary so
+        // tools guidance and server instructions cache together.
+        if let Some(instructions) = mcp_instructions.filter(|s| !s.trim().is_empty()) {
+            text.push_str("\n\n");
+            text.push_str(instructions.trim());
+        }
 
         // Boundary: everything above is byte-stable; from here the bytes can
         // change between sessions. Record the offset so a cache policy can

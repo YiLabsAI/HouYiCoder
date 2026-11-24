@@ -37,6 +37,25 @@ fn test_no_memory_file_identity() {
 }
 
 #[test]
+fn test_mcp_instructions_prefix() {
+    let dir = scratch_dir("mcp-inst");
+    let mcp = "### Server `codegraph` instructions:\nExplore the code graph.";
+    let p = SystemPrompt::build_with_mcp_instructions(
+        &dir,
+        None,
+        None,
+        Some(mcp),
+        &FrozenPrompt::read(&dir),
+    );
+    assert!(p.text.contains("Explore the code graph."));
+    let mcp_idx = p.text.find("Explore the code graph.").unwrap();
+    assert!(
+        mcp_idx < p.dynamic_boundary,
+        "MCP instructions must be part of the static prefix"
+    );
+}
+
+#[test]
 fn test_agent_directory_injected() {
     let dir = scratch_dir("empty");
     let section = "## Available agents\n\n- explore: fast search";

@@ -65,7 +65,11 @@ pub(crate) fn build_bundle(
     model_override: Option<String>,
     provider: ProviderResolution,
 ) -> AssembledSession {
-    let bundle = build_runner(crate::production_runner(project, provider));
+    let mut options = crate::production_runner(project, provider);
+    // Assembly runs on this plain thread, before the process runtime would
+    // otherwise be used, so the tool servers get its handle here.
+    options.runtime = Some(shared_runtime().handle().clone());
+    let bundle = build_runner(options);
     // --model overrides the settings-seeded active model for a fresh session
     // (resolution chain: --model flag > settings.json > DEFAULT). A resumed
     // session restores its own model from the descriptor (higher priority), so

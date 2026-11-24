@@ -33,6 +33,10 @@ pub trait ToolSource: Send + Sync {
     fn tool_defs(&self) -> Vec<ToolDef>;
     /// Resolve one tool by its registered name.
     fn get(&self, name: &str) -> Option<Arc<dyn Tool>>;
+    /// Instructions for the model's system prompt from connected servers, if any.
+    fn instructions(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A source with a set of names withheld, so a child agent's registry cannot
@@ -44,11 +48,17 @@ struct FilteredSource {
 }
 
 impl FilteredSource {
+    /// A restriction matches the registered name or its leaf, so a
+    /// definition that lists a built-in name (write, edit) also withholds a
+    /// server tool that carries the same leaf. Otherwise the authored
+    /// restriction would hold for built-ins only, and a child told not to
+    /// write could still write through a server.
     fn allows(&self, name: &str) -> bool {
+        let leaf = name.rsplit("__").next().unwrap_or(name);
         !self
             .disallowed
             .iter()
-            .any(|entry| entry.eq_ignore_ascii_case(name))
+            .any(|entry| entry.eq_ignore_ascii_case(name) || entry.eq_ignore_ascii_case(leaf))
     }
 }
 
@@ -67,6 +77,10 @@ impl ToolSource for FilteredSource {
         } else {
             None
         }
+    }
+
+    fn instructions(&self) -> Option<String> {
+        self.inner.instructions()
     }
 }
 
@@ -178,6 +192,11 @@ impl ToolRegistry {
     /// its live source offers.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Instructions for the model's system prompt from connected servers, if any.
+    pub fn instructions(&self) -> Option<String> {
+        self.source.as_ref().and_then(|s| s.instructions())
     }
 }
 

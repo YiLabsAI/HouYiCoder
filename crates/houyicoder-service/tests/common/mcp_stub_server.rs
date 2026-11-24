@@ -28,6 +28,8 @@ pub enum Behavior {
     CloseNow,
     /// Stay connected and answer listings.
     Calm,
+    /// Accept a call and never answer it, so a test can cut it short.
+    HangCall,
 }
 
 /// What the manager launched and what the servers were asked for.
@@ -161,15 +163,19 @@ fn serve_fake(
             }
             "tools/call" => {
                 counters.tool_calls.fetch_add(1, Ordering::SeqCst);
-                let text = call_text
-                    .lock()
-                    .map(|text| text.clone())
-                    .unwrap_or_default();
-                Some(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {"content": [{"type": "text", "text": text}]}
-                }))
+                if behavior == Behavior::HangCall {
+                    None
+                } else {
+                    let text = call_text
+                        .lock()
+                        .map(|text| text.clone())
+                        .unwrap_or_default();
+                    Some(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"content": [{"type": "text", "text": text}]}
+                    }))
+                }
             }
             "notifications/initialized" => {
                 match behavior {
@@ -188,7 +194,7 @@ fn serve_fake(
                         }
                     }
                     Behavior::CloseNow => return,
-                    Behavior::Calm => {}
+                    Behavior::Calm | Behavior::HangCall => {}
                 }
                 None
             }

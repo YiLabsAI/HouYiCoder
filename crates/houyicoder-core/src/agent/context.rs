@@ -322,10 +322,11 @@ impl ContextBuilder {
             .ok()
             .and_then(|defs| agent_directory_section(&defs));
         let freeze = self.frozen_prompt(&cwd);
-        let prompt = SystemPrompt::build_with_memory_index(
+        let prompt = SystemPrompt::build_with_mcp_instructions(
             &cwd,
             input.memory_index,
             agent_directory.as_deref(),
+            input.mcp_instructions,
             &freeze,
         );
         let prompt_tokens = self.tokenizer.count(&prompt.text);

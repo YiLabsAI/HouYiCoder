@@ -123,7 +123,8 @@ pub fn parse_project_servers(workspace: &Path) -> Vec<ScopedMcpServerConfig> {
 }
 
 /// Parse the env spelling: a JSON array of objects, each naming its own
-/// server under a name field.
+/// server under a name field, or under the file stem of the program it
+/// names when the older spelling leaves the name out.
 pub fn parse_env_servers(raw: Option<&str>) -> Vec<ScopedMcpServerConfig> {
     let Some(body) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
         return Vec::new();

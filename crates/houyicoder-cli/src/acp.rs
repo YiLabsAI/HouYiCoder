@@ -38,6 +38,7 @@ use houyicoder_service::lifecycle::SessionLeaseStore;
 use houyicoder_service::mcp::McpConnections;
 use houyicoder_service::turn_events::TurnEvents;
 use tokio::runtime::Builder;
+use tokio::runtime::Handle;
 
 use crate::production_runner;
 use crate::session::housekeeping::fire_after_bundle;
@@ -151,7 +152,11 @@ fn build_acp_session(
     model_override: Option<&str>,
 ) -> Result<AcpSessionParts, Box<dyn Error>> {
     let provider = resolve_provider(workspace.as_deref());
-    let mut bundle = build_runner(production_runner(workspace, provider));
+    let mut options = production_runner(workspace, provider);
+    // This entry assembles inside its own runtime's block_on, so the tool
+    // servers start on that runtime rather than on a second pool.
+    options.runtime = Handle::try_current().ok();
+    let mut bundle = build_runner(options);
     if let Some(model) = model_override {
         bundle.runner.set_model(model.to_string());
     }

@@ -299,20 +299,34 @@ async fn test_reconnect_swaps_tools() {
 }
 
 /// A stop during an in-flight call ends the wait instead of hanging the
-/// turn: the service cancel is bounded by its timeout.
+/// turn: the call resolves with an error once the manager shuts down.
 #[tokio::test]
 async fn test_shutdown_bounded() {
-    let (manager, _counters) = manager_with(Vec::new(), fast_timings());
-    manager.start_all(vec![config("calm", false)]).await;
+    let (manager, counters) = manager_with(vec![Behavior::HangCall], fast_timings());
+    let source = Arc::new(McpToolSource::default());
+    manager.start_all(vec![config("slow", false)]).await;
+    let _mirror = start_mirror(manager.clone(), Arc::clone(&source), auto_gate(), None);
     assert!(
-        status_is(&manager, |state| matches!(
-            state,
-            McpConnectionState::Connected
-        ))
-        .await,
-        "the server connects"
+        eventually(|| source.names().len() == 2).await,
+        "the server connects and its tools appear"
+    );
+    let probe = source
+        .get("mcp__slow__probe")
+        .expect("the read tool is exposed");
+    let call = tokio::spawn(async move { probe.execute(ToolCtx::new("c1"), json!({})).await });
+    assert!(
+        eventually(|| counters.tool_calls.load(Ordering::SeqCst) == 1).await,
+        "the request reached the server and is waiting for an answer"
     );
     timeout(Duration::from_secs(5), manager.shutdown())
         .await
         .expect("shutdown returns inside its budget");
+    let outcome = timeout(Duration::from_secs(5), call)
+        .await
+        .expect("the in-flight call resolves once the manager stops")
+        .expect("the call task does not panic");
+    assert!(
+        outcome.is_err(),
+        "a call cut short by shutdown reports an error, saw {outcome:?}"
+    );
 }

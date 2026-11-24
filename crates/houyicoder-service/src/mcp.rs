@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use houyicoder_api::launcher::StdProcessLauncher;
 use houyicoder_api::session::SessionLog;
-use houyicoder_config::{ENV_HOUYICODER_MCP_SERVERS, resolve_scoped_mcp_servers};
+use houyicoder_config::resolve_scoped_mcp_servers;
 use houyicoder_permission::ModeGate;
 use houyicoder_platform::tls::install_tls_provider;
 use houyicoder_protocol::mcp::ScopedMcpServerConfig;
@@ -35,11 +35,11 @@ pub struct McpRuntime {
 }
 
 /// Start the configured servers for one session and return the tools the
-/// registry reads. The caller supplies the runtime the supervisors run on:
-/// assembly often happens on a plain thread before the process runtime is
-/// first used, so an ambient handle cannot be assumed. None when no runtime is
-/// supplied; configured servers are then named in a diagnostic rather than
-/// dropped in silence.
+/// registry reads. The caller supplies the runtime the supervisors run on
+/// and the env spelling of the server list, so assembly often happens on a
+/// plain thread and no ambient handle or process variable is assumed. None
+/// when no runtime is supplied; configured servers are then named in a
+/// diagnostic rather than dropped in silence.
 ///
 /// This is the one place the settings, the environment, and the workspace's
 /// trust answer meet: the resolver merges the scopes, disables an untrusted
@@ -49,19 +49,15 @@ pub fn start_servers(
     settings_path: &Path,
     workspace: Option<&Path>,
     trusted: bool,
+    env_raw: Option<&str>,
     handle: Option<&Handle>,
     gate: Arc<dyn ModeGate>,
     log: Arc<dyn SessionLog>,
 ) -> Option<McpRuntime> {
-    let env_raw = env::var(ENV_HOUYICODER_MCP_SERVERS).ok();
+    // A value a server entry references through ${VAR} is read here rather
+    // than at the entry: the expansion contract names the process env.
     let lookup = |name: &str| env::var(name).ok();
-    let servers = resolve_scoped_mcp_servers(
-        settings_path,
-        workspace,
-        env_raw.as_deref(),
-        trusted,
-        &lookup,
-    );
+    let servers = resolve_scoped_mcp_servers(settings_path, workspace, env_raw, trusted, &lookup);
     let Some(handle) = handle else {
         if !servers.is_empty() {
             tracing::warn!(
