@@ -252,7 +252,7 @@ pub fn format_reward(snap: &RewardSnapshot) -> String {
     }
     format!(
         "{data}\nAct on these in Phase 2: for each recurring failure pattern, call \
-         save_memory with a lesson_ key capturing what to check or do \
+         memory_write with a lesson_ key capturing what to check or do \
          differently so the next session avoids it; for each redundant-call \
          pattern, capture the context-loss cause. A lesson with no actionable \
          difference from the existing index is not worth saving — skip it.\n",

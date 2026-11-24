@@ -51,30 +51,22 @@ impl Default for KeywordRecallProvider {
 }
 
 impl MemoryProvider for KeywordRecallProvider {
-    fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
+    fn rank_candidates(&self, query: &str, injected_keys: &HashSet<String>) -> Vec<MemoryRankHit> {
         let keywords = tokenize(query);
-        // Mirrors the markdown provider: no word content ranks nothing, but
-        // a query the tokenizer cannot split still offers its rows to the
-        // semantic stage at score zero.
         if keywords.is_empty() && !has_word_content(query) {
             return Vec::new();
         }
         let entries = self.entries.lock().expect("entries mutex poisoned");
-        // Score each entry by the number of distinct query keywords it
-        // contains; skip entries already in surfaced (the caller-built
-        // de-dup set, scanned from the assembled view). Track insertion
-        // index for a recency tie-break (higher = newer). Zero-score rows
-        // stay in the list as the semantic stage's candidate input.
         let mut scored: Vec<(u32, usize, MemoryRankHit)> = entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| !surfaced.contains(&e.key))
+            .filter(|(_, e)| !injected_keys.contains(&e.key))
             .map(|(idx, e)| {
                 let hits = hit_count(&e.content, &keywords);
                 let hit = MemoryRankHit::new(
                     e.key.clone(),
                     e.description.clone(),
-                    e.source,
+                    e.memory_type,
                     MemoryScope::Auto,
                     e.mtime_secs,
                     hits,

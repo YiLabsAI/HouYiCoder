@@ -1,20 +1,29 @@
-//! Tests for this module.
+//! Unit tests for MemoryDeleteTool (explicit scope and pinned scope).
 
 use super::*;
 use houyicoder_context::MemoryEntry;
 use std::sync::Mutex;
 
-/// A recording provider that records deletes so the test asserts the
-/// structured call reached delete_memory with the right key.
 struct RecordingMemory {
-    deleted: Mutex<Vec<String>>,
+    deleted: Mutex<Vec<(String, MemoryScope)>>,
 }
+
 impl MemoryProvider for RecordingMemory {
     fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
         Ok(())
     }
     fn delete_memory(&self, key: &str) -> Result<(), MemoryError> {
-        self.deleted.lock().expect("deleted").push(key.to_string());
+        self.deleted
+            .lock()
+            .expect("deleted")
+            .push((key.to_string(), MemoryScope::Auto));
+        Ok(())
+    }
+    fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        self.deleted
+            .lock()
+            .expect("deleted")
+            .push((key.to_string(), scope));
         Ok(())
     }
 }
@@ -25,124 +34,64 @@ fn provider() -> Arc<RecordingMemory> {
     })
 }
 
-async fn run(tool: &DeleteMemoryTool, input: Value) -> Result<Value, ToolError> {
+async fn run(tool: &MemoryDeleteTool, input: Value) -> Result<Value, ToolError> {
     tool.execute(ToolCtx::new("test"), input).await
 }
 
 #[tokio::test]
-async fn test_memory_routes_through_provider() {
+async fn test_delete_requires_explicit_scope() {
     let p = provider();
-    let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-    let out = run(&tool, json!({"key": "stale-thing"}))
+    let tool = MemoryDeleteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    assert_eq!(tool.name(), "memory_delete");
+    let missing_scope = run(&tool, json!({"key": "stale-thing"})).await;
+    assert!(missing_scope.is_err(), "unpinned delete requires scope");
+
+    let out = run(&tool, json!({"key": "stale-thing", "scope": "project"}))
         .await
-        .expect("delete succeeds");
-    assert_eq!(out, json!({"deleted": "stale-thing"}));
+        .expect("scoped delete succeeds");
+    assert_eq!(out, json!({"deleted": "stale-thing", "scope": "project"}));
     assert_eq!(
-        p.deleted.lock().expect("deleted").len(),
-        1,
-        "exactly one delete landed"
+        *p.deleted.lock().expect("deleted"),
+        vec![("stale-thing".to_string(), MemoryScope::Project)]
     );
-    assert_eq!(p.deleted.lock().expect("deleted")[0], "stale-thing");
 }
 
-/// A threaded recorder bumps once per successful delete so the dream can
-/// fire one memory-saved notice per pass. A NotFound does not bump it.
 #[tokio::test]
-async fn test_delete_memory_counts_deletes() {
+async fn test_pinned_delete_counts_deletes() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
-        .with_recorder(recorder.clone());
+    let tool =
+        MemoryDeleteTool::new_pinned(Arc::clone(&p) as Arc<dyn MemoryProvider>, MemoryScope::Auto)
+            .with_recorder(recorder.clone());
     run(&tool, json!({"key": "a"})).await.expect("delete a");
     run(&tool, json!({"key": "b"})).await.expect("delete b");
     let changes = recorder.take();
     assert_eq!(changes.len(), 2);
-    assert_eq!(
-        changes[0].scope,
-        MemoryScope::Auto,
-        "the unscoped delete form removes from the auto root"
-    );
+    assert_eq!(changes[0].scope, MemoryScope::Auto);
 }
 
-/// A NotFound does not bump the recorder (no memory was touched).
 #[tokio::test]
-async fn test_memory_skips_missing_count() {
+async fn test_delete_missing_errors() {
     struct EmptyMemory;
     impl MemoryProvider for EmptyMemory {
         fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
-        }
-        fn delete_memory(&self, _key: &str) -> Result<(), MemoryError> {
-            Err(MemoryError::NotFound)
         }
     }
     let recorder = Arc::new(MutationLog::new());
-    let tool = DeleteMemoryTool::new(Arc::new(EmptyMemory) as Arc<dyn MemoryProvider>)
+    let tool = MemoryDeleteTool::new(Arc::new(EmptyMemory) as Arc<dyn MemoryProvider>)
         .with_recorder(recorder.clone());
-    let _err = run(&tool, json!({"key": "absent"})).await;
-    assert!(recorder.take().is_empty());
-}
-
-#[tokio::test]
-async fn test_memory_surfaces_not_found() {
-    struct EmptyMemory;
-    impl MemoryProvider for EmptyMemory {
-        fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
-            Ok(())
-        }
-        fn delete_memory(&self, _key: &str) -> Result<(), MemoryError> {
-            Err(MemoryError::NotFound)
-        }
-    }
-    let tool = DeleteMemoryTool::new(Arc::new(EmptyMemory) as Arc<dyn MemoryProvider>);
-    let err = run(&tool, json!({"key": "absent"}))
+    assert!(!tool.is_read_only());
+    assert!(tool.is_destructive());
+    assert!(!tool.requires_approval());
+    let props = tool.input_schema()["properties"]
+        .as_object()
+        .expect("props")
+        .clone();
+    assert_eq!(props.len(), 2);
+    let err = run(&tool, json!({"key": "absent", "scope": "auto"}))
         .await
         .expect_err("not found errors");
-    assert!(
-        err.to_string().contains("no memory with key 'absent'"),
-        "error names the missing key: {err}"
-    );
-}
-
-#[tokio::test]
-async fn test_memory_rejects_missing_field() {
-    let p = provider();
-    let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-    let err = run(&tool, json!({}))
-        .await
-        .expect_err("missing key rejected");
-    assert!(
-        err.to_string().contains("'key'"),
-        "error names the missing field: {err}"
-    );
-    assert!(
-        p.deleted.lock().expect("deleted").is_empty(),
-        "no delete landed on a rejected call"
-    );
-}
-
-/// The structured capability surface: no path field, exactly one field.
-#[test]
-fn test_memory_schema_pins_fields() {
-    let p = provider();
-    let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-    let schema = tool.input_schema();
-    let props = schema
-        .get("properties")
-        .and_then(|v| v.as_object())
-        .expect("properties object");
-    assert!(
-        !props.contains_key("path"),
-        "no path field — the provider owns paths"
-    );
-    assert_eq!(props.len(), 1, "exactly one field (key)");
-}
-
-#[test]
-fn test_memory_destructive_auto_approves() {
-    let p = provider();
-    let tool = DeleteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-    assert!(!tool.is_read_only(), "a delete mutates the store");
-    assert!(tool.is_destructive(), "destructive");
-    assert!(!tool.requires_approval(), "auto-approve");
+    assert!(err.to_string().contains("no memory with key 'absent'"));
+    assert!(recorder.take().is_empty());
 }

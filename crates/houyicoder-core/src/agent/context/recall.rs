@@ -31,14 +31,14 @@ pub(crate) fn render_recall_text(entries: &[MemoryEntry]) -> String {
         let header = if entry.description.is_empty() {
             format!(
                 "- [{}] {} ({})\n",
-                entry.source.as_label(),
+                entry.memory_type.as_label(),
                 entry.key,
                 age_label
             )
         } else {
             format!(
                 "- [{}] {} ({}): {}\n",
-                entry.source.as_label(),
+                entry.memory_type.as_label(),
                 entry.key,
                 age_label,
                 entry.description

@@ -6,7 +6,7 @@ use houyicoder_api::memory::RerankOutcome;
 use houyicoder_async::PFut;
 use houyicoder_context::{CheckpointId, CheckpointManifest, TurnGroup};
 use houyicoder_context::{
-    Disposition, EventId, MemoryEntry, MemoryError, MemoryScope, MemorySource, SessionId,
+    Disposition, EventId, MemoryEntry, MemoryError, MemoryScope, MemoryType, SessionId,
 };
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
@@ -224,7 +224,7 @@ fn hit(key: &str, score: u32) -> MemoryRankHit {
     MemoryRankHit::new(
         key,
         format!("{key} description"),
-        MemorySource::Project,
+        MemoryType::Project,
         MemoryScope::Auto,
         0,
         score,
@@ -232,7 +232,7 @@ fn hit(key: &str, score: u32) -> MemoryRankHit {
 }
 
 fn body(key: &str) -> MemoryEntry {
-    MemoryEntry::new(key, format!("{key} body text"), MemorySource::Project)
+    MemoryEntry::new(key, format!("{key} body text"), MemoryType::Project)
 }
 
 /// A session with one user query already logged, plus a fresh store.
@@ -268,7 +268,7 @@ async fn test_cjk_query_reaches_recall() {
             MemoryEntry::new(
                 String::from("\u{90E8}\u{7F72}"),
                 String::from("body"),
-                MemorySource::Feedback,
+                MemoryType::Feedback,
             )
             .with_meta("desc", 0),
         ],

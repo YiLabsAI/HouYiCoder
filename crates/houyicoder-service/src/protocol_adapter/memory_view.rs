@@ -26,7 +26,7 @@ fn map_summaries(summaries: Vec<MemorySummary>, archived: bool) -> Vec<MemorySum
         .map(|s| MemorySummaryEntry {
             key: s.key,
             description: s.description,
-            source: s.source.as_label().to_string(),
+            source: s.memory_type.as_label().to_string(),
             scope: s.scope.as_label().to_string(),
             mtime_secs: s.mtime_secs,
             archived,
@@ -40,7 +40,7 @@ pub(crate) fn map_memory_entry(entry: Option<MemoryEntry>) -> Option<MemoryDetai
     entry.map(|e| MemoryDetail {
         key: e.key,
         content: e.content,
-        source: e.source.as_label().to_string(),
+        source: e.memory_type.as_label().to_string(),
         description: e.description,
         mtime_secs: e.mtime_secs,
     })

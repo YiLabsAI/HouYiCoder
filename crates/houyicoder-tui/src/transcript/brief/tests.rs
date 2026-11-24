@@ -92,6 +92,42 @@ fn test_memory_scope_flow_labels() {
     // a misleading label — it falls back to None so the caller keeps the
     // raw body.
     assert_eq!(
+        result_summary(
+            "memory_write",
+            &serde_json::json!({"saved": "rule-w", "outcome": "created"})
+        )
+        .as_deref(),
+        Some("created rule-w")
+    );
+    assert_eq!(
+        result_summary("memory_archive", &serde_json::json!({"archived": "rule-a"})).as_deref(),
+        Some("archived rule-a")
+    );
+    assert_eq!(
+        result_summary("memory_delete", &serde_json::json!({"deleted": "rule-d"})).as_deref(),
+        Some("deleted rule-d")
+    );
+    assert_eq!(
+        result_summary("memory_promote", &serde_json::json!({"promoted": "rule-x"})).as_deref(),
+        Some("promoted rule-x")
+    );
+    assert_eq!(
+        result_summary("memory_demote", &serde_json::json!({"demoted": "rule-y"})).as_deref(),
+        Some("demoted rule-y")
+    );
+    assert_eq!(
+        result_summary(
+            "memory_read",
+            &serde_json::json!({"key": "rule-z", "content": "body..."})
+        )
+        .as_deref(),
+        Some("showed rule-z")
+    );
+    assert_eq!(
+        result_summary("memory_search", &serde_json::json!({"matches": [1]})).as_deref(),
+        Some("found 1")
+    );
+    assert_eq!(
         result_summary("promote_memory", &serde_json::json!({"promoted": "rule-x"})).as_deref(),
         Some("promoted rule-x")
     );

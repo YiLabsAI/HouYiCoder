@@ -1,11 +1,4 @@
-//! The structured memory-search tool the main agent calls to find a stored
-//! memory from a description of what it is about. The query goes through the
-//! same rank the turn's recall uses, minus the surfaced filter; the provider
-//! owns the scan and the rank. A weak lexical signal awaits the semantic
-//! selection inline — an explicit search is the agent's own tool call, not
-//! the first-token path, so waiting is affordable and the answer is better.
-//!
-//! Read-only by construction, so the approval gate stays off.
+//! Structured memory-search tool used to find stored memories by topic.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -19,16 +12,14 @@ use serde_json::{Map, Value, json};
 use super::{Tool, ToolCtx, ToolError};
 use crate::agent::memory::selector::{RECALL_SELECT_CAP, classify, run_semantic_selection};
 
-/// A structured memory search. The agent calls it when the memory index lists
-/// a candidate whose one-line description is not enough to judge.
-pub struct SearchMemoryTool {
+/// Structured memory search tool.
+pub struct MemorySearchTool {
     provider: Arc<dyn MemoryProvider>,
     reranker: Option<Arc<dyn MemoryReranker>>,
 }
 
-impl SearchMemoryTool {
-    /// Construct with a shared provider handle. The provider is shared with
-    /// the runner memory, so a search reads the same store recall reads.
+impl MemorySearchTool {
+    /// Construct with a shared provider handle.
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self {
             provider,
@@ -36,23 +27,22 @@ impl SearchMemoryTool {
         }
     }
 
-    /// Install the semantic selection stage. Without it a weak lexical
-    /// signal answers with the matching rows only.
+    /// Install the semantic selection stage.
     pub fn with_reranker(mut self, reranker: Option<Arc<dyn MemoryReranker>>) -> Self {
         self.reranker = reranker;
         self
     }
 }
 
-impl Tool for SearchMemoryTool {
+impl Tool for MemorySearchTool {
     fn name(&self) -> &str {
-        "search_memory"
+        "memory_search"
     }
     fn description(&self) -> &str {
         "Search stored memories for ones about a topic. Returns the matching \
-         keys with their description, source, scope, and age. Use it when the \
+         keys with their description, type, scope, and age. Use it when the \
          memory index shows a candidate you cannot judge from its description, \
-         then read one body in full with show_memory."
+         then read one body in full with memory_read."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -78,12 +68,9 @@ impl Tool for SearchMemoryTool {
                 .filter(|q| !q.is_empty())
                 .ok_or_else(|| {
                     ToolError::InvalidInput(
-                        "search_memory: 'query' must be a non-empty string".to_string(),
+                        "memory_search: 'query' must be a non-empty string".to_string(),
                     )
                 })?;
-            // A search looks for a memory the agent may already hold in
-            // context, so the surfaced filter the turn's recall applies is
-            // left off here.
             let scored = provider.rank_candidates(query, &HashSet::new());
             if scored.is_empty() {
                 return Ok(json!({ "matches": [] }));
@@ -143,7 +130,7 @@ fn match_object(hit: &MemoryRankHit, now_secs: u64) -> Value {
     let mut row = Map::new();
     row.insert("key".to_string(), json!(hit.key));
     row.insert("description".to_string(), json!(hit.description));
-    row.insert("source".to_string(), json!(hit.source.as_label()));
+    row.insert("type".to_string(), json!(hit.memory_type.as_label()));
     row.insert("scope".to_string(), json!(hit.scope.as_label()));
     row.insert(
         "age".to_string(),

@@ -95,9 +95,9 @@ fn build_input(query: &str, candidates: &[MemoryRankHit]) -> String {
     for c in candidates {
         let age = memory_age_label(memory_age_days(c.mtime_secs, now));
         out.push_str(&format!(
-            "- {} | source {} | scope {} | {} | {}\n",
+            "- {} | type {} | scope {} | {} | {}\n",
             c.key,
-            c.source.as_label(),
+            c.memory_type.as_label(),
             c.scope.as_label(),
             age,
             c.description

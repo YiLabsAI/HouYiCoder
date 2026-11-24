@@ -118,6 +118,13 @@ fn is_foldable(tool_name: &str) -> bool {
             | "glob"
             | "read"
             | "WebFetch"
+            | "memory_write"
+            | "memory_read"
+            | "memory_search"
+            | "memory_delete"
+            | "memory_archive"
+            | "memory_promote"
+            | "memory_demote"
             | "save_memory"
             | "delete_memory"
             | "show_memory"
@@ -161,9 +168,9 @@ pub(crate) fn accumulate(stats: &mut ToolStats, tool: &str, input: &Value) {
         "glob" => stats.list += 1,
         "edit" | "multiedit" => stats.edit += 1,
         "write" => stats.write += 1,
-        "save_memory" => stats.mem_write += 1,
-        "delete_memory" => stats.mem_delete += 1,
-        "show_memory" | "search_memory" => stats.mem_read += 1,
+        "memory_write" | "memory_promote" | "memory_demote" | "save_memory" => stats.mem_write += 1,
+        "memory_delete" | "memory_archive" | "delete_memory" => stats.mem_delete += 1,
+        "memory_read" | "memory_search" | "show_memory" | "search_memory" => stats.mem_read += 1,
         "todo_write" => stats.todo += 1,
         _ => stats.other += 1,
     }
@@ -195,9 +202,9 @@ pub(crate) fn accumulate_brief(stats: &mut ToolStats, tool: &str, invocation: &s
         "edit" | "multiedit" => stats.edit += 1,
         "write" => stats.write += 1,
         "WebFetch" => stats.search += 1,
-        "save_memory" => stats.mem_write += 1,
-        "delete_memory" => stats.mem_delete += 1,
-        "show_memory" | "search_memory" => stats.mem_read += 1,
+        "memory_write" | "memory_promote" | "memory_demote" | "save_memory" => stats.mem_write += 1,
+        "memory_delete" | "memory_archive" | "delete_memory" => stats.mem_delete += 1,
+        "memory_read" | "memory_search" | "show_memory" | "search_memory" => stats.mem_read += 1,
         "todo_write" => stats.todo += 1,
         _ => stats.other += 1,
     }

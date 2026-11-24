@@ -5,14 +5,14 @@ use std::sync::Mutex;
 use super::*;
 use futures::stream::iter;
 use houyicoder_async::PStream;
-use houyicoder_context::{MemoryScope, MemorySource};
+use houyicoder_context::{MemoryScope, MemoryType};
 use houyicoder_protocol::llm::{LlmEvent, ModelCapabilities, ProviderError, Usage};
 
 fn hit(key: &str) -> MemoryRankHit {
     MemoryRankHit::new(
         key,
         format!("{key} description"),
-        MemorySource::Feedback,
+        MemoryType::Feedback,
         MemoryScope::Auto,
         0,
         0,
@@ -174,7 +174,7 @@ fn test_input_names_every_column() {
     let input = build_input("deploy question", &candidates());
     assert!(input.contains("Query: deploy question"));
     assert!(input.contains("deploy-gate"), "{input}");
-    assert!(input.contains("source feedback"), "{input}");
+    assert!(input.contains("type feedback"), "{input}");
     assert!(input.contains("scope auto"), "{input}");
     assert!(input.contains("deploy-gate description"), "{input}");
 }

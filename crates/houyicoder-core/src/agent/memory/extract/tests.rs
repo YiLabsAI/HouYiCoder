@@ -3,7 +3,7 @@
 use super::*;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{EventId, MemoryEntry, MemorySource, SessionEvent, SessionLogEntry};
+use houyicoder_context::{EventId, MemoryEntry, MemoryType, SessionEvent, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
@@ -87,11 +87,11 @@ fn scripted_response(n: usize) -> CompletionResponse {
                 },
                 OutputItem::ToolCall {
                     id: "save1".into(),
-                    name: "save_memory".into(),
+                    name: "memory_write".into(),
                     input: serde_json::json!({
                         "key": "user-prefers-terse",
                         "description": "User prefers terse responses",
-                        "source": "feedback",
+                        "type": "feedback",
                         "content": "Keep responses terse.\n**Why:** the user said long intros waste their time.\n**How to apply:** drop preamble, lead with the answer.",
                         "evidence": [{"quote": "the long intros waste my time"}]
                     }),
@@ -190,7 +190,7 @@ async fn test_forked_extract_writes_memory() {
     let written = memory.written_entries();
     assert_eq!(written.len(), 1, "exactly one memory must be written");
     assert_eq!(written[0].key, "user-prefers-terse");
-    assert_eq!(written[0].source, MemorySource::Feedback);
+    assert_eq!(written[0].memory_type, MemoryType::Feedback);
     assert!(
         written[0].content.contains("Keep responses terse"),
         "body content landed"
@@ -205,7 +205,7 @@ async fn test_forked_extract_writes_memory() {
         "prefix conversation reached the forked agent: {first}"
     );
     assert!(
-        first.contains("save_memory"),
+        first.contains("memory_write"),
         "extraction tool doc reached the forked agent"
     );
 
@@ -274,7 +274,15 @@ fn test_install_memory_registers_tool() {
         RunnerConfig::default(),
     )
     .install_memory(runtime);
-    for tool in ["save_memory", "search_memory", "show_memory"] {
+    for tool in [
+        "memory_write",
+        "memory_search",
+        "memory_read",
+        "memory_delete",
+        "memory_archive",
+        "memory_promote",
+        "memory_demote",
+    ] {
         assert!(
             runner.tools().get(tool).is_some(),
             "install_memory must register {tool}"
@@ -282,12 +290,10 @@ fn test_install_memory_registers_tool() {
     }
     assert!(
         memory.written_entries().is_empty(),
-        "no write until the agent emits a save_memory call"
+        "no write until the agent emits a memory_write call"
     );
 }
 
-/// The forked extraction runner's save_memory tool exposes no scope
-/// field: where an extraction write lands is the host's decision.
 #[test]
 fn test_extract_tool_hides_scope() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -306,8 +312,8 @@ fn test_extract_tool_hides_scope() {
     );
     let tool = runner
         .tools()
-        .get("save_memory")
-        .expect("extraction registers save_memory");
+        .get("memory_write")
+        .expect("extraction registers memory_write");
     let schema = tool.input_schema();
     let props = schema
         .get("properties")

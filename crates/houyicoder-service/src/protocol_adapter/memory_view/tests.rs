@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::{MemoryEntry, MemoryScope, MemorySource, MemorySummary};
+use houyicoder_context::{MemoryEntry, MemoryScope, MemorySummary, MemoryType};
 
 /// The list mapping maps the source enum to its wire label + carries the
 /// key, description, mtime. Pins the wire mapping the /memory list rides.
@@ -11,14 +11,14 @@ fn test_list_maps_source_label() {
         MemorySummary::new(
             "build-gate",
             "make check must stay green",
-            MemorySource::Project,
+            MemoryType::Project,
             MemoryScope::Project,
             0,
         ),
         MemorySummary::new(
             "user-pref",
             "prefer dark mode",
-            MemorySource::User,
+            MemoryType::User,
             MemoryScope::User,
             99,
         ),
@@ -38,7 +38,7 @@ fn test_list_maps_source_label() {
         vec![MemorySummary::new(
             "old",
             "d",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
             MemoryScope::Auto,
             1,
         )],
@@ -54,7 +54,7 @@ fn test_show_entry_drops_tokens() {
     let entry = MemoryEntry::new(
         "build-gate",
         "make check must stay green",
-        MemorySource::Project,
+        MemoryType::Project,
     )
     .with_meta("the build must pass", 42);
     let wire = map_memory_entry(Some(entry)).expect("Some");

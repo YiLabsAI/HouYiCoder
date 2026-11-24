@@ -49,7 +49,7 @@ impl MemoryProvider for UnchangedMemory {
     }
 }
 
-async fn run(tool: &MemoryAddTool, input: Value) -> Result<Value, ToolError> {
+async fn run(tool: &MemoryWriteTool, input: Value) -> Result<Value, ToolError> {
     tool.execute(ToolCtx::new("test"), input).await
 }
 
@@ -71,11 +71,11 @@ fn window(text: &str) -> Arc<[SessionLogEntry]> {
 #[tokio::test]
 async fn test_save_lands_structured_entry() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let input = json!({
         "key": "user-prefers-terse",
         "description": "User prefers terse responses without preamble",
-        "source": "feedback",
+        "type": "feedback",
         "content": "Keep responses terse.\n**Why:** the user said the long intros waste their time.\n**How to apply:** drop preamble, lead with the answer."
     });
     let out = run(&tool, input).await.expect("save succeeds");
@@ -87,7 +87,7 @@ async fn test_save_lands_structured_entry() {
     assert_eq!(writes.len(), 1, "exactly one entry landed");
     let e = &writes[0];
     assert_eq!(e.key, "user-prefers-terse");
-    assert_eq!(e.source, MemorySource::Feedback);
+    assert_eq!(e.memory_type, MemoryType::Feedback);
     assert_eq!(
         e.description,
         "User prefers terse responses without preamble"
@@ -103,18 +103,18 @@ async fn test_save_lands_structured_entry() {
 async fn test_save_memory_counts_writes() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
         .with_recorder(recorder.clone());
     let input = json!({
         "key": "k1",
         "description": "d",
-        "source": "user",
+        "type": "user",
         "content": "c"
     });
     run(&tool, input.clone()).await.expect("first save");
     run(
         &tool,
-        json!({ "key": "k2", "description": "d", "source": "user", "content": "c" }),
+        json!({ "key": "k2", "description": "d", "type": "user", "content": "c" }),
     )
     .await
     .expect("second save");
@@ -122,7 +122,7 @@ async fn test_save_memory_counts_writes() {
     assert_eq!(changes.len(), 2);
     assert_eq!(changes[0].key, "k1");
     assert_eq!(changes[1].key, "k2");
-    let err_input = json!({ "key": "k3", "description": "d", "source": "bogus", "content": "c" });
+    let err_input = json!({ "key": "k3", "description": "d", "type": "bogus", "content": "c" });
     let _err = run(&tool, err_input).await;
     assert!(recorder.take().is_empty());
 }
@@ -134,11 +134,11 @@ async fn test_save_memory_counts_writes() {
 async fn test_save_records_scope() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
         .with_recorder(recorder.clone());
     run(
         &tool,
-        json!({ "key": "k-auto", "description": "d", "source": "user", "content": "c" }),
+        json!({ "key": "k-auto", "description": "d", "type": "user", "content": "c" }),
     )
     .await
     .expect("default save lands in auto");
@@ -147,7 +147,7 @@ async fn test_save_records_scope() {
         json!({
             "key": "k-proj",
             "description": "d",
-            "source": "project",
+            "type": "project",
             "content": "c",
             "scope": "project"
         }),
@@ -176,8 +176,8 @@ async fn test_repeat_save_emits_once() {
     create_dir_all(&root).expect("create memory root");
     let provider = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new(provider).with_recorder(recorder.clone());
-    let input = json!({ "key": "stable", "description": "d", "source": "user", "content": "c" });
+    let tool = MemoryWriteTool::new(provider).with_recorder(recorder.clone());
+    let input = json!({ "key": "stable", "description": "d", "type": "user", "content": "c" });
     run(&tool, input.clone()).await.expect("first save");
     assert_eq!(recorder.take().len(), 1, "the first save is observable");
     let second = run(&tool, input).await.expect("repeated save");
@@ -196,12 +196,11 @@ async fn test_save_maps_outcome() {
     create_dir_all(&root).expect("create memory root");
     let store = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new(store).with_recorder(recorder.clone());
-    let base =
-        json!({ "key": "outcome-key", "description": "d", "source": "user", "content": "v1" });
+    let tool = MemoryWriteTool::new(store).with_recorder(recorder.clone());
+    let base = json!({ "key": "outcome-key", "description": "d", "type": "user", "content": "v1" });
     run(&tool, base).await.expect("first save");
     let updated =
-        json!({ "key": "outcome-key", "description": "d", "source": "user", "content": "v2" });
+        json!({ "key": "outcome-key", "description": "d", "type": "user", "content": "v2" });
     run(&tool, updated).await.expect("rewrite with new content");
     let changes = recorder.take();
     assert_eq!(changes.len(), 2, "both saves notify");
@@ -221,8 +220,8 @@ async fn test_save_maps_outcome() {
 #[tokio::test]
 async fn test_unchanged_save_is_silent() {
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new(Arc::new(UnchangedMemory)).with_recorder(recorder.clone());
-    let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
+    let tool = MemoryWriteTool::new(Arc::new(UnchangedMemory)).with_recorder(recorder.clone());
+    let input = json!({ "key": "k", "description": "d", "type": "user", "content": "c" });
     let output = run(&tool, input).await.expect("unchanged save succeeds");
     assert_eq!(output, json!({"saved": "k", "outcome": "unchanged"}));
     assert!(recorder.take().is_empty(), "unchanged writes do not notify");
@@ -233,8 +232,8 @@ async fn test_unchanged_save_is_silent() {
 #[tokio::test]
 async fn test_save_memory_works_untracked() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
-    let input = json!({ "key": "k", "description": "d", "source": "user", "content": "c" });
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let input = json!({ "key": "k", "description": "d", "type": "user", "content": "c" });
     let out = run(&tool, input).await.expect("save succeeds");
     assert_eq!(out, json!({"saved": "k", "outcome": "created"}));
 }
@@ -242,11 +241,11 @@ async fn test_save_memory_works_untracked() {
 #[tokio::test]
 async fn test_save_rejects_unknown_source() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let input = json!({
         "key": "k",
         "description": "d",
-        "source": "personal",
+        "type": "personal",
         "content": "c"
     });
     let err = run(&tool, input)
@@ -266,10 +265,10 @@ async fn test_save_rejects_unknown_source() {
 #[tokio::test]
 async fn test_save_rejects_missing_field() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let input = json!({
         "key": "k",
-        "source": "user",
+        "type": "user",
         "content": "c"
     });
     let err = run(&tool, input)
@@ -287,7 +286,7 @@ async fn test_save_rejects_missing_field() {
 #[test]
 fn test_save_memory_auto_approves() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     assert!(!tool.requires_approval(), "auto-approve must hold");
     assert!(!tool.is_destructive(), "an add is not destructive");
     assert!(!tool.is_read_only(), "a save mutates the store");
@@ -300,7 +299,7 @@ fn test_save_memory_auto_approves() {
 #[test]
 fn test_save_schema_pins_fields() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let schema = tool.input_schema();
     let props = schema
         .get("properties")
@@ -320,7 +319,7 @@ fn test_save_schema_pins_fields() {
             &"key".to_string(),
             &"replaces".to_string(),
             &"scope".to_string(),
-            &"source".to_string(),
+            &"type".to_string(),
         ],
         "exactly the five structured fields"
     );
@@ -339,7 +338,7 @@ fn test_save_schema_pins_fields() {
 #[test]
 fn test_extraction_schema_hides_scope() {
     let p = provider();
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::new(MutationLog::new()),
         Arc::from(Vec::new()),
@@ -363,7 +362,7 @@ fn test_extraction_schema_hides_scope() {
             &"evidence".to_string(),
             &"key".to_string(),
             &"replaces".to_string(),
-            &"source".to_string(),
+            &"type".to_string(),
         ],
         "the pinned tool exposes evidence, not scope"
     );
@@ -382,7 +381,7 @@ fn test_extraction_schema_hides_scope() {
 async fn test_extraction_pin_ignores_input() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::clone(&recorder),
         window("the ledger retention rule ships this week"),
@@ -392,7 +391,7 @@ async fn test_extraction_pin_ignores_input() {
         json!({
             "key": "k",
             "description": "d",
-            "source": "feedback",
+            "type": "feedback",
             "content": "c",
             "scope": "project",
             "evidence": [{"quote": "the ledger retention rule ships this week"}]
@@ -422,7 +421,7 @@ async fn test_extraction_pin_ignores_input() {
 async fn test_extraction_rejects_no_evidence() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::clone(&recorder),
         window("the user prefers terse replies"),
@@ -432,7 +431,7 @@ async fn test_extraction_rejects_no_evidence() {
         json!({
             "key": "k",
             "description": "d",
-            "source": "feedback",
+            "type": "feedback",
             "content": "c"
         }),
     )
@@ -459,7 +458,7 @@ async fn test_extraction_rejects_no_evidence() {
 async fn test_extraction_rejects_fabricated_quote() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::clone(&recorder),
         window("the user prefers terse replies"),
@@ -469,7 +468,7 @@ async fn test_extraction_rejects_fabricated_quote() {
         json!({
             "key": "manifest-only-fact",
             "description": "a fact from the manifest, not the window",
-            "source": "project",
+            "type": "project",
             "content": "c",
             "evidence": [{"quote": "this snippet never appeared in the window"}]
         }),
@@ -497,7 +496,7 @@ async fn test_extraction_rejects_fabricated_quote() {
 async fn test_extraction_accepts_normalized_quote() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::clone(&recorder),
         window("the user said:\n  drop the preamble, lead with the answer"),
@@ -507,7 +506,7 @@ async fn test_extraction_accepts_normalized_quote() {
         json!({
             "key": "terse",
             "description": "d",
-            "source": "feedback",
+            "type": "feedback",
             "content": "c",
             "evidence": [{"quote": "drop the preamble, lead with the answer"}]
         }),
@@ -523,7 +522,7 @@ async fn test_extraction_accepts_normalized_quote() {
 #[tokio::test]
 async fn test_extraction_rejects_too_many() {
     let p = provider();
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::new(MutationLog::new()),
         window("a b c d"),
@@ -533,7 +532,7 @@ async fn test_extraction_rejects_too_many() {
         json!({
             "key": "k",
             "description": "d",
-            "source": "user",
+            "type": "user",
             "content": "c",
             "evidence": [
                 {"quote": "a"}, {"quote": "b"}, {"quote": "c"}, {"quote": "d"}
@@ -579,7 +578,7 @@ async fn test_extraction_quotes_tool_bodies() {
         },
     };
     let window: Arc<[SessionLogEntry]> = Arc::from(vec![call, result]);
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::clone(&recorder),
         window,
@@ -589,7 +588,7 @@ async fn test_extraction_quotes_tool_bodies() {
         json!({
             "key": "build-gate",
             "description": "d",
-            "source": "project",
+            "type": "project",
             "content": "c",
             "evidence": [
                 {"quote": "build-gate passes"},
@@ -638,7 +637,7 @@ async fn test_extraction_rejects_injected_text() {
         },
     };
     let window: Arc<[SessionLogEntry]> = Arc::from(vec![recall, listing]);
-    let tool = MemoryAddTool::new_extraction(
+    let tool = MemoryWriteTool::new_extraction(
         Arc::clone(&p) as Arc<dyn MemoryProvider>,
         Arc::new(MutationLog::new()),
         window,
@@ -648,7 +647,7 @@ async fn test_extraction_rejects_injected_text() {
         json!({
             "key": "build-gate",
             "description": "d",
-            "source": "project",
+            "type": "project",
             "content": "c",
             "evidence": [
                 {"quote": "build-gate"},
@@ -676,14 +675,14 @@ async fn test_extraction_rejects_injected_text() {
 #[tokio::test]
 async fn test_save_scope_threads_through() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     // Default: no scope field -> Auto.
     run(
         &tool,
         json!({
             "key": "k-auto",
             "description": "d",
-            "source": "user",
+            "type": "user",
             "content": "c"
         }),
     )
@@ -695,7 +694,7 @@ async fn test_save_scope_threads_through() {
         json!({
             "key": "k-proj",
             "description": "d",
-            "source": "project",
+            "type": "project",
             "content": "c",
             "scope": "project"
         }),
@@ -720,13 +719,13 @@ async fn test_save_scope_threads_through() {
 #[tokio::test]
 async fn test_save_bad_scope_fallback() {
     let p = provider();
-    let tool = MemoryAddTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryWriteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let out = run(
         &tool,
         json!({
             "key": "k",
             "description": "d",
-            "source": "user",
+            "type": "user",
             "content": "c",
             "scope": "bogus"
         }),
@@ -765,14 +764,14 @@ async fn test_save_replaces_and_refreshes() {
         auto.clone(),
     ]));
     mp.add_in_scope(
-        MemoryEntry::new("user-key", "v1", MemorySource::User),
+        MemoryEntry::new("user-key", "v1", MemoryType::User),
         MemoryScope::User,
     )
     .expect("seed user");
-    mp.add(MemoryEntry::new("old-auto", "old", MemorySource::Feedback))
+    mp.add(MemoryEntry::new("old-auto", "old", MemoryType::Feedback))
         .expect("seed auto");
 
-    let tool = MemoryAddTool::new(Arc::clone(&mp) as Arc<dyn MemoryProvider>)
+    let tool = MemoryWriteTool::new(Arc::clone(&mp) as Arc<dyn MemoryProvider>)
         .with_origin(MemoryOrigin::MainAgent);
     // Omitted scope refreshes existing User copy instead of creating Auto copy.
     run(
@@ -780,7 +779,7 @@ async fn test_save_replaces_and_refreshes() {
         json!({
             "key": "user-key",
             "description": "updated user pref",
-            "source": "user",
+            "type": "user",
             "content": "v2"
         }),
     )
@@ -795,7 +794,7 @@ async fn test_save_replaces_and_refreshes() {
         json!({
             "key": "merged-proj",
             "description": "merged rule",
-            "source": "feedback",
+            "type": "feedback",
             "content": "Merged rule.",
             "scope": "project",
             "replaces": ["old-auto"]

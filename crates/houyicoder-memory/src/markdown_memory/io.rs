@@ -5,7 +5,7 @@
 //! lists as a record.
 
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, MemorySummary, tokens_for,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySummary, MemoryType, tokens_for,
 };
 use std::path::Path;
 
@@ -35,7 +35,7 @@ use unicode_normalization::UnicodeNormalization;
 pub(super) struct Frontmatter {
     pub(super) name: String,
     pub(super) description: String,
-    pub(super) source: MemorySource,
+    pub(super) memory_type: MemoryType,
     pub(super) origin: MemoryOrigin,
 }
 
@@ -83,7 +83,7 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
     }
     let mut name = String::new();
     let mut description = String::new();
-    let mut source = MemorySource::Project;
+    let mut memory_type = MemoryType::Project;
     let mut origin = MemoryOrigin::Unknown;
     let mut close_line = None;
     for (i, line) in lines.iter().enumerate().skip(1) {
@@ -98,8 +98,8 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
             "name" => name = v.trim().to_string(),
             "description" => description = v.trim().to_string(),
             "type" | "source" => {
-                source = MemorySource::from_label(v)
-                    .ok_or_else(|| MemoryError::Corrupt(format!("unknown source label: {v}")))?;
+                memory_type = MemoryType::from_label(v)
+                    .ok_or_else(|| MemoryError::Corrupt(format!("unknown type label: {v}")))?;
             }
             "origin" => origin = MemoryOrigin::from_label(v),
             _ => {}
@@ -122,7 +122,7 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
         Frontmatter {
             name,
             description,
-            source,
+            memory_type,
             origin,
         },
         body,
@@ -135,7 +135,7 @@ pub(super) fn serialize_topic_file(entry: &MemoryEntry) -> String {
     s.push_str("---\n");
     s.push_str(&format!("name: {}\n", entry.key));
     s.push_str(&format!("description: {}\n", index_description(entry)));
-    s.push_str(&format!("source: {}\n", entry.source.as_label()));
+    s.push_str(&format!("type: {}\n", entry.memory_type.as_label()));
     s.push_str(&format!("origin: {}\n", entry.origin.as_label()));
     s.push_str("---\n");
     s.push_str(&entry.content);
@@ -433,7 +433,7 @@ pub(super) fn list_memories_impl(provider: &MarkdownMemoryProvider) -> Vec<Memor
                 Ok(fm) => MemorySummary::new(
                     t.key.clone(),
                     fm.description,
-                    fm.source,
+                    fm.memory_type,
                     MemoryScope::for_root_index(t.root_index),
                     t.mtime,
                 )
@@ -441,7 +441,7 @@ pub(super) fn list_memories_impl(provider: &MarkdownMemoryProvider) -> Vec<Memor
                 Err(_) => MemorySummary::new(
                     t.key.clone(),
                     "[corrupt topic file]",
-                    MemorySource::Reference,
+                    MemoryType::Reference,
                     MemoryScope::for_root_index(t.root_index),
                     t.mtime,
                 ),

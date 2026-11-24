@@ -3,7 +3,7 @@
 use super::super::io::INDEX_BYTE_CAP;
 use super::super::io::MAX_KEY_BYTES;
 use super::super::*;
-use houyicoder_context::{MemoryOrigin, MemoryScope, MemorySource};
+use houyicoder_context::{MemoryOrigin, MemoryScope, MemoryType};
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
@@ -26,7 +26,7 @@ fn temp_root() -> PathBuf {
     dir
 }
 
-fn entry(key: &str, content: &str, source: MemorySource) -> MemoryEntry {
+fn entry(key: &str, content: &str, source: MemoryType) -> MemoryEntry {
     MemoryEntry::new(key, content, source)
 }
 
@@ -37,10 +37,10 @@ fn test_rank_orders_frontmatter_hits() {
     p.add(entry(
         "fox-facts",
         "the quick brown fox",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
-    p.add(entry("cat-facts", "a sleepy cat naps", MemorySource::User))
+    p.add(entry("cat-facts", "a sleepy cat naps", MemoryType::User))
         .unwrap();
     // The rank scores frontmatter only. The fox entry matches in both name
     // and description; the cat entry stays listed as a zero-score candidate
@@ -64,7 +64,7 @@ fn test_rank_dedups_already_surfaced() {
     p.add(entry(
         "fox-facts",
         "the quick brown fox here",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
     // First rank with an empty surfaced set returns the entry; the caller
@@ -93,7 +93,7 @@ fn test_surfaced_param_suppresses() {
     p.add(entry(
         "fox-facts",
         "the quick brown fox",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
     // surfaced = {fox-facts}: the rank skips it.
@@ -117,7 +117,7 @@ fn test_surfaced_param_suppresses() {
 fn test_atomic_write_lands_topic() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("alpha", "alpha fox body", MemorySource::User))
+    p.add(entry("alpha", "alpha fox body", MemoryType::User))
         .unwrap();
     let topic = root.join("alpha.md");
     let index = root.join(INDEX_FILE);
@@ -132,7 +132,7 @@ fn test_atomic_write_lands_topic() {
 fn test_identical_add_is_unchanged() {
     let root = temp_root();
     let provider = MarkdownMemoryProvider::new(root.clone());
-    let value = entry("stable", "same body", MemorySource::Feedback)
+    let value = entry("stable", "same body", MemoryType::Feedback)
         .with_meta("same description", 0)
         .with_origin(MemoryOrigin::Extractor);
     assert_eq!(
@@ -168,7 +168,7 @@ fn test_identical_add_is_unchanged() {
     assert_eq!(
         provider
             .add_if_changed(
-                entry("stable", "changed body", MemorySource::Feedback)
+                entry("stable", "changed body", MemoryType::Feedback)
                     .with_meta("same description", 0)
                     .with_origin(MemoryOrigin::Extractor)
             )
@@ -193,7 +193,7 @@ fn test_add_rejects_bad_key() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     // A traversal key is rejected before any file lands.
-    let res = p.add(entry("../escape", "bad", MemorySource::User));
+    let res = p.add(entry("../escape", "bad", MemoryType::User));
     assert!(matches!(res, Err(MemoryError::InvalidPath(_))));
     assert!(!root.join("../escape.md").exists());
     // The index must not exist either (nothing landed).
@@ -289,7 +289,7 @@ fn test_sanitize_nfc_normalizes() {
     // the NFC key finds it (no NFD/NFC dedup divergence).
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry(nfd, "body", MemorySource::User)).unwrap();
+    p.add(entry(nfd, "body", MemoryType::User)).unwrap();
     let found = p
         .show_memory("café-rules")
         .expect("nfc key finds nfd-written entry");
@@ -301,7 +301,7 @@ fn test_sanitize_nfc_normalizes() {
 fn test_rebuild_index_regenerates() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("alpha", "alpha fox body", MemorySource::User))
+    p.add(entry("alpha", "alpha fox body", MemoryType::User))
         .unwrap();
     // Wipe the index; rebuild must restore it from topic files only.
     fs::remove_file(root.join(INDEX_FILE)).unwrap();
@@ -315,7 +315,7 @@ fn test_rebuild_index_regenerates() {
 fn test_rank_empty_query_returns() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("fox", "fox body", MemorySource::Project))
+    p.add(entry("fox", "fox body", MemoryType::Project))
         .unwrap();
     assert!(p.rank_candidates("", &HashSet::new()).is_empty());
     assert!(p.rank_candidates("   ", &HashSet::new()).is_empty());
@@ -336,7 +336,7 @@ fn test_rank_unsplittable_offers_rows() {
     p.add(entry(
         "tea-order",
         "how the team orders tea",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
     let out = p.rank_candidates("\u{8336}", &HashSet::new());
@@ -361,13 +361,13 @@ fn test_rank_empty_root_returns() {
 fn test_round_trip_preserves_fields() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    let src = MemorySource::Feedback;
+    let src = MemoryType::Feedback;
     p.add(entry("round-trip", "the fox feedback here", src).with_origin(MemoryOrigin::MainAgent))
         .unwrap();
     let out = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].key, "round-trip");
-    assert_eq!(out[0].source, src);
+    assert_eq!(out[0].memory_type, src);
     // The rank carries metadata only; the body reads back through show.
     let body = p
         .show_memory("round-trip")
@@ -385,9 +385,9 @@ fn test_round_trip_preserves_fields() {
 fn test_surfaced_set_exhausts() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("fox-a", "alpha fox", MemorySource::Project))
+    p.add(entry("fox-a", "alpha fox", MemoryType::Project))
         .unwrap();
-    p.add(entry("fox-b", "bravo fox", MemorySource::Project))
+    p.add(entry("fox-b", "bravo fox", MemoryType::Project))
         .unwrap();
     let mut surfaced = HashSet::new();
     // First rank lists both fox entries.
@@ -416,7 +416,7 @@ fn test_rank_fresh_after_surfaced() {
         p.add(entry(
             &format!("fox{i}"),
             "fox body here",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     }
@@ -456,7 +456,7 @@ fn test_index_cap_char_boundary() {
             key: format!("k{i}"),
             content: big.clone(),
             tokens: 0,
-            source: MemorySource::Project,
+            memory_type: MemoryType::Project,
             description: String::new(),
             mtime_secs: 0,
             origin: MemoryOrigin::Unknown,
@@ -487,7 +487,7 @@ fn test_index_line_cap_warning() {
     // Each entry adds one short line to the index. After the cap fires a
     // WARNING is appended.
     for i in 0..(5 + 3) {
-        p.add(entry(&format!("k{i}"), "short body", MemorySource::Project))
+        p.add(entry(&format!("k{i}"), "short body", MemoryType::Project))
             .unwrap();
     }
     let index = fs::read_to_string(root.join(INDEX_FILE)).unwrap();
@@ -514,7 +514,7 @@ fn test_broken_index_keeps_topic() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     fs::create_dir(root.join(INDEX_FILE)).unwrap();
-    let res = p.add(entry("alpha", "alpha fox body", MemorySource::User));
+    let res = p.add(entry("alpha", "alpha fox body", MemoryType::User));
     assert!(res.is_ok(), "the topic write must still report success");
     let topic = root.join("alpha.md");
     assert!(
@@ -538,7 +538,7 @@ fn test_write_survives_stale_temp() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     fs::create_dir(root.join(".alpha.md.tmp")).unwrap();
-    p.add(entry("alpha", "alpha fox body", MemorySource::User))
+    p.add(entry("alpha", "alpha fox body", MemoryType::User))
         .expect("a stale shared temp name must not block the write");
     assert!(root.join("alpha.md").exists(), "the topic must land");
     remove_dir_all(&root).ok();
@@ -554,21 +554,17 @@ fn test_rank_merges_scopes() {
     let auto_dir = temp_root();
     // Seed each scope via a single-root provider (add writes to its root).
     MarkdownMemoryProvider::new(user_dir.clone())
-        .add(entry("user-fact", "alpha fox user", MemorySource::User))
+        .add(entry("user-fact", "alpha fox user", MemoryType::User))
         .unwrap();
     MarkdownMemoryProvider::new(project_dir.clone())
         .add(entry(
             "project-fact",
             "bravo fox project",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     MarkdownMemoryProvider::new(auto_dir.clone())
-        .add(entry(
-            "auto-fact",
-            "charlie fox auto",
-            MemorySource::Project,
-        ))
+        .add(entry("auto-fact", "charlie fox auto", MemoryType::Project))
         .unwrap();
     let p = MarkdownMemoryProvider::new_multi(vec![
         user_dir.clone(),
@@ -594,10 +590,10 @@ fn test_rank_dedups_across_scopes() {
     let user_dir = temp_root();
     let auto_dir = temp_root();
     MarkdownMemoryProvider::new(user_dir.clone())
-        .add(entry("shared", "fox user copy", MemorySource::User))
+        .add(entry("shared", "fox user copy", MemoryType::User))
         .unwrap();
     MarkdownMemoryProvider::new(auto_dir.clone())
-        .add(entry("shared", "fox auto copy", MemorySource::Project))
+        .add(entry("shared", "fox auto copy", MemoryType::Project))
         .unwrap();
     let p = MarkdownMemoryProvider::new_multi(vec![user_dir.clone(), auto_dir.clone()]);
     let out = p.rank_candidates("fox", &HashSet::new());
@@ -616,7 +612,7 @@ fn test_multi_dedups_dup_roots() {
     let user_dir = temp_root();
     let auto_dir = temp_root();
     MarkdownMemoryProvider::new(user_dir.clone())
-        .add(entry("shared", "fox user copy", MemorySource::User))
+        .add(entry("shared", "fox user copy", MemoryType::User))
         .unwrap();
     // user_dir passed twice + auto_dir once — the duplicate must drop without
     // panic and without double-scanning (which would only re-find the same
@@ -645,7 +641,7 @@ fn test_write_lands_in_auto() {
         project_dir.clone(),
         auto_dir.clone(),
     ]);
-    p.add(entry("new-fact", "delta fox", MemorySource::Project))
+    p.add(entry("new-fact", "delta fox", MemoryType::Project))
         .unwrap();
     assert!(
         auto_dir.join("new-fact.md").exists(),
@@ -672,7 +668,7 @@ fn test_write_lands_in_auto() {
 fn test_rebuild_heals_external_edit() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("alpha", "alpha fox", MemorySource::Project))
+    p.add(entry("alpha", "alpha fox", MemoryType::Project))
         .unwrap();
     // Externally write a second topic, bypassing add (no index update).
     let ext = "---\nname: bravo\ndescription: bravo fox\nsource: project\n---\nbravo fox body\n";
@@ -771,10 +767,10 @@ fn test_list_memories_frontmatter() {
     p.add(entry(
         "build-gate",
         "make check must stay green",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
-    p.add(entry("rust-style", "Prefer let chains", MemorySource::User))
+    p.add(entry("rust-style", "Prefer let chains", MemoryType::User))
         .unwrap();
     let list = p.list_memories();
     assert_eq!(list.len(), 2);
@@ -794,7 +790,7 @@ fn test_list_memories_frontmatter() {
 fn test_list_includes_corrupt_file() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("good-key", "a valid fact", MemorySource::Project))
+    p.add(entry("good-key", "a valid fact", MemoryType::Project))
         .unwrap();
     // Write a corrupt topic file (no frontmatter, garbage content).
     write(root.join("broken.md"), "this is not valid frontmatter\n").unwrap();
@@ -821,13 +817,22 @@ fn test_show_memory_body() {
     p.add(entry(
         "build-gate",
         "make check must stay green",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
     let entry = p.show_memory("build-gate").expect("entry found");
     assert_eq!(entry.key, "build-gate");
     assert!(entry.content.contains("make check must stay green"));
-    assert_eq!(entry.source, MemorySource::Project);
+    assert_eq!(entry.memory_type, MemoryType::Project);
+    let raw = fs::read_to_string(root.join("build-gate.md")).expect("disk text");
+    assert!(raw.contains("type: project\n") && !raw.contains("source:"));
+    fs::write(
+        root.join("legacy-source.md"),
+        "---\nname: legacy-source\ndescription: old format\nsource: feedback\n---\nLegacy body.\n",
+    )
+    .expect("seed legacy");
+    let legacy = p.show_memory("legacy-source").expect("legacy reads");
+    assert_eq!(legacy.memory_type, MemoryType::Feedback);
     assert!(p.show_memory("no-such-key").is_none(), "absent key → None");
     assert!(p.show_memory("../escape").is_none(), "traversal key → None");
     remove_dir_all(&root).ok();
@@ -967,7 +972,7 @@ fn test_roots_dedup_by_identity() {
     let link = holder.join("link");
     symlink(&real, &link).expect("link the store root");
     let p = MarkdownMemoryProvider::new_multi(vec![link, real.clone(), real.clone()]);
-    p.add(entry("alpha", "alpha body", MemorySource::User))
+    p.add(entry("alpha", "alpha body", MemoryType::User))
         .unwrap();
     assert_eq!(
         p.scopes_for_key("alpha"),
@@ -1007,7 +1012,7 @@ fn test_fresh_roots_claim_once() {
 fn test_rank_skips_corrupt_topic() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("good", "alpha body", MemorySource::Project))
+    p.add(entry("good", "alpha body", MemoryType::Project))
         .expect("seed a readable topic");
     write(root.join("bad.md"), "not a topic").expect("seed a corrupt file");
     let hits = p.rank_candidates("alpha", &HashSet::new());

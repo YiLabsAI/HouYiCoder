@@ -1,7 +1,7 @@
 //! Index rendering: one heading per type, and scope priority deciding what fits.
 
 use super::*;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 use houyicoder_session::SessionStore;
 use std::env::temp_dir;
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn summary(key: &str, source: MemorySource, scope: MemoryScope) -> MemorySummary {
+fn summary(key: &str, source: MemoryType, scope: MemoryScope) -> MemorySummary {
     MemorySummary::new(key, "one line", source, scope, 0)
 }
 
@@ -18,9 +18,9 @@ fn summary(key: &str, source: MemorySource, scope: MemoryScope) -> MemorySummary
 #[test]
 fn test_index_heading_once() {
     let rows = vec![
-        summary("a", MemorySource::Feedback, MemoryScope::User),
-        summary("b", MemorySource::Feedback, MemoryScope::Project),
-        summary("c", MemorySource::Feedback, MemoryScope::Auto),
+        summary("a", MemoryType::Feedback, MemoryScope::User),
+        summary("b", MemoryType::Feedback, MemoryScope::Project),
+        summary("c", MemoryType::Feedback, MemoryScope::Auto),
     ];
     let text = render_index(&rows);
     assert_eq!(text.matches("### feedback").count(), 1);
@@ -34,17 +34,13 @@ fn test_index_heading_once() {
 /// starved by a large automatic set.
 #[test]
 fn test_index_user_rows_first() {
-    let mut rows = vec![summary(
-        "user-row",
-        MemorySource::Feedback,
-        MemoryScope::User,
-    )];
+    let mut rows = vec![summary("user-row", MemoryType::Feedback, MemoryScope::User)];
     let long = "x".repeat(200);
     for i in 0..40 {
         rows.push(MemorySummary::new(
             format!("auto-{i}"),
             long.clone(),
-            MemorySource::Feedback,
+            MemoryType::Feedback,
             MemoryScope::Auto,
             0,
         ));
@@ -66,7 +62,7 @@ fn test_index_stops_at_budget() {
             MemorySummary::new(
                 format!("k-{i}"),
                 long.clone(),
-                MemorySource::Feedback,
+                MemoryType::Feedback,
                 MemoryScope::Auto,
                 0,
             )
@@ -108,27 +104,27 @@ fn test_active_rules_order() {
     // compact index instead of consuming an active rule card.
     provider
         .add_in_scope(
-            MemoryEntry::new("cold-proj", "Cold project note.", MemorySource::Feedback),
+            MemoryEntry::new("cold-proj", "Cold project note.", MemoryType::Feedback),
             MemoryScope::Project,
         )
         .expect("cold");
     // Updated once (occurrences = 2), 0 hits.
     provider
         .add_in_scope(
-            MemoryEntry::new("twice-proj", "v1", MemorySource::Feedback),
+            MemoryEntry::new("twice-proj", "v1", MemoryType::Feedback),
             MemoryScope::Project,
         )
         .expect("v1");
     provider
         .add_in_scope(
-            MemoryEntry::new("twice-proj", "Updated rule card.", MemorySource::Feedback),
+            MemoryEntry::new("twice-proj", "Updated rule card.", MemoryType::Feedback),
             MemoryScope::Project,
         )
         .expect("v2");
     // Frequently recalled (hits = 4) must outrank occurrences = 2.
     provider
         .add_in_scope(
-            MemoryEntry::new("recalled-proj", "High recall rule.", MemorySource::Feedback),
+            MemoryEntry::new("recalled-proj", "High recall rule.", MemoryType::Feedback),
             MemoryScope::Project,
         )
         .expect("recalled");
@@ -138,7 +134,7 @@ fn test_active_rules_order() {
     // User feedback always qualifies.
     provider
         .add_in_scope(
-            MemoryEntry::new("user-rule", "User direct rule.", MemorySource::Feedback),
+            MemoryEntry::new("user-rule", "User direct rule.", MemoryType::Feedback),
             MemoryScope::User,
         )
         .expect("user");
@@ -164,7 +160,7 @@ async fn test_gate_off_skips_reconcile() {
         .add(MemoryEntry::new(
             "hot-auto",
             "Auto rule.",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
         ))
         .expect("seed auto");
     provider.record_gate_violation("hot-auto");
@@ -203,11 +199,7 @@ fn test_runtime_archived_flow() {
         None,
     );
     provider
-        .add(MemoryEntry::new(
-            "arc-k",
-            "Arc body.",
-            MemorySource::Project,
-        ))
+        .add(MemoryEntry::new("arc-k", "Arc body.", MemoryType::Project))
         .expect("seed");
     provider
         .archive_memory("arc-k", MemoryScope::Auto)

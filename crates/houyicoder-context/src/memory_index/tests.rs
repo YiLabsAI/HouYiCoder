@@ -7,9 +7,9 @@ use super::*;
 #[test]
 fn test_groups_and_row_format() {
     let text = render_memory_index_groups([
-        (MemorySource::User, "pref", "answer briefly"),
-        (MemorySource::Feedback, "rule", "run the gate"),
-        (MemorySource::Project, "arch", "one host, many guests"),
+        (MemoryType::User, "pref", "answer briefly"),
+        (MemoryType::Feedback, "rule", "run the gate"),
+        (MemoryType::Project, "arch", "one host, many guests"),
     ]);
     assert_eq!(
         text,
@@ -23,7 +23,7 @@ fn test_groups_and_row_format() {
 /// headings with nothing under them.
 #[test]
 fn test_empty_group_no_heading() {
-    let text = render_memory_index_groups([(MemorySource::Project, "k", "d")]);
+    let text = render_memory_index_groups([(MemoryType::Project, "k", "d")]);
     assert!(!text.contains("### user"));
     assert_eq!(text.matches("###").count(), 1);
 }

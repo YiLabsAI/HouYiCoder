@@ -103,7 +103,7 @@ fn test_prompt_scopes_out_consolidation() {
         "no consolidation: {prompt}"
     );
     assert!(
-        !prompt.contains("Phase 4") && !prompt.contains("promote_memory"),
+        !prompt.contains("Phase 4") && !prompt.contains("memory_promote"),
         "no scope flow: {prompt}"
     );
 }

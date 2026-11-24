@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
-use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryScope, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryScope, MemoryType};
 
 use super::super::MarkdownMemoryProvider;
 
@@ -56,7 +56,7 @@ fn test_archive_restore_keeps_stats() {
         .add(MemoryEntry::new(
             "lesson-a",
             "Lesson body.",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
         ))
         .expect("add");
     fx.provider.record_recall_hits(&["lesson-a".to_string()]);
@@ -121,7 +121,7 @@ fn test_replace_preserves_scope() {
     let fx = MultiFixture::new("replace-guard");
     fx.provider
         .add_in_scope(
-            MemoryEntry::new("user-pref", "User secret rule.", MemorySource::User)
+            MemoryEntry::new("user-pref", "User secret rule.", MemoryType::User)
                 .with_origin(MemoryOrigin::User),
             MemoryScope::User,
         )
@@ -130,7 +130,7 @@ fn test_replace_preserves_scope() {
         .add(MemoryEntry::new(
             "old-auto",
             "Old auto rule.",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
         ))
         .expect("seed auto");
     fx.provider.record_recall_hits(&["old-auto".to_string()]);
@@ -138,7 +138,7 @@ fn test_replace_preserves_scope() {
 
     // 1. Background Dream tries to replace both User entry and its own target key:
     //    User entry must stay untouched, and target key must not swallow itself.
-    let dream_entry = MemoryEntry::new("merged-rule", "Merged body.", MemorySource::Feedback)
+    let dream_entry = MemoryEntry::new("merged-rule", "Merged body.", MemoryType::Feedback)
         .with_origin(MemoryOrigin::Dream);
     let out = fx
         .provider
@@ -183,7 +183,7 @@ fn test_reconcile_batch_moves_once() {
         .add(MemoryEntry::new(
             "hot-feedback",
             "Rule body.",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
         ))
         .expect("add feedback");
     fx.provider.record_gate_violation("hot-feedback");
@@ -193,7 +193,7 @@ fn test_reconcile_batch_moves_once() {
         .add(MemoryEntry::new(
             "stale-proj",
             "Finished task.",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .expect("add stale project");
     let stale_path = fx.auto.join("stale-proj.md");
@@ -220,7 +220,7 @@ fn test_demote_and_user_guard() {
     let fx = MultiFixture::new("demote-guard");
     fx.provider
         .add_in_scope(
-            MemoryEntry::new("cold-promoted", "Decayed rule.", MemorySource::Feedback)
+            MemoryEntry::new("cold-promoted", "Decayed rule.", MemoryType::Feedback)
                 .with_origin(MemoryOrigin::Dream),
             MemoryScope::Project,
         )
@@ -246,12 +246,12 @@ fn test_demote_and_user_guard() {
     // Background writer cannot overwrite a User-origin file.
     fx.provider
         .add(
-            MemoryEntry::new("hand-note", "User authored.", MemorySource::User)
+            MemoryEntry::new("hand-note", "User authored.", MemoryType::User)
                 .with_origin(MemoryOrigin::User),
         )
         .expect("seed user origin");
     let bg_attempt = fx.provider.add_if_changed(
-        MemoryEntry::new("hand-note", "Extractor overwrite.", MemorySource::User)
+        MemoryEntry::new("hand-note", "Extractor overwrite.", MemoryType::User)
             .with_origin(MemoryOrigin::Extractor),
     );
     assert!(

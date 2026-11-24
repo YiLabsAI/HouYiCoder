@@ -22,7 +22,7 @@ use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
 use houyicoder_context::MemoryOrigin;
 use houyicoder_context::MemoryScope;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -122,10 +122,10 @@ fn scripted(n: usize, quote: &str) -> CompletionResponse {
                 },
                 OutputItem::ToolCall {
                     id: "s1".into(),
-                    name: "save_memory".into(),
+                    name: "memory_write".into(),
                     input: serde_json::json!({
                         "key": "k", "description": "d",
-                        "source": "feedback", "content": "c",
+                        "type": "feedback", "content": "c",
                         "evidence": [{"quote": quote}]
                     }),
                 },
@@ -206,10 +206,10 @@ fn scripted_main(n: usize, quote: &str) -> CompletionResponse {
                 },
                 OutputItem::ToolCall {
                     id: "s1".into(),
-                    name: "save_memory".into(),
+                    name: "memory_write".into(),
                     input: serde_json::json!({
                         "key": "k", "description": "d",
-                        "source": "feedback", "content": "c",
+                        "type": "feedback", "content": "c",
                         "evidence": [{"quote": quote}]
                     }),
                 },
@@ -510,10 +510,10 @@ async fn test_extract_skips_main_saved() {
         prev_hash: None,
         event: SessionEvent::ToolCall {
             call_id: "main-save".into(),
-            tool: "save_memory".into(),
+            tool: "memory_write".into(),
             input: serde_json::json!({
                 "key": "k", "description": "d",
-                "source": "feedback", "content": "c"
+                "type": "feedback", "content": "c"
             }),
         },
     });
@@ -566,8 +566,8 @@ async fn test_extract_failed_save_runs() {
         prev_hash: None,
         event: SessionEvent::ToolCall {
             call_id: "main-save-fail".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({"key": "k", "description": "d", "source": "feedback", "content": "c"}),
+            tool: "memory_write".into(),
+            input: serde_json::json!({"key": "k", "description": "d", "type": "feedback", "content": "c"}),
         },
     });
     msgs.push(SessionLogEntry {
@@ -603,8 +603,8 @@ async fn test_extract_unanswered_save_runs() {
         prev_hash: None,
         event: SessionEvent::ToolCall {
             call_id: "main-save-lost".into(),
-            tool: "save_memory".into(),
-            input: serde_json::json!({"key": "k", "description": "d", "source": "feedback", "content": "c"}),
+            tool: "memory_write".into(),
+            input: serde_json::json!({"key": "k", "description": "d", "type": "feedback", "content": "c"}),
         },
     });
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
@@ -1019,7 +1019,7 @@ async fn test_forked_extract_receives_manifest() {
         existing: vec![MemorySummary {
             key: "build-gate".into(),
             description: "make check must stay green".into(),
-            source: MemorySource::Project,
+            memory_type: MemoryType::Project,
             mtime_secs: 0,
             scope: MemoryScope::Auto,
             origin: MemoryOrigin::Unknown,
@@ -1186,11 +1186,11 @@ fn probe_response(n: usize) -> CompletionResponse {
     let output = if n == 1 {
         vec![OutputItem::ToolCall {
             id: "probe-save".into(),
-            name: "save_memory".into(),
+            name: "memory_write".into(),
             input: serde_json::json!({
                 "key": "ashford-ledger-retention",
                 "description": "The Ashford ledger stays for seven years",
-                "source": "feedback",
+                "type": "feedback",
                 "content": "Retain the Ashford ledger for seven years."
             }),
         }]
@@ -1367,11 +1367,11 @@ impl SeqPipelineProvider {
             1 => CompletionResponse {
                 output: vec![OutputItem::ToolCall {
                     id: "ex-1".into(),
-                    name: "save_memory".into(),
+                    name: "memory_write".into(),
                     input: serde_json::json!({
                         "key": "extracted-rule",
                         "description": "terse answers",
-                        "source": "feedback",
+                        "type": "feedback",
                         "content": "Keep responses terse.",
                         "evidence": [{"quote": quote}]
                     }),
@@ -1386,11 +1386,11 @@ impl SeqPipelineProvider {
                 CompletionResponse {
                     output: vec![OutputItem::ToolCall {
                         id: "dr-1".into(),
-                        name: "save_memory".into(),
+                        name: "memory_write".into(),
                         input: serde_json::json!({
                             "key": "lesson-blind-retry",
                             "description": "change args after error",
-                            "source": "feedback",
+                            "type": "feedback",
                             "content": "Never repeat identical failed arguments."
                         }),
                     }],

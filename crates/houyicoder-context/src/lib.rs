@@ -29,7 +29,7 @@ pub use hook_types::{HookErrorKind, HookEventKind, HookFirePayload, HookVerdictK
 pub use memory_index::{MEMORY_INDEX_GROUPS, memory_index_row, render_memory_index_groups};
 pub use memory_types::{
     MemoryEntry, MemoryError, MemoryOrigin, MemoryRankHit, MemoryRecallStats, MemoryScope,
-    MemorySource, MemorySummary, is_cjk, memory_age_days, memory_age_label, memory_freshness_text,
+    MemorySummary, MemoryType, is_cjk, memory_age_days, memory_age_label, memory_freshness_text,
     tokens_for,
 };
 pub use sandbox_types::{DirEntry, ExecConfig, ExecResult, SandboxError};

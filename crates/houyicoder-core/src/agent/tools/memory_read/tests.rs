@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::{MemoryEntry, MemoryError, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryType};
 use std::sync::Mutex;
 
 /// An in-memory provider that holds one entry the tool reads back.
@@ -40,7 +40,7 @@ impl MemoryProvider for TwoScopeMemory {
             MemoryEntry::new(
                 key,
                 format!("body stored in {}", scope.as_label()),
-                MemorySource::Feedback,
+                MemoryType::Feedback,
             )
         })
     }
@@ -62,7 +62,7 @@ impl MemoryProvider for SingleScopeMemory {
         Ok(())
     }
     fn show_memory(&self, key: &str) -> Option<MemoryEntry> {
-        (key == "rule-one").then(|| MemoryEntry::new(key, "the only copy", MemorySource::Feedback))
+        (key == "rule-one").then(|| MemoryEntry::new(key, "the only copy", MemoryType::Feedback))
     }
     fn scopes_for_key(&self, key: &str) -> Vec<MemoryScope> {
         if key == "rule-one" {
@@ -77,12 +77,12 @@ fn entry() -> MemoryEntry {
     MemoryEntry::new(
         "user-prefers-terse",
         "User prefers terse responses",
-        MemorySource::Feedback,
+        MemoryType::Feedback,
     )
     .with_meta("User prefers terse responses".to_string(), 123)
 }
 
-async fn run(tool: &ShowMemoryTool, input: Value) -> Result<Value, ToolError> {
+async fn run(tool: &MemoryReadTool, input: Value) -> Result<Value, ToolError> {
     tool.execute(ToolCtx::new("test"), input).await
 }
 
@@ -91,12 +91,13 @@ async fn test_memory_returns_structured_entry() {
     let p = Arc::new(OneEntryMemory {
         entry: Mutex::new(Some(entry())),
     });
-    let tool = ShowMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    assert_eq!(tool.name(), "memory_read");
     let out = run(&tool, json!({"key": "user-prefers-terse"}))
         .await
         .expect("read succeeds");
     assert_eq!(out["key"], "user-prefers-terse");
-    assert_eq!(out["source"], "feedback");
+    assert_eq!(out["type"], "feedback");
     assert_eq!(out["mtime"], 123);
     assert!(out["content"].is_string(), "content returned as string");
 }
@@ -106,7 +107,7 @@ async fn test_memory_missing_key_errors() {
     let p = Arc::new(OneEntryMemory {
         entry: Mutex::new(Some(entry())),
     });
-    let tool = ShowMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let err = run(&tool, json!({"key": "absent"}))
         .await
         .expect_err("absent key errors");
@@ -121,7 +122,7 @@ async fn test_memory_rejects_missing_field() {
     let p = Arc::new(OneEntryMemory {
         entry: Mutex::new(Some(entry())),
     });
-    let tool = ShowMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let err = run(&tool, json!({}))
         .await
         .expect_err("missing key rejected");
@@ -142,7 +143,7 @@ fn test_memory_schema_pins_fields() {
     let p = Arc::new(OneEntryMemory {
         entry: Mutex::new(Some(entry())),
     });
-    let tool = ShowMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     let schema = tool.input_schema();
     let props = schema
         .get("properties")
@@ -159,7 +160,7 @@ fn test_memory_schema_pins_fields() {
 /// A named scope reads that scope's copy, not whichever one is newest.
 #[tokio::test]
 async fn test_memory_scope_selects_copy() {
-    let tool = ShowMemoryTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
     let out = run(&tool, json!({"key": "rule-x", "scope": "project"}))
         .await
         .expect("scoped read");
@@ -175,7 +176,7 @@ async fn test_memory_scope_selects_copy() {
 /// from the one it did.
 #[tokio::test]
 async fn test_memory_ambiguous_key_errors() {
-    let tool = ShowMemoryTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
     let err = run(&tool, json!({"key": "rule-x"}))
         .await
         .expect_err("ambiguous key errors");
@@ -195,7 +196,7 @@ async fn test_memory_ambiguous_key_errors() {
 /// fallback to another root that would answer with a different body.
 #[tokio::test]
 async fn test_memory_scope_absent_key() {
-    let tool = ShowMemoryTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
     let err = run(&tool, json!({"key": "rule-x", "scope": "user"}))
         .await
         .expect_err("absent scope errors");
@@ -209,7 +210,7 @@ async fn test_memory_scope_absent_key() {
 /// silently treated as the default.
 #[tokio::test]
 async fn test_memory_unknown_scope_errors() {
-    let tool = ShowMemoryTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::new(TwoScopeMemory) as Arc<dyn MemoryProvider>);
     let err = run(&tool, json!({"key": "rule-x", "scope": "team"}))
         .await
         .expect_err("unknown scope rejected");
@@ -223,7 +224,7 @@ async fn test_memory_unknown_scope_errors() {
 /// ambiguity refusal starts at a second copy, not at the first.
 #[tokio::test]
 async fn test_memory_single_scope_reads() {
-    let tool = ShowMemoryTool::new(Arc::new(SingleScopeMemory) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::new(SingleScopeMemory) as Arc<dyn MemoryProvider>);
     let out = run(&tool, json!({"key": "rule-one"}))
         .await
         .expect("single-scope read succeeds");
@@ -235,7 +236,7 @@ fn test_show_memory_auto_approves() {
     let p = Arc::new(OneEntryMemory {
         entry: Mutex::new(Some(entry())),
     });
-    let tool = ShowMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryReadTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
     assert!(tool.is_read_only(), "read-only");
     assert!(!tool.is_destructive(), "not destructive");
     assert!(!tool.requires_approval(), "auto-approve");

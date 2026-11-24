@@ -13,7 +13,7 @@
 //! When no source tag is present the default is User. The content is the
 //! remainder of the line after the key (and optional source tag).
 
-use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryType};
 
 /// Extract save facts from user input. Scans each line for the /save
 /// prefix. Returns one MemoryEntry per matching line. Lines without the
@@ -47,24 +47,21 @@ fn parse_save_line(rest: &str) -> Option<MemoryEntry> {
     if key.is_empty() || remainder.is_empty() {
         return None;
     }
-    // Try to peel a source tag: user:, project:, feedback:, reference:.
-    let (source, content) = match remainder.split_once(':') {
+    let (memory_type, content) = match remainder.split_once(':') {
         Some((tag, body)) if body.chars().next().is_some_and(char::is_whitespace) => {
             let body = body.trim();
-            if let Some(src) = MemorySource::from_label(tag.trim()) {
-                (src, body)
+            if let Some(kind) = MemoryType::from_label(tag.trim()) {
+                (kind, body)
             } else {
-                (MemorySource::User, remainder)
+                (MemoryType::User, remainder)
             }
         }
-        _ => (MemorySource::User, remainder),
+        _ => (MemoryType::User, remainder),
     };
-    // Guard against path traversal in the key — the provider's own
-    // validator is the real gate, but rejecting early avoids wasted work.
     if key.contains('/') || key.contains('\\') {
         return None;
     }
-    Some(MemoryEntry::new(key, content, source))
+    Some(MemoryEntry::new(key, content, memory_type))
 }
 
 #[cfg(test)]

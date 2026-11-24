@@ -34,17 +34,18 @@ fn provider() -> Arc<RecordingMemory> {
     })
 }
 
-async fn run_promote(tool: &PromoteMemoryTool, input: Value) -> Result<Value, ToolError> {
+async fn run_promote(tool: &MemoryPromoteTool, input: Value) -> Result<Value, ToolError> {
     tool.execute(ToolCtx::new("test"), input).await
 }
-async fn run_demote(tool: &DemoteMemoryTool, input: Value) -> Result<Value, ToolError> {
+async fn run_demote(tool: &MemoryDemoteTool, input: Value) -> Result<Value, ToolError> {
     tool.execute(ToolCtx::new("test"), input).await
 }
 
 #[tokio::test]
 async fn test_promote_routes_through_provider() {
     let p = provider();
-    let tool = PromoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryPromoteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    assert_eq!(tool.name(), "memory_promote");
     let out = run_promote(&tool, json!({"key": "test-naming"}))
         .await
         .expect("promote succeeds");
@@ -55,7 +56,8 @@ async fn test_promote_routes_through_provider() {
 #[tokio::test]
 async fn test_demote_routes_through_provider() {
     let p = provider();
-    let tool = DemoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    let tool = MemoryDemoteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>);
+    assert_eq!(tool.name(), "memory_demote");
     let out = run_demote(&tool, json!({"key": "merge-freeze"}))
         .await
         .expect("demote succeeds");
@@ -63,16 +65,13 @@ async fn test_demote_routes_through_provider() {
     assert_eq!(p.demoted.lock().expect("demoted").len(), 1);
 }
 
-/// A threaded recorder bumps once per successful promote / demote so the
-/// dream can fire one memory-saved notice per pass that touches the
-/// store. A NotFound does not bump it.
 #[tokio::test]
 async fn test_promote_demote_share_recorder() {
     let p = provider();
     let recorder = Arc::new(MutationLog::new());
-    let promote = PromoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
+    let promote = MemoryPromoteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
         .with_recorder(recorder.clone());
-    let demote = DemoteMemoryTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
+    let demote = MemoryDemoteTool::new(Arc::clone(&p) as Arc<dyn MemoryProvider>)
         .with_recorder(recorder.clone());
     run_promote(&promote, json!({"key": "k1"}))
         .await
@@ -110,7 +109,7 @@ async fn test_promote_missing_key_errors() {
         }
         // promote_memory defaults to Err(NotFound), so no override.
     }
-    let tool = PromoteMemoryTool::new(Arc::new(NotFoundProvider) as Arc<dyn MemoryProvider>);
+    let tool = MemoryPromoteTool::new(Arc::new(NotFoundProvider) as Arc<dyn MemoryProvider>);
     let err = run_promote(&tool, json!({"key": "absent"}))
         .await
         .expect_err("missing key rejected");

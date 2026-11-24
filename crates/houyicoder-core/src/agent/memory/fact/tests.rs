@@ -7,7 +7,7 @@ fn test_extract_single_save() {
     let entries = extract_save_facts("/save my-key user: Always run tests");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].key, "my-key");
-    assert_eq!(entries[0].source, MemorySource::User);
+    assert_eq!(entries[0].memory_type, MemoryType::User);
     assert!(entries[0].content.contains("Always run tests"));
 }
 
@@ -15,14 +15,14 @@ fn test_extract_single_save() {
 fn test_extract_project_source() {
     let entries = extract_save_facts("/save arch project: Storage owns I/O");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].source, MemorySource::Project);
+    assert_eq!(entries[0].memory_type, MemoryType::Project);
 }
 
 #[test]
 fn test_extract_default_source() {
     let entries = extract_save_facts("/save pref: No source tag means user");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].source, MemorySource::User);
+    assert_eq!(entries[0].memory_type, MemoryType::User);
     assert_eq!(entries[0].content, "No source tag means user");
 }
 
@@ -51,12 +51,12 @@ fn test_rejects_path_in_key() {
 fn test_feedback_source_tag() {
     let entries = extract_save_facts("/save review feedback: prefer short functions");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].source, MemorySource::Feedback);
+    assert_eq!(entries[0].memory_type, MemoryType::Feedback);
 }
 
 #[test]
 fn test_reference_source_tag() {
     let entries = extract_save_facts("/save book reference: The Rust Book chapter 4");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].source, MemorySource::Reference);
+    assert_eq!(entries[0].memory_type, MemoryType::Reference);
 }

@@ -4,7 +4,7 @@
 //! "remember" signal and never proactively accumulates memory.
 //!
 //! Memory-type taxonomy, adapted: the four content types line up with the
-//! MemorySource enum (user, feedback, project, reference); the private/team
+//! MemoryType enum (user, feedback, project, reference); the private/team
 //! scope language is replaced by this project's storage scopes (user for
 //! cross-session identity, project for shared project conventions);
 //! self-references are neutralized. The
@@ -45,7 +45,7 @@ There are several discrete types of memory you can store. Each type below declar
     <description>Information you learn about ongoing work, goals, initiatives, bugs, or incidents that is not derivable from the code or git history. Project memories help you understand the broader context and motivation behind the work in this working directory.</description>
     <when_to_save>When you learn who is doing what, why, or by when. These states change quickly, so keep your understanding up to date. Always convert relative dates in user messages to absolute dates when saving ("Thursday" -> "2026-03-05") so the memory stays interpretable after time passes.</when_to_save>
     <how_to_use>Use these memories to understand the nuance behind the user's request, anticipate coordination issues, and make better-informed suggestions.</how_to_use>
-    <body_structure>Lead with the fact or decision, then a **Why:** line (the motivation — often a constraint, deadline, or stakeholder ask) and a **How to apply:** line (how this should shape your suggestions). Project memories decay fast, so the why helps future-you judge whether the memory is still load-bearing.</body_structure>
+    <body_structure>Lead with the fact or decision, then a **Why:** line (the motivation — often a constraint, deadline, or stakeholder ask) and a **How to apply:** line (how this should shape your suggestions). Project memories decay fast, so the why helps future-you judge whether the memory still holds.</body_structure>
 </type>
 <type>
     <name>reference</name>
@@ -90,7 +90,7 @@ A memory that summarizes repo state (activity logs, architecture snapshots) is f
 ---
 name: {{memory name}}
 description: {{one-line description — used to decide relevance in future conversations, so be specific and include the entities it relates to}}
-source: {{user | feedback | project | reference}}
+type: {{user | feedback | project | reference}}
 ---
 
 {{memory content — for feedback and project types, structure as: the rule or fact, then **Why:** and **How to apply:** lines}}

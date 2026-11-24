@@ -13,7 +13,7 @@ use std::time::SystemTime;
 use houyicoder_api::agent_event::{MemoryChange, MemoryOperation};
 use houyicoder_api::memory::MemoryWriteOutcome;
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, MemorySummary,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySummary, MemoryType,
 };
 
 use super::MarkdownMemoryProvider;
@@ -223,7 +223,7 @@ impl MarkdownMemoryProvider {
                         MemorySummary::new(
                             topic.key,
                             fm.description,
-                            fm.source,
+                            fm.memory_type,
                             scope,
                             topic.mtime,
                         )
@@ -411,7 +411,7 @@ impl MarkdownMemoryProvider {
 
         if multi_scope
             && effective_scope == MemoryScope::Auto
-            && s.source == MemorySource::Feedback
+            && s.memory_type == MemoryType::Feedback
             && (violations >= 2 || occurrences >= 2 || hits >= 8)
         {
             let src = auto_root.join(format!("{}.md", s.key));
@@ -467,13 +467,13 @@ impl MarkdownMemoryProvider {
         if effective_scope == MemoryScope::Auto
             && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
         {
-            let expired = match s.source {
-                MemorySource::Project => unmodified_days >= 21 && unrecalled_days >= 30,
-                MemorySource::Feedback => {
+            let expired = match s.memory_type {
+                MemoryType::Project => unmodified_days >= 21 && unrecalled_days >= 30,
+                MemoryType::Feedback => {
                     unmodified_days >= 60 && unrecalled_days >= 60 && violations == 0
                 }
-                MemorySource::Reference => unmodified_days >= 90 && unrecalled_days >= 90,
-                MemorySource::User => false,
+                MemoryType::Reference => unmodified_days >= 90 && unrecalled_days >= 90,
+                MemoryType::User => false,
             };
             if expired {
                 let src = auto_root.join(format!("{}.md", s.key));

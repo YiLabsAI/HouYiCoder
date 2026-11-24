@@ -25,12 +25,6 @@ use std::fs::remove_dir_all;
 use std::process::id;
 
 /// Build a forked extraction runner over a caller-provided ephemeral store.
-/// The store is ephemeral (an in-memory backend the caller constructs) so the
-/// forked transcript stays out of the durable main log. The provider and
-/// memory are shared (Arc clone) so prompt caching and the in-process write
-/// lock carry over. The save_memory tool is registered with the given
-/// recorder so the caller can drain the exact operations the fork landed
-/// this pass, separately from the recorder the main runner's tool carries.
 pub(crate) fn build_forked_extract_runner(
     store: Arc<dyn SessionLog>,
     provider: Arc<dyn ModelProvider>,
@@ -63,9 +57,6 @@ pub(crate) async fn run_forked_extract(
     // formatMemoryManifest pre-inject). Built before moving memory into
     // the runner.
     let prompt = build_extraction_prompt(&memory.list_memories());
-    // The evidence window the save_memory tool validates quotes against:
-    // the exact events the forked agent sees, owned so the Arc<dyn Tool>
-    // outlives the borrowed ExactExtractionWindow.
     let evidence = Arc::from(window.events().to_vec());
     let runner =
         build_forked_extract_runner(store, provider, memory, cwd, config, recorder, evidence);

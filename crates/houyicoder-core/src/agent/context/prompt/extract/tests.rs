@@ -9,7 +9,7 @@ use super::*;
 fn test_extraction_prompt_names_guardrails() {
     let p = extraction_prompt();
     assert!(
-        p.contains("save_memory"),
+        p.contains("memory_write"),
         "prompt must name the structured write tool"
     );
     assert!(
@@ -94,7 +94,7 @@ fn test_build_prompt_appends_manifest() {
     let mem = MemorySummary {
         key: "build-gate".into(),
         description: "make check must stay green".into(),
-        source: MemorySource::Project,
+        memory_type: MemoryType::Project,
         mtime_secs: 0,
         scope: MemoryScope::Auto,
         origin: MemoryOrigin::Unknown,

@@ -42,6 +42,12 @@ fn test_memory_tools_key_field() {
     // The keyed memory tools take a "key" field, show_memory plus an
     // optional scope; the chip shows the key, not a raw JSON glimpse.
     for tool in [
+        "memory_write",
+        "memory_read",
+        "memory_delete",
+        "memory_archive",
+        "memory_promote",
+        "memory_demote",
         "save_memory",
         "delete_memory",
         "promote_memory",
@@ -66,6 +72,10 @@ fn test_search_pulls_query() {
     // search_memory takes a free-text query rather than a key; the chip
     // and the search index must show the query, not a JSON glimpse of it.
     let input = serde_json::json!({ "query": "how the deploy gate works" });
+    assert_eq!(
+        tool_invocation("memory_search", &input),
+        "how the deploy gate works"
+    );
     assert_eq!(
         tool_invocation("search_memory", &input),
         "how the deploy gate works"

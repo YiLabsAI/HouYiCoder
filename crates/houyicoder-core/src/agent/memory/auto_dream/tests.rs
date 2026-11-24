@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use houyicoder_api::agent_event::{
     AgentEventHandlers, MemoryChange, MemoryChangeOrigin, MemoryChangedEvent, MemoryOperation,
 };
-use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryScope, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryScope, MemoryType};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_memory::MarkdownMemoryProvider;
 use houyicoder_protocol::llm::{
@@ -17,7 +17,7 @@ use crate::agent::reward_snapshot::FailureHotspot;
 use crate::agent::reward_snapshot::RedundantCluster;
 use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::runner_config::RunnerConfig;
-use crate::agent::tools::MemoryAddTool;
+use crate::agent::tools::MemoryWriteTool;
 use crate::observability::evolution::RedundancyKind;
 use crate::provider::test_support::FakeProvider;
 use houyicoder_api::memory::MemoryProvider;
@@ -278,7 +278,7 @@ fn test_prompt_has_phases_root() {
     let listing = vec![MemorySummary::new(
         "user-prefers-terse",
         "User prefers terse responses",
-        MemorySource::Feedback,
+        MemoryType::Feedback,
         MemoryScope::Auto,
         100,
     )];
@@ -324,14 +324,14 @@ fn test_listing_names_scope() {
         MemorySummary::new(
             "rule-x",
             "a rule in the project root",
-            MemorySource::Project,
+            MemoryType::Project,
             MemoryScope::Project,
             100,
         ),
         MemorySummary::new(
             "rule-y",
             "a rule in the auto root",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
             MemoryScope::Auto,
             200,
         ),
@@ -473,11 +473,11 @@ fn scripted(n: usize) -> CompletionResponse {
                 },
                 OutputItem::ToolCall {
                     id: "s1".into(),
-                    name: "save_memory".into(),
+                    name: "memory_write".into(),
                     input: serde_json::json!({
                         "key": "dream-fact",
                         "description": "A fact the dream consolidated",
-                        "source": "project",
+                        "type": "project",
                         "content": "A consolidated fact with an absolute date."
                     }),
                 },
@@ -930,8 +930,8 @@ async fn test_dream_pins_save_scope() {
     let defs = runner.tools().tool_defs();
     let save_def = defs
         .iter()
-        .find(|d| d.name == "save_memory")
-        .expect("dream registers save_memory");
+        .find(|d| d.name == "memory_write")
+        .expect("dream registers memory_write");
     let props = save_def.input_schema["properties"].as_object().unwrap();
     assert!(
         !props.contains_key("scope"),
@@ -942,13 +942,13 @@ async fn test_dream_pins_save_scope() {
         "the dream owns no conversation window, so no evidence is demanded: {save_def:?}"
     );
 
-    let tool = MemoryAddTool::new(memory.clone())
+    let tool = MemoryWriteTool::new(memory.clone())
         .with_origin(MemoryOrigin::Dream)
         .with_pinned_scope(MemoryScope::Auto);
     let input = serde_json::json!({
         "key": "dream-consolidated",
         "description": "consolidated by the dream",
-        "source": "feedback",
+        "type": "feedback",
         "content": "rule body",
         "scope": "user",
     });
@@ -973,7 +973,7 @@ async fn test_dream_pins_save_scope() {
             MemoryEntry::new(
                 "promoted-rule",
                 "explicit project entry body",
-                MemorySource::Feedback,
+                MemoryType::Feedback,
             ),
             MemoryScope::Project,
         )
@@ -981,7 +981,7 @@ async fn test_dream_pins_save_scope() {
     let refresh = serde_json::json!({
         "key": "promoted-rule",
         "description": "consolidated refresh",
-        "source": "feedback",
+        "type": "feedback",
         "content": "refreshed rule body",
     });
     let refresh_outcome = tool

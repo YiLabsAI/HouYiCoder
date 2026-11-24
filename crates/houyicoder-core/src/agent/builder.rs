@@ -23,7 +23,8 @@ use crate::agent::multi_agent::bus_types::BusMessage;
 use crate::agent::reducer::ToolOutputReducer;
 use crate::agent::skill_reload::SkillReloadGuard;
 use crate::agent::tools::{
-    DemoteMemoryTool, MemoryAddTool, PromoteMemoryTool, SearchMemoryTool, ShowMemoryTool,
+    MemoryArchiveTool, MemoryDeleteTool, MemoryDemoteTool, MemoryPromoteTool, MemoryReadTool,
+    MemorySearchTool, MemoryWriteTool,
 };
 use crate::agent::{RunError, Runner, VerifyGate};
 use houyicoder_api::agent_event::AgentEventHandlers;
@@ -150,20 +151,26 @@ impl Runner {
         if let Some(provider) = runtime.provider().cloned() {
             let recorder = runtime.install_primary_recorder();
             self.tools.register(Arc::new(
-                MemoryAddTool::new(provider.clone())
+                MemoryWriteTool::new(provider.clone())
                     .with_origin(MemoryOrigin::MainAgent)
                     .with_recorder(recorder.clone()),
             ));
             self.tools.register(Arc::new(
-                SearchMemoryTool::new(provider.clone()).with_reranker(runtime.reranker().cloned()),
+                MemorySearchTool::new(provider.clone()).with_reranker(runtime.reranker().cloned()),
             ));
             self.tools
-                .register(Arc::new(ShowMemoryTool::new(provider.clone())));
+                .register(Arc::new(MemoryReadTool::new(provider.clone())));
             self.tools.register(Arc::new(
-                PromoteMemoryTool::new(provider.clone()).with_recorder(recorder.clone()),
+                MemoryDeleteTool::new(provider.clone()).with_recorder(recorder.clone()),
             ));
             self.tools.register(Arc::new(
-                DemoteMemoryTool::new(provider).with_recorder(recorder),
+                MemoryArchiveTool::new(provider.clone()).with_recorder(recorder.clone()),
+            ));
+            self.tools.register(Arc::new(
+                MemoryPromoteTool::new(provider.clone()).with_recorder(recorder.clone()),
+            ));
+            self.tools.register(Arc::new(
+                MemoryDemoteTool::new(provider).with_recorder(recorder),
             ));
         }
         self.memory = runtime;
@@ -171,25 +178,23 @@ impl Runner {
     }
 
     /// Install memory writes and mutation tracking for an extraction run.
-    /// The tool is the pinned construction: extractor origin, an auto-root
-    /// pin for new keys, and the evidence window every save must quote.
     pub(crate) fn install_extraction_memory(
         mut self,
         provider: Arc<dyn MemoryProvider>,
         recorder: Arc<MutationLog>,
         evidence: Arc<[houyicoder_context::SessionLogEntry]>,
     ) -> Self {
-        self.tools.register(Arc::new(MemoryAddTool::new_extraction(
-            provider.clone(),
-            recorder,
-            evidence,
-        )));
+        self.tools
+            .register(Arc::new(MemoryWriteTool::new_extraction(
+                provider.clone(),
+                recorder,
+                evidence,
+            )));
         self.memory.install_provider(provider);
         self
     }
 
-    /// Read access to the tool registry. The composition root + tests use it
-    /// to assert a tool is registered (e.g. save_memory after install_memory).
+    /// Read access to the tool registry.
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
     }

@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use std::collections::HashSet;
 
 #[test]
@@ -17,6 +17,6 @@ fn test_stub_rank_returns_empty() {
 #[test]
 fn test_stub_add_succeeds() {
     let provider = StubMemoryProvider::new();
-    let e = MemoryEntry::new("k", "content", MemorySource::User);
+    let e = MemoryEntry::new("k", "content", MemoryType::User);
     assert!(provider.add(e).is_ok());
 }

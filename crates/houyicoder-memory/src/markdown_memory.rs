@@ -295,7 +295,7 @@ impl MarkdownMemoryProvider {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        Ok(MemoryEntry::new(key, body, fm.source)
+        Ok(MemoryEntry::new(key, body, fm.memory_type)
             .with_meta(fm.description.clone(), mtime_secs)
             .with_origin(fm.origin))
     }
@@ -484,31 +484,16 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.record_gate_violation_impl(key);
     }
 
-    fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
+    fn rank_candidates(&self, query: &str, injected_keys: &HashSet<String>) -> Vec<MemoryRankHit> {
         let keywords = tokenize(query);
-        // A query with no word content ranks nothing. A query the tokenizer
-        // cannot split (a single CJK char) still scans, so its rows reach
-        // the semantic stage at score zero instead of being dropped.
         if keywords.is_empty() && !has_word_content(query) {
             return Vec::new();
         }
         let candidates = self.scan_candidates();
-        // Filter already-surfaced keys BEFORE ranking so fresh candidates
-        // beyond the scan cap get a chance when the top-ranked entries are
-        // all surfaced. Surfaced is caller-provided (the set of keys already
-        // in the assembled context), so the provider holds no surfaced state
-        // across calls.
         let fresh: Vec<ScannedTopic> = candidates
             .into_iter()
-            .filter(|t| !surfaced.contains(&t.key))
+            .filter(|t| !injected_keys.contains(&t.key))
             .collect();
-        // Score every field the record carries: the key is the most
-        // deliberate label, the description the summary the writer chose, and
-        // the body the place a concrete error string actually lands. The scan
-        // already read each file to parse its frontmatter, so the body costs
-        // no extra I/O. Zero-score rows stay in the list, sorted last, as the
-        // semantic stage's candidate input for a query the lexical stage
-        // could not match.
         let mut hits: Vec<MemoryRankHit> = Vec::new();
         let query_has_words = !keywords.is_empty();
         for t in fresh {
@@ -528,7 +513,7 @@ impl MemoryProvider for MarkdownMemoryProvider {
             hits.push(MemoryRankHit::new(
                 t.key,
                 fm.description,
-                fm.source,
+                fm.memory_type,
                 MemoryScope::for_root_index(t.root_index),
                 t.mtime,
                 score,

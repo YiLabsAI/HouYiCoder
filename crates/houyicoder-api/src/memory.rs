@@ -17,7 +17,7 @@
 //! of memory keys already in the assembled context (scanned from the
 //! assembled transcript) so the rank skips entries the model already sees
 //! this turn. Compaction folds old memory-recall events out of the assembled
-//! context (they take the Summarized disposition), so the scanned surfaced
+//! context (they take the Summarized disposition), so the scanned injected
 //! set naturally empties at the compaction boundary — the reset falls out of
 //! the assembly, with no provider-side mutable state to clear. Recall
 //! re-scans the post-compact transcript for already-injected attachments
@@ -55,22 +55,14 @@ impl MemoryWriteOutcome {
     }
 }
 
-/// Engine-facing rank plus write seam. The engine holds this trait and never
-/// sees the backend. rank_candidates is deterministic lexical ranking over
-/// frontmatter metadata that skips any key in surfaced (a key already in the
-/// assembled context this turn); add lands a single source of truth; update
-/// rewrites; rebuild_index regenerates the derived index from the topic
-/// files (self-healing).
+/// Engine-facing rank plus write boundary.
 pub trait MemoryProvider: Send + Sync {
     /// Rank stored memories against the query as metadata rows, most
-    /// relevant first, skipping any key in surfaced. Zero-score rows stay in
-    /// the list, sorted last, so a query with no lexical overlap still
-    /// offers its candidates to the semantic stage. The caller builds
-    /// surfaced by scanning the assembled transcript for already-injected
-    /// memory-recall events, so the provider holds no surfaced state across
-    /// calls. Default empty for providers without a rank path.
-    fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
-        let _ = (query, surfaced);
+    /// relevant first, skipping any key in injected_keys. Zero-score rows stay
+    /// in the list, sorted last, so a query with no lexical overlap still
+    /// offers its candidates to the semantic stage.
+    fn rank_candidates(&self, query: &str, injected_keys: &HashSet<String>) -> Vec<MemoryRankHit> {
+        let _ = (query, injected_keys);
         Vec::new()
     }
     /// Atomically write a new memory entry (single source of truth; the

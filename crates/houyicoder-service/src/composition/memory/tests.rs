@@ -6,7 +6,7 @@ use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, SessionEvent, SessionId, SessionLogEntry};
-use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryType};
 use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
@@ -214,7 +214,7 @@ fn test_roots_honor_home_override() {
         .add(MemoryEntry::new(
             "isolated-key",
             "written under the override",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .expect("save lands");
     let override_user = isolated.join(".houyicoder").join("memory");

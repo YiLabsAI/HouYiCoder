@@ -10,7 +10,7 @@ use houyicoder_context::{
     CheckpointId, CheckpointManifest, Disposition, EventId, SessionEvent, SessionId,
     SessionLogEntry, TurnGroup,
 };
-use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryType};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_memory::MarkdownMemoryProvider;
 use houyicoder_session::SessionStore;
@@ -176,7 +176,7 @@ fn test_memory_index_formats_entries() {
         .add(MemoryEntry::new(
             "proj-pref",
             "prefer let chains",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -200,7 +200,7 @@ fn test_memory_index_formats_entries() {
         .add(MemoryEntry::new(
             "late-entry",
             "written after the first request",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     let frozen = runner.format_memory_index().unwrap();

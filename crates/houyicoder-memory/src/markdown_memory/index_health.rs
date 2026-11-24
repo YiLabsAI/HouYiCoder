@@ -18,7 +18,7 @@ use std::cell::Cell;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use houyicoder_context::{MemoryError, MemorySource, render_memory_index_groups, tokens_for};
+use houyicoder_context::{MemoryError, MemoryType, render_memory_index_groups, tokens_for};
 
 use super::MarkdownMemoryProvider;
 use super::io::{
@@ -51,10 +51,8 @@ impl MarkdownMemoryProvider {
     /// see one topic set. Both the full rebuild and the write path call this,
     /// so the disk format has a single producer.
     pub(super) fn render_root_index(&self, root: &Path) -> Result<(), MemoryError> {
-        let mut rows: Vec<(MemorySource, String, String)> = Vec::new();
+        let mut rows: Vec<(MemoryType, String, String)> = Vec::new();
         for topic in Self::scan_root(root) {
-            // A key no row can address stays out of the index rather than
-            // publishing a row that reads back as another key.
             if !Self::index_key_representable(&topic.key) {
                 continue;
             }
@@ -62,7 +60,7 @@ impl MarkdownMemoryProvider {
                 continue;
             };
             rows.push((
-                frontmatter.source,
+                frontmatter.memory_type,
                 topic.key.clone(),
                 frontmatter.description,
             ));

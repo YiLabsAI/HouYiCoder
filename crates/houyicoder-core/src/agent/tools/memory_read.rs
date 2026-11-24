@@ -16,28 +16,25 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
 
-/// A structured memory-read tool. An agent calls it to read the full body of
-/// one memory before deciding whether to merge, update, delete, or act on it;
-/// the provider owns the read path.
-pub struct ShowMemoryTool {
+/// Structured memory-read tool.
+pub struct MemoryReadTool {
     provider: Arc<dyn MemoryProvider>,
 }
 
-impl ShowMemoryTool {
-    /// Construct with a shared provider handle. The provider is shared with
-    /// the runner memory so the forked dream reads the same store.
+impl MemoryReadTool {
+    /// Construct with a shared provider handle.
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self { provider }
     }
 }
 
-impl Tool for ShowMemoryTool {
+impl Tool for MemoryReadTool {
     fn name(&self) -> &str {
-        "show_memory"
+        "memory_read"
     }
     fn description(&self) -> &str {
         "Read the full body of one stored memory by its key. Returns the key, \
-         description, source, mtime, and content. Use it when a memory listing \
+         description, type, mtime, and content. Use it when a memory listing \
          shows a candidate you need to inspect in full before acting on it. \
          Pass scope when the same key is stored in more than one scope."
     }
@@ -70,7 +67,7 @@ impl Tool for ShowMemoryTool {
                 .filter(|k| !k.is_empty())
                 .ok_or_else(|| {
                     ToolError::InvalidInput(
-                        "show_memory: 'key' must be a non-empty string".to_string(),
+                        "memory_read: 'key' must be a non-empty string".to_string(),
                     )
                 })?;
             let scope = match input.get("scope") {
@@ -81,7 +78,7 @@ impl Tool for ShowMemoryTool {
             Ok(json!({
                 "key": entry.key,
                 "description": entry.description,
-                "source": entry.source.as_label(),
+                "type": entry.memory_type.as_label(),
                 "mtime": entry.mtime_secs,
                 "content": entry.content,
             }))
@@ -106,20 +103,15 @@ impl Tool for ShowMemoryTool {
 /// did not choose.
 fn parse_scope(value: &Value) -> Result<MemoryScope, ToolError> {
     let label = value.as_str().ok_or_else(|| {
-        ToolError::InvalidInput("show_memory: 'scope' must be a string".to_string())
+        ToolError::InvalidInput("memory_read: 'scope' must be a string".to_string())
     })?;
     MemoryScope::from_label(label).ok_or_else(|| {
         ToolError::InvalidInput(format!(
-            "show_memory: unknown scope '{label}'; use user, project, or auto"
+            "memory_read: unknown scope '{label}'; use user, project, or auto"
         ))
     })
 }
 
-/// Read the body for a key, resolving the scope question first. A key stored
-/// in one scope reads straight through. A key stored in more than one has two
-/// different bodies, so the caller must name the scope it wants — picking the
-/// newest would hand back a body the caller did not ask for and cannot tell
-/// apart from the one it did.
 fn read_body(
     provider: &dyn MemoryProvider,
     key: &str,
@@ -128,7 +120,7 @@ fn read_body(
     if let Some(scope) = scope {
         return provider.show_memory_in_scope(key, scope).ok_or_else(|| {
             ToolError::Failed(format!(
-                "show_memory: no memory with key '{key}' in scope '{}'",
+                "memory_read: no memory with key '{key}' in scope '{}'",
                 scope.as_label()
             ))
         });
@@ -137,14 +129,14 @@ fn read_body(
     if scopes.len() > 1 {
         let names: Vec<&str> = scopes.iter().map(|s| s.as_label()).collect();
         return Err(ToolError::InvalidInput(format!(
-            "show_memory: '{key}' is stored in {} scopes ({}); pass scope to choose one",
+            "memory_read: '{key}' is stored in {} scopes ({}); pass scope to choose one",
             scopes.len(),
             names.join(", ")
         )));
     }
     provider
         .show_memory(key)
-        .ok_or_else(|| ToolError::Failed(format!("show_memory: no memory with key '{key}'")))
+        .ok_or_else(|| ToolError::Failed(format!("memory_read: no memory with key '{key}'")))
 }
 
 #[cfg(test)]

@@ -152,11 +152,11 @@ fn shipped_memory_runner(store: Arc<SessionStore>) -> Runner {
         call("c1", "guarded", serde_json::json!({})),
         call(
             "c2",
-            "save_memory",
+            "memory_write",
             serde_json::json!({
                 "key": "inline-save",
                 "description": "a save the resumed leg lands",
-                "source": "user",
+                "type": "user",
                 "content": "the resumed leg writes this",
             }),
         ),

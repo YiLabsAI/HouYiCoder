@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fs::OpenOptions;
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryType};
 use houyicoder_memory::MarkdownMemoryProvider;
 use serde::Deserialize;
 use std::process::id;
@@ -71,12 +71,8 @@ pub fn seed_corpus(corpus: &Corpus) -> (MarkdownMemoryProvider, PathBuf) {
     for entry in &corpus.entries {
         provider
             .add(
-                MemoryEntry::new(
-                    entry.key.as_str(),
-                    entry.body.clone(),
-                    MemorySource::Project,
-                )
-                .with_meta(entry.description.clone(), 0),
+                MemoryEntry::new(entry.key.as_str(), entry.body.clone(), MemoryType::Project)
+                    .with_meta(entry.description.clone(), 0),
             )
             .expect("corpus entry seeds");
     }

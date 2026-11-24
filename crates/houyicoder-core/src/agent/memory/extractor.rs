@@ -434,15 +434,14 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry])
     }
 }
 
-/// Whether the tail holds a save_memory call that succeeded. Pairs each
-/// call with its ToolResult and requires a saved key (present on created,
-/// updated, and unchanged; absent on error or a missing result), so a
-/// failed or unanswered save does not skip extraction.
+/// Whether the tail holds a memory_write call that succeeded.
 fn primary_saved_in(tail: &[SessionLogEntry]) -> bool {
     let save_call_ids: Vec<&str> = tail
         .iter()
         .filter_map(|m| match &m.event {
-            SessionEvent::ToolCall { tool, call_id, .. } if tool == "save_memory" => {
+            SessionEvent::ToolCall { tool, call_id, .. }
+                if matches!(tool.as_str(), "memory_write" | "save_memory") =>
+            {
                 Some(call_id.as_str())
             }
             _ => None,

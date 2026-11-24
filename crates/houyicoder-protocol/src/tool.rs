@@ -41,10 +41,10 @@ pub fn tool_invocation(tool: &str, input: &Value) -> String {
         "bash" => "command",
         "read" | "write" | "edit" | "multiedit" => "path",
         "grep" | "glob" => "pattern",
-        "save_memory" | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory" => {
-            "key"
-        }
-        "search_memory" => "query",
+        "memory_write" | "memory_read" | "memory_delete" | "memory_archive" | "memory_promote"
+        | "memory_demote" | "save_memory" | "delete_memory" | "promote_memory"
+        | "demote_memory" | "show_memory" => "key",
+        "memory_search" | "search_memory" => "query",
         _ => return canonical_json(input),
     };
     match input.get(field).and_then(|v| v.as_str()) {

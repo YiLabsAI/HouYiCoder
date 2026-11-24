@@ -17,9 +17,7 @@ use houyicoder_api::skill::SkillDescriptor;
 use houyicoder_api::skill::SkillError;
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::skill::SkillSnapshot;
-use houyicoder_context::{
-    CachedBlockDecision, MemoryEntry, MemoryError, MemoryScope, MemorySource,
-};
+use houyicoder_context::{CachedBlockDecision, MemoryEntry, MemoryError, MemoryScope, MemoryType};
 use houyicoder_protocol::llm::EffortLevel;
 use std::collections::HashSet;
 use std::path::Path;
@@ -663,7 +661,7 @@ fn test_memory_forget_routes_scope() {
     });
     // Exercise the mock methods so the stub has no dead code.
     drop(provider.rank_candidates("", &HashSet::new()));
-    drop(provider.add(MemoryEntry::new("k", "c", MemorySource::Project)));
+    drop(provider.add(MemoryEntry::new("k", "c", MemoryType::Project)));
     let mut runner = Runner::new(
         Arc::new(SessionStore::new(Box::new(InMemoryBackend::new()))),
         Arc::new(FakeProvider::text("x")),

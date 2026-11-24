@@ -1,38 +1,14 @@
-//! The structured memory-write tool the memory-writing seams share to
-//! land new memories. The agent emits a structured call with key, description,
-//! source, and content fields; the tool routes it through the memory
-//! provider add method, which owns the atomic two-step (topic file plus
-//! derived-index pointer) and the in-process write lock. The tool holds no
-//! path logic of its own — the provider owns every path — so there is no
-//! path-escape surface for the agent to probe. This is the structurally-safe
-//! alternative to a raw sandboxed Write: the capability is save a memory
-//! entry, not write an arbitrary file under the memory dir.
+//! Structured memory-write tool used by the main agent, extractor, and dream.
 //!
-//! Auto-approve by construction: the approval gate stays off and the tool
-//! is not destructive (an add creates or refreshes one topic; it does not
-//! delete or overwrite unrelated state). The forked extraction agent runs
-//! autonomously — a per-call approval gate would starve memory (the agent
-//! would queue approvals no one answers) — so the gate is off here and
-//! safety comes from the structured capability plus the what-not-to-save
-//! guidance in the extraction prompt. Each seam registers its own
-//! construction: origin is host-stamped per seam, and the extraction and
-//! dream ones pin the storage root so their writes cannot open a root the
-//! host did not name — a pinned save lands in the pinned root, except the
-//! host-side refresh routing for keys already in the project root.
-//!
-//! The provider is shared with the runner that owns it, so a forked
-//! extraction run in the same process lands writes under the same write lock
-//! as an explicit user save — no cross-write orphan within the process.
-//! Cross-process safety is a store-level concern (a planned journal), not
-//! this tool concern.
+//! Callers pass key, description, type, and content fields; the tool routes
+//! them through the memory provider under its write lock and path validation.
 
 use std::sync::Arc;
 
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, SessionEvent,
-    SessionLogEntry,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemoryType, SessionEvent, SessionLogEntry,
 };
 use serde_json::{Value, json};
 
@@ -44,38 +20,17 @@ use std::time::UNIX_EPOCH;
 use tracing::debug;
 use unicode_normalization::UnicodeNormalization;
 
-/// A structured memory-write tool. The forked extraction agent calls it to
-/// persist a new memory entry; the provider owns the atomic write. Holds the
-/// provider behind an Arc so it shares the write lock with any other caller
-/// in the same process.
-pub struct MemoryAddTool {
+/// Structured memory-write tool backed by a shared memory provider.
+pub struct MemoryWriteTool {
     provider: Arc<dyn MemoryProvider>,
-    /// Optional write recorder the caller threads in to learn how many saves
-    /// landed. Incremented on a successful add. The forked-extraction seam
-    /// resets it before a pass and reads it after to fire one AutoMemory
-    /// notice; the main-agent seam leaves it for the runtime to drain when the
-    /// turn settles into a PrimaryAgent notice.
     recorder: Option<Arc<MutationLog>>,
-    /// Which writer this tool saves on behalf of. Injected by the host at
-    /// construction (the LLM never provides origin) so a dream cannot
-    /// self-promote. Unknown for a bare tool (tests).
     origin: MemoryOrigin,
-    /// Storage root pinned by the host. Some on the forked-extraction and
-    /// dream seams, where the model is offered no scope field and every write
-    /// lands in the auto root; None where the model picks the root per call.
     scope: Option<MemoryScope>,
-    /// Whether saves must quote window evidence. Set by the extraction seam,
-    /// which owns a real window; a pinned tool without a window (the dream)
-    /// checks nothing rather than fabricate a ground.
     requires_evidence: bool,
-    /// The evidence window the extraction seam validates quotes against. Empty
-    /// on the unpinned main-agent tool (no grounding check); the host-owned
-    /// window events on the extraction seam, so every save must quote text the
-    /// forked agent actually saw rather than a manifest-only fact.
     evidence: Arc<[SessionLogEntry]>,
 }
 
-impl MemoryAddTool {
+impl MemoryWriteTool {
     /// Construct with a shared provider handle. The provider is shared with
     /// the runner memory so forked-extract writes land under the same lock.
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
@@ -136,19 +91,19 @@ impl MemoryAddTool {
     }
 }
 
-impl Tool for MemoryAddTool {
+impl Tool for MemoryWriteTool {
     fn name(&self) -> &str {
-        "save_memory"
+        "memory_write"
     }
     fn description(&self) -> &str {
-        "Save a memory entry that captures context NOT derivable from the \
+        "Write a memory entry that captures context NOT derivable from the \
          current project state (code, git, file structure). Use ONLY for \
          non-obvious facts: user role/preferences, corrective or validating \
          feedback, project goals/decisions/why, or pointers to external \
          systems. Do NOT save code patterns, architecture, file paths, fix \
          recipes, or ephemeral task state — those are derivable or already \
          in the code. Provide a short kebab-case key, a one-line description \
-         (specific, naming the entities it relates to), the source type, and \
+         (specific, naming the entities it relates to), the memory type, and \
          the body. For feedback and project types, structure the body as the \
          rule or fact followed by Why and How-to-apply lines."
     }
@@ -164,7 +119,7 @@ impl Tool for MemoryAddTool {
                     "type": "string",
                     "description": "One-line summary used to decide relevance in future conversations. Be specific and name the entities it relates to."
                 },
-                "source": {
+                "type": {
                     "type": "string",
                     "enum": ["user", "feedback", "project", "reference"],
                     "description": "user = user role/preferences; feedback = corrective or validating guidance on how to work; project = ongoing work/goals/decisions not in git; reference = pointer to an external system."
@@ -179,7 +134,7 @@ impl Tool for MemoryAddTool {
                     "description": "Optional list of superseded memory keys consolidated into this entry. Their counters merge into this key and the old files move to the archive directory."
                 }
             },
-            "required": ["key", "description", "source", "content"],
+            "required": ["key", "description", "type", "content"],
             "additionalProperties": false
         });
         if self.requires_evidence {
@@ -236,35 +191,21 @@ impl Tool for MemoryAddTool {
         Box::pin(async move {
             let key = parse_string(&input, "key")?;
             let description = parse_string(&input, "description")?;
-            let source = parse_source(&input)?;
+            let memory_type = parse_type(&input)?;
             let content = parse_string(&input, "content")?;
-            // The extraction seam grounds every save in window evidence before
-            // the write: a save whose quotes are not substrings of a window
-            // event body is rejected with a correctable error, so no write
-            // lands and the recorder stays flat. Unpinned tools skip this.
             if self.requires_evidence {
                 validate_extraction_evidence(&self.evidence, &input)?;
             }
-            // A host-pinned tool ignores any scope in the input: the pin is
-            // the answer, whatever the caller sent. The pin resolves per
-            // key: a save lands in the pinned root, except that a key
-            // already living in the project root refreshes that root in
-            // place — a competing copy in the pinned root would shadow the
-            // project entry by newest-mtime and lose the refresh.
             let scope = match self.scope {
                 Some(pinned) => refresh_root(provider.as_ref(), &key, pinned),
                 None => parse_scope(&input, provider.as_ref(), &key),
             };
             let replaces = parse_replaces(&input);
-            // Stamp the entry with the current time so a backend that does
-            // not restat on recall still sees a fresh mtime; backends that
-            // restat (the markdown store) overwrite this with the file stat,
-            // so the value is correct either way.
             let now_secs = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let entry = MemoryEntry::new(key.clone(), content, source)
+            let entry = MemoryEntry::new(key.clone(), content, memory_type)
                 .with_meta(description, now_secs)
                 .with_origin(self.origin);
             let save = if !replaces.is_empty() {
@@ -318,34 +259,27 @@ impl Tool for MemoryAddTool {
     }
 }
 
-/// Extract a required string field from the input object. A missing or
-/// non-string field is a clear error the model can see and correct rather
-/// than a silent panic.
 fn parse_string(input: &Value, field: &str) -> Result<String, ToolError> {
     input
         .get(field)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| {
-            ToolError::Failed(format!("save_memory: '{field}' must be a non-empty string"))
+            ToolError::Failed(format!(
+                "memory_write: '{field}' must be a non-empty string"
+            ))
         })
 }
 
-/// Parse the source enum from the label the model sent. Rejects unknown
-/// labels with the accepted set so the model can self-correct.
-fn parse_source(input: &Value) -> Result<MemorySource, ToolError> {
-    let label = input
-        .get("source")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            ToolError::Failed(
-                "save_memory: 'source' must be one of user, feedback, project, reference"
-                    .to_string(),
-            )
-        })?;
-    MemorySource::from_label(label).ok_or_else(|| {
+fn parse_type(input: &Value) -> Result<MemoryType, ToolError> {
+    let label = input.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+        ToolError::Failed(
+            "memory_write: 'type' must be one of user, feedback, project, reference".to_string(),
+        )
+    })?;
+    MemoryType::from_label(label).ok_or_else(|| {
         ToolError::Failed(format!(
-            "save_memory: 'source' must be user, feedback, project, or reference; got '{label}'"
+            "memory_write: 'type' must be user, feedback, project, or reference; got '{label}'"
         ))
     })
 }
@@ -398,17 +332,11 @@ fn refresh_root(provider: &dyn MemoryProvider, key: &str, pinned: MemoryScope) -
     }
 }
 
-/// Build a correctable evidence-rejection error and trace it host-side so a
-/// recurring extraction failure is observable in the tracing stream.
 fn reject_evidence(msg: String) -> ToolError {
-    debug!(target: "memory_add", "extraction evidence rejected: {msg}");
+    debug!(target: "memory_write", "extraction evidence rejected: {msg}");
     ToolError::Failed(msg)
 }
 
-/// Validate the extraction seam's evidence: one to three quotes, each a
-/// normalized substring of some window event's body. A save keyed on a
-/// manifest-only fact has no quote the window contains, so it is rejected
-/// with a correctable error before any write or recorder bump.
 fn validate_extraction_evidence(
     window: &[SessionLogEntry],
     input: &Value,
@@ -418,31 +346,31 @@ fn validate_extraction_evidence(
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
             reject_evidence(
-                "save_memory: 'evidence' must be an array of 1..3 quotes copied from the conversation window"
+                "memory_write: 'evidence' must be an array of 1..3 quotes copied from the conversation window"
                     .to_string(),
             )
         })?;
     if evidence.is_empty() {
         return Err(reject_evidence(
-            "save_memory: 'evidence' must contain at least one quote from the conversation window"
+            "memory_write: 'evidence' must contain at least one quote from the conversation window"
                 .to_string(),
         ));
     }
     if evidence.len() > 3 {
         return Err(reject_evidence(
-            "save_memory: 'evidence' may contain at most three quotes".to_string(),
+            "memory_write: 'evidence' may contain at most three quotes".to_string(),
         ));
     }
     for (i, item) in evidence.iter().enumerate() {
         let quote = item.get("quote").and_then(|v| v.as_str()).ok_or_else(|| {
             reject_evidence(format!(
-                "save_memory: evidence[{i}] must have a non-empty 'quote' copied from the conversation window"
+                "memory_write: evidence[{i}] must have a non-empty 'quote' copied from the conversation window"
             ))
         })?;
         let needle = normalize_quote(quote);
         if needle.is_empty() {
             return Err(reject_evidence(format!(
-                "save_memory: evidence[{i}] quote is empty after normalization"
+                "memory_write: evidence[{i}] quote is empty after normalization"
             )));
         }
         if !window
@@ -450,7 +378,7 @@ fn validate_extraction_evidence(
             .any(|e| normalized_body(&e.event).contains(&needle))
         {
             return Err(reject_evidence(format!(
-                "save_memory: evidence[{i}] quote was not found in the conversation window; copy the snippet verbatim from the messages above (the manifest is not evidence)"
+                "memory_write: evidence[{i}] quote was not found in the conversation window; copy the snippet verbatim from the messages above (the manifest is not evidence)"
             )));
         }
     }
@@ -482,26 +410,20 @@ fn normalized_body(event: &SessionEvent) -> String {
     normalize_quote(raw)
 }
 
-/// Map a memory store error onto the tool error the model sees.
 fn map_memory_error(e: MemoryError) -> ToolError {
     match e {
         MemoryError::InvalidPath(msg) => {
-            ToolError::Failed(format!("save_memory: invalid key/path: {msg}"))
+            ToolError::Failed(format!("memory_write: invalid key/path: {msg}"))
         }
         MemoryError::Corrupt(msg) => {
-            ToolError::Failed(format!("save_memory: corrupt store: {msg}"))
+            ToolError::Failed(format!("memory_write: corrupt store: {msg}"))
         }
-        MemoryError::Io => ToolError::Failed("save_memory: storage I/O failure".to_string()),
+        MemoryError::Io => ToolError::Failed("memory_write: storage I/O failure".to_string()),
         MemoryError::Secret(rule) => ToolError::Failed(format!(
-            "save_memory: the entry looks like it carries a credential ({rule}); \
+            "memory_write: the entry looks like it carries a credential ({rule}); \
              store a pointer to the secret instead of the value"
         )),
-        MemoryError::NotFound => {
-            // add does not look up by key, so NotFound is unreachable here;
-            // map it for completeness so the match is exhaustive over a
-            // growing enum without a wildcard.
-            ToolError::Failed("save_memory: entry not found".to_string())
-        }
+        MemoryError::NotFound => ToolError::Failed("memory_write: entry not found".to_string()),
     }
 }
 

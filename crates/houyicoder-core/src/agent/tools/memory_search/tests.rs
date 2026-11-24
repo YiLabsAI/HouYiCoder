@@ -2,7 +2,7 @@
 
 use super::*;
 use houyicoder_api::memory::RerankOutcome;
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemoryType};
 use houyicoder_memory::MarkdownMemoryProvider;
 use std::env;
 use std::fs;
@@ -58,7 +58,7 @@ fn hit(key: &str, score: u32) -> MemoryRankHit {
     MemoryRankHit::new(
         key,
         format!("{key} description"),
-        MemorySource::Project,
+        MemoryType::Project,
         MemoryScope::Project,
         0,
         score,
@@ -77,11 +77,11 @@ fn root(name: &str) -> PathBuf {
 /// description back, so the two cannot be set independently: the
 /// description is the body's opening line.
 fn entry(key: &str, description: &str, body: &str) -> MemoryEntry {
-    MemoryEntry::new(key, format!("{description}\n{body}"), MemorySource::Project)
+    MemoryEntry::new(key, format!("{description}\n{body}"), MemoryType::Project)
         .with_meta(description.to_string(), 0)
 }
 
-async fn run(tool: &SearchMemoryTool, input: Value) -> Result<Value, ToolError> {
+async fn run(tool: &MemorySearchTool, input: Value) -> Result<Value, ToolError> {
     tool.execute(ToolCtx::new("test"), input).await
 }
 
@@ -101,7 +101,7 @@ async fn test_search_ranks_by_query() {
     provider
         .add(entry("tea-order", "how the team orders tea", "body two"))
         .expect("add tea-order");
-    let tool = SearchMemoryTool::new(Arc::clone(&provider) as Arc<dyn MemoryProvider>);
+    let tool = MemorySearchTool::new(Arc::clone(&provider) as Arc<dyn MemoryProvider>);
     let out = run(&tool, json!({ "query": "deploy gate review" }))
         .await
         .expect("search");
@@ -118,8 +118,9 @@ async fn test_search_ranks_by_query() {
         matches[0].get("description").and_then(|v| v.as_str()),
         Some("the deploy gate is red until review")
     );
+    assert_eq!(tool.name(), "memory_search");
     assert_eq!(
-        matches[0].get("source").and_then(|v| v.as_str()),
+        matches[0].get("type").and_then(|v| v.as_str()),
         Some("project")
     );
     assert_eq!(
@@ -146,7 +147,7 @@ async fn test_search_no_match_empty() {
     provider
         .add(entry("deploy-gate", "the deploy gate is red", "body"))
         .expect("add");
-    let tool = SearchMemoryTool::new(Arc::clone(&provider) as Arc<dyn MemoryProvider>);
+    let tool = MemorySearchTool::new(Arc::clone(&provider) as Arc<dyn MemoryProvider>);
     let out = run(&tool, json!({ "query": "kettle whistle" }))
         .await
         .expect("search");
@@ -159,7 +160,7 @@ async fn test_search_no_match_empty() {
 async fn test_search_rejects_blank_query() {
     let dir = root("blank");
     let provider = Arc::new(MarkdownMemoryProvider::new(dir.clone()));
-    let tool = SearchMemoryTool::new(Arc::clone(&provider) as Arc<dyn MemoryProvider>);
+    let tool = MemorySearchTool::new(Arc::clone(&provider) as Arc<dyn MemoryProvider>);
     for input in [json!({}), json!({ "query": "" }), json!({ "query": "   " })] {
         let err = run(&tool, input.clone())
             .await
@@ -183,7 +184,7 @@ async fn test_search_ignores_surfaced() {
     let memory = Arc::new(RecordingMemory {
         seen: Mutex::new(Vec::new()),
     });
-    let tool = SearchMemoryTool::new(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
+    let tool = MemorySearchTool::new(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
     run(&tool, json!({ "query": "anything" }))
         .await
         .expect("search");
@@ -197,7 +198,7 @@ async fn test_search_ignores_surfaced() {
 /// second index lookup can leave a row without one.
 #[tokio::test]
 async fn test_search_rows_carry_scope() {
-    let tool = SearchMemoryTool::new(
+    let tool = MemorySearchTool::new(
         Arc::new(RankedRows(vec![hit("listed", 3)])) as Arc<dyn MemoryProvider>
     );
     let out = run(&tool, json!({ "query": "listed" }))
@@ -231,7 +232,7 @@ async fn test_search_reranks_weak_signal() {
         outcome: RerankOutcome::Selected(vec!["deploy-gate".into()]),
         calls: AtomicUsize::new(0),
     });
-    let tool = SearchMemoryTool::new(provider).with_reranker(Some(reranker));
+    let tool = MemorySearchTool::new(provider).with_reranker(Some(reranker));
     let out = run(&tool, json!({ "query": "deploy question" }))
         .await
         .expect("search");
@@ -255,7 +256,7 @@ async fn test_search_semantic_empty() {
         outcome: RerankOutcome::Selected(Vec::new()),
         calls: AtomicUsize::new(0),
     });
-    let tool = SearchMemoryTool::new(provider).with_reranker(Some(reranker));
+    let tool = MemorySearchTool::new(provider).with_reranker(Some(reranker));
     let out = run(&tool, json!({ "query": "kettle" }))
         .await
         .expect("search");
@@ -272,7 +273,7 @@ async fn test_search_rerank_failure_lexical() {
         outcome: RerankOutcome::Unavailable("no route".into()),
         calls: AtomicUsize::new(0),
     });
-    let tool = SearchMemoryTool::new(provider).with_reranker(Some(reranker));
+    let tool = MemorySearchTool::new(provider).with_reranker(Some(reranker));
     let out = run(&tool, json!({ "query": "tea" })).await.expect("search");
     let matches = out
         .get("matches")
@@ -294,7 +295,7 @@ async fn test_search_confident_no_rerank() {
         outcome: RerankOutcome::Selected(Vec::new()),
         calls: AtomicUsize::new(0),
     });
-    let tool = SearchMemoryTool::new(provider)
+    let tool = MemorySearchTool::new(provider)
         .with_reranker(Some(Arc::clone(&reranker) as Arc<dyn MemoryReranker>));
     let out = run(&tool, json!({ "query": "deploy gate" }))
         .await

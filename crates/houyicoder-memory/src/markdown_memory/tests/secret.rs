@@ -3,7 +3,7 @@
 
 use super::super::MarkdownMemoryProvider;
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_context::{MemoryEntry, MemoryError, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryType};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -24,7 +24,7 @@ fn test_credential_write_refused() {
     let outcome = provider.add(MemoryEntry::new(
         "leak",
         "deploy with sk-ant-api03-abcdefghijklmnopqrst",
-        MemorySource::Reference,
+        MemoryType::Reference,
     ));
     assert!(
         matches!(outcome, Err(MemoryError::Secret(_))),
@@ -41,7 +41,7 @@ fn test_ordinary_write_passes() {
     let outcome = provider.add(MemoryEntry::new(
         "policy",
         "integration tests hit a real database",
-        MemorySource::Feedback,
+        MemoryType::Feedback,
     ));
     assert!(outcome.is_ok(), "{outcome:?}");
     assert!(root.join("policy.md").exists(), "the record lands");
@@ -55,7 +55,7 @@ fn test_private_key_refused() {
     let outcome = provider.add(MemoryEntry::new(
         "key",
         "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----",
-        MemorySource::Reference,
+        MemoryType::Reference,
     ));
     assert!(
         matches!(outcome, Err(MemoryError::Secret(_))),
@@ -69,7 +69,7 @@ fn test_description_checked() {
     let root = root("desc");
     let provider = MarkdownMemoryProvider::new(root.clone());
     let outcome = provider.add(
-        MemoryEntry::new("note", "harmless body", MemorySource::Reference)
+        MemoryEntry::new("note", "harmless body", MemoryType::Reference)
             .with_meta("token ghp_abcdefghijklmnopqrstuvwxyz", 0),
     );
     assert!(
@@ -90,7 +90,7 @@ fn test_prefix_words_pass() {
         ("registry", "npm_registry is configured"),
         ("hub", "hf_hub cache lives in the workspace"),
     ] {
-        let outcome = provider.add(MemoryEntry::new(key, body, MemorySource::Reference));
+        let outcome = provider.add(MemoryEntry::new(key, body, MemoryType::Reference));
         assert!(outcome.is_ok(), "{key}: {outcome:?}");
     }
     drop(remove_dir_all(&root));
@@ -105,13 +105,13 @@ fn test_access_key_body() {
     let key = provider.add(MemoryEntry::new(
         "aws",
         "id AKIAABCDEFGHIJKLMNOP",
-        MemorySource::Reference,
+        MemoryType::Reference,
     ));
     assert!(matches!(key, Err(MemoryError::Secret(_))), "{key:?}");
     let word = provider.add(MemoryEntry::new(
         "region",
         "AKIA-EAST region",
-        MemorySource::Reference,
+        MemoryType::Reference,
     ));
     assert!(word.is_ok(), "{word:?}");
     drop(remove_dir_all(&root));
@@ -126,7 +126,7 @@ fn test_access_key_embedded() {
     let outcome = provider.add(MemoryEntry::new(
         "embedded",
         "identifier xAKIAABCDEFGHIJKLMNOP",
-        MemorySource::Reference,
+        MemoryType::Reference,
     ));
     assert!(outcome.is_ok(), "{outcome:?}");
     drop(remove_dir_all(&root));

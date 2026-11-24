@@ -51,7 +51,18 @@ const LEDGER_CAP: usize = 512;
 /// the global last-write seq — coarse (a write to file X exempts a re-read
 /// of file Y) but false-negative-safe: it can only miss a redundant flag,
 /// never raise a false one. Per-path precision is a later refinement.
-const WRITE_TOOLS: &[&str] = &["write", "edit", "multiedit", "save_memory", "delete_memory"];
+const WRITE_TOOLS: &[&str] = &[
+    "write",
+    "edit",
+    "multiedit",
+    "memory_write",
+    "memory_delete",
+    "memory_archive",
+    "memory_promote",
+    "memory_demote",
+    "save_memory",
+    "delete_memory",
+];
 
 /// The outcome of a prior same-input call, recorded in the ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,7 +9,7 @@ use crate::provider::test_support::FakeProvider;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_context::EventId;
-use houyicoder_context::{MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry};
+use houyicoder_context::{MemoryEntry, MemoryType, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_memory::KeywordRecallProvider;
 use houyicoder_memory::MarkdownMemoryProvider;
@@ -92,7 +92,7 @@ async fn test_byte_cap_skips_recall() {
         Arc::new(KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
             "fact-key",
             "matching fact content here",
-            MemorySource::Project,
+            MemoryType::Project,
         )]));
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.install_provider(memory);
@@ -145,7 +145,7 @@ async fn test_recall_records_bytes() {
         Arc::new(KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
             "fact-key",
             "matching fact content here",
-            MemorySource::Project,
+            MemoryType::Project,
         )]));
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.install_provider(memory);
@@ -190,7 +190,7 @@ async fn test_toggle_off_skips_recall() {
         Arc::new(KeywordRecallProvider::with_entries(vec![MemoryEntry::new(
             "fact-key",
             "matching fact content here",
-            MemorySource::Project,
+            MemoryType::Project,
         )]));
     let mut runner = runner_with(provider, ToolRegistry::new());
     runner.memory.set_auto_memory(false);
@@ -232,7 +232,7 @@ fn test_memory_index_respects_gate() {
         .add(MemoryEntry::new(
             "gated-key",
             "carries a description",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -287,7 +287,7 @@ async fn test_memory_index_holds() {
         .add(MemoryEntry::new(
             "drill-key",
             "a description the prompt carries",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
@@ -323,7 +323,7 @@ async fn test_memory_index_holds() {
         .add(MemoryEntry::new(
             "written-later",
             "not in the frozen index yet",
-            MemorySource::Project,
+            MemoryType::Project,
         ))
         .unwrap();
     let rows = memory_rows(&runner, session).await;

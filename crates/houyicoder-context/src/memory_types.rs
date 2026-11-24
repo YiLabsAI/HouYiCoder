@@ -7,10 +7,10 @@
 use std::error::Error;
 use std::fmt;
 
-/// Provenance category for a memory entry. Determines the file frontmatter
-/// label and how the entry is displayed.
+/// Taxonomy category for a memory entry. Determines the file frontmatter
+/// type label and how the entry is grouped in the index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemorySource {
+pub enum MemoryType {
     /// User-authored guidance or preferences.
     User,
     /// Corrective feedback observed during a session.
@@ -21,7 +21,7 @@ pub enum MemorySource {
     Reference,
 }
 
-impl MemorySource {
+impl MemoryType {
     /// Stable lowercase label used in file frontmatter.
     pub fn as_label(self) -> &'static str {
         match self {
@@ -32,7 +32,7 @@ impl MemorySource {
         }
     }
 
-    /// Parse a frontmatter label back into a source; case-insensitive.
+    /// Parse a frontmatter label back into a memory type; case-insensitive.
     pub fn from_label(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "user" => Some(Self::User),
@@ -44,8 +44,8 @@ impl MemorySource {
     }
 }
 
-/// Which writer produced this entry. Orthogonal to MemorySource: the
-/// source says what kind of knowledge it is, the origin says whose claim
+/// Which writer produced this entry. Orthogonal to MemoryType: the
+/// type says what kind of knowledge it is, the origin says whose claim
 /// it is. Injected by the host at tool-construction time, never accepted
 /// from the LLM — a model-provided origin would let a dream self-promote.
 /// Old files with no origin frontmatter parse as Unknown (machine-
@@ -56,7 +56,7 @@ pub enum MemoryOrigin {
     /// Explicitly authored by the user. Protected from background overwrites
     /// and automatic archival.
     User,
-    /// The main agent's save_memory call.
+    /// The main agent's memory_write call.
     MainAgent,
     /// The extractor fork observing the conversation.
     Extractor,
@@ -98,11 +98,8 @@ impl MemoryOrigin {
 
 /// Physical storage scope a memory lives in. The provider holds an ordered
 /// list of roots (user, project, auto); each topic resolves to one scope by
-/// its root position. Distinct from MemorySource (the provenance category):
-/// scope says WHERE a memory lives (global / per-project / auto-extracted),
-/// source says WHAT it is (a user preference / corrective feedback / a project
-/// fact / reference material). The two are orthogonal — a user-preference
-/// source can live in any scope.
+/// its root position. Distinct from MemoryType: scope says WHERE a memory
+/// lives, while MemoryType says WHAT kind of memory it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryScope {
     /// The user-global root: cross-project memories.
@@ -183,20 +180,12 @@ pub fn is_cjk(c: char) -> bool {
 }
 
 /// A single recalled memory unit.
-///
-/// key is the stable identifier (file stem or slug). content is the text
-/// surfaced to the agent. tokens is the approximate token cost of content
-/// (one token per four characters) so recall can budget without
-/// re-tokenizing. source is the provenance category. description is the
-/// one-line frontmatter hook shown in the Memory section manifest line.
-/// mtime_secs is the topic file modification time in seconds since the UNIX
-/// epoch, driving the age label and the staleness caveat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryEntry {
     pub key: String,
     pub content: String,
     pub tokens: usize,
-    pub source: MemorySource,
+    pub memory_type: MemoryType,
     pub description: String,
     pub mtime_secs: u64,
     pub origin: MemoryOrigin,
@@ -204,16 +193,18 @@ pub struct MemoryEntry {
 
 impl MemoryEntry {
     /// Build an entry, computing the token estimate from content length.
-    /// description and mtime default empty until with_meta attaches them;
-    /// origin defaults Unknown until with_origin attaches the writer.
-    pub fn new(key: impl Into<String>, content: impl Into<String>, source: MemorySource) -> Self {
+    pub fn new(
+        key: impl Into<String>,
+        content: impl Into<String>,
+        memory_type: MemoryType,
+    ) -> Self {
         let content = content.into();
         let tokens = tokens_for(&content);
         Self {
             key: key.into(),
             content,
             tokens,
-            source,
+            memory_type,
             description: String::new(),
             mtime_secs: 0,
             origin: MemoryOrigin::Unknown,
@@ -236,18 +227,14 @@ impl MemoryEntry {
     }
 }
 
-/// A lightweight listing row for a memory entry — the frontmatter only (key,
-/// description, source, mtime), no body content. The listing path reads no
-/// full bodies so a /memory browse stays cheap regardless of store size. The
-/// full body is fetched on demand via MemoryProvider::show_memory.
+/// A lightweight listing row for a memory entry — frontmatter metadata only,
+/// no body content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemorySummary {
     pub key: String,
     pub description: String,
-    pub source: MemorySource,
-    /// Which storage root (user / project / auto) this topic lives in — the
-    /// physical scope, orthogonal to the provenance source above. Drives the
-    /// /memory pane scope filter (see a project's memories, or the global set).
+    pub memory_type: MemoryType,
+    /// Which storage root (user / project / auto) this topic lives in.
     pub scope: MemoryScope,
     pub mtime_secs: u64,
     pub origin: MemoryOrigin,
@@ -257,14 +244,14 @@ impl MemorySummary {
     pub fn new(
         key: impl Into<String>,
         description: impl Into<String>,
-        source: MemorySource,
+        memory_type: MemoryType,
         scope: MemoryScope,
         mtime_secs: u64,
     ) -> Self {
         Self {
             key: key.into(),
             description: description.into(),
-            source,
+            memory_type,
             scope,
             mtime_secs,
             origin: MemoryOrigin::Unknown,
@@ -278,20 +265,15 @@ impl MemorySummary {
     }
 }
 
-/// One scored candidate row from a recall rank. The rank scans topic
-/// frontmatter only, so a hit carries the same metadata a listing row does
-/// plus the lexical score the query earned against it. A score of zero keeps
-/// the row in the list: a zero-hit query still hands its candidates to the
-/// semantic stage, which reads the metadata, not the score.
+/// One scored candidate row from a recall rank.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryRankHit {
     pub key: String,
     pub description: String,
-    pub source: MemorySource,
+    pub memory_type: MemoryType,
     pub scope: MemoryScope,
     pub mtime_secs: u64,
-    /// Distinct query tokens found in the key plus description. Zero means
-    /// the lexical stage found no overlap.
+    /// Weighted lexical overlap score across key, description, and body.
     pub score: u32,
 }
 
@@ -299,7 +281,7 @@ impl MemoryRankHit {
     pub fn new(
         key: impl Into<String>,
         description: impl Into<String>,
-        source: MemorySource,
+        memory_type: MemoryType,
         scope: MemoryScope,
         mtime_secs: u64,
         score: u32,
@@ -307,7 +289,7 @@ impl MemoryRankHit {
         Self {
             key: key.into(),
             description: description.into(),
-            source,
+            memory_type,
             scope,
             mtime_secs,
             score,

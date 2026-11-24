@@ -13,7 +13,7 @@
 //! not as a blanket "nothing changed" escape.
 //!
 //! Turn budget is tight (REWARD_DREAM_MAX_TURNS = 8): the prompt must be
-//! achievable in a few tool calls (show_memory to check, save_memory to
+//! achievable in a few tool calls (memory_read to check, memory_write to
 //! write one or two lessons).
 
 use houyicoder_context::MemorySummary;
@@ -54,14 +54,14 @@ pub(crate) fn build_reward_lesson_prompt(
         ## Task\n\n\
         The agent retried a call that already failed with the same input — a \
         blind retry. For each failure pattern in the reward signal above:\n\n\
-        1. Call show_memory with the lesson_ key you would use, to check \
+        1. Call memory_read with the lesson_ key you would use, to check \
         whether a similar lesson already exists.\n\
         2. If an existing lesson covers the same actionable difference, skip \
         it. A lesson with no actionable difference from what is already in \
         the index is not worth saving — this is a per-pattern filter, not a \
         blanket exit. Do NOT skip every pattern with a generic \"already \
         covered\" unless you can name the existing lesson that covers each.\n\
-        3. If the lesson is new or needs updating, call save_memory with a \
+        3. If the lesson is new or needs updating, call memory_write with a \
         lesson_ key. The body must state:\n\
            - What the failure pattern was (tool, error, retry count).\n\
            - What to do differently next time — a concrete action, not \

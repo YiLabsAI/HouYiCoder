@@ -10,28 +10,28 @@ fn test_tokens_for_rounds_up() {
 
 #[test]
 fn test_entry_new_computes_tokens() {
-    let e = MemoryEntry::new("k", "abcd", MemorySource::User);
+    let e = MemoryEntry::new("k", "abcd", MemoryType::User);
     assert_eq!(e.tokens, 1);
-    let e = MemoryEntry::new("k", "abcdef", MemorySource::Project);
+    let e = MemoryEntry::new("k", "abcdef", MemoryType::Project);
     assert_eq!(e.tokens, 2);
 }
 
 #[test]
 fn test_source_label_round_trip() {
     for s in [
-        MemorySource::User,
-        MemorySource::Feedback,
-        MemorySource::Project,
-        MemorySource::Reference,
+        MemoryType::User,
+        MemoryType::Feedback,
+        MemoryType::Project,
+        MemoryType::Reference,
     ] {
-        assert_eq!(MemorySource::from_label(s.as_label()), Some(s));
+        assert_eq!(MemoryType::from_label(s.as_label()), Some(s));
     }
-    assert!(MemorySource::from_label("unknown").is_none());
+    assert!(MemoryType::from_label("unknown").is_none());
 }
 
 #[test]
 fn test_source_label_case_insensitive() {
-    assert_eq!(MemorySource::from_label("USER"), Some(MemorySource::User));
+    assert_eq!(MemoryType::from_label("USER"), Some(MemoryType::User));
 }
 
 #[test]
@@ -69,12 +69,12 @@ fn test_freshness_text_threshold() {
 
 #[test]
 fn test_with_meta_description_mtime() {
-    let e = MemoryEntry::new("k", "body", MemorySource::User).with_meta("a hook line", 1234);
+    let e = MemoryEntry::new("k", "body", MemoryType::User).with_meta("a hook line", 1234);
     assert_eq!(e.description, "a hook line");
     assert_eq!(e.mtime_secs, 1234);
     // The bare constructor leaves the meta fields empty for callers that
     // never attach them (e.g. fact extraction that has no file mtime yet).
-    let bare = MemoryEntry::new("k", "body", MemorySource::User);
+    let bare = MemoryEntry::new("k", "body", MemoryType::User);
     assert!(bare.description.is_empty());
     assert_eq!(bare.mtime_secs, 0);
 }

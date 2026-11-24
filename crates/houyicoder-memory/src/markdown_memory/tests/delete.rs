@@ -6,7 +6,7 @@
 
 use super::super::*;
 use houyicoder_context::MemoryScope;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
@@ -23,7 +23,7 @@ fn temp_root() -> PathBuf {
     dir
 }
 
-fn entry(key: &str, content: &str, source: MemorySource) -> MemoryEntry {
+fn entry(key: &str, content: &str, source: MemoryType) -> MemoryEntry {
     MemoryEntry::new(key, content, source)
 }
 
@@ -34,12 +34,12 @@ fn entry(key: &str, content: &str, source: MemorySource) -> MemoryEntry {
 fn test_delete_removes_topic_index() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("keep-me", "a fact to keep", MemorySource::Project))
+    p.add(entry("keep-me", "a fact to keep", MemoryType::Project))
         .unwrap();
     p.add(entry(
         "prune-me",
         "a stale fact to prune",
-        MemorySource::Project,
+        MemoryType::Project,
     ))
     .unwrap();
     assert_eq!(
@@ -95,7 +95,7 @@ fn test_delete_routes_by_scope() {
         auto_dir.clone(),
     ]);
     p.add_in_scope(
-        entry("proj-fact", "a project-scoped fact", MemorySource::Project),
+        entry("proj-fact", "a project-scoped fact", MemoryType::Project),
         MemoryScope::Project,
     )
     .unwrap();
@@ -132,7 +132,7 @@ fn test_delete_routes_by_scope() {
 fn test_delete_prunes_stats_sidecar() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("doomed", "a fact to delete", MemorySource::Project))
+    p.add(entry("doomed", "a fact to delete", MemoryType::Project))
         .unwrap();
     p.record_recall_hits(&["doomed".to_string()]);
     assert!(
@@ -167,7 +167,7 @@ fn test_delete_reports_unexpected_error() {
 fn test_delete_survives_broken_index() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("doomed", "a fact to delete", MemorySource::Project))
+    p.add(entry("doomed", "a fact to delete", MemoryType::Project))
         .unwrap();
     remove_file(root.join(INDEX_FILE)).unwrap();
     create_dir_all(root.join(INDEX_FILE)).expect("plant a directory at the index path");

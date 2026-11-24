@@ -10,7 +10,7 @@ use super::super::*;
 use houyicoder_context::MemoryEntry;
 use houyicoder_context::MemoryError;
 use houyicoder_context::MemoryScope;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use houyicoder_context::tokens_for;
 use std::env::temp_dir;
 use std::fs::File;
@@ -34,7 +34,7 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 fn entry(key: &str, content: &str) -> MemoryEntry {
-    MemoryEntry::new(key, content, MemorySource::Project)
+    MemoryEntry::new(key, content, MemoryType::Project)
 }
 
 fn index_text(root: &Path) -> String {

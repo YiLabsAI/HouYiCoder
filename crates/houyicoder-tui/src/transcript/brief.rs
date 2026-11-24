@@ -40,9 +40,12 @@ pub(crate) fn value_brief(v: &Value) -> String {
 /// the path, not the entire input JSON (which embeds the file content).
 pub(crate) fn tool_call_brief(tool: &str, input: &Value) -> String {
     match tool {
-        "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "save_memory"
-        | "delete_memory" | "promote_memory" | "demote_memory" | "show_memory"
-        | "search_memory" => truncate_call_arg(&strip_ansi(&tool_invocation(tool, input))),
+        "bash" | "read" | "write" | "edit" | "multiedit" | "grep" | "glob" | "memory_write"
+        | "memory_read" | "memory_search" | "memory_delete" | "memory_archive"
+        | "memory_promote" | "memory_demote" | "save_memory" | "delete_memory"
+        | "promote_memory" | "demote_memory" | "show_memory" | "search_memory" => {
+            truncate_call_arg(&strip_ansi(&tool_invocation(tool, input)))
+        }
         "agent" => {
             let st = input
                 .get("subagent_type")
@@ -226,6 +229,13 @@ pub(crate) fn edit_diff_summary(added: u32, removed: u32) -> String {
 /// the raw JSON body. Shared by the result-summary render and the
 /// transcript body builder so a new memory tool joins both at once.
 pub(crate) const MEMORY_LABEL_TOOLS: &[&str] = &[
+    "memory_write",
+    "memory_read",
+    "memory_search",
+    "memory_delete",
+    "memory_archive",
+    "memory_promote",
+    "memory_demote",
     "save_memory",
     "delete_memory",
     "promote_memory",
@@ -234,16 +244,8 @@ pub(crate) const MEMORY_LABEL_TOOLS: &[&str] = &[
     "search_memory",
 ];
 
-/// Human label for a memory-tool result: names the topic the call touched so
-/// the transcript shows one readable line instead of the raw JSON. An empty
-/// or missing key returns None so the caller falls back to the raw body
-/// rather than emitting a misleading label. show_memory carries the full
-/// entry body in its JSON; the label names the key only, mirroring the Read
-/// tool (content reaches the model via the tool result, not the transcript).
-/// search_memory returns a list rather than one entry, so its label counts
-/// the matches; the query is already on the call line.
 fn memory_result_label(tool: &str, output: &Value) -> Option<String> {
-    if tool == "search_memory" {
+    if matches!(tool, "memory_search" | "search_memory") {
         let count = output
             .get("matches")
             .and_then(|v| v.as_array())
@@ -251,11 +253,12 @@ fn memory_result_label(tool: &str, output: &Value) -> Option<String> {
         return Some(format!("found {count}"));
     }
     let (key_field, label) = match tool {
-        "save_memory" => ("saved", save_memory_label(output)),
-        "delete_memory" => ("deleted", "deleted"),
-        "promote_memory" => ("promoted", "promoted"),
-        "demote_memory" => ("demoted", "demoted"),
-        "show_memory" => ("key", "showed"),
+        "memory_write" | "save_memory" => ("saved", save_memory_label(output)),
+        "memory_delete" | "delete_memory" => ("deleted", "deleted"),
+        "memory_archive" => ("archived", "archived"),
+        "memory_promote" | "promote_memory" => ("promoted", "promoted"),
+        "memory_demote" | "demote_memory" => ("demoted", "demoted"),
+        "memory_read" | "show_memory" => ("key", "showed"),
         _ => return None,
     };
     let key = output

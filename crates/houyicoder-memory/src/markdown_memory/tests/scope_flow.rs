@@ -5,7 +5,7 @@
 //!   entry with a competing auto copy).
 
 use super::super::*;
-use houyicoder_context::{MemoryEntry, MemoryScope, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryScope, MemoryType};
 use std::collections::HashMap;
 use std::env::temp_dir;
 use std::fs::OpenOptions;
@@ -67,7 +67,7 @@ impl ThreeScopeFixture {
     }
 
     fn entry(&self, key: &str, content: &str) -> MemoryEntry {
-        MemoryEntry::new(key, content, MemorySource::Feedback).with_meta(format!("{key} hook"), 0)
+        MemoryEntry::new(key, content, MemoryType::Feedback).with_meta(format!("{key} hook"), 0)
     }
 }
 
@@ -311,7 +311,7 @@ fn test_gate_violation_accumulates() {
     p.add(MemoryEntry::new(
         "test-naming",
         "keep test names short",
-        MemorySource::Feedback,
+        MemoryType::Feedback,
     ))
     .expect("seed rule");
     p.record_gate_violation("test-naming");

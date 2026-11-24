@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::*;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 
 /// Every port must support runtime dispatch.
 #[test]
@@ -35,7 +35,7 @@ fn test_default_delete_in_scope() {
         ),
         "default delegates to delete_memory (NotFound for the Stub)"
     );
-    let entry = MemoryEntry::new("k", "v", MemorySource::Project);
+    let entry = MemoryEntry::new("k", "v", MemoryType::Project);
     assert_eq!(
         stub.replace_in_scope(entry, MemoryScope::Project, &["old".into()]),
         Ok(MemoryWriteOutcome::Created)
@@ -86,7 +86,7 @@ fn test_store_stub_round_trip() {
         matches!(store.read("any"), Err(MemoryError::NotFound)),
         "read returns NotFound for the stub"
     );
-    let entry = MemoryEntry::new("k", "content", MemorySource::User);
+    let entry = MemoryEntry::new("k", "content", MemoryType::User);
     assert!(store.write(entry).is_ok(), "write accepts the entry");
     assert!(store.rebuild().is_ok(), "rebuild succeeds");
 }

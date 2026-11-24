@@ -9,7 +9,7 @@ use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryType};
 use houyicoder_memory::MarkdownMemoryProvider;
 use serde_json::json;
 
@@ -181,7 +181,7 @@ fn test_twenty_real_error_positives() {
     let provider = MarkdownMemoryProvider::new(root.clone());
     for &(key, body, description) in CASES {
         provider
-            .add(MemoryEntry::new(key, body, MemorySource::Feedback).with_meta(description, 0))
+            .add(MemoryEntry::new(key, body, MemoryType::Feedback).with_meta(description, 0))
             .expect("seed lesson");
     }
     for &(key, body, _) in CASES {
@@ -211,7 +211,7 @@ fn test_ten_negatives_select_nothing() {
         ("lesson-three", "old_string not found during the edit"),
     ] {
         provider
-            .add(MemoryEntry::new(key, body, MemorySource::Feedback))
+            .add(MemoryEntry::new(key, body, MemoryType::Feedback))
             .expect("seed lesson");
     }
     for query in [

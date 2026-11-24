@@ -431,11 +431,11 @@ impl CannedSaver {
                     },
                     OutputItem::ToolCall {
                         id: "save1".into(),
-                        name: "save_memory".into(),
+                        name: "memory_write".into(),
                         input: serde_json::json!({
                             "key": "deploy-token-expiry",
                             "description": "Deploy tokens expire nightly",
-                            "source": "project",
+                            "type": "project",
                             "content": "Vault deploy tokens expire nightly.\n**Why:** an overnight run outlives the token.\n**How to apply:** rotate before long runs.",
                             "evidence": [{"quote": "the deploy tokens expire nightly"}]
                         }),

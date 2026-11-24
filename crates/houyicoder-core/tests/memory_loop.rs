@@ -18,7 +18,7 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{MemoryEntry, MemoryRankHit, MemoryScope, MemorySource, SessionId};
+use houyicoder_context::{MemoryEntry, MemoryRankHit, MemoryScope, MemoryType, SessionId};
 use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, ModelCapabilities, OutputItem, ProviderError,
@@ -78,7 +78,7 @@ impl MemoryProvider for RecordingMemory {
                 MemoryRankHit::new(
                     e.key.as_str(),
                     e.description.as_str(),
-                    e.source,
+                    e.memory_type,
                     MemoryScope::Auto,
                     e.mtime_secs,
                     2,
@@ -188,7 +188,7 @@ async fn test_instructions_override_keeps_memory() {
     memory.seed(MemoryEntry::new(
         "rust-conventions",
         "Prefer let chains in conditionals",
-        MemorySource::Project,
+        MemoryType::Project,
     ));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let provider = Arc::new(FinalResponseProvider { seen: seen.clone() });
@@ -270,7 +270,7 @@ async fn test_recall_injects_user_text() {
     memory.seed(MemoryEntry::new(
         "rust-conventions",
         "Prefer let chains in conditionals",
-        MemorySource::Project,
+        MemoryType::Project,
     ));
 
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -326,7 +326,7 @@ async fn test_save_signal_writes_memory() {
     let written = memory.written_entries();
     assert_eq!(written.len(), 1, "one fact must be written");
     assert_eq!(written[0].key, "test-fact");
-    assert_eq!(written[0].source, MemorySource::User);
+    assert_eq!(written[0].memory_type, MemoryType::User);
     assert!(written[0].content.contains("Always verify"));
 }
 
@@ -340,7 +340,7 @@ async fn test_compress_does_not_recall() {
     memory.seed(MemoryEntry::new(
         "persisted-fact",
         "Use deterministic extraction not model classifiers",
-        MemorySource::Feedback,
+        MemoryType::Feedback,
     ));
 
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -372,7 +372,7 @@ async fn test_post_compress_recall_surfaces() {
     memory.seed(MemoryEntry::new(
         "cycled-fact",
         "Memory re-surfaces after compaction boundary",
-        MemorySource::Project,
+        MemoryType::Project,
     ));
 
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -462,7 +462,7 @@ async fn test_single_word_reaches_provider() {
     memory.seed(MemoryEntry::new(
         "rust-conventions",
         "Prefer let chains in conditionals",
-        MemorySource::Project,
+        MemoryType::Project,
     ));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let provider = Arc::new(FinalResponseProvider { seen: seen.clone() });
@@ -581,7 +581,7 @@ async fn test_failure_recall_next_request() {
             MemoryEntry::new(
                 "lesson-tool-call-shape-refusals",
                 "Shape refusal on io.rs: write: content required. Change arguments instead of repeating.",
-                MemorySource::Feedback,
+                MemoryType::Feedback,
             )
             .with_meta("Change shape when a call fails validation.", 0),
         )

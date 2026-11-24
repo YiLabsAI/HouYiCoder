@@ -1,29 +1,9 @@
-//! The structured memory-delete tool the forked consolidation agent uses to
-//! prune stale or contradicted entries. The agent emits a structured call
-//! with a key; the tool routes it through the memory provider delete_memory
-//! method, which owns the topic-file removal and the derived-index
-//! regeneration. The tool holds no path logic of its own — the provider
-//! owns every path — so there is no path-escape surface for the agent to
-//! probe. This is the structurally-safe recorderpart to a raw sandboxed
-//! file delete over the memory directory: the capability is delete one
-//! memory entry by key, not delete an arbitrary file under the memory dir.
-//!
-//! Destructive but auto-approve: a delete removes one topic, which is
-//! reversible by re-saving the same key (the dream can save_memory it
-//! back), and the dream runs off the hot path bounded by the prompt's
-//! what-to-prune guidance plus the forked maxTurns backstop. A per-call
-//! approval gate would queue approvals no one answers and starve
-//! consolidation — the forked agent runs autonomously. Safety comes from
-//! the structured capability (the provider owns paths, so no
-//! path-escape; the key is validator-checked) plus the prompt guidance,
-//! not from a human checkpoint here.
-//!
-//! The provider is shared (Arc) with the runner that owns it, so the
-//! forked dream deletes through the same write lock as the main runner —
-//! no cross-write orphan within the process.
+//! Structured memory-delete tool with explicit scope selection on the main
+//! agent and pinned auto-scope operation in background consolidation.
 
 use std::sync::Arc;
 
+use houyicoder_api::agent_event::MemoryOperation;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_async::PFut;
 use houyicoder_context::{MemoryError, MemoryScope};
@@ -31,93 +11,132 @@ use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
 use crate::agent::memory::MutationLog;
-use houyicoder_api::agent_event::MemoryOperation;
 
-/// A structured memory-delete tool. The forked consolidation agent calls it
-/// to prune a stale or contradicted entry; the provider owns the removal
-/// and the index regeneration.
-pub struct DeleteMemoryTool {
+/// Structured memory-delete tool.
+pub struct MemoryDeleteTool {
     provider: Arc<dyn MemoryProvider>,
-    /// Optional write recorder the caller threads in to learn how many
-    /// deletions landed this pass. Incremented on a successful delete so the
-    /// dream can fire one memory-saved notice per pass. None for the main
-    /// runner's tool, which does not notify.
     recorder: Option<Arc<MutationLog>>,
+    pinned_scope: Option<MemoryScope>,
 }
 
-impl DeleteMemoryTool {
-    /// Construct with a shared provider handle. The provider is shared with
-    /// the runner memory so the forked dream deletes under the same lock.
+impl MemoryDeleteTool {
+    /// Construct an unpinned delete tool that requires an explicit scope.
     pub fn new(provider: Arc<dyn MemoryProvider>) -> Self {
         Self {
             provider,
             recorder: None,
+            pinned_scope: None,
         }
     }
 
-    /// Thread a write recorder so a successful delete bumps it. The dream
-    /// shares one recorder across the add + delete tools so a touch (add or
-    /// delete) counts toward the notice.
+    /// Construct a delete tool pinned to a specific storage scope.
+    pub fn new_pinned(provider: Arc<dyn MemoryProvider>, scope: MemoryScope) -> Self {
+        Self {
+            provider,
+            recorder: None,
+            pinned_scope: Some(scope),
+        }
+    }
+
+    /// Attach a mutation recorder.
     pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
         self
     }
 }
 
-impl Tool for DeleteMemoryTool {
+impl Tool for MemoryDeleteTool {
     fn name(&self) -> &str {
-        "delete_memory"
+        "memory_delete"
     }
     fn description(&self) -> &str {
-        "Delete one stored memory by key. Use to prune entries that are stale, \
-         contradicted by the current code or project state, or superseded by a \
-         merged successor. Deletion removes the topic file; the index \
-         regenerates after the dream so the pointer disappears. Deletion is \
-         reversible by saving the same key again."
+        "Permanently delete one stored memory by key. Use for contradicted or \
+         wrong entries; prefer memory_archive for decayed entries that may \
+         still be useful later."
     }
     fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The kebab-case key (file stem) of the memory to delete."
-                }
-            },
-            "required": ["key"],
-            "additionalProperties": false
-        })
+        if self.pinned_scope.is_some() {
+            json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "The kebab-case key (file stem) of the memory to delete."
+                    }
+                },
+                "required": ["key"],
+                "additionalProperties": false
+            })
+        } else {
+            json!({
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "The kebab-case key (file stem) of the memory to delete."
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["user", "project", "auto"],
+                        "description": "The storage scope holding the memory to delete."
+                    }
+                },
+                "required": ["key", "scope"],
+                "additionalProperties": false
+            })
+        }
     }
     fn execute(&self, _ctx: ToolCtx, input: Value) -> PFut<'_, Result<Value, ToolError>> {
         let provider = Arc::clone(&self.provider);
         let recorder = self.recorder.clone();
+        let pinned_scope = self.pinned_scope;
         Box::pin(async move {
-            let key = input.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
-                ToolError::Failed("delete_memory: 'key' must be a non-empty string".to_string())
-            })?;
-            match provider.delete_memory(key) {
+            let key = input
+                .get("key")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| {
+                    ToolError::Failed("memory_delete: 'key' must be a non-empty string".to_string())
+                })?;
+            let scope = match pinned_scope {
+                Some(pinned) => pinned,
+                None => {
+                    let label = input.get("scope").and_then(|v| v.as_str()).ok_or_else(|| {
+                        ToolError::Failed(
+                            "memory_delete: 'scope' must be user, project, or auto".to_string(),
+                        )
+                    })?;
+                    MemoryScope::from_label(label).ok_or_else(|| {
+                        ToolError::Failed(format!(
+                            "memory_delete: unknown scope '{label}'; use user, project, or auto"
+                        ))
+                    })?
+                }
+            };
+            let result = if pinned_scope == Some(MemoryScope::Auto) {
+                provider.delete_memory(key)
+            } else {
+                provider.delete_memory_in_scope(key, scope)
+            };
+            match result {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {
-                        // This tool deletes through the unscoped form, whose
-                        // contract is the auto root (the dream's consolidation
-                        // target), so the notice names auto.
-                        recorder.record(key, MemoryOperation::Deleted, MemoryScope::Auto);
+                        recorder.record(key, MemoryOperation::Deleted, scope);
                     }
-                    Ok(json!({"deleted": key}))
+                    Ok(json!({"deleted": key, "scope": scope.as_label()}))
                 }
                 Err(MemoryError::NotFound) => Err(ToolError::Failed(format!(
-                    "delete_memory: no memory with key '{key}'"
+                    "memory_delete: no memory with key '{key}' in scope '{}'",
+                    scope.as_label()
                 ))),
-                Err(e) => Err(ToolError::Failed(format!("delete_memory: {e}"))),
+                Err(e) => Err(ToolError::Failed(format!("memory_delete: {e}"))),
             }
         })
     }
     fn is_read_only(&self) -> bool {
         false
     }
-    /// Destructive: a delete removes one topic file. Auto-approve (see the
-    /// module doc) — the forked agent runs autonomously off the hot path,
-    /// bounded by the prompt guidance plus the forked maxTurns backstop.
     fn is_destructive(&self) -> bool {
         true
     }

@@ -115,7 +115,7 @@ pub enum LivenessPhase {
 /// The producer responsible for a set of memory changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryChangeOrigin {
-    /// A save_memory call made by the primary agent.
+    /// A memory tool call made by the primary agent.
     PrimaryAgent,
     /// Automatic extraction after a run.
     AutoMemory,

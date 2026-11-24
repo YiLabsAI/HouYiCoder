@@ -5,7 +5,7 @@ use crate::agent::multi_agent::registry::built_in_general_purpose;
 use crate::agent::skill::listing::format_skill_listing;
 use houyicoder_api::skill::{SkillDescriptor, SkillUsage};
 use houyicoder_context::{
-    EventId, MemoryEntry, MemorySource, SessionEvent, SessionId, SessionLogEntry,
+    EventId, MemoryEntry, MemoryType, SessionEvent, SessionId, SessionLogEntry,
 };
 use houyicoder_protocol::llm::ToolDef;
 use prompt::SystemPrompt;
@@ -358,7 +358,7 @@ fn test_memory_manifest_format_aligned() {
     let entry = MemoryEntry::new(
         "build-gate",
         "make check must stay green",
-        MemorySource::Project,
+        MemoryType::Project,
     )
     .with_meta("the build must pass before commit", 0);
     let text = render_recall_text(&[entry]);
@@ -399,7 +399,7 @@ fn test_memory_manifest_no_caveat() {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let entry = MemoryEntry::new("fresh-note", "just saved a fact", MemorySource::User)
+    let entry = MemoryEntry::new("fresh-note", "just saved a fact", MemoryType::User)
         .with_meta("a recent fact", now);
     let text = render_recall_text(&[entry]);
     assert!(
@@ -422,7 +422,7 @@ fn test_context_partitions_recall_tokens() {
     let mem_text = render_recall_text(&[MemoryEntry::new(
         "build-gate",
         "make check must stay green",
-        MemorySource::Project,
+        MemoryType::Project,
     )
     .with_meta("the build must pass", 0)]);
     let events = vec![

@@ -2,7 +2,7 @@
 
 use super::*;
 use houyicoder_async::PFut;
-use houyicoder_context::{MemoryError, MemoryScope, MemorySource};
+use houyicoder_context::{MemoryError, MemoryScope, MemoryType};
 use std::collections::HashSet;
 use std::future::pending;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +13,7 @@ fn hit(key: &str, score: u32) -> MemoryRankHit {
     MemoryRankHit::new(
         key,
         format!("{key} description"),
-        MemorySource::Project,
+        MemoryType::Project,
         MemoryScope::Auto,
         0,
         score,
@@ -130,7 +130,7 @@ impl MemoryProvider for BodyStore {
 }
 
 fn body(key: &str, tokens: usize) -> MemoryEntry {
-    let mut e = MemoryEntry::new(key, format!("{key} body"), MemorySource::Project);
+    let mut e = MemoryEntry::new(key, format!("{key} body"), MemoryType::Project);
     e.tokens = tokens;
     e
 }

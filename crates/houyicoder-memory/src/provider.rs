@@ -1,5 +1,5 @@
-//! Memory provider helpers. The MemoryProvider trait and its payload types
-//! (MemoryEntry, MemoryError, MemorySource) live in the foundation layers:
+//! Memory provider utilities. The MemoryProvider trait and its payload types
+//! (MemoryEntry, MemoryError, MemoryType) live in the foundation layers:
 //! the trait in the ports crate, the payload types in the context crate, so
 //! neither ports nor the engine depends on this impl crate. This module keeps
 //! the keyword-ranking helpers shared by all in-process providers (tokenize,

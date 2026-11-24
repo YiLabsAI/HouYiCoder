@@ -34,7 +34,7 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySource, MemorySummary, SessionId,
+    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, MemoryType, SessionId,
     memory_index_row, render_memory_index_groups, tokens_for,
 };
 
@@ -123,7 +123,7 @@ pub(crate) fn render_index(summaries: &[MemorySummary]) -> String {
     }
     render_memory_index_groups(selected.iter().map(|summary| {
         (
-            summary.source,
+            summary.memory_type,
             summary.key.as_str(),
             summary.description.as_str(),
         )
@@ -409,7 +409,7 @@ impl MemoryRuntime {
         let mut candidates: Vec<&MemorySummary> = summaries
             .iter()
             .filter(|s| {
-                if s.scope == MemoryScope::Auto || s.source != MemorySource::Feedback {
+                if s.scope == MemoryScope::Auto || s.memory_type != MemoryType::Feedback {
                     return false;
                 }
                 if s.scope == MemoryScope::User {
@@ -653,7 +653,7 @@ impl MemoryRuntime {
     }
 
     /// Create and install the primary recorder the main-agent save tool
-    /// records into. The returned Arc is threaded into MemoryAddTool so a
+    /// records into. The returned Arc is threaded into MemoryWriteTool so a
     /// main-agent save is captured at call time, then drained when the turn
     /// settles by drain_primary_changes. Replaces the post-hoc durable-log
     /// scan for primary saves.

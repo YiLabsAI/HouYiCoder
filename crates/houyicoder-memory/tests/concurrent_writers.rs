@@ -38,7 +38,7 @@ use std::time::UNIX_EPOCH;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::MemoryEntry;
 use houyicoder_context::MemoryError;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use houyicoder_memory::MarkdownMemoryProvider;
 
 /// The root lock file every writer takes before touching the store.
@@ -72,7 +72,7 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 fn entry(key: &str, body: &str) -> MemoryEntry {
-    MemoryEntry::new(key, body, MemorySource::User)
+    MemoryEntry::new(key, body, MemoryType::User)
 }
 
 /// Run the child half when the environment names one. Returns true in a

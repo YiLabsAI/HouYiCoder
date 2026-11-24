@@ -4,7 +4,7 @@
 
 use super::DESCRIPTION_TOKEN_CAP;
 use super::index_description;
-use houyicoder_context::{MemoryEntry, MemorySource, tokens_for};
+use houyicoder_context::{MemoryEntry, MemoryType, tokens_for};
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::read;
@@ -126,7 +126,7 @@ fn test_relocate_keeps_source() {
 /// is cut: the cap is spent on characters, not on whitespace-separated words.
 #[test]
 fn test_description_cap_cjk() {
-    let entry = MemoryEntry::new("k", "body", MemorySource::Feedback).with_meta(
+    let entry = MemoryEntry::new("k", "body", MemoryType::Feedback).with_meta(
         "2026-11-22 读数：用 Read 带 offset 去读超过1MB的大文件会返回空字符串且无报错",
         0,
     );
@@ -143,7 +143,7 @@ fn test_description_cap_cjk() {
 #[test]
 fn test_description_cap_word_boundary() {
     let body = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike                 november oscar papa quebec romeo sierra tango uniform victor whiskey";
-    let entry = MemoryEntry::new("k", "body", MemorySource::Feedback).with_meta(body, 0);
+    let entry = MemoryEntry::new("k", "body", MemoryType::Feedback).with_meta(body, 0);
     let text = index_description(&entry);
     assert!(tokens_for(&text) <= DESCRIPTION_TOKEN_CAP);
     assert!(text.ends_with(|c: char| c.is_ascii_alphabetic()), "{text}");

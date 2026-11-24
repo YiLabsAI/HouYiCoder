@@ -21,7 +21,7 @@ use crate::common::{pair, recv_frame, recv_hello, send_frame};
 use futures::channel::mpsc::Receiver;
 use futures::channel::mpsc::Sender;
 use houyicoder_api::memory::MemoryProvider;
-use houyicoder_context::{MemoryEntry, MemorySource};
+use houyicoder_context::{MemoryEntry, MemoryType};
 use houyicoder_memory::MarkdownMemoryProvider;
 use houyicoder_permission::DefaultModeGate;
 use houyicoder_protocol::frontend::memory::MemorySummaryEntry;
@@ -64,7 +64,7 @@ fn runner_with_memory(key: &str, body: &str) -> (Arc<Runner>, SessionId, PathBuf
     create_dir_all(&root).expect("create temp root");
     let memory: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
     memory
-        .add(MemoryEntry::new(key, body, MemorySource::Project))
+        .add(MemoryEntry::new(key, body, MemoryType::Project))
         .expect("seed memory");
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let session = SessionId::new();

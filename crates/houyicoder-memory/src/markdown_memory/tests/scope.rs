@@ -6,7 +6,7 @@
 
 use super::super::*;
 use houyicoder_context::MemoryScope;
-use houyicoder_context::MemorySource;
+use houyicoder_context::MemoryType;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ fn temp_root() -> PathBuf {
     dir
 }
 
-fn entry(key: &str, content: &str, source: MemorySource) -> MemoryEntry {
+fn entry(key: &str, content: &str, source: MemoryType) -> MemoryEntry {
     MemoryEntry::new(key, content, source)
 }
 
@@ -39,17 +39,13 @@ fn test_show_scoped_body() {
     let project_dir = temp_root();
     let auto_dir = temp_root();
     MarkdownMemoryProvider::new(user_dir.clone())
-        .add(entry(
-            "rule-x",
-            "body from the user root",
-            MemorySource::User,
-        ))
+        .add(entry("rule-x", "body from the user root", MemoryType::User))
         .unwrap();
     MarkdownMemoryProvider::new(auto_dir.clone())
         .add(entry(
             "rule-x",
             "body from the auto root",
-            MemorySource::Feedback,
+            MemoryType::Feedback,
         ))
         .unwrap();
     let p = MarkdownMemoryProvider::new_multi(vec![
@@ -101,7 +97,7 @@ fn test_scopes_for_key_absent() {
     let project_dir = temp_root();
     let auto_dir = temp_root();
     MarkdownMemoryProvider::new(user_dir.clone())
-        .add(entry("only-here", "one copy", MemorySource::User))
+        .add(entry("only-here", "one copy", MemoryType::User))
         .unwrap();
     let p = MarkdownMemoryProvider::new_multi(vec![
         user_dir.clone(),
@@ -137,9 +133,9 @@ fn test_list_scope_per_root() {
             .add(entry(key, "fact", src))
             .unwrap();
     };
-    put(user_dir.clone(), "user-fact", MemorySource::User);
-    put(project_dir.clone(), "project-fact", MemorySource::Project);
-    put(auto_dir.clone(), "auto-fact", MemorySource::Feedback);
+    put(user_dir.clone(), "user-fact", MemoryType::User);
+    put(project_dir.clone(), "project-fact", MemoryType::Project);
+    put(auto_dir.clone(), "auto-fact", MemoryType::Feedback);
     let p = MarkdownMemoryProvider::new_multi(vec![
         user_dir.clone(),
         project_dir.clone(),
@@ -172,10 +168,10 @@ fn test_list_scope_per_root() {
 fn test_count_new_since_topics() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
-    p.add(entry("alpha", "a fact", MemorySource::Project))
+    p.add(entry("alpha", "a fact", MemoryType::Project))
         .unwrap();
-    p.add(entry("beta", "b fact", MemorySource::User)).unwrap();
-    p.add(entry("gamma", "c fact", MemorySource::Reference))
+    p.add(entry("beta", "b fact", MemoryType::User)).unwrap();
+    p.add(entry("gamma", "c fact", MemoryType::Reference))
         .unwrap();
     // All three seeded now have mtime past the epoch.
     assert_eq!(p.count_new_since(0), 3, "three new topics since epoch");

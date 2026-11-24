@@ -57,7 +57,7 @@ use crate::agent::prompt::reward_lesson::build_reward_lesson_prompt;
 use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::reward_snapshot::format_reward;
 use crate::agent::runner_config::RunnerConfig;
-use crate::agent::tools::{DeleteMemoryTool, MemoryAddTool, ShowMemoryTool};
+use crate::agent::tools::{MemoryArchiveTool, MemoryDeleteTool, MemoryReadTool, MemoryWriteTool};
 use crate::agent::{RunError, RunResult, Runner, ToolRegistry};
 use tokio::time::sleep;
 
@@ -260,7 +260,7 @@ pub(crate) fn format_listing(listing: &[MemorySummary]) -> String {
         out.push_str(&format!(
             "- {} [{}] scope={} mtime={}: {}\n",
             m.key,
-            m.source.as_label(),
+            m.memory_type.as_label(),
             m.scope.as_label(),
             m.mtime_secs,
             m.description,
@@ -330,11 +330,11 @@ pub(crate) fn build_consolidation_prompt(
         ---\n\n\
         ## Phase 1 — Orient\n\n\
         - Read the index and the listing above to see what already exists.\n\
-        - For any candidate you might merge, update, prune, or promote, call \
-        show_memory with its key to read the full body before acting.\n\
+        - For any candidate you might merge, update, or prune, call \
+        memory_read with its key to read the full body before acting.\n\
         - Improve existing topic files rather than creating near-duplicates.\n\n\
         ## Phase 2 — Consolidate\n\n\
-        For each thing worth remembering, call save_memory to write or update \
+        For each thing worth remembering, call memory_write to write or update \
         a topic file. Reusing a key refreshes that entry. Focus on:\n\
         - Merging near-duplicate entries into one canonical topic and passing \
         the superseded keys in the replaces field so their counters merge and \
@@ -345,20 +345,20 @@ pub(crate) fn build_consolidation_prompt(
         old memory, fix it at the source (update the entry, or delete it in \
         Phase 3).\n\n\
         ## Phase 3 — Prune\n\n\
-        - Call delete_memory for entries that are stale, contradicted by the \
-        current code or project state, superseded by a merged successor, or \
-        dead weight (zero recall hits + never recalled, or not recalled for \
-        a long time — see the recall frequency block). Deletion is permanent \
-        but reversible by saving the same key again.\n\
+        - Call memory_delete for entries that are contradicted by the \
+        current code or project state, or dead weight (zero recall hits + \
+        never recalled, or not recalled for a long time — see the recall \
+        frequency block). Call memory_archive for completed project notes \
+        that should leave the active index while remaining restorable.\n\
         - Keep the index tight: each entry is one line, with detail in the \
         topic file. The index regenerates from the topic files after the \
-        dream, so do not edit {INDEX_FILE} directly — just delete or save \
-        topics.\n\n\
+        dream, so do not edit {INDEX_FILE} directly — just delete, archive, \
+        or write topics.\n\n\
         ## Phase 4 — Scope flow\n\n\
         Promotion, demotion, and decay archival run deterministically in the \
         host based on recall hits, occurrences, and gate violations.\n\
         - When refreshing a topic that already lives in the project scope, \
-        call save_memory with the updated content: the host updates that \
+        call memory_write with the updated content: the host updates that \
         project entry in place rather than writing a duplicate in auto.\n\
         - When consolidating several granular feedback rules into one rule, \
         pass the superseded keys in replaces so the merged rule inherits \
@@ -383,23 +383,20 @@ pub(crate) fn build_forked_dream_runner(
     config: RunnerConfig,
     recorder: Arc<MutationLog>,
 ) -> Runner {
-    // The add + delete + promote + demote tools share one recorder so a
-    // touch (add, delete, promote, or demote) counts toward the notice.
-    // The add tool pins the auto root: a scope choice offered to the dream
-    // model could open a root the seam is not authorized to write, and
-    // moving a topic between roots is the promote/demote tools' job — the
-    // one cross-root write the pin allows is the host-side refresh routing
-    // that updates a project-root key in place.
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(
-        MemoryAddTool::new(memory.clone())
+        MemoryWriteTool::new(memory.clone())
             .with_recorder(recorder.clone())
             .with_origin(MemoryOrigin::Dream)
             .with_pinned_scope(MemoryScope::Auto),
     ));
-    tools.register(Arc::new(ShowMemoryTool::new(memory.clone())));
+    tools.register(Arc::new(MemoryReadTool::new(memory.clone())));
     tools.register(Arc::new(
-        DeleteMemoryTool::new(memory.clone()).with_recorder(recorder),
+        MemoryDeleteTool::new_pinned(memory.clone(), MemoryScope::Auto)
+            .with_recorder(recorder.clone()),
+    ));
+    tools.register(Arc::new(
+        MemoryArchiveTool::new_pinned(memory.clone(), MemoryScope::Auto).with_recorder(recorder),
     ));
     Runner::new(store, provider, tools, config).with_cwd(cwd.to_path_buf())
 }
