@@ -247,6 +247,8 @@ async fn test_call_returns_text() {
         .expect("the call succeeds");
     assert_eq!(out, Value::String("answer".to_string()));
     assert_eq!(counters.tool_calls.load(Ordering::SeqCst), 1);
+    let instructions = source.instructions().expect("server instructions present");
+    assert!(instructions.contains("use probe"));
     manager.shutdown().await;
     timeout(Duration::from_secs(5), mirror)
         .await
