@@ -4,6 +4,7 @@
 //! through assemble_bundle (crate root) so the bridge wiring cannot drift from
 //! the fresh path.
 
+use crate::composition::with_process_runtime;
 use houyicoder_permission::FileRuleStore;
 use houyicoder_service::composition::ProviderResolution;
 use houyicoder_service::composition::build_runner_for_fork;
@@ -21,13 +22,15 @@ pub(crate) fn build_bundle_for_resume_sid(
     project: Option<String>,
     provider: ProviderResolution,
 ) -> Result<crate::AssembledSession, Box<dyn Error>> {
-    let resumed = build_runner_for_resume_sid(
-        sid,
-        &session_log_root(),
-        project,
-        Some(Arc::new(FileRuleStore::default_paths())),
-        provider,
-    )?;
+    let resumed = with_process_runtime(|| {
+        build_runner_for_resume_sid(
+            sid,
+            &session_log_root(),
+            project,
+            Some(Arc::new(FileRuleStore::default_paths())),
+            provider,
+        )
+    })?;
     Ok(crate::assemble_bundle(
         resumed.assembled,
         resumed.model,
@@ -44,13 +47,15 @@ pub(crate) fn build_bundle_for_fork(
     project: Option<String>,
     provider: ProviderResolution,
 ) -> Result<crate::AssembledSession, Box<dyn Error>> {
-    let resumed = build_runner_for_fork(
-        source_sid,
-        &session_log_root(),
-        project,
-        Some(Arc::new(FileRuleStore::default_paths())),
-        provider,
-    )?;
+    let resumed = with_process_runtime(|| {
+        build_runner_for_fork(
+            source_sid,
+            &session_log_root(),
+            project,
+            Some(Arc::new(FileRuleStore::default_paths())),
+            provider,
+        )
+    })?;
     Ok(crate::assemble_bundle(
         resumed.assembled,
         resumed.model,

@@ -21,6 +21,7 @@ use std::path::Path;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::runtime::Builder;
+use tokio::runtime::Handle;
 
 /// How many of the most recently active sessions the cwd walk reads before
 /// falling back to a full scan. Bounds descriptor reads on a store holding
@@ -173,6 +174,10 @@ pub fn build_runner_for_resume_export(
         // The resume entries read user-level state from the environment,
         // like the interactive entry they sit beside.
         None,
+        // A resume entry runs before the process runtime is otherwise used,
+        // so its caller enters the runtime around this call; the handle is
+        // the process one when it does.
+        Handle::try_current().ok(),
     );
     // Opening a session through resume is its own entry: the user is coming
     // back, so a summary of what they left is owed whether or not they look
@@ -343,6 +348,10 @@ pub fn build_runner_for_resume_sid(
         // The resume entries read user-level state from the environment,
         // like the interactive entry they sit beside.
         None,
+        // A resume entry runs before the process runtime is otherwise used,
+        // so its caller enters the runtime around this call; the handle is
+        // the process one when it does.
+        Handle::try_current().ok(),
     );
     // Same entry as the export path: the session is being reopened after an
     // absence, which is what a resume recap describes.
@@ -453,6 +462,10 @@ pub fn build_runner_for_fork(
         // The resume entries read user-level state from the environment,
         // like the interactive entry they sit beside.
         None,
+        // A resume entry runs before the process runtime is otherwise used,
+        // so its caller enters the runtime around this call; the handle is
+        // the process one when it does.
+        Handle::try_current().ok(),
     );
     Ok(ResumedRunner {
         assembled,

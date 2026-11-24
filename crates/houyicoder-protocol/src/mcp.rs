@@ -86,7 +86,9 @@ impl McpTransportConfig {
 struct RawTransport {
     #[serde(default, rename = "type", alias = "kind")]
     kind: Option<McpTransportKind>,
-    #[serde(default)]
+    /// The standard file spells the command under this key; the older
+    /// environment spelling called it a program.
+    #[serde(default, alias = "program")]
     command: Option<String>,
     #[serde(default)]
     url: Option<String>,

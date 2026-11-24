@@ -315,5 +315,7 @@ pub fn file_uri_for(path: &Path) -> String {
     }
 }
 
+// Visible to the sibling test modules that build a peer to call through,
+// which is what keeps one in-memory peer double in the tree.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

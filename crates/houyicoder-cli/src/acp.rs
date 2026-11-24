@@ -35,6 +35,7 @@ use houyicoder_service::composition::build_runner;
 use houyicoder_service::composition::resolve_provider;
 use houyicoder_service::composition::session_log_root;
 use houyicoder_service::lifecycle::SessionLeaseStore;
+use houyicoder_service::mcp::McpConnections;
 use houyicoder_service::turn_events::TurnEvents;
 use tokio::runtime::Builder;
 
@@ -96,6 +97,11 @@ pub(crate) fn run_acp_stdio(
                 .with_bus(parts.bus);
             drop(server.serve(&mut pump).await);
             parts.background_tasks.shutdown();
+            // The session is over, so its external tool servers end here
+            // rather than at process exit.
+            if let Some(manager) = parts.mcp {
+                manager.shutdown().await;
+            }
             // serve returns when the client closes stdin; close waits for the
             // writer to flush the last reply before the process exits.
             pump.close().await;
@@ -134,6 +140,8 @@ struct AcpSessionParts {
     model_options: Vec<String>,
     background_tasks: Arc<BackgroundTasks>,
     bus: Option<Arc<AgentBus>>,
+    /// The session's external tool servers, ended when the client closes.
+    mcp: Option<Arc<McpConnections>>,
 }
 
 /// Build the runner, fences, and adapter for one workspace. The session log,
@@ -218,6 +226,10 @@ fn build_acp_session(
         model_options,
         background_tasks: bundle.background_tasks,
         bus: bundle.bus,
+        mcp: bundle
+            .mcp
+            .take()
+            .map(|runtime| Arc::clone(&runtime.manager)),
     })
 }
 

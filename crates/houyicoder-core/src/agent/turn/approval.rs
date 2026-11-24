@@ -173,7 +173,7 @@ impl Runner {
                     .await?;
                     continue;
                 }
-                if let Some(tool) = self.tools.get(&req.tool_name).cloned() {
+                if let Some(tool) = self.tools.get(&req.tool_name) {
                     // A decision may carry an updated input (the answers
                     // AskUserQuestion collected in the UI); use it so they
                     // reach the tool.
@@ -319,7 +319,7 @@ impl Runner {
                         None => Some(ApprovalRequest::new(
                             call_id.clone(),
                             tool.clone(),
-                            resolved_input(self.tools.get(tool), input),
+                            resolved_input(self.tools.get(tool).as_ref(), input),
                             // The gate's verdict happened in an earlier
                             // process and the record does not store it, so the
                             // card offers a generic prompt rather than a

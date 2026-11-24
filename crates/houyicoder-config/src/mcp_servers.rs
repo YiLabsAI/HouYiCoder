@@ -140,8 +140,22 @@ pub fn parse_env_servers(raw: Option<&str>) -> Vec<ScopedMcpServerConfig> {
     values
         .iter()
         .filter_map(|body| {
-            let name = body.get("name").and_then(Value::as_str)?;
-            parse_server_entry((&name.to_string(), body))
+            // The older spelling named no server, only a program; the
+            // program's file stem is the name it was reachable under.
+            let name = body
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    body.get("program")
+                        .and_then(Value::as_str)
+                        .and_then(|program| {
+                            Path::new(program)
+                                .file_stem()
+                                .map(|stem| stem.to_string_lossy().to_string())
+                        })
+                })?;
+            parse_server_entry((&name, body))
         })
         .collect()
 }

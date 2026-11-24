@@ -1,5 +1,5 @@
 //! The connection manager: one supervised task per configured server, a
-//! shared view of every server's state for the surfaces, and the policy that
+//! shared view of every server's state for the views, and the policy that
 //! turns a dropped connection into a bounded restart.
 //!
 //! A server's slots live in one map ordered by name, so the tool list and the
@@ -24,6 +24,7 @@ use rmcp::model::Tool;
 use rmcp::service::Peer;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -50,6 +51,9 @@ pub struct McpTimings {
     /// How long a connection must stay up before its restart count resets. A
     /// connection that drops sooner is part of the same failure storm.
     pub stable_after: Duration,
+    /// How long a closing handshake may take before the connection is
+    /// dropped without one.
+    pub close_timeout: Duration,
     /// How a dropped connection is retried.
     pub restart: RestartPolicy,
 }
@@ -61,12 +65,13 @@ impl Default for McpTimings {
             handshake_timeout: Duration::from_secs(15),
             liveness_poll: Duration::from_millis(500),
             stable_after: Duration::from_secs(30),
+            close_timeout: Duration::from_secs(2),
             restart: RestartPolicy::default(),
         }
     }
 }
 
-/// One server's shared view: what the surfaces render and what the tool
+/// One server's shared view, what the views render and what the tool
 /// adapter calls through.
 pub(crate) struct ServerSlot {
     pub(crate) config: ScopedMcpServerConfig,
@@ -80,7 +85,7 @@ pub(crate) struct ServerSlot {
 }
 
 /// The manager itself. Cloning shares the slots and the cancellation token,
-/// so the supervisor tasks and the handles a surface holds see one state.
+/// so the supervisor tasks and the handles a view holds see one state.
 #[derive(Clone)]
 pub struct McpConnections {
     launcher: Arc<dyn ProcessLauncher>,
@@ -89,6 +94,10 @@ pub struct McpConnections {
     slots: Arc<RwLock<BTreeMap<String, ServerSlot>>>,
     cancel: CancellationToken,
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Bumped whenever the connected tool set changes, so the tool view can
+    /// rebuild the moment a server connects, reconnects, or goes away
+    /// instead of polling for a difference.
+    generation: Arc<watch::Sender<u64>>,
 }
 
 impl McpConnections {
@@ -98,6 +107,7 @@ impl McpConnections {
         workspace_root: Arc<Path>,
         timings: McpTimings,
     ) -> Self {
+        let (generation, _) = watch::channel(0);
         Self {
             launcher,
             workspace_root,
@@ -105,7 +115,19 @@ impl McpConnections {
             slots: Arc::new(RwLock::new(BTreeMap::new())),
             cancel: CancellationToken::new(),
             tasks: Arc::new(Mutex::new(Vec::new())),
+            generation: Arc::new(generation),
         }
+    }
+
+    /// A receiver that fires once per change to the connected tool set.
+    pub(crate) fn change_receiver(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
+
+    /// Announce that the connected tool set changed. Sending is best effort:
+    /// no receiver means nobody is mirroring the tools, not an error.
+    fn announce_change(&self) {
+        self.generation.send_modify(|generation| *generation += 1);
     }
 
     /// Start every configured server as its own supervised task. A disabled
@@ -161,7 +183,7 @@ impl McpConnections {
         }
     }
 
-    /// The servers as the status surfaces render them, ordered by name.
+    /// The servers as the status views render them, ordered by name.
     pub async fn statuses(&self) -> Vec<McpServerStatusView> {
         let slots = self.slots.read().await;
         slots
@@ -191,7 +213,7 @@ impl McpConnections {
             .unwrap_or_default()
     }
 
-    /// The diagnostics hold size the tail keeps, exposed so a status surface
+    /// The diagnostics hold size the tail keeps, exposed so a status view
     /// can say how much of the child's output it is eliding.
     pub fn stderr_limit(&self) -> usize {
         STDERR_TAIL_LINES
@@ -227,39 +249,11 @@ impl McpConnections {
                 return;
             };
             self.set_state(&name, McpConnectionState::Pending).await;
-            let launched = timeout(
-                self.timings.handshake_timeout,
-                launch_stdio(
-                    &self.launcher,
-                    &config.transport,
-                    self.workspace_root.clone(),
-                ),
-            )
-            .await;
-            let mut live = match launched {
-                Ok(Ok(live)) => live,
-                Ok(Err(error)) => {
-                    self.set_state(
-                        &name,
-                        McpConnectionState::Failed {
-                            error: error.to_string(),
-                        },
-                    )
-                    .await;
-                    if !self.wait_wake(&mut wake).await {
-                        return;
-                    }
-                    attempt = 0;
-                    continue;
-                }
-                Err(_elapsed) => {
-                    self.set_state(
-                        &name,
-                        McpConnectionState::Failed {
-                            error: "the handshake timed out".into(),
-                        },
-                    )
-                    .await;
+            let mut live = match self.connect(&config).await {
+                Ok(live) => live,
+                Err(error) => {
+                    self.set_state(&name, McpConnectionState::Failed { error })
+                        .await;
                     if !self.wait_wake(&mut wake).await {
                         return;
                     }
@@ -275,28 +269,23 @@ impl McpConnections {
             if connected_at.elapsed() >= self.timings.stable_after {
                 attempt = 0;
             }
+            drop(
+                live.service
+                    .close_with_timeout(self.timings.close_timeout)
+                    .await,
+            );
             match end {
-                ServeEnd::Shutdown => {
-                    drop(
-                        live.service
-                            .close_with_timeout(Duration::from_secs(2))
-                            .await,
-                    );
-                    return;
-                }
+                ServeEnd::Shutdown => return,
                 ServeEnd::Wake => {
-                    drop(
-                        live.service
-                            .close_with_timeout(Duration::from_secs(2))
-                            .await,
-                    );
+                    // The user asked for a fresh handshake: the old peer and
+                    // its tools go now, so a relaunch that fails cannot leave
+                    // the source advertising a server nothing is behind.
+                    self.forget_connection(&name).await;
                 }
                 ServeEnd::Closed => {
-                    drop(
-                        live.service
-                            .close_with_timeout(Duration::from_secs(2))
-                            .await,
-                    );
+                    // The peer is dead: drop it and the tools it served, so
+                    // nothing keeps calling a transport that cannot answer.
+                    self.forget_connection(&name).await;
                     attempt += 1;
                     match self.timings.restart.delay(attempt) {
                         Some(delay) => {
@@ -323,6 +312,29 @@ impl McpConnections {
         }
     }
 
+    /// Launch one server and wait out its handshake inside the window, or
+    /// name why it did not arrive. A shutdown ends the wait immediately, so a
+    /// session close never has to outlast a slow handshake.
+    async fn connect(&self, config: &ScopedMcpServerConfig) -> Result<LaunchedMcpServer, String> {
+        let launched = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err("the manager is shutting down".into()),
+            launched = timeout(
+                self.timings.handshake_timeout,
+                launch_stdio(
+                    &self.launcher,
+                    &config.transport,
+                    self.workspace_root.clone(),
+                ),
+            ) => launched,
+        };
+        match launched {
+            Ok(Ok(live)) => Ok(live),
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_elapsed) => Err("the handshake timed out".into()),
+        }
+    }
+
     /// Fetch the server's identity, instructions, and tools, and publish them
     /// to the shared view.
     async fn mark_connected(&self, name: &str, live: &mut LaunchedMcpServer) {
@@ -342,6 +354,10 @@ impl McpConnections {
                 .as_ref()
                 .and_then(|i| i.server_info.as_ref().map(|s| s.version.clone()));
         }
+        drop(slots);
+        // A reconnect hands out a new peer, so the tools must be rebuilt
+        // even when the names are unchanged.
+        self.announce_change();
     }
 
     /// Run the connection until it ends, folding change notices into one
@@ -398,7 +414,22 @@ impl McpConnections {
             if let Some(slot) = slots.get_mut(name) {
                 slot.tools = result.tools;
             }
+            drop(slots);
+            self.announce_change();
         }
+    }
+
+    /// Drop a server's peer and its tools after the connection ended, and
+    /// announce the change so nothing keeps addressing a dead transport.
+    async fn forget_connection(&self, name: &str) {
+        let mut slots = self.slots.write().await;
+        if let Some(slot) = slots.get_mut(name) {
+            slot.peer = None;
+            slot.tools.clear();
+            slot.instructions = None;
+        }
+        drop(slots);
+        self.announce_change();
     }
 
     async fn wait_wake(&self, wake: &mut mpsc::Receiver<()>) -> bool {
@@ -422,6 +453,23 @@ impl McpConnections {
         if let Some(slot) = slots.get_mut(name) {
             slot.state = state;
         }
+    }
+
+    /// How long one call on this server may run.
+    pub(crate) async fn call_timeout_of(&self, name: &str) -> Duration {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .map(|slot| Duration::from_millis(slot.config.tool_timeout_ms))
+            .unwrap_or(Duration::from_secs(60))
+    }
+
+    /// A token that fires when the manager shuts down. It is a child of the
+    /// manager's own, so a watcher that cancels it ends its own wait without
+    /// stopping the servers.
+    pub(crate) fn watch_stop(&self) -> CancellationToken {
+        self.cancel.child_token()
     }
 
     /// One server's peer, for the tool adapter to call through.
@@ -491,4 +539,4 @@ async fn sleep_until_deadline(window: Option<Instant>, deadline: Instant) {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

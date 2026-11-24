@@ -50,7 +50,6 @@ def main() -> int:
         live.returncode
         or r"binary\(/live_agent/\)" not in live.stdout
         or r"binary\(/openai_compat_real/\)" not in live.stdout
-        or r"binary\(/mcp_live_server/\)" not in live.stdout
     ):
         failures.append(f"live suite route incorrect: {live.stdout!r} {live.stderr!r}")
     if "reward_bench" in live.stdout:
@@ -131,7 +130,6 @@ def main() -> int:
     for binary in (
         "live_agent",
         "openai_compat_real",
-        "mcp_live_server",
         "reward_bench",
         "reward_baseline",
     ):

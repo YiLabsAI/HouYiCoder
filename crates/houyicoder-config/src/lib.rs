@@ -221,18 +221,6 @@ pub(crate) fn json_type_name(v: &Value) -> &'static str {
     }
 }
 
-/// One external tool server to spawn at startup. The composition root reads
-/// the list from env, spawns each via the launcher, and wraps its tools
-/// behind the Tool trait. The first cut wires one server; the shape is a Vec
-/// so a multi-server config lands without a schema change.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct McpServerConfig {
-    /// The program to run (a binary name or path).
-    pub program: String,
-    /// Argv after the program.
-    pub args: Vec<String>,
-}
-
 // ---- pure helpers (logic under test, no env mutation) ---------------------
 
 /// The first non-empty value in priority order, or None. Empty strings are
@@ -335,41 +323,6 @@ pub fn resolve_default_model() -> String {
     DEFAULT_MODEL.to_string()
 }
 
-/// The list of external tool servers configured via env. An empty or unset var
-/// yields an empty Vec so the composition root wires no external server (the
-/// built-in tools still load). A malformed value is also an empty Vec with a
-/// stderr warning — the engine must not brick on a config typo.
-pub fn resolve_mcp_servers() -> Vec<McpServerConfig> {
-    let raw = var(ENV_HOUYICODER_MCP_SERVERS).ok();
-    match parse_mcp_servers(raw.as_deref()) {
-        Ok(list) => list,
-        Err(msg) => {
-            tracing::warn!(
-                "{ENV_HOUYICODER_MCP_SERVERS} ignored ({msg}); no external tool server wired"
-            );
-            Vec::new()
-        }
-    }
-}
-
-/// Pure parser for the external server list; testable without env mutation.
-/// Accepts a JSON array of objects with program and args fields. An empty or
-/// unset value yields an empty list. A non-array value is an error.
-fn parse_mcp_servers(raw: Option<&str>) -> Result<Vec<McpServerConfig>, String> {
-    let Some(body) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    let parsed: Vec<McpServerConfig> =
-        serde_json::from_str(body).map_err(|e| format!("invalid json: {e}"))?;
-    // Drop entries with an empty program: a server with no command cannot
-    // spawn, and silently registering zero tools from it would mask the
-    // config typo.
-    Ok(parsed
-        .into_iter()
-        .filter(|c| !c.program.is_empty())
-        .collect())
-}
-
 // ---- memory toggles (cross-session, file-backed) -------------------------
 
 /// The config-home directory under the user home. Falls back to the OS
@@ -413,6 +366,14 @@ fn user_home() -> Option<PathBuf> {
 /// The settings file path inside the config-home directory.
 pub fn settings_path() -> PathBuf {
     config_home().join(retention::SETTINGS_FILE)
+}
+
+/// The settings file path under one user home, for a caller that resolves
+/// user-level state against a home it was handed rather than the process
+/// home. The profile layouts are the same, so a test that routes its state
+/// through a temporary home reaches its own settings and no one else's.
+pub fn settings_path_in(home: &Path) -> PathBuf {
+    home.join(".houyicoder").join(retention::SETTINGS_FILE)
 }
 
 /// User-tunable memory feature switches, persisted across sessions in the

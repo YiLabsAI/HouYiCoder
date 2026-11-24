@@ -15,7 +15,6 @@ pub mod capture;
 pub mod cost_model;
 pub mod hook_fire;
 pub mod launcher;
-pub mod mcp;
 pub mod memory;
 pub mod path;
 pub mod provider;

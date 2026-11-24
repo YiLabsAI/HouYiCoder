@@ -328,6 +328,17 @@ fn test_env_servers_parse() {
     assert!(parse_env_servers(Some("  ")).is_empty());
 }
 
+/// An entry that names no server but names a program is reachable under the
+/// program's file stem, and one that names neither is skipped.
+#[test]
+fn test_env_names_by_program() {
+    let raw = r#"[{"program": "/usr/bin/local/grader"}, {}]"#;
+    let servers = parse_env_servers(Some(raw));
+    assert_eq!(servers.len(), 1, "the nameless entry is skipped");
+    assert_eq!(servers[0].name, "grader");
+    assert_eq!(servers[0].transport.endpoint, "/usr/bin/local/grader");
+}
+
 /// A transport serializes into the flat stdio body the standard file uses,
 /// with empty collections omitted.
 #[test]

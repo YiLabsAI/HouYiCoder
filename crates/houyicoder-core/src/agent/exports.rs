@@ -43,7 +43,7 @@ pub use crate::agent::tools::{
     AskUserQuestionTool, BashTool, ConversationSearchTool, DelegationTool, EditTool,
     EnterWorktreeTool, ExitWorktreeTool, GlobTool, GrepTool, MemoryAddTool, MultiEditTool,
     ReadTool, SendMessageTool, SessionResultCatalog, SkillTool, TaskListTool, TaskOutputTool,
-    TaskStopTool, TodoItem, TodoStatus, TodoWriteTool, WebFetchTool, WriteTool,
+    TaskStopTool, TodoItem, TodoStatus, TodoWriteTool, ToolSource, WebFetchTool, WriteTool,
     bound_child_summary,
 };
 pub use crate::agent::turn_group::assemble_model_input;

@@ -37,6 +37,48 @@ fn test_narrow_drops_disallowed() {
     assert_eq!(child.len(), 1);
 }
 
+/// A source that serves one canned tool, standing in for connected servers.
+struct CannedSource(Arc<dyn Tool>);
+
+impl ToolSource for CannedSource {
+    fn tool_defs(&self) -> Vec<ToolDef> {
+        vec![ToolDef {
+            name: self.0.name().to_string(),
+            description: self.0.description().to_string(),
+            input_schema: self.0.input_schema(),
+        }]
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        (self.0.name() == name).then(|| Arc::clone(&self.0))
+    }
+}
+
+/// What the parent registry learned also reaches a narrowed child: the
+/// definition's disallowed list withholds a source tool from both the
+/// declarations and the dispatch.
+#[test]
+fn test_narrow_filters_source() {
+    let source: Arc<dyn ToolSource> =
+        Arc::new(CannedSource(Arc::new(StubTool::new("mcp__graph__wipe"))));
+    let parent = ToolRegistry::new().with_source(Arc::clone(&source));
+    assert!(parent.get("mcp__graph__wipe").is_some());
+    let child = parent.narrow(&["MCP__graph__wipe".into()]);
+    assert!(
+        child.get("mcp__graph__wipe").is_none(),
+        "a narrowed source must not dispatch the disallowed tool"
+    );
+    assert!(
+        child
+            .tool_defs()
+            .iter()
+            .all(|def| def.name != "mcp__graph__wipe"),
+        "a narrowed source must not advertise the disallowed tool"
+    );
+    let kept = parent.narrow(&[]);
+    assert!(kept.get("mcp__graph__wipe").is_some());
+}
+
 #[test]
 fn test_tool_defs_deterministic_sort() {
     let mut reg = ToolRegistry::new();

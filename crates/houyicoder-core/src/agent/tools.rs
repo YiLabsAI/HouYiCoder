@@ -57,6 +57,7 @@ pub use memory_search::SearchMemoryTool;
 pub use memory_show::ShowMemoryTool;
 pub use multiedit::MultiEditTool;
 pub use read::ReadTool;
+pub use registry::ToolSource;
 pub use results::SessionResultCatalog;
 pub use skill::SkillTool;
 pub use task_tools::{SendMessageTool, TaskListTool, TaskOutputTool, TaskStopTool};

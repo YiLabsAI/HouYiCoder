@@ -330,6 +330,10 @@ fn production_runner(project: Option<String>, provider: ProviderResolution) -> B
     let mut options =
         BuildRunnerOptions::disk(project, Some(Arc::new(FileRuleStore::default_paths())));
     options.provider = Some(provider);
+    // Assembly runs on this plain thread, before the process runtime would
+    // otherwise be used, so the handle is named here rather than discovered
+    // from an ambient context that does not exist yet.
+    options.runtime = Some(shared_runtime().handle().clone());
     options
 }
 
@@ -348,7 +352,12 @@ fn run_detached_host(
 ) -> Result<(), Box<dyn Error>> {
     let provider = resolve_provider(project.as_deref());
     let facts = provider.facts.clone();
-    let mut bundle = build_runner(production_runner(project, provider));
+    // The host's own runtime exists before assembly so the external tool
+    // servers start on it rather than on a second pool built for them.
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
+    let mut options = production_runner(project, provider);
+    options.runtime = Some(runtime.handle().clone());
+    let mut bundle = build_runner(options);
     if let Some(m) = &model_override {
         bundle.runner.set_model(m.clone());
     }
@@ -359,7 +368,10 @@ fn run_detached_host(
     }
     eprintln!("session_id={}", bundle.session);
     eprintln!("pid={}", id());
-    let runtime = Builder::new_multi_thread().enable_all().build()?;
+    let mcp_manager = bundle
+        .mcp
+        .take()
+        .map(|runtime| Arc::clone(&runtime.manager));
     let background_tasks = bundle.background_tasks.clone();
     let host = Arc::new(
         SessionHost::new(SessionLeaseStore::new())
@@ -423,6 +435,11 @@ fn run_detached_host(
         drain_cancel.cancel();
         if let Some(handle) = drain_handle {
             drop(handle.await);
+        }
+        // The session's servers end with the session they served, so no
+        // child process outlives the host that started it.
+        if let Some(manager) = mcp_manager {
+            manager.shutdown().await;
         }
         Ok::<(), Box<dyn Error>>(())
     })?;

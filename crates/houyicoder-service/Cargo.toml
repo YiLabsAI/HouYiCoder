@@ -128,6 +128,10 @@ name = "acp_child_delegation"
 path = "tests/acp_child_delegation.rs"
 harness = false
 
+[[test]]
+name = "mcp_lifecycle"
+path = "tests/mcp_lifecycle.rs"
+
 [dev-dependencies]
 # test-util drives the recap deadline and the away window on a paused clock,
 # so their tests prove the timing without waiting for it.

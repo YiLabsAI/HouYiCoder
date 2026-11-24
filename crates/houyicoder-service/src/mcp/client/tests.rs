@@ -115,7 +115,7 @@ async fn test_change_notices_reach_channel() {
     assert_eq!(rx.recv().await, Some(ClientEvent::ResourceListChanged));
 }
 
-/// Both failure kinds read as the stage that failed, so a status surface can
+/// Both failure kinds read as the stage that failed, so a status view can
 /// say whether the process or the handshake broke.
 #[test]
 fn test_error_display_names_stage() {
@@ -136,7 +136,7 @@ fn test_notice_after_close_quiet() {
     handler.report(ClientEvent::ToolListChanged);
 }
 
-/// A launcher that refuses the spawn surfaces the launcher's reason as a
+/// A launcher that refuses the spawn reports the launcher's reason as a
 /// launch failure.
 #[tokio::test]
 async fn test_launch_refused() {
@@ -199,7 +199,7 @@ async fn test_launch_without_pipes() {
 /// and after the client confirms the handshake asks for the roots and emits
 /// the three change notifications. The roots answer is forwarded to the
 /// caller so the test can assert what the server learned.
-fn fake_peer(
+pub(crate) fn fake_peer(
     mut server_read: tokio::io::DuplexStream,
     mut server_write: tokio::io::DuplexStream,
     roots_seen: UnboundedSender<String>,
@@ -264,6 +264,11 @@ fn peer_reply(method: &str, id: Option<serde_json::Value>) -> Option<serde_json:
             "jsonrpc": "2.0",
             "id": id,
             "result": {"tools": []}
+        })),
+        "tools/call" => Some(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"content": [{"type": "text", "text": "answer"}]}
         })),
         _ => None,
     }

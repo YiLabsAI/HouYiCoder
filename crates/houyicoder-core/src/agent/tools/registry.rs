@@ -21,19 +21,78 @@ use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::ToolDef;
 use serde_json::Value;
 
+/// A tool set that exists outside the static registry and can change while
+/// the run is live. External tool servers connect in the background, so the
+/// tools they expose cannot be known when the registry is built; this is the
+/// point that lets a turn see them without the host waiting at startup.
+///
+/// Implementations answer from their own snapshot: both calls must be cheap
+/// and synchronous, because they run on the turn path.
+pub trait ToolSource: Send + Sync {
+    /// The declarations of every tool currently available.
+    fn tool_defs(&self) -> Vec<ToolDef>;
+    /// Resolve one tool by its registered name.
+    fn get(&self, name: &str) -> Option<Arc<dyn Tool>>;
+}
+
+/// A source with a set of names withheld, so a child agent's registry cannot
+/// advertise or dispatch a tool its definition excludes. The inner source
+/// stays the single owner of what is connected.
+struct FilteredSource {
+    inner: Arc<dyn ToolSource>,
+    disallowed: Vec<String>,
+}
+
+impl FilteredSource {
+    fn allows(&self, name: &str) -> bool {
+        !self
+            .disallowed
+            .iter()
+            .any(|entry| entry.eq_ignore_ascii_case(name))
+    }
+}
+
+impl ToolSource for FilteredSource {
+    fn tool_defs(&self) -> Vec<ToolDef> {
+        self.inner
+            .tool_defs()
+            .into_iter()
+            .filter(|def| self.allows(&def.name))
+            .collect()
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        if self.allows(name) {
+            self.inner.get(name)
+        } else {
+            None
+        }
+    }
+}
+
 /// A registry of tools available to a run. Produces ToolDefs for the
-/// CompletionRequest and dispatches by name. A HashMap by name; the
-/// partition-by-safety batch dispatcher layers on later without changing this.
+/// CompletionRequest and dispatches by name. A HashMap by name, plus one
+/// optional live source; the partition-by-safety batch dispatcher layers on
+/// later without changing this.
 #[derive(Default, Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
+    source: Option<Arc<dyn ToolSource>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            source: None,
         }
+    }
+
+    /// Attach a live source. A name the static set holds keeps its tool, so
+    /// a source can neither shadow a built-in nor replace one.
+    pub fn with_source(mut self, source: Arc<dyn ToolSource>) -> Self {
+        self.source = Some(source);
+        self
     }
 
     /// Register a tool. Last registration wins on name collision; a caller
@@ -47,6 +106,10 @@ impl ToolRegistry {
     /// Whether a tool with this name is already registered.
     pub fn contains(&self, name: &str) -> bool {
         self.tools.contains_key(name)
+            || self
+                .source
+                .as_ref()
+                .is_some_and(|source| source.get(name).is_some())
     }
 
     /// The tool declarations sent to the model in a CompletionRequest.
@@ -62,20 +125,32 @@ impl ToolRegistry {
                 input_schema: t.input_schema(),
             })
             .collect();
+        if let Some(source) = &self.source {
+            for def in source.tool_defs() {
+                if !self.tools.contains_key(&def.name) {
+                    defs.push(def);
+                }
+            }
+        }
         defs.sort_by(|a, b| a.name.cmp(&b.name));
         defs
     }
 
     /// Look up a tool by name. None means the model called an unknown tool;
     /// the loop returns an unknown-tool error result for it.
-    pub fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
-        self.tools.get(name)
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools
+            .get(name)
+            .cloned()
+            .or_else(|| self.source.as_ref().and_then(|source| source.get(name)))
     }
 
     /// A new registry with the named tools removed, for building a child
     /// agent's tool set from its definition's disallowed list. Match is
     /// case insensitive so a disallowed entry catches casing variants
-    /// (the disallowed list is authored data, not a dispatch key).
+    /// (the disallowed list is authored data, not a dispatch key). The live
+    /// source is narrowed the same way, so a restriction on a server tool
+    /// holds for both the declarations and the dispatch.
     pub fn narrow(&self, disallowed: &[String]) -> ToolRegistry {
         let mut out = ToolRegistry::new();
         for (name, tool) in &self.tools {
@@ -84,14 +159,23 @@ impl ToolRegistry {
             }
             out.tools.insert(name.clone(), Arc::clone(tool));
         }
+        out.source = self.source.as_ref().map(|source| {
+            Arc::new(FilteredSource {
+                inner: Arc::clone(source),
+                disallowed: disallowed.to_vec(),
+            }) as Arc<dyn ToolSource>
+        });
         out
     }
 
-    /// Number of registered tools.
+    /// Number of statically registered tools. A live source adds tools a turn
+    /// may also call, which this count does not include.
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
+    /// Whether the registry carries no statically registered tool, whatever
+    /// its live source offers.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }

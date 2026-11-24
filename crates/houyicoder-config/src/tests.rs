@@ -159,43 +159,6 @@ fn test_default_pick_ignores_settings() {
     drop(remove_file(&path));
 }
 
-#[test]
-fn test_parse_mcp_servers_empty() {
-    // An unset or empty value yields no external server.
-    assert!(parse_mcp_servers(None).unwrap().is_empty());
-    assert!(parse_mcp_servers(Some("")).unwrap().is_empty());
-    assert!(parse_mcp_servers(Some("   ")).unwrap().is_empty());
-}
-
-#[test]
-fn test_parse_mcp_servers_array() {
-    let raw = r#"[
-        {"program":"node","args":["server.js"]},
-        {"program":"python","args":["-m","srv"]}
-    ]"#;
-    let list = parse_mcp_servers(Some(raw)).unwrap();
-    assert_eq!(list.len(), 2);
-    assert_eq!(list[0].program, "node");
-    assert_eq!(list[0].args, vec!["server.js"]);
-    assert_eq!(list[1].program, "python");
-    assert_eq!(list[1].args, vec!["-m", "srv"]);
-}
-
-#[test]
-fn test_parse_mcp_servers_invalid() {
-    // A non-array value is an error so a config typo does not silently
-    // register zero tools.
-    assert!(parse_mcp_servers(Some("not json")).is_err());
-    assert!(parse_mcp_servers(Some("[{}]")).is_err());
-}
-
-#[test]
-fn test_parse_servers_drops_empty() {
-    let raw = r#"[{"program":"","args":[]}]"#;
-    let list = parse_mcp_servers(Some(raw)).unwrap();
-    assert!(list.is_empty());
-}
-
 /// A missing settings file yields the default (both on).
 #[test]
 fn test_load_missing_is_default() {

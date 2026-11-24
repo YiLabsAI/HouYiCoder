@@ -36,6 +36,7 @@ pub(crate) use recap::recap_settings;
 mod containment;
 mod paths;
 mod session_host;
+use crate::mcp;
 pub(crate) use containment::ContainmentAdapter;
 use containment::build_session_fences;
 pub(crate) use session_host::RunnerHandleClone;
@@ -47,6 +48,7 @@ pub use resume::{
 };
 use std::sync::Arc;
 
+use tokio::runtime::Handle;
 use tokio::sync::Notify;
 
 use houyicoder_api::memory::MemoryProvider;
@@ -55,9 +57,10 @@ use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
+use houyicoder_config::trust::is_path_trusted;
 use houyicoder_config::{
     ConfigWarning, ModelSelection, RunnerSettings, load_model_section_from,
-    resolve_model_selection_from, settings_path,
+    resolve_model_selection_from, settings_path, settings_path_in,
 };
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
@@ -71,7 +74,7 @@ use houyicoder_core::agent::{
     CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
     HookRegistry, HookSource, HotPathReducer, LlmSummarizer, ModelCatalogResolver, Runner,
     SendMessageTool, SessionResultCatalog, Summarizer, TaskListTool, TaskOutputTool, TaskStopTool,
-    TodoWriteTool, ToolOutputReducer, ToolRegistry, parse_event,
+    TodoWriteTool, ToolOutputReducer, ToolRegistry, ToolSource, parse_event,
 };
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
@@ -159,6 +162,9 @@ pub struct AssembledRunner {
     /// event stream and the runner once both exist, and so the server can
     /// answer the tasks requests from the same instance.
     pub background_tasks: Arc<BackgroundTasks>,
+    /// The external tool servers this session started, when it started any.
+    /// Held so a caller that owns the session's lifetime can end them.
+    pub mcp: Option<mcp::McpRuntime>,
 }
 
 /// An assembled runner plus the model restored from a resumed session's
@@ -187,12 +193,16 @@ pub struct BuildRunnerOptions {
     /// Skip the operating system kernel sandbox fence (the --no-sandbox CLI flag).
     pub no_sandbox: bool,
     /// The home user-level state resolves against: the memory roots, skill
-    /// discovery and its reload watch, the skill grant file, and the
-    /// snapshot store. None keeps the environment read; a caller driving the
-    /// assembly inside a test process passes its own directory so those
-    /// readers never touch the machine's real home. Settings and the
-    /// session log root are not routed through this home.
+    /// discovery and its reload watch, the skill grant file, the snapshot
+    /// store, and the settings file the external tool servers are read from.
+    /// None keeps the environment read; a caller driving the assembly inside
+    /// a test process passes its own directory so those readers never touch
+    /// the machine's real home. The session log root is not routed here.
     pub home: Option<PathBuf>,
+    /// The runtime the external tool servers' supervisors run on. Assembly
+    /// usually happens on a plain thread, so no ambient handle exists; a
+    /// caller that leaves this None gets no servers and a diagnostic.
+    pub runtime: Option<Handle>,
 }
 
 impl BuildRunnerOptions {
@@ -215,6 +225,7 @@ impl BuildRunnerOptions {
             provider: None,
             no_sandbox: false,
             home: None,
+            runtime: None,
         }
     }
 }
@@ -274,6 +285,7 @@ pub fn build_runner(options: BuildRunnerOptions) -> AssembledRunner {
         resolved,
         descriptor_store,
         options.home,
+        options.runtime,
     )
 }
 
@@ -305,6 +317,7 @@ pub(crate) fn assemble(
     resolved: ProviderResolution,
     descriptor_store: Arc<dyn SessionDescriptorStore>,
     home: Option<PathBuf>,
+    runtime: Option<Handle>,
 ) -> AssembledRunner {
     let model = model_selection.model;
     let ProviderResolution {
@@ -347,6 +360,29 @@ pub(crate) fn assemble(
         background_tasks.clone(),
         Duration::from_millis(runner_settings.bash_foreground_budget_ms),
     );
+    // The trust answer and the servers it gates come from one settings file,
+    // so a caller that routed its state through a home sees that home. The
+    // servers start in the background, and an untrusted workspace's project
+    // entries are disabled by the resolver before anything is launched.
+    let settings_file = match home.as_deref() {
+        Some(home) => settings_path_in(home),
+        None => settings_path(),
+    };
+    let workspace_trusted = fences
+        .workspace
+        .as_deref()
+        .is_none_or(|workspace| is_path_trusted(&settings_file, workspace));
+    let mcp = mcp::start_servers(
+        &settings_file,
+        fences.workspace.as_deref(),
+        workspace_trusted,
+        runtime.as_ref(),
+        Arc::clone(&gate_dyn),
+        Arc::clone(&store) as Arc<dyn SessionLog>,
+    );
+    if let Some(runtime) = &mcp {
+        tools = tools.with_source(Arc::clone(&runtime.source) as Arc<dyn ToolSource>);
+    }
     let config = build_runner_config(model.clone(), &runner_settings);
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
     let denied_agents = resolve_denied_agents(rule_store.as_deref(), agent_registry.as_ref());
@@ -447,6 +483,7 @@ pub(crate) fn assemble(
         provider_facts,
         recap,
         background_tasks,
+        mcp,
     }
 }
 
@@ -653,7 +690,7 @@ fn register_builtin_tools(
     .with_transaction(file_transaction.clone())
     .with_background_commands(background_tasks, foreground_budget);
     let undo_handles = builtin.undo_handles();
-    tool_registration::register_provider_tools(tools, gate_dyn, builtin);
+    tool_registration::register_provider_tools(tools, builtin);
     BuiltInSetup {
         file_transaction,
         undo_handles,

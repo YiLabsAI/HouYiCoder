@@ -19,6 +19,7 @@ use houyicoder_service::composition::{
     AssembledRunner, ProviderResolution, build_runner, build_runner_for_resume_export,
     fleet_status_relay, notification_drain, session_log_root,
 };
+use houyicoder_service::mcp::McpRuntime;
 use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
 use houyicoder_tui::composition::{FrontendStartup, SessionHandoff, shared_runtime};
@@ -43,6 +44,16 @@ use std::panic::{set_hook, take_hook};
 /// travels alongside the bundle rather than inside it so a Session never
 /// carries frontend startup state.
 pub(crate) type AssembledSession = (SessionHandoff, FrontendStartup, HostLifecycle, Arc<Runner>);
+
+/// Run an assembly step with the process runtime entered, so the external
+/// tool servers it starts have a runtime to run on. Assembly runs on the main
+/// thread before the runtime is otherwise used, so an ambient handle does not
+/// exist unless one is entered here.
+pub(crate) fn with_process_runtime<T>(step: impl FnOnce() -> T) -> T {
+    let runtime = shared_runtime();
+    let _entered = runtime.handle().enter();
+    step()
+}
 
 /// The composition root: build the runner via the service layer, install its
 /// event handlers, Arc the runner so the server task and the TUI share one, pair an
@@ -76,13 +87,15 @@ pub(crate) fn build_bundle_for_resume(
     project: Option<String>,
     provider: ProviderResolution,
 ) -> Result<AssembledSession, Box<dyn Error>> {
-    let resumed = build_runner_for_resume_export(
-        export_path,
-        &session_log_root(),
-        project,
-        Some(Arc::new(FileRuleStore::default_paths())),
-        provider,
-    )?;
+    let resumed = with_process_runtime(|| {
+        build_runner_for_resume_export(
+            export_path,
+            &session_log_root(),
+            project,
+            Some(Arc::new(FileRuleStore::default_paths())),
+            provider,
+        )
+    })?;
     Ok(assemble_bundle(resumed.assembled, resumed.model, true))
 }
 
@@ -109,6 +122,7 @@ pub(crate) fn assemble_bundle(
         provider_facts,
         recap,
         background_tasks,
+        mcp,
     } = assembled;
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the prompt
@@ -149,6 +163,7 @@ pub(crate) fn assemble_bundle(
             provider_facts,
             recap,
             background_tasks,
+            mcp,
         },
         houyicoder_config::settings_path(),
         session_log_root(),
@@ -177,6 +192,21 @@ pub(crate) fn assemble_bundle(
     )
 }
 
+/// End the session's external tool servers with the host that owns it. The
+/// task waits on the host's cancel token and then stops every supervisor, so
+/// a session switch never leaves the previous session's servers and their
+/// child processes running.
+fn arm_mcp_shutdown(host: &mut HostLifecycle, mcp: Option<McpRuntime>) {
+    if let Some(mcp) = mcp {
+        let manager = Arc::clone(&mcp.manager);
+        let stop = host.cancel_token();
+        host.track(shared_runtime().spawn(async move {
+            stop.cancelled().await;
+            manager.shutdown().await;
+        }));
+    }
+}
+
 /// Pair an in-memory protocol server and client around a runner. The session
 /// event sequencer receives runtime events before the runner is shared, then
 /// becomes the sole ordering authority for durable event frames, model
@@ -202,6 +232,7 @@ pub(crate) fn start_local_server(
         provider_facts,
         recap,
         background_tasks,
+        mcp,
     } = assembled;
     // The server's rename and model writes touch the same descriptor the
     // runner records prompts through, so it takes the runner's own store
@@ -214,6 +245,7 @@ pub(crate) fn start_local_server(
     let backfill_log = runner.store();
     let backfill_store = descriptor_store.clone();
     let mut host = HostLifecycle::new();
+    arm_mcp_shutdown(&mut host, mcp);
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let event_sequencer = EventSequencer::new();
