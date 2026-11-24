@@ -299,7 +299,10 @@ def _check_file_qualifiers(errors: list[str], root: Path = Path("crates")) -> No
 # The get_ ban targets pure accessors (Rust idiom: name the field, do not
 # prefix with get_); get_or_create has no field-name form, so the ban does
 # not apply.
-_GET_PREFIX_EXEMPT = ("get_or_create_",)
+# get_info is the method name a foreign protocol trait imposes on its
+# implementors; the workspace never chooses that prefix for its own
+# functions, and the trait cannot be renamed.
+_GET_PREFIX_EXEMPT = ("get_or_create_", "get_info")
 _GET_PREFIX_BASELINE: frozenset[str] = frozenset({
 })
 _VAGUE_SUFFIX_RE = re.compile(r"(?:Info|Data|Wrapper|Manager|Helper|Util|Base)$")

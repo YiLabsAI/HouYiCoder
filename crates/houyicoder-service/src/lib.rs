@@ -23,6 +23,7 @@ pub(crate) mod consent;
 pub mod diagnostics;
 pub mod lifecycle;
 pub mod local_ipc;
+pub mod mcp;
 pub mod protocol_adapter;
 pub mod sandbox_policy;
 pub mod server;
