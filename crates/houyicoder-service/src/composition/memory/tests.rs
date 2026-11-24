@@ -1,7 +1,7 @@
 //! Tests for this module.
 
 use super::super::worktree;
-use super::{build_memory_runtime, heal_memory_index, memory_provider_for};
+use super::{build_memory_runtime, heal_memory_index, memory_config_root, memory_provider_for};
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
@@ -173,6 +173,33 @@ fn test_heal_logs_write_failure() {
     // Restore so cleanup can remove the dir.
     set_permissions(&root, Permissions::from_mode(0o755)).ok();
     drop(remove_dir_all(&root));
+}
+
+/// The config root resolves an explicit override first, a non-empty
+/// environment value second, and the home directory only when neither is
+/// present. This pins the isolation path a test uses when it sets only the
+/// config-home environment variable.
+#[test]
+fn test_config_root_precedence() {
+    let ws = temp_root();
+    let override_home = PathBuf::from("/tmp/override-home");
+    let env_root = PathBuf::from("/tmp/env-config-home");
+    assert_eq!(
+        memory_config_root(&ws, Some(&override_home), Some(env_root.clone())),
+        override_home.join(".houyicoder"),
+        "an explicit override beats the environment"
+    );
+    assert_eq!(
+        memory_config_root(&ws, None, Some(env_root.clone())),
+        env_root,
+        "the environment value is used directly as the config root"
+    );
+    assert_eq!(
+        memory_config_root(&ws, None, Some(PathBuf::new())),
+        memory_config_root(&ws, None, None),
+        "an empty environment value is skipped, not treated as a root"
+    );
+    drop(remove_dir_all(&ws));
 }
 
 /// An injected home override routes every provider root under the

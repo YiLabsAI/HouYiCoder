@@ -74,6 +74,18 @@ _BANNED_VOCAB = re.compile(
     re.IGNORECASE,
 )
 
+# Tool and model attribution trailers. A commit message records what changed
+# and why; a generator signature names the tool that typed it, ages into a
+# broken link, and is not part of the project's history. The rule is written
+# once here and applied to every commit so it cannot creep back in through a
+# hook, a template, or a remembered habit.
+_ATTRIBUTION = re.compile(
+    r"Generated with"
+    r"|Co-Authored-By:"
+    r"|Signed-off-by:.*\bbot\b",
+    re.IGNORECASE,
+)
+
 
 # Scissors line: git commit -v appends a diff below a separator line.
 # The real line is "# ------------------------ >8 ------------------------"
@@ -199,6 +211,20 @@ def main() -> int:
                 f"ERROR: commit message contains banned jargon "
                 f"'{m_vocab.group(0)}' ({where}). Use plain open-source "
                 f"vocabulary (boundary, interface, connect, release, active).",
+                file=sys.stderr,
+            )
+            return 1
+
+    # 5. No generator or model attribution. The message explains the change;
+    # who or what typed it is not history.
+    for lineno, line in lines:
+        m = _ATTRIBUTION.search(line)
+        if m:
+            where = "subject" if lineno == 1 else f"body line {lineno}"
+            print(
+                f"ERROR: commit message carries an attribution trailer "
+                f"'{m.group(0)}' ({where}). Remove it; the commit records the "
+                f"change, not the tool that wrote it.",
                 file=sys.stderr,
             )
             return 1

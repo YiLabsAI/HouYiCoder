@@ -90,6 +90,21 @@ def main() -> int:
     if _lint("fix(tui): wire the footer pill seam\n") == 0:
         failures.append("banned jargon (wire/pill/seam) should block, did not")
 
+    # Generator and model attribution trailers are blocked, in the body and
+    # in the subject. A plain "generated" word in prose must still pass.
+    attribution_bodies = [
+        "Generated with a scaffolding tool.\n",
+        "Co-Authored-By: someone <someone@example.com>\n",
+        "Signed-off-by: build-bot <bot@example.com>\n",
+    ]
+    for body in attribution_bodies:
+        if _lint(f"feat(x): do the thing\n\n{body}") == 0:
+            failures.append(f"attribution trailer should block, did not: {body!r}")
+    if _lint("feat(x): generated docs refresh\n") != 0:
+        failures.append("the word generated in a subject was blocked (false positive)")
+    if _lint("feat(x): do the thing\n\nSigned-off-by: a human <human@example.com>\n") != 0:
+        failures.append("a human sign-off was blocked (false positive)")
+
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)
