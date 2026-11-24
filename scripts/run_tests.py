@@ -230,6 +230,11 @@ env = {
     "HOUYICODER_RUNTIME_DIR": str(runtime_dir),
     "HOUYICODER_CONFIG_HOME": str(config_dir),
 }
+# HOUYICODER_MCP_SERVERS: a developer who configured external tool servers
+# through the env spelling would otherwise have every test that assembles a
+# session spawn them. The gate suite drives its own stub servers; production
+# never relies on this scrub.
+env.pop("HOUYICODER_MCP_SERVERS", None)
 # A terminal-capability or size probe must not see the developer's own
 # terminal: CI runs headless and the probes behave differently there, so a
 # test that reads TERM_PROGRAM or asks crossterm for a size is green locally

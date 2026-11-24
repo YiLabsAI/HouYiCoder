@@ -76,4 +76,7 @@ agent.md
 AGENTS.local.md
 CLAUDE.local.md
 
+# Local code graph index built by the live tool-server test
+.codegraph/
+
 

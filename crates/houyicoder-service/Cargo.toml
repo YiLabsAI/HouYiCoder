@@ -137,6 +137,10 @@ name = "mcp_stdio_round_trip"
 path = "tests/mcp_stdio_round_trip.rs"
 harness = false
 
+[[test]]
+name = "mcp_codegraph_live"
+path = "tests/mcp_codegraph_live.rs"
+
 [dev-dependencies]
 # test-util drives the recap deadline and the away window on a paused clock,
 # so their tests prove the timing without waiting for it.
