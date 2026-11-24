@@ -23,7 +23,7 @@ fn test_credential_write_refused() {
     let provider = MarkdownMemoryProvider::new(root.clone());
     let outcome = provider.add(MemoryEntry::new(
         "leak",
-        "deploy with sk-ant-api03-abcdef",
+        "deploy with sk-ant-api03-abcdefghijklmnopqrst",
         MemorySource::Reference,
     ));
     assert!(
@@ -70,11 +70,49 @@ fn test_description_checked() {
     let provider = MarkdownMemoryProvider::new(root.clone());
     let outcome = provider.add(
         MemoryEntry::new("note", "harmless body", MemorySource::Reference)
-            .with_meta("token ghp_abcdef", 0),
+            .with_meta("token ghp_abcdefghijklmnopqrstuvwxyz", 0),
     );
     assert!(
         matches!(outcome, Err(MemoryError::Secret(_))),
         "{outcome:?}"
     );
+    drop(remove_dir_all(&root));
+}
+
+/// Ordinary prose that happens to carry a prefix is not a credential: the
+/// suffix length is what separates an identifier from a key.
+#[test]
+fn test_prefix_words_pass() {
+    let root = root("words");
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    for (key, body) in [
+        ("region", "deploy to ASIA-EAST region"),
+        ("registry", "npm_registry is configured"),
+        ("hub", "hf_hub cache lives in the workspace"),
+    ] {
+        let outcome = provider.add(MemoryEntry::new(key, body, MemorySource::Reference));
+        assert!(outcome.is_ok(), "{key}: {outcome:?}");
+    }
+    drop(remove_dir_all(&root));
+}
+
+/// An access key id has a fixed body length and alphabet, so a region name or
+/// a short word after the prefix is not one.
+#[test]
+fn test_access_key_body() {
+    let root = root("aws");
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    let key = provider.add(MemoryEntry::new(
+        "aws",
+        "id AKIAABCDEFGHIJKLMNOP",
+        MemorySource::Reference,
+    ));
+    assert!(matches!(key, Err(MemoryError::Secret(_))), "{key:?}");
+    let word = provider.add(MemoryEntry::new(
+        "region",
+        "AKIA-EAST region",
+        MemorySource::Reference,
+    ));
+    assert!(word.is_ok(), "{word:?}");
     drop(remove_dir_all(&root));
 }
