@@ -10,17 +10,25 @@ use std::time::Instant;
 use houyicoder_api::launcher::{
     LauncherChild, ProcessLauncher, SpawnError, SpawnPolicy, SpawnRequest,
 };
+use houyicoder_api::session::SessionLog;
+use houyicoder_api::tool::{Tool, ToolCtx};
+use houyicoder_context::SessionId;
 use houyicoder_core::agent::ToolSource;
+use houyicoder_memory::InMemoryBackend;
 use houyicoder_permission::{DefaultModeGate, ModeGate};
 use houyicoder_protocol::mcp::McpConfigScope;
+use houyicoder_session::SessionStore;
 use rmcp::model::Tool as DeclaredTool;
 use rmcp::model::ToolAnnotations;
 use serde_json::Map;
+use serde_json::Value;
 use tokio::io::duplex;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::time::sleep;
 
 use super::*;
+use crate::mcp::ListMcpResourcesTool;
+use crate::mcp::ReadMcpResourceTool;
 use crate::mcp::client::serve_over;
 use crate::mcp::client::tests::fake_peer;
 
@@ -234,6 +242,7 @@ async fn test_source_exposes_tools() {
                 config: config("srv", false),
                 state: McpConnectionState::Connected,
                 tools: vec![dot, underscore],
+                resources: Vec::new(),
                 instructions: Some("use the graph".into()),
                 server_version: Some("1.0".into()),
                 stderr: StderrTail::default(),
@@ -271,6 +280,7 @@ fn slot(name: &str, state: McpConnectionState, instructions: &str) -> super::Ser
         config: config(name, false),
         state,
         tools: Vec::new(),
+        resources: Vec::new(),
         instructions: Some(instructions.into()),
         server_version: None,
         stderr: StderrTail::default(),
@@ -318,6 +328,233 @@ fn test_launch_error_state() {
         matches!(broken, McpConnectionState::Failed { error } if error.contains("peer closed")),
         "a broken transport reads as failed"
     );
+}
+
+/// A connected server's resources are listed in name order, narrowed by
+/// server name, and read through its peer.
+#[tokio::test]
+async fn test_resources_list_and_read() {
+    const BUF: usize = 8192;
+    let (client_read, server_write) = duplex(BUF);
+    let (server_read, client_write) = duplex(BUF);
+    let (roots_seen, _roots_rx) = unbounded_channel::<String>();
+    let peer_task = fake_peer(server_read, server_write, roots_seen);
+    let (service, _events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+        .await
+        .expect("the handshake completes");
+    let manager = Arc::new(McpConnections::new(
+        Arc::new(NoSpawn),
+        Arc::from(Path::new("/work")),
+        McpTimings::default(),
+    ));
+    {
+        let mut slots = manager.slots.write().await;
+        let mut entry = slot("srv", McpConnectionState::Connected, "use it");
+        entry.peer = Some(service.peer().clone());
+        entry.resources = vec![
+            serde_json::from_value(serde_json::json!({"uri": "file:///b", "name": "second"}))
+                .expect("a resource"),
+            serde_json::from_value(serde_json::json!({"uri": "file:///a", "name": "first"}))
+                .expect("a resource"),
+        ];
+        slots.insert("srv".into(), entry);
+    }
+    let listed = manager
+        .resources_for(None)
+        .await
+        .expect("the listing answers");
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].1.name, "first", "resources follow name order");
+    assert_eq!(listed[0].0, "srv");
+    assert!(
+        manager.resources_for(Some("other")).await.is_err(),
+        "an unknown server is named in the error, not silently empty"
+    );
+    let contents = manager
+        .read_resource("srv", "file:///a")
+        .await
+        .expect("the peer answers");
+    assert!(format!("{contents:?}").contains("the body"));
+    assert!(
+        manager.read_resource("missing", "file:///a").await.is_err(),
+        "an unknown server is refused"
+    );
+    {
+        let mut slots = manager.slots.write().await;
+        slots.insert(
+            "off".into(),
+            slot(
+                "off",
+                McpConnectionState::Disabled {
+                    reason: "by configuration".into(),
+                },
+                "",
+            ),
+        );
+    }
+    assert!(
+        manager.read_resource("off", "file:///a").await.is_err(),
+        "a server that is not connected is refused"
+    );
+    manager.shutdown().await;
+    peer_task.abort();
+    drop(service.cancel());
+}
+
+/// A connection publishes the resources its server lists, a resource notice
+/// refetches them, and a dropped connection clears them.
+#[tokio::test]
+async fn test_resources_follow_connection() {
+    const BUF: usize = 8192;
+    let (client_read, server_write) = duplex(BUF);
+    let (server_read, client_write) = duplex(BUF);
+    let (roots_seen, _roots_rx) = unbounded_channel::<String>();
+    let peer_task = fake_peer(server_read, server_write, roots_seen);
+    let (service, events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+        .await
+        .expect("the handshake completes");
+    let manager = Arc::new(McpConnections::new(
+        Arc::new(NoSpawn),
+        Arc::from(Path::new("/work")),
+        McpTimings::default(),
+    ));
+    {
+        let mut slots = manager.slots.write().await;
+        slots.insert(
+            "srv".into(),
+            slot("srv", McpConnectionState::Pending, "use it"),
+        );
+    }
+    let mut live = LaunchedMcpServer {
+        service,
+        child: None,
+        stderr: StderrTail::default(),
+        events,
+    };
+    manager.mark_connected("srv", &mut live).await;
+    assert_eq!(manager.resources_for(None).await.expect("listed").len(), 2);
+    let counted = manager
+        .statuses()
+        .await
+        .into_iter()
+        .find(|status| status.name == "srv")
+        .map(|status| status.resource_count);
+    assert_eq!(
+        counted,
+        Some(2),
+        "the status view reports the resource count"
+    );
+
+    // Clear the slot so the refetch is the only possible source of the list.
+    {
+        let mut slots = manager.slots.write().await;
+        slots
+            .get_mut("srv")
+            .expect("the slot exists")
+            .resources
+            .clear();
+    }
+    let notice = BTreeSet::from([NoticeKind::Resources]);
+    manager.refetch("srv", &mut live, &notice).await;
+    assert_eq!(
+        manager.resources_for(None).await.expect("refetched").len(),
+        2
+    );
+
+    manager.forget_connection("srv").await;
+    assert!(
+        manager
+            .resources_for(None)
+            .await
+            .expect("listed")
+            .is_empty()
+    );
+    manager.shutdown().await;
+    drop(live.service.cancel());
+    peer_task.abort();
+}
+
+/// The two resource tools answer over the same connected peer: one lists what
+/// the server offers, the other reads a named resource.
+#[tokio::test]
+async fn test_resource_tools_over_peer() {
+    const BUF: usize = 8192;
+    let (client_read, server_write) = duplex(BUF);
+    let (server_read, client_write) = duplex(BUF);
+    let (roots_seen, _roots_rx) = unbounded_channel::<String>();
+    let peer_task = fake_peer(server_read, server_write, roots_seen);
+    let (service, _events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+        .await
+        .expect("the handshake completes");
+    let manager = Arc::new(McpConnections::new(
+        Arc::new(NoSpawn),
+        Arc::from(Path::new("/work")),
+        McpTimings::default(),
+    ));
+    {
+        let mut slots = manager.slots.write().await;
+        let mut entry = slot("srv", McpConnectionState::Connected, "use it");
+        entry.peer = Some(service.peer().clone());
+        entry.resources = vec![
+            serde_json::from_value(serde_json::json!({"uri": "file:///a", "name": "first"}))
+                .expect("a resource"),
+            serde_json::from_value(serde_json::json!({"uri": "file:///b", "name": "second"}))
+                .expect("a resource"),
+        ];
+        slots.insert("srv".into(), entry);
+    }
+    let list = ListMcpResourcesTool::new(Arc::clone(&manager), None);
+    let listed = list
+        .execute(ToolCtx::new("c1"), serde_json::json!({}))
+        .await
+        .expect("the listing answers");
+    assert_eq!(listed.as_array().map(Vec::len), Some(2));
+    assert_eq!(listed[0]["server"], "srv");
+
+    let read = ReadMcpResourceTool::new(Arc::clone(&manager), None);
+    let body = read
+        .execute(
+            ToolCtx::new("c1"),
+            serde_json::json!({"server": "srv", "uri": "file:///a"}),
+        )
+        .await
+        .expect("the read answers");
+    assert!(
+        body.as_str().is_some_and(|text| text.contains("the body")),
+        "{body}"
+    );
+
+    // An oversized answer is published under the shared block marker, with a
+    // store bound to the call, and degrades to a preview without one.
+    let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let log: Arc<dyn SessionLog> = store.clone();
+    let spilled = ReadMcpResourceTool::new(Arc::clone(&manager), Some(log)).with_inline_budget(1);
+    let ctx = ToolCtx::new("c1").with_session(SessionId::new());
+    let marker = spilled
+        .execute(
+            ctx,
+            serde_json::json!({"server": "srv", "uri": "file:///a"}),
+        )
+        .await
+        .expect("the oversized read is published");
+    assert!(
+        marker.get("block_ref").and_then(Value::as_str).is_some(),
+        "the marker names the stored block, saw {marker}"
+    );
+    let without_store = ReadMcpResourceTool::new(Arc::clone(&manager), None).with_inline_budget(1);
+    let preview = without_store
+        .execute(
+            ToolCtx::new("c1"),
+            serde_json::json!({"server": "srv", "uri": "file:///a"}),
+        )
+        .await
+        .expect("the answer survives without a store");
+    assert!(preview.get("preview").is_some(), "saw {preview}");
+    assert!(preview.get("block_ref").is_none());
+
+    manager.shutdown().await;
+    peer_task.abort();
+    drop(service.cancel());
 }
 
 /// Instructions for connected servers are formatted in alphabetical order by

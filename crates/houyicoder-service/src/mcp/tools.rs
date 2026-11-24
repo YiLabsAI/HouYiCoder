@@ -16,6 +16,7 @@ use std::time::Duration;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::PFut;
+use houyicoder_context::SessionId;
 use houyicoder_core::agent::ToolSource;
 use houyicoder_permission::GuardedTool;
 use houyicoder_permission::ModeGate;
@@ -205,57 +206,49 @@ impl McpTool {
         self.registered = name;
         self
     }
+}
 
-    /// Publish one oversized result as a content-addressed block and return
-    /// the marker the model reads instead. The marker carries the block
-    /// address, the stored size, a leading preview, and the hint that names
-    /// how to reach the rest, so every reader of a result marker finds the
-    /// same keys whether it came from here or from the tool runner.
-    ///
-    /// The block holds the payload as JSON, the encoding every other
-    /// producer uses, so the engine's materialize path can decode a stored
-    /// result back into the value the server returned. The marker's size is
-    /// the stored length, which the retention budget reads.
-    ///
-    /// A store that cannot take the bytes must not cost the model the whole
-    /// result: the marker then carries the preview and a hint naming the
-    /// failure, the same rule the engine's own large-output externalizer
-    /// follows.
-    async fn externalize(&self, ctx: &ToolCtx, payload: Value) -> Value {
-        let rendered = match &payload {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
-        };
-        let preview: String = rendered.chars().take(PREVIEW_CHARS).collect();
-        let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| rendered.into_bytes());
-        let length = bytes.len();
-        let Some((log, session)) = self.log.as_ref().zip(ctx.session_id) else {
-            return result_marker(
+/// Publish one oversized payload as a content-addressed block and return the
+/// marker the model reads instead. Shared by every producer in this module,
+/// so a stored result decodes the same way whichever tool wrote it.
+pub(crate) async fn externalize_result(
+    log: Option<&Arc<dyn SessionLog>>,
+    session: Option<SessionId>,
+    payload: Value,
+) -> Value {
+    let rendered = match &payload {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let preview: String = rendered.chars().take(PREVIEW_CHARS).collect();
+    let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| rendered.into_bytes());
+    let length = bytes.len();
+    let Some((log, session)) = log.zip(session) else {
+        return result_marker(
+            None,
+            length,
+            preview,
+            "the result exceeded the inline budget and no session store is bound to hold it; the preview is all that is available",
+        );
+    };
+    match log.backend().block_put(bytes).await {
+        Ok(hash) => {
+            let hint = format!(
+                "the result exceeded the inline budget; its whole text is stored in block {} of session {}",
+                hash.0, session
+            );
+            result_marker(Some(hash.0), length, preview, &hint)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "an oversized tool result could not be stored");
+            result_marker(
                 None,
                 length,
                 preview,
-                "the result exceeded the inline budget and no session store is bound to hold it; the preview is all that is available",
-            );
-        };
-        match log.backend().block_put(bytes).await {
-            Ok(hash) => {
-                let hint = format!(
-                    "the result exceeded the inline budget; its whole text is stored in block {} of session {}",
-                    hash.0, session
-                );
-                result_marker(Some(hash.0), length, preview, &hint)
-            }
-            Err(error) => {
-                tracing::warn!(%error, "an oversized tool result could not be stored");
-                result_marker(
-                    None,
-                    length,
-                    preview,
-                    &format!(
-                        "the result exceeded the inline budget and could not be stored: {error}; the preview is all that is available"
-                    ),
-                )
-            }
+                &format!(
+                    "the result exceeded the inline budget and could not be stored: {error}; the preview is all that is available"
+                ),
+            )
         }
     }
 }
@@ -356,7 +349,7 @@ impl McpTool {
             other => other.to_string(),
         };
         if exceeds_inline(&rendered, self.inline_budget) {
-            return Ok(self.externalize(&ctx, payload).await);
+            return Ok(externalize_result(self.log.as_ref(), ctx.session_id, payload).await);
         }
         Ok(payload)
     }
@@ -375,7 +368,7 @@ fn text_of(result: &CallToolResult) -> String {
         .join("\n")
 }
 
-fn type_name(value: &Value) -> &'static str {
+pub(crate) fn type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "a boolean",

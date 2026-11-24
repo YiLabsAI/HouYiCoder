@@ -1,0 +1,104 @@
+//! What the status and instruction views read from the shared slots: one
+//! server's state as a view renders it, the diagnostics it wrote, and the
+//! instruction block a prompt carries. None of it changes a connection.
+
+use houyicoder_protocol::mcp::McpConnectionState;
+use houyicoder_protocol::mcp::McpServerStatusView;
+
+use super::McpConnections;
+use super::STDERR_TAIL_LINES;
+
+impl McpConnections {
+    /// The servers as the status views render them, ordered by name.
+    pub async fn statuses(&self) -> Vec<McpServerStatusView> {
+        let slots = self.slots.read().await;
+        slots
+            .values()
+            .map(|slot| McpServerStatusView {
+                name: slot.config.name.clone(),
+                scope: slot.config.scope,
+                state: slot.state.clone(),
+                server_version: slot.server_version.clone(),
+                tool_count: slot.tools.len(),
+                resource_count: slot.resources.len(),
+                has_instructions: slot
+                    .instructions
+                    .as_deref()
+                    .is_some_and(|text| !text.is_empty()),
+                recent_stderr: slot.stderr.lines(),
+            })
+            .collect()
+    }
+
+    /// The most recent diagnostic lines one server wrote, oldest first.
+    pub async fn stderr_tail(&self, name: &str) -> Vec<String> {
+        let slots = self.slots.read().await;
+        slots
+            .get(name)
+            .map(|slot| slot.stderr.lines())
+            .unwrap_or_default()
+    }
+
+    /// The diagnostics hold size the tail keeps, exposed so a status view
+    /// can say how much of the child's output it is eliding.
+    pub fn stderr_limit(&self) -> usize {
+        STDERR_TAIL_LINES
+    }
+
+    /// Read the instructions exported by connected servers, sorted by server
+    /// name, as one block of explicit server tags for the prompt. Server text
+    /// is untrusted, so each entry is wrapped in a tag naming its server, and
+    /// both the text and the name are escaped: server content cannot close the
+    /// host's frame or leave the attribute. A server the allowed list excludes
+    /// contributes neither its instructions nor a tag. Each server's text is
+    /// cut at a character boundary to 4,096 characters.
+    pub async fn instructions_for(&self, allowed_servers: Option<&[String]>) -> Option<String> {
+        const MAX_MCP_INSTRUCTIONS_CHARS: usize = 4_096;
+        let slots = self.slots.read().await;
+        let mut sections = Vec::new();
+        for (name, slot) in slots.iter() {
+            if !matches!(slot.state, McpConnectionState::Connected) {
+                continue;
+            }
+            if let Some(allowed) = allowed_servers
+                && !allowed.iter().any(|a| a == name)
+            {
+                continue;
+            }
+            if let Some(instructions) = slot
+                .instructions
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                let trimmed = instructions.trim();
+                let bounded: String = if trimmed.chars().count() > MAX_MCP_INSTRUCTIONS_CHARS {
+                    trimmed.chars().take(MAX_MCP_INSTRUCTIONS_CHARS).collect()
+                } else {
+                    trimmed.to_string()
+                };
+                sections.push(format!(
+                    "<mcp_server_instructions server=\"{}\">\n{}\n</mcp_server_instructions>",
+                    escape_attribute(name),
+                    escape_text(&bounded)
+                ));
+            }
+        }
+        if sections.is_empty() {
+            None
+        } else {
+            Some(sections.join("\n\n"))
+        }
+    }
+}
+
+/// Escape the characters that would let server text close the host's tag.
+fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Escape a server name for use inside a double-quoted attribute.
+fn escape_attribute(name: &str) -> String {
+    escape_text(name).replace('"', "&quot;")
+}

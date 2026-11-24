@@ -36,6 +36,7 @@ pub(crate) use recap::recap_settings;
 mod containment;
 mod paths;
 mod session_host;
+mod session_servers;
 use crate::mcp;
 pub(crate) use containment::ContainmentAdapter;
 use containment::build_session_fences;
@@ -56,10 +57,9 @@ use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::trust::TrustState;
-use houyicoder_config::trust::is_path_trusted;
 use houyicoder_config::{
     ConfigWarning, ENV_HOUYICODER_MCP_SERVERS, ModelSelection, RunnerSettings,
-    load_model_section_from, resolve_model_selection_from, settings_path, settings_path_in,
+    load_model_section_from, resolve_model_selection_from, settings_path,
 };
 use houyicoder_context::ContextBackend;
 use houyicoder_context::SessionDescriptorStore;
@@ -73,7 +73,7 @@ use houyicoder_core::agent::{
     CommandHook, ConversationSearchTool, DelegationTool, GitWorkspaceProbe, HookPolicy,
     HookRegistry, HookSource, HotPathReducer, LlmSummarizer, ModelCatalogResolver, Runner,
     SendMessageTool, SessionResultCatalog, Summarizer, TaskListTool, TaskOutputTool, TaskStopTool,
-    TodoWriteTool, ToolOutputReducer, ToolRegistry, ToolSource, parse_event,
+    TodoWriteTool, ToolOutputReducer, ToolRegistry, parse_event,
 };
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
@@ -359,31 +359,19 @@ pub(crate) fn assemble(
         background_tasks.clone(),
         Duration::from_millis(runner_settings.bash_foreground_budget_ms),
     );
-    // The trust answer and the servers it gates come from one settings file,
-    // so a caller that routed its state through a home sees that home. The
-    // servers start in the background, and an untrusted workspace's project
-    // entries are disabled by the resolver before anything is launched.
-    let settings_file = match home.as_deref() {
-        Some(home) => settings_path_in(home),
-        None => settings_path(),
-    };
-    let workspace_trusted = fences
-        .workspace
-        .as_deref()
-        .is_none_or(|workspace| is_path_trusted(&settings_file, workspace));
+    // The external tool servers start in the background and attach through a
+    // live source, so a slow server never delays the session.
     let env_servers = var(ENV_HOUYICODER_MCP_SERVERS).ok();
-    let mcp = mcp::start_servers(
-        &settings_file,
+    let (attached, mcp) = session_servers::start_and_attach(
+        tools,
+        home.as_deref(),
         fences.workspace.as_deref(),
-        workspace_trusted,
         env_servers.as_deref(),
         runtime.as_ref(),
-        Arc::clone(&gate_dyn),
+        &gate_dyn,
         Arc::clone(&store) as Arc<dyn SessionLog>,
     );
-    if let Some(runtime) = &mcp {
-        tools = tools.with_source(Arc::clone(&runtime.source) as Arc<dyn ToolSource>);
-    }
+    tools = attached;
     let config = build_runner_config(model.clone(), &runner_settings);
     skills.register_tool(&mut tools, fences.sandbox_session.clone());
     let denied_agents = resolve_denied_agents(rule_store.as_deref(), agent_registry.as_ref());

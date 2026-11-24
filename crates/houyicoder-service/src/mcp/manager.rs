@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::iter::once;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -18,10 +19,11 @@ use std::time::Duration;
 
 use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_async::CancellationToken;
-use houyicoder_protocol::mcp::{
-    McpConnectionState, McpServerStatusView, McpTransportKind, ScopedMcpServerConfig,
-};
+use houyicoder_protocol::mcp::{McpConnectionState, McpTransportKind, ScopedMcpServerConfig};
 use rmcp::RoleClient;
+use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::Resource;
+use rmcp::model::ResourceContents;
 use rmcp::model::Tool;
 use rmcp::service::Peer;
 use tokio::sync::RwLock;
@@ -80,6 +82,7 @@ pub(crate) struct ServerSlot {
     pub(crate) config: ScopedMcpServerConfig,
     pub(crate) state: McpConnectionState,
     pub(crate) tools: Vec<Tool>,
+    pub(crate) resources: Vec<Resource>,
     pub(crate) instructions: Option<String>,
     pub(crate) server_version: Option<String>,
     pub(crate) stderr: StderrTail,
@@ -150,6 +153,7 @@ impl McpConnections {
                             reason: "disabled by configuration or workspace trust".into(),
                         },
                         tools: Vec::new(),
+                        resources: Vec::new(),
                         instructions: None,
                         server_version: None,
                         stderr: StderrTail::default(),
@@ -168,6 +172,7 @@ impl McpConnections {
                         config,
                         state: McpConnectionState::Pending,
                         tools: Vec::new(),
+                        resources: Vec::new(),
                         instructions: None,
                         server_version: None,
                         stderr: StderrTail::default(),
@@ -183,87 +188,6 @@ impl McpConnections {
             if let Ok(mut tasks) = self.tasks.lock() {
                 tasks.push(task);
             }
-        }
-    }
-
-    /// The servers as the status views render them, ordered by name.
-    pub async fn statuses(&self) -> Vec<McpServerStatusView> {
-        let slots = self.slots.read().await;
-        slots
-            .values()
-            .map(|slot| McpServerStatusView {
-                name: slot.config.name.clone(),
-                scope: slot.config.scope,
-                state: slot.state.clone(),
-                server_version: slot.server_version.clone(),
-                tool_count: slot.tools.len(),
-                resource_count: 0,
-                has_instructions: slot
-                    .instructions
-                    .as_deref()
-                    .is_some_and(|text| !text.is_empty()),
-                recent_stderr: slot.stderr.lines(),
-            })
-            .collect()
-    }
-
-    /// The most recent diagnostic lines one server wrote, oldest first.
-    pub async fn stderr_tail(&self, name: &str) -> Vec<String> {
-        let slots = self.slots.read().await;
-        slots
-            .get(name)
-            .map(|slot| slot.stderr.lines())
-            .unwrap_or_default()
-    }
-
-    /// The diagnostics hold size the tail keeps, exposed so a status view
-    /// can say how much of the child's output it is eliding.
-    pub fn stderr_limit(&self) -> usize {
-        STDERR_TAIL_LINES
-    }
-
-    /// Read the instructions exported by connected servers, sorted by server
-    /// name, as one block of explicit server tags for the prompt. Server text
-    /// is untrusted, so each entry is wrapped in a tag naming its server, and
-    /// both the text and the name are escaped: server content cannot close the
-    /// host's frame or leave the attribute. A server the allowed list excludes
-    /// contributes neither its instructions nor a tag. Each server's text is
-    /// cut at a character boundary to 4,096 characters.
-    pub async fn instructions_for(&self, allowed_servers: Option<&[String]>) -> Option<String> {
-        const MAX_MCP_INSTRUCTIONS_CHARS: usize = 4_096;
-        let slots = self.slots.read().await;
-        let mut sections = Vec::new();
-        for (name, slot) in slots.iter() {
-            if !matches!(slot.state, McpConnectionState::Connected) {
-                continue;
-            }
-            if let Some(allowed) = allowed_servers
-                && !allowed.iter().any(|a| a == name)
-            {
-                continue;
-            }
-            if let Some(instructions) = slot
-                .instructions
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-            {
-                let trimmed = instructions.trim();
-                let bounded: String = if trimmed.chars().count() > MAX_MCP_INSTRUCTIONS_CHARS {
-                    trimmed.chars().take(MAX_MCP_INSTRUCTIONS_CHARS).collect()
-                } else {
-                    trimmed.to_string()
-                };
-                sections.push(format!(
-                    "<mcp_server_instructions server=\"{}\">\n{}\n</mcp_server_instructions>",
-                    escape_attribute(name),
-                    escape_text(&bounded)
-                ));
-            }
-        }
-        if sections.is_empty() {
-            None
-        } else {
-            Some(sections.join("\n\n"))
         }
     }
 
@@ -402,20 +326,29 @@ impl McpConnections {
         }
     }
 
-    /// Fetch the server's identity, instructions, and tools, and publish them
-    /// to the shared view.
+    /// Fetch the server's identity, instructions, tools, and resources, and
+    /// publish them to the shared view.
     async fn mark_connected(&self, name: &str, live: &mut LaunchedMcpServer) {
         let info = live.service.peer_info();
-        let tools =
-            match timeout(self.timings.handshake_timeout, live.peer().list_tools(None)).await {
-                Ok(Ok(result)) => result.tools,
-                _ => Vec::new(),
-            };
+        let peer = live.peer().clone();
+        let budget = self.timings.handshake_timeout;
+        let (tools, resources) = tokio::join!(
+            timeout(budget, peer.list_tools(None)),
+            resources_of(&peer, budget),
+        );
+        let tools = match tools {
+            Ok(Ok(result)) => result.tools,
+            _ => Vec::new(),
+        };
         let mut slots = self.slots.write().await;
         if let Some(slot) = slots.get_mut(name) {
             slot.state = McpConnectionState::Connected;
-            slot.peer = Some(live.peer().clone());
+            slot.peer = Some(peer);
             slot.tools = tools;
+            // A fresh connection is a new server identity, so an unanswered
+            // resource listing starts empty rather than carrying the previous
+            // connection's list.
+            slot.resources = resources.unwrap_or_default();
             slot.instructions = info.as_ref().and_then(|i| i.instructions.clone());
             slot.server_version = info
                 .as_ref()
@@ -473,26 +406,64 @@ impl McpConnections {
         live: &mut LaunchedMcpServer,
         pending: &BTreeSet<NoticeKind>,
     ) {
-        if pending.contains(&NoticeKind::Tools)
-            && let Ok(Ok(result)) =
-                timeout(self.timings.handshake_timeout, live.peer().list_tools(None)).await
-        {
-            let mut slots = self.slots.write().await;
-            if let Some(slot) = slots.get_mut(name) {
-                slot.tools = result.tools;
+        let want_tools = pending.contains(&NoticeKind::Tools);
+        let want_resources = pending.contains(&NoticeKind::Resources);
+        if !want_tools && !want_resources {
+            return;
+        }
+        let peer = live.peer().clone();
+        let budget = self.timings.handshake_timeout;
+        let refresh = async {
+            let tools = async {
+                if !want_tools {
+                    return None;
+                }
+                match timeout(budget, peer.list_tools(None)).await {
+                    Ok(Ok(result)) => Some(result.tools),
+                    _ => None,
+                }
+            };
+            let resources = async {
+                if !want_resources {
+                    return None;
+                }
+                resources_of(&peer, budget).await
+            };
+            tokio::join!(tools, resources)
+        };
+        // A listing that does not answer is not a listing of nothing, so only
+        // an answer replaces what the slot already knows.
+        let (tools, resources) = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return,
+            listed = refresh => listed,
+        };
+        let mut changed = false;
+        let mut slots = self.slots.write().await;
+        if let Some(slot) = slots.get_mut(name) {
+            if let Some(tools) = tools {
+                slot.tools = tools;
+                changed = true;
             }
-            drop(slots);
+            if let Some(resources) = resources {
+                slot.resources = resources;
+                changed = true;
+            }
+        }
+        drop(slots);
+        if changed {
             self.announce_change();
         }
     }
 
-    /// Drop a server's peer and its tools after the connection ended, and
-    /// announce the change so nothing keeps addressing a dead transport.
+    /// Drop a server's peer and what it served after the connection ended,
+    /// and announce the change so nothing keeps addressing a dead transport.
     async fn forget_connection(&self, name: &str) {
         let mut slots = self.slots.write().await;
         if let Some(slot) = slots.get_mut(name) {
             slot.peer = None;
             slot.tools.clear();
+            slot.resources.clear();
             slot.instructions = None;
         }
         drop(slots);
@@ -565,6 +536,92 @@ impl McpConnections {
         }
         all
     }
+
+    /// The resources every connected server lists, ordered by server name
+    /// then resource name. One server may be named to narrow the view; a name
+    /// the manager does not hold, or holds without a connection, is an error
+    /// rather than an empty listing.
+    pub(crate) async fn resources_for(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Vec<(String, Resource)>, String> {
+        let slots = self.slots.read().await;
+        if let Some(only) = server {
+            let slot = slots
+                .get(only)
+                .ok_or_else(|| format!("no server named {only} is configured"))?;
+            if !matches!(slot.state, McpConnectionState::Connected) {
+                return Err(format!("{only} is not connected"));
+            }
+            return Ok(sorted_resources(once(slot)));
+        }
+        Ok(sorted_resources(slots.values().filter(|slot| {
+            matches!(slot.state, McpConnectionState::Connected)
+        })))
+    }
+
+    /// Read one resource from one connected server, inside that server's call
+    /// budget.
+    pub(crate) async fn read_resource(
+        &self,
+        server: &str,
+        uri: &str,
+    ) -> Result<Vec<ResourceContents>, String> {
+        let (peer, budget) = {
+            let slots = self.slots.read().await;
+            let slot = slots
+                .get(server)
+                .ok_or_else(|| format!("no server named {server} is configured"))?;
+            if !matches!(slot.state, McpConnectionState::Connected) {
+                return Err(format!("{server} is not connected"));
+            }
+            (
+                slot.peer.clone(),
+                Duration::from_millis(slot.config.tool_timeout_ms),
+            )
+        };
+        let peer = peer.ok_or_else(|| format!("{server} has no live connection"))?;
+        let answer = timeout(
+            budget,
+            peer.read_resource(ReadResourceRequestParams::new(uri)),
+        )
+        .await
+        .map_err(|_| format!("{server} did not answer inside its budget"))?;
+        let result = answer.map_err(|error| format!("{server} refused the read: {error}"))?;
+        Ok(result.contents)
+    }
+}
+
+/// Every resource of the given slots, ordered by server name then resource
+/// name.
+fn sorted_resources<'a>(slots: impl Iterator<Item = &'a ServerSlot>) -> Vec<(String, Resource)> {
+    let mut all = Vec::new();
+    for slot in slots {
+        let mut resources = slot.resources.clone();
+        resources.sort_by(|a, b| a.name.cmp(&b.name));
+        for resource in resources {
+            all.push((slot.config.name.clone(), resource));
+        }
+    }
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all
+}
+
+/// The resources one server lists, bounded by the handshake window. None
+/// means the server did not answer, which is not the same as an empty list:
+/// a refresh that gets None keeps what the slot already knows.
+async fn resources_of(peer: &Peer<RoleClient>, budget: Duration) -> Option<Vec<Resource>> {
+    match timeout(budget, peer.list_resources(None)).await {
+        Ok(Ok(result)) => Some(result.resources),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "a server's resource listing failed; the known list is kept");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("a server's resource listing timed out; the known list is kept");
+            None
+        }
+    }
 }
 
 /// Why the serve loop ended.
@@ -605,18 +662,6 @@ fn state_after_launch_error(error: McpClientError) -> McpConnectionState {
     }
 }
 
-/// Escape the characters that would let server text close the host's tag.
-fn escape_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// Escape a server name for use inside a double-quoted attribute.
-fn escape_attribute(name: &str) -> String {
-    escape_text(name).replace('"', "&quot;")
-}
-
 /// Wait for a window deadline, or forever when no window is open. A pending
 /// sleep in a select arm needs a future even when the guard is false, so the
 /// closed case parks instead of spinning.
@@ -626,6 +671,8 @@ async fn sleep_until_deadline(window: Option<Instant>, deadline: Instant) {
         None => std::future::pending().await,
     }
 }
+
+mod views;
 
 #[cfg(test)]
 pub(crate) mod tests;

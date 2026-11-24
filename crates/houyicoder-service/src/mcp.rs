@@ -7,11 +7,15 @@ mod client;
 mod http;
 mod liveness;
 mod manager;
+mod resources;
 mod stdio;
 mod tools;
 
 pub use liveness::RestartPolicy;
 pub use manager::{McpConnections, McpTimings};
+#[cfg(test)]
+pub(crate) use resources::{LIST_RESOURCES_TOOL, READ_RESOURCE_TOOL};
+pub(crate) use resources::{ListMcpResourcesTool, ReadMcpResourceTool};
 pub use tools::McpToolSource;
 
 use std::env;

@@ -270,6 +270,19 @@ fn peer_reply(method: &str, id: Option<serde_json::Value>) -> Option<serde_json:
             "id": id,
             "result": {"content": [{"type": "text", "text": "answer"}]}
         })),
+        "resources/list" => Some(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"resources": [
+                {"uri": "file:///a", "name": "first"},
+                {"uri": "file:///b", "name": "second"}
+            ]}
+        })),
+        "resources/read" => Some(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"contents": [{"uri": "file:///a", "text": "the body"}]}
+        })),
         _ => None,
     }
 }

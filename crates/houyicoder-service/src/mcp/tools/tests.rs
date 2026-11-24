@@ -325,16 +325,9 @@ async fn test_externalized_block_round_trips() {
     let (service, peer_task) = connected().await;
     let store = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
     let log: Arc<dyn SessionLog> = store.clone();
-    let tool = McpTool::adapt(
-        "graph",
-        &read_only_probe(),
-        service.peer().clone(),
-        Duration::from_secs(5),
-        Some(log),
-    );
-    let ctx = ToolCtx::new("c1").with_session(SessionId::new());
+    let session = SessionId::new();
     let body = "x".repeat(PREVIEW_CHARS + 88);
-    let out = tool.externalize(&ctx, Value::String(body.clone())).await;
+    let out = externalize_result(Some(&log), Some(session), Value::String(body.clone())).await;
     let hash = out
         .get(BLOCK_REF_KEY)
         .and_then(Value::as_str)
