@@ -4,6 +4,7 @@
 //! own types, a tool, a status view, or an instruction block.
 
 mod client;
+mod http;
 mod liveness;
 mod manager;
 mod stdio;

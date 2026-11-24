@@ -304,6 +304,8 @@ def _check_file_qualifiers(errors: list[str], root: Path = Path("crates")) -> No
 # functions, and the trait cannot be renamed.
 _GET_PREFIX_EXEMPT = ("get_or_create_", "get_info")
 _GET_PREFIX_BASELINE: frozenset[str] = frozenset({
+    # A foreign trait fixes this name; the implementation cannot rename it.
+    "crates/houyicoder-service/src/mcp/http/tests.rs:get_stream",
 })
 _VAGUE_SUFFIX_RE = re.compile(r"(?:Info|Data|Wrapper|Manager|Helper|Util|Base)$")
 _VAGUE_SUFFIX_BASELINE: frozenset[str] = frozenset({

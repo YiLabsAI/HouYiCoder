@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_async::CancellationToken;
-use houyicoder_protocol::mcp::{McpConnectionState, McpServerStatusView, ScopedMcpServerConfig};
+use houyicoder_protocol::mcp::{
+    McpConnectionState, McpServerStatusView, McpTransportKind, ScopedMcpServerConfig,
+};
 use rmcp::RoleClient;
 use rmcp::model::Tool;
 use rmcp::service::Peer;
@@ -31,7 +33,8 @@ use tokio::time::sleep;
 use tokio::time::sleep_until;
 use tokio::time::timeout;
 
-use super::client::{ClientEvent, LaunchedMcpServer, launch_stdio};
+use super::client::{ClientEvent, LaunchedMcpServer, McpClientError, launch_stdio};
+use super::http;
 use super::liveness::RestartPolicy;
 use super::stdio::{STDERR_TAIL_LINES, StderrTail};
 
@@ -297,8 +300,10 @@ impl McpConnections {
             let mut live = match self.connect(&config).await {
                 Ok(live) => live,
                 Err(error) => {
-                    self.set_state(&name, McpConnectionState::Failed { error })
-                        .await;
+                    // A server that asked for credentials cannot be helped by
+                    // retrying, so the state says so and the supervisor waits
+                    // for a user reconnect either way.
+                    self.set_state(&name, state_after_launch_error(error)).await;
                     if !self.wait_wake(&mut wake).await {
                         return;
                     }
@@ -360,23 +365,40 @@ impl McpConnections {
     /// Launch one server and wait out its handshake inside the window, or
     /// name why it did not arrive. A shutdown ends the wait immediately, so a
     /// session close never has to outlast a slow handshake.
-    async fn connect(&self, config: &ScopedMcpServerConfig) -> Result<LaunchedMcpServer, String> {
+    async fn connect(
+        &self,
+        config: &ScopedMcpServerConfig,
+    ) -> Result<LaunchedMcpServer, McpClientError> {
+        let launch = async {
+            match config.transport.kind {
+                McpTransportKind::Stdio => {
+                    launch_stdio(
+                        &self.launcher,
+                        &config.transport,
+                        self.workspace_root.clone(),
+                    )
+                    .await
+                }
+                McpTransportKind::Http => {
+                    http::launch_http(
+                        &self.launcher,
+                        &config.transport,
+                        self.workspace_root.clone(),
+                    )
+                    .await
+                }
+            }
+        };
         let launched = tokio::select! {
             biased;
-            _ = self.cancel.cancelled() => return Err("the manager is shutting down".into()),
-            launched = timeout(
-                self.timings.handshake_timeout,
-                launch_stdio(
-                    &self.launcher,
-                    &config.transport,
-                    self.workspace_root.clone(),
-                ),
-            ) => launched,
+            _ = self.cancel.cancelled() => {
+                return Err(McpClientError::Serve("the manager is shutting down".into()));
+            }
+            launched = timeout(self.timings.handshake_timeout, launch) => launched,
         };
         match launched {
-            Ok(Ok(live)) => Ok(live),
-            Ok(Err(error)) => Err(error.to_string()),
-            Err(_elapsed) => Err("the handshake timed out".into()),
+            Ok(result) => result,
+            Err(_elapsed) => Err(McpClientError::Serve("the handshake timed out".into())),
         }
     }
 
@@ -570,6 +592,16 @@ impl From<ClientEvent> for NoticeKind {
             ClientEvent::ResourceListChanged => Self::Resources,
             ClientEvent::PromptListChanged => Self::Prompts,
         }
+    }
+}
+
+/// The state a server's view records after a launch that did not connect.
+fn state_after_launch_error(error: McpClientError) -> McpConnectionState {
+    match error {
+        McpClientError::NeedsAuth(reason) => McpConnectionState::NeedsAuth { reason },
+        other => McpConnectionState::Failed {
+            error: other.to_string(),
+        },
     }
 }
 

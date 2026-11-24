@@ -43,13 +43,16 @@ pub enum McpClientError {
     Launch(String),
     /// The transport could not be handed to the protocol client.
     Serve(String),
+    /// The server asked for credentials before it would talk.
+    NeedsAuth(String),
 }
 
 impl Display for McpClientError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Launch(reason) => write!(f, "the server process did not start: {reason}"),
+            Self::Launch(reason) => write!(f, "the server did not start: {reason}"),
             Self::Serve(reason) => write!(f, "the protocol client did not start: {reason}"),
+            Self::NeedsAuth(reason) => write!(f, "the server requires credentials: {reason}"),
         }
     }
 }
@@ -161,13 +164,13 @@ impl ClientHandler for McpClientHandler {
     }
 }
 
-/// One live stdio server: the protocol service, the child whose lifetime it
-/// runs on, and the tail of the diagnostics the child wrote.
+/// One live server: the protocol service, the child whose lifetime it runs
+/// on when it has one, and the tail of the diagnostics it wrote.
 pub struct LaunchedMcpServer {
     pub service: RunningService<RoleClient, McpClientHandler>,
-    /// Dropped with the server; the launcher's on-drop kill then ends the
-    /// child and its process group.
-    pub child: LauncherChild,
+    /// Dropped with a stdio server; the launcher's on-drop kill then ends the
+    /// child and its process group. A remote server has no child.
+    pub child: Option<LauncherChild>,
     pub stderr: StderrTail,
     pub events: UnboundedReceiver<ClientEvent>,
 }
@@ -209,7 +212,7 @@ pub async fn launch_stdio(
     let (service, events) = serve_over(bridge.reader, bridge.writer, workspace_root).await?;
     Ok(LaunchedMcpServer {
         service,
-        child,
+        child: Some(child),
         stderr: stderr_tail,
         events,
     })

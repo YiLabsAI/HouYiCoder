@@ -279,6 +279,47 @@ fn slot(name: &str, state: McpConnectionState, instructions: &str) -> super::Ser
     }
 }
 
+/// A local server the launcher refuses reports a launch failure instead of
+/// hanging.
+#[tokio::test]
+async fn test_connect_refused_spawn() {
+    let manager = manager(Arc::new(NoSpawn));
+    let local = config("local", false);
+    assert!(
+        manager.connect(&local).await.is_err(),
+        "a refused spawn does not connect"
+    );
+}
+
+/// A manager that is already stopping refuses to launch: a session close does
+/// not wait behind a server that has not connected yet.
+#[tokio::test]
+async fn test_connect_after_stop() {
+    let manager = manager(Arc::new(NoSpawn));
+    manager.cancel.cancel();
+    let outcome = manager.connect(&config("local", false)).await;
+    let Err(error) = outcome else {
+        panic!("a stopped manager must not connect a server");
+    };
+    assert!(error.to_string().contains("shutting down"), "{error}");
+}
+
+/// A launch that needs credentials records that state; any other failure
+/// records the reason it gave.
+#[test]
+fn test_launch_error_state() {
+    let auth = state_after_launch_error(McpClientError::NeedsAuth("Bearer realm".into()));
+    assert!(
+        matches!(auth, McpConnectionState::NeedsAuth { reason } if reason.contains("Bearer")),
+        "the challenge reaches the view"
+    );
+    let broken = state_after_launch_error(McpClientError::Serve("the peer closed".into()));
+    assert!(
+        matches!(broken, McpConnectionState::Failed { error } if error.contains("peer closed")),
+        "a broken transport reads as failed"
+    );
+}
+
 /// Instructions for connected servers are formatted in alphabetical order by
 /// server name, safely truncated at 4,096 characters, and escaped so a
 /// server's text cannot close the host's tag.
