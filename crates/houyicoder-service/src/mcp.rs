@@ -4,7 +4,11 @@
 //! own types (a tool, a status view, an instruction block).
 
 mod client;
+mod liveness;
+mod manager;
 mod stdio_bridge;
 
 pub use client::{ClientEvent, HouyiMcpClientHandler, LaunchedMcpServer, launch_stdio};
+pub use liveness::RestartPolicy;
+pub use manager::{McpConnections, McpTimings};
 pub use stdio_bridge::StderrTail;

@@ -1,0 +1,494 @@
+//! The connection manager: one supervised task per configured server, a
+//! shared view of every server's state for the surfaces, and the policy that
+//! turns a dropped connection into a bounded restart.
+//!
+//! A server's slots live in one map ordered by name, so the tool list and the
+//! instruction blocks are stable regardless of which handshake finished
+//! first. A change notification does not trigger a refetch immediately: the
+//! first notice opens a short window and everything arriving inside it folds
+//! into one refetch, which is what keeps a server that re-lists in a loop
+//! from spending the host's turn on it.
+
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use houyicoder_api::launcher::ProcessLauncher;
+use houyicoder_async::CancellationToken;
+use houyicoder_protocol::mcp::{McpConnectionState, McpServerStatusView, ScopedMcpServerConfig};
+use rmcp::RoleClient;
+use rmcp::model::Tool;
+use rmcp::service::Peer;
+use tokio::sync::RwLock;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tokio::time::sleep;
+use tokio::time::sleep_until;
+use tokio::time::timeout;
+
+use super::client::{ClientEvent, LaunchedMcpServer, launch_stdio};
+use super::liveness::RestartPolicy;
+use super::stdio_bridge::{STDERR_TAIL_LINES, StderrTail};
+
+/// The windows and limits one manager runs with. Production uses the
+/// defaults; a test injects millisecond values so no assertion waits on a
+/// wall clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpTimings {
+    /// How long the first change notice waits for its siblings before the
+    /// refetch runs.
+    pub notice_window: Duration,
+    /// How long a launch may spend in the handshake before it counts as
+    /// failed.
+    pub handshake_timeout: Duration,
+    /// How often a connected server's transport is checked for closure.
+    pub liveness_poll: Duration,
+    /// How long a connection must stay up before its restart count resets. A
+    /// connection that drops sooner is part of the same failure storm.
+    pub stable_after: Duration,
+    /// How a dropped connection is retried.
+    pub restart: RestartPolicy,
+}
+
+impl Default for McpTimings {
+    fn default() -> Self {
+        Self {
+            notice_window: Duration::from_millis(50),
+            handshake_timeout: Duration::from_secs(15),
+            liveness_poll: Duration::from_millis(500),
+            stable_after: Duration::from_secs(30),
+            restart: RestartPolicy::default(),
+        }
+    }
+}
+
+/// One server's shared view: what the surfaces render and what the tool
+/// adapter calls through.
+pub(crate) struct ServerSlot {
+    pub(crate) config: ScopedMcpServerConfig,
+    pub(crate) state: McpConnectionState,
+    pub(crate) tools: Vec<Tool>,
+    pub(crate) instructions: Option<String>,
+    pub(crate) server_version: Option<String>,
+    pub(crate) stderr: StderrTail,
+    pub(crate) peer: Option<Peer<RoleClient>>,
+    wake: Option<mpsc::Sender<()>>,
+}
+
+/// The manager itself. Cloning shares the slots and the cancellation token,
+/// so the supervisor tasks and the handles a surface holds see one state.
+#[derive(Clone)]
+pub struct McpConnections {
+    launcher: Arc<dyn ProcessLauncher>,
+    workspace_root: Arc<Path>,
+    timings: McpTimings,
+    slots: Arc<RwLock<BTreeMap<String, ServerSlot>>>,
+    cancel: CancellationToken,
+    tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+}
+
+impl McpConnections {
+    /// A manager over one launcher and one workspace, with the given windows.
+    pub fn new(
+        launcher: Arc<dyn ProcessLauncher>,
+        workspace_root: Arc<Path>,
+        timings: McpTimings,
+    ) -> Self {
+        Self {
+            launcher,
+            workspace_root,
+            timings,
+            slots: Arc::new(RwLock::new(BTreeMap::new())),
+            cancel: CancellationToken::new(),
+            tasks: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Start every configured server as its own supervised task. A disabled
+    /// server is recorded as disabled and never launched: the trust gate
+    /// marks an untrusted workspace's servers this way, and no process or
+    /// request may follow from one.
+    pub async fn start_all(&self, servers: Vec<ScopedMcpServerConfig>) {
+        for config in servers {
+            let name = config.name.clone();
+            if config.disabled {
+                let mut slots = self.slots.write().await;
+                slots.insert(
+                    name,
+                    ServerSlot {
+                        config,
+                        state: McpConnectionState::Disabled {
+                            reason: "disabled by configuration or workspace trust".into(),
+                        },
+                        tools: Vec::new(),
+                        instructions: None,
+                        server_version: None,
+                        stderr: StderrTail::default(),
+                        peer: None,
+                        wake: None,
+                    },
+                );
+                continue;
+            }
+            let (wake_tx, wake_rx) = mpsc::channel(4);
+            {
+                let mut slots = self.slots.write().await;
+                slots.insert(
+                    name.clone(),
+                    ServerSlot {
+                        config,
+                        state: McpConnectionState::Pending,
+                        tools: Vec::new(),
+                        instructions: None,
+                        server_version: None,
+                        stderr: StderrTail::default(),
+                        peer: None,
+                        wake: Some(wake_tx),
+                    },
+                );
+            }
+            let manager = self.clone();
+            let task = tokio::spawn(async move {
+                manager.supervise(name, wake_rx).await;
+            });
+            if let Ok(mut tasks) = self.tasks.lock() {
+                tasks.push(task);
+            }
+        }
+    }
+
+    /// The servers as the status surfaces render them, ordered by name.
+    pub async fn statuses(&self) -> Vec<McpServerStatusView> {
+        let slots = self.slots.read().await;
+        slots
+            .values()
+            .map(|slot| McpServerStatusView {
+                name: slot.config.name.clone(),
+                scope: slot.config.scope,
+                state: slot.state.clone(),
+                server_version: slot.server_version.clone(),
+                tool_count: slot.tools.len(),
+                resource_count: 0,
+                has_instructions: slot
+                    .instructions
+                    .as_deref()
+                    .is_some_and(|text| !text.is_empty()),
+                recent_stderr: slot.stderr.lines(),
+            })
+            .collect()
+    }
+
+    /// The most recent diagnostic lines one server wrote, oldest first.
+    pub async fn stderr_tail(&self, name: &str) -> Vec<String> {
+        let slots = self.slots.read().await;
+        slots
+            .get(name)
+            .map(|slot| slot.stderr.lines())
+            .unwrap_or_default()
+    }
+
+    /// The diagnostics hold size the tail keeps, exposed so a status surface
+    /// can say how much of the child's output it is eliding.
+    pub fn stderr_limit(&self) -> usize {
+        STDERR_TAIL_LINES
+    }
+
+    /// Ask one server to reconnect now, whether it failed or the user wants a
+    /// fresh handshake.
+    pub async fn reconnect(&self, name: &str) {
+        let slots = self.slots.read().await;
+        if let Some(wake) = slots.get(name).and_then(|slot| slot.wake.clone()) {
+            let _ = wake.try_send(());
+        }
+    }
+
+    /// Stop every server: cancel their services, wait for their tasks, and
+    /// let the launcher's on-drop kill end each process group.
+    pub async fn shutdown(&self) {
+        self.cancel.cancel();
+        let tasks: Vec<JoinHandle<()>> = match self.tasks.lock() {
+            Ok(mut tasks) => tasks.drain(..).collect(),
+            Err(_) => Vec::new(),
+        };
+        for task in tasks {
+            drop(task.await);
+        }
+    }
+
+    /// The supervisor for one server.
+    async fn supervise(&self, name: String, mut wake: mpsc::Receiver<()>) {
+        let mut attempt = 0u32;
+        loop {
+            let Some(config) = self.slot_config(&name).await else {
+                return;
+            };
+            self.set_state(&name, McpConnectionState::Pending).await;
+            let launched = timeout(
+                self.timings.handshake_timeout,
+                launch_stdio(
+                    &self.launcher,
+                    &config.transport,
+                    self.workspace_root.clone(),
+                ),
+            )
+            .await;
+            let mut live = match launched {
+                Ok(Ok(live)) => live,
+                Ok(Err(error)) => {
+                    self.set_state(
+                        &name,
+                        McpConnectionState::Failed {
+                            error: error.to_string(),
+                        },
+                    )
+                    .await;
+                    if !self.wait_wake(&mut wake).await {
+                        return;
+                    }
+                    attempt = 0;
+                    continue;
+                }
+                Err(_elapsed) => {
+                    self.set_state(
+                        &name,
+                        McpConnectionState::Failed {
+                            error: "the handshake timed out".into(),
+                        },
+                    )
+                    .await;
+                    if !self.wait_wake(&mut wake).await {
+                        return;
+                    }
+                    attempt = 0;
+                    continue;
+                }
+            };
+            self.mark_connected(&name, &mut live).await;
+            let connected_at = Instant::now();
+            let end = self.serve_until_end(&name, &mut live, &mut wake).await;
+            // A connection that stayed up past the stability window resets
+            // the count; one that dropped sooner joins the same storm.
+            if connected_at.elapsed() >= self.timings.stable_after {
+                attempt = 0;
+            }
+            match end {
+                ServeEnd::Shutdown => {
+                    drop(
+                        live.service
+                            .close_with_timeout(Duration::from_secs(2))
+                            .await,
+                    );
+                    return;
+                }
+                ServeEnd::Wake => {
+                    drop(
+                        live.service
+                            .close_with_timeout(Duration::from_secs(2))
+                            .await,
+                    );
+                }
+                ServeEnd::Closed => {
+                    drop(
+                        live.service
+                            .close_with_timeout(Duration::from_secs(2))
+                            .await,
+                    );
+                    attempt += 1;
+                    match self.timings.restart.delay(attempt) {
+                        Some(delay) => {
+                            self.set_state(&name, McpConnectionState::Reconnecting { attempt })
+                                .await;
+                            sleep(delay).await;
+                        }
+                        None => {
+                            self.set_state(
+                                &name,
+                                McpConnectionState::Failed {
+                                    error: "the connection kept dropping".into(),
+                                },
+                            )
+                            .await;
+                            if !self.wait_wake(&mut wake).await {
+                                return;
+                            }
+                            attempt = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fetch the server's identity, instructions, and tools, and publish them
+    /// to the shared view.
+    async fn mark_connected(&self, name: &str, live: &mut LaunchedMcpServer) {
+        let info = live.service.peer_info();
+        let tools =
+            match timeout(self.timings.handshake_timeout, live.peer().list_tools(None)).await {
+                Ok(Ok(result)) => result.tools,
+                _ => Vec::new(),
+            };
+        let mut slots = self.slots.write().await;
+        if let Some(slot) = slots.get_mut(name) {
+            slot.state = McpConnectionState::Connected;
+            slot.peer = Some(live.peer().clone());
+            slot.tools = tools;
+            slot.instructions = info.as_ref().and_then(|i| i.instructions.clone());
+            slot.server_version = info
+                .as_ref()
+                .and_then(|i| i.server_info.as_ref().map(|s| s.version.clone()));
+        }
+    }
+
+    /// Run the connection until it ends, folding change notices into one
+    /// refetch per window.
+    async fn serve_until_end(
+        &self,
+        name: &str,
+        live: &mut LaunchedMcpServer,
+        wake: &mut mpsc::Receiver<()>,
+    ) -> ServeEnd {
+        let mut pending: BTreeSet<NoticeKind> = BTreeSet::new();
+        let mut window = None;
+        loop {
+            let deadline = window.unwrap_or_else(|| Instant::now() + self.timings.notice_window);
+            tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => return ServeEnd::Shutdown,
+                _ = wake.recv() => return ServeEnd::Wake,
+                _ = sleep_until_deadline(window, deadline), if window.is_some() => {
+                    self.refetch(name, live, &pending).await;
+                    pending.clear();
+                    window = None;
+                }
+                _ = sleep(self.timings.liveness_poll) => {
+                    if live.peer().is_transport_closed() {
+                        return ServeEnd::Closed;
+                    }
+                }
+                event = live.events.recv() => match event {
+                    Some(kind) => {
+                        pending.insert(NoticeKind::from(kind));
+                        if window.is_none() {
+                            window = Some(Instant::now() + self.timings.notice_window);
+                        }
+                    }
+                    None => return ServeEnd::Closed,
+                },
+            }
+        }
+    }
+
+    /// Refetch what the received notices named, and publish the result.
+    async fn refetch(
+        &self,
+        name: &str,
+        live: &mut LaunchedMcpServer,
+        pending: &BTreeSet<NoticeKind>,
+    ) {
+        if pending.contains(&NoticeKind::Tools)
+            && let Ok(Ok(result)) =
+                timeout(self.timings.handshake_timeout, live.peer().list_tools(None)).await
+        {
+            let mut slots = self.slots.write().await;
+            if let Some(slot) = slots.get_mut(name) {
+                slot.tools = result.tools;
+            }
+        }
+    }
+
+    async fn wait_wake(&self, wake: &mut mpsc::Receiver<()>) -> bool {
+        tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => false,
+            result = wake.recv() => result.is_some(),
+        }
+    }
+
+    async fn slot_config(&self, name: &str) -> Option<ScopedMcpServerConfig> {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .map(|slot| slot.config.clone())
+    }
+
+    async fn set_state(&self, name: &str, state: McpConnectionState) {
+        let mut slots = self.slots.write().await;
+        if let Some(slot) = slots.get_mut(name) {
+            slot.state = state;
+        }
+    }
+
+    /// One server's peer, for the tool adapter to call through.
+    pub(crate) async fn peer_of(&self, name: &str) -> Option<Peer<RoleClient>> {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .and_then(|slot| slot.peer.clone())
+    }
+
+    /// The tools every connected server reports, ordered by server name then
+    /// tool name, so the exposed list is stable across handshake order.
+    pub(crate) async fn tools_snapshot(&self) -> Vec<(String, Tool)> {
+        let slots = self.slots.read().await;
+        let mut all = Vec::new();
+        for slot in slots.values() {
+            if !matches!(slot.state, McpConnectionState::Connected) {
+                continue;
+            }
+            let mut tools = slot.tools.clone();
+            tools.sort_by(|a, b| a.name.cmp(&b.name));
+            for tool in tools {
+                all.push((slot.config.name.clone(), tool));
+            }
+        }
+        all
+    }
+}
+
+/// Why the serve loop ended.
+enum ServeEnd {
+    /// The manager is shutting down.
+    Shutdown,
+    /// The user asked for a reconnect.
+    Wake,
+    /// The transport closed.
+    Closed,
+}
+
+/// What one notice asked to refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NoticeKind {
+    Tools,
+    Resources,
+    Prompts,
+}
+
+impl From<ClientEvent> for NoticeKind {
+    fn from(event: ClientEvent) -> Self {
+        match event {
+            ClientEvent::ToolListChanged => Self::Tools,
+            ClientEvent::ResourceListChanged => Self::Resources,
+            ClientEvent::PromptListChanged => Self::Prompts,
+        }
+    }
+}
+
+/// Wait for a window deadline, or forever when no window is open. A pending
+/// sleep in a select arm needs a future even when the guard is false, so the
+/// closed case parks instead of spinning.
+async fn sleep_until_deadline(window: Option<Instant>, deadline: Instant) {
+    match window {
+        Some(_) => sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests;
