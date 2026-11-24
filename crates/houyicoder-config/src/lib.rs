@@ -48,7 +48,13 @@ pub use hook_spec::{
     HookPolicySettings, HookSpec, parse_hooks_from_settings, resolve_hook_policy_settings,
     resolve_hooks,
 };
+pub mod mcp_servers;
 pub mod trust;
+pub use mcp_servers::{
+    PROJECT_FILE, SETTINGS_KEY, apply_trust_gate, expand_references, parse_env_servers,
+    parse_project_servers, parse_settings_servers, remove_user_server, resolve_scoped_mcp_servers,
+    upsert_user_server,
+};
 use serde_json::Value;
 use std::env::temp_dir;
 use std::env::var;

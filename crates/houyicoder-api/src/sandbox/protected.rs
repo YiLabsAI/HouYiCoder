@@ -104,6 +104,12 @@ const MEMORY_DIR: &str = "memory";
 /// later decision.
 const INSTRUCTION_FILES: &[&str] = &["agents.md", "claude.md", "skill.md"];
 
+/// Root-level configuration files that decide what external processes the
+/// agent may spawn. A silent write to one plants a command the agent runs at
+/// the next startup, which is a privilege escalation: the file is protected
+/// so the model cannot add its own tool server.
+const ROOT_CONFIG_FILES: &[&str] = &[".mcp.json"];
+
 /// Shell startup files, which are also credential files: a write to one runs
 /// code at every later shell start, and a read can expose the exports they
 /// define. Both escalate, so the read waiver above does not reach them.
@@ -285,9 +291,10 @@ fn memory_hit(forms: &[String]) -> bool {
 
 /// Whether one of the spellings names an instruction file.
 fn instruction_hit(forms: &[String]) -> bool {
-    forms
-        .iter()
-        .any(|lower| INSTRUCTION_FILES.iter().any(|name| names_file(lower, name)))
+    forms.iter().any(|lower| {
+        INSTRUCTION_FILES.iter().any(|name| names_file(lower, name))
+            || ROOT_CONFIG_FILES.iter().any(|name| names_file(lower, name))
+    })
 }
 
 /// Whether one of the spellings names a shell startup file.

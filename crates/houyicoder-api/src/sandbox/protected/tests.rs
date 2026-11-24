@@ -28,6 +28,10 @@ fn test_families_reported_apart() {
     let memory = protected_path_hits(".houyicoder/projects/p1/memory/notes.md");
     assert!(memory.memory && !memory.control);
     assert!(protected_path_hits("cat AGENTS.md").instruction);
+    // A root-level mcp config file is an instruction-tier protected path:
+    // writing one plants a tool server the agent runs, which is a privilege
+    // escalation the model must not perform silently.
+    assert!(protected_path_hits("echo x > .mcp.json").instruction);
 }
 
 /// A file whose name merely ends in a protected name is not that file, and a

@@ -163,6 +163,7 @@ DEP_RE = re.compile(r"^(houyicoder-[a-z]+)\s*=", re.MULTILINE)
 # that must not leak past the boundary crate.
 EXTERNAL_BOUNDARY: dict[str, set[str]] = {
     "agent-client-protocol": {"houyicoder-service"},
+    "rmcp": {"houyicoder-service"},
 }
 
 
