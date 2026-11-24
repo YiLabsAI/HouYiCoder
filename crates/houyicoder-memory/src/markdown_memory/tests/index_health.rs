@@ -11,6 +11,7 @@ use houyicoder_context::MemoryEntry;
 use houyicoder_context::MemoryError;
 use houyicoder_context::MemoryScope;
 use houyicoder_context::MemorySource;
+use houyicoder_context::tokens_for;
 use std::env::temp_dir;
 use std::fs::File;
 use std::fs::create_dir_all;
@@ -684,6 +685,59 @@ fn test_rebuild_skips_legacy_key() {
     assert!(
         text.contains("- alpha:"),
         "the addressable topic keeps its row:\n{text}"
+    );
+    remove_dir_all(&root).ok();
+}
+
+/// A legacy store whose topic frontmatter and published index both carry
+/// uncapped descriptions (and a truncation warning) heals on first check
+/// without mutating the topic file on disk, and does not rebuild a second
+/// time once healed.
+#[test]
+fn test_long_row_heals() {
+    let root = temp_root("long-row-heal");
+    let long_desc = "word ".repeat(80);
+    let raw_topic = format!(
+        "---\nname: legacy-rule\ndescription: {long_desc}\nsource: feedback\n---\nbody line\n"
+    );
+    write(root.join("legacy-rule.md"), &raw_topic).expect("seed legacy topic");
+    let legacy_index =
+        format!("### feedback\n\n- legacy-rule: {long_desc}\n\n{INDEX_TRUNCATION_WARNING}\n");
+    write(root.join("MEMORY.md"), &legacy_index).expect("seed legacy uncapped index");
+
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    provider
+        .rebuild_if_stale()
+        .expect("uncapped index heals on start");
+
+    let healed = index_text(&root);
+    assert!(
+        !healed.contains(INDEX_TRUNCATION_WARNING),
+        "shortened rows fit without the warning:\n{healed}"
+    );
+    let row = healed
+        .lines()
+        .find(|line| line.starts_with("- legacy-rule: "))
+        .expect("healed row present");
+    let (_, desc) = row.split_once(": ").expect("row delimiter");
+    assert!(
+        tokens_for(desc) <= 24,
+        "healed row description fits cap: {} tokens ({desc})",
+        tokens_for(desc)
+    );
+    assert_eq!(
+        read_to_string(root.join("legacy-rule.md")).expect("read topic"),
+        raw_topic,
+        "read-side bounding leaves the user topic file byte-identical"
+    );
+
+    write(root.join("MEMORY.md"), format!("{healed}sentinel\n")).expect("plant sentinel");
+    provider
+        .rebuild_if_stale()
+        .expect("second start sees a bounded index");
+    assert!(
+        index_text(&root).contains("sentinel"),
+        "bounded index does not rebuild again"
     );
     remove_dir_all(&root).ok();
 }

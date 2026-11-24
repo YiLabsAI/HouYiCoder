@@ -38,6 +38,39 @@ impl MutationLog {
     pub(crate) fn take(&self) -> Vec<MemoryChange> {
         std::mem::take(&mut *self.changes.lock().expect("mutation log lock"))
     }
+
+    /// Append a batch of already-recorded mutations in order.
+    pub(crate) fn extend(&self, more: impl IntoIterator<Item = MemoryChange>) {
+        self.changes.lock().expect("mutation log lock").extend(more);
+    }
+
+    /// Atomically take and collapse mutations by key so one pipeline notice
+    /// lists each touched key at most once with its net operation and scope.
+    pub(crate) fn take_merged(&self) -> Vec<MemoryChange> {
+        let raw = self.take();
+        let mut merged: Vec<MemoryChange> = Vec::with_capacity(raw.len());
+        for change in raw {
+            if let Some(pos) = merged.iter().position(|m| m.key == change.key) {
+                let prior = &merged[pos];
+                if prior.operation == MemoryOperation::Created
+                    && change.operation == MemoryOperation::Deleted
+                    && prior.scope == change.scope
+                {
+                    merged.remove(pos);
+                } else if prior.operation == MemoryOperation::Created
+                    && change.operation == MemoryOperation::Updated
+                    && prior.scope == change.scope
+                {
+                    // Created then refreshed in the same pass stays Created.
+                } else {
+                    merged[pos] = change;
+                }
+            } else {
+                merged.push(change);
+            }
+        }
+        merged
+    }
 }
 
 #[cfg(test)]

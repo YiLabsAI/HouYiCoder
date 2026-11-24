@@ -27,7 +27,8 @@ use tokio::time::timeout_at;
 const EXTRACTION_BEFORE_DREAM: Duration = Duration::from_secs(60);
 
 use houyicoder_api::agent_event::{
-    AgentEventHandlers, EventHandler, MemoryChangeCausality, MemoryChangeOrigin, MemoryChangedEvent,
+    AgentEventHandlers, EventHandler, MemoryChange, MemoryChangeCausality, MemoryChangeOrigin,
+    MemoryChangedEvent,
 };
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
@@ -401,33 +402,74 @@ impl MemoryRuntime {
     where
         F: FnOnce() -> RewardSnapshot,
     {
-        self.submit_preservation(session).await;
-        let Some(dream) = self
+        let extractor = self
+            .background
+            .extractor
+            .as_ref()
+            .filter(|_| self.gates.auto_memory_enabled())
+            .cloned();
+        let dream = self
             .background
             .dream
             .as_ref()
             .filter(|_| self.gates.auto_dream_enabled())
-            .cloned()
-        else {
-            return;
+            .cloned();
+        let reward = if dream.is_some() {
+            reward.map(|f| f())
+        } else {
+            None
         };
-        // One background pipeline per turn: the extraction pass lands first,
-        // then the dream reads the store it just wrote. Firing both at once
-        // let the dream plan against a listing the extractor was still
-        // changing, and put two notices on one turn.
-        let extractor = self.background.extractor.clone();
+        if extractor.is_none() && dream.is_none() {
+            return;
+        }
+        let messages = if extractor.is_some() {
+            match self.store.replay(session).await {
+                Ok(messages) => Some(messages),
+                Err(error) => {
+                    tracing::warn!("memory extract replay failed: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        // One serial pipeline per turn: extraction lands first, then dream
+        // awaits inline under the same lock, and one merged notice emits at
+        // the end of the pipeline.
+        let wait_extractor = self.background.extractor.clone();
+        let track_extractor = extractor.clone();
         let serial = Arc::clone(&self.background_lock);
-        let reward = reward.map(|f| f());
+        let handler = self.memory_changed.lock().expect("memory_changed").clone();
         let handle = tokio::spawn(async move {
             let _serial = serial.lock().await;
-            if let Some(extractor) = extractor {
-                extractor.wait_idle(EXTRACTION_BEFORE_DREAM).await;
+            if let Some(ext) = wait_extractor.as_ref() {
+                ext.wait_idle(EXTRACTION_BEFORE_DREAM).await;
             }
-            dream.execute_dream(reward);
+            let pipeline_log = MutationLog::new();
+            let mut extract_causality = None;
+            if let (Some(ext), Some(msgs)) = (extractor.as_ref(), messages) {
+                extract_causality = ext.run_pipeline(msgs, &pipeline_log).await;
+            }
+            let dream_changed = if let Some(dream) = dream.as_ref() {
+                dream.run_consolidation(reward, &pipeline_log).await
+            } else {
+                false
+            };
+            let changes = pipeline_log.take_merged();
+            emit_background_changes(
+                handler.as_deref(),
+                changes,
+                extract_causality,
+                dream_changed,
+            );
         });
-        let mut running = self.background_pipeline.lock().expect("pipeline");
-        running.retain(|h| !h.is_finished());
-        running.push(handle);
+        if let Some(ext) = track_extractor {
+            ext.track_task(handle);
+        } else {
+            let mut running = self.background_pipeline.lock().expect("pipeline");
+            running.retain(|h| !h.is_finished());
+            running.push(handle);
+        }
     }
 
     /// Await running background tasks — recall selections first, then dream
@@ -445,6 +487,7 @@ impl MemoryRuntime {
         }
         if let Some(extractor) = self.background.extractor.as_ref() {
             extractor.wait_idle(remaining()).await;
+            extractor.drain_pending(remaining()).await;
         }
         if let Some(dream) = self.background.dream.as_ref() {
             dream.drain_pending(remaining()).await;
@@ -506,6 +549,37 @@ impl MemoryRuntime {
             .as_ref()
             .and_then(|d| d.session_log_root.as_deref())
     }
+}
+
+fn emit_background_changes(
+    handler: Option<&dyn EventHandler<MemoryChangedEvent>>,
+    changes: Vec<MemoryChange>,
+    extract_causality: Option<MemoryChangeCausality>,
+    dream_changed: bool,
+) {
+    if changes.is_empty() {
+        return;
+    }
+    let Some(handler) = handler else {
+        return;
+    };
+    let (origin, causality) = if dream_changed {
+        (
+            MemoryChangeOrigin::AutoDream,
+            MemoryChangeCausality::PreviousTurn,
+        )
+    } else {
+        (
+            MemoryChangeOrigin::AutoMemory,
+            extract_causality.unwrap_or(MemoryChangeCausality::PreviousTurn),
+        )
+    };
+    handler.handle(MemoryChangedEvent {
+        id: MemoryChangeId::new(),
+        origin,
+        causality,
+        changes,
+    });
 }
 
 #[cfg(test)]

@@ -18,8 +18,9 @@ use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionId, SessionLogEntry};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
+use tokio::time::{Instant, sleep, sleep_until};
 
 use crate::agent::extract::run_forked_extract;
 use crate::agent::memory::MutationLog;
@@ -31,7 +32,6 @@ use crate::agent::auto_dream::InProgressGuard;
 use extraction_window::ExactExtractionWindow;
 use std::mem::take;
 use std::pin::Pin;
-use tokio::time::sleep;
 
 #[derive(Debug)]
 pub enum ExtractOutcome {
@@ -79,6 +79,7 @@ pub struct MemoryExtractor {
     in_progress: Mutex<bool>,
     pending_context: Mutex<Option<Vec<SessionLogEntry>>>,
     in_flight: Mutex<Vec<JoinHandle<()>>>,
+    idle_notify: Notify,
     logs: ExtractionLogs,
     provider: Arc<dyn ModelProvider>,
     memory: Arc<dyn MemoryProvider>,
@@ -103,6 +104,7 @@ impl MemoryExtractor {
             in_progress: Mutex::new(false),
             pending_context: Mutex::new(None),
             in_flight: Mutex::new(Vec::new()),
+            idle_notify: Notify::new(),
             logs,
             provider,
             memory,
@@ -189,27 +191,45 @@ impl MemoryExtractor {
         &self,
         messages: &[SessionLogEntry],
     ) -> Result<ExtractOutcome, RunError> {
+        let (outcome, causality, changes) = self.collect_extraction_once(messages).await;
+        if let Some(causality) = causality {
+            self.emit_changes(MemoryChangeOrigin::AutoMemory, causality, changes);
+        }
+        outcome
+    }
+
+    async fn collect_extraction_once(
+        &self,
+        messages: &[SessionLogEntry],
+    ) -> (
+        Result<ExtractOutcome, RunError>,
+        Option<MemoryChangeCausality>,
+        Vec<MemoryChange>,
+    ) {
         let cursor = *self.cursor.lock().expect("cursor");
         let Some(tail) = ExactExtractionWindow::unconsumed(messages, cursor.as_ref()) else {
-            // The cursor names an event this snapshot does not hold, so the
-            // consumed prefix cannot be located. Widening to the full history
-            // would hand the fork evidence an earlier pass already consumed;
-            // leaving the cursor lost would end extraction for the session.
-            // Re-seed to this snapshot's tail so the next pass has a located
-            // range.
             tracing::warn!("extraction cursor does not resolve; skipping the pass");
             advance_cursor(&self.cursor, messages);
-            return Ok(ExtractOutcome::Skipped(ExtractSkip::CursorLost));
+            return (
+                Ok(ExtractOutcome::Skipped(ExtractSkip::CursorLost)),
+                None,
+                Vec::new(),
+            );
         };
-        // Skip the fork when the primary saved successfully this range: a
-        // paired save_memory call + successful result means re-extracting
-        // would duplicate it. A failed or unanswered save does not skip.
         if primary_saved_in(tail) {
             advance_cursor(&self.cursor, messages);
-            return Ok(ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote));
+            return (
+                Ok(ExtractOutcome::Skipped(ExtractSkip::PrimaryWrote)),
+                None,
+                Vec::new(),
+            );
         }
         let Some(window) = ExactExtractionWindow::from_unconsumed(tail) else {
-            return Ok(ExtractOutcome::Skipped(ExtractSkip::NoQueryTurn));
+            return (
+                Ok(ExtractOutcome::Skipped(ExtractSkip::NoQueryTurn)),
+                None,
+                Vec::new(),
+            );
         };
         tracing::debug!(
             session = %window.session(),
@@ -230,14 +250,62 @@ impl MemoryExtractor {
             Arc::clone(&recorder),
         )
         .await;
-        // Advance the cursor only on success. On error the cursor stays so
-        // the errored messages are reconsidered next pass.
         if result.is_ok() {
             advance_cursor(&self.cursor, messages);
             let causality = self.causality_for(window.session(), window.trigger_user_event());
-            self.emit_changes(MemoryChangeOrigin::AutoMemory, causality, recorder.take());
+            (
+                result.map(ExtractOutcome::Extracted),
+                Some(causality),
+                recorder.take(),
+            )
+        } else {
+            (result.map(ExtractOutcome::Extracted), None, Vec::new())
         }
-        result.map(ExtractOutcome::Extracted)
+    }
+
+    /// Run extraction inline inside the turn's serial pipeline, draining any
+    /// stashed trailing context into shared_log without emitting a separate
+    /// notice. Boxed to break the compile-time Send cycle through the forked
+    /// runner's lifecycle.
+    pub(crate) fn run_pipeline<'a>(
+        &'a self,
+        messages: Vec<SessionLogEntry>,
+        shared_log: &'a MutationLog,
+    ) -> Pin<Box<dyn std::future::Future<Output = Option<MemoryChangeCausality>> + Send + 'a>> {
+        Box::pin(async move {
+            {
+                let mut ip = self.in_progress.lock().expect("in_progress");
+                if *ip {
+                    *self.pending_context.lock().expect("pending") = Some(messages);
+                    return None;
+                }
+                *ip = true;
+            }
+            let _guard = InProgressGuard::with_notify(&self.in_progress, &self.idle_notify);
+            let mut current = messages;
+            let mut last_causality = None;
+            loop {
+                let (_outcome, causality, changes) = self.collect_extraction_once(&current).await;
+                if let Some(c) = causality {
+                    last_causality = Some(c);
+                }
+                shared_log.extend(changes);
+                let pending = self.pending_context.lock().expect("pending").take();
+                if let Some(next) = pending {
+                    current = next;
+                } else {
+                    break;
+                }
+            }
+            last_causality
+        })
+    }
+
+    /// Track a background task handle so shutdown drain awaits it.
+    pub(crate) fn track_task(&self, handle: JoinHandle<()>) {
+        let mut in_flight = self.in_flight.lock().expect("in_flight");
+        in_flight.retain(|h| !h.is_finished());
+        in_flight.push(handle);
     }
 
     /// The fire-and-forget body: run one pass, then in the finally drain the
@@ -254,29 +322,22 @@ impl MemoryExtractor {
         is_trailing: bool,
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async move {
-            // Guard the initial run only: in_progress stays true across the
-            // trailing chain so concurrent triggers coalesce; the guard
-            // resets it at the chain end OR if a panic unwinds this task
-            // (run_extraction_once or the trailing recursion), which would
-            // otherwise wedge the flag true forever. Trailing runs skip the
-            // guard — they are inner to the initial's scope.
             let _guard = if !is_trailing {
-                Some(InProgressGuard::new(&self.in_progress))
+                Some(InProgressGuard::with_notify(
+                    &self.in_progress,
+                    &self.idle_notify,
+                ))
             } else {
                 None
             };
             let _outcome = self.run_extraction_once(&messages).await;
-            // finally: drain the stashed context. in_progress stays true across
-            // the trailing chain so concurrent triggers coalesce; only set
-            // false when nothing is left to run (the guard also resets on
-            // scope exit, so this explicit set is the normal-path fast path).
             let pending = self.pending_context.lock().expect("pending").take();
             if let Some(trailing) = pending {
                 Arc::clone(&self).run_extraction(trailing, true).await;
             } else {
                 *self.in_progress.lock().expect("in_progress") = false;
+                self.idle_notify.notify_waiters();
             }
-            // _guard drops here (initial only), resetting in_progress on panic.
         })
     }
 
@@ -326,13 +387,19 @@ impl MemoryExtractor {
     pub async fn wait_idle(&self, budget: Duration) {
         let deadline = Instant::now() + budget;
         loop {
+            let notified = self.idle_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if !*self.in_progress.lock().expect("in_progress") {
                 return;
             }
             if Instant::now() >= deadline {
                 return;
             }
-            sleep(Duration::from_millis(50)).await;
+            tokio::select! {
+                () = &mut notified => {}
+                () = sleep_until(deadline) => return,
+            }
         }
     }
 

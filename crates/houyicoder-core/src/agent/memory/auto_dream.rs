@@ -46,9 +46,11 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
+use houyicoder_async::PFut;
 use houyicoder_context::{
     MemoryChangeId, MemoryOrigin, MemoryRecallStats, MemoryScope, MemorySummary, SessionId,
 };
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::agent::prompt::reward_lesson::build_reward_lesson_prompt;
@@ -214,11 +216,19 @@ impl Drop for ConsolidationGuard {
 /// inside Drop. Shared with the extractor (same in-progress pattern).
 pub(crate) struct InProgressGuard<'a> {
     flag: &'a Mutex<bool>,
+    notify: Option<&'a Notify>,
 }
 
 impl<'a> InProgressGuard<'a> {
     pub(crate) fn new(flag: &'a Mutex<bool>) -> Self {
-        Self { flag }
+        Self { flag, notify: None }
+    }
+
+    pub(crate) fn with_notify(flag: &'a Mutex<bool>, notify: &'a Notify) -> Self {
+        Self {
+            flag,
+            notify: Some(notify),
+        }
     }
 }
 
@@ -226,6 +236,9 @@ impl Drop for InProgressGuard<'_> {
     fn drop(&mut self) {
         if let Ok(mut ip) = self.flag.lock() {
             *ip = false;
+        }
+        if let Some(notify) = self.notify {
+            notify.notify_waiters();
         }
     }
 }
@@ -523,43 +536,31 @@ impl DreamRunner {
         }
     }
 
-    /// The fire-and-forget entry point. Called from the main runner at
-    /// FinalOutput (alongside the Stop-hook extractor). Per-turn cost when
-    /// the gate is closed: one stat (read the lock mtime). When the gate
-    /// opens: spawn a forked agent (async, non-blocking) to run the
-    /// consolidation. Coalesces if a dream is already in flight.
-    pub fn execute_dream(self: &Arc<Self>, reward: Option<RewardSnapshot>) {
+    /// Evaluate the consolidation gates and claim the running flag when open.
+    fn open_dream_gate(&self, reward: Option<&RewardSnapshot>) -> Option<(String, bool)> {
         let root = self.memory.memory_root();
         if root.is_empty() {
-            return;
+            return None;
         }
         let now = now_secs();
         let lock = ConsolidationLock::new(Path::new(&root));
         let last_at = lock.last_consolidated_at();
         let elapsed = now.saturating_sub(last_at);
-        // Memory-delta gate: fire only when new memories landed since the last
-        // dream. Two paths — the base (full interval plus a few new memories)
-        // or an early fire (a burst of new memories past a shorter floor).
-        // last_at is the lock mtime, which record_consolidation stamps at the
-        // END of a successful dream, so the dream's own promote/demote writes
-        // (mtime <= last_at) do not inflate the count. A quiet store never
-        // fires, so a forked LLM run is not spent re-organizing stable content.
         let new_count = self.memory.count_new_since(last_at);
         let base = elapsed >= DEFAULT_MIN_HOURS * 3600 && new_count >= MIN_NEW_MEMORIES;
         let early = elapsed >= EARLY_FIRE_SECS && new_count >= EARLY_FIRE_NEW;
         let consumed = *self.consumed_retries.lock().expect("consumed retries");
-        let reward_ready = reward.as_ref().is_some_and(|r| {
+        let reward_ready = reward.is_some_and(|r| {
             !r.failures.is_empty()
                 && r.retry_after_error.saturating_sub(consumed) >= REWARD_DREAM_RETRY_THRESHOLD
         });
         let gate_msg = format!(
             "retry_after_error={} fails={} redundant={} new={} elapsed={} base={} early={} reward_ready={}",
-            reward.as_ref().map(|r| r.retry_after_error).unwrap_or(0),
+            reward.map(|r| r.retry_after_error).unwrap_or(0),
             reward
-                .as_ref()
                 .map(|r| r.failures.iter().map(|f| f.fail_count).sum::<u32>())
                 .unwrap_or(0),
-            reward.as_ref().map(|r| r.redundant.len()).unwrap_or(0),
+            reward.map(|r| r.redundant.len()).unwrap_or(0),
             new_count,
             elapsed,
             base,
@@ -571,149 +572,158 @@ impl DreamRunner {
         let reward_path =
             reward_ready && now.saturating_sub(last_scan) >= REWARD_DREAM_MIN_INTERVAL_SECS;
         if !base && !early && !reward_path {
-            return;
+            return None;
         }
-        // Scan throttle: the time-gate has passed, but do not attempt the
-        // lock more often than the throttle window. This is the retry
-        // backoff when a prior dream failed (a claim that ends without a
-        // completed full dream restores the stamp, so the time-gate keeps
-        // passing every turn).
         if now.saturating_sub(last_scan) < SCAN_INTERVAL_SECS {
-            return;
+            return None;
         }
-        // Coalesce: if a dream is in flight, drop this trigger (the
-        // in-flight dream will see whatever it sees; a second concurrent
-        // dream would double-stamp the lock and double-write the store).
         let mut ip = self.in_progress.lock().expect("in_progress");
         if *ip {
-            return;
+            return None;
         }
-        // Setting in_progress synchronously here (not in the spawned body)
-        // closes the race where a concurrent trigger would see
-        // in_progress=false between the check and the spawned task arming it.
         *ip = true;
         drop(ip);
         *self.last_scan_at.lock().expect("last_scan_at") = now;
         let is_reward_dream = reward_path && !base && !early;
+        Some((root, is_reward_dream))
+    }
+
+    /// Run consolidation inline inside the caller's serial pipeline and append
+    /// any mutations to shared_log instead of emitting a separate notice.
+    /// Returns true when the dream made at least one mutation.
+    pub(crate) async fn run_consolidation(
+        self: &Arc<Self>,
+        reward: Option<RewardSnapshot>,
+        shared_log: &MutationLog,
+    ) -> bool {
+        let Some((root, is_reward_dream)) = self.open_dream_gate(reward.as_ref()) else {
+            return false;
+        };
+        let changes = Arc::clone(self)
+            .collect_dream_changes(root, reward, is_reward_dream)
+            .await;
+        let changed = !changes.is_empty();
+        shared_log.extend(changes);
+        changed
+    }
+
+    /// Start a standalone consolidation task when the gates open. Coalesces
+    /// when a consolidation pass is already running.
+    pub fn execute_dream(self: &Arc<Self>, reward: Option<RewardSnapshot>) {
+        let Some((root, is_reward_dream)) = self.open_dream_gate(reward.as_ref()) else {
+            return;
+        };
         let me = Arc::clone(self);
         let handle = tokio::spawn(async move {
             me.run_dream_body(root, reward, is_reward_dream).await;
         });
         let mut in_flight = self.in_flight.lock().expect("in_flight");
-        // Prune completed handles so the Vec does not grow unboundedly across
-        // a long-running process (drain_pending is shutdown-only). is_finished
-        // is a non-blocking poll; detached-but-complete tasks are reaped here.
         in_flight.retain(|h| !h.is_finished());
         in_flight.push(handle);
     }
 
-    /// The spawned body: deterministic pre-pass, build the prompt, run the
-    /// forked agent, then stamp the lock on success or rewind on failure.
-    /// in_progress clears in the finally (no trailing pickup: the dream is a
-    /// single shot, unlike extraction which coalesces a trailing context).
+    /// Run the consolidation body and emit a standalone notice when changes
+    /// landed.
     pub(crate) async fn run_dream_body(
         self: Arc<Self>,
         root: String,
         reward: Option<RewardSnapshot>,
         is_reward_dream: bool,
     ) {
-        // Reset in_progress on scope exit, including a panic unwinding this
-        // task. Without the guard, a panic below would wedge the flag true.
-        let _guard = InProgressGuard::new(&self.in_progress);
-        let lock = ConsolidationLock::new(Path::new(&root));
-        // Both dream kinds claim the same slot: two dreams over one store
-        // would each rewrite topics from a stale listing. The interval gate
-        // belongs to the full dream and reads the lock file's mtime, which
-        // only a completed full dream stamps, so a reward dream's claim does
-        // not move the full dream's schedule.
-        let Some(mut claim) = lock.try_acquire() else {
-            return;
-        };
-        // Deterministic pre-pass: heal any drifted index so the LLM sees a
-        // clean store (a deterministic heal saves the LLM turns it would
-        // otherwise spend fixing the index).
-        drop(self.memory.rebuild_if_stale());
-        let listing = self.memory.list_memories();
-        let fork_msg = format!(
-            "listing={} is_reward={} reward_fails={} retry_after_error={}",
-            listing.len(),
-            is_reward_dream,
-            reward
-                .as_ref()
-                .map(|r| r.failures.iter().map(|f| f.fail_count).sum::<u32>())
-                .unwrap_or(0),
-            reward.as_ref().map(|r| r.retry_after_error).unwrap_or(0),
-        );
-        tracing::debug!("{fork_msg}");
-        let stats = self.memory.read_recall_stats();
-        let index_text = read_to_string(Path::new(&root).join(INDEX_FILE)).unwrap_or_default();
-        let prompt = if is_reward_dream {
-            // Reward dream: focused lesson extraction from blind retries,
-            // not a full consolidation pass. Uses a dedicated prompt that
-            // removes the "if nothing changed, say so" blanket exit and
-            // scopes out consolidation/prune/scope-flow phases.
-            build_reward_lesson_prompt(
-                &root,
-                &listing,
-                &index_text,
-                reward.as_ref().expect("reward dream has a snapshot"),
+        let me = Arc::clone(&self);
+        let changes = self
+            .collect_dream_changes(root, reward, is_reward_dream)
+            .await;
+        me.emit_changes(changes);
+    }
+
+    /// Execute one consolidation pass under the lock and return the recorded
+    /// mutations without emitting a notice. Boxed to break the compile-time
+    /// Send cycle through the forked runner's lifecycle.
+    fn collect_dream_changes(
+        self: Arc<Self>,
+        root: String,
+        reward: Option<RewardSnapshot>,
+        is_reward_dream: bool,
+    ) -> PFut<'static, Vec<MemoryChange>> {
+        Box::pin(async move {
+            let _guard = InProgressGuard::new(&self.in_progress);
+            let lock = ConsolidationLock::new(Path::new(&root));
+            let Some(mut claim) = lock.try_acquire() else {
+                return Vec::new();
+            };
+            drop(self.memory.rebuild_if_stale());
+            let listing = self.memory.list_memories();
+            let fork_msg = format!(
+                "listing={} is_reward={} reward_fails={} retry_after_error={}",
+                listing.len(),
+                is_reward_dream,
+                reward
+                    .as_ref()
+                    .map(|r| r.failures.iter().map(|f| f.fail_count).sum::<u32>())
+                    .unwrap_or(0),
+                reward.as_ref().map(|r| r.retry_after_error).unwrap_or(0),
+            );
+            tracing::debug!("{fork_msg}");
+            let stats = self.memory.read_recall_stats();
+            let index_text = read_to_string(Path::new(&root).join(INDEX_FILE)).unwrap_or_default();
+            let prompt = if is_reward_dream {
+                build_reward_lesson_prompt(
+                    &root,
+                    &listing,
+                    &index_text,
+                    reward.as_ref().expect("reward dream has a snapshot"),
+                )
+            } else {
+                build_consolidation_prompt(
+                    &root,
+                    &listing,
+                    &index_text,
+                    &stats,
+                    now_secs(),
+                    reward.as_ref(),
+                )
+            };
+            let recorder = Arc::new(MutationLog::new());
+            let config = if is_reward_dream {
+                let mut c = self.config.clone();
+                c.max_turns = REWARD_DREAM_MAX_TURNS;
+                c
+            } else {
+                self.config.clone()
+            };
+            let result = run_forked_dream(
+                Arc::clone(&self.store),
+                Arc::clone(&self.provider),
+                Arc::clone(&self.memory),
+                &self.cwd,
+                config,
+                &prompt,
+                Arc::clone(&recorder),
             )
-        } else {
-            build_consolidation_prompt(
-                &root,
-                &listing,
-                &index_text,
-                &stats,
-                now_secs(),
-                reward.as_ref(),
-            )
-        };
-        // One recorder preserves the successful operations emitted by every
-        // memory tool in this consolidation.
-        let recorder = Arc::new(MutationLog::new());
-        let config = if is_reward_dream {
-            let mut c = self.config.clone();
-            c.max_turns = REWARD_DREAM_MAX_TURNS;
-            c
-        } else {
-            self.config.clone()
-        };
-        let result = run_forked_dream(
-            Arc::clone(&self.store),
-            Arc::clone(&self.provider),
-            Arc::clone(&self.memory),
-            &self.cwd,
-            config,
-            &prompt,
-            Arc::clone(&recorder),
-        )
-        .await;
-        match result {
-            Ok(r) => {
-                let dream_msg = format!("dream outcome: {:?}", r.outcome);
-                tracing::debug!("{dream_msg}");
-                if is_reward_dream {
-                    if let Some(snapshot) = reward.as_ref() {
-                        *self.consumed_retries.lock().expect("consumed retries") =
-                            snapshot.retry_after_error;
+            .await;
+            match result {
+                Ok(r) => {
+                    let dream_msg = format!("dream outcome: {:?}", r.outcome);
+                    tracing::debug!("{dream_msg}");
+                    if is_reward_dream {
+                        if let Some(snapshot) = reward.as_ref() {
+                            *self.consumed_retries.lock().expect("consumed retries") =
+                                snapshot.retry_after_error;
+                        }
+                    } else {
+                        claim.record_consolidation();
                     }
-                } else {
-                    claim.record_consolidation();
+                    drop(self.memory.rebuild_index());
+                    recorder.take()
                 }
-                // Deterministic post-pass: regenerate the index from the
-                // final topic set (a deterministic regenerate saves the LLM
-                // maintaining it by hand).
-                drop(self.memory.rebuild_index());
-                // Fire one notice if the dream touched any memories this
-                // pass (an Ok run that wrote nothing is not worth a notice).
-                self.emit_changes(recorder.take());
+                Err(e) => {
+                    let fork_err = format!("auto-dream fork failed: {e}");
+                    tracing::debug!("{fork_err}");
+                    Vec::new()
+                }
             }
-            Err(e) => {
-                let fork_err = format!("auto-dream fork failed: {e}");
-                tracing::debug!("{fork_err}");
-            }
-        }
-        // _guard drops here, resetting in_progress (also on panic).
+        })
     }
 
     /// Drain in-flight dream tasks before shutdown. Awaits every spawned

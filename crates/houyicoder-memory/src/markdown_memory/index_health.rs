@@ -18,11 +18,13 @@ use std::cell::Cell;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use houyicoder_context::MemoryError;
+use houyicoder_context::{MemoryError, MemorySource, render_memory_index_groups, tokens_for};
 
 use super::MarkdownMemoryProvider;
-use super::io::INDEX_FILE;
-use super::io::INDEX_TRUNCATION_WARNING;
+use super::io::{
+    DESCRIPTION_TOKEN_CAP, INDEX_FILE, INDEX_TRUNCATION_WARNING, cap_index_content,
+    write_bytes_atomic,
+};
 
 /// Marker inside a root. The suffix keeps the topic scan, which lists
 /// markdown files only, from reading it as a memory.
@@ -44,6 +46,35 @@ pub(super) fn fail_marker_after(ok_calls: usize) {
 }
 
 impl MarkdownMemoryProvider {
+    /// Render one root's index from its own topic files. The caller holds the
+    /// in-process write lock and this root's lock, so the scan and the write
+    /// see one topic set. Both the full rebuild and the write path call this,
+    /// so the disk format has a single producer.
+    pub(super) fn render_root_index(&self, root: &Path) -> Result<(), MemoryError> {
+        let mut rows: Vec<(MemorySource, String, String)> = Vec::new();
+        for topic in Self::scan_root(root) {
+            // A key no row can address stays out of the index rather than
+            // publishing a row that reads back as another key.
+            if !Self::index_key_representable(&topic.key) {
+                continue;
+            }
+            let Ok(frontmatter) = self.read_frontmatter(&topic.path) else {
+                continue;
+            };
+            rows.push((
+                frontmatter.source,
+                topic.key.clone(),
+                frontmatter.description,
+            ));
+        }
+        let rendered = render_memory_index_groups(
+            rows.iter()
+                .map(|(source, key, description)| (*source, key.as_str(), description.as_str())),
+        );
+        let capped = cap_index_content(&rendered, self.max_lines);
+        write_bytes_atomic(&Self::index_path_for(root), capped.as_bytes())
+    }
+
     /// Record that the root's index no longer describes its topic set. The
     /// caller holds the root lock and changes the topic only after this
     /// returns, so a failure here leaves the store unchanged.
@@ -101,7 +132,19 @@ impl MarkdownMemoryProvider {
         let Ok(text) = fs::read_to_string(root.join(INDEX_FILE)) else {
             return false;
         };
-        Self::index_has_dangling(root, &text) || self.index_misses_topic(root, &text)
+        Self::index_has_dangling(root, &text)
+            || Self::index_has_long_row(&text)
+            || self.index_misses_topic(root, &text)
+    }
+
+    /// Whether any published row exceeds the description token cap, as in an
+    /// index written before read-side description bounding existed. Checked
+    /// ahead of the truncation-warning short-circuit so a pre-cap truncated
+    /// index still repairs itself once.
+    fn index_has_long_row(text: &str) -> bool {
+        text.lines().filter_map(index_row_description).any(|desc| {
+            desc.chars().any(char::is_control) || tokens_for(desc) > DESCRIPTION_TOKEN_CAP
+        })
     }
 
     /// Whether a published row names a topic file that is not in this root.
@@ -150,4 +193,10 @@ fn index_row_key(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("- ")?;
     let (key, _) = rest.split_once(": ")?;
     if key.is_empty() { None } else { Some(key) }
+}
+
+fn index_row_description(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("- ")?;
+    let (key, desc) = rest.split_once(": ")?;
+    if key.is_empty() { None } else { Some(desc) }
 }

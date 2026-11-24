@@ -91,7 +91,7 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
         match k.trim() {
             "name" => name = v.trim().to_string(),
             "description" => description = v.trim().to_string(),
-            "source" => {
+            "type" | "source" => {
                 source = MemorySource::from_label(v)
                     .ok_or_else(|| MemoryError::Corrupt(format!("unknown source label: {v}")))?;
             }
@@ -106,6 +106,12 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
     } else {
         String::new()
     };
+    let raw_description = if description.is_empty() {
+        first_line(&body).to_string()
+    } else {
+        description
+    };
+    let description = cap_description(&raw_description);
     Ok((
         Frontmatter {
             name,

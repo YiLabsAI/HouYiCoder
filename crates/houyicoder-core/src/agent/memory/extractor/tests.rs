@@ -16,6 +16,8 @@ use houyicoder_session::SessionStore;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::agent::RunOutcome;
+use crate::agent::auto_dream::DreamRunner;
+use crate::agent::reward_snapshot::FailureHotspot;
 use houyicoder_api::provider::stream_from_response;
 use houyicoder_async::{PFut, PStream};
 use houyicoder_context::MemoryOrigin;
@@ -1324,6 +1326,180 @@ async fn test_wait_idle_expires() {
         calls: StdMutex::new(0),
     }));
     *ext.in_progress.lock().expect("in_progress") = true;
-    ext.wait_idle(Duration::from_millis(60)).await;
+    ext.wait_idle(Duration::from_millis(20)).await;
     *ext.in_progress.lock().expect("in_progress") = false;
+    ext.idle_notify.notify_waiters();
+}
+
+#[tokio::test]
+async fn test_wait_idle_notify_returns() {
+    let (ext, _) = extractor(Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    }));
+    *ext.in_progress.lock().expect("in_progress") = true;
+    let notifier = Arc::clone(&ext);
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(10)).await;
+        *notifier.in_progress.lock().expect("in_progress") = false;
+        notifier.idle_notify.notify_waiters();
+    });
+    let start = Instant::now();
+    ext.wait_idle(Duration::from_secs(5)).await;
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "notify returns without waiting for budget"
+    );
+}
+
+struct SeqPipelineProvider {
+    calls: StdMutex<usize>,
+    dream_saw_extracted: Arc<StdMutex<bool>>,
+}
+
+impl SeqPipelineProvider {
+    fn next_response(&self, req: &CompletionRequest) -> CompletionResponse {
+        let quote = first_user_quote(req);
+        let mut n = self.calls.lock().expect("calls");
+        *n += 1;
+        let step = *n;
+        drop(n);
+        match step {
+            1 => CompletionResponse {
+                output: vec![OutputItem::ToolCall {
+                    id: "ex-1".into(),
+                    name: "save_memory".into(),
+                    input: serde_json::json!({
+                        "key": "extracted-rule",
+                        "description": "terse answers",
+                        "source": "feedback",
+                        "content": "Keep responses terse.",
+                        "evidence": [{"quote": quote}]
+                    }),
+                }],
+                usage: Usage::default(),
+                model: "seq".into(),
+            },
+            3 => {
+                if format!("{:?}", req.input).contains("extracted-rule") {
+                    *self.dream_saw_extracted.lock().expect("saw") = true;
+                }
+                CompletionResponse {
+                    output: vec![OutputItem::ToolCall {
+                        id: "dr-1".into(),
+                        name: "save_memory".into(),
+                        input: serde_json::json!({
+                            "key": "lesson-blind-retry",
+                            "description": "change args after error",
+                            "source": "feedback",
+                            "content": "Never repeat identical failed arguments."
+                        }),
+                    }],
+                    usage: Usage::default(),
+                    model: "seq".into(),
+                }
+            }
+            _ => CompletionResponse {
+                output: vec![OutputItem::Text {
+                    text: "done".into(),
+                }],
+                usage: Usage::default(),
+                model: "seq".into(),
+            },
+        }
+    }
+}
+
+impl ModelProvider for SeqPipelineProvider {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        let resp = self.next_response(&req);
+        Box::pin(async move { Ok(resp) })
+    }
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        stream_from_response(self.next_response(&req))
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// Extraction and dream inside one background fire run sequentially under the
+/// serial lock and emit one merged notice instead of two separate notices.
+#[tokio::test]
+async fn test_pipeline_single_notice() {
+    let root = temp_dir().join(format!("pipeline-notice-{}", id()));
+    create_dir_all(&root).expect("mkdir");
+    let mem: Arc<dyn MemoryProvider> = Arc::new(MarkdownMemoryProvider::new(root.clone()));
+    let main_store: Arc<dyn SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let fork_store: Arc<dyn SessionLog> =
+        Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let conv = conversation();
+    let session = conv[0].session;
+    for entry in conv {
+        main_store.append(entry).await.expect("append");
+    }
+    let dream_saw = Arc::new(StdMutex::new(false));
+    let provider: Arc<dyn ModelProvider> = Arc::new(SeqPipelineProvider {
+        calls: StdMutex::new(0),
+        dream_saw_extracted: Arc::clone(&dream_saw),
+    });
+    let cfg = RunnerConfig {
+        max_turns: 5,
+        ..RunnerConfig::default()
+    };
+    let ext = Arc::new(MemoryExtractor::new(
+        ExtractionLogs {
+            session: Arc::clone(&main_store),
+            fork: Arc::clone(&fork_store),
+        },
+        Arc::clone(&provider),
+        Arc::clone(&mem),
+        root.clone(),
+        cfg.clone(),
+    ));
+    let dream = Arc::new(DreamRunner::new(
+        fork_store,
+        provider,
+        Arc::clone(&mem),
+        root.clone(),
+        cfg,
+    ));
+    let runtime = MemoryRuntime::from_parts(
+        main_store,
+        Some(mem),
+        MemoryGates::new(true, true),
+        Some(ext),
+        Some(dream),
+    );
+    let (handlers, recorded) = RecordingChanges::new();
+    runtime.set_event_handlers(&handlers);
+
+    let reward = RewardSnapshot {
+        retry_after_error: 2,
+        failures: vec![FailureHotspot {
+            tool: "edit".into(),
+            fail_count: 2,
+            top_reasons: vec!["old_string not found".into()],
+        }],
+        ..RewardSnapshot::default()
+    };
+    runtime.fire_background(session, Some(|| reward)).await;
+    runtime.join_background(Duration::from_secs(5)).await;
+
+    assert!(
+        *dream_saw.lock().expect("saw"),
+        "dream must run after extraction and see extracted-rule in its listing"
+    );
+    let notices = recorded.0.lock().expect("notices").clone();
+    assert_eq!(
+        notices.len(),
+        1,
+        "extraction plus dream in one pipeline must emit one merged notice: {notices:?}"
+    );
+    assert_eq!(notices[0].origin, MemoryChangeOrigin::AutoDream);
+    assert_eq!(notices[0].changes.len(), 2);
+    remove_dir_all(&root).ok();
 }

@@ -18,8 +18,7 @@ use std::cmp::Reverse;
 use crate::provider::{has_word_content, hit_count_bounded, tokenize};
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySource,
-    MemorySummary, render_memory_index_groups,
+    MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
 };
 
 mod index_health;
@@ -29,8 +28,8 @@ mod roots;
 mod scope_flow;
 use crate::secret_scan::first_match;
 use io::{
-    Frontmatter, INDEX_FILE, ScannedTopic, StatRecord, cap_index_content, count_new_since_impl,
-    list_memories_impl, parse_topic_file, sanitize_key, scopes_for_key_impl, serialize_topic_file,
+    Frontmatter, INDEX_FILE, ScannedTopic, StatRecord, count_new_since_impl, list_memories_impl,
+    parse_topic_file, sanitize_key, scopes_for_key_impl, serialize_topic_file,
     show_memory_in_scope_impl, validate_index_key, write_bytes_advisory, write_bytes_atomic,
 };
 use lock::RootLock;
@@ -298,35 +297,6 @@ impl MarkdownMemoryProvider {
         Ok(())
     }
 
-    /// Render one root's index from its own topic files. The caller holds the
-    /// in-process write lock and this root's lock, so the scan and the write
-    /// see one topic set. Both the full rebuild and the write path call this,
-    /// so the disk format has a single producer.
-    fn render_root_index(&self, root: &Path) -> Result<(), MemoryError> {
-        let mut rows: Vec<(MemorySource, String, String)> = Vec::new();
-        for topic in Self::scan_root(root) {
-            // A key no row can address stays out of the index rather than
-            // publishing a row that reads back as another key.
-            if !Self::index_key_representable(&topic.key) {
-                continue;
-            }
-            let Ok(frontmatter) = self.read_frontmatter(&topic.path) else {
-                continue;
-            };
-            rows.push((
-                frontmatter.source,
-                topic.key.clone(),
-                frontmatter.description,
-            ));
-        }
-        let rendered = render_memory_index_groups(
-            rows.iter()
-                .map(|(source, key, description)| (*source, key.as_str(), description.as_str())),
-        );
-        let capped = cap_index_content(&rendered, self.max_lines);
-        write_bytes_atomic(&Self::index_path_for(root), capped.as_bytes())
-    }
-
     fn read_frontmatter(&self, path: &Path) -> Result<Frontmatter, MemoryError> {
         let text = fs::read_to_string(path).map_err(|e| match e.kind() {
             ErrorKind::NotFound => MemoryError::NotFound,
@@ -355,7 +325,9 @@ impl MarkdownMemoryProvider {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        Ok(MemoryEntry::new(key, body, fm.source).with_meta(fm.description.clone(), mtime_secs))
+        Ok(MemoryEntry::new(key, body, fm.source)
+            .with_meta(fm.description.clone(), mtime_secs)
+            .with_origin(fm.origin))
     }
 
     /// Republish the given root's index after a topic write. Re-rendering the
