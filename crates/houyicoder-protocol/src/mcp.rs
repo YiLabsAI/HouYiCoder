@@ -25,30 +25,31 @@ pub enum McpConfigScope {
 /// How one server is reached: a child process over standard streams, or a
 /// streamable HTTP endpoint.
 ///
-/// The standard config file spells stdio servers flat, with a command field
-/// and no kind field, and spells HTTP servers with a type field. The struct
-/// accepts both: serde aliases each source field onto the one destination,
-/// so the file a user copied from another client parses without a rewrite.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The standard config file spells a stdio server flat, with a command field
+/// and no kind field, and spells an HTTP server with a URL. The parser accepts
+/// every spelling: when the kind is absent, a body carrying a URL and no
+/// command is HTTP and one carrying a command is stdio, so a copied file
+/// cannot be mistaken for the other transport.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTransportConfig {
-    /// The transport kind. Omitted in the common stdio spelling of the
-    /// standard config file, so the field defaults to stdio; the typed
-    /// spelling names it under the file's own key.
-    #[serde(default, alias = "type")]
+    /// The transport kind.
     pub kind: McpTransportKind,
     /// The command to launch, or the endpoint URL to call.
-    #[serde(alias = "command", alias = "url")]
     pub endpoint: String,
     /// Arguments after the command. Empty for HTTP.
-    #[serde(default, alias = "args")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub arguments: Vec<String>,
     /// Variables the child needs, already expanded. Empty for HTTP.
-    #[serde(default, alias = "env")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub environment: BTreeMap<String, String>,
     /// Headers an HTTP server requires, after expansion. Empty for stdio.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// A command whose stdout supplies HTTP headers at connect time. Absent
+    /// for stdio and for servers with static headers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers_helper: Option<String>,
 }
 
 impl McpTransportConfig {
@@ -60,6 +61,7 @@ impl McpTransportConfig {
             arguments,
             environment: BTreeMap::new(),
             headers: BTreeMap::new(),
+            headers_helper: None,
         }
     }
 
@@ -71,7 +73,63 @@ impl McpTransportConfig {
             arguments: Vec::new(),
             environment: BTreeMap::new(),
             headers: BTreeMap::new(),
+            headers_helper: None,
         }
+    }
+}
+
+/// The body as a config file writes it, before the kind decides which of the
+/// two address fields is the endpoint. Kept separate so normalization happens
+/// in one place rather than through aliases that cannot see the other fields.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawTransport {
+    #[serde(default, rename = "type", alias = "kind")]
+    kind: Option<McpTransportKind>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default, alias = "args")]
+    arguments: Vec<String>,
+    #[serde(default, alias = "env")]
+    environment: BTreeMap<String, String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default, rename = "headersHelper")]
+    headers_helper: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for McpTransportConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawTransport::deserialize(deserializer)?;
+        // A body with no kind is judged by which address it carries: a URL
+        // alone is an HTTP server, a command is a child process.
+        let kind = raw.kind.unwrap_or({
+            if raw.url.is_some() && raw.command.is_none() {
+                McpTransportKind::Http
+            } else {
+                McpTransportKind::Stdio
+            }
+        });
+        let endpoint = match kind {
+            McpTransportKind::Stdio => raw.command.or(raw.endpoint).or(raw.url),
+            McpTransportKind::Http => raw.url.or(raw.endpoint).or(raw.command),
+        }
+        .unwrap_or_default();
+        Ok(Self {
+            kind,
+            endpoint,
+            arguments: raw.arguments,
+            environment: raw.environment,
+            headers: raw.headers,
+            headers_helper: raw.headers_helper,
+        })
     }
 }
 
@@ -80,12 +138,11 @@ impl McpTransportConfig {
 #[serde(rename_all = "lowercase")]
 pub enum McpTransportKind {
     /// A child process speaking the protocol over its standard streams.
-    /// Aliases the type spelling the standard config file uses.
     #[default]
-    #[serde(alias = "type", alias = "stdio")]
     Stdio,
-    /// A streamable HTTP endpoint.
-    #[serde(alias = "http", alias = "streamable-http", alias = "sse")]
+    /// A streamable HTTP endpoint. A file may spell it as the older
+    /// server-sent-events transport, which this kind carries.
+    #[serde(alias = "streamable-http", alias = "sse")]
     Http,
 }
 

@@ -40,6 +40,35 @@ fn test_typed_http_parses() {
     );
 }
 
+/// A body that names only a URL, with no type field, is an HTTP server: the
+/// address it carries is what decides the transport. Reading it as a child
+/// process would try to launch a URL as a command.
+#[test]
+fn test_url_only_is_http() {
+    let transport: McpTransportConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://example.invalid/mcp",
+    }))
+    .expect("parses");
+    assert_eq!(transport.kind, McpTransportKind::Http);
+    assert_eq!(transport.endpoint, "https://example.invalid/mcp");
+}
+
+/// A headers helper parses under the file's own key and survives a round
+/// trip, so a command-supplied header keeps working through a write-back.
+#[test]
+fn test_headers_helper_parses() {
+    let transport: McpTransportConfig = serde_json::from_value(serde_json::json!({
+        "type": "http",
+        "url": "https://example.invalid/mcp",
+        "headersHelper": "token-helper",
+    }))
+    .expect("parses");
+    assert_eq!(transport.headers_helper.as_deref(), Some("token-helper"));
+    let text = serde_json::to_string(&transport).expect("serializes");
+    let back: McpTransportConfig = serde_json::from_str(&text).expect("re-parses");
+    assert_eq!(back, transport);
+}
+
 /// The streamable HTTP constructor sets the kind and endpoint and leaves the
 /// stdio-only fields empty.
 #[test]

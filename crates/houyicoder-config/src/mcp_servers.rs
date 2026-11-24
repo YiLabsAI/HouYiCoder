@@ -28,14 +28,22 @@ pub const PROJECT_FILE: &str = ".mcp.json";
 /// The settings key that holds the user-scope server list.
 pub const SETTINGS_KEY: &str = "mcpServers";
 
-/// Read every scope's servers and merge them by precedence: user wins over
-/// project, project over env. Returns the merged list ordered by name, so
-/// two reads of the same inputs expose the same order and a caller that
-/// turns it into a prompt sees a stable sequence.
+/// Read every scope's servers, merge them by precedence, gate them on
+/// workspace trust, and expand the variable references in the entries that
+/// will actually run.
+///
+/// Precedence is user over project over env. Order is by server name, so two
+/// reads of the same inputs expose the same sequence. An untrusted workspace
+/// disables every project-scope entry before expansion, so the host's secrets
+/// are never even resolved into a body the renderer could show or a
+/// handshake could send: an HTTP entry with a key reference would otherwise
+/// leak it to the endpoint the repository names.
 pub fn resolve_scoped_mcp_servers(
     settings_path: &Path,
     workspace: Option<&Path>,
     env_raw: Option<&str>,
+    trusted: bool,
+    lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<ScopedMcpServerConfig> {
     let mut by_name: BTreeMap<String, ScopedMcpServerConfig> = BTreeMap::new();
     for (scope, entries) in [
@@ -51,7 +59,30 @@ pub fn resolve_scoped_mcp_servers(
             by_name.insert(server.name.clone(), server);
         }
     }
-    by_name.into_values().collect()
+    apply_trust_gate(by_name.into_values().collect(), trusted)
+        .into_iter()
+        .map(|mut server| {
+            if !server.disabled {
+                expand_entry(&mut server, lookup);
+            }
+            server
+        })
+        .collect()
+}
+
+/// Expand every variable reference in one enabled entry: the address, each
+/// argument, each environment value, and each header value.
+fn expand_entry(server: &mut ScopedMcpServerConfig, lookup: &dyn Fn(&str) -> Option<String>) {
+    server.transport.endpoint = expand_references(&server.transport.endpoint, lookup);
+    for argument in &mut server.transport.arguments {
+        *argument = expand_references(argument, lookup);
+    }
+    for value in server.transport.environment.values_mut() {
+        *value = expand_references(value, lookup);
+    }
+    for value in server.transport.headers.values_mut() {
+        *value = expand_references(value, lookup);
+    }
 }
 
 /// Read one scope's servers from the user settings file. The key is a map
@@ -179,10 +210,12 @@ pub fn expand_references(value: &str, lookup: &dyn Fn(&str) -> Option<String>) -
     out
 }
 
-/// Mark project-scope servers whose transport spawns a child process as
-/// disabled when the workspace is not trusted. A cloned repository that
-/// ships a .mcp.json naming an executable must not start that process
-/// until the user has approved the workspace.
+/// Mark every project-scope server disabled when the workspace is not
+/// trusted, whatever its transport. A cloned repository must not choose the
+/// endpoints this host talks to: an HTTP entry can name an attacker's
+/// address, carry a header referencing a host secret, and return
+/// instructions that steer the model, which a stdio-only gate would let
+/// through.
 pub fn apply_trust_gate(
     servers: Vec<ScopedMcpServerConfig>,
     trusted: bool,
@@ -193,10 +226,7 @@ pub fn apply_trust_gate(
     servers
         .into_iter()
         .map(|mut server| {
-            if server.scope == McpConfigScope::Project
-                && server.transport.kind == McpTransportKind::Stdio
-                && !server.disabled
-            {
+            if server.scope == McpConfigScope::Project {
                 server.disabled = true;
             }
             server
@@ -261,12 +291,19 @@ fn transport_body(transport: &McpTransportConfig) -> Value {
             }
         }
         McpTransportKind::Http => {
+            // The explicit kind keeps a written HTTP entry readable by a
+            // reader that only checks the type field, and keeps a URL-only
+            // body from being re-read under the wrong transport.
+            map.insert("type".into(), Value::String("http".into()));
             map.insert("url".into(), Value::String(transport.endpoint.clone()));
             if !transport.headers.is_empty() {
                 map.insert(
                     "headers".into(),
                     serde_json::to_value(&transport.headers).unwrap(),
                 );
+            }
+            if let Some(helper) = &transport.headers_helper {
+                map.insert("headersHelper".into(), Value::String(helper.clone()));
             }
         }
     }
