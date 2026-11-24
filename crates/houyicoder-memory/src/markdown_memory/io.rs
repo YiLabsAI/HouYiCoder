@@ -354,38 +354,39 @@ pub(super) fn index_description(entry: &MemoryEntry) -> String {
 }
 
 /// Fold to one line and cut at the description cap on a character boundary.
+/// Cutting word by word would drop the rest of the budget as soon as one long
+/// unspaced run (a CJK sentence, a path) crosses it, so the walk is per
+/// character and retreats only when the cut would split a Latin word.
 fn cap_description(raw: &str) -> String {
     let folded: String = raw
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    let words: Vec<&str> = folded.split_whitespace().collect();
+    let compact = folded.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out = String::new();
-    for word in words {
-        let candidate = if out.is_empty() {
-            word.to_string()
-        } else {
-            format!("{out} {word}")
-        };
-        if tokens_for(&candidate) > DESCRIPTION_TOKEN_CAP {
+    for c in compact.chars() {
+        let mut probe = out.clone();
+        probe.push(c);
+        if tokens_for(&probe) > DESCRIPTION_TOKEN_CAP {
             break;
         }
-        out = candidate;
+        out = probe;
     }
-    if out.is_empty() {
-        // A single word longer than the cap still needs a row; cut it.
-        let mut cut = String::new();
-        for c in folded.split_whitespace().next().unwrap_or("").chars() {
-            let mut probe = cut.clone();
-            probe.push(c);
-            if tokens_for(&probe) > DESCRIPTION_TOKEN_CAP {
-                break;
-            }
-            cut = probe;
-        }
-        return cut;
+    let cut_at = out.chars().count();
+    let next_is_word = compact
+        .chars()
+        .nth(cut_at)
+        .is_some_and(|c| c.is_ascii_alphanumeric());
+    if out
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && next_is_word
+        && let Some(space) = out.rfind(' ')
+    {
+        out.truncate(space);
     }
-    out
+    out.trim_end().to_string()
 }
 
 /// Byte cap on the derived MEMORY index (keeps the always-on index small).

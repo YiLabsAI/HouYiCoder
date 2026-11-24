@@ -1307,3 +1307,23 @@ async fn test_lost_cursor_skips_fork() {
         "the cursor re-seeds to the snapshot tail"
     );
 }
+
+/// An idle extractor needs no wait; a running one is waited on only up to the
+/// budget the caller set.
+#[tokio::test]
+async fn test_wait_idle_when_idle() {
+    let (ext, _) = extractor(Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    }));
+    ext.wait_idle(Duration::from_millis(1)).await;
+}
+
+#[tokio::test]
+async fn test_wait_idle_expires() {
+    let (ext, _) = extractor(Arc::new(FakeProvider {
+        calls: StdMutex::new(0),
+    }));
+    *ext.in_progress.lock().expect("in_progress") = true;
+    ext.wait_idle(Duration::from_millis(60)).await;
+    *ext.in_progress.lock().expect("in_progress") = false;
+}

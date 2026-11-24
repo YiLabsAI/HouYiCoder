@@ -16,6 +16,8 @@ use std::mem::take;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
+use tokio::time::timeout_at;
 
 /// How long a turn's background pipeline waits for the extraction pass before
 /// starting the dream. The dream only consolidates what the store holds, so a
@@ -61,42 +63,40 @@ pub(crate) fn index_line(summary: &MemorySummary) -> String {
     format!("- {}: {}\n", summary.key, summary.description)
 }
 
-/// Render the injected index under one token budget, grouped by type. A
-/// heading per type carries the classification once instead of a label on
-/// every row, and the budget stops the tail rather than a byte cap that a
-/// dense description would blow through.
+/// Render the injected index under one token budget. Selection runs first, so
+/// scope priority decides what fits and a large automatic set cannot starve a
+/// preference the user wrote. Grouping runs once over the selected rows, so
+/// each type heading appears at most once under the section heading.
 pub(crate) fn render_index(summaries: &[MemorySummary]) -> String {
-    let mut out = String::new();
+    let mut selected: Vec<&MemorySummary> = Vec::new();
     let mut used = 0usize;
-    let mut rows = 0usize;
-    // Scope outranks type: a preference the user wrote, or a rule the project
-    // promoted, must not be starved by a large automatic feedback set that
-    // sorts ahead of it.
     for scope in [MemoryScope::User, MemoryScope::Project, MemoryScope::Auto] {
-        for source in [
-            MemorySource::Feedback,
-            MemorySource::Project,
-            MemorySource::User,
-            MemorySource::Reference,
-        ] {
-            let mut heading = false;
-            for summary in summaries
-                .iter()
-                .filter(|s| s.scope == scope && s.source == source)
-            {
-                let line = index_line(summary);
-                let cost = tokens_for(&line);
-                if rows >= INDEX_ENTRY_CAP || used + cost > INDEX_TOKEN_BUDGET {
-                    return out;
-                }
-                if !heading {
-                    out.push_str(&format!("## {}\n", source.as_label()));
-                    heading = true;
-                }
-                out.push_str(&line);
-                used += cost;
-                rows += 1;
+        for summary in summaries.iter().filter(|s| s.scope == scope) {
+            if selected.len() >= INDEX_ENTRY_CAP {
+                break;
             }
+            let cost = tokens_for(&index_line(summary));
+            if used + cost > INDEX_TOKEN_BUDGET {
+                break;
+            }
+            used += cost;
+            selected.push(summary);
+        }
+    }
+    let mut out = String::new();
+    for source in [
+        MemorySource::Feedback,
+        MemorySource::Project,
+        MemorySource::User,
+        MemorySource::Reference,
+    ] {
+        let mut group = selected.iter().filter(|s| s.source == source).peekable();
+        if group.peek().is_none() {
+            continue;
+        }
+        out.push_str(&format!("### {}\n", source.as_label()));
+        for summary in group {
+            out.push_str(&index_line(summary));
         }
     }
     out
@@ -139,6 +139,10 @@ pub struct MemoryRuntime {
     /// and joined at shutdown so an extraction started by the last turn is
     /// not cut off by process exit.
     background_pipeline: Mutex<Vec<JoinHandle<()>>>,
+    /// Serializes the turn pipelines. Two turns can end within seconds of
+    /// each other; without this lock the second pipeline could start the
+    /// dream beside the first turn's still-running extraction.
+    background_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl MemoryRuntime {
@@ -155,6 +159,7 @@ impl MemoryRuntime {
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
             background_pipeline: Mutex::new(Vec::new()),
+            background_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -177,6 +182,7 @@ impl MemoryRuntime {
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
             background_pipeline: Mutex::new(Vec::new()),
+            background_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -285,7 +291,7 @@ impl MemoryRuntime {
         }
     }
 
-    /// Format the memory index for the system prompt prefix. The first result
+    /// Format the memory index for the session prompt suffix. The first result
     /// is held until clear or compact so background memory writes cannot change
     /// the provider prefix between ordinary turns. A disabled auto-memory gate
     /// injects nothing and leaves the snapshot untouched, so re-enabling
@@ -384,10 +390,12 @@ impl MemoryRuntime {
         // let the dream plan against a listing the extractor was still
         // changing, and put two notices on one turn.
         let extractor = self.background.extractor.clone();
+        let serial = Arc::clone(&self.background_lock);
         let reward = reward.map(|f| f());
         let handle = tokio::spawn(async move {
+            let _serial = serial.lock().await;
             if let Some(extractor) = extractor {
-                extractor.drain_pending(EXTRACTION_BEFORE_DREAM).await;
+                extractor.wait_idle(EXTRACTION_BEFORE_DREAM).await;
             }
             dream.execute_dream(reward);
         });
@@ -399,17 +407,21 @@ impl MemoryRuntime {
     /// Await running background tasks — recall selections first, then dream
     /// passes — until they finish or the timeout expires.
     pub(crate) async fn join_background(&self, timeout: Duration) {
-        self.recall_tasks.drain(timeout).await;
+        // One deadline for every stage: each stage waiting its own full budget
+        // would let shutdown take a multiple of it.
+        let deadline = Instant::now() + timeout;
+        let remaining = || deadline.saturating_duration_since(Instant::now());
+        self.recall_tasks.drain(remaining()).await;
         let pipeline: Vec<JoinHandle<()>> =
             take(&mut *self.background_pipeline.lock().expect("pipeline"));
         for handle in pipeline {
-            drop(tokio::time::timeout(timeout, handle).await);
+            drop(timeout_at(deadline, handle).await);
         }
         if let Some(extractor) = self.background.extractor.as_ref() {
-            extractor.drain_pending(timeout).await;
+            extractor.wait_idle(remaining()).await;
         }
         if let Some(dream) = self.background.dream.as_ref() {
-            dream.drain_pending(timeout).await;
+            dream.drain_pending(remaining()).await;
         }
     }
 
@@ -469,3 +481,6 @@ impl MemoryRuntime {
             .and_then(|d| d.session_log_root.as_deref())
     }
 }
+
+#[cfg(test)]
+mod tests;

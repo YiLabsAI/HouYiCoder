@@ -146,7 +146,7 @@ pub fn tokens_for(s: &str) -> usize {
     let mut cjk = 0usize;
     let mut other = 0usize;
     for c in s.chars() {
-        if is_cjk_ideograph(c) {
+        if is_cjk(c) {
             cjk += 1;
         } else {
             other += 1;
@@ -157,13 +157,15 @@ pub fn tokens_for(s: &str) -> usize {
 
 /// Whether a character is written without word spacing, where one character
 /// carries about one token: the CJK ideographs and their extensions, the
-/// Japanese kana, and Korean hangul.
-fn is_cjk_ideograph(c: char) -> bool {
+/// Japanese kana, and Korean hangul. Shared by the token estimate and the
+/// recall tokenizer so the two cannot disagree about what a dense script is.
+pub fn is_cjk(c: char) -> bool {
     matches!(
         c,
         '\u{3400}'..='\u{4DBF}'
             | '\u{4E00}'..='\u{9FFF}'
             | '\u{F900}'..='\u{FAFF}'
+            | '\u{20000}'..='\u{2FA1F}'
             | '\u{3040}'..='\u{309F}'
             | '\u{30A0}'..='\u{30FF}'
             | '\u{AC00}'..='\u{D7AF}'

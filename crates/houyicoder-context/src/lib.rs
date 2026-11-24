@@ -27,7 +27,7 @@ mod sandbox_types;
 pub use hook_types::{HookErrorKind, HookEventKind, HookFirePayload, HookVerdictKind};
 pub use memory_types::{
     MemoryEntry, MemoryError, MemoryOrigin, MemoryRankHit, MemoryRecallStats, MemoryScope,
-    MemorySource, MemorySummary, memory_age_days, memory_age_label, memory_freshness_text,
+    MemorySource, MemorySummary, is_cjk, memory_age_days, memory_age_label, memory_freshness_text,
     tokens_for,
 };
 pub use sandbox_types::{DirEntry, ExecConfig, ExecResult, SandboxError};

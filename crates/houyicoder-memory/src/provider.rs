@@ -24,7 +24,7 @@ pub(crate) fn tokenize(query: &str) -> Vec<String> {
             buf_cjk = false;
             continue;
         }
-        let cjk = is_cjk(c);
+        let cjk = houyicoder_context::is_cjk(c);
         if cjk != buf_cjk && !buf.is_empty() {
             flush(&mut buf, buf_cjk, &mut out);
         }
@@ -76,20 +76,6 @@ fn push_bigrams(s: &str, out: &mut Vec<String>) {
     for w in chars.windows(2) {
         out.push(w.iter().collect());
     }
-}
-
-/// Whether a character belongs to a script without word boundaries: the CJK
-/// unified ideographs and extensions, Japanese kana, and Korean hangul.
-fn is_cjk(c: char) -> bool {
-    matches!(
-        c,
-        '\u{3400}'..='\u{4DBF}'
-        | '\u{4E00}'..='\u{9FFF}'
-        | '\u{F900}'..='\u{FAFF}'
-        | '\u{3040}'..='\u{309F}'
-        | '\u{30A0}'..='\u{30FF}'
-        | '\u{AC00}'..='\u{D7AF}'
-    )
 }
 
 /// Count how many distinct keywords occur in the text via case-insensitive

@@ -19,6 +19,7 @@ use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{EventId, MemoryChangeId, SessionEvent, SessionId, SessionLogEntry};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::agent::extract::run_forked_extract;
 use crate::agent::memory::MutationLog;
@@ -315,6 +316,24 @@ impl MemoryExtractor {
         // poll; detached-but-complete tasks are reaped here.
         in_flight.retain(|h| !h.is_finished());
         in_flight.push(handle);
+    }
+
+    /// Wait until no extraction pass is running, up to the given budget. The
+    /// turn's background pipeline uses it so the dream reads what the pass
+    /// wrote. Unlike the shutdown drain it never takes the in-flight handles,
+    /// which belong to shutdown alone: taking them here would let a later turn
+    /// find an empty list and start the dream beside a running pass.
+    pub async fn wait_idle(&self, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        loop {
+            if !*self.in_progress.lock().expect("in_progress") {
+                return;
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Drain in-flight extraction tasks before shutdown. Awaits every spawned
