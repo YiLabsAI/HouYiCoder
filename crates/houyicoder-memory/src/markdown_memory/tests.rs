@@ -7,3 +7,4 @@ mod index_health;
 mod ranking;
 mod scope;
 mod scope_flow;
+mod secret;

@@ -367,6 +367,9 @@ pub enum MemoryError {
     InvalidPath(String),
     /// A record on disk was corrupt (unparseable frontmatter or body).
     Corrupt(String),
+    /// The entry looked like it carried a credential. The rule id names the
+    /// pattern, never the matched text, so the refusal cannot echo the secret.
+    Secret(String),
 }
 
 impl fmt::Display for MemoryError {
@@ -376,6 +379,7 @@ impl fmt::Display for MemoryError {
             Self::NotFound => f.write_str("memory entry not found"),
             Self::InvalidPath(msg) => write!(f, "invalid memory path: {msg}"),
             Self::Corrupt(msg) => write!(f, "corrupt memory record: {msg}"),
+            Self::Secret(rule) => write!(f, "entry looks like a credential: {rule}"),
         }
     }
 }

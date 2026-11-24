@@ -62,20 +62,22 @@ pub fn load_corpus() -> Corpus {
 }
 
 /// Seed every entry under a fresh root and return the provider over it plus
-/// the root for cleanup. Entry content leads with the description line so
-/// the write path derives the same frontmatter the fixture declares.
+/// the root for cleanup. The description travels as the record's own summary,
+/// so the corpus measures the write path a caller actually uses.
 pub fn seed_corpus(corpus: &Corpus) -> (MarkdownMemoryProvider, PathBuf) {
     let root = unique_root("recall-corpus");
     fs::create_dir_all(&root).expect("corpus root creatable");
     let provider = MarkdownMemoryProvider::new(root.clone());
     for entry in &corpus.entries {
-        let content = format!("{}\n\n{}", entry.description, entry.body);
         provider
-            .add(MemoryEntry::new(
-                entry.key.as_str(),
-                content,
-                MemorySource::Project,
-            ))
+            .add(
+                MemoryEntry::new(
+                    entry.key.as_str(),
+                    entry.body.clone(),
+                    MemorySource::Project,
+                )
+                .with_meta(entry.description.clone(), 0),
+            )
             .expect("corpus entry seeds");
     }
     pin_recency(&root, corpus);

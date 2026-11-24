@@ -22,6 +22,7 @@ pub mod markdown_memory;
 pub mod native;
 pub mod provider;
 pub mod reranker;
+mod secret_scan;
 
 pub use descriptor_store::{FileDescriptorStore, InMemoryDescriptorStore};
 pub use houyi::StubMemoryProvider;

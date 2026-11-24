@@ -26,6 +26,7 @@ mod io;
 mod lock;
 mod roots;
 mod scope_flow;
+use crate::secret_scan::first_match;
 use io::{
     Frontmatter, INDEX_BYTE_CAP, INDEX_FILE, ScannedTopic, StatRecord, cap_index_content,
     count_new_since_impl, index_description, list_memories_impl, parse_topic_file, sanitize_key,
@@ -693,6 +694,10 @@ impl MarkdownMemoryProvider {
         root: &Path,
         entry: &MemoryEntry,
     ) -> Result<MemoryWriteOutcome, MemoryError> {
+        if let Some(rule) = first_match(&entry.content).or_else(|| first_match(&entry.description))
+        {
+            return Err(MemoryError::Secret(rule.to_string()));
+        }
         let _root_lock = RootLock::acquire(root)?;
         let topic_path = root.join(format!("{}.md", entry.key));
         let payload = serialize_topic_file(entry).into_bytes();

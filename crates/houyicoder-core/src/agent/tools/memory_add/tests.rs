@@ -735,3 +735,15 @@ async fn test_save_bad_scope_fallback() {
     let scopes = p.scopes.lock().expect("scopes").clone();
     assert_eq!(scopes, vec![MemoryScope::Auto], "bad scope -> auto");
 }
+
+/// A refused credential reaches the model as an actionable message that names
+/// the rule, never the value it matched.
+#[test]
+fn test_secret_tool_message() {
+    let error = map_memory_error(MemoryError::Secret("aws-access-key".to_string()));
+    let ToolError::Failed(message) = error else {
+        panic!("a refused credential is a correctable failure");
+    };
+    assert!(message.contains("credential"), "{message}");
+    assert!(message.contains("aws-access-key"), "{message}");
+}

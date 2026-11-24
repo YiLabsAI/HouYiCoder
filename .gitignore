@@ -73,5 +73,7 @@ scripts/rules/sdd.py
 
 # Agent memory (runtime artifact, not project source)
 agent.md
+AGENTS.local.md
+CLAUDE.local.md
 
 

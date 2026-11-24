@@ -461,6 +461,10 @@ fn map_memory_error(e: MemoryError) -> ToolError {
             ToolError::Failed(format!("save_memory: corrupt store: {msg}"))
         }
         MemoryError::Io => ToolError::Failed("save_memory: storage I/O failure".to_string()),
+        MemoryError::Secret(rule) => ToolError::Failed(format!(
+            "save_memory: the entry looks like it carries a credential ({rule}); \
+             store a pointer to the secret instead of the value"
+        )),
         MemoryError::NotFound => {
             // add does not look up by key, so NotFound is unreachable here;
             // map it for completeness so the match is exhaustive over a
