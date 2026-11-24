@@ -136,10 +136,38 @@ impl MemoryScope {
     }
 }
 
-/// Estimate the token cost of a string (one token per four characters,
-/// rounded up). Used by MemoryEntry::new to budget without re-tokenizing.
+/// Estimate the token cost of a string without a tokenizer. Latin text runs
+/// about four characters per token, while a CJK character costs at least one
+/// token on the vocabularies in use, so counting both at four would understate
+/// a Chinese entry by the same factor it is dense. Used by MemoryEntry::new
+/// and by the index and recall budgets, which must not let a dense entry pass
+/// a limit the model pays for.
 pub fn tokens_for(s: &str) -> usize {
-    s.chars().count().div_ceil(4)
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    for c in s.chars() {
+        if is_cjk_ideograph(c) {
+            cjk += 1;
+        } else {
+            other += 1;
+        }
+    }
+    cjk + other.div_ceil(4)
+}
+
+/// Whether a character is written without word spacing, where one character
+/// carries about one token: the CJK ideographs and their extensions, the
+/// Japanese kana, and Korean hangul.
+fn is_cjk_ideograph(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{3040}'..='\u{309F}'
+            | '\u{30A0}'..='\u{30FF}'
+            | '\u{AC00}'..='\u{D7AF}'
+    )
 }
 
 /// A single recalled memory unit.

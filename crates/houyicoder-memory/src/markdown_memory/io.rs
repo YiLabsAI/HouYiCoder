@@ -5,7 +5,7 @@
 //! lists as a record.
 
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, MemorySummary,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, MemorySummary, tokens_for,
 };
 use std::path::Path;
 
@@ -122,7 +122,7 @@ pub(super) fn serialize_topic_file(entry: &MemoryEntry) -> String {
     let mut s = String::new();
     s.push_str("---\n");
     s.push_str(&format!("name: {}\n", entry.key));
-    s.push_str(&format!("description: {}\n", first_line(&entry.content)));
+    s.push_str(&format!("description: {}\n", index_description(entry)));
     s.push_str(&format!("source: {}\n", entry.source.as_label()));
     s.push_str(&format!("origin: {}\n", entry.origin.as_label()));
     s.push_str("---\n");
@@ -328,10 +328,64 @@ pub(super) fn cap_index_content(raw: &str, max_lines: usize) -> String {
     truncated
 }
 
-/// First line of a block of text, trimmed; used as the frontmatter
-/// description derived from the entry content.
+/// First line of a block of text, trimmed; the fallback description for a
+/// record written without a summary of its own.
 pub(super) fn first_line(content: &str) -> &str {
     content.lines().next().unwrap_or("").trim()
+}
+
+/// Longest description a record publishes, in estimated tokens. The index
+/// carries one row per entry into every request, so a long row spends the
+/// shared budget on a single memory and pushes the rest out.
+pub(super) const DESCRIPTION_TOKEN_CAP: usize = 24;
+
+/// The one-line description a record publishes. The caller-supplied summary
+/// wins; a record that carries none falls back to its first line so an entry
+/// written before summaries existed still earns an index row. Control
+/// characters are folded to spaces and the text is cut at the token cap,
+/// because a newline or a long row would break the line-oriented index.
+pub(super) fn index_description(entry: &MemoryEntry) -> String {
+    let raw = if entry.description.trim().is_empty() {
+        first_line(&entry.content).to_string()
+    } else {
+        entry.description.clone()
+    };
+    cap_description(&raw)
+}
+
+/// Fold to one line and cut at the description cap on a character boundary.
+fn cap_description(raw: &str) -> String {
+    let folded: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let words: Vec<&str> = folded.split_whitespace().collect();
+    let mut out = String::new();
+    for word in words {
+        let candidate = if out.is_empty() {
+            word.to_string()
+        } else {
+            format!("{out} {word}")
+        };
+        if tokens_for(&candidate) > DESCRIPTION_TOKEN_CAP {
+            break;
+        }
+        out = candidate;
+    }
+    if out.is_empty() {
+        // A single word longer than the cap still needs a row; cut it.
+        let mut cut = String::new();
+        for c in folded.split_whitespace().next().unwrap_or("").chars() {
+            let mut probe = cut.clone();
+            probe.push(c);
+            if tokens_for(&probe) > DESCRIPTION_TOKEN_CAP {
+                break;
+            }
+            cut = probe;
+        }
+        return cut;
+    }
+    out
 }
 
 /// Byte cap on the derived MEMORY index (keeps the always-on index small).

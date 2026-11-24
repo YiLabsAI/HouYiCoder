@@ -28,7 +28,7 @@ mod roots;
 mod scope_flow;
 use io::{
     Frontmatter, INDEX_BYTE_CAP, INDEX_FILE, ScannedTopic, StatRecord, cap_index_content,
-    count_new_since_impl, first_line, list_memories_impl, parse_topic_file, sanitize_key,
+    count_new_since_impl, index_description, list_memories_impl, parse_topic_file, sanitize_key,
     scopes_for_key_impl, serialize_topic_file, show_memory_in_scope_impl, validate_index_key,
     write_bytes_advisory, write_bytes_atomic,
 };
@@ -369,7 +369,7 @@ impl MarkdownMemoryProvider {
             "- {} [{}]: {}\n",
             entry.key,
             entry.source.as_label(),
-            first_line(&entry.content)
+            index_description(entry)
         ));
         existing = cap_index_content(&existing, self.max_lines);
         write_bytes_atomic(&index_path, existing.as_bytes()).map_err(|e| e.to_string())

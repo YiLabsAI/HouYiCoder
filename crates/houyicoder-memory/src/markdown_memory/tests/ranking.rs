@@ -176,7 +176,14 @@ fn test_identical_add_is_unchanged() {
     );
     let updated_index = fs::read_to_string(&index).unwrap();
     assert_eq!(updated_index.matches("stable").count(), 1);
-    assert!(updated_index.contains("changed body"));
+    assert!(
+        updated_index.contains("same description"),
+        "the index publishes the summary the caller supplied"
+    );
+    assert!(
+        !updated_index.contains("changed body"),
+        "the body's first line is only a fallback, not the row"
+    );
     fs::remove_dir_all(&root).ok();
 }
 

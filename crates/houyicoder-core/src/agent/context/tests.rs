@@ -1444,8 +1444,8 @@ fn test_date_grounds_system_prompt() {
 /// request builder threads a real interior offset instead of dropping it. A
 /// zero would collapse every prompt-cache key onto one value; the whole
 /// length would let the cwd suffix rotate it. The memory index lands in the
-/// static prefix, so the cacheable segment survives a working-directory
-/// change and only the project-context suffix diverges.
+/// session suffix, so the cacheable segment survives a working-directory
+/// change and a memory write, and only the suffix diverges.
 #[test]
 fn test_assemble_threads_boundary() {
     let index = "- [Note](note.md) stable summary";
@@ -1483,8 +1483,8 @@ fn test_assemble_threads_boundary() {
         "static prefix byte-stable across cwds through the assemble path"
     );
     assert!(
-        prefix_a.contains("stable summary"),
-        "memory index sits in the static prefix, not the suffix"
+        a.system[a.dynamic_boundary..].contains("stable summary"),
+        "memory index rides the session suffix, not the cross-project prefix"
     );
     assert!(
         a.system[a.dynamic_boundary..].contains("Project A"),

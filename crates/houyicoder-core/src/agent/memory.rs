@@ -28,7 +28,8 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
+    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySource, MemorySummary, SessionId,
+    tokens_for,
 };
 
 pub use gates::{MemoryGateState, MemoryGates};
@@ -46,18 +47,59 @@ use std::path::Path;
 /// that grew without bound from crowding out the rest of the prompt.
 pub(crate) const INDEX_ENTRY_CAP: usize = 200;
 
+/// Token budget for the injected index. It is a budget rather than a byte or
+/// line cap because the rows carry CJK summaries, where a byte cap stops far
+/// fewer entries than it looks like it should, and because the index is paid
+/// for on every request while only the opening rows earn their place.
+pub(crate) const INDEX_TOKEN_BUDGET: usize = 4_000;
+
 /// One line of the system prompt's memory index, the exact text a stored
 /// memory contributes to the prompt. The frozen index is the only thing the
 /// prompt carries, so the cost the measurement reports is the cost the request
 /// pays.
 pub(crate) fn index_line(summary: &MemorySummary) -> String {
-    format!(
-        "- {} [{}/{}]: {}\n",
-        summary.key,
-        summary.source.as_label(),
-        summary.origin.as_label(),
-        summary.description
-    )
+    format!("- {}: {}\n", summary.key, summary.description)
+}
+
+/// Render the injected index under one token budget, grouped by type. A
+/// heading per type carries the classification once instead of a label on
+/// every row, and the budget stops the tail rather than a byte cap that a
+/// dense description would blow through.
+pub(crate) fn render_index(summaries: &[MemorySummary]) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut rows = 0usize;
+    // Scope outranks type: a preference the user wrote, or a rule the project
+    // promoted, must not be starved by a large automatic feedback set that
+    // sorts ahead of it.
+    for scope in [MemoryScope::User, MemoryScope::Project, MemoryScope::Auto] {
+        for source in [
+            MemorySource::Feedback,
+            MemorySource::Project,
+            MemorySource::User,
+            MemorySource::Reference,
+        ] {
+            let mut heading = false;
+            for summary in summaries
+                .iter()
+                .filter(|s| s.scope == scope && s.source == source)
+            {
+                let line = index_line(summary);
+                let cost = tokens_for(&line);
+                if rows >= INDEX_ENTRY_CAP || used + cost > INDEX_TOKEN_BUDGET {
+                    return out;
+                }
+                if !heading {
+                    out.push_str(&format!("## {}\n", source.as_label()));
+                    heading = true;
+                }
+                out.push_str(&line);
+                used += cost;
+                rows += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Optional background memory workers.
@@ -278,13 +320,7 @@ impl MemoryRuntime {
         if summaries.is_empty() {
             return None;
         }
-        Some(
-            summaries
-                .into_iter()
-                .take(INDEX_ENTRY_CAP)
-                .map(|summary| index_line(&summary))
-                .collect(),
-        )
+        Some(render_index(&summaries))
     }
 
     /// Refresh the frozen index at a natural prompt-cache invalidation point.

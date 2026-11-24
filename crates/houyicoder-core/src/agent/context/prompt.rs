@@ -129,20 +129,6 @@ impl SystemPrompt {
         text.push_str("\n\n");
         text.push_str(&memory_behavior::memory_behavior_section());
 
-        // Memory index (stable summaries): appended after the memory-behavior
-        // rules so it sits in the byte-stable cache prefix.
-        let index_block = index.filter(|s| !s.is_empty()).map(|idx| {
-            text.push_str("\n\n## Memory index\n\n");
-            text.push_str(idx);
-            MemoryBlock {
-                label: format!(
-                    "Memory index ({})",
-                    super::memory_entry_label(idx.lines().count())
-                ),
-                text: idx.to_string(),
-            }
-        });
-
         text.push_str("\n\n");
         text.push_str(&tool_docs);
 
@@ -150,6 +136,23 @@ impl SystemPrompt {
         // change between sessions. Record the offset so a cache policy can
         // split here.
         let dynamic_boundary = text.len();
+
+        // The index changes whenever a memory lands or the store rebuilds, so
+        // it rides the session-scoped suffix. Carried in the prefix it would
+        // miss the cross-project cache on every project on the machine.
+        let index_block = index.filter(|s| !s.is_empty()).map(|idx| {
+            text.push_str("\n\n## Memory index\n\n");
+            text.push_str(idx);
+            MemoryBlock {
+                label: format!(
+                    "Memory index ({})",
+                    super::memory_entry_label(
+                        idx.lines().filter(|line| line.starts_with("- ")).count()
+                    )
+                ),
+                text: idx.to_string(),
+            }
+        });
 
         // Dynamic suffix — not byte-stable across sessions, appended after the
         // boundary so the static prefix stays a clean cacheable prefix.
