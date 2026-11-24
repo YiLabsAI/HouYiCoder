@@ -83,7 +83,13 @@ fn command_paths(command: &str) -> Vec<String> {
     command
         .split_whitespace()
         .map(|word| word.trim_matches(|c| c == '"' || c == '\''))
-        .filter(|word| word.starts_with('/') || word.starts_with("~/") || word.starts_with("../"))
+        .filter(|word| {
+            word.starts_with('/')
+                || word.starts_with("~/")
+                || word.starts_with("../")
+                || word.starts_with("..\\")
+                || Path::new(word).is_absolute()
+        })
         .map(str::to_string)
         .collect()
 }
