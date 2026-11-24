@@ -88,30 +88,128 @@ pub(crate) fn hit_count(text: &str, keywords: &[String]) -> u32 {
         .count() as u32
 }
 
-/// Count distinct keywords occurring in the text, requiring a whole-word
-/// match for a short Latin keyword. A three-letter command word such as go
-/// or git otherwise matches inside cargo or digit and scores a row that has
-/// nothing to do with the query. Longer Latin words and CJK bigrams keep
-/// substring matching, where the extra characters already carry the signal.
-pub(crate) fn hit_count_bounded(text: &str, keywords: &[String]) -> u32 {
-    let lower = text.to_ascii_lowercase();
-    keywords
-        .iter()
-        .filter(|keyword| {
-            if is_short_latin(keyword) {
-                contains_word(&lower, keyword)
+pub(crate) struct PreparedKeywords {
+    items: Vec<(String, bool)>,
+}
+
+impl PreparedKeywords {
+    pub(crate) fn new(keywords: Vec<String>) -> Self {
+        let items = keywords
+            .into_iter()
+            .take(64)
+            .map(|k| {
+                let short = is_short_latin(&k);
+                (k, short)
+            })
+            .collect();
+        Self { items }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub(crate) fn matched_bits(&self, text: &str) -> u64 {
+        let lower = text.to_ascii_lowercase();
+        self.matched_bits_lower(&lower)
+    }
+
+    pub(crate) fn matched_bits_lower(&self, lower: &str) -> u64 {
+        let mut mask = 0u64;
+        for (idx, (keyword, short_latin)) in self.items.iter().enumerate() {
+            let matched = if *short_latin {
+                contains_word(lower, keyword)
             } else {
                 lower.contains(keyword.as_str())
+            };
+            if matched {
+                mask |= 1u64 << idx;
             }
-        })
-        .count() as u32
+        }
+        mask
+    }
+}
+
+/// Closed-class English function words and CJK question particles that appear
+/// across unrelated queries and hyphenated slugs without carrying topic signal.
+pub(crate) fn is_common_word(token: &str) -> bool {
+    matches!(
+        token,
+        "an" | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "been"
+            | "but"
+            | "by"
+            | "can"
+            | "could"
+            | "did"
+            | "do"
+            | "does"
+            | "for"
+            | "from"
+            | "had"
+            | "has"
+            | "have"
+            | "how"
+            | "if"
+            | "in"
+            | "into"
+            | "is"
+            | "it"
+            | "its"
+            | "not"
+            | "of"
+            | "on"
+            | "or"
+            | "over"
+            | "should"
+            | "so"
+            | "than"
+            | "that"
+            | "the"
+            | "their"
+            | "them"
+            | "then"
+            | "there"
+            | "these"
+            | "they"
+            | "this"
+            | "to"
+            | "was"
+            | "were"
+            | "what"
+            | "when"
+            | "where"
+            | "which"
+            | "who"
+            | "why"
+            | "will"
+            | "with"
+            | "would"
+            | "you"
+            | "your"
+            | "什么"
+            | "怎么"
+            | "为什"
+            | "为什么"
+            | "可以"
+            | "需要"
+            | "多少"
+    )
 }
 
 /// Whether the keyword is a short Latin word, the case that needs a word
 /// boundary. A CJK keyword is always two characters, but it is not Latin and
 /// keeps substring matching.
 fn is_short_latin(keyword: &str) -> bool {
-    keyword.chars().count() <= 3 && keyword.chars().all(|c| c.is_ascii_alphanumeric())
+    keyword.len() <= 3 && keyword.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// Whether the lowercased text carries the keyword as a whole word.

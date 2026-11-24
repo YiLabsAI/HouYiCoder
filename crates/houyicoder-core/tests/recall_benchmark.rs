@@ -6,6 +6,8 @@
 
 #[path = "recall_corpus.rs"]
 mod recall_corpus;
+#[path = "recall_golden.rs"]
+mod recall_golden;
 
 use std::collections::HashSet;
 use std::env;
@@ -194,6 +196,8 @@ impl ModelProvider for StubModel {
     }
 }
 
+pub(crate) static BENCH_IO_LOCK: Mutex<()> = Mutex::new(());
+
 fn percentile(sorted: &[u128], pct: usize) -> u128 {
     sorted[sorted.len() * pct / 100]
 }
@@ -204,6 +208,7 @@ fn percentile(sorted: &[u128], pct: usize) -> u128 {
 #[test]
 #[ignore]
 fn test_fast_path_latency_exact() {
+    let _io_serial = BENCH_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let corpus = load_corpus();
     let (provider, root) = seed_corpus(&corpus);
     let queries: Vec<&str> = corpus.pairs.iter().map(|p| p.query.as_str()).collect();

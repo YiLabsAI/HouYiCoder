@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::{
-    MemoryScope, MemorySummary, MemoryType, memory_index_row, render_memory_index_groups,
+    MemoryScope, MemorySummary, MemoryType, is_cjk, memory_index_row, render_memory_index_groups,
     tokens_for,
 };
 
@@ -33,21 +33,38 @@ fn rule_card_text(body: &str) -> String {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .trim();
-    let folded: String = first
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let compact = folded.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut out = String::new();
-    for c in compact.chars() {
-        let mut probe = out.clone();
-        probe.push(c);
-        if tokens_for(&probe) > RULE_CARD_TOKEN_BUDGET {
+    let mut compact = String::with_capacity(first.len().min(320));
+    let mut pending_space = false;
+    for c in first.chars() {
+        if c.is_control() || c.is_whitespace() {
+            if !compact.is_empty() {
+                pending_space = true;
+            }
+        } else {
+            if pending_space {
+                compact.push(' ');
+                pending_space = false;
+            }
+            compact.push(c);
+        }
+    }
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    let mut end_byte = compact.len();
+    for (idx, c) in compact.char_indices() {
+        let next_cjk = cjk + usize::from(is_cjk(c));
+        let next_other = other + usize::from(!is_cjk(c));
+        if next_cjk + next_other.div_ceil(4) > RULE_CARD_TOKEN_BUDGET {
+            end_byte = idx;
             break;
         }
-        out = probe;
+        cjk = next_cjk;
+        other = next_other;
     }
-    out.trim_end().to_string()
+    compact.truncate(end_byte);
+    let trimmed_len = compact.trim_end().len();
+    compact.truncate(trimmed_len);
+    compact
 }
 
 /// One line of the system prompt memory index.

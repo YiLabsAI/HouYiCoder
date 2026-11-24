@@ -79,3 +79,13 @@ fn test_cjk_exact_outranks() {
         "exact {exact} should outrank partial {partial}"
     );
 }
+
+#[test]
+fn test_prepared_keywords_and_filter() {
+    assert!(is_common_word("the") && is_common_word("in") && is_common_word("什么"));
+    assert!(!is_common_word("cargo") && !is_common_word("git"));
+    let pk = PreparedKeywords::new(vec!["git".into(), "canonicalize".into()]);
+    assert_eq!(pk.len(), 2);
+    assert_eq!(pk.matched_bits("Use git and dunce::canonicalize"), 0b11);
+    assert_eq!(pk.matched_bits("digit only"), 0);
+}

@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use std::cmp::Reverse;
 
-use crate::provider::{has_word_content, hit_count_bounded, tokenize};
+use crate::provider::{PreparedKeywords, has_word_content, is_common_word, tokenize};
 use houyicoder_api::agent_event::MemoryChange;
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{
@@ -31,8 +31,8 @@ mod scope_flow;
 mod stats;
 use crate::secret_scan::first_match;
 use io::{
-    Frontmatter, INDEX_FILE, ScannedTopic, count_new_since_impl, list_memories_impl,
-    parse_topic_file, sanitize_key, scopes_for_key_impl, serialize_topic_file,
+    CachedTopic, Frontmatter, INDEX_FILE, ScannedTopic, count_new_since_impl, list_memories_impl,
+    parse_topic_file, parse_topic_slice, sanitize_key, scopes_for_key_impl, serialize_topic_file,
     show_memory_in_scope_impl, validate_index_key, write_bytes_atomic,
 };
 use lock::RootLock;
@@ -54,6 +54,7 @@ pub struct MarkdownMemoryProvider {
     roots: Vec<PathBuf>,
     write_lock: Mutex<()>,
     max_lines: usize,
+    topic_cache: Mutex<HashMap<PathBuf, CachedTopic>>,
 }
 
 impl MarkdownMemoryProvider {
@@ -92,6 +93,7 @@ impl MarkdownMemoryProvider {
             roots,
             write_lock: Mutex::new(()),
             max_lines,
+            topic_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -176,15 +178,17 @@ impl MarkdownMemoryProvider {
                 }
                 let stem = path.file_stem()?.to_str()?.to_string();
                 let meta = e.metadata().ok()?;
-                let mtime = meta
+                let dur = meta
                     .modified()
                     .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok());
+                let mtime = dur.map(|d| d.as_secs()).unwrap_or(0);
+                let mtime_nanos = dur.map(|d| d.as_nanos()).unwrap_or(0);
                 Some(ScannedTopic {
                     key: stem,
                     mtime,
+                    mtime_nanos,
+                    byte_len: meta.len(),
                     path,
                     root_index: 0,
                 })
@@ -254,6 +258,10 @@ impl MarkdownMemoryProvider {
     /// the window where a concurrent writer could land a competing copy
     /// between the change and the rebuild.
     fn rebuild_index_impl_locked(&self) -> Result<(), MemoryError> {
+        self.topic_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         for root in &self.roots {
             fs::create_dir_all(root).map_err(|_| MemoryError::Io)?;
             // The marker goes down before this root's index is replaced, and
@@ -306,6 +314,10 @@ impl MarkdownMemoryProvider {
     /// to splice a row into a group it may not have yet. The caller holds the
     /// root lock, and writes are low-frequency, so the extra scan is cheap.
     fn append_index_pointer_in(&self, root: &Path, entry: &MemoryEntry) -> Result<(), String> {
+        self.topic_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.render_root_index(root)
             .map_err(|error| format!("index for {} not republished: {error}", entry.key))
     }
@@ -485,35 +497,80 @@ impl MemoryProvider for MarkdownMemoryProvider {
     }
 
     fn rank_candidates(&self, query: &str, injected_keys: &HashSet<String>) -> Vec<MemoryRankHit> {
-        let keywords = tokenize(query);
-        if keywords.is_empty() && !has_word_content(query) {
+        let raw_keywords = tokenize(query);
+        if raw_keywords.is_empty() && !has_word_content(query) {
             return Vec::new();
         }
+        let filtered: Vec<String> = raw_keywords
+            .iter()
+            .filter(|k| !is_common_word(k.as_str()))
+            .cloned()
+            .collect();
+        let prepared = PreparedKeywords::new(if filtered.is_empty() {
+            raw_keywords
+        } else {
+            filtered
+        });
         let candidates = self.scan_candidates();
         let fresh: Vec<ScannedTopic> = candidates
             .into_iter()
             .filter(|t| !injected_keys.contains(&t.key))
             .collect();
         let mut hits: Vec<MemoryRankHit> = Vec::new();
-        let query_has_words = !keywords.is_empty();
+        let query_has_words = !prepared.is_empty();
+        let multi_word_query = prepared.len() >= 2;
+        let mut cache = self.topic_cache.lock().unwrap_or_else(|e| e.into_inner());
         for t in fresh {
-            let Ok(text) = fs::read_to_string(&t.path) else {
-                continue;
-            };
-            let Ok((fm, body)) = parse_topic_file(&text) else {
-                continue;
+            let entry = if let Some(hit) = cache.get(&t.path)
+                && hit.mtime_nanos == t.mtime_nanos
+                && hit.byte_len == t.byte_len
+            {
+                hit.clone()
+            } else {
+                let Ok(text) = fs::read_to_string(&t.path) else {
+                    continue;
+                };
+                let Ok((fm, body)) = parse_topic_slice(&text) else {
+                    continue;
+                };
+                let built = CachedTopic {
+                    mtime_nanos: t.mtime_nanos,
+                    byte_len: t.byte_len,
+                    frontmatter: fm,
+                    lower_body: body.to_ascii_lowercase().into(),
+                };
+                cache.insert(t.path.clone(), built.clone());
+                built
             };
             let score = if query_has_words {
-                hit_count_bounded(&t.key, &keywords) * 3
-                    + hit_count_bounded(&fm.description, &keywords) * 2
-                    + hit_count_bounded(&body, &keywords)
+                let k_bits = prepared.matched_bits_lower(&t.key.to_ascii_lowercase());
+                let d_bits = prepared.matched_bits(&entry.frontmatter.description);
+                let b_bits = prepared.matched_bits_lower(&entry.lower_body);
+                let k_hits = k_bits.count_ones();
+                let d_hits = d_bits.count_ones();
+                let b_hits = b_bits.count_ones();
+                let raw_score = k_hits * 3 + d_hits * 2 + b_hits;
+                if raw_score == 0 {
+                    0
+                } else if multi_word_query {
+                    let total_distinct = (k_bits | d_bits | b_bits).count_ones();
+                    let sparse_body_only =
+                        k_hits == 0 && d_hits == 0 && b_hits < 3 && prepared.len() >= 4;
+                    if total_distinct < 2 || sparse_body_only {
+                        1
+                    } else {
+                        raw_score
+                    }
+                } else {
+                    raw_score
+                }
             } else {
                 0
             };
             hits.push(MemoryRankHit::new(
                 t.key,
-                fm.description,
-                fm.memory_type,
+                entry.frontmatter.description,
+                entry.frontmatter.memory_type,
                 MemoryScope::for_root_index(t.root_index),
                 t.mtime,
                 score,

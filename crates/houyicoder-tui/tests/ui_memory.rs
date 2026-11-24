@@ -294,7 +294,7 @@ fn test_notice_label_and_scope() {
     // scope field the model picks per call. A project scope lands the write
     // in the project root and the notice names it.
     let script = r#"[
-      [{"type":"ToolCall","id":"c1","name":"save_memory","input":{"key":"deploy-gate","description":"deploy gate state","source":"feedback","content":"The deploy gate is red.","scope":"project"}}],
+      [{"type":"ToolCall","id":"c1","name":"memory_write","input":{"key":"deploy-gate","description":"deploy gate state","type":"feedback","content":"The deploy gate is red.","scope":"project"}}],
       [{"type":"Text","text":"saved"}]
     ]"#;
     let mut s = pty_session_scripted_home(script, home.clone());
@@ -344,7 +344,7 @@ fn test_extractor_notice_lands() {
     // measurably after the run.
     let script = r#"[
       [{"type":"Text","text":"ok"}],
-      [{"type":"ToolCall","id":"ex1","name":"save_memory","input":{"key":"gate-fact","description":"gate state","source":"feedback","content":"The gate is open.","evidence":[{"quote":"note the gate"}]}}],
+      [{"type":"ToolCall","id":"ex1","name":"memory_write","input":{"key":"gate-fact","description":"gate state","type":"feedback","content":"The gate is open.","evidence":[{"quote":"note the gate"}]}}],
       [{"type":"Text","text":"done"}]
     ]"#;
     let mut s = pty_session_slow_scripted_home(600, script, home.clone());

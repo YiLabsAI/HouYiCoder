@@ -5,7 +5,7 @@
 //! lists as a record.
 
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySummary, MemoryType, tokens_for,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySummary, MemoryType, is_cjk,
 };
 use std::path::Path;
 
@@ -26,6 +26,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::id;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use unicode_normalization::UnicodeNormalization;
@@ -58,37 +59,48 @@ fn default_occurrences() -> u64 {
     1
 }
 
-/// A topic file located during the scan phase, with precomputed metadata
-/// for ranking (no body read yet).
 #[derive(Debug, Clone)]
 pub(super) struct ScannedTopic {
     pub(super) key: String,
     pub(super) mtime: u64,
+    pub(super) mtime_nanos: u128,
+    pub(super) byte_len: u64,
     pub(super) path: PathBuf,
-    /// Position of the root this topic was scanned from, in the provider's
-    /// ordered roots vec. Mapped to a MemoryScope at list time so the wire
-    /// carries the physical scope (which root the surviving newest copy lives
-    /// in, after the merge dedups a key that exists across scopes).
     pub(super) root_index: usize,
 }
 
-/// Parse a topic record into frontmatter plus body. The frontmatter is a
-/// YAML-style block delimited by lines of three dashes.
-pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), MemoryError> {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() || lines[0].trim() != "---" {
-        return Err(MemoryError::Corrupt(
-            "frontmatter must open with ---".into(),
-        ));
-    }
+#[derive(Debug, Clone)]
+pub(super) struct CachedTopic {
+    pub(super) mtime_nanos: u128,
+    pub(super) byte_len: u64,
+    pub(super) frontmatter: Frontmatter,
+    pub(super) lower_body: Arc<str>,
+}
+
+/// Parse a topic record into frontmatter plus a borrowed body slice without
+/// copying the body on read-heavy ranking scans.
+pub(super) fn parse_topic_slice(text: &str) -> Result<(Frontmatter, &str), MemoryError> {
+    let rest = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+        .or_else(|| {
+            let first_end = text.find('\n')?;
+            (text[..first_end].trim() == "---").then_some(&text[first_end + 1..])
+        })
+        .ok_or_else(|| MemoryError::Corrupt("frontmatter must open with ---".into()))?;
+
     let mut name = String::new();
-    let mut description = String::new();
+    let mut description: &str = "";
     let mut memory_type = MemoryType::Project;
     let mut origin = MemoryOrigin::Unknown;
-    let mut close_line = None;
-    for (i, line) in lines.iter().enumerate().skip(1) {
+    let mut offset = 0usize;
+    let mut body_start = None;
+
+    for raw_line in rest.split_inclusive('\n') {
+        offset += raw_line.len();
+        let line = raw_line.trim_end_matches(['\r', '\n']);
         if line.trim() == "---" {
-            close_line = Some(i);
+            body_start = Some(offset);
             break;
         }
         let Some((k, v)) = line.split_once(':') else {
@@ -96,7 +108,7 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
         };
         match k.trim() {
             "name" => name = v.trim().to_string(),
-            "description" => description = v.trim().to_string(),
+            "description" => description = v.trim(),
             "type" | "source" => {
                 memory_type = MemoryType::from_label(v)
                     .ok_or_else(|| MemoryError::Corrupt(format!("unknown type label: {v}")))?;
@@ -105,19 +117,17 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
             _ => {}
         }
     }
-    let close =
-        close_line.ok_or_else(|| MemoryError::Corrupt("frontmatter never closed".into()))?;
-    let body = if close + 1 < lines.len() {
-        lines[close + 1..].join("\n")
-    } else {
-        String::new()
-    };
+    let start =
+        body_start.ok_or_else(|| MemoryError::Corrupt("frontmatter never closed".into()))?;
+    let body = rest[start..]
+        .strip_suffix('\n')
+        .map_or(&rest[start..], |s| s.strip_suffix('\r').unwrap_or(s));
     let raw_description = if description.is_empty() {
-        first_line(&body).to_string()
+        first_line(body)
     } else {
         description
     };
-    let description = cap_description(&raw_description);
+    let description = cap_description(raw_description);
     Ok((
         Frontmatter {
             name,
@@ -127,6 +137,12 @@ pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), Memo
         },
         body,
     ))
+}
+
+/// Parse a topic record into frontmatter plus an owned body string.
+pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), MemoryError> {
+    let (fm, body) = parse_topic_slice(text)?;
+    Ok((fm, body.to_string()))
 }
 
 /// Serialize a memory entry into a topic record (frontmatter plus body).
@@ -370,35 +386,57 @@ pub(super) fn index_description(entry: &MemoryEntry) -> String {
 /// unspaced run (a CJK sentence, a path) crosses it, so the walk is per
 /// character and retreats only when the cut would split a Latin word.
 fn cap_description(raw: &str) -> String {
-    let folded: String = raw
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let compact = folded.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut out = String::new();
-    for c in compact.chars() {
-        let mut probe = out.clone();
-        probe.push(c);
-        if tokens_for(&probe) > DESCRIPTION_TOKEN_CAP {
+    let trimmed = raw.trim();
+    if trimmed.len() <= DESCRIPTION_TOKEN_CAP * 3
+        && !trimmed.contains(['\n', '\r', '\t'])
+        && !trimmed.contains("  ")
+    {
+        return trimmed.to_string();
+    }
+    let mut compact = String::with_capacity(trimmed.len().min(128));
+    let mut pending_space = false;
+    for c in raw.chars() {
+        if c.is_control() || c.is_whitespace() {
+            if !compact.is_empty() {
+                pending_space = true;
+            }
+        } else {
+            if pending_space {
+                compact.push(' ');
+                pending_space = false;
+            }
+            compact.push(c);
+        }
+    }
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    let mut end_byte = compact.len();
+    let mut last_char = None;
+    let mut next_char = None;
+    for (idx, c) in compact.char_indices() {
+        let next_cjk = cjk + usize::from(is_cjk(c));
+        let next_other = other + usize::from(!is_cjk(c));
+        if next_cjk + next_other.div_ceil(4) > DESCRIPTION_TOKEN_CAP {
+            end_byte = idx;
+            next_char = Some(c);
             break;
         }
-        out = probe;
+        cjk = next_cjk;
+        other = next_other;
+        last_char = Some(c);
     }
-    let cut_at = out.chars().count();
-    let next_is_word = compact
-        .chars()
-        .nth(cut_at)
-        .is_some_and(|c| c.is_ascii_alphanumeric());
-    if out
-        .chars()
-        .last()
-        .is_some_and(|c| c.is_ascii_alphanumeric())
-        && next_is_word
-        && let Some(space) = out.rfind(' ')
-    {
-        out.truncate(space);
+    if end_byte < compact.len() {
+        if last_char.is_some_and(|c| c.is_ascii_alphanumeric())
+            && next_char.is_some_and(|c| c.is_ascii_alphanumeric())
+            && let Some(space) = compact[..end_byte].rfind(' ')
+        {
+            end_byte = space;
+        }
+        compact.truncate(end_byte);
+        let trimmed_len = compact.trim_end().len();
+        compact.truncate(trimmed_len);
     }
-    out.trim_end().to_string()
+    compact
 }
 
 /// Byte cap on the derived MEMORY index (keeps the always-on index small).
