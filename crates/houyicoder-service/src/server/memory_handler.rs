@@ -109,7 +109,9 @@ impl Server {
         enabled: bool,
         idle_secs: u64,
     ) -> Result<(), ProtocolError> {
-        if let Err(e) = save_recap_to(&self.settings_path, enabled, idle_secs) {
+        if let Some(path) = self.settings_path.as_deref()
+            && let Err(e) = save_recap_to(path, enabled, idle_secs)
+        {
             return self
                 .send_response(
                     io,
@@ -141,13 +143,15 @@ impl Server {
             MemoryToggleWhich::Auto => (!current.auto_memory, current.auto_dream),
             MemoryToggleWhich::Dream => (current.auto_memory, !current.auto_dream),
         };
-        if let Err(e) = houyicoder_config::save_toggles_to(
-            &self.settings_path,
-            &houyicoder_config::MemoryToggles {
-                auto_memory,
-                auto_dream,
-            },
-        ) {
+        if let Some(path) = self.settings_path.as_deref()
+            && let Err(e) = houyicoder_config::save_toggles_to(
+                path,
+                &houyicoder_config::MemoryToggles {
+                    auto_memory,
+                    auto_dream,
+                },
+            )
+        {
             return self
                 .send_response(
                     io,

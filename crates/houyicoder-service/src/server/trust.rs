@@ -40,7 +40,12 @@ impl Server {
             None => return Ok(TrustState::Trusted),
         };
         let settings_path = self.settings_path.clone();
-        let state = compute_trust_state(&settings_path, Some(&project_path));
+        // With no settings backend nothing can record a trust decision, so the
+        // project reads as untrusted and the prompt still fires.
+        let state = match settings_path.as_deref() {
+            Some(path) => compute_trust_state(path, Some(&project_path)),
+            None => TrustState::Untrusted,
+        };
         if state != TrustState::Untrusted {
             return Ok(state);
         }
@@ -112,7 +117,9 @@ impl Server {
             ));
         }
         // Persistence failure keeps this session trusted but forces a later recheck.
-        if let Err(e) = houyicoder_config::persist_project_trust(&settings_path, &project_path) {
+        if let Some(path) = settings_path.as_deref()
+            && let Err(e) = houyicoder_config::persist_project_trust(path, &project_path)
+        {
             tracing::warn!("trust persist failed (re-asks next launch): {e:?}");
         }
         Ok(TrustState::Acknowledged)

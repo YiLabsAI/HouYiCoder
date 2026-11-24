@@ -162,7 +162,7 @@ impl Server {
         };
         snapshot.base_url = facts.base_url;
         snapshot.auth_token_source = facts.key_origin;
-        snapshot.setting_sources = setting_sources_label();
+        snapshot.setting_sources = setting_sources_label(self.settings_path.as_deref());
         // The four settings-file switches read from the live session, not the
         // file: status is polled every second, and a value the user just
         // changed must be the one this reply carries. Reading the file here

@@ -28,7 +28,11 @@ impl Server {
         let Some(recap) = self.recap.clone() else {
             return Vec::new();
         };
-        let settings_path = self.settings_path.clone();
+        // With no settings backend there is no file to read the recap switch
+        // from, so skip the blocking read and report no warnings.
+        let Some(settings_path) = self.settings_path.clone() else {
+            return Vec::new();
+        };
         let session_model = self.runner.active_model();
         let resolved = spawn_blocking(move || {
             let (config, mut warnings) = load_recap_from(&settings_path);

@@ -130,7 +130,7 @@ pub struct Server {
     sandbox_session: Option<Arc<dyn SandboxSession>>,
     file_transaction: Option<Arc<FileTransaction>>,
     host: Option<Arc<SessionHost>>,
-    settings_path: PathBuf,
+    settings_path: Option<PathBuf>,
     project_path: Option<PathBuf>,
     provider_facts: Option<ProviderFacts>,
     append_notify: Option<Arc<Notify>>,
@@ -188,7 +188,7 @@ impl Server {
             sandbox_session: None,
             file_transaction: None,
             host: None,
-            settings_path: houyicoder_config::settings_path(),
+            settings_path: None,
             project_path: None,
             provider_facts: None,
             append_notify: None,
@@ -217,14 +217,16 @@ impl Server {
         self
     }
 
-    /// Override the settings path the /memory toggle handler persists to.
-    /// Tests pass a temp path so a flip never writes the real settings file.
-    /// The runner's model resolver is built at composition time from the
-    /// global path, so a caller that overrides this one builds the runner over
-    /// the same file too - otherwise a catalog row and the capabilities
-    /// reported for it come from different files.
+    /// Attach the settings file this server persists to. The default is no
+    /// backend, so a server built without this call runs a purely in-memory
+    /// session and never reads or writes the host config. The composition
+    /// root and the persistence contract tests inject an explicit path. The
+    /// runner's model resolver is built at composition time from the same
+    /// file, so a caller that attaches this one builds the runner over it too,
+    /// otherwise a catalog row and the capabilities reported for it come from
+    /// different files.
     pub fn with_settings_path(mut self, path: PathBuf) -> Self {
-        self.settings_path = path;
+        self.settings_path = Some(path);
         self
     }
 

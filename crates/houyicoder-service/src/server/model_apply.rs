@@ -140,17 +140,22 @@ impl Server {
         let effort = selection.effort;
         let toggled = selection.effort_toggled;
         let store = self.descriptor_store.clone();
+        // A server with no persistence backend at all runs a purely in-memory
+        // session. Without a settings path or a descriptor store the pick is
+        // applied with nothing to write, so the blocking task is not spawned.
+        if settings_path.is_none() && store.is_none() {
+            return PersistenceOutcome::Saved;
+        }
         let session = self.session;
         let resolved = resolved.to_string();
         let writes = spawn_blocking(move || {
-            let settings = persist_model_pick(
-                &settings_path,
-                model_input.as_deref(),
-                effort,
-                toggled,
-                speed,
-            )
-            .map_err(|e| e.to_string());
+            let settings = match settings_path {
+                Some(path) => {
+                    persist_model_pick(&path, model_input.as_deref(), effort, toggled, speed)
+                        .map_err(|e| e.to_string())
+                }
+                None => Ok(()),
+            };
             let descriptor = Server::write_descriptor_model(store, session, &resolved);
             (settings, descriptor)
         })
@@ -184,13 +189,24 @@ impl Server {
     /// fails the reply as an internal error rather than crashing the serve
     /// loop or rendering an empty pane that would read as no models.
     pub(super) async fn model_catalog_snapshot(&self) -> Result<ModelCatalog, ProtocolError> {
-        let runner = self.runner.clone();
-        let settings_path = self.settings_path.clone();
-        let catalog = spawn_blocking(move || {
-            let (section, _warnings) = houyicoder_config::load_model_section_from(&settings_path);
-            Self::catalog_from_section(&runner, section)
-        })
-        .await;
+        // A server with no settings backend builds the catalog from the
+        // default section in memory. A server that owns a settings file reads
+        // it on the blocking pool so the read never stalls a worker.
+        let catalog = match self.settings_path.clone() {
+            Some(settings_path) => {
+                let runner = self.runner.clone();
+                spawn_blocking(move || {
+                    let (section, _warnings) =
+                        houyicoder_config::load_model_section_from(&settings_path);
+                    Self::catalog_from_section(&runner, section)
+                })
+                .await
+            }
+            None => Ok(Self::catalog_from_section(
+                &self.runner,
+                ModelSection::default(),
+            )),
+        };
         catalog.map_err(|e| {
             ProtocolError::new(
                 ErrorCategory::Internal,

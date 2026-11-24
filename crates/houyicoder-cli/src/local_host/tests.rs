@@ -188,7 +188,7 @@ fn test_release_joins_children_first() {
 
         let parent_sid = bundle.session;
         let (runner, client, _warnings, host) =
-            start_local_server(bundle, Some(root.join("settings.json")), root.clone());
+            start_local_server(bundle, root.join("settings.json"), root.clone());
         let spawn_handle = runner.spawn_handle().expect("real spawn handle attached");
         let ctx = ToolCtx::new("probe-parent").with_session(parent_sid);
         let mut args = SpawnArgs::new("explore", "probe-task", "probe-task");
@@ -367,7 +367,7 @@ fn test_release_waits_worktree_cleanup() {
 
         let parent_sid = bundle.session;
         let (runner, client, _warnings, host) =
-            start_local_server(bundle, Some(root.join("settings.json")), root.clone());
+            start_local_server(bundle, root.join("settings.json"), root.clone());
         let spawn_handle = runner.spawn_handle().expect("real spawn handle attached");
         let ctx = ToolCtx::new("probe-parent").with_session(parent_sid);
         let mut args = SpawnArgs::new("explore", "probe-task", "probe-task");
@@ -553,7 +553,7 @@ fn start_host_for_test(
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
     let (runner, client, _warnings, host) =
-        start_local_server(bundle, Some(settings_path), root.to_path_buf());
+        start_local_server(bundle, settings_path, root.to_path_buf());
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
     (runner, client, weak, host, lock, bus)

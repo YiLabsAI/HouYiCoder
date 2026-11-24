@@ -74,7 +74,7 @@ fn start_host(
     let sid = bundle.session.to_string();
     let bus = bundle.bus.clone().expect("the real assembly carries a bus");
     let (runner, client, _warnings, host) =
-        start_local_server(bundle, Some(settings_path), root.to_path_buf());
+        start_local_server(bundle, settings_path, root.to_path_buf());
     let weak = Arc::downgrade(&runner);
     let lock = SessionLock::acquire(&sid, root).expect("acquire session lock");
     (runner, client, weak, host, lock, bus)
@@ -451,7 +451,7 @@ fn test_rename_preserves_prompt() {
     bundle.runner.set_auto_dream(false);
     let session = bundle.session;
     let (runner, mut client, _warnings, host) =
-        start_local_server(bundle, Some(settings_path), root.clone());
+        start_local_server(bundle, settings_path, root.clone());
     let wire_session = WireSessionId(session.to_string());
     let rt = Builder::new_current_thread()
         .enable_all()

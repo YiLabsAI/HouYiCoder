@@ -150,7 +150,7 @@ pub(crate) fn assemble_bundle(
             recap,
             background_tasks,
         },
-        None,
+        houyicoder_config::settings_path(),
         session_log_root(),
     );
     // The server task owns the runner + the permission gate; the TUI holds
@@ -187,7 +187,7 @@ pub(crate) fn assemble_bundle(
 /// host over in-memory stores would otherwise walk the real one.
 pub(crate) fn start_local_server(
     assembled: AssembledRunner,
-    settings_path: Option<PathBuf>,
+    settings_path: PathBuf,
     sessions_root: PathBuf,
 ) -> (Arc<Runner>, Client, Vec<String>, HostLifecycle) {
     let AssembledRunner {
@@ -297,9 +297,7 @@ pub(crate) fn start_local_server(
     if let Some(store) = descriptor_store {
         server = server.with_descriptor_store(store);
     }
-    if let Some(sp) = settings_path {
-        server = server.with_settings_path(sp);
-    }
+    server = server.with_settings_path(settings_path);
     let server = server;
     let runtime = shared_runtime();
     // The serve task is pure serve: it returns when its client drops, and

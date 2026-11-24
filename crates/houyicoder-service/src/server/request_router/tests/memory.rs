@@ -20,6 +20,7 @@ use houyicoder_protocol::envelope::{
 use houyicoder_protocol::framing::encode;
 use houyicoder_protocol::frontend::FrontendRequest;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
+use houyicoder_protocol::frontend::model::PersistenceOutcome;
 use houyicoder_protocol::handshake::Hello;
 use houyicoder_provider::FakeProvider;
 use houyicoder_session::SessionStore;
@@ -100,8 +101,8 @@ async fn forget_dispatch(key: &str) -> ResponsePayload {
 }
 
 /// Drive one server connection: send every request in order, then collect
-/// the replies. settings None keeps the default path — only pass it for
-/// requests that write settings, so tests never touch the real user file.
+/// the replies. Passing settings None runs in-memory with no persistence
+/// backend, so tests never touch the real user config file.
 async fn memory_dispatch(
     settings: Option<PathBuf>,
     reqs: Vec<FrontendRequest>,
@@ -193,6 +194,72 @@ async fn test_io_failure_replies_error() {
             );
         }
         other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+/// A server assembled without a settings path owns no persistence backend.
+/// Toggles flip in-memory state and write no settings file.
+/// The default settings path is None, so a unit test never touches host config.
+#[tokio::test]
+async fn test_default_server_off_disk() {
+    let runner = stub_runner_with_memory();
+    let session = SessionId::new();
+    let server = Server::new(runner, session, Arc::new(DefaultModeGate::new()));
+    assert!(
+        server.settings_path.is_none(),
+        "a default server owns no persistence backend"
+    );
+
+    let payloads = memory_dispatch(
+        None,
+        vec![
+            FrontendRequest::MemoryToggle {
+                which: MemoryToggleWhich::Auto,
+            },
+            // The reported pollution came through the model path, so the
+            // model apply and the recap switch must each answer without a
+            // backend too.
+            FrontendRequest::ModelSet {
+                model: Some("test-model".into()),
+                effort: None,
+                effort_toggled: false,
+                speed: None,
+            },
+            FrontendRequest::RecapConfigSet {
+                enabled: false,
+                idle_secs: 300,
+            },
+        ],
+    )
+    .await;
+    match &payloads[0] {
+        ResponsePayload::ToggleState(state) => {
+            assert!(
+                !state.auto_memory,
+                "the memory toggle flips in memory without a persistence backend"
+            );
+        }
+        other => panic!("expected ToggleState, got {other:?}"),
+    }
+    match &payloads[1] {
+        ResponsePayload::ModelResult(result) => {
+            assert_eq!(
+                result.persistence,
+                PersistenceOutcome::Saved,
+                "model apply reports saved in-memory without a persistence backend"
+            );
+        }
+        other => panic!("expected ModelResult, got {other:?}"),
+    }
+    match &payloads[2] {
+        ResponsePayload::ToggleState(state) => {
+            assert!(
+                !state.recap,
+                "recap config updates in memory without a persistence backend"
+            );
+            assert_eq!(state.recap_idle_secs, 300);
+        }
+        other => panic!("expected ToggleState, got {other:?}"),
     }
 }
 

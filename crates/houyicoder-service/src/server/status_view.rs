@@ -5,14 +5,17 @@
 
 use houyicoder_core::observability::ModelUsage;
 use houyicoder_protocol::frontend::status::ModelUsageView;
+use std::path::Path;
 
-/// Whether the user settings file exists: "User" when it does, else
-/// "(defaults)". It names that one layer only: the project and local settings
-/// files are merged into the values a session runs on, but this label does not
-/// yet report them, so a repository that pins an endpoint still reads "User"
-/// here.
-pub(super) fn setting_sources_label() -> String {
-    if houyicoder_config::settings_path().exists() {
+/// Whether the server's own settings file exists. The label reads User when
+/// the file is present and the defaults otherwise. It reads the path the
+/// server was assembled with, not the ambient config, so a server that owns
+/// no settings backend reports the defaults rather than the host file. It
+/// names that one layer only, since the project and local settings files are
+/// merged into the values a session runs on but this label does not report
+/// them, so a repository that pins an endpoint still reads User here.
+pub(super) fn setting_sources_label(settings_path: Option<&Path>) -> String {
+    if settings_path.is_some_and(Path::exists) {
         "User".to_string()
     } else {
         "(defaults)".to_string()

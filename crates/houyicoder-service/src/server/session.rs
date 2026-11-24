@@ -60,7 +60,7 @@ impl Server {
             // journal too; the pane reports that rather than an empty list.
             file_transaction: None,
             host: Some(host),
-            settings_path: houyicoder_config::settings_path(),
+            settings_path: None,
             project_path: None,
             provider_facts: None,
             append_notify: Some(append_notify),
@@ -357,7 +357,8 @@ pub(crate) async fn serve_session(
         host.clone(),
         handle.append_notify,
         handle.recap,
-    );
+    )
+    .with_settings_path(houyicoder_config::settings_path());
     // The bus is process-scoped too, and without it this connection would drop
     // every child permission ask the detached run is still waiting on.
     server = server.with_bus(host.bus().cloned());
