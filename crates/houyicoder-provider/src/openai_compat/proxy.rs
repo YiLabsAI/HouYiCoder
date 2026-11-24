@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use houyicoder_platform::host::net::{ProxyConfigCache, ProxySnapshot};
+use houyicoder_platform::tls::install_tls_provider;
 use houyicoder_protocol::llm::ProviderError;
 use reqwest::{Client, NoProxy, Proxy};
 
@@ -81,6 +82,9 @@ fn build_client(snapshot: &ProxySnapshot) -> Result<Client, String> {
     if let Some(diagnostic) = snapshot.diagnostic() {
         return Err(diagnostic.to_string());
     }
+    // The HTTP pool ships without a crypto backend; installing the ring
+    // provider once per process is what makes every later client build.
+    install_tls_provider();
     let mut builder = Client::builder()
         .read_timeout(Duration::from_secs(90))
         .connect_timeout(Duration::from_secs(10))
@@ -111,3 +115,6 @@ fn build_client(snapshot: &ProxySnapshot) -> Result<Client, String> {
         .build()
         .map_err(|error| format!("the HTTP client could not be built: {error}"))
 }
+
+#[cfg(test)]
+mod tests;

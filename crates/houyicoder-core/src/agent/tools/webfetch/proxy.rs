@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use houyicoder_platform::host::net::{
     ProxyConfig, ProxyConfigCache, ProxySnapshot, ProxySource, is_loopback_endpoint,
 };
+use houyicoder_platform::tls::install_tls_provider;
 use reqwest::redirect::Policy;
 use reqwest::{Client, NoProxy, Proxy};
 
@@ -164,6 +165,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// turned off on this client so it serves as the clean fallback whenever no
 /// proxy is configured or a local proxy refused the connection.
 fn build_direct_transport(resolver: Arc<PublicResolver>) -> Client {
+    // The HTTP pool ships without a crypto backend; installing the ring
+    // provider once per process is what makes every later client build.
+    install_tls_provider();
     let builder = Client::builder()
         .redirect(Policy::none())
         .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
@@ -176,7 +180,7 @@ fn build_direct_transport(resolver: Arc<PublicResolver>) -> Client {
         // Skip the platform trust store in unit tests: mock servers use plain
         // HTTP or loopback sockets, and reading the store per test is what
         // contends on the platform keychain.
-        builder.tls_built_in_root_certs(false)
+        builder.tls_certs_only([])
     };
     builder
         .build()

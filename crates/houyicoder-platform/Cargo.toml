@@ -17,6 +17,10 @@ dunce = "1"
 # crate free of an operating-system conditional; the runtime is already in the
 # workspace graph, so this adds an edge rather than a download.
 tokio = { version = "1", features = ["net"] }
+# The TLS provider is process-wide state installed once before any client
+# is built. This crate owns the install because every crate that speaks
+# TLS already depends on it for another reason.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tracing = "0.1.44"
 
 # The termination registration and the hangup probe read the terminal's own

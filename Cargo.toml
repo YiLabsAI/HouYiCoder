@@ -14,6 +14,23 @@ authors = ["hicoder contributors"]
 license = "MIT"
 repository = "https://github.com/YiLabsAI/HouYiCoder"
 
+# One HTTP stack for the whole workspace. The pool is pinned here so a second
+# major version cannot enter the tree by a crate declaring its own range: two
+# versions mean two connection pools, two TLS stacks, and two proxy caches.
+# The TLS feature pair is deliberate: the default rustls feature resolves to
+# aws-lc-rs, whose CMake and NASM build cannot cross-compile for Windows from
+# this host, while the no-provider feature installs no provider at all, so
+# houyicoder-platform installs ring once per process.
+[workspace.dependencies]
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "stream",
+    "charset",
+    "http2",
+    "system-proxy",
+    "rustls-no-provider",
+] }
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 future_incompatible = { level = "warn", priority = -1 }

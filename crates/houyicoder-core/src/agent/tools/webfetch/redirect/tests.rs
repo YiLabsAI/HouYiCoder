@@ -37,7 +37,7 @@ use crate::agent::tools::webfetch::{ProxyClient, read_body};
 /// with redirects left to the follower under test.
 fn test_client(addr: SocketAddr) -> Client {
     Client::builder()
-        .tls_built_in_root_certs(false)
+        .tls_certs_only([])
         .resolve("example.test", addr)
         .redirect(Policy::none())
         .no_proxy()
@@ -114,7 +114,7 @@ fn test_connect_deadline_falls_back() {
         });
         let proxy_url = format!("https://127.0.0.1:{port}");
         let proxy_http = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all(&proxy_url).expect("proxy"))
             .connect_timeout(Duration::from_millis(50))
             .build()
@@ -186,7 +186,7 @@ fn test_response_timeout_no_fallback() {
         let direct_client = test_client(*direct.address());
         let proxy_url = format!("http://{}", proxy.address());
         let proxy_http = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all(&proxy_url).expect("proxy"))
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_millis(60))
@@ -335,7 +335,7 @@ fn test_env_proxy_never_direct() {
         let direct = test_client(*server.address());
         let url = format!("http://example.test:{}/ok", server.address().port());
         let unreachable = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all("http://127.0.0.1:1").expect("proxy"))
             .connect_timeout(Duration::from_millis(100))
             .build()
@@ -378,7 +378,7 @@ fn test_system_loopback_falls_back() {
         let direct = test_client(*server.address());
         let url = format!("http://example.test:{}/ok", server.address().port());
         let unreachable = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all("http://127.0.0.1:1").expect("proxy"))
             .connect_timeout(Duration::from_millis(100))
             .build()
@@ -412,7 +412,7 @@ fn test_system_remote_no_fallback() {
         let direct = test_client(*server.address());
         let url = format!("http://example.test:{}/ok", server.address().port());
         let gateway = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all("http://192.0.2.1:9").expect("proxy"))
             .connect_timeout(Duration::from_millis(100))
             .build()
@@ -456,7 +456,7 @@ fn test_https_proxy_direct_http() {
         let direct = test_client(*server.address());
         let url = format!("http://example.test:{}/ok", server.address().port());
         let proxy_http = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .resolve("example.test", *server.address())
             .proxy(Proxy::https("http://127.0.0.1:1").expect("proxy"))
             .connect_timeout(Duration::from_millis(100))
@@ -500,7 +500,7 @@ fn test_proxy_status_no_fallback() {
         let direct_client = test_client(*direct.address());
         let proxy_url = format!("http://{}", proxy.address());
         let proxy_http = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all(&proxy_url).expect("proxy"))
             .build()
             .expect("proxy client");
@@ -553,7 +553,7 @@ fn test_proxy_tls_no_fallback() {
         let direct_client = test_client(*direct.address());
         let proxy_url = format!("https://127.0.0.1:{port}");
         let proxy_http = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .proxy(Proxy::all(&proxy_url).expect("proxy"))
             .connect_timeout(Duration::from_millis(500))
             .build()
@@ -608,7 +608,7 @@ fn test_direct_connect_retries() {
         .expect("runtime");
     runtime.block_on(async {
         let closed = Client::builder()
-            .tls_built_in_root_certs(false)
+            .tls_certs_only([])
             .connect_timeout(Duration::from_millis(50))
             .no_proxy()
             .build()

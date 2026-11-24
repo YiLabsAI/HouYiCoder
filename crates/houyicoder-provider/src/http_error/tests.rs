@@ -1,4 +1,5 @@
 use super::*;
+use houyicoder_platform::tls::install_tls_provider;
 use reqwest::header::HeaderMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -318,9 +319,11 @@ async fn test_truncated_body_is_network() {
     });
     // No system trust store: this fixture never completes a TLS handshake,
     // and loading the store per client is what made the suite contend on the
-    // platform keychain.
+    // platform keychain. The builder itself needs the ring backend installed
+    // first, because the pool ships with none.
+    install_tls_provider();
     let err = reqwest::Client::builder()
-        .tls_built_in_root_certs(false)
+        .tls_certs_only([])
         .no_proxy()
         .build()
         .expect("client")

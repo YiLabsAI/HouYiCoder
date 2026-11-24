@@ -28,7 +28,7 @@ fn resolver() -> Arc<PublicResolver> {
 /// per client is what made these tests contend on the platform keychain.
 fn test_client() -> Client {
     Client::builder()
-        .tls_built_in_root_certs(false)
+        .tls_certs_only([])
         .no_proxy()
         .build()
         .expect("client")
