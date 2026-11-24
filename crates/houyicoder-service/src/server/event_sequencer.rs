@@ -365,6 +365,7 @@ fn to_protocol_memory_operation(operation: agent_event::MemoryOperation) -> Memo
         agent_event::MemoryOperation::Created => MemoryOperation::Created,
         agent_event::MemoryOperation::Updated => MemoryOperation::Updated,
         agent_event::MemoryOperation::Deleted => MemoryOperation::Deleted,
+        agent_event::MemoryOperation::Archived => MemoryOperation::Archived,
         agent_event::MemoryOperation::Promoted => MemoryOperation::Promoted,
         agent_event::MemoryOperation::Demoted => MemoryOperation::Demoted,
     }

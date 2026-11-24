@@ -53,6 +53,9 @@ impl MemorySource {
 /// real origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MemoryOrigin {
+    /// Explicitly authored by the user. Protected from background overwrites
+    /// and automatic archival.
+    User,
     /// The main agent's save_memory call.
     MainAgent,
     /// The extractor fork observing the conversation.
@@ -68,6 +71,7 @@ impl MemoryOrigin {
     /// Stable lowercase label used in file frontmatter.
     pub fn as_label(self) -> &'static str {
         match self {
+            Self::User => "user",
             Self::MainAgent => "main_agent",
             Self::Extractor => "extractor",
             Self::Dream => "dream",
@@ -78,11 +82,17 @@ impl MemoryOrigin {
     /// Parse a frontmatter label; any unrecognized value is Unknown.
     pub fn from_label(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
+            "user" => Self::User,
             "main_agent" => Self::MainAgent,
             "extractor" => Self::Extractor,
             "dream" => Self::Dream,
             _ => Self::Unknown,
         }
+    }
+
+    /// Whether this writer runs in the background without direct user action.
+    pub fn is_background(self) -> bool {
+        matches!(self, Self::Extractor | Self::Dream)
     }
 }
 
@@ -320,6 +330,7 @@ pub struct MemoryRecallStats {
     pub key: String,
     pub recall_hits: u64,
     pub gate_violations: u64,
+    pub occurrences: u64,
     pub last_access_ts: u64,
 }
 

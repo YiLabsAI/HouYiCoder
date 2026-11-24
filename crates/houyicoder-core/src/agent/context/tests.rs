@@ -27,6 +27,7 @@ fn assembly_input<'a>(
 ) -> AssemblyInput<'a> {
     AssemblyInput {
         tool_defs,
+        active_rules: None,
         memory_index,
         announced_skills: &[],
         discovered_skills: &[],
@@ -543,6 +544,7 @@ fn test_skill_section_recomputed() {
     ];
     let input = AssemblyInput {
         tool_defs: &[],
+        active_rules: None,
         memory_index: None,
         announced_skills: &skills,
         discovered_skills: &skills,
@@ -627,6 +629,7 @@ fn test_skill_rows_cover_manual() {
     }];
     let input = AssemblyInput {
         tool_defs: &[],
+        active_rules: None,
         memory_index: None,
         announced_skills: &announced,
         discovered_skills: &discovered,
@@ -705,6 +708,7 @@ fn test_skill_section_follows_listing() {
     }];
     let input = AssemblyInput {
         tool_defs: &[],
+        active_rules: None,
         memory_index: None,
         announced_skills: &skills,
         discovered_skills: &skills,
@@ -1114,6 +1118,7 @@ fn test_skills_estimate_keeps_messages() {
     })];
     let input = AssemblyInput {
         tool_defs: &[],
+        active_rules: None,
         memory_index: None,
         announced_skills: &skills,
         discovered_skills: &skills,

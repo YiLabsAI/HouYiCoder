@@ -25,6 +25,7 @@ use houyicoder_protocol::llm::{InputItem, ToolDef};
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AssemblyInput<'a> {
     pub tool_defs: &'a [ToolDef],
+    pub active_rules: Option<&'a str>,
     pub memory_index: Option<&'a str>,
     pub announced_skills: &'a [SkillSnapshot],
     pub discovered_skills: &'a [SkillSnapshot],

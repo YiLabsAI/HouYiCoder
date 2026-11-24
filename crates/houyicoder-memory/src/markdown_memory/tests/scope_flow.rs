@@ -308,9 +308,16 @@ fn test_gate_violation_accumulates() {
     ));
     create_dir_all(&root).expect("mkdir");
     let p = MarkdownMemoryProvider::new(root.clone());
+    p.add(MemoryEntry::new(
+        "test-naming",
+        "keep test names short",
+        MemorySource::Feedback,
+    ))
+    .expect("seed rule");
     p.record_gate_violation("test-naming");
     p.record_gate_violation("test-naming");
     p.record_gate_violation("test-naming");
+    p.record_gate_violation("missing-rule");
     let stats = p.read_recall_stats();
     let by_key: HashMap<&str, &MemoryRecallStats> =
         stats.iter().map(|s| (s.key.as_str(), s)).collect();
@@ -319,6 +326,10 @@ fn test_gate_violation_accumulates() {
     assert_eq!(
         entry.recall_hits, 0,
         "gate violations do not touch recall_hits"
+    );
+    assert!(
+        !by_key.contains_key("missing-rule"),
+        "absent rule key creates no orphan counter"
     );
     // A bad key (path separator) is rejected — no orphan stats row.
     p.record_gate_violation("../escape");

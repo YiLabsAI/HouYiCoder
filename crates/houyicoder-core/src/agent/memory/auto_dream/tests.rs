@@ -311,12 +311,8 @@ fn test_prompt_has_phases_root() {
         "Scope-flow phase is present in the prompt"
     );
     assert!(
-        prompt.contains("promote_memory"),
-        "prompt mentions the promote_memory tool"
-    );
-    assert!(
-        prompt.contains("demote_memory"),
-        "prompt mentions the demote_memory tool"
+        prompt.contains("replaces"),
+        "prompt instructs consolidation via replaces"
     );
 }
 
@@ -365,6 +361,7 @@ fn test_prompt_stats_hits_age() {
         key: "stale-rule".into(),
         recall_hits: 0,
         gate_violations: 0,
+        occurrences: 1,
         last_access_ts: 0,
     }];
     let prompt = build_consolidation_prompt("/tmp/m", &[], "", &stats, 0, None);

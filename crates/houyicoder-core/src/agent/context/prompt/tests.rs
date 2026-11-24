@@ -44,6 +44,7 @@ fn test_mcp_instructions_prefix() {
         &dir,
         None,
         None,
+        None,
         Some(mcp),
         &FrozenPrompt::read(&dir),
     );

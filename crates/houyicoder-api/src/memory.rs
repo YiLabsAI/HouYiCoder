@@ -30,6 +30,7 @@
 //! store trait object). No Sqlite/PG impl is built — markdown-only is
 //! intentional; the seam is left open for million-scale later.
 
+use crate::agent_event::MemoryChange;
 use houyicoder_async::PFut;
 use houyicoder_context::{
     MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
@@ -121,6 +122,39 @@ pub trait MemoryProvider: Send + Sync {
     /// multi-scope filesystem backend.
     fn demote_memory(&self, _key: &str) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
+    }
+    /// Write an entry into the named scope while atomically accumulating
+    /// statistics from any superseded keys and moving those superseded records
+    /// into the archive directory.
+    fn replace_in_scope(
+        &self,
+        entry: MemoryEntry,
+        scope: MemoryScope,
+        _replaces: &[String],
+    ) -> Result<MemoryWriteOutcome, MemoryError> {
+        self.add_in_scope_if_changed(entry, scope)
+    }
+    /// Move an active memory in the named scope into its archive directory so
+    /// it leaves the active index and recall scan while remaining restorable.
+    fn archive_memory(&self, _key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
+        Err(MemoryError::NotFound)
+    }
+    /// Restore an archived memory in the named scope back into active use.
+    fn restore_memory(&self, _key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
+        Err(MemoryError::NotFound)
+    }
+    /// List every archived memory across scopes as a frontmatter summary.
+    fn list_archived(&self) -> Vec<MemorySummary> {
+        Vec::new()
+    }
+    /// Fetch the full body of one archived memory from a named scope.
+    fn show_archived(&self, _key: &str, _scope: MemoryScope) -> Option<MemoryEntry> {
+        None
+    }
+    /// Reconcile scope standing and decay archival in one single-lock pass,
+    /// rebuilding affected indexes at most once.
+    fn reconcile_scopes(&self, _now_secs: u64) -> Vec<MemoryChange> {
+        Vec::new()
     }
     /// Rewrite an existing entry (rewrite topic file plus index pointer).
     /// Default delegates to add — backends that distinguish insert vs update

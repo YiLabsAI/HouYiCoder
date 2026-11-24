@@ -203,6 +203,7 @@ fn operation_verb(operation: MemoryOperation) -> &'static str {
         MemoryOperation::Created => "created",
         MemoryOperation::Updated => "updated",
         MemoryOperation::Deleted => "deleted",
+        MemoryOperation::Archived => "archived",
         MemoryOperation::Promoted => "promoted",
         MemoryOperation::Demoted => "demoted",
         MemoryOperation::Unknown => "changed",

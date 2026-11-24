@@ -729,32 +729,31 @@ async fn test_recover_reply_not_reexecute() {
     );
 }
 
+struct ViolationMemory {
+    violations: Mutex<Vec<String>>,
+}
+
+impl MemoryProvider for ViolationMemory {
+    fn add(
+        &self,
+        _e: houyicoder_context::MemoryEntry,
+    ) -> Result<(), houyicoder_context::MemoryError> {
+        Ok(())
+    }
+    fn record_gate_violation(&self, key: &str) {
+        self.violations
+            .lock()
+            .expect("violations")
+            .push(key.to_string());
+    }
+}
+
 /// A PreToolUse Deny feeds signal B: the memory provider's
 /// record_gate_violation counter accumulates for the denied rule. Closes
 /// the U7 loop where a rule the agent keeps violating finally accumulates
 /// enough violations for the dream to promote it into the project scope.
 #[tokio::test]
 async fn test_deny_records_gate_violation() {
-    /// A recording memory that captures every record_gate_violation call
-    /// so the test asserts the deny fed signal B without a real descriptor.
-    struct ViolationMemory {
-        violations: Mutex<Vec<String>>,
-    }
-    impl MemoryProvider for ViolationMemory {
-        fn add(
-            &self,
-            _e: houyicoder_context::MemoryEntry,
-        ) -> Result<(), houyicoder_context::MemoryError> {
-            Ok(())
-        }
-        fn record_gate_violation(&self, key: &str) {
-            self.violations
-                .lock()
-                .expect("violations")
-                .push(key.to_string());
-        }
-    }
-
     let memory = Arc::new(ViolationMemory {
         violations: Mutex::new(Vec::new()),
     });
@@ -817,5 +816,102 @@ async fn test_deny_records_gate_violation() {
     assert_eq!(
         violations[0], "test-placement",
         "violation recorded against the deny reason (the rule key)"
+    );
+}
+
+struct ProseDenyHook;
+impl Hook for ProseDenyHook {
+    fn name(&self) -> &str {
+        "prose-deny"
+    }
+    fn events(&self) -> &[HookEvent] {
+        &[HookEvent::PreToolUse]
+    }
+    fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        match &ctx.payload {
+            HookPayload::PreToolUse { input, .. } if input["case"] == "prose" => Ok(
+                HookVerdict::Deny("blocked bash edit of file.rs: use edit tool".into()),
+            ),
+            _ => Ok(HookVerdict::Allow),
+        }
+    }
+    fn source(&self) -> HookSource {
+        HookSource::User
+    }
+}
+
+struct KeyedFeedbackHook;
+impl Hook for KeyedFeedbackHook {
+    fn name(&self) -> &str {
+        "keyed-feedback"
+    }
+    fn events(&self) -> &[HookEvent] {
+        &[HookEvent::PreToolUse]
+    }
+    fn rule_key(&self) -> Option<&str> {
+        Some("prefer-edit-tool")
+    }
+    fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        match &ctx.payload {
+            HookPayload::PreToolUse { input, .. } if input["case"] == "keyed" => Ok(
+                HookVerdict::Feedback("Use the structured edit tool instead.".into()),
+            ),
+            _ => Ok(HookVerdict::Allow),
+        }
+    }
+    fn source(&self) -> HookSource {
+        HookSource::User
+    }
+}
+
+#[tokio::test]
+async fn test_rule_key_skips_prose() {
+    let memory = Arc::new(ViolationMemory {
+        violations: Mutex::new(Vec::new()),
+    });
+    let ran = Arc::new(AtomicU8::new(0));
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(RecordingTool::new(ran)));
+    let first = CompletionResponse {
+        output: vec![
+            OutputItem::ToolCall {
+                id: "c1".into(),
+                name: "recordable".into(),
+                input: serde_json::json!({"case": "prose"}),
+            },
+            OutputItem::ToolCall {
+                id: "c2".into(),
+                name: "recordable".into(),
+                input: serde_json::json!({"case": "keyed"}),
+            },
+        ],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let second = CompletionResponse {
+        output: vec![OutputItem::Text {
+            text: "done".into(),
+        }],
+        usage: Usage::default(),
+        model: "test".into(),
+    };
+    let provider: Arc<dyn ModelProvider> = Arc::new(FakeProvider::new(vec![first, second]));
+    let registry = HookRegistry::new();
+    registry.register(Arc::new(ProseDenyHook));
+    registry.register(Arc::new(KeyedFeedbackHook));
+    let mut runner = runner_with(provider, tools).with_hooks(Arc::new(registry));
+    runner
+        .memory
+        .install_provider(Arc::clone(&memory) as Arc<dyn MemoryProvider>);
+    let result = runner
+        .run(SessionId::new(), "go".into())
+        .await
+        .expect("run");
+    assert!(matches!(result.outcome, RunOutcome::FinalOutput(_)));
+    let violations = memory.violations.lock().expect("violations").clone();
+    assert_eq!(
+        violations,
+        vec!["prefer-edit-tool".to_string()],
+        "free-text deny reason is skipped while structured rule_key on feedback is recorded"
     );
 }

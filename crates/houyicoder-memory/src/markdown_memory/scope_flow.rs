@@ -3,17 +3,31 @@
 //! Both move the record between roots and rebuild the derived indexes inside
 //! one critical section held across processes.
 
+use std::collections::HashSet;
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::time::SystemTime;
 
-use houyicoder_context::MemoryError;
-use houyicoder_context::MemoryScope;
+use houyicoder_api::agent_event::{MemoryChange, MemoryOperation};
+use houyicoder_api::memory::MemoryWriteOutcome;
+use houyicoder_context::{
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySource, MemorySummary,
+};
 
 use super::MarkdownMemoryProvider;
-use super::io::relocate_record;
-use super::io::sanitize_key;
+use super::io::{
+    StatRecord, list_memories_impl, relocate_record, sanitize_key, validate_index_key,
+};
+
+const ARCHIVE_DIR: &str = "archive";
+
+fn move_topic(src: &Path, dst: &Path) -> Result<(), MemoryError> {
+    if fs::rename(src, dst).is_err() {
+        relocate_record(src, dst)?;
+    }
+    Ok(())
+}
 
 /// Stamp a file as freshly modified. Promotion is an edit of the record's
 /// standing, so the file it lands in carries the newest time; a failure is
@@ -122,5 +136,338 @@ impl MarkdownMemoryProvider {
         // Step two: regenerate both indexes under the same lock.
         drop(self.rebuild_index_impl_locked());
         Ok(())
+    }
+
+    pub(super) fn archive_impl(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        let key = sanitize_key(key)?;
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let _root_locks = self.lock_roots()?;
+        let topic_root = self.root_for_scope(scope).to_path_buf();
+        let topic_path = topic_root.join(format!("{key}.md"));
+        if !topic_path.is_file() {
+            return Err(MemoryError::NotFound);
+        }
+        let archive_dir = topic_root.join(ARCHIVE_DIR);
+        fs::create_dir_all(&archive_dir).map_err(|_| MemoryError::Io)?;
+        Self::mark_index_dirty(&topic_root)?;
+        move_topic(&topic_path, &archive_dir.join(format!("{key}.md")))?;
+        // Keep the stats row intact so restoring this archived entry recovers
+        // its accumulated recall hits, violations, and occurrence count.
+        drop(self.rebuild_index_impl_locked());
+        Ok(())
+    }
+
+    pub(super) fn restore_impl(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        let key = sanitize_key(key)?;
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let _root_locks = self.lock_roots()?;
+        let topic_root = self.root_for_scope(scope).to_path_buf();
+        let archive_path = topic_root.join(ARCHIVE_DIR).join(format!("{key}.md"));
+        if !archive_path.is_file() {
+            return Err(MemoryError::NotFound);
+        }
+        fs::create_dir_all(&topic_root).map_err(|_| MemoryError::Io)?;
+        let dst_path = topic_root.join(format!("{key}.md"));
+        Self::mark_index_dirty(&topic_root)?;
+        move_topic(&archive_path, &dst_path)?;
+        touch_file(&dst_path);
+        drop(self.rebuild_index_impl_locked());
+        Ok(())
+    }
+
+    pub(super) fn list_archived_impl(&self) -> Vec<MemorySummary> {
+        let mut out: Vec<MemorySummary> = Vec::new();
+        let mut seen: HashSet<(String, usize)> = HashSet::new();
+        for (root_index, root) in self.roots.iter().enumerate() {
+            let archive_dir = root.join(ARCHIVE_DIR);
+            for topic in Self::scan_root(&archive_dir) {
+                if !seen.insert((topic.key.clone(), root_index)) {
+                    continue;
+                }
+                let scope = if self.roots.len() == 1 {
+                    MemoryScope::Auto
+                } else {
+                    MemoryScope::for_root_index(root_index)
+                };
+                if let Ok(fm) = self.read_frontmatter(&topic.path) {
+                    out.push(
+                        MemorySummary::new(
+                            topic.key,
+                            fm.description,
+                            fm.source,
+                            scope,
+                            topic.mtime,
+                        )
+                        .with_origin(fm.origin),
+                    );
+                }
+            }
+        }
+        out.sort_by(|a, b| {
+            b.mtime_secs
+                .cmp(&a.mtime_secs)
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        out
+    }
+
+    pub(super) fn show_archived_impl(&self, key: &str, scope: MemoryScope) -> Option<MemoryEntry> {
+        let key = sanitize_key(key).ok()?;
+        let path = self
+            .root_for_scope(scope)
+            .join(ARCHIVE_DIR)
+            .join(format!("{key}.md"));
+        self.read_topic(&path).ok()
+    }
+
+    pub(super) fn replace_in_scope_impl(
+        &self,
+        mut entry: MemoryEntry,
+        scope: MemoryScope,
+        replaces: &[String],
+    ) -> Result<MemoryWriteOutcome, MemoryError> {
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        entry.key = sanitize_key(&entry.key)?;
+        validate_index_key(&entry.key)?;
+        if entry.origin.is_background() && scope == MemoryScope::User && self.roots.len() > 1 {
+            return Err(MemoryError::InvalidPath(
+                "background writer cannot target user scope".into(),
+            ));
+        }
+        let target_root = self.root_for_scope(scope).to_path_buf();
+        let outcome = self.add_if_changed_in_root(&target_root, &entry)?;
+        if replaces.is_empty() {
+            return Ok(outcome);
+        }
+        let _root_locks = self.lock_roots()?;
+        let allowed_scopes: &[MemoryScope] = if entry.origin.is_background() {
+            if scope == MemoryScope::Project {
+                &[MemoryScope::Project, MemoryScope::Auto]
+            } else {
+                &[MemoryScope::Auto]
+            }
+        } else {
+            match scope {
+                MemoryScope::User => &[MemoryScope::User, MemoryScope::Auto],
+                MemoryScope::Project => &[MemoryScope::Project, MemoryScope::Auto],
+                MemoryScope::Auto => &[MemoryScope::Auto],
+            }
+        };
+        let mut stats = self.load_stats();
+        let mut acc_hits = 0u64;
+        let mut acc_violations = 0u64;
+        let mut acc_occurrences = 0u64;
+        let mut archived_any = false;
+        let mut seen = HashSet::new();
+        for old in replaces {
+            let Ok(clean) = sanitize_key(old) else {
+                continue;
+            };
+            // Never archive the key just written when a model lists the target
+            // key inside its own replacement list.
+            if clean == entry.key || !seen.insert(clean.clone()) {
+                continue;
+            }
+            let mut moved_this_key = false;
+            for &cand_scope in allowed_scopes {
+                if entry.origin.is_background()
+                    && cand_scope == MemoryScope::User
+                    && self.roots.len() > 1
+                {
+                    continue;
+                }
+                let cand_root = self.root_for_scope(cand_scope).to_path_buf();
+                let cand_path = cand_root.join(format!("{clean}.md"));
+                if !cand_path.is_file() {
+                    continue;
+                }
+                if entry.origin.is_background()
+                    && let Ok(fm) = self.read_frontmatter(&cand_path)
+                    && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
+                {
+                    continue;
+                }
+                let archive_dir = cand_root.join(ARCHIVE_DIR);
+                if fs::create_dir_all(&archive_dir).is_ok() {
+                    drop(Self::mark_index_dirty(&cand_root));
+                    if move_topic(&cand_path, &archive_dir.join(format!("{clean}.md"))).is_ok() {
+                        moved_this_key = true;
+                        archived_any = true;
+                    }
+                }
+            }
+            if moved_this_key && let Some(st) = stats.remove(&clean) {
+                acc_hits = acc_hits.saturating_add(st.recall_hits);
+                acc_violations = acc_violations.saturating_add(st.gate_violations);
+                acc_occurrences = acc_occurrences.saturating_add(st.occurrences);
+            }
+        }
+        if acc_hits > 0 || acc_violations > 0 || acc_occurrences > 0 {
+            let target_stat = stats.entry(entry.key.clone()).or_default();
+            target_stat.occurrences = target_stat.occurrences.max(1);
+            target_stat.recall_hits = target_stat.recall_hits.saturating_add(acc_hits);
+            target_stat.gate_violations =
+                target_stat.gate_violations.saturating_add(acc_violations);
+            target_stat.occurrences = target_stat.occurrences.saturating_add(acc_occurrences);
+            self.save_stats(&stats);
+        }
+        if archived_any {
+            drop(self.rebuild_index_impl_locked());
+        }
+        Ok(outcome)
+    }
+
+    /// Single-pass deterministic scope promotion, demotion, decay archival, and
+    /// orphan-stat cleanup. Rebuilds affected indexes at most once.
+    pub(super) fn reconcile_scopes_impl(&self, now_secs: u64) -> Vec<MemoryChange> {
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let Ok(_root_locks) = self.lock_roots() else {
+            return Vec::new();
+        };
+        let summaries = list_memories_impl(self);
+        let mut stats = self.load_stats();
+        let multi_scope = self.roots.len() > 1;
+        let auto_root = self.write_root().to_path_buf();
+        let project_root = self.root_for_scope(MemoryScope::Project).to_path_buf();
+        let mut changes = Vec::new();
+
+        for s in &summaries {
+            if let Some(change) = Self::reconcile_entry(
+                s,
+                stats.get(&s.key),
+                now_secs,
+                multi_scope,
+                &auto_root,
+                &project_root,
+            ) {
+                changes.push(change);
+            }
+        }
+
+        // Prune orphan stats keys that exist neither in active roots nor in archive.
+        let before_stats = stats.len();
+        stats.retain(|key, _| self.key_exists_anywhere(key));
+        if stats.len() != before_stats {
+            self.save_stats(&stats);
+        }
+        if !changes.is_empty() {
+            drop(self.rebuild_index_impl_locked());
+        }
+        changes
+    }
+
+    fn reconcile_entry(
+        s: &MemorySummary,
+        stat: Option<&StatRecord>,
+        now_secs: u64,
+        multi_scope: bool,
+        auto_root: &Path,
+        project_root: &Path,
+    ) -> Option<MemoryChange> {
+        let effective_scope = if multi_scope {
+            s.scope
+        } else {
+            MemoryScope::Auto
+        };
+        let violations = stat.map(|r| r.gate_violations).unwrap_or(0);
+        let occurrences = stat.map(|r| r.occurrences).unwrap_or(1);
+        let hits = stat.map(|r| r.recall_hits).unwrap_or(0);
+        let last_access = stat.map(|r| r.last_access_ts).unwrap_or(0);
+        let unmodified_days = now_secs.saturating_sub(s.mtime_secs) / 86_400;
+        let unrecalled_days = if last_access == 0 {
+            unmodified_days
+        } else {
+            now_secs.saturating_sub(last_access) / 86_400
+        };
+
+        if multi_scope
+            && effective_scope == MemoryScope::Auto
+            && s.source == MemorySource::Feedback
+            && (violations >= 2 || occurrences >= 2 || hits >= 8)
+        {
+            let src = auto_root.join(format!("{}.md", s.key));
+            let dst = project_root.join(format!("{}.md", s.key));
+            if src.is_file() && fs::create_dir_all(project_root).is_ok() {
+                drop(Self::mark_index_dirty(auto_root));
+                drop(Self::mark_index_dirty(project_root));
+                let moved = if dst.is_file() {
+                    fs::remove_file(&src).is_ok()
+                } else {
+                    move_topic(&src, &dst).is_ok()
+                };
+                if moved {
+                    touch_file(&dst);
+                    return Some(MemoryChange {
+                        key: s.key.clone(),
+                        operation: MemoryOperation::Promoted,
+                        scope: MemoryScope::Project,
+                    });
+                }
+            }
+        }
+
+        if multi_scope
+            && effective_scope == MemoryScope::Project
+            && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
+            && unmodified_days >= 60
+            && unrecalled_days >= 60
+            && violations == 0
+            && occurrences <= 1
+            && hits == 0
+        {
+            let src = project_root.join(format!("{}.md", s.key));
+            let dst = auto_root.join(format!("{}.md", s.key));
+            if src.is_file() && fs::create_dir_all(auto_root).is_ok() {
+                drop(Self::mark_index_dirty(auto_root));
+                drop(Self::mark_index_dirty(project_root));
+                let moved = if dst.is_file() {
+                    fs::remove_file(&src).is_ok()
+                } else {
+                    move_topic(&src, &dst).is_ok()
+                };
+                if moved {
+                    return Some(MemoryChange {
+                        key: s.key.clone(),
+                        operation: MemoryOperation::Demoted,
+                        scope: MemoryScope::Auto,
+                    });
+                }
+            }
+        }
+
+        if effective_scope == MemoryScope::Auto
+            && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
+        {
+            let expired = match s.source {
+                MemorySource::Project => unmodified_days >= 21 && unrecalled_days >= 30,
+                MemorySource::Feedback => {
+                    unmodified_days >= 60 && unrecalled_days >= 60 && violations == 0
+                }
+                MemorySource::Reference => unmodified_days >= 90 && unrecalled_days >= 90,
+                MemorySource::User => false,
+            };
+            if expired {
+                let src = auto_root.join(format!("{}.md", s.key));
+                let archive_dir = auto_root.join(ARCHIVE_DIR);
+                if src.is_file() && fs::create_dir_all(&archive_dir).is_ok() {
+                    drop(Self::mark_index_dirty(auto_root));
+                    if move_topic(&src, &archive_dir.join(format!("{}.md", s.key))).is_ok() {
+                        return Some(MemoryChange {
+                            key: s.key.clone(),
+                            operation: MemoryOperation::Archived,
+                            scope: MemoryScope::Auto,
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub(super) fn key_exists_anywhere(&self, key: &str) -> bool {
+        let filename = format!("{key}.md");
+        self.roots
+            .iter()
+            .any(|r| r.join(&filename).is_file() || r.join(ARCHIVE_DIR).join(&filename).is_file())
     }
 }

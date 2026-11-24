@@ -24,7 +24,7 @@ pub struct HookId(u64);
 /// dispatch start, and the configured limit in milliseconds for timeout
 /// error reporting.
 struct PendingHook {
-    rx: Receiver<Result<HookVerdict, HookError>>,
+    rx: Receiver<(Result<HookVerdict, HookError>, Option<String>)>,
     name: String,
     deadline: Instant,
     configured_limit_ms: u64,
@@ -278,9 +278,11 @@ impl HookRegistry {
                 .iter()
                 .map(|h| {
                     let name = h.name().to_string();
+                    let (result, rule_key) = catch_panic_verdict(|| h.evaluate_verdict(ctx), &name);
                     HookOutcome {
-                        result: catch_panic(|| h.evaluate(ctx), &name),
                         hook_name: name,
+                        rule_key,
+                        result,
                     }
                 })
                 .collect();
@@ -319,8 +321,8 @@ impl HookRegistry {
                 let configured_limit_ms = hook_timeout.as_millis() as u64;
                 let deadline = started + hook_timeout;
                 spawn(move || {
-                    let result = catch_panic(|| hook.evaluate(&ctx), &thread_name);
-                    drop(tx.send(result));
+                    let pair = catch_panic_verdict(|| hook.evaluate_verdict(&ctx), &thread_name);
+                    drop(tx.send(pair));
                 });
                 PendingHook {
                     rx,
@@ -334,21 +336,20 @@ impl HookRegistry {
         receivers
             .into_iter()
             .map(|pending| {
-                // Every hook started together at dispatch entry, so each waits
-                // up to its own deadline measured from that instant: N default
-                // hooks still complete within one default budget rather than N
-                // times it, while an explicit longer per-hook timeout is
-                // honored instead of being cut short at the default.
                 let remaining = pending.deadline.saturating_duration_since(Instant::now());
-                let result = match pending.rx.recv_timeout(remaining) {
-                    Ok(result) => result,
-                    Err(_) => Err(HookError::Timeout {
-                        hook_name: pending.name.clone(),
-                        limit_ms: pending.configured_limit_ms,
-                    }),
+                let (result, rule_key) = match pending.rx.recv_timeout(remaining) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        Err(HookError::Timeout {
+                            hook_name: pending.name.clone(),
+                            limit_ms: pending.configured_limit_ms,
+                        }),
+                        None,
+                    ),
                 };
                 HookOutcome {
                     hook_name: pending.name,
+                    rule_key,
                     result,
                 }
             })

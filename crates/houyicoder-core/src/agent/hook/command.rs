@@ -159,7 +159,10 @@ impl CommandHook {
     /// Spawn the command, pipe the context JSON, parse the verdict. Split
     /// from evaluate so the once gate and self-unregister wrap it without
     /// duplicating the spawn logic.
-    fn evaluate_inner(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+    fn evaluate_inner(
+        &self,
+        ctx: &HookContext,
+    ) -> Result<(HookVerdict, Option<String>), HookError> {
         let payload = HookContextJson::from_context(ctx);
         let payload_json = serde_json::to_string(&payload).map_err(|e| HookError::ConfigError {
             detail: format!("hook context encode: {e}"),
@@ -253,13 +256,17 @@ impl CommandHook {
                     hook_name: self.name.clone(),
                     detail: format!("verdict decode: {e} (got {})", buf.trim()),
                 })?;
-            Ok(verdict.to_hook_verdict(&self.name))
+            let rule_key = verdict
+                .rule_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(ToString::to_string);
+            Ok((verdict.to_hook_verdict(&self.name), rule_key))
         } else {
-            Ok(exit_code_to_verdict(
-                exit_code,
-                &buf,
-                &stderr_buf,
-                &self.name,
+            Ok((
+                exit_code_to_verdict(exit_code, &buf, &stderr_buf, &self.name),
+                None,
             ))
         }
     }
@@ -282,49 +289,46 @@ impl Hook for CommandHook {
         self.once
     }
     fn evaluate(&self, ctx: &HookContext) -> Result<HookVerdict, HookError> {
+        self.evaluate_verdict(ctx).0
+    }
+    fn evaluate_verdict(
+        &self,
+        ctx: &HookContext,
+    ) -> (Result<HookVerdict, HookError>, Option<String>) {
         if let Some(m) = &self.matcher
             && !filter::matcher_passes_compiled(ctx, m, self.matcher_regex.as_ref())
         {
-            return Ok(HookVerdict::Allow);
+            return (Ok(HookVerdict::Allow), None);
         }
         if let Some(rule) = &self.if_condition
             && !filter::if_rule_passes_compiled(ctx, rule, self.if_regex.as_ref())
         {
-            return Ok(HookVerdict::Allow);
+            return (Ok(HookVerdict::Allow), None);
         }
-        // once: only the dispatch that wins the compare_exchange spawns.
-        // A lost race returns Allow without spawning, so two concurrent
-        // dispatches never both run the command.
         if self.once
             && self
                 .fired
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .is_err()
         {
-            return Ok(HookVerdict::Allow);
+            return (Ok(HookVerdict::Allow), None);
         }
         let result = self.evaluate_inner(ctx);
         if self.once {
             if result.is_ok() {
-                // The one shot was spent. Unregister so later dispatches
-                // skip the hook entirely; the flag stays set so an
-                // in-flight dispatch racing the removal still declines.
-                // Dispatch releases the read lock before evaluate, so
-                // taking the write lock here cannot deadlock.
                 if let Some(&id) = self.hook_id.get()
                     && let Some(reg) = &self.hook_reg
                 {
                     reg.unregister(id);
                 }
             } else {
-                // The attempt never produced a verdict, so it did not
-                // consume the one shot. Release the gate for the next
-                // event rather than silently dropping a hook the user
-                // asked to run once and which has not yet run.
                 self.fired.store(false, Ordering::Release);
             }
         }
-        result
+        match result {
+            Ok((verdict, rule_key)) => (Ok(verdict), rule_key),
+            Err(err) => (Err(err), None),
+        }
     }
 }
 
@@ -453,6 +457,9 @@ struct VerdictJson {
     /// For a Trigger verdict, the event to fire downstream.
     #[serde(default)]
     event: Option<String>,
+    /// Optional structured memory rule key violated by the call.
+    #[serde(default, alias = "ruleKey")]
+    rule_key: Option<String>,
 }
 
 impl VerdictJson {

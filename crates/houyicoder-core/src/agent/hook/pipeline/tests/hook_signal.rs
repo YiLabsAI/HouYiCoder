@@ -37,34 +37,42 @@ async fn test_append_signals_cover_verdicts() {
     let outcomes = vec![
         HookOutcome {
             hook_name: "a".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Allow),
         },
         HookOutcome {
             hook_name: "d".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Deny("no".into())),
         },
         HookOutcome {
             hook_name: "f".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Feedback("fix".into())),
         },
         HookOutcome {
             hook_name: "o".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Observe("seen".into())),
         },
         HookOutcome {
             hook_name: "i".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Inject("x".into())),
         },
         HookOutcome {
             hook_name: "k".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Ask("q".into())),
         },
         HookOutcome {
             hook_name: "t".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Trigger(HookEvent::PostCompact)),
         },
         HookOutcome {
             hook_name: "e".into(),
+            rule_key: None,
             result: Err(HookError::Timeout {
                 hook_name: "e".into(),
                 limit_ms: 5,
@@ -175,10 +183,12 @@ async fn test_observe_error_warn_user() {
     let outcomes = vec![
         HookOutcome {
             hook_name: "observer".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Observe("something noted".into())),
         },
         HookOutcome {
             hook_name: "broken".into(),
+            rule_key: None,
             result: Err(HookError::Timeout {
                 hook_name: "broken".into(),
                 limit_ms: 100,
@@ -187,6 +197,7 @@ async fn test_observe_error_warn_user() {
         // Allow does not fire a system line.
         HookOutcome {
             hook_name: "silent".into(),
+            rule_key: None,
             result: Ok(HookVerdict::Allow),
         },
     ];

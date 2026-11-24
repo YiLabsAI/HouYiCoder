@@ -46,6 +46,8 @@ pub enum MemoryOperation {
     Updated,
     /// A memory was deleted.
     Deleted,
+    /// A memory moved to the archive directory.
+    Archived,
     /// A memory moved to a broader scope.
     Promoted,
     /// A memory moved to a narrower scope.

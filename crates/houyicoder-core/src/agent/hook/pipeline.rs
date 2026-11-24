@@ -158,6 +158,16 @@ impl Runner {
             let outcomes = self.run_hooks(reg, ctx).await;
             self.append_hook_signals(session, HookEvent::PreToolUse, Some(&tool_name), &outcomes)
                 .await;
+            let rule_keys: Vec<String> = outcomes
+                .iter()
+                .filter(|o| {
+                    matches!(
+                        o.result,
+                        Ok(HookVerdict::Deny(_) | HookVerdict::Feedback(_))
+                    )
+                })
+                .filter_map(|o| o.rule_key.clone())
+                .collect();
             let verdict = combine_verdicts(outcomes.into_iter().map(|o| o.result));
             let allow = match verdict.primary {
                 HookVerdict::Allow => true,
@@ -169,16 +179,14 @@ impl Runner {
                 }
                 HookVerdict::Observe(_) | HookVerdict::Trigger(_) => true,
                 HookVerdict::Deny(reason) => {
-                    // Signal B: a PreToolUse gate denied a call. Record a
-                    // violation against the deny reason (the rule the agent
-                    // violated) so the consolidation dream can nominate the
-                    // rule for promotion into the project scope. The
-                    // reason is best-effort sanitized to a memory key; a
-                    // hook whose deny reason names the rule key lands a
-                    // precise counter, a free-text reason lands a coarse
-                    // one. Either way the dream sees the cumulative count.
                     if let Some(memory) = self.memory.provider() {
-                        memory.record_gate_violation(&reason);
+                        if !rule_keys.is_empty() {
+                            for key in &rule_keys {
+                                memory.record_gate_violation(key);
+                            }
+                        } else if is_rule_key(&reason) {
+                            memory.record_gate_violation(&reason);
+                        }
                     }
                     blocked.push((
                         plan.id.clone(),
@@ -187,6 +195,11 @@ impl Runner {
                     false
                 }
                 HookVerdict::Feedback(reason) => {
+                    if let Some(memory) = self.memory.provider() {
+                        for key in &rule_keys {
+                            memory.record_gate_violation(key);
+                        }
+                    }
                     blocked.push((plan.id.clone(), hook_feedback_json(&reason)));
                     false
                 }
@@ -587,6 +600,10 @@ fn hook_feedback_json(reason: &str) -> Value {
         RefusalBy::Hook,
         RefusalVerdict::Feedback,
     )
+}
+
+fn is_rule_key(reason: &str) -> bool {
+    !reason.is_empty() && !reason.chars().any(|c| c.is_whitespace() || c == ':')
 }
 
 #[cfg(test)]

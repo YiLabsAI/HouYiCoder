@@ -324,6 +324,7 @@ impl ContextBuilder {
         let freeze = self.frozen_prompt(&cwd);
         let prompt = SystemPrompt::build_with_mcp_instructions(
             &cwd,
+            input.active_rules,
             input.memory_index,
             agent_directory.as_deref(),
             input.mcp_instructions,

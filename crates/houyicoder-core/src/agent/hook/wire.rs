@@ -14,6 +14,7 @@ use super::{HookError, HookEvent, HookVerdict};
 #[derive(Debug, Clone)]
 pub struct HookOutcome {
     pub hook_name: String,
+    pub rule_key: Option<String>,
     pub result: Result<HookVerdict, HookError>,
 }
 

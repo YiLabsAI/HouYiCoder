@@ -130,6 +130,23 @@ pub trait Hook: Send + Sync {
     fn once(&self) -> bool {
         false
     }
+
+    /// Optional memory rule key associated with this hook when it blocks or
+    /// pushes back on a call.
+    fn rule_key(&self) -> Option<&str> {
+        None
+    }
+
+    /// Evaluate the event and return the verdict paired with an optional
+    /// structured memory rule key.
+    fn evaluate_verdict(
+        &self,
+        ctx: &HookContext,
+    ) -> (Result<HookVerdict, HookError>, Option<String>) {
+        let res = self.evaluate(ctx);
+        let key = self.rule_key().map(ToString::to_string);
+        (res, key)
+    }
 }
 
 // HookExecutor — future WASM sandbox seam.
@@ -207,6 +224,31 @@ where
                 hook_name: hook_name.to_string(),
                 backtrace,
             })
+        }
+    }
+}
+
+fn catch_panic_verdict<F>(f: F, hook_name: &str) -> (Result<HookVerdict, HookError>, Option<String>)
+where
+    F: FnOnce() -> (Result<HookVerdict, HookError>, Option<String>),
+{
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(pair) => pair,
+        Err(payload) => {
+            let backtrace = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "non-string panic payload".to_string()
+            };
+            (
+                Err(HookError::GuestPanic {
+                    hook_name: hook_name.to_string(),
+                    backtrace,
+                }),
+                None,
+            )
         }
     }
 }

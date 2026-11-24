@@ -16,9 +16,11 @@ use std::sync::Mutex;
 use std::cmp::Reverse;
 
 use crate::provider::{has_word_content, hit_count_bounded, tokenize};
+use houyicoder_api::agent_event::MemoryChange;
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryRankHit, MemoryRecallStats, MemoryScope,
+    MemorySummary,
 };
 
 mod index_health;
@@ -26,27 +28,24 @@ mod io;
 mod lock;
 mod roots;
 mod scope_flow;
+mod stats;
 use crate::secret_scan::first_match;
 use io::{
-    Frontmatter, INDEX_FILE, ScannedTopic, StatRecord, count_new_since_impl, list_memories_impl,
+    Frontmatter, INDEX_FILE, ScannedTopic, count_new_since_impl, list_memories_impl,
     parse_topic_file, sanitize_key, scopes_for_key_impl, serialize_topic_file,
-    show_memory_in_scope_impl, validate_index_key, write_bytes_advisory, write_bytes_atomic,
+    show_memory_in_scope_impl, validate_index_key, write_bytes_atomic,
 };
 use lock::RootLock;
 use roots::canonical_identity;
+#[cfg(test)]
+use stats::STATS_FILE;
 use std::io::ErrorKind;
-use std::time::SystemTime;
+use std::str::from_utf8;
 use std::time::UNIX_EPOCH;
 
 /// Cap on lines in the derived MEMORY index so it never grows past a
 /// bounded number of entries even with short lines.
 const MAX_ENTRYPOINT_LINES: usize = 200;
-
-/// Advisory recall-frequency sidecar filename. Lives in the write root
-/// alongside the topic files and the derived index, written atomically under
-/// that root's lock. Advisory: a lost or corrupt sidecar is a cold restart
-/// (counters re-accumulate), never an invariant violation.
-const STATS_FILE: &str = ".stats.json";
 
 /// Markdown directory memory provider with a derived index. Holds an
 /// ordered list of roots (user, project, auto); recall scans every root
@@ -110,35 +109,6 @@ impl MarkdownMemoryProvider {
 
     fn index_path_for(root: &Path) -> PathBuf {
         root.join(INDEX_FILE)
-    }
-
-    /// The advisory stats sidecar path in the write root.
-    fn stats_path(&self) -> PathBuf {
-        self.write_root().join(STATS_FILE)
-    }
-
-    /// Load the advisory stats sidecar. A missing or corrupt sidecar yields
-    /// an empty map (cold restart) — never an error, since the sidecar is
-    /// advisory and re-accumulates.
-    fn load_stats(&self) -> HashMap<String, StatRecord> {
-        let Ok(text) = fs::read_to_string(self.stats_path()) else {
-            return HashMap::new();
-        };
-        serde_json::from_str(&text).unwrap_or_default()
-    }
-
-    /// Persist the stats map best-effort through the atomic write, called
-    /// with the write root's lock held. Counters are advisory, so a failed or
-    /// lost update is a cold restart for them rather than an invariant
-    /// violation. The write skips the durability flush for the same reason,
-    /// and a failure reaches diagnostics.
-    fn save_stats(&self, stats: &HashMap<String, StatRecord>) {
-        let Ok(json) = serde_json::to_string(stats) else {
-            return;
-        };
-        if write_bytes_advisory(&self.stats_path(), json.as_bytes()).is_err() {
-            tracing::warn!("memory recall stats could not be persisted (advisory)");
-        }
     }
 
     /// True when a root's derived index is stale: the index is missing, or any
@@ -502,84 +472,16 @@ impl MemoryProvider for MarkdownMemoryProvider {
         Ok(())
     }
 
-    /// Read the advisory recall-stats sidecar as typed records. A missing or
-    /// corrupt sidecar yields an empty vec (cold restart). The dream reads
-    /// this to nominate stale entries (low recall hits + old last access) for
-    /// pruning — a 30-day-unrecalled memory is dead weight.
     fn read_recall_stats(&self) -> Vec<MemoryRecallStats> {
-        self.load_stats()
-            .into_iter()
-            .map(|(key, r)| MemoryRecallStats {
-                key,
-                recall_hits: r.recall_hits,
-                gate_violations: r.gate_violations,
-                last_access_ts: r.last_access_ts,
-            })
-            .collect()
+        self.read_recall_stats_impl()
     }
 
-    /// Record recall hits under the write lock so delete cannot leave orphan
-    /// stats. Sidecar corruption degrades to empty counters. Lock and root are
-    /// claimed without waiting: these counters are advisory, so a writer or
-    /// healer busy elsewhere skips this update rather than stalling the turn.
     fn record_recall_hits(&self, keys: &[String]) {
-        if keys.is_empty() {
-            return;
-        }
-        let Ok(_guard) = self.write_lock.try_lock() else {
-            tracing::debug!("memory recall stats write skipped: writer busy (advisory)");
-            return;
-        };
-        let _root_lock = match RootLock::try_acquire(self.write_root()) {
-            Ok(Some(lock)) => lock,
-            Ok(None) => {
-                tracing::debug!("memory recall stats write skipped: root busy (advisory)");
-                return;
-            }
-            Err(_) => {
-                tracing::warn!("memory recall stats write skipped: root lock unavailable");
-                return;
-            }
-        };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let mut stats = self.load_stats();
-        for key in keys {
-            let r = stats.entry(key.clone()).or_default();
-            r.recall_hits = r.recall_hits.saturating_add(1);
-            r.last_access_ts = now;
-        }
-        self.save_stats(&stats);
+        self.record_recall_hits_impl(keys);
     }
 
-    /// Record one gate violation under the write lock using the canonical key.
-    /// Sidecar corruption degrades to empty counters. Lock and root are claimed
-    /// without waiting: the counter is advisory and must not stall the gate.
     fn record_gate_violation(&self, key: &str) {
-        let Ok(key) = sanitize_key(key) else {
-            return;
-        };
-        let Ok(_guard) = self.write_lock.try_lock() else {
-            tracing::debug!("memory gate stats write skipped: writer busy (advisory)");
-            return;
-        };
-        let _root_lock = match RootLock::try_acquire(self.write_root()) {
-            Ok(Some(lock)) => lock,
-            Ok(None) => {
-                tracing::debug!("memory gate stats write skipped: root busy (advisory)");
-                return;
-            }
-            Err(_) => {
-                tracing::warn!("memory gate stats write skipped: root lock unavailable");
-                return;
-            }
-        };
-        let mut stats = self.load_stats();
-        let r = stats.entry(key).or_default();
-        r.gate_violations = r.gate_violations.saturating_add(1);
-        self.save_stats(&stats);
+        self.record_gate_violation_impl(key);
     }
 
     fn rank_candidates(&self, query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
@@ -683,6 +585,35 @@ impl MemoryProvider for MarkdownMemoryProvider {
     fn demote_memory(&self, key: &str) -> Result<(), MemoryError> {
         self.demote_impl(key)
     }
+
+    fn replace_in_scope(
+        &self,
+        entry: MemoryEntry,
+        scope: MemoryScope,
+        replaces: &[String],
+    ) -> Result<MemoryWriteOutcome, MemoryError> {
+        self.replace_in_scope_impl(entry, scope, replaces)
+    }
+
+    fn archive_memory(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        self.archive_impl(key, scope)
+    }
+
+    fn restore_memory(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        self.restore_impl(key, scope)
+    }
+
+    fn list_archived(&self) -> Vec<MemorySummary> {
+        self.list_archived_impl()
+    }
+
+    fn show_archived(&self, key: &str, scope: MemoryScope) -> Option<MemoryEntry> {
+        self.show_archived_impl(key, scope)
+    }
+
+    fn reconcile_scopes(&self, now_secs: u64) -> Vec<MemoryChange> {
+        self.reconcile_scopes_impl(now_secs)
+    }
 }
 
 impl MarkdownMemoryProvider {
@@ -704,12 +635,22 @@ impl MarkdownMemoryProvider {
         }
         let _root_lock = RootLock::acquire(root)?;
         let topic_path = root.join(format!("{}.md", entry.key));
-        let payload = serialize_topic_file(entry).into_bytes();
         let previous = match fs::read(&topic_path) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(_) => return Err(MemoryError::Io),
         };
+        if entry.origin.is_background()
+            && let Some(prev_bytes) = previous.as_deref()
+            && let Ok(prev_text) = from_utf8(prev_bytes)
+            && let Ok((fm, _)) = parse_topic_file(prev_text)
+            && fm.origin == MemoryOrigin::User
+        {
+            return Err(MemoryError::InvalidPath(
+                "background writer cannot overwrite user-authored memory".into(),
+            ));
+        }
+        let payload = serialize_topic_file(entry).into_bytes();
         if previous.as_deref() == Some(payload.as_slice()) {
             return Ok(MemoryWriteOutcome::Unchanged);
         }
@@ -718,10 +659,6 @@ impl MarkdownMemoryProvider {
         } else {
             MemoryWriteOutcome::Created
         };
-        // A marker already present names an earlier index update this store
-        // never published. This write appends only its own row, so it must
-        // not clear that marker: the earlier gap would otherwise become
-        // invisible to the next session's checks.
         let index_was_dirty = Self::index_marked_dirty(root);
         Self::mark_index_dirty(root)?;
         write_bytes_atomic(&topic_path, &payload)?;
@@ -733,6 +670,7 @@ impl MarkdownMemoryProvider {
                 topic_path.display()
             ),
         }
+        self.record_occurrence(&entry.key, outcome);
         Ok(outcome)
     }
 }

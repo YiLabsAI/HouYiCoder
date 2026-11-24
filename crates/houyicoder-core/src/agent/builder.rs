@@ -22,7 +22,9 @@ use crate::agent::memory::{MemoryRuntime, MutationLog};
 use crate::agent::multi_agent::bus_types::BusMessage;
 use crate::agent::reducer::ToolOutputReducer;
 use crate::agent::skill_reload::SkillReloadGuard;
-use crate::agent::tools::{MemoryAddTool, SearchMemoryTool, ShowMemoryTool};
+use crate::agent::tools::{
+    DemoteMemoryTool, MemoryAddTool, PromoteMemoryTool, SearchMemoryTool, ShowMemoryTool,
+};
 use crate::agent::{RunError, Runner, VerifyGate};
 use houyicoder_api::agent_event::AgentEventHandlers;
 use houyicoder_api::cache_policy::CachePolicyProvider;
@@ -47,6 +49,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 /// them across the assembler's borrow.
 pub(crate) struct AssemblyParts {
     pub tool_defs: Vec<ToolDef>,
+    pub active_rules: Option<String>,
     pub memory_index: Option<String>,
     pub announced_skills: Vec<SkillSnapshot>,
     pub discovered_skills: Vec<SkillSnapshot>,
@@ -58,6 +61,7 @@ impl AssemblyParts {
     pub(crate) fn input(&self) -> AssemblyInput<'_> {
         AssemblyInput {
             tool_defs: &self.tool_defs,
+            active_rules: self.active_rules.as_deref(),
             memory_index: self.memory_index.as_deref(),
             announced_skills: &self.announced_skills,
             discovered_skills: &self.discovered_skills,
@@ -148,12 +152,19 @@ impl Runner {
             self.tools.register(Arc::new(
                 MemoryAddTool::new(provider.clone())
                     .with_origin(MemoryOrigin::MainAgent)
-                    .with_recorder(recorder),
+                    .with_recorder(recorder.clone()),
             ));
             self.tools.register(Arc::new(
                 SearchMemoryTool::new(provider.clone()).with_reranker(runtime.reranker().cloned()),
             ));
-            self.tools.register(Arc::new(ShowMemoryTool::new(provider)));
+            self.tools
+                .register(Arc::new(ShowMemoryTool::new(provider.clone())));
+            self.tools.register(Arc::new(
+                PromoteMemoryTool::new(provider.clone()).with_recorder(recorder.clone()),
+            ));
+            self.tools.register(Arc::new(
+                DemoteMemoryTool::new(provider).with_recorder(recorder),
+            ));
         }
         self.memory = runtime;
         self
@@ -423,6 +434,7 @@ impl Runner {
             .collect();
         AssemblyParts {
             tool_defs: self.tools.tool_defs(),
+            active_rules: self.memory.format_active_rules(),
             memory_index: self.format_memory_index(),
             announced_skills,
             discovered_skills,

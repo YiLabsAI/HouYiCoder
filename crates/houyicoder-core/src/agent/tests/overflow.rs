@@ -771,6 +771,7 @@ async fn test_break_names_prefix_half() {
             None,
             &AssemblyInput {
                 tool_defs: tools,
+                active_rules: None,
                 memory_index: None,
                 announced_skills: &[],
                 discovered_skills: &[],

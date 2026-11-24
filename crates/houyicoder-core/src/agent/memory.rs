@@ -13,10 +13,11 @@ mod mutation_log;
 mod recall;
 pub(crate) mod selector;
 
-use std::collections::HashSet;
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
 use std::mem::take;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::time::timeout_at;
@@ -33,8 +34,8 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId, memory_index_row,
-    render_memory_index_groups, tokens_for,
+    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySource, MemorySummary, SessionId,
+    memory_index_row, render_memory_index_groups, tokens_for,
 };
 
 pub use gates::{MemoryGateState, MemoryGates};
@@ -57,6 +58,40 @@ pub(crate) const INDEX_ENTRY_CAP: usize = 200;
 /// fewer entries than it looks like it should, and because the index is paid
 /// for on every request while only the opening rows earn their place.
 pub(crate) const INDEX_TOKEN_BUDGET: usize = 4_000;
+
+/// Token budget for the active rules section.
+pub(crate) const ACTIVE_RULES_TOKEN_BUDGET: usize = 1_600;
+
+/// Token cap for one compact active rule card.
+pub(crate) const RULE_CARD_TOKEN_BUDGET: usize = 80;
+
+pub(crate) fn format_rule_card(key: &str, content: &str) -> String {
+    let card = rule_card_text(content);
+    format!("- [{key}] {card}\n")
+}
+
+fn rule_card_text(body: &str) -> String {
+    let first = body
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let folded: String = first
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let compact = folded.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::new();
+    for c in compact.chars() {
+        let mut probe = out.clone();
+        probe.push(c);
+        if tokens_for(&probe) > RULE_CARD_TOKEN_BUDGET {
+            break;
+        }
+        out = probe;
+    }
+    out.trim_end().to_string()
+}
 
 /// One line of the system prompt's memory index, the exact text a stored
 /// memory contributes to the prompt. The frozen index is the only thing the
@@ -111,10 +146,9 @@ impl BackgroundMemory {
 }
 
 #[derive(Default)]
-enum MemoryIndexSnapshot {
-    #[default]
-    Uninitialized,
-    Loaded(Option<String>),
+struct CachedPromptMemory {
+    index: Option<Option<String>>,
+    active_rules: Option<Option<String>>,
 }
 
 /// Coordinates memory state and lifecycle operations.
@@ -124,7 +158,7 @@ pub struct MemoryRuntime {
     reranker: Option<Arc<dyn MemoryReranker>>,
     gates: MemoryGates,
     background: BackgroundMemory,
-    index_snapshot: Mutex<MemoryIndexSnapshot>,
+    index_snapshot: Mutex<CachedPromptMemory>,
     primary_recorder: Option<Arc<MutationLog>>,
     memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
     recall_tasks: RecallTasks,
@@ -150,7 +184,7 @@ impl MemoryRuntime {
             reranker: None,
             gates: MemoryGates::new(true, true),
             background: BackgroundMemory::none(),
-            index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
+            index_snapshot: Mutex::new(CachedPromptMemory::default()),
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
@@ -174,7 +208,7 @@ impl MemoryRuntime {
             reranker: None,
             gates,
             background: BackgroundMemory { extractor, dream },
-            index_snapshot: Mutex::new(MemoryIndexSnapshot::Uninitialized),
+            index_snapshot: Mutex::new(CachedPromptMemory::default()),
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
@@ -337,14 +371,85 @@ impl MemoryRuntime {
             tracing::warn!("memory index snapshot lock poisoned");
             return self.build_index();
         };
-        match &*snapshot {
-            MemoryIndexSnapshot::Loaded(index) => index.clone(),
-            MemoryIndexSnapshot::Uninitialized => {
-                let index = self.build_index();
-                *snapshot = MemoryIndexSnapshot::Loaded(index.clone());
-                index
-            }
+        if let Some(cached) = &snapshot.index {
+            return cached.clone();
         }
+        let index = self.build_index();
+        snapshot.index = Some(index.clone());
+        index
+    }
+
+    /// Format high-priority feedback rules from explicit scopes for the
+    /// session prompt suffix. Held alongside the index snapshot until clear
+    /// or compact so ordinary turns keep a byte-stable prompt.
+    pub(crate) fn format_active_rules(&self) -> Option<String> {
+        if !self.gates.auto_memory_enabled() {
+            return None;
+        }
+        let Ok(mut snapshot) = self.index_snapshot.lock() else {
+            return self.build_active_rules();
+        };
+        if let Some(cached) = &snapshot.active_rules {
+            return cached.clone();
+        }
+        let rules = self.build_active_rules();
+        snapshot.active_rules = Some(rules.clone());
+        rules
+    }
+
+    fn build_active_rules(&self) -> Option<String> {
+        let memory = self.provider.as_ref()?;
+        let summaries = memory.list_memories();
+        let stats: HashMap<String, _> = memory
+            .read_recall_stats()
+            .into_iter()
+            .map(|s| (s.key.clone(), s))
+            .collect();
+
+        let mut candidates: Vec<&MemorySummary> = summaries
+            .iter()
+            .filter(|s| {
+                if s.scope == MemoryScope::Auto || s.source != MemorySource::Feedback {
+                    return false;
+                }
+                if s.scope == MemoryScope::User {
+                    return true;
+                }
+                let stat = stats.get(&s.key);
+                let violations = stat.map(|r| r.gate_violations).unwrap_or(0);
+                let hits = stat.map(|r| r.recall_hits).unwrap_or(0);
+                let occurrences = stat.map(|r| r.occurrences).unwrap_or(1);
+                violations >= 1 || hits >= 3 || occurrences >= 2
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        candidates.sort_by_key(|s| {
+            let stat = stats.get(&s.key);
+            let violations = stat.map(|r| r.gate_violations).unwrap_or(0);
+            let hits = stat.map(|r| r.recall_hits).unwrap_or(0);
+            let occurrences = stat.map(|r| r.occurrences).unwrap_or(1);
+            Reverse((violations, hits, occurrences, s.mtime_secs))
+        });
+
+        let mut out = String::new();
+        let mut used = 0usize;
+        for s in candidates {
+            let content = memory
+                .show_memory_in_scope(&s.key, s.scope)
+                .map(|e| e.content)
+                .unwrap_or_else(|| s.description.clone());
+            let line = format_rule_card(&s.key, &content);
+            let cost = tokens_for(&line);
+            if used + cost > ACTIVE_RULES_TOKEN_BUDGET {
+                break;
+            }
+            used += cost;
+            out.push_str(&line);
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     fn build_index(&self) -> Option<String> {
@@ -359,7 +464,7 @@ impl MemoryRuntime {
     /// Refresh the frozen index at a natural prompt-cache invalidation point.
     pub(crate) fn invalidate_index_snapshot(&self) {
         if let Ok(mut snapshot) = self.index_snapshot.lock() {
-            *snapshot = MemoryIndexSnapshot::Uninitialized;
+            *snapshot = CachedPromptMemory::default();
         } else {
             tracing::warn!("memory index snapshot lock poisoned during invalidation");
         }
@@ -402,12 +507,14 @@ impl MemoryRuntime {
     where
         F: FnOnce() -> RewardSnapshot,
     {
+        let auto_memory_on = self.gates.auto_memory_enabled();
         let extractor = self
             .background
             .extractor
             .as_ref()
-            .filter(|_| self.gates.auto_memory_enabled())
+            .filter(|_| auto_memory_on)
             .cloned();
+        let reconcile_provider = self.provider.as_ref().filter(|_| auto_memory_on).cloned();
         let dream = self
             .background
             .dream
@@ -419,7 +526,7 @@ impl MemoryRuntime {
         } else {
             None
         };
-        if extractor.is_none() && dream.is_none() {
+        if extractor.is_none() && reconcile_provider.is_none() && dream.is_none() {
             return;
         }
         let messages = if extractor.is_some() {
@@ -433,9 +540,9 @@ impl MemoryRuntime {
         } else {
             None
         };
-        // One serial pipeline per turn: extraction lands first, then dream
-        // awaits inline under the same lock, and one merged notice emits at
-        // the end of the pipeline.
+        // One serial pipeline per turn: extraction lands first, then host
+        // scope reconciliation runs in one batch, then dream awaits inline
+        // under the same lock, and one merged notice emits at the end.
         let wait_extractor = self.background.extractor.clone();
         let track_extractor = extractor.clone();
         let serial = Arc::clone(&self.background_lock);
@@ -450,6 +557,12 @@ impl MemoryRuntime {
             if let (Some(ext), Some(msgs)) = (extractor.as_ref(), messages) {
                 extract_causality = ext.run_pipeline(msgs, &pipeline_log).await;
             }
+            let mut reconciled = false;
+            if let Some(provider) = reconcile_provider.as_ref() {
+                let moved = provider.reconcile_scopes(now_secs());
+                reconciled = !moved.is_empty();
+                pipeline_log.extend(moved);
+            }
             let dream_changed = if let Some(dream) = dream.as_ref() {
                 dream.run_consolidation(reward, &pipeline_log).await
             } else {
@@ -460,7 +573,7 @@ impl MemoryRuntime {
                 handler.as_deref(),
                 changes,
                 extract_causality,
-                dream_changed,
+                reconciled || dream_changed,
             );
         });
         if let Some(ext) = track_extractor {
@@ -580,6 +693,13 @@ fn emit_background_changes(
         causality,
         changes,
     });
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

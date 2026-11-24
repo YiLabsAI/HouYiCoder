@@ -76,7 +76,7 @@ impl SystemPrompt {
     /// context from the first AGENTS.md walking up from cwd) is appended
     /// after the boundary so a cache policy can carve the prefix.
     pub fn build(cwd: &Path) -> SystemPrompt {
-        Self::build_with_mcp_instructions(cwd, None, None, None, &FrozenPrompt::read(cwd))
+        Self::build_with_mcp_instructions(cwd, None, None, None, None, &FrozenPrompt::read(cwd))
     }
 
     /// Build the system prompt from the session's frozen inputs. MemoryRuntime
@@ -89,12 +89,13 @@ impl SystemPrompt {
         agent_directory: Option<&str>,
         freeze: &FrozenPrompt,
     ) -> SystemPrompt {
-        Self::build_with_mcp_instructions(cwd, index, agent_directory, None, freeze)
+        Self::build_with_mcp_instructions(cwd, None, index, agent_directory, None, freeze)
     }
 
     /// Build the system prompt including optional MCP server instructions.
     pub fn build_with_mcp_instructions(
         cwd: &Path,
+        active_rules: Option<&str>,
         index: Option<&str>,
         agent_directory: Option<&str>,
         mcp_instructions: Option<&str>,
@@ -156,6 +157,20 @@ impl SystemPrompt {
         // split here.
         let dynamic_boundary = text.len();
 
+        let rules_block = active_rules.filter(|s| !s.is_empty()).map(|rules| {
+            text.push_str("\n\n# Active Rules\n\n");
+            text.push_str(rules);
+            MemoryBlock {
+                label: format!(
+                    "Active Rules ({})",
+                    super::memory_entry_label(
+                        rules.lines().filter(|line| line.starts_with("- [")).count()
+                    )
+                ),
+                text: rules.to_string(),
+            }
+        });
+
         // The index changes whenever a memory lands or the store rebuilds, so
         // it rides the session-scoped suffix. Carried in the prefix it would
         // miss the cross-project cache on every project on the machine.
@@ -207,6 +222,7 @@ impl SystemPrompt {
                 memory_blocks.push(block_for(overlay));
             }
         }
+        memory_blocks.extend(rules_block);
         memory_blocks.extend(index_block);
 
         SystemPrompt {

@@ -48,8 +48,14 @@ pub(super) struct StatRecord {
     pub(super) recall_hits: u64,
     #[serde(default)]
     pub(super) gate_violations: u64,
+    #[serde(default = "default_occurrences")]
+    pub(super) occurrences: u64,
     #[serde(default)]
     pub(super) last_access_ts: u64,
+}
+
+fn default_occurrences() -> u64 {
+    1
 }
 
 /// A topic file located during the scan phase, with precomputed metadata

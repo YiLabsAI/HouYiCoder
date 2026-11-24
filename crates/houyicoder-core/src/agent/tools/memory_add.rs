@@ -172,6 +172,11 @@ impl Tool for MemoryAddTool {
                 "content": {
                     "type": "string",
                     "description": "The memory body. For feedback/project, lead with the rule or fact then add Why and How-to-apply lines."
+                },
+                "replaces": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of superseded memory keys consolidated into this entry. Their counters merge into this key and the old files move to the archive directory."
                 }
             },
             "required": ["key", "description", "source", "content"],
@@ -248,8 +253,9 @@ impl Tool for MemoryAddTool {
             // project entry by newest-mtime and lose the refresh.
             let scope = match self.scope {
                 Some(pinned) => refresh_root(provider.as_ref(), &key, pinned),
-                None => parse_scope(&input),
+                None => parse_scope(&input, provider.as_ref(), &key),
             };
+            let replaces = parse_replaces(&input);
             // Stamp the entry with the current time so a backend that does
             // not restat on recall still sees a fresh mtime; backends that
             // restat (the markdown store) overwrite this with the file stat,
@@ -261,9 +267,13 @@ impl Tool for MemoryAddTool {
             let entry = MemoryEntry::new(key.clone(), content, source)
                 .with_meta(description, now_secs)
                 .with_origin(self.origin);
-            let save = match scope {
-                MemoryScope::Auto => provider.add_if_changed(entry),
-                other => provider.add_in_scope_if_changed(entry, other),
+            let save = if !replaces.is_empty() {
+                provider.replace_in_scope(entry, scope, &replaces)
+            } else {
+                match scope {
+                    MemoryScope::Auto => provider.add_if_changed(entry),
+                    other => provider.add_in_scope_if_changed(entry, other),
+                }
             };
             match save {
                 Ok(outcome) => {
@@ -345,11 +355,32 @@ fn parse_source(input: &Value) -> Result<MemorySource, ToolError> {
 /// so the main agent or the dream can pick a root per call. An unknown value
 /// falls back to auto rather than rejecting: the field is advisory and the
 /// call's intent was to save, so a typo must not starve the write.
-fn parse_scope(input: &Value) -> MemoryScope {
-    let Some(label) = input.get("scope").and_then(|v| v.as_str()) else {
-        return MemoryScope::Auto;
-    };
-    MemoryScope::from_label(label).unwrap_or(MemoryScope::Auto)
+fn parse_scope(input: &Value, provider: &dyn MemoryProvider, key: &str) -> MemoryScope {
+    if let Some(label) = input.get("scope").and_then(|v| v.as_str()) {
+        return MemoryScope::from_label(label).unwrap_or(MemoryScope::Auto);
+    }
+    let existing = provider.scopes_for_key(key);
+    if existing.contains(&MemoryScope::User) {
+        MemoryScope::User
+    } else if existing.contains(&MemoryScope::Project) {
+        MemoryScope::Project
+    } else {
+        MemoryScope::Auto
+    }
+}
+
+fn parse_replaces(input: &Value) -> Vec<String> {
+    input
+        .get("replaces")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::trim))
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Resolve the write root for a pinned save. The pin names the default

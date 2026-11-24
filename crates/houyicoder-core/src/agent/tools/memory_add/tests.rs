@@ -318,6 +318,7 @@ fn test_save_schema_pins_fields() {
             &"content".to_string(),
             &"description".to_string(),
             &"key".to_string(),
+            &"replaces".to_string(),
             &"scope".to_string(),
             &"source".to_string(),
         ],
@@ -361,6 +362,7 @@ fn test_extraction_schema_hides_scope() {
             &"description".to_string(),
             &"evidence".to_string(),
             &"key".to_string(),
+            &"replaces".to_string(),
             &"source".to_string(),
         ],
         "the pinned tool exposes evidence, not scope"
@@ -746,4 +748,62 @@ fn test_secret_tool_message() {
     };
     assert!(message.contains("credential"), "{message}");
     assert!(message.contains("aws-access-key"), "{message}");
+}
+
+#[tokio::test]
+async fn test_save_replaces_and_refreshes() {
+    let dir = temp_dir().join(format!("save-replace-{}", id()));
+    let user = dir.join("user");
+    let proj = dir.join("project");
+    let auto = dir.join("auto");
+    for d in [&user, &proj, &auto] {
+        create_dir_all(d).expect("mkdir");
+    }
+    let mp = Arc::new(MarkdownMemoryProvider::new_multi(vec![
+        user.clone(),
+        proj.clone(),
+        auto.clone(),
+    ]));
+    mp.add_in_scope(
+        MemoryEntry::new("user-key", "v1", MemorySource::User),
+        MemoryScope::User,
+    )
+    .expect("seed user");
+    mp.add(MemoryEntry::new("old-auto", "old", MemorySource::Feedback))
+        .expect("seed auto");
+
+    let tool = MemoryAddTool::new(Arc::clone(&mp) as Arc<dyn MemoryProvider>)
+        .with_origin(MemoryOrigin::MainAgent);
+    // Omitted scope refreshes existing User copy instead of creating Auto copy.
+    run(
+        &tool,
+        json!({
+            "key": "user-key",
+            "description": "updated user pref",
+            "source": "user",
+            "content": "v2"
+        }),
+    )
+    .await
+    .expect("refresh user");
+    assert!(!auto.join("user-key.md").exists());
+    assert_eq!(mp.show_memory("user-key").unwrap().content, "v2");
+
+    // Explicit project save with replaces moves old-auto to archive.
+    run(
+        &tool,
+        json!({
+            "key": "merged-proj",
+            "description": "merged rule",
+            "source": "feedback",
+            "content": "Merged rule.",
+            "scope": "project",
+            "replaces": ["old-auto"]
+        }),
+    )
+    .await
+    .expect("replace in project");
+    assert!(proj.join("merged-proj.md").is_file());
+    assert!(auto.join("archive").join("old-auto.md").is_file());
+    remove_dir_all(&dir).ok();
 }

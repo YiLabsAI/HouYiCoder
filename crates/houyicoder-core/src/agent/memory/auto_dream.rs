@@ -57,9 +57,7 @@ use crate::agent::prompt::reward_lesson::build_reward_lesson_prompt;
 use crate::agent::reward_snapshot::RewardSnapshot;
 use crate::agent::reward_snapshot::format_reward;
 use crate::agent::runner_config::RunnerConfig;
-use crate::agent::tools::{
-    DeleteMemoryTool, DemoteMemoryTool, MemoryAddTool, PromoteMemoryTool, ShowMemoryTool,
-};
+use crate::agent::tools::{DeleteMemoryTool, MemoryAddTool, ShowMemoryTool};
 use crate::agent::{RunError, RunResult, Runner, ToolRegistry};
 use tokio::time::sleep;
 
@@ -338,8 +336,9 @@ pub(crate) fn build_consolidation_prompt(
         ## Phase 2 — Consolidate\n\n\
         For each thing worth remembering, call save_memory to write or update \
         a topic file. Reusing a key refreshes that entry. Focus on:\n\
-        - Merging new signal into existing topic files rather than creating \
-        near-duplicates.\n\
+        - Merging near-duplicate entries into one canonical topic and passing \
+        the superseded keys in the replaces field so their counters merge and \
+        the old files move to the archive directory.\n\
         - Converting relative dates (yesterday, last week) to absolute dates \
         so they remain interpretable after time passes.\n\
         - Fixing contradicted facts — if today's investigation disproves an \
@@ -356,32 +355,17 @@ pub(crate) fn build_consolidation_prompt(
         dream, so do not edit {INDEX_FILE} directly — just delete or save \
         topics.\n\n\
         ## Phase 4 — Scope flow\n\n\
-        Rules that have crossed the promotion threshold move from the \
-        recall-on-demand auto scope into the always-on project carrier; rules \
-        that have decayed move back. Use the recall-frequency block to decide:\n\
-        - Call promote_memory for rules with high recall frequency (the rule \
-        is referenced often) or for rules you see cited repeatedly across the \
-        listing. Promotion moves the topic into the project memory dir, where \
-        the project scope outranks the automatic one on a key collision, so \
-        the rule survives an automatic rewrite of the same key.\n\
-        - Call promote_memory for rules with a high gate-violations count \
-        (the agent keeps violating a PreToolUse gate on that rule — recall is \
-        missing it, so it should be promoted so the agent sees it before \
-        acting). This closes \
-        the loop where a rule the agent keeps violating finally stops relying \
-        on recall luck.\n\
-        - Call demote_memory for rules that have decayed: long unstirred in \
-        recall and no recent gate violations. Demotion moves the topic back \
-        into the auto scope and out of the project root, so it is \
-        recall-on-demand only.\n\
-        - When refreshing a topic that is already in the project scope (one \
-        you promoted earlier), just call save_memory with the updated \
-        content: the host routes that refresh into the project root in \
-        place, so the explicit entry is updated rather than shadowed.\n\n\
+        Promotion, demotion, and decay archival run deterministically in the \
+        host based on recall hits, occurrences, and gate violations.\n\
+        - When refreshing a topic that already lives in the project scope, \
+        call save_memory with the updated content: the host updates that \
+        project entry in place rather than writing a duplicate in auto.\n\
+        - When consolidating several granular feedback rules into one rule, \
+        pass the superseded keys in replaces so the merged rule inherits \
+        their accumulated counts for host promotion.\n\n\
         ---\n\n\
-        Return a brief summary of what you consolidated, updated, pruned, \
-        promoted, or demoted. If nothing changed (memories are already tight), \
-        say so.",
+        Return a brief summary of what you consolidated, updated, or pruned. \
+        If nothing changed (memories are already tight), say so.",
         count = listing.len(),
         listing = format_listing(listing),
         stats = format_recall_stats(stats, now_secs),
@@ -415,13 +399,7 @@ pub(crate) fn build_forked_dream_runner(
     ));
     tools.register(Arc::new(ShowMemoryTool::new(memory.clone())));
     tools.register(Arc::new(
-        DeleteMemoryTool::new(memory.clone()).with_recorder(recorder.clone()),
-    ));
-    tools.register(Arc::new(
-        PromoteMemoryTool::new(memory.clone()).with_recorder(recorder.clone()),
-    ));
-    tools.register(Arc::new(
-        DemoteMemoryTool::new(memory.clone()).with_recorder(recorder),
+        DeleteMemoryTool::new(memory.clone()).with_recorder(recorder),
     ));
     Runner::new(store, provider, tools, config).with_cwd(cwd.to_path_buf())
 }
@@ -571,7 +549,12 @@ impl DreamRunner {
         let last_scan = *self.last_scan_at.lock().expect("last_scan_at");
         let reward_path =
             reward_ready && now.saturating_sub(last_scan) >= REWARD_DREAM_MIN_INTERVAL_SECS;
-        if !base && !early && !reward_path {
+        let watermark = !base
+            && !early
+            && !reward_path
+            && now.saturating_sub(last_scan) >= 1_800
+            && self.memory.count_new_since(0) > 120;
+        if !base && !early && !reward_path && !watermark {
             return None;
         }
         if now.saturating_sub(last_scan) < SCAN_INTERVAL_SECS {
@@ -584,7 +567,7 @@ impl DreamRunner {
         *ip = true;
         drop(ip);
         *self.last_scan_at.lock().expect("last_scan_at") = now;
-        let is_reward_dream = reward_path && !base && !early;
+        let is_reward_dream = reward_path && !base && !early && !watermark;
         Some((root, is_reward_dream))
     }
 
