@@ -3,6 +3,7 @@
 //! Independent atomics control recall, extraction, and consolidation without
 //! locking the agent loop.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Snapshot of the memory feature gates.
@@ -12,17 +13,19 @@ pub struct MemoryGateState {
     pub auto_dream: bool,
 }
 
-/// Runtime switches for automatic memory behavior.
+/// Runtime switches for automatic memory behavior, shared via Arc so delegated
+/// children see live toggle flips made in the parent session.
+#[derive(Clone)]
 pub struct MemoryGates {
-    auto_memory: AtomicBool,
-    auto_dream: AtomicBool,
+    auto_memory: Arc<AtomicBool>,
+    auto_dream: Arc<AtomicBool>,
 }
 
 impl MemoryGates {
     pub fn new(auto_memory: bool, auto_dream: bool) -> Self {
         Self {
-            auto_memory: AtomicBool::new(auto_memory),
-            auto_dream: AtomicBool::new(auto_dream),
+            auto_memory: Arc::new(AtomicBool::new(auto_memory)),
+            auto_dream: Arc::new(AtomicBool::new(auto_dream)),
         }
     }
 
@@ -33,7 +36,8 @@ impl MemoryGates {
         }
     }
 
-    pub(crate) fn auto_memory_enabled(&self) -> bool {
+    /// Whether automatic memory recall and maintenance are enabled.
+    pub fn auto_memory_enabled(&self) -> bool {
         self.auto_memory.load(Ordering::Relaxed)
     }
 

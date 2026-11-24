@@ -164,5 +164,53 @@ pub(super) fn heal_memory_index(provider: &MarkdownMemoryProvider) {
     }
 }
 
+pub(super) fn build_workspace_memory(
+    workspace: Option<(PathBuf, Option<PathBuf>)>,
+    store: Arc<dyn SessionLog>,
+    session: SessionId,
+    provider_for_extractor: Arc<dyn ModelProvider>,
+    model_for_extractor: String,
+    session_log_root: Option<PathBuf>,
+) -> (Option<(PathBuf, MemoryRuntime)>, Vec<ConfigWarning>) {
+    match workspace {
+        Some((ws, home)) => {
+            let memory_provider: Arc<dyn MemoryProvider> =
+                Arc::new(memory_provider_for(&ws, home.as_deref()));
+            let (runtime, warnings) = build_memory_runtime(
+                store,
+                session,
+                memory_provider,
+                provider_for_extractor,
+                ws.clone(),
+                model_for_extractor,
+                session_log_root,
+            );
+            (Some((ws, runtime)), warnings)
+        }
+        None => (None, Vec::new()),
+    }
+}
+
+pub(super) fn attach_workspace_memory(
+    runner: Runner,
+    workspace_memory: Option<(PathBuf, MemoryRuntime)>,
+    undo_handles: Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)>,
+    worktree_controller: Option<&Arc<WorktreeController>>,
+) -> Runner {
+    match workspace_memory {
+        Some((ws, runtime)) => {
+            let mut r = runner.with_cwd(ws).install_memory(runtime);
+            if let Some((stack, store)) = undo_handles {
+                r.set_undo(stack, store);
+            }
+            if let Some(controller) = worktree_controller {
+                controller.set_cwd_handle(r.cwd_handle());
+            }
+            r
+        }
+        None => runner,
+    }
+}
+
 #[cfg(test)]
 mod tests;

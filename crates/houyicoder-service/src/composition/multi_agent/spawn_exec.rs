@@ -38,12 +38,12 @@ use super::provenance::record_provenance;
 use super::{ChildReservation, ChildWatch, MultiAgentRuntime, RunningChildren};
 use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::SpawnError;
-use houyicoder_core::agent::multi_agent::child_prompt::child_system_prompt;
-use houyicoder_core::agent::multi_agent::registry::AgentBackend;
-use houyicoder_core::agent::multi_agent::registry::AgentDefinition;
-use houyicoder_core::agent::multi_agent::registry::AgentError;
-use houyicoder_core::agent::multi_agent::registry::PromptSource;
+use houyicoder_core::agent::multi_agent::child_prompt::build_child_prompt;
+use houyicoder_core::agent::multi_agent::registry::{
+    AgentBackend, AgentDefinition, AgentError, MemoryScope as AgentMemoryScope, PromptSource,
+};
 use houyicoder_core::agent::runner_config::RunnerConfig;
+use houyicoder_core::agent::{MemoryGates, MemoryReadTool, MemorySearchTool, render_child_memory};
 use std::panic::resume_unwind;
 use std::time::Duration;
 

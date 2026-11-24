@@ -51,7 +51,6 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
 
-use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::sandbox::SandboxSession;
@@ -402,11 +401,28 @@ pub(crate) fn assemble(
     let reducer: Arc<dyn ToolOutputReducer> = Arc::new(HotPathReducer);
     let catalog_resolver: Arc<dyn ModelCatalogResolver> =
         Arc::new(SettingsCatalogResolver::from_section(section.clone()));
+    let store_log_root = store.session_log_root();
+    let session_log: Arc<dyn SessionLog> = store.clone();
+    let (workspace_memory, toggle_warnings) = memory::build_workspace_memory(
+        fences.workspace.clone().map(|ws| (ws, home)),
+        session_log,
+        session,
+        Arc::clone(&provider_for_extractor),
+        model.clone(),
+        store_log_root.clone(),
+    );
     let inherited = RunnerInheritance {
         summarizer: Some(Arc::clone(&summarizer)),
         reducer: Some(Arc::clone(&reducer)),
         result_catalog: Some(Arc::clone(&stored_results.catalog)),
         catalog_resolver: Some(Arc::clone(&catalog_resolver)),
+        memory_provider: workspace_memory
+            .as_ref()
+            .and_then(|(_, rt)| rt.shared_provider()),
+        memory_reranker: workspace_memory
+            .as_ref()
+            .and_then(|(_, rt)| rt.shared_reranker()),
+        memory_gates: workspace_memory.as_ref().map(|(_, rt)| rt.shared_gates()),
     };
     let spawn_handle = multi_agent::build_runtime(
         skills.multi_agent_deps(
@@ -426,7 +442,6 @@ pub(crate) fn assemble(
     );
     let (recap, recap_warnings) =
         build_recap(session, &section, &store, &provider_for_extractor, &model);
-    let store_log_root = store.session_log_root();
     let runner = Runner::new(store, provider, tools, config)
         .with_recall_meter(recall_meter)
         .with_breaker(fences.breaker)
@@ -447,12 +462,9 @@ pub(crate) fn assemble(
     if let Some(controller) = &worktree_controller {
         controller.set_hook_fire(build_hook_fire(&runner));
     }
-    let (runner, toggle_warnings) = install_workspace_memory(
+    let runner = memory::attach_workspace_memory(
         runner,
-        fences.workspace.map(|ws| (ws, home)),
-        session,
-        provider_for_extractor,
-        model,
+        workspace_memory,
         builtin.undo_handles,
         worktree_controller.as_ref(),
     );
@@ -604,46 +616,6 @@ fn finish_startup_warnings(
         startup.push(notice);
     }
     retention_notice::push_startup_notices(store_log_root, session, startup);
-}
-
-/// Wire workspace-scoped memory, undo handles, and the real cwd handle onto the runner.
-/// The workspace pair carries where the session's state is read from: the
-/// directory the session works in, and the home user-level state resolves
-/// against (None reads the environment, like the interactive entry).
-fn install_workspace_memory(
-    runner: Runner,
-    workspace: Option<(PathBuf, Option<PathBuf>)>,
-    session: SessionId,
-    provider_for_extractor: Arc<dyn ModelProvider>,
-    model_for_extractor: String,
-    undo_handles: Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)>,
-    worktree_controller: Option<&Arc<WorktreeController>>,
-) -> (Runner, Vec<ConfigWarning>) {
-    match workspace {
-        Some((ws, home)) => {
-            let memory_provider: Arc<dyn MemoryProvider> =
-                Arc::new(memory::memory_provider_for(&ws, home.as_deref()));
-            let session_log_root = runner.store().session_log_root();
-            let (runtime, warnings) = memory::build_memory_runtime(
-                runner.store(),
-                session,
-                memory_provider,
-                provider_for_extractor,
-                ws.clone(),
-                model_for_extractor,
-                session_log_root,
-            );
-            let mut r = runner.with_cwd(ws).install_memory(runtime);
-            if let Some((stack, store)) = undo_handles {
-                r.set_undo(stack, store);
-            }
-            if let Some(controller) = worktree_controller {
-                controller.set_cwd_handle(r.cwd_handle());
-            }
-            (r, warnings)
-        }
-        None => (runner, Vec::new()),
-    }
 }
 
 /// The write journal over the same store the session log uses. None when the

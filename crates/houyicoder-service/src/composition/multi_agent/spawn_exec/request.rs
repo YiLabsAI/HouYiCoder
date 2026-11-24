@@ -61,20 +61,50 @@ pub(super) fn build_spawn_request(
         PromptSource::Owned(p) => p.clone(),
         PromptSource::InheritParent => this.config.instructions.clone(),
     };
+    let memory_allowed = def.memory != AgentMemoryScope::Disabled
+        && this
+            .inherited
+            .memory_gates
+            .as_ref()
+            .is_none_or(MemoryGates::auto_memory_enabled);
+    let child_memory = if memory_allowed {
+        this.inherited.memory_provider.as_ref().cloned()
+    } else {
+        None
+    };
+    let memory_section = child_memory.as_deref().and_then(render_child_memory);
     let child_config = RunnerConfig {
-        instructions: child_system_prompt(
+        instructions: build_child_prompt(
             &base_prompt,
             &this.cwd,
             &this.config.model,
             def.omit_project_context,
+            memory_section.as_deref(),
         ),
-        // The definition's own ceiling wins, so a read-only child cannot spend
-        // the parent's whole budget on one question. A definition that names
-        // none inherits the parent's, which keeps a hand-written agent from
-        // silently getting a zero-turn run.
         max_turns: def.max_turns.unwrap_or(this.config.max_turns),
         ..this.config.clone()
     };
+    let mut disallowed = def.disallowed_tools.clone();
+    for tool in [
+        "memory_write",
+        "memory_delete",
+        "memory_archive",
+        "memory_promote",
+        "memory_demote",
+    ] {
+        disallowed.push(tool.to_string());
+    }
+    if !memory_allowed {
+        disallowed.push("memory_read".to_string());
+        disallowed.push("memory_search".to_string());
+    }
+    let mut child_tools = this.tools.clone();
+    if let Some(mem) = child_memory {
+        child_tools.register(Arc::new(MemoryReadTool::new(Arc::clone(&mem))));
+        child_tools.register(Arc::new(
+            MemorySearchTool::new(mem).with_reranker(this.inherited.memory_reranker.clone()),
+        ));
+    }
     let resume = match args.resume.as_deref() {
         Some(raw) => Some(SessionId::from_display_string(raw).ok_or_else(|| {
             SpawnFailure::InvalidResumeTarget {
@@ -87,7 +117,7 @@ pub(super) fn build_spawn_request(
         parent_sid,
         parent_store: this.store.clone(),
         provider: this.provider.clone(),
-        tools: this.tools.narrow(&def.disallowed_tools),
+        tools: child_tools.narrow(&disallowed),
         config: child_config,
         subagent_type: args.subagent_type.clone(),
         prompt: args.prompt.clone(),

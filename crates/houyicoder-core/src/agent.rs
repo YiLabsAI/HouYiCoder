@@ -65,7 +65,7 @@ pub use exports::{
     WriteTool, apply_manifest, assemble_model_input, bound_child_summary, build_grid,
     build_hook_fire, build_manifest, build_recap_input, combine_verdicts, derive_backbone,
     extraction_prompt, merge_summary, never_worse, parse_event, render_backbone_block,
-    thinking_brief, unified_diff,
+    render_child_memory, thinking_brief, unified_diff,
 };
 pub use inference::{InferenceConfig, RequestInferenceConfig};
 

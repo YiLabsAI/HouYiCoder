@@ -10,11 +10,11 @@ pub(crate) mod reward_snapshot;
 
 mod gates;
 mod mutation_log;
+mod prompt_render;
 mod recall;
 pub(crate) mod selector;
 
-use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::mem::take;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -34,12 +34,13 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, MemoryType, SessionId,
-    memory_index_row, render_memory_index_groups, tokens_for,
+    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
 };
 
 pub use gates::{MemoryGateState, MemoryGates};
 pub(crate) use mutation_log::MutationLog;
+pub use prompt_render::render_child_memory;
+pub(crate) use prompt_render::{render_active_rules, render_index};
 use selector::RecallTasks;
 
 use crate::agent::RunError;
@@ -48,87 +49,6 @@ use crate::agent::extractor::MemoryExtractor;
 use crate::agent::reward_snapshot::RewardSnapshot;
 use houyicoder_context::MemoryChangeId;
 use std::path::Path;
-
-/// How many memories the system prompt index carries. The cap keeps a store
-/// that grew without bound from crowding out the rest of the prompt.
-pub(crate) const INDEX_ENTRY_CAP: usize = 200;
-
-/// Token budget for the injected index. It is a budget rather than a byte or
-/// line cap because the rows carry CJK summaries, where a byte cap stops far
-/// fewer entries than it looks like it should, and because the index is paid
-/// for on every request while only the opening rows earn their place.
-pub(crate) const INDEX_TOKEN_BUDGET: usize = 4_000;
-
-/// Token budget for the active rules section.
-pub(crate) const ACTIVE_RULES_TOKEN_BUDGET: usize = 1_600;
-
-/// Token cap for one compact active rule card.
-pub(crate) const RULE_CARD_TOKEN_BUDGET: usize = 80;
-
-pub(crate) fn format_rule_card(key: &str, content: &str) -> String {
-    let card = rule_card_text(content);
-    format!("- [{key}] {card}\n")
-}
-
-fn rule_card_text(body: &str) -> String {
-    let first = body
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let folded: String = first
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let compact = folded.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut out = String::new();
-    for c in compact.chars() {
-        let mut probe = out.clone();
-        probe.push(c);
-        if tokens_for(&probe) > RULE_CARD_TOKEN_BUDGET {
-            break;
-        }
-        out = probe;
-    }
-    out.trim_end().to_string()
-}
-
-/// One line of the system prompt's memory index, the exact text a stored
-/// memory contributes to the prompt. The frozen index is the only thing the
-/// prompt carries, so the cost the measurement reports is the cost the request
-/// pays.
-pub(crate) fn index_line(summary: &MemorySummary) -> String {
-    format!("{}\n", memory_index_row(&summary.key, &summary.description))
-}
-
-/// Render the injected index under one token budget. Selection runs first, so
-/// scope priority decides what fits and a large automatic set cannot starve a
-/// preference the user wrote. Grouping runs once over the selected rows, so
-/// each type heading appears at most once under the section heading.
-pub(crate) fn render_index(summaries: &[MemorySummary]) -> String {
-    let mut selected: Vec<&MemorySummary> = Vec::new();
-    let mut used = 0usize;
-    for scope in [MemoryScope::User, MemoryScope::Project, MemoryScope::Auto] {
-        for summary in summaries.iter().filter(|s| s.scope == scope) {
-            if selected.len() >= INDEX_ENTRY_CAP {
-                break;
-            }
-            let cost = tokens_for(&index_line(summary));
-            if used + cost > INDEX_TOKEN_BUDGET {
-                break;
-            }
-            used += cost;
-            selected.push(summary);
-        }
-    }
-    render_memory_index_groups(selected.iter().map(|summary| {
-        (
-            summary.memory_type,
-            summary.key.as_str(),
-            summary.description.as_str(),
-        )
-    }))
-}
 
 /// Optional background memory workers.
 struct BackgroundMemory {
@@ -239,6 +159,11 @@ impl MemoryRuntime {
         self.provider.as_ref()
     }
 
+    /// Cloneable handle to the configured provider for read-only child inheritance.
+    pub fn shared_provider(&self) -> Option<Arc<dyn MemoryProvider>> {
+        self.provider.clone()
+    }
+
     /// Install a provider during crate-internal incremental assembly.
     pub(crate) fn install_provider(&mut self, provider: Arc<dyn MemoryProvider>) {
         self.provider = Some(provider);
@@ -248,6 +173,16 @@ impl MemoryRuntime {
     /// Return the semantic selection stage, when one is installed.
     pub(crate) fn reranker(&self) -> Option<&Arc<dyn MemoryReranker>> {
         self.reranker.as_ref()
+    }
+
+    /// Cloneable handle to the semantic selection stage for child search tools.
+    pub fn shared_reranker(&self) -> Option<Arc<dyn MemoryReranker>> {
+        self.reranker.clone()
+    }
+
+    /// Shared handle to the live runtime memory switches.
+    pub fn shared_gates(&self) -> MemoryGates {
+        self.gates.clone()
     }
 
     /// Install the semantic selection stage during composition. Without it a
@@ -399,57 +334,7 @@ impl MemoryRuntime {
 
     fn build_active_rules(&self) -> Option<String> {
         let memory = self.provider.as_ref()?;
-        let summaries = memory.list_memories();
-        let stats: HashMap<String, _> = memory
-            .read_recall_stats()
-            .into_iter()
-            .map(|s| (s.key.clone(), s))
-            .collect();
-
-        let mut candidates: Vec<&MemorySummary> = summaries
-            .iter()
-            .filter(|s| {
-                if s.scope == MemoryScope::Auto || s.memory_type != MemoryType::Feedback {
-                    return false;
-                }
-                if s.scope == MemoryScope::User {
-                    return true;
-                }
-                let stat = stats.get(&s.key);
-                let violations = stat.map(|r| r.gate_violations).unwrap_or(0);
-                let hits = stat.map(|r| r.recall_hits).unwrap_or(0);
-                let occurrences = stat.map(|r| r.occurrences).unwrap_or(1);
-                violations >= 1 || hits >= 3 || occurrences >= 2
-            })
-            .collect();
-        if candidates.is_empty() {
-            return None;
-        }
-
-        candidates.sort_by_key(|s| {
-            let stat = stats.get(&s.key);
-            let violations = stat.map(|r| r.gate_violations).unwrap_or(0);
-            let hits = stat.map(|r| r.recall_hits).unwrap_or(0);
-            let occurrences = stat.map(|r| r.occurrences).unwrap_or(1);
-            Reverse((violations, hits, occurrences, s.mtime_secs))
-        });
-
-        let mut out = String::new();
-        let mut used = 0usize;
-        for s in candidates {
-            let content = memory
-                .show_memory_in_scope(&s.key, s.scope)
-                .map(|e| e.content)
-                .unwrap_or_else(|| s.description.clone());
-            let line = format_rule_card(&s.key, &content);
-            let cost = tokens_for(&line);
-            if used + cost > ACTIVE_RULES_TOKEN_BUDGET {
-                break;
-            }
-            used += cost;
-            out.push_str(&line);
-        }
-        if out.is_empty() { None } else { Some(out) }
+        render_active_rules(memory.as_ref())
     }
 
     fn build_index(&self) -> Option<String> {

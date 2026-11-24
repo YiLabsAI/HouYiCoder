@@ -26,7 +26,7 @@ pub use crate::agent::hook::{
 pub use crate::agent::manifest::{
     CompressPolicy, HeuristicSummarizer, SummarizeError, Summarizer, build_manifest,
 };
-pub use crate::agent::memory::{MemoryGateState, MemoryGates, MemoryRuntime};
+pub use crate::agent::memory::{MemoryGateState, MemoryGates, MemoryRuntime, render_child_memory};
 pub use crate::agent::prompt::SystemPrompt;
 pub use crate::agent::prompt::extract::extraction_prompt;
 pub use crate::agent::reducer::{

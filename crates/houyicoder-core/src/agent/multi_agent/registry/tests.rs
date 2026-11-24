@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use super::{
-    AgentBackend, AgentError, AgentRegistry, BuiltInRegistry, ResolveCtx, built_in_all,
-    built_in_general_purpose,
+    AgentBackend, AgentError, AgentRegistry, BuiltInRegistry, MemoryScope, ResolveCtx,
+    built_in_all, built_in_general_purpose,
 };
 
 /// A registered built-in must resolve to its definition, unchanged.
@@ -120,6 +120,12 @@ fn test_explore_plan_omit_memory() {
     assert!(super::built_in_plan().omit_project_context);
     assert!(!super::built_in_general_purpose().omit_project_context);
     assert!(!super::built_in_verify().omit_project_context);
+    assert_eq!(
+        super::built_in_general_purpose().memory,
+        MemoryScope::Project
+    );
+    assert_eq!(super::built_in_explore().memory, MemoryScope::Disabled);
+    assert_eq!(super::built_in_plan().memory, MemoryScope::Disabled);
 }
 
 fn built_in() -> BuiltInRegistry {

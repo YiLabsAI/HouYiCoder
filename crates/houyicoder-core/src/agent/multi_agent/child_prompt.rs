@@ -39,6 +39,18 @@ pub fn child_system_prompt(
     model: &str,
     omit_project_context: bool,
 ) -> String {
+    build_child_prompt(base_prompt, cwd, model, omit_project_context, None)
+}
+
+/// Assemble a child's system prompt with an optional read-only memory snapshot
+/// carrying active rules and the compact memory index.
+pub fn build_child_prompt(
+    base_prompt: &str,
+    cwd: &Path,
+    model: &str,
+    omit_project_context: bool,
+    memory_section: Option<&str>,
+) -> String {
     let mut text = String::new();
     if !base_prompt.is_empty() {
         text.push_str(base_prompt);
@@ -46,6 +58,10 @@ pub fn child_system_prompt(
     }
     if !omit_project_context && let Some(project) = project_context_section(cwd) {
         text.push_str(&project);
+        text.push_str("\n\n");
+    }
+    if let Some(mem) = memory_section.filter(|s| !s.trim().is_empty()) {
+        text.push_str(mem.trim_end());
         text.push_str("\n\n");
     }
     text.push_str(&env_block(cwd, model));

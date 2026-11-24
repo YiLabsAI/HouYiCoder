@@ -1,6 +1,7 @@
 //! Child-agent construction, durable spawn boundaries, and run handles.
 
 use houyicoder_api::agent_event::AgentEventHandlers;
+use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::result_catalog::ResultCatalog;
 use houyicoder_api::session::{SessionLog, TrajectoryPosition};
@@ -13,7 +14,7 @@ use crate::agent::append::new_event;
 use crate::agent::runner_config::RunnerConfig;
 use crate::agent::worktree_controller::{ChildWorktree, WorktreeController};
 use crate::agent::{
-    ConditionalSkillActivator, HookRegistry, ModelCatalogResolver, Runner, Summarizer,
+    ConditionalSkillActivator, HookRegistry, MemoryGates, ModelCatalogResolver, Runner, Summarizer,
     ToolOutputReducer, ToolRegistry,
 };
 
@@ -127,6 +128,12 @@ pub struct RunnerInheritance {
     pub result_catalog: Option<Arc<dyn ResultCatalog>>,
     /// The resolver the child reads model limits and defaults from.
     pub catalog_resolver: Option<Arc<dyn ModelCatalogResolver>>,
+    /// Read-only memory store inherited by memory-enabled sub-agents.
+    pub memory_provider: Option<Arc<dyn MemoryProvider>>,
+    /// Semantic selection stage inherited for child memory search.
+    pub memory_reranker: Option<Arc<dyn MemoryReranker>>,
+    /// Shared live memory switches so disabling automatic memory stops child injection.
+    pub memory_gates: Option<MemoryGates>,
 }
 
 /// What the caller extracts from a parent Runner to spawn a child.
