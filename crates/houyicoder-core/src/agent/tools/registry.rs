@@ -33,9 +33,20 @@ pub trait ToolSource: Send + Sync {
     fn tool_defs(&self) -> Vec<ToolDef>;
     /// Resolve one tool by its registered name.
     fn get(&self, name: &str) -> Option<Arc<dyn Tool>>;
-    /// Instructions for the model's system prompt from connected servers, if any.
-    fn instructions(&self) -> Option<String> {
+    /// The external server a tool came from, when the source knows one. The
+    /// source owns the mapping because it is the only layer that knows how a
+    /// server's name became a registered tool name.
+    fn tool_server(&self, _tool: &str) -> Option<String> {
         None
+    }
+    /// Instructions for the model's system prompt from connected servers, if
+    /// any, optionally narrowed to the named servers.
+    fn instructions_for(&self, _allowed: Option<&[String]>) -> Option<String> {
+        None
+    }
+    /// Every connected server's instructions, when the source carries any.
+    fn instructions(&self) -> Option<String> {
+        self.instructions_for(None)
     }
 }
 
@@ -45,6 +56,10 @@ pub trait ToolSource: Send + Sync {
 struct FilteredSource {
     inner: Arc<dyn ToolSource>,
     disallowed: Vec<String>,
+    /// The servers a child definition mounts. None keeps every server; an
+    /// empty list mounts none, so a lightweight child does not carry an
+    /// external server's tools and instructions.
+    allowed_servers: Option<Vec<String>>,
 }
 
 impl FilteredSource {
@@ -55,10 +70,21 @@ impl FilteredSource {
     /// write could still write through a server.
     fn allows(&self, name: &str) -> bool {
         let leaf = name.rsplit("__").next().unwrap_or(name);
-        !self
+        if self
             .disallowed
             .iter()
             .any(|entry| entry.eq_ignore_ascii_case(name) || entry.eq_ignore_ascii_case(leaf))
+        {
+            return false;
+        }
+        let Some(allowed) = &self.allowed_servers else {
+            return true;
+        };
+        self.inner.tool_server(name).is_some_and(|server| {
+            allowed
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&server))
+        })
     }
 }
 
@@ -79,8 +105,18 @@ impl ToolSource for FilteredSource {
         }
     }
 
-    fn instructions(&self) -> Option<String> {
-        self.inner.instructions()
+    fn instructions_for(&self, allowed: Option<&[String]>) -> Option<String> {
+        let narrowed = match (&self.allowed_servers, allowed) {
+            (None, other) => other.map(<[String]>::to_vec),
+            (Some(own), None) => Some(own.clone()),
+            (Some(own), Some(other)) => Some(
+                own.iter()
+                    .filter(|server| other.contains(server))
+                    .cloned()
+                    .collect(),
+            ),
+        };
+        self.inner.instructions_for(narrowed.as_deref())
     }
 }
 
@@ -159,13 +195,19 @@ impl ToolRegistry {
             .or_else(|| self.source.as_ref().and_then(|source| source.get(name)))
     }
 
-    /// A new registry with the named tools removed, for building a child
-    /// agent's tool set from its definition's disallowed list. Match is
-    /// case insensitive so a disallowed entry catches casing variants
-    /// (the disallowed list is authored data, not a dispatch key). The live
-    /// source is narrowed the same way, so a restriction on a server tool
-    /// holds for both the declarations and the dispatch.
-    pub fn narrow(&self, disallowed: &[String]) -> ToolRegistry {
+    /// A new registry with the named tools removed and the live source
+    /// narrowed, for building a child agent's tool set from its definition.
+    /// Match is case insensitive so a disallowed entry catches casing
+    /// variants (the disallowed list is authored data, not a dispatch key).
+    /// The source is narrowed the same way, so a restriction on a server
+    /// tool holds for both the declarations and the dispatch; a server list
+    /// narrows which servers the child mounts, and an empty list mounts
+    /// none.
+    pub fn narrow(
+        &self,
+        disallowed: &[String],
+        allowed_servers: Option<&[String]>,
+    ) -> ToolRegistry {
         let mut out = ToolRegistry::new();
         for (name, tool) in &self.tools {
             if disallowed.iter().any(|d| d.eq_ignore_ascii_case(name)) {
@@ -177,6 +219,7 @@ impl ToolRegistry {
             Arc::new(FilteredSource {
                 inner: Arc::clone(source),
                 disallowed: disallowed.to_vec(),
+                allowed_servers: allowed_servers.map(<[String]>::to_vec),
             }) as Arc<dyn ToolSource>
         });
         out

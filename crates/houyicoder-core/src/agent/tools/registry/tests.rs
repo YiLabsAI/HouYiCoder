@@ -27,7 +27,7 @@ fn test_narrow_drops_disallowed() {
     reg.register(Arc::new(StubTool::new("read")));
     reg.register(Arc::new(StubTool::new("write")));
     reg.register(Arc::new(StubTool::new("agent")));
-    let child = reg.narrow(&["write".into(), "Agent".into()]);
+    let child = reg.narrow(&["write".into(), "Agent".into()], None);
     assert!(child.get("read").is_some());
     assert!(child.get("write").is_none(), "write must be dropped");
     assert!(
@@ -53,9 +53,70 @@ impl ToolSource for CannedSource {
         (self.0.name() == name).then(|| Arc::clone(&self.0))
     }
 
-    fn instructions(&self) -> Option<String> {
+    fn instructions_for(&self, _allowed: Option<&[String]>) -> Option<String> {
         Some("canned instructions".into())
     }
+}
+
+/// A source that serves several canned tools, standing in for connected
+/// servers, and reports the server names it was asked about.
+struct CannedSet(Vec<Arc<dyn Tool>>);
+
+impl ToolSource for CannedSet {
+    fn tool_defs(&self) -> Vec<ToolDef> {
+        self.0
+            .iter()
+            .map(|tool| ToolDef {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+                input_schema: tool.input_schema(),
+            })
+            .collect()
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.0.iter().find(|tool| tool.name() == name).cloned()
+    }
+
+    fn tool_server(&self, tool: &str) -> Option<String> {
+        let rest = tool.strip_prefix("mcp__")?;
+        rest.split_once("__").map(|(server, _)| server.to_string())
+    }
+
+    fn instructions_for(&self, allowed: Option<&[String]>) -> Option<String> {
+        match allowed {
+            None => Some("all servers".into()),
+            Some([]) => None,
+            Some(list) => Some(list.join(",")),
+        }
+    }
+}
+
+/// A definition's server list decides which servers a child mounts, and an
+/// empty list mounts none; the instruction block follows the same list.
+#[test]
+fn test_narrow_mounts_named_servers() {
+    let source: Arc<dyn ToolSource> = Arc::new(CannedSet(vec![
+        Arc::new(StubTool::new("mcp__alpha__one")),
+        Arc::new(StubTool::new("mcp__beta__two")),
+    ]));
+    let parent = ToolRegistry::new().with_source(source);
+    let child = parent.narrow(&[], Some(&["alpha".into()]));
+    assert!(child.get("mcp__alpha__one").is_some());
+    assert!(
+        child.get("mcp__beta__two").is_none(),
+        "a server the definition does not name is not mounted"
+    );
+    assert_eq!(child.tool_defs().len(), 1);
+    assert_eq!(child.instructions().as_deref(), Some("alpha"));
+    assert_eq!(parent.instructions().as_deref(), Some("all servers"));
+
+    let none = parent.narrow(&[], Some(&[]));
+    assert!(
+        none.get("mcp__alpha__one").is_none(),
+        "an empty list mounts no server"
+    );
+    assert_eq!(none.instructions(), None);
 }
 
 #[test]
@@ -79,7 +140,7 @@ fn test_tool_source_instructions_forwarded() {
         parent.instructions().as_deref(),
         Some("canned instructions")
     );
-    let narrowed = parent.narrow(&["test".into()]);
+    let narrowed = parent.narrow(&["test".into()], None);
     assert_eq!(
         narrowed.instructions().as_deref(),
         Some("canned instructions")
@@ -95,7 +156,7 @@ fn test_narrow_filters_source() {
         Arc::new(CannedSource(Arc::new(StubTool::new("mcp__graph__wipe"))));
     let parent = ToolRegistry::new().with_source(Arc::clone(&source));
     assert!(parent.get("mcp__graph__wipe").is_some());
-    let child = parent.narrow(&["MCP__graph__wipe".into()]);
+    let child = parent.narrow(&["MCP__graph__wipe".into()], None);
     assert!(
         child.get("mcp__graph__wipe").is_none(),
         "a narrowed source must not dispatch the disallowed tool"
@@ -107,7 +168,7 @@ fn test_narrow_filters_source() {
             .all(|def| def.name != "mcp__graph__wipe"),
         "a narrowed source must not advertise the disallowed tool"
     );
-    let kept = parent.narrow(&[]);
+    let kept = parent.narrow(&[], None);
     assert!(kept.get("mcp__graph__wipe").is_some());
 }
 
@@ -119,7 +180,7 @@ fn test_narrow_matches_leaf_name() {
     let source: Arc<dyn ToolSource> =
         Arc::new(CannedSource(Arc::new(StubTool::new("mcp__graph__write"))));
     let parent = ToolRegistry::new().with_source(source);
-    let child = parent.narrow(&["write".into()]);
+    let child = parent.narrow(&["write".into()], None);
     assert!(
         child.get("mcp__graph__write").is_none(),
         "a leaf restriction reaches the server tool"
@@ -130,7 +191,7 @@ fn test_narrow_matches_leaf_name() {
             .iter()
             .all(|def| def.name != "mcp__graph__write")
     );
-    let unrelated = parent.narrow(&["edit".into()]);
+    let unrelated = parent.narrow(&["edit".into()], None);
     assert!(unrelated.get("mcp__graph__write").is_some());
 }
 

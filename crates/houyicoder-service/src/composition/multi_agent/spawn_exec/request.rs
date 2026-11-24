@@ -8,6 +8,9 @@ use super::*;
 use houyicoder_api::session::SessionLog;
 use houyicoder_core::agent::multi_agent::PartialTranscript;
 
+use crate::mcp::LIST_RESOURCES_TOOL;
+use crate::mcp::READ_RESOURCE_TOOL;
+
 pub(super) fn map_registry_err(error: AgentError) -> SpawnFailure {
     match error {
         AgentError::NotFound { .. } => SpawnFailure::UnknownAgent,
@@ -50,6 +53,17 @@ impl PartialTranscript for ChildTranscript {
 /// A resume id the caller cannot parse is refused here, before the spawn has
 /// any side effect: silently starting a fresh child would report success for a
 /// continuation that never happened.
+/// The tool scope a child runs with: the definition's disallowed names plus
+/// the two host resource tools, which read every connected server and so do
+/// not travel into a child until a server-scoped variant exists, and the
+/// definition's server list. An empty list mounts no external server.
+fn child_tool_scope(def: &AgentDefinition) -> (Vec<String>, Option<Vec<String>>) {
+    let mut disallowed = def.disallowed_tools.clone();
+    disallowed.push(LIST_RESOURCES_TOOL.to_string());
+    disallowed.push(READ_RESOURCE_TOOL.to_string());
+    (disallowed, Some(def.mcp_servers.clone()))
+}
+
 pub(super) fn build_spawn_request(
     this: &MultiAgentRuntime,
     parent_sid: SessionId,
@@ -113,7 +127,10 @@ pub(super) fn build_spawn_request(
         parent_sid,
         parent_store: this.store.clone(),
         provider: this.provider.clone(),
-        tools: child_tools.narrow(&disallowed),
+tools: {
+            let (_, servers) = child_tool_scope(def);
+            child_tools.narrow(&disallowed, servers.as_deref())
+        },
         config: child_config,
         subagent_type: args.subagent_type.clone(),
         prompt: args.prompt.clone(),
@@ -148,3 +165,6 @@ pub(super) fn map_spawn_err(e: SpawnError) -> SpawnFailure {
         SpawnError::InvalidResumeTarget { reason } => SpawnFailure::InvalidResumeTarget { reason },
     }
 }
+
+#[cfg(test)]
+mod tests;

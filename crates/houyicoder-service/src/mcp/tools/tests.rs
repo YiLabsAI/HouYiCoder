@@ -1,6 +1,7 @@
 //! Tests for this module. The call path runs against an in-memory peer, so
 //! the transport and the handshake are real and nothing is spawned.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -145,15 +146,39 @@ fn test_source_snapshot() {
     let source = McpToolSource::default();
     assert!(source.names().is_empty());
     assert!(source.get("mcp__x__y").is_none());
-    let mut tools: std::collections::BTreeMap<String, Arc<dyn Tool>> =
-        std::collections::BTreeMap::new();
+    let mut tools: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
     tools.insert("mcp__x__y".into(), Arc::new(NamedTool("mcp__x__y")));
-    source.replace(tools);
+    source.replace(
+        tools,
+        BTreeMap::from([("mcp__x__y".to_string(), "x".to_string())]),
+    );
     assert_eq!(source.names(), vec!["mcp__x__y".to_string()]);
     let defs: Vec<ToolDef> = ToolSource::tool_defs(&source);
     assert_eq!(defs.len(), 1);
     assert_eq!(defs[0].name, "mcp__x__y");
     assert!(ToolSource::get(&source, "mcp__x__y").is_some());
+}
+
+/// Instructions stay per server, so a narrowed view receives only the
+/// servers it mounts and the full view receives every server's block.
+#[test]
+fn test_source_narrows_instructions() {
+    let source = McpToolSource::default();
+    let sections = BTreeMap::from([
+        ("alpha".to_string(), "alpha guidance".to_string()),
+        ("beta".to_string(), "beta guidance".to_string()),
+    ]);
+    source.replace_instructions(sections);
+    let all = source.instructions().expect("both servers speak");
+    assert!(all.contains("alpha guidance") && all.contains("beta guidance"));
+    let narrowed =
+        ToolSource::instructions_for(&source, Some(&["alpha".to_string()])).expect("alpha speaks");
+    assert!(narrowed.contains("alpha guidance"));
+    assert!(
+        !narrowed.contains("beta"),
+        "beta is not mounted: {narrowed}"
+    );
+    assert!(ToolSource::instructions_for(&source, Some(&[])).is_none());
 }
 
 /// A peer connected over an in-memory pair, and the fake server behind it.

@@ -36,6 +36,7 @@ use serde_json::Value;
 use tokio::time::timeout;
 
 use super::manager::McpConnections;
+use super::manager::instructions_block;
 
 /// The prefix every server tool carries, so the model can tell the source of
 /// a call and the host can refuse a name a server tries to claim outside it.
@@ -385,19 +386,31 @@ pub(crate) fn type_name(value: &Value) -> &'static str {
 #[derive(Default)]
 pub struct McpToolSource {
     tools: RwLock<BTreeMap<String, Arc<dyn Tool>>>,
-    instructions: RwLock<Option<String>>,
+    /// The configured server each registered tool came from.
+    servers: RwLock<BTreeMap<String, String>>,
+    /// Each connected server's raw instructions, kept per server so a child
+    /// agent's server list can narrow the block it receives.
+    instructions: RwLock<BTreeMap<String, String>>,
 }
 
 impl McpToolSource {
-    /// Replace the snapshot with the tools currently connected.
-    pub(crate) fn replace(&self, tools: BTreeMap<String, Arc<dyn Tool>>) {
+    /// Replace the snapshot with the tools currently connected and the
+    /// server each of them came from.
+    pub(crate) fn replace(
+        &self,
+        tools: BTreeMap<String, Arc<dyn Tool>>,
+        servers: BTreeMap<String, String>,
+    ) {
         if let Ok(mut current) = self.tools.write() {
             *current = tools;
         }
+        if let Ok(mut current) = self.servers.write() {
+            *current = servers;
+        }
     }
 
-    /// Replace the instructions block from connected servers.
-    pub(crate) fn replace_instructions(&self, instructions: Option<String>) {
+    /// Replace the per-server instructions from connected servers.
+    pub(crate) fn replace_instructions(&self, instructions: BTreeMap<String, String>) {
         if let Ok(mut current) = self.instructions.write() {
             *current = instructions;
         }
@@ -436,8 +449,13 @@ impl ToolSource for McpToolSource {
             .and_then(|tools| tools.get(name).cloned())
     }
 
-    fn instructions(&self) -> Option<String> {
-        self.instructions.read().ok().and_then(|i| i.clone())
+    fn tool_server(&self, tool: &str) -> Option<String> {
+        self.servers.read().ok()?.get(tool).cloned()
+    }
+
+    fn instructions_for(&self, allowed: Option<&[String]>) -> Option<String> {
+        let sections = self.instructions.read().ok()?;
+        instructions_block(&sections, allowed)
     }
 }
 
@@ -466,6 +484,7 @@ impl McpConnections {
             loop {
                 let snapshot = manager.tools_snapshot().await;
                 let mut adapters: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
+                let mut servers: BTreeMap<String, String> = BTreeMap::new();
                 for (server, tool) in &snapshot {
                     let Some(peer) = manager.peer_of(server).await else {
                         continue;
@@ -490,10 +509,11 @@ impl McpConnections {
                         adapter
                     };
                     let guarded = GuardedTool::new(Arc::new(adapter), Arc::clone(&gate));
+                    servers.insert(guarded.name().to_string(), server.clone());
                     adapters.insert(guarded.name().to_string(), Arc::new(guarded));
                 }
-                let instructions = manager.instructions_for(None).await;
-                shared.replace(adapters);
+                let instructions = manager.instruction_sections().await;
+                shared.replace(adapters, servers);
                 shared.replace_instructions(instructions);
                 tokio::select! {
                     changed = changes.changed() => {

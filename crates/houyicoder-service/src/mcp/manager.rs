@@ -673,6 +673,7 @@ async fn sleep_until_deadline(window: Option<Instant>, deadline: Instant) {
 }
 
 mod views;
+pub(crate) use views::instructions_block;
 
 #[cfg(test)]
 pub(crate) mod tests;

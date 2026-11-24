@@ -2,6 +2,8 @@
 //! server's state as a view renders it, the diagnostics it wrote, and the
 //! instruction block a prompt carries. None of it changes a connection.
 
+use std::collections::BTreeMap;
+
 use houyicoder_protocol::mcp::McpConnectionState;
 use houyicoder_protocol::mcp::McpServerStatusView;
 
@@ -46,23 +48,22 @@ impl McpConnections {
     }
 
     /// Read the instructions exported by connected servers, sorted by server
-    /// name, as one block of explicit server tags for the prompt. Server text
-    /// is untrusted, so each entry is wrapped in a tag naming its server, and
-    /// both the text and the name are escaped: server content cannot close the
-    /// host's frame or leave the attribute. A server the allowed list excludes
-    /// contributes neither its instructions nor a tag. Each server's text is
-    /// cut at a character boundary to 4,096 characters.
+    /// name, as one block of explicit server tags for the prompt. A server
+    /// the allowed list excludes contributes neither its instructions nor a
+    /// tag.
     pub async fn instructions_for(&self, allowed_servers: Option<&[String]>) -> Option<String> {
+        let sections = self.instruction_sections().await;
+        instructions_block(&sections, allowed_servers)
+    }
+
+    /// The raw instructions each connected server exported, ordered by
+    /// server name and trimmed to the per-server character cap.
+    pub(crate) async fn instruction_sections(&self) -> BTreeMap<String, String> {
         const MAX_MCP_INSTRUCTIONS_CHARS: usize = 4_096;
         let slots = self.slots.read().await;
-        let mut sections = Vec::new();
+        let mut sections = BTreeMap::new();
         for (name, slot) in slots.iter() {
             if !matches!(slot.state, McpConnectionState::Connected) {
-                continue;
-            }
-            if let Some(allowed) = allowed_servers
-                && !allowed.iter().any(|a| a == name)
-            {
                 continue;
             }
             if let Some(instructions) = slot
@@ -76,18 +77,38 @@ impl McpConnections {
                 } else {
                     trimmed.to_string()
                 };
-                sections.push(format!(
-                    "<mcp_server_instructions server=\"{}\">\n{}\n</mcp_server_instructions>",
-                    escape_attribute(name),
-                    escape_text(&bounded)
-                ));
+                sections.insert(name.clone(), bounded);
             }
         }
-        if sections.is_empty() {
-            None
-        } else {
-            Some(sections.join("\n\n"))
+        sections
+    }
+}
+
+/// One prompt block of server tags from the raw sections. Server text is
+/// untrusted, so each entry is wrapped in a tag naming its server and both
+/// the text and the name are escaped: server content cannot close the host's
+/// frame or leave the attribute.
+pub(crate) fn instructions_block(
+    sections: &BTreeMap<String, String>,
+    allowed_servers: Option<&[String]>,
+) -> Option<String> {
+    let mut blocks = Vec::new();
+    for (name, text) in sections {
+        if let Some(allowed) = allowed_servers
+            && !allowed.iter().any(|candidate| candidate == name)
+        {
+            continue;
         }
+        blocks.push(format!(
+            "<mcp_server_instructions server=\"{}\">\n{}\n</mcp_server_instructions>",
+            escape_attribute(name),
+            escape_text(text)
+        ));
+    }
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks.join("\n\n"))
     }
 }
 
