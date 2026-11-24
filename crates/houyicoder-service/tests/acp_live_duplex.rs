@@ -8,8 +8,8 @@
 
 #![allow(clippy::disallowed_methods)] // test scaffolding spawns this binary, not an engine call
 
-#[path = "common/acp_child_fixture.rs"]
-mod acp_child_fixture;
+#[path = "common/acp_agent.rs"]
+mod acp_agent;
 mod common;
 
 use crate::common::child_command;
@@ -28,7 +28,7 @@ use serde_json::json;
 
 /// Spawn the example with the given environment and piped stdio.
 fn spawn_server(env: &[(&str, &str)]) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-    let mut command = child_command(acp_child_fixture::SERVER_ENV);
+    let mut command = child_command(acp_agent::SERVER_ENV);
     for (key, value) in env {
         command.env(key, value);
     }
@@ -284,8 +284,8 @@ fn test_acp_rejects_image_block() {
 
 /// The tests, run by hand because the binary doubles as its own child.
 fn main() {
-    if var_os(acp_child_fixture::SERVER_ENV).is_some() {
-        acp_child_fixture::serve_stdio_server();
+    if var_os(acp_agent::SERVER_ENV).is_some() {
+        acp_agent::serve_stdio_server();
         return;
     }
     common::run_tests(&[

@@ -1,4 +1,4 @@
-//! The byte bridge between a launched child's blocking pipes and the
+//! The byte channels between a launched child's blocking pipes and the
 //! asynchronous transport the protocol client speaks, plus the bounded tail
 //! of the child's diagnostic stream.
 //!
@@ -25,11 +25,11 @@ use tokio::sync::mpsc;
 
 /// The in-memory buffer between the client and the pump tasks. One chunk of
 /// a child's output fits without the writer waiting on a scheduler turn.
-const BRIDGE_BUFFER: usize = 64 * 1024;
+const STDIO_BUFFER_BYTES: usize = 64 * 1024;
 
 /// How many chunks may queue between a thread and its pump task. The bound
 /// is what keeps a chatty child from growing memory without limit.
-const BRIDGE_DEPTH: usize = 16;
+const STDIO_QUEUE_DEPTH: usize = 16;
 
 /// How many diagnostic lines the tail keeps. Enough to see the reason a
 /// server failed, bounded so a chatty child cannot grow memory.
@@ -47,7 +47,7 @@ pub struct Pipes {
 }
 
 /// The asynchronous halves the protocol client reads and writes.
-pub struct StdioBridge {
+pub struct StdioChannels {
     /// What the client reads: the child's standard output.
     pub reader: DuplexStream,
     /// What the client writes: the child's standard input.
@@ -84,15 +84,15 @@ impl StderrTail {
     }
 }
 
-/// Start the bridge. Must be called from an async context, because the pump
+/// Start the channels. Must be called from an async context, because the pump
 /// tasks it starts ride the current runtime.
 ///
-/// The returned bridge is what the transport reads and writes. Dropping its
-/// write half closes the child's stdin through the writer thread, the same
-/// way a closed terminal would.
-pub fn start(pipes: Pipes) -> (StdioBridge, StderrTail) {
-    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(BRIDGE_DEPTH);
-    let (client_read, mut pump_write) = duplex(BRIDGE_BUFFER);
+/// The returned channels are what the transport reads and writes. Dropping
+/// the write half closes the child's stdin through the writer thread, the
+/// same way a closed terminal would.
+pub fn start(pipes: Pipes) -> (StdioChannels, StderrTail) {
+    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(STDIO_QUEUE_DEPTH);
+    let (client_read, mut pump_write) = duplex(STDIO_BUFFER_BYTES);
     tokio::spawn(async move {
         while let Some(chunk) = out_rx.recv().await {
             if pump_write.write_all(&chunk).await.is_err() {
@@ -119,8 +119,8 @@ pub fn start(pipes: Pipes) -> (StdioBridge, StderrTail) {
         }
     });
 
-    let (client_write, mut pump_read) = duplex(BRIDGE_BUFFER);
-    let (in_tx, mut in_rx) = mpsc::channel::<Vec<u8>>(BRIDGE_DEPTH);
+    let (client_write, mut pump_read) = duplex(STDIO_BUFFER_BYTES);
+    let (in_tx, mut in_rx) = mpsc::channel::<Vec<u8>>(STDIO_QUEUE_DEPTH);
     tokio::spawn(async move {
         let mut buf = [0u8; 8192];
         loop {
@@ -179,7 +179,7 @@ pub fn start(pipes: Pipes) -> (StdioBridge, StderrTail) {
     }
 
     (
-        StdioBridge {
+        StdioChannels {
             reader: client_read,
             writer: client_write,
         },

@@ -10,8 +10,8 @@
 //! northbound server, --stub serves the minimal child that reaches the paths
 //! the server's canned provider cannot.
 
-#[path = "common/acp_child_fixture.rs"]
-mod acp_child_fixture;
+#[path = "common/acp_agent.rs"]
+mod acp_agent;
 mod common;
 
 use std::env::current_exe;
@@ -83,7 +83,7 @@ fn external_definition(args: Vec<String>) -> AgentDefinition {
 }
 
 fn stub_args(mode: &[&str]) -> Vec<String> {
-    let mut args = vec![acp_child_fixture::STUB_ARG.to_string()];
+    let mut args = vec![acp_agent::STUB_ARG.to_string()];
     args.extend(mode.iter().map(|s| s.to_string()));
     args
 }
@@ -368,11 +368,11 @@ async fn test_acp_child_missing_program() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--server") {
-        acp_child_fixture::serve_stdio_server();
+        acp_agent::serve_stdio_server();
         return;
     }
-    if args.iter().any(|arg| arg == acp_child_fixture::STUB_ARG) {
-        acp_child_fixture::serve_child_stub();
+    if args.iter().any(|arg| arg == acp_agent::STUB_ARG) {
+        acp_agent::serve_child_stub();
         return;
     }
     let runtime = RuntimeBuilder::new_current_thread()

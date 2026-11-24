@@ -82,7 +82,7 @@ fn test_spawn_request_shape() {
 #[test]
 fn test_handler_info_declares_roots() {
     let (events, _rx) = unbounded_channel();
-    let handler = HouyiMcpClientHandler::new(Arc::from(Path::new("/work")), events);
+    let handler = McpClientHandler::new(Arc::from(Path::new("/work")), events);
     let info = ClientHandler::get_info(&handler);
     assert_eq!(info.client_info.name, "houyicoder");
     assert!(
@@ -96,7 +96,7 @@ fn test_handler_info_declares_roots() {
 #[test]
 fn test_handler_root_is_workspace() {
     let (events, _rx) = unbounded_channel();
-    let handler = HouyiMcpClientHandler::new(Arc::from(Path::new("/work/src")), events);
+    let handler = McpClientHandler::new(Arc::from(Path::new("/work/src")), events);
     #[allow(deprecated)]
     let roots = handler.roots();
     assert_eq!(roots.roots.len(), 1);
@@ -108,7 +108,7 @@ fn test_handler_root_is_workspace() {
 #[tokio::test]
 async fn test_change_notices_reach_channel() {
     let (events, mut rx) = unbounded_channel();
-    let handler = HouyiMcpClientHandler::new(Arc::from(Path::new("/work")), events);
+    let handler = McpClientHandler::new(Arc::from(Path::new("/work")), events);
     handler.report(ClientEvent::ToolListChanged);
     handler.report(ClientEvent::ResourceListChanged);
     assert_eq!(rx.recv().await, Some(ClientEvent::ToolListChanged));
@@ -132,7 +132,7 @@ fn test_error_display_names_stage() {
 fn test_notice_after_close_quiet() {
     let (events, rx) = unbounded_channel();
     drop(rx);
-    let handler = HouyiMcpClientHandler::new(Arc::from(Path::new("/work")), events);
+    let handler = McpClientHandler::new(Arc::from(Path::new("/work")), events);
     handler.report(ClientEvent::ToolListChanged);
 }
 

@@ -3,8 +3,8 @@
 //! the transport handshake, and the manager's supervision all run as they do
 //! for a real server. The stub speaks the protocol over a loopback socket.
 
-#[path = "common/mcp_stub_server.rs"]
-mod mcp_stub_server;
+#[path = "common/mcp_server.rs"]
+mod mcp_server;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,10 +18,8 @@ use houyicoder_permission::{DefaultModeGate, ModeGate};
 use houyicoder_protocol::mcp::{
     McpConfigScope, McpConnectionState, McpTransportConfig, ScopedMcpServerConfig,
 };
-use houyicoder_service::mcp::{
-    McpConnections, McpTimings, McpToolSource, RestartPolicy, start_mirror,
-};
-use mcp_stub_server::{Behavior, Counters, SocketLauncher};
+use houyicoder_service::mcp::{McpConnections, McpTimings, RestartPolicy};
+use mcp_server::{Behavior, Counters, SocketLauncher};
 use serde_json::{Value, json};
 use tokio::time::{sleep, timeout};
 
@@ -36,10 +34,17 @@ fn fast_timings() -> McpTimings {
     }
 }
 
-fn manager_with(behaviors: Vec<Behavior>, timings: McpTimings) -> (McpConnections, Arc<Counters>) {
+fn manager_with(
+    behaviors: Vec<Behavior>,
+    timings: McpTimings,
+) -> (Arc<McpConnections>, Arc<Counters>) {
     let launcher = Arc::new(SocketLauncher::new(behaviors));
     let counters = Arc::clone(&launcher.counters);
-    let manager = McpConnections::new(launcher, Arc::from(Path::new("/work")), timings);
+    let manager = Arc::new(McpConnections::new(
+        launcher,
+        Arc::from(Path::new("/work")),
+        timings,
+    ));
     (manager, counters)
 }
 
@@ -190,11 +195,10 @@ async fn test_reconnect_after_failure() {
 #[tokio::test]
 async fn test_tools_ordered_and_gated() {
     let (manager, _counters) = manager_with(Vec::new(), fast_timings());
-    let source = Arc::new(McpToolSource::default());
+    let source = manager.tool_source(auto_gate(), None);
     manager
         .start_all(vec![config("beta", false), config("alpha", false)])
         .await;
-    let _mirror = start_mirror(manager.clone(), Arc::clone(&source), auto_gate(), None);
     assert!(
         eventually(|| source.names().len() == 4).await,
         "both servers connect and appear"
@@ -230,9 +234,8 @@ async fn test_tools_ordered_and_gated() {
 #[tokio::test]
 async fn test_call_returns_text() {
     let (manager, counters) = manager_with(Vec::new(), fast_timings());
-    let source = Arc::new(McpToolSource::default());
+    let source = manager.tool_source(auto_gate(), None);
     manager.start_all(vec![config("graph", false)]).await;
-    let mirror = start_mirror(manager.clone(), Arc::clone(&source), auto_gate(), None);
     assert!(
         eventually(|| source.names().len() == 2).await,
         "the server connects and its tools appear"
@@ -250,22 +253,17 @@ async fn test_call_returns_text() {
     let instructions = source.instructions().expect("server instructions present");
     assert!(instructions.contains("use probe"));
     manager.shutdown().await;
-    timeout(Duration::from_secs(5), mirror)
-        .await
-        .expect("the mirror ends with the manager")
-        .expect("the mirror task does not panic");
 }
 
-/// A server that drops is restarted, and the mirrored tools move to the new
+/// A server that drops is restarted, and the exposed tools move to the new
 /// connection, so a call after the restart reaches the live process instead
 /// of the peer that died.
 #[tokio::test]
 async fn test_reconnect_swaps_tools() {
     let (manager, counters) =
         manager_with(vec![Behavior::CloseNow, Behavior::Calm], fast_timings());
-    let source = Arc::new(McpToolSource::default());
+    let source = manager.tool_source(auto_gate(), None);
     manager.start_all(vec![config("flaky", false)]).await;
-    let _mirror = start_mirror(manager.clone(), Arc::clone(&source), auto_gate(), None);
     assert!(
         eventually(|| counters.spawns.load(Ordering::SeqCst) == 2).await,
         "the dropped server was restarted"
@@ -305,9 +303,8 @@ async fn test_reconnect_swaps_tools() {
 #[tokio::test]
 async fn test_shutdown_bounded() {
     let (manager, counters) = manager_with(vec![Behavior::HangCall], fast_timings());
-    let source = Arc::new(McpToolSource::default());
+    let source = manager.tool_source(auto_gate(), None);
     manager.start_all(vec![config("slow", false)]).await;
-    let _mirror = start_mirror(manager.clone(), Arc::clone(&source), auto_gate(), None);
     assert!(
         eventually(|| source.names().len() == 2).await,
         "the server connects and its tools appear"

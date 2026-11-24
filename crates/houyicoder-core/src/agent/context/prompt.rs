@@ -46,8 +46,9 @@ pub struct MemoryBlock {
 /// turns and across sessions — it carries only the fixed identity, framework,
 /// and behavior sections with no cwd input. The dynamic suffix (from
 /// dynamic_boundary onward) carries the cwd-dependent project context, the
-/// session-stable agent directory, and the run's current date, none of which
-/// belong in a cross-session cache. A cache-policy consumer splits on this
+/// session-stable agent directory, the workspace's server instructions, and
+/// the run's current date, none of which belong in a cross-session cache. A
+/// cache-policy consumer splits on this
 /// offset to give the static prefix a global cache scope while the dynamic
 /// suffix stays session-scoped, without leaking a sentinel string into the
 /// model's view.
@@ -144,14 +145,6 @@ impl SystemPrompt {
         text.push_str("\n\n");
         text.push_str(&tool_docs);
 
-        // MCP server instructions (session-stable, sorted by server name).
-        // Placed in the static prefix right before the dynamic boundary so
-        // tools guidance and server instructions cache together.
-        if let Some(instructions) = mcp_instructions.filter(|s| !s.trim().is_empty()) {
-            text.push_str("\n\n");
-            text.push_str(instructions.trim());
-        }
-
         // Boundary: everything above is byte-stable; from here the bytes can
         // change between sessions. Record the offset so a cache policy can
         // split here.
@@ -202,6 +195,16 @@ impl SystemPrompt {
         if let Some(dir) = agent_directory.filter(|s| !s.is_empty()) {
             text.push_str("\n\n");
             text.push_str(dir);
+        }
+
+        // MCP server instructions (sorted by server name, wrapped by the
+        // manager in server tags). They vary with the workspace's server
+        // configuration, so they ride the dynamic suffix: above the boundary
+        // the shared prefix would differ per workspace. Within a session they
+        // change only on a reconnect, so multi-turn caching still reaches them.
+        if let Some(instructions) = mcp_instructions.filter(|s| !s.trim().is_empty()) {
+            text.push_str("\n\n");
+            text.push_str(instructions.trim());
         }
 
         // The run's current date, last so a day roll-over costs only this

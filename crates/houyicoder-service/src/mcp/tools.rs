@@ -32,7 +32,6 @@ use rmcp::model::{
 use rmcp::service::Peer;
 use serde_json::Map;
 use serde_json::Value;
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use super::manager::McpConnections;
@@ -387,9 +386,9 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
-/// The live tools the registry consults, held as a snapshot the mirror task
-/// keeps current, so a turn reads connected servers without waiting for any
-/// handshake.
+/// The live tools the registry consults, held as a snapshot the subscription
+/// task keeps current, so a turn reads connected servers without waiting for
+/// any handshake.
 #[derive(Default)]
 pub struct McpToolSource {
     tools: RwLock<BTreeMap<String, Arc<dyn Tool>>>,
@@ -398,14 +397,14 @@ pub struct McpToolSource {
 
 impl McpToolSource {
     /// Replace the snapshot with the tools currently connected.
-    pub fn replace(&self, tools: BTreeMap<String, Arc<dyn Tool>>) {
+    pub(crate) fn replace(&self, tools: BTreeMap<String, Arc<dyn Tool>>) {
         if let Ok(mut current) = self.tools.write() {
             *current = tools;
         }
     }
 
     /// Replace the instructions block from connected servers.
-    pub fn replace_instructions(&self, instructions: Option<String>) {
+    pub(crate) fn replace_instructions(&self, instructions: Option<String>) {
         if let Ok(mut current) = self.instructions.write() {
             *current = instructions;
         }
@@ -449,65 +448,72 @@ impl ToolSource for McpToolSource {
     }
 }
 
-/// Keep the source's snapshot in step with the manager. The manager announces
-/// every change to the connected tool set, so the rebuild runs exactly when a
-/// server connects, reconnects, re-lists, or goes away, and never otherwise.
-///
-/// Each adapter is wrapped in the mode gate before it reaches the source. A
-/// server tool is external code, so it must pass the same permission decision
-/// as a built-in one; an unwrapped adapter would hand the runner a tool whose
-/// every call runs without asking.
-pub fn start_mirror(
-    manager: McpConnections,
-    source: Arc<McpToolSource>,
-    gate: Arc<dyn ModeGate>,
-    log: Option<Arc<dyn SessionLog>>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut changes = manager.change_receiver();
-        let stopping = manager.watch_stop();
-        loop {
-            let snapshot = manager.tools_snapshot().await;
-            let mut adapters: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
-            for (server, tool) in &snapshot {
-                let Some(peer) = manager.peer_of(server).await else {
-                    continue;
-                };
-                let timeout = manager.call_timeout_of(server).await;
-                let adapter = McpTool::adapt(server, tool, peer, timeout, log.clone());
-                let registered = adapter.name().to_string();
-                // Two tools whose raw names differ only in a character the
-                // namespace replaces normalize to one name. Keep both: the
-                // second takes the hashed form so neither silently replaces
-                // the other.
-                let adapter = if adapters.contains_key(&registered) {
-                    let distinct = distinguished_name(server, &tool.name);
-                    tracing::warn!(
-                        server = %server,
-                        tool = %tool.name,
-                        name = %distinct,
-                        "two server tools normalize to one name; the second is exposed under a hashed name"
-                    );
-                    adapter.renamed(distinct.clone())
-                } else {
-                    adapter
-                };
-                let guarded = GuardedTool::new(Arc::new(adapter), Arc::clone(&gate));
-                adapters.insert(guarded.name().to_string(), Arc::new(guarded));
-            }
-            let instructions = manager.instructions_for(None).await;
-            source.replace(adapters);
-            source.replace_instructions(instructions);
-            tokio::select! {
-                changed = changes.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
+impl McpConnections {
+    /// The tools this manager currently exposes, as one live source the
+    /// registry consults. A background task keeps it current: the manager
+    /// announces every change to the connected set, and both the adapters
+    /// and the combined instructions are rebuilt on each announcement, never
+    /// on a timer. The task ends when the manager stops.
+    ///
+    /// Each adapter is wrapped in the mode gate before it reaches the source.
+    /// A server tool is external code, so it must pass the same permission
+    /// decision as a built-in one; an unwrapped adapter would hand the runner
+    /// a tool whose every call runs without asking.
+    pub fn tool_source(
+        self: &Arc<Self>,
+        gate: Arc<dyn ModeGate>,
+        log: Option<Arc<dyn SessionLog>>,
+    ) -> Arc<McpToolSource> {
+        let source = Arc::new(McpToolSource::default());
+        let manager = Arc::clone(self);
+        let shared = Arc::clone(&source);
+        tokio::spawn(async move {
+            let mut changes = manager.change_receiver();
+            let stopping = manager.watch_stop();
+            loop {
+                let snapshot = manager.tools_snapshot().await;
+                let mut adapters: BTreeMap<String, Arc<dyn Tool>> = BTreeMap::new();
+                for (server, tool) in &snapshot {
+                    let Some(peer) = manager.peer_of(server).await else {
+                        continue;
+                    };
+                    let timeout = manager.call_timeout_of(server).await;
+                    let adapter = McpTool::adapt(server, tool, peer, timeout, log.clone());
+                    let registered = adapter.name().to_string();
+                    // Two tools whose raw names differ only in a character
+                    // the namespace replaces normalize to one name. Keep
+                    // both: the second takes the hashed form so neither
+                    // silently replaces the other.
+                    let adapter = if adapters.contains_key(&registered) {
+                        let distinct = distinguished_name(server, &tool.name);
+                        tracing::warn!(
+                            server = %server,
+                            tool = %tool.name,
+                            name = %distinct,
+                            "two server tools normalize to one name; the second is exposed under a hashed name"
+                        );
+                        adapter.renamed(distinct.clone())
+                    } else {
+                        adapter
+                    };
+                    let guarded = GuardedTool::new(Arc::new(adapter), Arc::clone(&gate));
+                    adapters.insert(guarded.name().to_string(), Arc::new(guarded));
                 }
-                _ = stopping.cancelled() => return,
+                let instructions = manager.instructions_for(None).await;
+                shared.replace(adapters);
+                shared.replace_instructions(instructions);
+                tokio::select! {
+                    changed = changes.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                    _ = stopping.cancelled() => return,
+                }
             }
-        }
-    })
+        });
+        source
+    }
 }
 
 #[cfg(test)]

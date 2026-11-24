@@ -33,7 +33,7 @@ use tokio::time::timeout;
 
 use super::client::{ClientEvent, LaunchedMcpServer, launch_stdio};
 use super::liveness::RestartPolicy;
-use super::stdio_bridge::{STDERR_TAIL_LINES, StderrTail};
+use super::stdio::{STDERR_TAIL_LINES, StderrTail};
 
 /// The windows and limits one manager runs with. Production uses the
 /// defaults; a test injects millisecond values so no assertion waits on a
@@ -125,7 +125,7 @@ impl McpConnections {
     }
 
     /// Announce that the connected tool set changed. Sending is best effort:
-    /// no receiver means nobody is mirroring the tools, not an error.
+    /// no receiver means no tool source is subscribed, not an error.
     fn announce_change(&self) {
         self.generation.send_modify(|generation| *generation += 1);
     }
@@ -220,9 +220,12 @@ impl McpConnections {
     }
 
     /// Read the instructions exported by connected servers, sorted by server
-    /// name, joined as a single instructions block for the prompt. If allowed_servers
-    /// is supplied, only servers in that list are included. Each server's instructions
-    /// are safely truncated at character boundary to 4,096 characters.
+    /// name, as one block of explicit server tags for the prompt. Server text
+    /// is untrusted, so each entry is wrapped in a tag naming its server, and
+    /// both the text and the name are escaped: server content cannot close the
+    /// host's frame or leave the attribute. A server the allowed list excludes
+    /// contributes neither its instructions nor a tag. Each server's text is
+    /// cut at a character boundary to 4,096 characters.
     pub async fn instructions_for(&self, allowed_servers: Option<&[String]>) -> Option<String> {
         const MAX_MCP_INSTRUCTIONS_CHARS: usize = 4_096;
         let slots = self.slots.read().await;
@@ -247,16 +250,17 @@ impl McpConnections {
                 } else {
                     trimmed.to_string()
                 };
-                sections.push(format!("### Server `{name}` instructions:\n{bounded}"));
+                sections.push(format!(
+                    "<mcp_server_instructions server=\"{}\">\n{}\n</mcp_server_instructions>",
+                    escape_attribute(name),
+                    escape_text(&bounded)
+                ));
             }
         }
         if sections.is_empty() {
             None
         } else {
-            Some(format!(
-                "# MCP Server Instructions\n\n{}",
-                sections.join("\n\n")
-            ))
+            Some(sections.join("\n\n"))
         }
     }
 
@@ -567,6 +571,18 @@ impl From<ClientEvent> for NoticeKind {
             ClientEvent::PromptListChanged => Self::Prompts,
         }
     }
+}
+
+/// Escape the characters that would let server text close the host's tag.
+fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Escape a server name for use inside a double-quoted attribute.
+fn escape_attribute(name: &str) -> String {
+    escape_text(name).replace('"', "&quot;")
 }
 
 /// Wait for a window deadline, or forever when no window is open. A pending

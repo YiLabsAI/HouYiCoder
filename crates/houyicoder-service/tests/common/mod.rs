@@ -1,9 +1,9 @@
 //! Shared helpers for the service integration-test binaries.
 //!
 //! Binaries that also act as a child process run harness-free through
-//! run_tests, and the ACP processes they speak to live in acp_stub_server.
-//! The MCP stub server is its own module beside this one, included by path
-//! from the one binary that drives it.
+//! run_tests, and the ACP processes they speak to live in acp_agent. The
+//! MCP server the tool tests drive is its own module beside this one,
+//! included by path from the binary that owns it.
 //! Each tests-binary does mod common; + imports the frame plumbing so the
 //! wire-contract tests share ONE copy of the stub-runner + channel pair +
 //! send/recv helpers instead of duplicating them per binary. Cargo treats

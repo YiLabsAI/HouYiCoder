@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use houyicoder_api::session::SessionLog;
 use houyicoder_api::tool::{Tool, ToolCtx};
@@ -22,13 +23,14 @@ use serde_json::{Map, Value, json};
 use tokio::io::duplex;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::time::sleep;
 
 use crate::mcp::McpConnections;
 use crate::mcp::manager::McpTimings;
+use crate::mcp::manager::tests::NoSpawn;
 
 use super::*;
-use crate::mcp::client::HouyiMcpClientHandler;
+use crate::mcp::client::McpClientHandler;
 use crate::mcp::client::serve_over;
 use crate::mcp::client::tests::fake_peer;
 
@@ -155,10 +157,7 @@ fn test_source_snapshot() {
 }
 
 /// A peer connected over an in-memory pair, and the fake server behind it.
-async fn connected() -> (
-    RunningService<RoleClient, HouyiMcpClientHandler>,
-    JoinHandle<()>,
-) {
+async fn connected() -> (RunningService<RoleClient, McpClientHandler>, JoinHandle<()>) {
     const BUF: usize = 8192;
     let (client_read, server_write) = duplex(BUF);
     let (server_read, client_write) = duplex(BUF);
@@ -201,7 +200,7 @@ async fn test_call_returns_text() {
 
 /// A read-only declaration passes the mode gate without a card, and the call
 /// runs: the annotations only reach the user through the gate, so this is the
-/// path a mirrored tool takes.
+/// path a tool from the source takes.
 #[tokio::test]
 async fn test_read_only_no_prompt() {
     let (service, peer_task) = connected().await;
@@ -484,15 +483,16 @@ fn test_type_names_every_shape() {
     assert_eq!(type_name(&json!({})), "an object");
 }
 
-/// The mirror starts from an empty snapshot and ends when the manager stops,
-/// so a session that shuts down leaves no task behind.
+/// The subscription task a tool source starts holds the manager only until
+/// the manager stops: an empty source is expected, but the task's end is what
+/// keeps a stopped session from leaving work behind.
 #[tokio::test]
-async fn test_mirror_follows_shutdown() {
-    let manager = McpConnections::new(
-        Arc::new(crate::mcp::manager::tests::NoSpawn),
+async fn test_source_task_ends() {
+    let manager = Arc::new(McpConnections::new(
+        Arc::new(NoSpawn),
         Arc::from(Path::new("/work")),
         McpTimings::default(),
-    );
+    ));
     manager
         .start_all(vec![ScopedMcpServerConfig {
             name: "quiet".into(),
@@ -502,14 +502,22 @@ async fn test_mirror_follows_shutdown() {
             tool_timeout_ms: 5_000,
         }])
         .await;
-    let source = Arc::new(McpToolSource::default());
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
-    let mirror = start_mirror(manager.clone(), Arc::clone(&source), gate, None);
+    let source = manager.tool_source(gate, None);
     assert!(source.names().is_empty());
+    assert!(source.instructions().is_none());
+    assert!(
+        Arc::strong_count(&manager) > 1,
+        "the subscription task holds its own handle"
+    );
     manager.shutdown().await;
-    timeout(Duration::from_secs(2), mirror)
-        .await
-        .expect("the mirror ends with the manager")
-        .expect("the mirror task does not panic");
-    assert!(source.names().is_empty());
+    let started = Instant::now();
+    while Arc::strong_count(&manager) > 1 && started.elapsed() < Duration::from_secs(2) {
+        sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(
+        Arc::strong_count(&manager),
+        1,
+        "the subscription task ends when the manager stops"
+    );
 }

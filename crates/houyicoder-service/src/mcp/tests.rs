@@ -44,7 +44,7 @@ fn config(name: &str, disabled: bool) -> ScopedMcpServerConfig {
 }
 
 /// A resolved list with nothing in it starts nothing, so an unconfigured
-/// session pays no manager, no mirror, and no background task.
+/// session pays no manager, no tool source, and no background task.
 #[tokio::test]
 async fn test_empty_list_yields_none() {
     let handle = Handle::current();

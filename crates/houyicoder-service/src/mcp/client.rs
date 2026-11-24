@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::stdio_bridge::{Pipes, StderrTail, start};
+use super::stdio::{Pipes, StderrTail, start};
 
 /// Why a server could not be launched or handed to the transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,12 +76,12 @@ pub enum ClientEvent {
 /// is the workspace the session was opened on, as a standard file URI. It may
 /// also ask the client to run an inference; that request is refused, because
 /// a server must not spend the user's model budget.
-pub struct HouyiMcpClientHandler {
+pub struct McpClientHandler {
     workspace_root: Arc<Path>,
     events: Option<UnboundedSender<ClientEvent>>,
 }
 
-impl HouyiMcpClientHandler {
+impl McpClientHandler {
     /// A handler that answers for this workspace and reports changes on the
     /// given channel.
     pub fn new(workspace_root: Arc<Path>, events: UnboundedSender<ClientEvent>) -> Self {
@@ -124,7 +124,7 @@ impl HouyiMcpClientHandler {
     }
 }
 
-impl ClientHandler for HouyiMcpClientHandler {
+impl ClientHandler for McpClientHandler {
     fn get_info(&self) -> InitializeRequestParams {
         self.handshake_info()
     }
@@ -164,7 +164,7 @@ impl ClientHandler for HouyiMcpClientHandler {
 /// One live stdio server: the protocol service, the child whose lifetime it
 /// runs on, and the tail of the diagnostics the child wrote.
 pub struct LaunchedMcpServer {
-    pub service: RunningService<RoleClient, HouyiMcpClientHandler>,
+    pub service: RunningService<RoleClient, McpClientHandler>,
     /// Dropped with the server; the launcher's on-drop kill then ends the
     /// child and its process group.
     pub child: LauncherChild,
@@ -223,13 +223,13 @@ pub(crate) async fn serve_over(
     workspace_root: Arc<Path>,
 ) -> Result<
     (
-        RunningService<RoleClient, HouyiMcpClientHandler>,
+        RunningService<RoleClient, McpClientHandler>,
         UnboundedReceiver<ClientEvent>,
     ),
     McpClientError,
 > {
     let (events_tx, events) = mpsc::unbounded_channel();
-    let handler = HouyiMcpClientHandler::new(workspace_root, events_tx);
+    let handler = McpClientHandler::new(workspace_root, events_tx);
     let service = handler
         .serve(AsyncRwTransport::new_client(reader, writer))
         .await

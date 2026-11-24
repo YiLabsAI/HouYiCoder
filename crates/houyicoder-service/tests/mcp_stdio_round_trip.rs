@@ -21,9 +21,7 @@ use houyicoder_api::tool::ToolCtx;
 use houyicoder_core::agent::ToolSource;
 use houyicoder_permission::{DefaultModeGate, ModeGate};
 use houyicoder_protocol::mcp::{McpConfigScope, McpTransportConfig, ScopedMcpServerConfig};
-use houyicoder_service::mcp::{
-    McpConnections, McpTimings, McpToolSource, RestartPolicy, start_mirror,
-};
+use houyicoder_service::mcp::{McpConnections, McpTimings, RestartPolicy};
 use serde_json::{Value, json};
 use tokio::runtime::Builder as RuntimeBuilder;
 use tokio::time::{sleep, timeout};
@@ -168,8 +166,8 @@ async fn test_mcp_stdio_full_round_trip() {
     let self_exe = current_exe().expect("current test exe");
     let launcher: Arc<dyn ProcessLauncher> = Arc::new(StdProcessLauncher::new());
     let workspace: Arc<Path> = Arc::from(temp_dir());
-    let manager = McpConnections::new(launcher, workspace, fast_timings());
-    let source = Arc::new(McpToolSource::default());
+    let manager = Arc::new(McpConnections::new(launcher, workspace, fast_timings()));
+    let source = manager.tool_source(auto_gate(), None);
 
     let server_cfg = ScopedMcpServerConfig {
         name: "test_srv".into(),
@@ -183,7 +181,6 @@ async fn test_mcp_stdio_full_round_trip() {
     };
 
     manager.start_all(vec![server_cfg]).await;
-    let mirror = start_mirror(manager.clone(), Arc::clone(&source), auto_gate(), None);
 
     let ok = eventually(|| source.names().len() == 2).await;
     if !ok {
@@ -235,7 +232,6 @@ async fn test_mcp_stdio_full_round_trip() {
     timeout(Duration::from_secs(5), manager.shutdown())
         .await
         .expect("shutdown completes within budget");
-    drop(timeout(Duration::from_secs(2), mirror).await);
 }
 
 fn main() {

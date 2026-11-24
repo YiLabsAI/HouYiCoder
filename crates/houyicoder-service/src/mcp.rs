@@ -6,13 +6,12 @@
 mod client;
 mod liveness;
 mod manager;
-mod stdio_bridge;
+mod stdio;
 mod tools;
 
-pub use client::{ClientEvent, HouyiMcpClientHandler, LaunchedMcpServer, launch_stdio};
 pub use liveness::RestartPolicy;
 pub use manager::{McpConnections, McpTimings};
-pub use tools::{McpToolSource, registered_name, start_mirror};
+pub use tools::McpToolSource;
 
 use std::env;
 use std::path::Path;
@@ -101,24 +100,16 @@ fn start_resolved(
         root,
         McpTimings::default(),
     ));
-    let source = Arc::new(McpToolSource::default());
     // Spawning through the handle needs the handle entered on this thread;
     // the guard restores the previous context when it drops.
     let _entered = handle.enter();
-    let start = manager.clone();
+    let source = manager.tool_source(gate, Some(log));
+    let start = Arc::clone(&manager);
     handle.spawn(async move {
         start.start_all(servers).await;
     });
-    drop(start_mirror(
-        (*manager).clone(),
-        Arc::clone(&source),
-        gate,
-        Some(log),
-    ));
     Some(McpRuntime { manager, source })
 }
 
 #[cfg(test)]
 mod tests;
-
-pub use stdio_bridge::StderrTail;

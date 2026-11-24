@@ -37,22 +37,26 @@ fn test_no_memory_file_identity() {
 }
 
 #[test]
-fn test_mcp_instructions_prefix() {
+fn test_mcp_instructions_after_boundary() {
     let dir = scratch_dir("mcp-inst");
-    let mcp = "### Server `codegraph` instructions:\nExplore the code graph.";
-    let p = SystemPrompt::build_with_mcp_instructions(
-        &dir,
-        None,
-        None,
-        None,
-        Some(mcp),
-        &FrozenPrompt::read(&dir),
-    );
+    let mcp = "<mcp_server_instructions server=\"codegraph\">\nExplore the code graph.\n</mcp_server_instructions>";
+    let freeze = FrozenPrompt::read(&dir);
+    let p = SystemPrompt::build_with_mcp_instructions(&dir, None, None, None, Some(mcp), &freeze);
     assert!(p.text.contains("Explore the code graph."));
     let mcp_idx = p.text.find("Explore the code graph.").unwrap();
     assert!(
-        mcp_idx < p.dynamic_boundary,
-        "MCP instructions must be part of the static prefix"
+        mcp_idx > p.dynamic_boundary,
+        "MCP instructions vary by workspace and must ride the dynamic suffix"
+    );
+    // Two workspaces whose servers differ still share the global prefix, so
+    // one workspace's server list cannot cost another its cache hit.
+    let other =
+        "<mcp_server_instructions server=\"other\">\nother text\n</mcp_server_instructions>";
+    let q = SystemPrompt::build_with_mcp_instructions(&dir, None, None, None, Some(other), &freeze);
+    assert_eq!(
+        &p.text[..p.dynamic_boundary],
+        &q.text[..q.dynamic_boundary],
+        "the cross-project prefix is the same whatever the servers say"
     );
 }
 

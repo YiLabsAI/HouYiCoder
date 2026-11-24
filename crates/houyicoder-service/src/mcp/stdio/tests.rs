@@ -37,10 +37,10 @@ fn test_tail_cuts_wide_line() {
     assert!(kept.is_char_boundary(kept.len()));
 }
 
-/// The bridge delivers the child's output to the reader half and the writer
+/// The channels deliver the child's output to the reader half and the writer
 /// half's bytes to the child's input.
 #[tokio::test]
-async fn test_bridge_moves_bytes() {
+async fn test_channels_move_bytes() {
     struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Recorder {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -58,20 +58,20 @@ async fn test_bridge_moves_bytes() {
         stdout: Box::new(Cursor::new(b"from child".to_vec())),
         stderr: None,
     };
-    let (mut bridge, _tail) = start(pipes);
+    let (mut channels, _tail) = start(pipes);
     let mut out = Vec::new();
-    bridge
+    channels
         .reader
         .read_to_end(&mut out)
         .await
         .expect("child output arrives");
     assert_eq!(out, b"from child");
-    bridge
+    channels
         .writer
         .write_all(b"to child")
         .await
-        .expect("write reaches the bridge");
-    bridge.writer.flush().await.expect("flush");
+        .expect("write reaches the channels");
+    channels.writer.flush().await.expect("flush");
     // The writer thread flushes on its own turn; poll for the bytes rather
     // than assuming the same instant.
     let mut delivered = false;
@@ -94,7 +94,7 @@ async fn test_tail_reads_partial_line() {
         stdout: Box::new(Cursor::new(Vec::new())),
         stderr: Some(Box::new(Cursor::new(b"last words".to_vec()))),
     };
-    let (_bridge, tail) = start(pipes);
+    let (_channels, tail) = start(pipes);
     let mut lines = Vec::new();
     for _ in 0..100 {
         lines = tail.lines();
