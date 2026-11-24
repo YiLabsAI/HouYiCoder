@@ -1,5 +1,6 @@
 //! Markdown memory ranking, atomic writes, index repair, and boundary behavior.
 
+use super::super::io::INDEX_BYTE_CAP;
 use super::super::io::MAX_KEY_BYTES;
 use super::super::*;
 use houyicoder_context::{MemoryOrigin, MemoryScope, MemorySource};

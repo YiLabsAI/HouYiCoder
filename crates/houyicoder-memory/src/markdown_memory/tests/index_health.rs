@@ -107,7 +107,7 @@ fn test_marker_triggers_rebuild() {
         "a completed rebuild clears the marker"
     );
     assert!(
-        index_text(&root).contains("- alpha ["),
+        index_text(&root).contains("- alpha:"),
         "the rebuilt index still names the topic"
     );
     remove_dir_all(&root).ok();
@@ -128,7 +128,7 @@ fn test_dangling_pointer_heals() {
         provider.add(entry(key, body)).expect("seed a topic");
     }
     assert!(
-        index_text(&root).contains("- gone ["),
+        index_text(&root).contains("- gone:"),
         "the index names the topic before the deletion"
     );
     remove_file(root.join("gone.md")).expect("delete the topic directly");
@@ -137,12 +137,12 @@ fn test_dangling_pointer_heals() {
 
     let text = index_text(&root);
     assert!(
-        !text.contains("- gone ["),
+        !text.contains("- gone:"),
         "the rebuilt index drops the row naming a missing topic:\n{text}"
     );
-    assert!(text.contains("- keep-me ["), "unrelated rows survive");
+    assert!(text.contains("- keep-me:"), "unrelated rows survive");
     assert!(
-        text.contains("- two words ["),
+        text.contains("- two words:"),
         "a key containing a space is still one row"
     );
     remove_dir_all(&root).ok();
@@ -169,7 +169,7 @@ fn test_add_failure_marks_index() {
         "an add whose index append failed must leave the marker"
     );
     assert!(
-        !index_text(&root).contains("- new ["),
+        !index_text(&root).contains("- new:"),
         "the old index does not name the new topic"
     );
 
@@ -180,7 +180,7 @@ fn test_add_failure_marks_index() {
         "the heal clears the marker"
     );
     assert!(
-        index_text(&root).contains("- new ["),
+        index_text(&root).contains("- new:"),
         "the healed index names the topic that was already on disk"
     );
     remove_dir_all(&root).ok();
@@ -269,7 +269,7 @@ fn test_delete_failure_leaves_marker() {
         "a delete whose index publish failed must leave the marker"
     );
     assert!(
-        index_text(&root).contains("- prune-me ["),
+        index_text(&root).contains("- prune-me:"),
         "the published index is left as it was"
     );
 
@@ -280,11 +280,11 @@ fn test_delete_failure_leaves_marker() {
         "the heal clears the marker"
     );
     assert!(
-        !index_text(&root).contains("- prune-me ["),
+        !index_text(&root).contains("- prune-me:"),
         "the healed index no longer names the deleted topic"
     );
     assert!(
-        index_text(&root).contains("- keep-me ["),
+        index_text(&root).contains("- keep-me:"),
         "the remaining topic keeps its row"
     );
     remove_dir_all(&root).ok();
@@ -303,7 +303,7 @@ fn test_demote_failure_marks_both() {
         .add(entry("other", "other body"))
         .expect("seed an automatic topic");
     assert!(
-        index_text(&fx.project).contains("- topic ["),
+        index_text(&fx.project).contains("- topic:"),
         "the project index names the topic before the move"
     );
     fail_next_index_write();
@@ -324,7 +324,7 @@ fn test_demote_failure_marks_both() {
         "the automatic root is marked for repair"
     );
     assert!(
-        index_text(&fx.project).contains("- topic ["),
+        index_text(&fx.project).contains("- topic:"),
         "the project index keeps its old row"
     );
 
@@ -333,11 +333,11 @@ fn test_demote_failure_marks_both() {
         .expect("the next session heals");
 
     assert!(
-        !index_text(&fx.project).contains("- topic ["),
+        !index_text(&fx.project).contains("- topic:"),
         "the healed project index no longer names the moved topic"
     );
     assert!(
-        index_text(&fx.auto).contains("- topic ["),
+        index_text(&fx.auto).contains("- topic:"),
         "the healed automatic index gains the moved topic"
     );
     assert!(!fx.project.join(INDEX_DIRTY).exists());
@@ -354,7 +354,7 @@ fn test_promote_failure_marks_both() {
         .add(entry("topic", "topic body"))
         .expect("seed the automatic topic");
     assert!(
-        index_text(&fx.auto).contains("- topic ["),
+        index_text(&fx.auto).contains("- topic:"),
         "the automatic index names the topic before the move"
     );
     fail_next_index_write();
@@ -380,11 +380,11 @@ fn test_promote_failure_marks_both() {
         .expect("the next session heals");
 
     assert!(
-        index_text(&fx.project).contains("- topic ["),
+        index_text(&fx.project).contains("- topic:"),
         "the healed project index names the moved topic"
     );
     assert!(
-        !index_text(&fx.auto).contains("- topic ["),
+        !index_text(&fx.auto).contains("- topic:"),
         "the healed automatic index drops the moved topic"
     );
     assert!(!fx.project.join(INDEX_DIRTY).exists());
@@ -405,11 +405,11 @@ fn test_index_row_uses_stem() {
 
     let text = index_text(&root);
     assert!(
-        text.contains("- stem ["),
+        text.contains("- stem:"),
         "the row uses the file stem:\n{text}"
     );
     assert!(
-        !text.contains("- Display Name ["),
+        !text.contains("- Display Name:"),
         "the name field does not address the row:\n{text}"
     );
     write(root.join("MEMORY.md"), format!("{text}sentinel\n")).expect("mark the index");
@@ -440,7 +440,7 @@ fn test_delimiter_key_pointer_heals() {
     provider.rebuild_index().expect("publish both rows");
     let text = index_text(&root);
     assert!(
-        text.contains("- foo [bar ["),
+        text.contains("- foo [bar:"),
         "the legacy key is one row:\n{text}"
     );
     remove_file(root.join("foo [bar.md")).expect("delete the legacy topic");
@@ -451,11 +451,11 @@ fn test_delimiter_key_pointer_heals() {
 
     let text = index_text(&root);
     assert!(
-        !text.contains("- foo [bar ["),
+        !text.contains("- foo [bar:"),
         "the deleted key's row is dropped:\n{text}"
     );
     assert!(
-        text.contains("- foo ["),
+        text.contains("- foo:"),
         "the surviving key keeps its row:\n{text}"
     );
     remove_dir_all(&root).ok();
@@ -484,14 +484,14 @@ fn test_equal_mtime_heals() {
         .set_modified(index_time)
         .expect("keep the copy's older timestamp");
     assert!(
-        !index_text(&root).contains("- beta ["),
+        !index_text(&root).contains("- beta:"),
         "the index predates the copy"
     );
 
     provider.rebuild_if_stale().expect("the missing row heals");
 
     assert!(
-        index_text(&root).contains("- beta ["),
+        index_text(&root).contains("- beta:"),
         "the healed index names the copied topic"
     );
     remove_dir_all(&root).ok();
@@ -513,7 +513,7 @@ fn test_capped_index_skips_rebuild() {
         "the index is capped:\n{text}"
     );
     assert!(
-        !text.contains("- four ["),
+        !text.contains("- four:"),
         "the cap leaves later topics out:\n{text}"
     );
     write(root.join("MEMORY.md"), format!("{text}\nsentinel\n")).expect("mark the index");
@@ -554,14 +554,14 @@ fn test_delete_marker_survives() {
         "the marker the delete raised survives a failed repair"
     );
     assert!(
-        index_text(&root).contains("- alpha ["),
+        index_text(&root).contains("- alpha:"),
         "the failed repair leaves the old index"
     );
 
     provider.rebuild_if_stale().expect("the next session heals");
 
     assert!(!root.join(INDEX_DIRTY).exists());
-    assert!(!index_text(&root).contains("- alpha ["));
+    assert!(!index_text(&root).contains("- alpha:"));
 }
 
 /// A new key cannot contain the sequence that separates a row's key from its
@@ -615,7 +615,7 @@ fn test_warning_text_in_description() {
         .expect("a description cannot hide the omitted topic");
 
     assert!(
-        index_text(&root).contains("- beta ["),
+        index_text(&root).contains("- beta:"),
         "the omitted topic heals"
     );
     remove_dir_all(&root).ok();
@@ -681,7 +681,7 @@ fn test_rebuild_skips_legacy_key() {
         "an unaddressable row is not published:\n{text}"
     );
     assert!(
-        text.contains("- alpha ["),
+        text.contains("- alpha:"),
         "the addressable topic keeps its row:\n{text}"
     );
     remove_dir_all(&root).ok();

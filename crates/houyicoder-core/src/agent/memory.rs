@@ -30,8 +30,8 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySource, MemorySummary, SessionId,
-    tokens_for,
+    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId, memory_index_row,
+    render_memory_index_groups, tokens_for,
 };
 
 pub use gates::{MemoryGateState, MemoryGates};
@@ -60,7 +60,7 @@ pub(crate) const INDEX_TOKEN_BUDGET: usize = 4_000;
 /// prompt carries, so the cost the measurement reports is the cost the request
 /// pays.
 pub(crate) fn index_line(summary: &MemorySummary) -> String {
-    format!("- {}: {}\n", summary.key, summary.description)
+    format!("{}\n", memory_index_row(&summary.key, &summary.description))
 }
 
 /// Render the injected index under one token budget. Selection runs first, so
@@ -83,23 +83,13 @@ pub(crate) fn render_index(summaries: &[MemorySummary]) -> String {
             selected.push(summary);
         }
     }
-    let mut out = String::new();
-    for source in [
-        MemorySource::Feedback,
-        MemorySource::Project,
-        MemorySource::User,
-        MemorySource::Reference,
-    ] {
-        let mut group = selected.iter().filter(|s| s.source == source).peekable();
-        if group.peek().is_none() {
-            continue;
-        }
-        out.push_str(&format!("### {}\n", source.as_label()));
-        for summary in group {
-            out.push_str(&index_line(summary));
-        }
-    }
-    out
+    render_memory_index_groups(selected.iter().map(|summary| {
+        (
+            summary.source,
+            summary.key.as_str(),
+            summary.description.as_str(),
+        )
+    }))
 }
 
 /// Optional background memory workers.

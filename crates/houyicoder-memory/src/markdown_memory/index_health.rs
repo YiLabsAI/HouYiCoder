@@ -19,7 +19,6 @@ use std::cell::Cell;
 use std::os::unix::fs::OpenOptionsExt;
 
 use houyicoder_context::MemoryError;
-use houyicoder_context::MemorySource;
 
 use super::MarkdownMemoryProvider;
 use super::SCAN_FILE_CAP;
@@ -135,30 +134,22 @@ impl MarkdownMemoryProvider {
     }
 
     /// Whether the index can read a row back as this whole key. A key that
-    /// embeds a complete delimiter reads back as the part before it, so the
+    /// embeds the row delimiter reads back as the part before it, so the
     /// rebuild leaves such a key out instead of publishing a row that names
     /// another key and asks for another rebuild on every start.
     pub(super) fn index_key_representable(key: &str) -> bool {
-        let probe = format!("- {key} [{}]: probe", MemorySource::Project.as_label());
+        let probe = houyicoder_context::memory_index_row(key, "probe");
         index_row_key(&probe) == Some(key)
     }
 }
 
-/// The key a row names, or None for a line that is not a row. The writer puts
-/// a space, the source label in brackets, a colon, and the description after
-/// the key. A key may itself hold spaces and brackets, so the delimiter counts
-/// only when the text after it is one of the labels the writer emits.
+/// The key a row names, or None for a line that is not a row. A row is a
+/// dash, a space, the key, a colon, a space, and the description. A key may
+/// itself hold spaces, so the delimiter is the first colon-space after the
+/// dash; a key that contains that sequence cannot be represented and is kept
+/// out by the caller's probe.
 fn index_row_key(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("- ")?;
-    let mut from = 0;
-    while let Some(found) = rest[from..].find(" [") {
-        let at = from + found;
-        if let Some((label, _)) = rest[at + 2..].split_once("]: ")
-            && MemorySource::from_label(label).is_some()
-        {
-            return Some(&rest[..at]);
-        }
-        from = at + 1;
-    }
-    None
+    let (key, _) = rest.split_once(": ")?;
+    if key.is_empty() { None } else { Some(key) }
 }

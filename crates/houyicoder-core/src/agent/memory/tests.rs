@@ -1,6 +1,7 @@
 //! Index rendering: one heading per type, and scope priority deciding what fits.
 
 use super::*;
+use houyicoder_context::MemorySource;
 
 fn summary(key: &str, source: MemorySource, scope: MemoryScope) -> MemorySummary {
     MemorySummary::new(key, "one line", source, scope, 0)

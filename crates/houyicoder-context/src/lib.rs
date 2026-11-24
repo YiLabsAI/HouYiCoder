@@ -22,9 +22,11 @@
 // into public contract, and a named list is what keeps a new pub item in a
 // submodule from widening the API on its own.
 mod hook_types;
+mod memory_index;
 mod memory_types;
 mod sandbox_types;
 pub use hook_types::{HookErrorKind, HookEventKind, HookFirePayload, HookVerdictKind};
+pub use memory_index::{MEMORY_INDEX_GROUPS, memory_index_row, render_memory_index_groups};
 pub use memory_types::{
     MemoryEntry, MemoryError, MemoryOrigin, MemoryRankHit, MemoryRecallStats, MemoryScope,
     MemorySource, MemorySummary, is_cjk, memory_age_days, memory_age_label, memory_freshness_text,

@@ -256,11 +256,11 @@ fn test_writers_keep_both() {
     assert!(root.join("beta.md").exists(), "the child topic must exist");
     let index = read_to_string(root.join("MEMORY.md")).expect("the index is readable");
     assert!(
-        index.contains("- alpha ["),
+        index.contains("- alpha:"),
         "the index must name the parent's key:\n{index}"
     );
     assert!(
-        index.contains("- beta ["),
+        index.contains("- beta:"),
         "the index must name the child's key:\n{index}"
     );
     let leftovers: Vec<String> = read_dir(&root)
@@ -477,11 +477,11 @@ fn test_crash_state_heals() {
     );
     let index = read_to_string(root.join("MEMORY.md")).expect("the index is readable");
     assert!(
-        index.contains("- alpha ["),
+        index.contains("- alpha:"),
         "the healed index names the topic the dead writer landed:\n{index}"
     );
     assert!(
-        index.contains("- seed ["),
+        index.contains("- seed:"),
         "the heal keeps the row that was already published:\n{index}"
     );
     remove_dir_all(&root).ok();

@@ -9,20 +9,20 @@ mod recall_corpus;
 
 use std::collections::HashSet;
 use std::env;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::{ModelProvider, stream_from_response};
 use houyicoder_api::session::SessionLog;
 use houyicoder_async::{PFut, PStream};
-use houyicoder_context::{SessionEvent, SessionId};
+use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, Runner, ToolRegistry};
 use houyicoder_memory::{InMemoryBackend, SemanticReranker};
 use houyicoder_protocol::llm::{
-    CompletionRequest, CompletionResponse, LlmEvent, ModelCapabilities, OutputItem, ProviderError,
-    Usage,
+    CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, OutputItem,
+    ProviderError, Usage,
 };
 use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_session::SessionStore;
@@ -46,8 +46,57 @@ fn test_api_key() -> Option<String> {
 }
 
 /// The main-loop model, canned so every token spent goes to the semantic
-/// selection stage under measurement.
-struct StubModel;
+/// selection stage under measurement. It records the text of every request
+/// so the benchmark can judge what the model actually received instead of
+/// inferring it from the session log after the turn.
+struct StubModel {
+    captured: Mutex<Vec<String>>,
+}
+
+impl StubModel {
+    fn new() -> Self {
+        Self {
+            captured: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The text of the first request of the turn, which is where a
+    /// synchronous recall lands. Empty when the turn never reached a request.
+    fn step_zero(&self) -> String {
+        self.captured
+            .lock()
+            .expect("capture lock")
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn reset(&self) {
+        self.captured.lock().expect("capture lock").clear();
+    }
+
+    fn record(&self, request: &CompletionRequest) {
+        self.captured
+            .lock()
+            .expect("capture lock")
+            .push(request_text(request));
+    }
+}
+
+/// Flatten a request into the text a model would read: the instructions plus
+/// every input item in order.
+fn request_text(request: &CompletionRequest) -> String {
+    let mut text = request.instructions.clone();
+    for item in &request.input {
+        text.push('\n');
+        match item {
+            InputItem::User { content } => text.push_str(content),
+            InputItem::Assistant { content, .. } => text.push_str(content),
+            InputItem::ToolResult { output, .. } => text.push_str(&output.to_string()),
+        }
+    }
+    text
+}
 
 fn done_response() -> CompletionResponse {
     CompletionResponse {
@@ -62,12 +111,14 @@ fn done_response() -> CompletionResponse {
 impl ModelProvider for StubModel {
     fn complete(
         &self,
-        _req: CompletionRequest,
+        req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        self.record(&req);
         Box::pin(async { Ok(done_response()) })
     }
 
-    fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        self.record(&req);
         stream_from_response(done_response())
     }
 
@@ -113,33 +164,33 @@ fn test_fast_path_latency_exact() {
     assert!(p95 < 5000, "rank p95 {p95}us over the 5ms fast-path bound");
 }
 
-/// One recall pass over the whole corpus through the production pipeline:
-/// turn start ranks, a confident lexical top settles synchronously, a weak
-/// signal spawns the live semantic stage beside the canned main call, and
-/// the join at turn end lands the selection as a durable recall event.
-async fn injected_keys(
-    runner: &Runner,
-    store: &Arc<dyn SessionLog>,
-    pair: &CorpusPair,
-) -> Vec<String> {
+/// Run one turn and return the text of the first request the model received.
+/// A synchronous recall lands there, so this is the earliest point the
+/// benchmark can judge without reading the session log after the turn.
+async fn step_zero_request(model: &StubModel, runner: &Runner, pair: &CorpusPair) -> String {
     let session = SessionId::new();
+    model.reset();
     let outcome = runner.run(session, pair.query.clone()).await;
     assert!(outcome.is_ok(), "turn for {:?} must complete", pair.query);
-    runner.join_dreams(Duration::from_secs(90)).await;
-    let view = store.current_view(session).await.expect("session view");
-    let mut keys = Vec::new();
-    for entry in &view.events {
-        if let SessionEvent::MemoryRecall { keys: recalled, .. } = &entry.event {
-            keys.extend(recalled.iter().cloned());
-        }
-    }
-    keys
+    model.step_zero()
 }
 
-fn score_pair(pair: &CorpusPair, keys: &[String]) -> bool {
+/// The body a correct recall must deliver for this pair, when it names one.
+fn expected_body<'a>(corpus: &'a Corpus, pair: &CorpusPair) -> Option<&'a str> {
+    let key = pair.expected.as_deref()?;
+    corpus
+        .entries
+        .iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.body.as_str())
+}
+
+fn score_pair(pair: &CorpusPair, corpus: &Corpus, step_zero: &str) -> bool {
     match pair.expected.as_deref() {
-        Some(expected) => keys.iter().any(|k| k == expected),
-        None => keys.is_empty(),
+        Some(_) => expected_body(corpus, pair).is_some_and(|body| step_zero.contains(body)),
+        // A negative must carry no recalled block at all; the always-on index
+        // names descriptions, not bodies, so its presence is not a recall.
+        None => !step_zero.contains("# Recalled memories"),
     }
 }
 
@@ -167,9 +218,10 @@ async fn test_live_recall_gates() {
         None,
     );
     runtime.install_reranker(reranker);
+    let model = Arc::new(StubModel::new());
     let runner = Runner::new(
         store.clone(),
-        Arc::new(StubModel),
+        model.clone(),
         ToolRegistry::new(),
         RunnerConfig::default(),
     )
@@ -187,12 +239,12 @@ async fn test_live_recall_gates() {
         let pairs = corpus.pairs_in(category);
         let mut hits = 0;
         for pair in pairs.iter() {
-            let keys = injected_keys(&runner, &store, pair).await;
-            if score_pair(pair, &keys) {
+            let step_zero = step_zero_request(&model, &runner, pair).await;
+            if score_pair(pair, &corpus, &step_zero) {
                 hits += 1;
             } else {
                 misses.push(format!(
-                    "{category} {:?} expected {:?} got {keys:?}",
+                    "{category} {:?} expected {:?} missing from the first request",
                     pair.query, pair.expected
                 ));
             }

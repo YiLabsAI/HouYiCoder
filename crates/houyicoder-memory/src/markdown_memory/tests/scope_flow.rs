@@ -185,7 +185,7 @@ fn test_promote_idempotent_project_topic() {
     let index = read_to_string(fx.project_root.join("MEMORY.md")).expect("project index");
     let count = index
         .lines()
-        .filter(|l| l.starts_with("- rule-idem "))
+        .filter(|l| l.starts_with("- rule-idem:"))
         .count();
     assert_eq!(
         count, 1,
@@ -205,7 +205,7 @@ fn test_demote_reverses_promote() {
     let index_after_promote =
         read_to_string(fx.project_root.join("MEMORY.md")).expect("project index");
     assert!(
-        index_after_promote.contains("- rule-rev "),
+        index_after_promote.contains("- rule-rev:"),
         "promote puts the key in the always-on index: {index_after_promote}"
     );
     fx.provider.demote_memory("rule-rev").expect("demote");
@@ -221,7 +221,7 @@ fn test_demote_reverses_promote() {
     // The always-on index no longer carries the key.
     let index = read_to_string(fx.project_root.join("MEMORY.md")).expect("project index");
     assert!(
-        !index.contains("- rule-rev "),
+        !index.contains("- rule-rev:"),
         "the key leaves the always-on index: {index}"
     );
     // Recall finds it under the auto scope now.
