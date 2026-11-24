@@ -246,7 +246,7 @@ impl Runner {
 
         // Reinject active memory recalls and skills so they survive the compaction boundary.
         if result.made_progress {
-            self.memory.recall(session).await?;
+            self.memory.recall_after_compaction(session).await?;
             self.inject_skill_listing_and_body(session).await?;
         }
 

@@ -122,13 +122,13 @@ pub(crate) struct Withheld {
 
 /// What each check of one response must do, given the state of every call in
 /// it.
-pub(crate) fn check_actions(
-    emitted_calls: &[(String, String)],
+pub(crate) fn check_actions<T>(
+    emitted_calls: &[(String, String, T)],
     outcomes: &HashMap<String, EditOutcome>,
 ) -> Withheld {
     let mut plan = CheckPlan::default();
     let mut withheld = Withheld::default();
-    for (id, tool) in emitted_calls {
+    for (id, tool, _) in emitted_calls {
         match plan.action(tool) {
             CheckAction::Run => {}
             CheckAction::Wait => {
@@ -147,14 +147,14 @@ pub(crate) fn check_actions(
 /// What each emitted call leaves behind for the checks sent after it: a call
 /// that is waiting for a verdict has not written anything yet, and every
 /// other call is either done or settled as not done.
-pub(crate) fn outcomes(
-    emitted_calls: &[(String, String)],
+pub(crate) fn outcomes<T>(
+    emitted_calls: &[(String, String, T)],
     did_not_run: &HashSet<String>,
     awaiting: &HashSet<String>,
 ) -> HashMap<String, EditOutcome> {
     emitted_calls
         .iter()
-        .map(|(id, _)| {
+        .map(|(id, _, _)| {
             let outcome = if awaiting.contains(id) {
                 EditOutcome::Pending
             } else if did_not_run.contains(id) {

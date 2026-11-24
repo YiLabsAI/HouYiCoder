@@ -182,12 +182,12 @@ pub(super) fn sanitize_key(key: &str) -> Result<String, MemoryError> {
 }
 
 /// Reject a new key containing the sequence that separates a row's key from
-/// its source label. One index row cannot carry such a key unambiguously, so
-/// a later read would attribute part of the key to the neighboring field.
+/// its description. One index row cannot carry such a key unambiguously, so
+/// a later read would attribute part of the key to the description.
 /// A legacy key already on disk stays readable and deletable; writing one
 /// again is refused like any other key that carries the sequence.
 pub(super) fn validate_index_key(key: &str) -> Result<(), MemoryError> {
-    if key.contains(" [") {
+    if key.contains(": ") || key.contains(" [") {
         return Err(MemoryError::InvalidPath(
             "index row separator in key".into(),
         ));

@@ -473,6 +473,12 @@ impl Runner {
         // Finalize the injection buffer at the loop exit (single point; every
         // caller covered). Pre-loop returns in resume skip this (low severity).
         let result = self.drive_loop_inner(session, turn, usage, token).await;
+        // The turn has reached a terminal outcome (not paused on approval),
+        // so a background selection still running can only append an orphan
+        // recall event. Drop it.
+        if !matches!(&result, Ok(run) if matches!(run.outcome, RunOutcome::Interruption(_))) {
+            self.memory.cancel_recall(session);
+        }
         self.finalize_input_buffer(&result);
         result
     }

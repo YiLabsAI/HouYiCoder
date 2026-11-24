@@ -22,8 +22,11 @@ pub(crate) use hook::{emit_user_notice, record_hook_signals};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::agent::memory::failure_recall::FailureSignal;
 use crate::agent::multi_agent::spawn::completion_notice_pending;
 use crate::agent::turn::result::run_completion_status;
+use crate::observability::evolution::REDUNDANCY_INPUT_PREVIEW_CAP;
+use crate::observability::truncate_str;
 use houyicoder_api::agent_event::{AgentEventHandlers, RunCompletionStatus, RunLifecycleEvent};
 use houyicoder_context::{EventId, NotificationTopic, SessionEvent, SessionId, SessionLogEntry};
 use houyicoder_protocol::llm::{OutputItem, Usage};
@@ -172,7 +175,7 @@ impl Runner {
         if let Ok(mut t) = self.redundancy.lock() {
             t.check_batch(calls.iter().copied());
         }
-        let (new_redundant, new_retry, tools, retry_tools) = {
+        let (new_redundant, new_retry, tools, retry_tools, retry_inputs) = {
             let t = self.redundancy.lock().expect("redundancy");
             let nr = (t.flagged_total() - prev_flagged) as u32;
             let nretry = t.retry_after_error() - prev_retry;
@@ -188,14 +191,29 @@ impl Runner {
                 .skip(start)
                 .map(|r| r.tool.clone())
                 .collect();
+            let redundant_inputs: Vec<String> = t
+                .records()
+                .iter()
+                .skip(start)
+                .map(|r| r.input_preview.clone())
+                .collect();
             let retry_tools: Vec<String> = t
                 .retry_tools()
                 .iter()
                 .skip(prev_retry_tools)
                 .cloned()
                 .collect();
-            (nr, nretry, tools, retry_tools)
+            (nr, nretry, tools, retry_tools, redundant_inputs)
         };
+        self.recall_repeated_calls(
+            session,
+            calls,
+            &retry_tools,
+            &retry_inputs,
+            new_retry,
+            new_redundant,
+        )
+        .await;
         // Durable reward observation: a later dream can scan cross-session
         // reward trends from the trajectory log (the in-memory tracker is
         // process-scoped and lost on exit). Only appended when this batch
@@ -247,6 +265,38 @@ impl Runner {
             {
                 tracing::warn!("blind-retry reminder append failed: {e}");
             }
+        }
+    }
+
+    /// Recall lessons when a repeat call or blind retry is detected.
+    async fn recall_repeated_calls(
+        &self,
+        session: SessionId,
+        calls: &[(&str, &serde_json::Value)],
+        retry_tools: &[String],
+        retry_inputs: &[String],
+        new_retry: u32,
+        new_redundant: u32,
+    ) {
+        if new_retry == 0 && new_redundant == 0 {
+            return;
+        }
+        let signals: Vec<FailureSignal> = calls
+            .iter()
+            .filter(|(tool, input)| {
+                let preview = truncate_str(&input.to_string(), REDUNDANCY_INPUT_PREVIEW_CAP);
+                retry_tools.iter().any(|r| r == tool) || retry_inputs.iter().any(|r| r == &preview)
+            })
+            .map(|(tool, input)| FailureSignal {
+                tool: (*tool).to_string(),
+                input: (*input).clone(),
+                output: Value::Null,
+            })
+            .collect();
+        if !signals.is_empty()
+            && let Err(error) = self.memory.recall_after_failures(session, &signals).await
+        {
+            tracing::warn!("failure recall after repeat call failed: {error}");
         }
     }
 

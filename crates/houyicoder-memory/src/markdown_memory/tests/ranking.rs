@@ -999,3 +999,18 @@ fn test_fresh_roots_claim_once() {
     }
     remove_dir_all(&base).ok();
 }
+
+/// A topic whose frontmatter does not parse is skipped by the rank instead
+/// of failing the whole scan, so one corrupt file does not blind recall.
+#[test]
+fn test_rank_skips_corrupt_topic() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    p.add(entry("good", "alpha body", MemorySource::Project))
+        .expect("seed a readable topic");
+    write(root.join("bad.md"), "not a topic").expect("seed a corrupt file");
+    let hits = p.rank_candidates("alpha", &HashSet::new());
+    assert_eq!(hits.len(), 1, "the corrupt file is skipped");
+    assert_eq!(hits[0].key, "good");
+    remove_dir_all(&root).ok();
+}

@@ -377,10 +377,6 @@ impl Runner {
                                 return Err(RunError::ContextOverflowNoProgress);
                             }
                             overflow_retries += 1;
-                            // Compaction folded older memory-recall events out
-                            // of the context; re-inject so the model is not
-                            // memory-blind for the rest of this run.
-                            self.memory.recall(session).await?;
                             // Re-announce skills: the compact folded the
                             // listing out; the scan resets and re-surfaces it.
                             self.inject_skill_listing_and_body(session).await?;

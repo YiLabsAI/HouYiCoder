@@ -5,6 +5,7 @@ pub mod extract;
 pub(crate) mod extraction_window;
 pub mod extractor;
 pub(crate) mod fact;
+pub(crate) mod failure_recall;
 pub(crate) mod reward_snapshot;
 
 mod gates;
@@ -12,6 +13,7 @@ mod mutation_log;
 mod recall;
 pub(crate) mod selector;
 
+use std::collections::HashSet;
 use std::mem::take;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -125,6 +127,9 @@ pub struct MemoryRuntime {
     primary_recorder: Option<Arc<MutationLog>>,
     memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
     recall_tasks: RecallTasks,
+    /// Error signatures already recalled in this turn, so one failure does
+    /// not inject the same lesson again at every later step of the turn.
+    failure_signatures: Mutex<HashSet<String>>,
     /// Handles of the per-turn background pipelines, reaped on the next fire
     /// and joined at shutdown so an extraction started by the last turn is
     /// not cut off by process exit.
@@ -148,6 +153,7 @@ impl MemoryRuntime {
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
+            failure_signatures: Mutex::new(HashSet::new()),
             background_pipeline: Mutex::new(Vec::new()),
             background_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
@@ -171,6 +177,7 @@ impl MemoryRuntime {
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
+            failure_signatures: Mutex::new(HashSet::new()),
             background_pipeline: Mutex::new(Vec::new()),
             background_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
@@ -232,6 +239,12 @@ impl MemoryRuntime {
     /// settles on nothing. A triggered semantic stage runs beside the model
     /// call and appends its recall on completion.
     pub(crate) async fn recall(&self, session: SessionId) -> Result<(), RunError> {
+        // A new user turn re-arms failure recall: the same error may happen
+        // again in the next task and deserves its lesson then.
+        self.failure_signatures
+            .lock()
+            .expect("failure signatures")
+            .clear();
         recall::recall(
             &self.store,
             self.provider.as_ref(),
@@ -241,6 +254,29 @@ impl MemoryRuntime {
             session,
         )
         .await
+    }
+
+    /// Re-inject after compaction with the summary's own words added to the
+    /// query. The summary carries the backbone's active file names, so the
+    /// recall looks for memories about the work the compacted span covered,
+    /// not just the last sentence the user typed.
+    pub(crate) async fn recall_after_compaction(&self, session: SessionId) -> Result<(), RunError> {
+        recall::recall_after_compaction(
+            &self.store,
+            self.provider.as_ref(),
+            self.reranker.as_ref(),
+            &self.recall_tasks,
+            &self.gates,
+            session,
+        )
+        .await
+    }
+
+    /// Drop selection tasks still running for this session. The run that
+    /// spawned them has ended, so a late selection can only append a recall
+    /// event the turn's requests have already passed.
+    pub(crate) fn cancel_recall(&self, session: SessionId) {
+        self.recall_tasks.cancel_session(session);
     }
 
     /// System lifecycle boundary: compaction is about to fold events out of

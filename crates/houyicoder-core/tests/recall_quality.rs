@@ -96,11 +96,15 @@ fn test_lexical_recall_top_five() {
     );
 }
 
+/// The weak categories are answered by the semantic stage, not by a
+/// confident lexical verdict. Body scoring gives their queries some lexical
+/// signal on purpose, so the gate is that the expected entry stays inside
+/// the candidate window and that a negative query never settles confidently.
 #[test]
-fn test_weak_pairs_no_signal() {
+fn test_weak_pairs_in_window() {
     let corpus = load_corpus();
     let (provider, root) = seed_corpus(&corpus);
-    for category in ["cjk_cross", "semantic", "negative"] {
+    for category in ["cjk_cross", "semantic"] {
         for pair in corpus.pairs_in(category) {
             let rows = ranked(&provider, &pair.query);
             assert_eq!(
@@ -108,27 +112,26 @@ fn test_weak_pairs_no_signal() {
                 corpus.entries.len(),
                 "every entry stays a candidate"
             );
-            if let Some(row) = rows.iter().find(|r| r.score > 0) {
-                panic!(
-                    "{category} query {:?} lexically hit {} at score {}",
-                    pair.query, row.key, row.score
-                );
-            }
-            // With every score zero the rank falls back to recency, so the
-            // expected entry must sit inside the window the semantic stage
-            // receives or the pair is unanswerable by construction.
-            if let Some(expected) = pair.expected.as_deref() {
-                let position = rows
-                    .iter()
-                    .position(|r| r.key == expected)
-                    .expect("expected entry ranked");
-                assert!(
-                    position < RERANK_WINDOW,
-                    "{category} query {:?} expects {expected} at window position {position}",
-                    pair.query
-                );
-            }
+            let expected = pair.expected.as_deref().expect("weak pair has a key");
+            let position = rows
+                .iter()
+                .position(|r| r.key == expected)
+                .expect("expected entry ranked");
+            assert!(
+                position < RERANK_WINDOW,
+                "{category} query {:?} expects {expected} at window position {position}",
+                pair.query
+            );
         }
+    }
+    for pair in corpus.pairs_in("negative") {
+        let rows = ranked(&provider, &pair.query);
+        assert_ne!(
+            verdict_of(&rows),
+            "confident",
+            "a negative query must not settle without the semantic stage: {:?}",
+            pair.query
+        );
     }
     discard_root(&root);
 }

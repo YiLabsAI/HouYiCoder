@@ -9,17 +9,19 @@ mod recall_corpus;
 
 use std::collections::HashSet;
 use std::env;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::{ModelProvider, stream_from_response};
 use houyicoder_api::session::SessionLog;
+use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
 use houyicoder_context::SessionId;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, Runner, ToolRegistry};
 use houyicoder_memory::{InMemoryBackend, SemanticReranker};
+use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, LlmEvent, ModelCapabilities, OutputItem,
     ProviderError, Usage,
@@ -27,6 +29,7 @@ use houyicoder_protocol::llm::{
 use houyicoder_provider::OpenAiCompatibleProvider;
 use houyicoder_session::SessionStore;
 use recall_corpus::{Corpus, CorpusPair, discard_root, load_corpus, seed_corpus};
+use serde_json::json;
 
 /// Model under test, overridable so a benchmark run can pin a version.
 fn test_model() -> String {
@@ -47,21 +50,34 @@ fn test_api_key() -> Option<String> {
 
 /// The main-loop model, canned so every token spent goes to the semantic
 /// selection stage under measurement. It records the text of every request
-/// so the benchmark can judge what the model actually received instead of
-/// inferring it from the session log after the turn.
+/// so the benchmark can judge what the model actually received. For queries
+/// that require the asynchronous semantic stage, it issues a dummy tool call
+/// on step 0 and finishes on step 1 after the background prefetch settles.
 struct StubModel {
     captured: Mutex<Vec<String>>,
+    two_step: bool,
 }
 
 impl StubModel {
-    fn new() -> Self {
+    fn new(two_step: bool) -> Self {
         Self {
             captured: Mutex::new(Vec::new()),
+            two_step,
         }
     }
 
-    /// The text of the first request of the turn, which is where a
-    /// synchronous recall lands. Empty when the turn never reached a request.
+    /// The text of the last request the model received. For single-step
+    /// queries this is step 0; for two-step queries this is step 1.
+    fn last_request(&self) -> String {
+        self.captured
+            .lock()
+            .expect("capture lock")
+            .last()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The text of the step-0 request.
     fn step_zero(&self) -> String {
         self.captured
             .lock()
@@ -108,18 +124,69 @@ fn done_response() -> CompletionResponse {
     }
 }
 
+struct BenchmarkWaitTool(Arc<OnceLock<Weak<Runner>>>);
+
+impl Tool for BenchmarkWaitTool {
+    fn name(&self) -> &str {
+        "wait_for_prefetch"
+    }
+    fn description(&self) -> &str {
+        "benchmark test tool that waits for background prefetch to settle"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({ "type": "object" })
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        _input: serde_json::Value,
+    ) -> PFut<'_, Result<serde_json::Value, ToolError>> {
+        let runner_slot = Arc::clone(&self.0);
+        Box::pin(async move {
+            if let Some(runner) = runner_slot.get().and_then(Weak::upgrade) {
+                runner.join_dreams(Duration::from_secs(10)).await;
+            }
+            Ok(json!({ "status": "waited" }))
+        })
+    }
+}
+
+fn wait_tool_response() -> CompletionResponse {
+    CompletionResponse {
+        output: vec![OutputItem::ToolCall {
+            id: "call_wait".into(),
+            name: "wait_for_prefetch".into(),
+            input: json!({}),
+        }],
+        usage: Usage::default(),
+        model: "stub".to_string(),
+    }
+}
+
 impl ModelProvider for StubModel {
     fn complete(
         &self,
         req: CompletionRequest,
     ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
         self.record(&req);
-        Box::pin(async { Ok(done_response()) })
+        let step = self.captured.lock().expect("capture lock").len();
+        let resp = if self.two_step && step == 1 {
+            wait_tool_response()
+        } else {
+            done_response()
+        };
+        Box::pin(async move { Ok(resp) })
     }
 
     fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
         self.record(&req);
-        stream_from_response(done_response())
+        let step = self.captured.lock().expect("capture lock").len();
+        let resp = if self.two_step && step == 1 {
+            wait_tool_response()
+        } else {
+            done_response()
+        };
+        stream_from_response(resp)
     }
 
     fn capabilities(&self) -> ModelCapabilities {
@@ -164,15 +231,25 @@ fn test_fast_path_latency_exact() {
     assert!(p95 < 5000, "rank p95 {p95}us over the 5ms fast-path bound");
 }
 
-/// Run one turn and return the text of the first request the model received.
-/// A synchronous recall lands there, so this is the earliest point the
-/// benchmark can judge without reading the session log after the turn.
-async fn step_zero_request(model: &StubModel, runner: &Runner, pair: &CorpusPair) -> String {
+/// Run one turn and return the text of the request where recall lands.
+/// For synchronous fast-path categories, this is step 0. For asynchronous
+/// semantic categories, the model runs a two-step turn so the background
+/// prefetch completes and lands on step 1.
+async fn run_turn_for_pair(
+    model: &StubModel,
+    runner: &Runner,
+    pair: &CorpusPair,
+    is_async: bool,
+) -> String {
     let session = SessionId::new();
     model.reset();
     let outcome = runner.run(session, pair.query.clone()).await;
     assert!(outcome.is_ok(), "turn for {:?} must complete", pair.query);
-    model.step_zero()
+    if is_async {
+        model.last_request()
+    } else {
+        model.step_zero()
+    }
 }
 
 /// The body a correct recall must deliver for this pair, when it names one.
@@ -185,12 +262,12 @@ fn expected_body<'a>(corpus: &'a Corpus, pair: &CorpusPair) -> Option<&'a str> {
         .map(|entry| entry.body.as_str())
 }
 
-fn score_pair(pair: &CorpusPair, corpus: &Corpus, step_zero: &str) -> bool {
+fn score_pair(pair: &CorpusPair, corpus: &Corpus, request_text: &str) -> bool {
     match pair.expected.as_deref() {
-        Some(_) => expected_body(corpus, pair).is_some_and(|body| step_zero.contains(body)),
+        Some(_) => expected_body(corpus, pair).is_some_and(|body| request_text.contains(body)),
         // A negative must carry no recalled block at all; the always-on index
         // names descriptions, not bodies, so its presence is not a recall.
-        None => !step_zero.contains("# Recalled memories"),
+        None => !request_text.contains("# Recalled memories"),
     }
 }
 
@@ -210,23 +287,7 @@ async fn test_live_recall_gates() {
     let model = Arc::new(OpenAiCompatibleProvider::new(test_base_url(), api_key));
     let reranker = Arc::new(SemanticReranker::new(model, test_model()));
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
-    let mut runtime = MemoryRuntime::from_parts(
-        store.clone(),
-        Some(Arc::new(memory)),
-        MemoryGates::new(true, true),
-        None,
-        None,
-    );
-    runtime.install_reranker(reranker);
-    let model = Arc::new(StubModel::new());
-    let runner = Runner::new(
-        store.clone(),
-        model.clone(),
-        ToolRegistry::new(),
-        RunnerConfig::default(),
-    )
-    .install_memory(runtime);
-
+    let memory_arc: Arc<dyn MemoryProvider> = Arc::new(memory);
     let mut misses: Vec<String> = Vec::new();
     let mut per_category: Vec<(&str, usize, usize)> = Vec::new();
     for category in [
@@ -236,15 +297,41 @@ async fn test_live_recall_gates() {
         "semantic",
         "negative",
     ] {
+        let is_async = matches!(category, "cjk_cross" | "semantic" | "negative");
+        let model = Arc::new(StubModel::new(is_async));
+        let mut runtime = MemoryRuntime::from_parts(
+            store.clone(),
+            Some(memory_arc.clone()),
+            MemoryGates::new(true, true),
+            None,
+            None,
+        );
+        runtime.install_reranker(reranker.clone());
+        let mut tools = ToolRegistry::new();
+        let runner_slot: Arc<OnceLock<Weak<Runner>>> = Arc::new(OnceLock::new());
+        tools.register(Arc::new(BenchmarkWaitTool(Arc::clone(&runner_slot))));
+        let runner = Arc::new(
+            Runner::new(store.clone(), model.clone(), tools, RunnerConfig::default())
+                .install_memory(runtime),
+        );
+        drop(runner_slot.set(Arc::downgrade(&runner)));
+
         let pairs = corpus.pairs_in(category);
         let mut hits = 0;
         for pair in pairs.iter() {
-            let step_zero = step_zero_request(&model, &runner, pair).await;
-            if score_pair(pair, &corpus, &step_zero) {
+            let request = run_turn_for_pair(&model, &runner, pair, is_async).await;
+            if is_async {
+                assert!(
+                    !model.step_zero().contains("# Recalled memories"),
+                    "step 0 must stay non-blocking on weak-signal query {:?}",
+                    pair.query
+                );
+            }
+            if score_pair(pair, &corpus, &request) {
                 hits += 1;
             } else {
                 misses.push(format!(
-                    "{category} {:?} expected {:?} missing from the first request",
+                    "{category} {:?} expected {:?} missing from target request",
                     pair.query, pair.expected
                 ));
             }

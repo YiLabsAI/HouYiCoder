@@ -293,6 +293,22 @@ impl RecallTasks {
             }
         }
     }
+
+    /// Drop selections still running for one session. Called when the run
+    /// that started them has ended: their recall would otherwise land after
+    /// the turn's last request, an event no step of that turn can read.
+    pub(crate) fn cancel_session(&self, session: SessionId) {
+        let mut running = self.running.lock().expect("recall tasks");
+        let mut kept = Vec::with_capacity(running.len());
+        for entry in running.drain(..) {
+            if entry.session == session {
+                entry.handle.abort();
+            } else {
+                kept.push(entry);
+            }
+        }
+        *running = kept;
+    }
 }
 
 #[cfg(test)]

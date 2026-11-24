@@ -84,9 +84,19 @@ pub struct RewardSnapshot {
 /// Capture a read-only reward snapshot. Locks OL + redundancy briefly to
 /// clone out, drops both before returning. Never holds across an await —
 /// the dream spawn is the caller's job after this returns.
+#[cfg(test)]
 pub fn capture_reward_snapshot(
     obs: &SharedObservability,
     redundancy: &Mutex<RedundancyTracker>,
+) -> RewardSnapshot {
+    capture_reward_snapshot_with_keys(obs, redundancy, &[])
+}
+
+/// Capture a read-only reward snapshot with explicit recalled keys.
+pub fn capture_reward_snapshot_with_keys(
+    obs: &SharedObservability,
+    redundancy: &Mutex<RedundancyTracker>,
+    extra_recalled_keys: &[String],
 ) -> RewardSnapshot {
     let mut snap = RewardSnapshot::default();
     if let Ok(ol) = obs.lock() {
@@ -119,13 +129,15 @@ pub fn capture_reward_snapshot(
             snap.cost.cache_hit_ratio = delta.cache_hit_ratio;
         }
         snap.cost.api_duration_ms = ol.cost().total_api_duration_ms;
-        // Recalled keys: scan the trajectory's MemoryRecall events so the
-        // dream can judge each recalled memory against the failures that
-        // followed — the failure→falsify-lesson edge.
         for ev in ol.trajectory() {
             if let SessionEvent::MemoryRecall { keys, .. } = &ev.event {
                 snap.recalled_keys.extend(keys.iter().cloned());
             }
+        }
+    }
+    for key in extra_recalled_keys {
+        if !snap.recalled_keys.contains(key) {
+            snap.recalled_keys.push(key.clone());
         }
     }
     // Redundant: cluster records by (tool, kind) so the dream sees patterns,

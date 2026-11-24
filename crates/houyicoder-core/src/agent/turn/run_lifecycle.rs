@@ -441,10 +441,26 @@ impl Runner {
     /// which suppresses the dream reward signal only.
     pub(crate) async fn fire_background_memory(&self, session: SessionId) {
         let reward_off = var("HOUYICODER_REWARD_OFF").is_ok();
+        let recalled_keys: Vec<String> = self
+            .store
+            .trajectory_tail(session)
+            .into_iter()
+            .filter_map(|entry| match entry.event {
+                SessionEvent::MemoryRecall { keys, .. } => Some(keys),
+                _ => None,
+            })
+            .flatten()
+            .collect();
         let reward = if reward_off {
             None
         } else {
-            Some(|| reward_snapshot::capture_reward_snapshot(&self.observability, &self.redundancy))
+            Some(move || {
+                reward_snapshot::capture_reward_snapshot_with_keys(
+                    &self.observability,
+                    &self.redundancy,
+                    &recalled_keys,
+                )
+            })
         };
         self.memory.fire_background(session, reward).await;
     }

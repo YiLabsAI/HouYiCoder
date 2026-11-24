@@ -512,9 +512,10 @@ fn test_capped_index_skips_rebuild() {
         text.contains("index too long"),
         "the index is capped:\n{text}"
     );
+    let visible = text.lines().filter(|line| line.starts_with("- ")).count();
     assert!(
-        !text.contains("- four:"),
-        "the cap leaves later topics out:\n{text}"
+        visible < 4,
+        "the cap leaves later topics out, {visible} rows visible:\n{text}"
     );
     write(root.join("MEMORY.md"), format!("{text}\nsentinel\n")).expect("mark the index");
 

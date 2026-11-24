@@ -259,3 +259,37 @@ async fn test_pending_keys_reserve() {
         "a finished selection reserves nothing"
     );
 }
+
+/// Cancelling one session drops its running selection and leaves another
+/// session's reservation alone.
+#[tokio::test]
+async fn test_cancel_session_drops_task() {
+    let session = SessionId::new();
+    let other = SessionId::new();
+    let tasks = RecallTasks::default();
+    let (tx, rx) = channel::<()>();
+    tasks.track(
+        tokio::spawn(async move {
+            drop(rx.await);
+        }),
+        session,
+        HashSet::from(["a".to_string()]),
+    );
+    let (tx2, rx2) = channel::<()>();
+    tasks.track(
+        tokio::spawn(async move {
+            drop(rx2.await);
+        }),
+        other,
+        HashSet::from(["b".to_string()]),
+    );
+    tasks.cancel_session(session);
+    assert!(tasks.pending_keys(session).is_empty());
+    assert_eq!(
+        tasks.pending_keys(other),
+        HashSet::from(["b".to_string()]),
+        "another session keeps its reservation"
+    );
+    drop(tx);
+    drop(tx2);
+}

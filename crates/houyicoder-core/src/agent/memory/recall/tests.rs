@@ -10,6 +10,7 @@ use houyicoder_context::{
 };
 use houyicoder_memory::InMemoryBackend;
 use houyicoder_session::SessionStore;
+use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -57,7 +58,7 @@ fn test_scan_collects_all() {
         ev(s, ids[1], recall(&["bravo", "charlie"])),
         ev(s, ids[2], user("query")),
     ];
-    let (keys, bytes) = surfaced_memory_scan(&events, None, None);
+    let (keys, bytes) = injected_key_scan(&events, None, None);
     assert!(keys.contains("alpha"));
     assert!(keys.contains("bravo"));
     assert!(keys.contains("charlie"));
@@ -81,7 +82,7 @@ fn test_scan_log_falls_back() {
             bytes: 0,
         },
     };
-    let (keys, bytes) = surfaced_memory_scan(&[event], None, None);
+    let (keys, bytes) = injected_key_scan(&[event], None, None);
     assert!(keys.contains("old"));
     assert_eq!(
         bytes,
@@ -121,7 +122,7 @@ fn test_scan_excludes_folded() {
             ts: 0,
         }
     };
-    let (keys, bytes) = surfaced_memory_scan(&events, Some(&manifest), None);
+    let (keys, bytes) = injected_key_scan(&events, Some(&manifest), None);
     assert!(
         !keys.contains("folded"),
         "a Summarized memory-recall must drop out of the surfaced set"
@@ -516,4 +517,150 @@ async fn test_second_recall_skips_reserved() {
         .collect();
     assert_eq!(recalls.len(), 1, "one selection appends one recall");
     assert_eq!(recalls[0], &vec!["tea-order".to_string()]);
+}
+
+/// A successful memory write or read marks its key as already seen; a failed
+/// read or an unfinished call without result does not, because the model
+/// never received its text.
+#[test]
+fn test_session_written_keys() {
+    let s = SessionId::new();
+    let ids = ids(8);
+    let events = vec![
+        ev(
+            s,
+            ids[0],
+            SessionEvent::ToolCall {
+                call_id: "a".into(),
+                tool: "save_memory".into(),
+                input: json!({ "key": "written" }),
+            },
+        ),
+        ev(
+            s,
+            ids[1],
+            SessionEvent::ToolResult {
+                call_id: "a".into(),
+                output: json!({ "ok": true }),
+                duration_ms: 0,
+            },
+        ),
+        ev(
+            s,
+            ids[2],
+            SessionEvent::ToolCall {
+                call_id: "b".into(),
+                tool: "show_memory".into(),
+                input: json!({ "key": "missing" }),
+            },
+        ),
+        ev(
+            s,
+            ids[3],
+            SessionEvent::ToolResult {
+                call_id: "b".into(),
+                output: json!({ "error": "not found" }),
+                duration_ms: 0,
+            },
+        ),
+        ev(
+            s,
+            ids[4],
+            SessionEvent::ToolCall {
+                call_id: "c".into(),
+                tool: "memory_write".into(),
+                input: json!({ "key": "future" }),
+            },
+        ),
+        ev(
+            s,
+            ids[5],
+            SessionEvent::ToolResult {
+                call_id: "c".into(),
+                output: json!({ "ok": true }),
+                duration_ms: 0,
+            },
+        ),
+        ev(
+            s,
+            ids[6],
+            SessionEvent::ToolCall {
+                call_id: "d".into(),
+                tool: "show_memory".into(),
+                input: json!({ "key": "unanswered" }),
+            },
+        ),
+    ];
+    let keys = session_written_keys(&events);
+    assert!(keys.contains("written"));
+    assert!(keys.contains("future"), "future tool names count too");
+    assert!(!keys.contains("missing"), "a failed read saw nothing");
+    assert!(
+        !keys.contains("unanswered"),
+        "an unfinished call without result saw nothing"
+    );
+}
+
+/// After compaction the summary's words join the query, so the recall is
+/// about the folded work rather than the last sentence the user typed.
+#[tokio::test]
+async fn test_recall_after_compaction_summary() {
+    let (store, session) = session_with_query("continue").await;
+    store
+        .append(new_event(
+            session,
+            SessionEvent::Summary {
+                text: "Summary of work:\n- crates/houyicoder-core/src/nightly_prune.rs".into(),
+            },
+        ))
+        .await
+        .expect("append summary");
+    let provider: Arc<dyn MemoryProvider> = Arc::new(StubProvider::new(
+        vec![hit("nightly_prune", 3)],
+        vec![body("nightly_prune")],
+    ));
+    recall_after_compaction(
+        &store,
+        Some(&provider),
+        None,
+        &RecallTasks::default(),
+        &MemoryGates::new(true, true),
+        session,
+    )
+    .await
+    .expect("recall after compaction");
+    assert!(
+        has_recall(&store, session).await,
+        "the summary-seeded recall lands"
+    );
+
+    // Also test structured Todo snapshot section parsing.
+    let (store_todo, session_todo) = session_with_query("continue").await;
+    store_todo
+        .append(new_event(
+            session_todo,
+            SessionEvent::Summary {
+                text: "--- derived-from-log (authoritative) ---\nTodo snapshot:\n- [in_progress] implement_feature_x\n- [completed] setup_env\n".into(),
+            },
+        ))
+        .await
+        .expect("append todo summary");
+    let provider_todo: Arc<dyn MemoryProvider> = Arc::new(StubProvider::new(
+        vec![hit("feature_x", 3)],
+        vec![body("feature_x")],
+    ));
+    recall_after_compaction(
+        &store_todo,
+        Some(&provider_todo),
+        None,
+        &RecallTasks::default(),
+        &MemoryGates::new(true, true),
+        session_todo,
+    )
+    .await
+    .expect("recall after todo compaction");
+    assert!(
+        has_recall(&store_todo, session_todo).await,
+        "todo section extracted keywords"
+    );
 }

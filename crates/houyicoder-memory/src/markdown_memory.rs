@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use std::cmp::Reverse;
 
-use crate::provider::{has_word_content, hit_count, tokenize};
+use crate::provider::{has_word_content, hit_count_bounded, tokenize};
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
 use houyicoder_context::{
     MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySource,
@@ -38,9 +38,6 @@ use roots::canonical_identity;
 use std::io::ErrorKind;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-
-/// Cap on candidate files scanned per rank; keeps the scan bounded.
-const SCAN_FILE_CAP: usize = 200;
 
 /// Cap on lines in the derived MEMORY index so it never grows past a
 /// bounded number of entries even with short lines.
@@ -307,7 +304,7 @@ impl MarkdownMemoryProvider {
     /// so the disk format has a single producer.
     fn render_root_index(&self, root: &Path) -> Result<(), MemoryError> {
         let mut rows: Vec<(MemorySource, String, String)> = Vec::new();
-        for topic in Self::scan_root(root).iter().take(SCAN_FILE_CAP) {
+        for topic in Self::scan_root(root) {
             // A key no row can address stays out of the index rather than
             // publishing a row that reads back as another key.
             if !Self::index_key_representable(&topic.key) {
@@ -425,8 +422,37 @@ impl MemoryProvider for MarkdownMemoryProvider {
         // Sanitize to the canonical NFC form so a requested key matches the
         // on-disk stem regardless of the caller's decomposition.
         let key = sanitize_key(key).ok()?;
-        let topic = self.scan_candidates().into_iter().find(|t| t.key == key)?;
-        self.read_topic(&topic.path).ok()
+        let filename = format!("{key}.md");
+        // Direct probe first across all roots (explicit scopes outrank auto scope,
+        // then newest mtime wins) matching scan_candidates priority.
+        let mut best: Option<(u8, u64, PathBuf)> = None;
+        for (root_index, root) in self.roots.iter().enumerate() {
+            let path = root.join(&filename);
+            if let Ok(meta) = fs::metadata(&path)
+                && meta.is_file()
+            {
+                let rank = u8::from(!self.is_explicit_scope(root_index));
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let is_better = match &best {
+                    None => true,
+                    Some((best_rank, best_mtime, _)) => {
+                        (rank, Reverse(mtime)) < (*best_rank, Reverse(*best_mtime))
+                    }
+                };
+                if is_better {
+                    best = Some((rank, mtime, path));
+                }
+            }
+        }
+        if let Some((_, _, path)) = best {
+            return self.read_topic(&path).ok();
+        }
+        None
     }
 
     /// Fetch one memory body from the named scope's root only. Delegates to
@@ -600,20 +626,31 @@ impl MemoryProvider for MarkdownMemoryProvider {
         // across calls.
         let fresh: Vec<ScannedTopic> = candidates
             .into_iter()
-            .take(SCAN_FILE_CAP)
             .filter(|t| !surfaced.contains(&t.key))
             .collect();
-        // Frontmatter-only scan (no full bodies): score keyword overlap over
-        // name plus description. Zero-score rows stay in the list, sorted
-        // last, as the semantic stage's candidate input for a query the
-        // lexical stage could not match.
+        // Score every field the record carries: the key is the most
+        // deliberate label, the description the summary the writer chose, and
+        // the body the place a concrete error string actually lands. The scan
+        // already read each file to parse its frontmatter, so the body costs
+        // no extra I/O. Zero-score rows stay in the list, sorted last, as the
+        // semantic stage's candidate input for a query the lexical stage
+        // could not match.
         let mut hits: Vec<MemoryRankHit> = Vec::new();
+        let query_has_words = !keywords.is_empty();
         for t in fresh {
-            let fm = match self.read_frontmatter(&t.path) {
-                Ok(fm) => fm,
-                Err(_) => continue,
+            let Ok(text) = fs::read_to_string(&t.path) else {
+                continue;
             };
-            let score = hit_count(&fm.name, &keywords) + hit_count(&fm.description, &keywords);
+            let Ok((fm, body)) = parse_topic_file(&text) else {
+                continue;
+            };
+            let score = if query_has_words {
+                hit_count_bounded(&t.key, &keywords) * 3
+                    + hit_count_bounded(&fm.description, &keywords) * 2
+                    + hit_count_bounded(&body, &keywords)
+            } else {
+                0
+            };
             hits.push(MemoryRankHit::new(
                 t.key,
                 fm.description,

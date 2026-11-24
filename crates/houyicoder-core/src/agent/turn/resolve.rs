@@ -21,12 +21,14 @@ use houyicoder_protocol::llm::{CompletionResponse, OutputItem};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::memory::failure_recall::FailureSignal;
 use crate::agent::outcome_counts;
 use crate::agent::skill_body::skill_source;
 use crate::agent::step::{NextStep, extract_final_text};
 use crate::agent::turn::fallback::tool_error_json;
 use crate::agent::turn::withhold;
 use crate::agent::{ApprovalRequest, FallbackToolOutcome, RunError, Runner, obs_wire};
+use crate::observability::tool_failure_reason;
 
 /// One tool call the model emitted this turn, with everything dispatch needs
 /// to know about it. The tool's own gate on the input and its concurrency
@@ -142,6 +144,40 @@ impl ToolCallPlan {
 }
 
 impl Runner {
+    /// Hand the turn's failed calls to the local lexical recall. A failure
+    /// is where the opening query is furthest from the work, so a stored
+    /// lesson about the same error can reach the next step. Best-effort: a
+    /// recall failure is logged, never a run failure.
+    async fn recall_tool_failures(
+        &self,
+        session: SessionId,
+        emitted_calls: &[(String, String, Value)],
+        results: &[(String, Value)],
+    ) {
+        let failures: Vec<FailureSignal> = results
+            .iter()
+            .filter_map(|(call_id, output)| {
+                tool_failure_reason(output)?;
+                let (tool, input) = emitted_calls
+                    .iter()
+                    .find(|(id, _, _)| id == call_id)
+                    .map(|(_, name, input)| (name.clone(), input.clone()))?;
+                Some(FailureSignal {
+                    tool,
+                    input,
+                    output: output.clone(),
+                })
+            })
+            .collect();
+        if !failures.is_empty()
+            && let Err(error) = self.memory.recall_after_failures(session, &failures).await
+        {
+            tracing::warn!("failure recall failed: {error}");
+        }
+    }
+}
+
+impl Runner {
     /// Resolve one turn: gate every call the model emitted, dispatch the ones
     /// that run in partition-by-safety batches (concurrency-safe parallel,
     /// mutating serial), collect the calls that await approval, compute
@@ -238,6 +274,8 @@ impl Runner {
         results.extend(answered);
         results.extend(blocked);
         results.extend(unrunnable);
+        self.recall_tool_failures(session, &emitted_calls, &results)
+            .await;
         self.fold_tool_outcomes(&results, &call_names);
         if let Some(skill) = self.active_skill()
             && let Some(req) = self.skill_registry.as_ref().and_then(|registry| {
@@ -354,15 +392,17 @@ impl Runner {
     }
 }
 
-/// Every call the model emitted, in order, with the tool name it gave. Taken
-/// from the response rather than from the planned calls: a name the host does
+/// Every call the model emitted, in order, with the tool name and input it gave.
+/// Taken from the response rather than from the planned calls: a name the host does
 /// not resolve still marks a call the model expects to have run.
-fn emitted_calls(response: &CompletionResponse) -> Vec<(String, String)> {
+fn emitted_calls(response: &CompletionResponse) -> Vec<(String, String, Value)> {
     response
         .output
         .iter()
         .filter_map(|item| match item {
-            OutputItem::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
+            OutputItem::ToolCall { id, name, input } => {
+                Some((id.clone(), name.clone(), input.clone()))
+            }
             _ => None,
         })
         .collect()
@@ -370,12 +410,12 @@ fn emitted_calls(response: &CompletionResponse) -> Vec<(String, String)> {
 
 /// The emitted calls whose tool the host did not resolve and whose name is a
 /// file edit. None of them ran, so the checks sent after them must not either.
-fn unknown_edits(emitted: &[(String, String)], plans: &[ToolCallPlan]) -> Vec<String> {
+fn unknown_edits(emitted: &[(String, String, Value)], plans: &[ToolCallPlan]) -> Vec<String> {
     let planned: HashSet<&str> = plans.iter().map(|plan| plan.id.as_str()).collect();
     emitted
         .iter()
-        .filter(|(id, name)| !planned.contains(id.as_str()) && writes_files(name))
-        .map(|(id, _)| id.clone())
+        .filter(|(id, name, _)| !planned.contains(id.as_str()) && writes_files(name))
+        .map(|(id, _, _)| id.clone())
         .collect()
 }
 

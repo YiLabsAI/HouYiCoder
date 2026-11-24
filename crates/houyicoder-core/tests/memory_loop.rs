@@ -8,13 +8,18 @@
 //! Uses a custom MemoryProvider that records calls and honors the surfaced
 //! param so the de-dup lifecycle is verifiable without a filesystem.
 
+use std::env::temp_dir;
+use std::fs::{create_dir_all, remove_dir_all};
+use std::process::id;
 use std::sync::{Arc, Mutex};
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::provider::ModelProvider;
 use houyicoder_api::provider::stream_from_response;
+use houyicoder_api::tool::{Tool, ToolCtx};
 use houyicoder_async::{PFut, PStream};
 use houyicoder_context::{MemoryEntry, MemoryRankHit, MemoryScope, MemorySource, SessionId};
+use houyicoder_protocol::extension::ToolError;
 use houyicoder_protocol::llm::{
     CompletionRequest, CompletionResponse, InputItem, ModelCapabilities, OutputItem, ProviderError,
 };
@@ -25,7 +30,7 @@ use std::collections::HashSet;
 use houyicoder_api::session::SessionLog;
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, RunOutcome, Runner, ToolRegistry};
-use houyicoder_memory::InMemoryBackend;
+use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 
 /// A memory provider that ranks every stored entry as a confident lexical
 /// hit (skipping any key in surfaced, the caller-built de-dup set) so the
@@ -480,4 +485,147 @@ async fn test_single_word_reaches_provider() {
     let session2 = SessionId::new();
     let _result = runner.run(session2, "help with rust".into()).await;
     assert_eq!(memory.recall_count(), 2, "each turn recalls once");
+}
+
+struct FailureStepModel {
+    step: Mutex<usize>,
+    seen_requests: Mutex<Vec<CapturedRequest>>,
+}
+
+impl FailureStepModel {
+    fn next_response(&self) -> CompletionResponse {
+        let mut s = self.step.lock().expect("step");
+        *s += 1;
+        if *s == 1 {
+            CompletionResponse {
+                output: vec![OutputItem::ToolCall {
+                    id: "call_bad_write".into(),
+                    name: "write".into(),
+                    input: serde_json::json!({ "path": "/dir/io.rs" }), // missing content
+                }],
+                usage: Usage::default(),
+                model: "test".into(),
+            }
+        } else {
+            CompletionResponse {
+                output: vec![OutputItem::Text {
+                    text: "done".into(),
+                }],
+                usage: Usage::default(),
+                model: "test".into(),
+            }
+        }
+    }
+}
+
+impl ModelProvider for FailureStepModel {
+    fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+        self.seen_requests
+            .lock()
+            .expect("seen")
+            .push(CapturedRequest::from(&req));
+        let resp = self.next_response();
+        Box::pin(async move { Ok(resp) })
+    }
+    fn stream(&self, req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+        self.seen_requests
+            .lock()
+            .expect("seen")
+            .push(CapturedRequest::from(&req));
+        stream_from_response(self.next_response())
+    }
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+struct FakeWriteTool;
+impl Tool for FakeWriteTool {
+    fn name(&self) -> &str {
+        "write"
+    }
+    fn description(&self) -> &str {
+        "fake write tool requiring path and content"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "content": { "type": "string" }
+            },
+            "required": ["path", "content"]
+        })
+    }
+    fn execute(
+        &self,
+        _ctx: ToolCtx,
+        _input: serde_json::Value,
+    ) -> PFut<'_, Result<serde_json::Value, ToolError>> {
+        Box::pin(async { Ok(serde_json::json!({ "ok": true })) })
+    }
+}
+
+/// When an unrunnable tool call or an executed tool failure occurs mid-turn,
+/// local failure recall fires and injects relevant lessons into the next request.
+#[tokio::test]
+async fn test_failure_recall_next_request() {
+    let root = temp_dir().join(format!("memory_failure_loop_{}_{}", id(), SessionId::new()));
+    create_dir_all(&root).expect("temp memory root");
+    let memory = Arc::new(MarkdownMemoryProvider::new(root.clone()));
+    memory
+        .add(
+            MemoryEntry::new(
+                "lesson-tool-call-shape-refusals",
+                "Shape refusal on io.rs: write: content required. Change arguments instead of repeating.",
+                MemorySource::Feedback,
+            )
+            .with_meta("Change shape when a call fails validation.", 0),
+        )
+        .expect("seed failure lesson");
+
+    let model = Arc::new(FailureStepModel {
+        step: Mutex::new(0),
+        seen_requests: Mutex::new(Vec::new()),
+    });
+    let mut tools = ToolRegistry::new();
+    tools.register(Arc::new(FakeWriteTool));
+
+    let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));
+    let runtime = MemoryRuntime::from_parts(
+        store.clone(),
+        Some(memory),
+        MemoryGates::new(true, true),
+        None,
+        None,
+    );
+    let runner =
+        Runner::new(store, model.clone(), tools, RunnerConfig::default()).install_memory(runtime);
+
+    let session = SessionId::new();
+    let result = runner
+        .run(session, "please update the greeting banner".into())
+        .await;
+    let _cleanup = remove_dir_all(&root);
+    assert!(result.is_ok());
+
+    let captured = model.seen_requests.lock().expect("seen").clone();
+    assert_eq!(captured.len(), 2, "runner took exactly two steps");
+    assert!(
+        !captured[0]
+            .user_text
+            .contains("lesson-tool-call-shape-refusals"),
+        "step 0 must not carry the lesson on an unrelated opening prompt: {}",
+        captured[0].user_text
+    );
+    assert!(
+        captured[1]
+            .user_text
+            .contains("lesson-tool-call-shape-refusals"),
+        "step 1 request must contain the recalled failure lesson: {}",
+        captured[1].user_text
+    );
 }

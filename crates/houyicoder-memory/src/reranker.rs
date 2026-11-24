@@ -13,7 +13,7 @@ use houyicoder_async::PFut;
 use houyicoder_context::{MemoryRankHit, memory_age_days, memory_age_label};
 use houyicoder_protocol::cache_policy::PromptCacheFormat;
 use houyicoder_protocol::llm::{
-    CompletionRequest, CompletionResponse, InputItem, ModelSettings, OutputItem,
+    CompletionRequest, CompletionResponse, EffortLevel, InputItem, ModelSettings, OutputItem,
 };
 
 /// The selection instruction. The reply contract is a bare JSON array of
@@ -62,7 +62,16 @@ impl MemoryReranker for SemanticReranker {
                 dynamic_boundary: None,
                 input: vec![InputItem::User { content: input }],
                 tools: Vec::new(),
-                settings: ModelSettings::default(),
+                settings: ModelSettings {
+                    // The reply is a short key array, so the output bound is
+                    // small. Leaving thinking enabled would consume the entire
+                    // token budget before emitting any text, yielding an empty
+                    // output on thinking models.
+                    max_output_tokens: Some(160),
+                    enable_thinking: Some(false),
+                    reasoning_effort: Some(EffortLevel::Low),
+                    ..ModelSettings::default()
+                },
                 cache_breakpoints: Vec::new(),
                 cache_format: PromptCacheFormat::AutoPrefix,
             };

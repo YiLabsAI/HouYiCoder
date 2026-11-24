@@ -88,5 +88,53 @@ pub(crate) fn hit_count(text: &str, keywords: &[String]) -> u32 {
         .count() as u32
 }
 
+/// Count distinct keywords occurring in the text, requiring a whole-word
+/// match for a short Latin keyword. A three-letter command word such as go
+/// or git otherwise matches inside cargo or digit and scores a row that has
+/// nothing to do with the query. Longer Latin words and CJK bigrams keep
+/// substring matching, where the extra characters already carry the signal.
+pub(crate) fn hit_count_bounded(text: &str, keywords: &[String]) -> u32 {
+    let lower = text.to_ascii_lowercase();
+    keywords
+        .iter()
+        .filter(|keyword| {
+            if is_short_latin(keyword) {
+                contains_word(&lower, keyword)
+            } else {
+                lower.contains(keyword.as_str())
+            }
+        })
+        .count() as u32
+}
+
+/// Whether the keyword is a short Latin word, the case that needs a word
+/// boundary. A CJK keyword is always two characters, but it is not Latin and
+/// keeps substring matching.
+fn is_short_latin(keyword: &str) -> bool {
+    keyword.chars().count() <= 3 && keyword.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Whether the lowercased text carries the keyword as a whole word.
+fn contains_word(lower: &str, keyword: &str) -> bool {
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(keyword) {
+        let start = from + found;
+        let end = start + keyword.len();
+        let before_ok = lower[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        let after_ok = lower[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + keyword.len().max(1);
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests;

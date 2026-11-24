@@ -35,10 +35,10 @@ fn named_plan(id: &str, name: &'static str) -> ToolCallPlan {
     ToolCallPlan::new(id.to_string(), Arc::new(NamedTool(name)), Value::Null)
 }
 
-fn emitted(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+fn emitted(pairs: &[(&str, &str)]) -> Vec<(String, String, Value)> {
     pairs
         .iter()
-        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .map(|(id, name)| (id.to_string(), name.to_string(), Value::Null))
         .collect()
 }
 

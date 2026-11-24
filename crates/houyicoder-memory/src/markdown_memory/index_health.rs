@@ -21,7 +21,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use houyicoder_context::MemoryError;
 
 use super::MarkdownMemoryProvider;
-use super::SCAN_FILE_CAP;
 use super::io::INDEX_FILE;
 use super::io::INDEX_TRUNCATION_WARNING;
 
@@ -127,7 +126,6 @@ impl MarkdownMemoryProvider {
         let published: HashSet<&str> = text.lines().filter_map(index_row_key).collect();
         Self::scan_root(root)
             .iter()
-            .take(SCAN_FILE_CAP)
             .filter(|topic| Self::index_key_representable(&topic.key))
             .filter(|topic| !published.contains(topic.key.as_str()))
             .any(|topic| self.read_frontmatter(&topic.path).is_ok())

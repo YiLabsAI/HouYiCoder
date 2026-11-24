@@ -1,5 +1,7 @@
 //! Tests for this module.
 
+use std::sync::Mutex;
+
 use super::*;
 use futures::stream::iter;
 use houyicoder_async::PStream;
@@ -175,4 +177,45 @@ fn test_input_names_every_column() {
     assert!(input.contains("source feedback"), "{input}");
     assert!(input.contains("scope auto"), "{input}");
     assert!(input.contains("deploy-gate description"), "{input}");
+}
+
+/// The reranker configures low thinking budget and low reasoning effort so
+/// a thinking model does not burn its token budget before emitting the JSON array.
+#[tokio::test]
+async fn test_reranker_disables_thinking() {
+    struct Capturing(Mutex<Option<CompletionRequest>>);
+    impl ModelProvider for Capturing {
+        fn complete(
+            &self,
+            req: CompletionRequest,
+        ) -> PFut<'_, Result<CompletionResponse, ProviderError>> {
+            *self.0.lock().expect("lock") = Some(req);
+            let resp = CompletionResponse {
+                output: vec![OutputItem::Text {
+                    text: r#"["tea-order"]"#.into(),
+                }],
+                usage: Usage::default(),
+                model: "test".into(),
+            };
+            Box::pin(async move { Ok(resp) })
+        }
+        fn stream(&self, _req: CompletionRequest) -> PStream<'_, Result<LlmEvent, ProviderError>> {
+            Box::pin(iter(Vec::new()))
+        }
+        fn capabilities(&self) -> ModelCapabilities {
+            ModelCapabilities::default()
+        }
+    }
+    let cap = Arc::new(Capturing(Mutex::new(None)));
+    let r = SemanticReranker::new(cap.clone(), "test".into());
+    let _outcome = r.rerank("query", &candidates(), 5).await;
+    let req = cap
+        .0
+        .lock()
+        .expect("lock")
+        .take()
+        .expect("request captured");
+    assert_eq!(req.settings.max_output_tokens, Some(160));
+    assert_eq!(req.settings.enable_thinking, Some(false));
+    assert_eq!(req.settings.reasoning_effort, Some(EffortLevel::Low));
 }

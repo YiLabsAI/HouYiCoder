@@ -11,9 +11,11 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::fallback::FallbackToolOutcome;
+use crate::agent::memory::failure_recall::FailureSignal;
 use crate::agent::turn::resolve::resolved_input;
 use crate::agent::turn::withhold::{self, CheckAction, CheckPlan, EditOutcome};
 use crate::agent::{ApprovalDecision, ApprovalRequest, RunError, Runner};
+use crate::observability::tool_failure_reason;
 use std::collections::HashMap;
 
 /// One call of a model response whose release is being settled: a call that
@@ -31,6 +33,7 @@ struct BatchCall {
 struct BatchSettlement {
     results: Vec<(String, Value)>,
     call_names: HashMap<String, String>,
+    call_inputs: HashMap<String, Value>,
     /// Set once a stop lands while an approved call is running; every call
     /// after it is recorded interrupted instead of released.
     stopped: bool,
@@ -60,6 +63,29 @@ impl Runner {
         // Folded once, after every response is settled, so a call released
         // here counts like one the live turn dispatched.
         self.fold_tool_outcomes(&settled.results, &settled.call_names);
+        let failures: Vec<FailureSignal> = settled
+            .results
+            .iter()
+            .filter_map(|(call_id, output)| {
+                tool_failure_reason(output)?;
+                let tool = settled.call_names.get(call_id)?;
+                let input = settled
+                    .call_inputs
+                    .get(call_id)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                Some(FailureSignal {
+                    tool: tool.clone(),
+                    input,
+                    output: output.clone(),
+                })
+            })
+            .collect();
+        if !failures.is_empty()
+            && let Err(error) = self.memory.recall_after_failures(session, &failures).await
+        {
+            tracing::warn!("failure recall after approval release failed: {error}");
+        }
         Ok(remaining)
     }
 
@@ -88,6 +114,9 @@ impl Runner {
             settled
                 .call_names
                 .insert(req.call_id.clone(), req.tool_name.clone());
+            settled
+                .call_inputs
+                .insert(req.call_id.clone(), req.input.clone());
             if settled.stopped {
                 // The stop landed while an approved call was running: the
                 // calls behind it do not start. Each is recorded interrupted
