@@ -260,6 +260,7 @@ fn build_harness(
             hooks: None,
             launcher: Arc::new(StdProcessLauncher::new()),
             mode_gate: None,
+            mcp: None,
         });
         builder = builder.with_spawn_handle(Arc::new(runtime));
         return Harness {

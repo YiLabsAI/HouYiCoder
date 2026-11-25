@@ -74,6 +74,19 @@ pub fn default_shell() -> ShellSelection {
         .clone()
 }
 
+/// The command interpreter a helper script runs through when the caller names
+/// none: the platform's own shell on Windows and the POSIX shell elsewhere.
+pub fn default_helper_program() -> ShellProgram {
+    #[cfg(target_os = "windows")]
+    {
+        ShellProgram::Cmd
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        ShellProgram::Posix
+    }
+}
+
 /// Resolve a helper shell to the program that runs it. The sh variant is the
 /// POSIX shell on every host; the Windows-only variants resolve on Windows and
 /// answer None elsewhere, so a settings value a host cannot honor is reported

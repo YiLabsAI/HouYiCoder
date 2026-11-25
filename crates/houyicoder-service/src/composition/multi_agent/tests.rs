@@ -5,6 +5,7 @@ use houyicoder_context::SessionProvenance;
 
 mod descriptor;
 mod external_stop;
+mod foreground;
 use houyicoder_async::CancellationToken;
 use houyicoder_async::PFut;
 use houyicoder_async::bus::MessageBus;
@@ -75,34 +76,10 @@ fn runtime_with_backend(
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     (runtime, store, parent_sid)
-}
-
-#[tokio::test]
-async fn test_foreground_spawn_reaches_terminal() {
-    let (runtime, store, parent_sid) = runtime_with_text_child("child answer");
-    let ctx = ToolCtx::new("c1").with_session(parent_sid);
-    let args = SpawnArgs::new("explore", "find the auth module", "find auth");
-    let outcome = runtime.spawn(&ctx, args).await.expect("spawn");
-    assert_eq!(outcome.status.as_deref(), Some("completed"));
-    assert_eq!(outcome.summary.as_deref(), Some("child answer"));
-    // The parent log carries the durable spawn + return boundary pair so
-    // replay reconstructs the delegation.
-    let events = store.trajectory_tail(parent_sid);
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e.event, SessionEvent::SubagentSpawn { .. })),
-        "parent log must record the SubagentSpawn boundary",
-    );
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e.event, SessionEvent::SubagentReturn { .. })),
-        "parent log must record the SubagentReturn boundary",
-    );
 }
 
 /// The child's provenance is written at the delegation boundary, before its
@@ -131,6 +108,7 @@ async fn test_provenance_precedes_child_run() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let token = CancellationToken::new();
@@ -192,6 +170,7 @@ async fn test_background_boundary_provenance() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let token = CancellationToken::new();
@@ -253,6 +232,7 @@ async fn test_child_task_excludes_memory() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -318,6 +298,7 @@ async fn test_max_turns_surfaces_partial() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -490,6 +471,7 @@ async fn test_spawn_announces_on_bus() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let mut rx = bus.subscribe(spawned_topic());
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -530,6 +512,7 @@ async fn test_spawn_system_records_trigger() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let args = SpawnArgs::new("explore", "review the diff", "review the diff");
     let outcome = runtime
@@ -629,6 +612,7 @@ async fn test_send_to_child_inbox() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     runtime
         .send_to_child_inbox("c1", "focus on auth".into())
@@ -786,6 +770,7 @@ async fn test_background_child_notifies_parent() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
@@ -942,6 +927,7 @@ async fn test_foreground_failure_reaches_parent() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -996,6 +982,7 @@ async fn test_foreground_failure_loses_partial() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
@@ -1076,6 +1063,7 @@ async fn test_background_failure_notifies_parent() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "review the diff", "review the diff");
@@ -1234,6 +1222,7 @@ async fn test_failed_write_reaches_terminal() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("explore", "find the auth module", "find auth");
@@ -1296,6 +1285,7 @@ async fn test_unwritable_boundary_refuses_spawn() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let ctx = ToolCtx::new("c1").with_session(parent_sid);
     let args = SpawnArgs::new("explore", "find the auth module", "find auth");
@@ -1427,6 +1417,7 @@ async fn test_background_panic_notifies_parent() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let mut args = SpawnArgs::new("explore", "task", "task");
@@ -1675,6 +1666,10 @@ impl Tool for GuardedTool {
 
     fn requires_approval(&self) -> bool {
         true
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
     }
 }
 

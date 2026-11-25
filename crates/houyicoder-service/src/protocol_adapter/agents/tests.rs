@@ -15,7 +15,7 @@ fn definition() -> AgentDefinition {
         permission_mode: Some("manual".into()),
         max_turns: Some(3),
         skills: vec!["commit".into()],
-        mcp_servers: vec!["docs".into()],
+        mcp_servers: Some(vec!["docs".into()]),
         hooks: vec!["PreToolUse".into()],
         initial_prompt: Some("start here".into()),
         memory: MemoryScope::Disabled,

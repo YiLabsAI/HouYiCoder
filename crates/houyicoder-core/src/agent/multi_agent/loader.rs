@@ -90,10 +90,12 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
         .or_else(|| get("maxTurns"))
         .and_then(|v| v.parse::<u32>().ok());
     let skills = get("skills").map(split_commas).unwrap_or_default();
+    // An absent key inherits the parent's servers; an explicit empty value
+    // mounts none. The two cannot collapse, or every definition file written
+    // before the field existed would silently lose external tools.
     let mcp_servers = get("mcp_servers")
         .or_else(|| get("mcpServers"))
-        .map(split_commas)
-        .unwrap_or_default();
+        .map(split_commas);
     let hooks = get("hooks").map(split_commas).unwrap_or_default();
     let initial_prompt = get("initial_prompt")
         .or_else(|| get("initialPrompt"))

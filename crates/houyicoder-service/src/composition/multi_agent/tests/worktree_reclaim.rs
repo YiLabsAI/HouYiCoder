@@ -136,6 +136,7 @@ async fn test_join_reclaims_abandoned_worktree() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let hook = Arc::new(BlockingStartHook {
         entered: Notify::new(),

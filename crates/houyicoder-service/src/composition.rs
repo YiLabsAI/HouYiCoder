@@ -424,6 +424,7 @@ pub(crate) fn assemble(
             Some(Arc::clone(&bus)),
             Some(Arc::clone(&descriptor_store)),
             Arc::clone(&gate_dyn),
+            mcp.as_ref().map(|runtime| Arc::clone(&runtime.manager)),
         ),
         inherited,
         runner_settings.delegation_foreground_budget_ms,

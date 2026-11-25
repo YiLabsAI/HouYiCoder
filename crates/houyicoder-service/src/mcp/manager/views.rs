@@ -95,7 +95,7 @@ pub(crate) fn instructions_block(
     let mut blocks = Vec::new();
     for (name, text) in sections {
         if let Some(allowed) = allowed_servers
-            && !allowed.iter().any(|candidate| candidate == name)
+            && !name_in_scope(allowed, name)
         {
             continue;
         }
@@ -110,6 +110,16 @@ pub(crate) fn instructions_block(
     } else {
         Some(blocks.join("\n\n"))
     }
+}
+
+/// Whether a configured server is inside a caller's list. The list is
+/// authored data, not a dispatch key, so the match ignores case everywhere
+/// one is consulted: tools, resources, and the instruction block agree on
+/// which servers a list names.
+pub(crate) fn name_in_scope(allowed: &[String], server: &str) -> bool {
+    allowed
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(server))
 }
 
 /// Escape the characters that would let server text close the host's tag.

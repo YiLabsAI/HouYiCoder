@@ -84,6 +84,9 @@ rmcp = { version = "=3.11.0", default-features = false, features = [
 # the daemon keeps a single connection pool and TLS backend; the MCP module
 # is the only place in this crate that builds one.
 reqwest = { workspace = true }
+# The SSE event type the HTTP transport's stream wrapper names; the version
+# the MCP SDK itself depends on.
+sse-stream = "0.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry"] }
 # Cross-platform filesystem notification (inotify/FSEvents/kqueue). Used by
@@ -156,6 +159,3 @@ path = "tests/mcp_http.rs"
 tokio = { version = "1", features = ["rt", "macros", "time", "test-util"] }
 serde = { version = "1", features = ["derive"] }
 houyicoder-client = { path = "../houyicoder-client" }
-# The SSE event type a fake HTTP client answers with in unit tests; the same
-# version the MCP SDK itself depends on.
-sse-stream = "0.2"

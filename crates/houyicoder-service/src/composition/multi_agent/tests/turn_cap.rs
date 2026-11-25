@@ -79,6 +79,7 @@ async fn test_child_turn_cap_wins() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let ctx = ToolCtx::new("c1").with_session(SessionId::new());
     let args = SpawnArgs::new("explore", "task", "task");
@@ -156,6 +157,7 @@ async fn test_turn_cap_wraps_up() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     }));
     let tool = DelegationTool::new(registry);
     let ctx = ToolCtx::new("c1")
@@ -235,6 +237,7 @@ async fn test_single_turn_cap_wraps() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let ctx = ToolCtx::new("c1").with_session(SessionId::new());
     let outcome = runtime

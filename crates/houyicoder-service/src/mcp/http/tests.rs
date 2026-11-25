@@ -10,6 +10,7 @@ use std::sync::Arc;
 use houyicoder_api::launcher::{
     LauncherChild, LauncherExit, ProcessLauncher, SpawnError, SpawnPolicy, SpawnRequest,
 };
+use houyicoder_platform::tls::install_tls_provider;
 use houyicoder_protocol::mcp::McpTransportConfig;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::EmptyResult;
@@ -246,6 +247,9 @@ impl StreamableHttpClient for InMemoryClient {
 /// The resolved proxy policy is what the client is built from.
 #[test]
 fn test_proxy_client_policies() {
+    // The pool ships without a crypto backend; installing the provider is
+    // what every client build in this module expects first.
+    install_tls_provider();
     assert!(
         build_proxy_client(None, None).is_ok(),
         "a direct snapshot builds"

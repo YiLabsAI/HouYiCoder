@@ -64,7 +64,7 @@ fn external_definition(args: Vec<String>) -> AgentDefinition {
         permission_mode: None,
         max_turns: None,
         skills: vec![],
-        mcp_servers: vec![],
+        mcp_servers: None,
         hooks: vec![],
         initial_prompt: None,
         memory: Default::default(),
@@ -118,6 +118,7 @@ fn runtime(
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()) as Arc<dyn ProcessLauncher>,
         mode_gate: gate,
+        mcp: None,
     });
     Harness { runtime, store }
 }

@@ -55,7 +55,7 @@ async fn test_houyi_acp_child_round_trip() {
         permission_mode: None,
         max_turns: None,
         skills: vec![],
-        mcp_servers: vec![],
+        mcp_servers: None,
         hooks: vec![],
         initial_prompt: None,
         memory: Default::default(),
@@ -101,6 +101,7 @@ async fn test_houyi_acp_child_round_trip() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let ctx = ToolCtx::new("c1").with_session(SessionId::new());
     let args = SpawnArgs::new("review", "review the diff", "review");

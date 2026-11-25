@@ -25,8 +25,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
+use super::multi_agent::MultiAgentDeps;
 use super::reloader::SkillReloader;
 use super::skill::SkillRegistryImpl;
+use crate::mcp::McpConnections;
 
 /// Command-hook identity across configuration sources. Shell is excluded
 /// because program and args already determine the spawned process; including
@@ -485,7 +487,8 @@ impl SkillRuntime {
         bus: Option<Arc<AgentBus>>,
         descriptor_store: Option<Arc<dyn SessionDescriptorStore>>,
         mode_gate: Arc<dyn ModeGate>,
-    ) -> crate::composition::multi_agent::MultiAgentDeps {
+        mcp: Option<Arc<McpConnections>>,
+    ) -> MultiAgentDeps {
         crate::composition::multi_agent::MultiAgentDeps {
             registry,
             store,
@@ -501,6 +504,7 @@ impl SkillRuntime {
             hooks: Some(Arc::clone(&self.hook_registry)),
             launcher: Arc::new(StdProcessLauncher::new()),
             mode_gate: Some(mode_gate),
+            mcp,
         }
     }
 

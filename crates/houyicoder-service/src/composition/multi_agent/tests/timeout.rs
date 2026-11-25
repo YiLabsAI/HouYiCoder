@@ -360,6 +360,7 @@ fn runtime_sharing_store(
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     })
 }
 

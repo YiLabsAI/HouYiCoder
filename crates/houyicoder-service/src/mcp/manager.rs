@@ -200,6 +200,14 @@ impl McpConnections {
         }
     }
 
+    /// Track a task the manager owns, so shutdown waits for it like the
+    /// supervisors.
+    pub(crate) fn track(&self, task: JoinHandle<()>) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(task);
+        }
+    }
+
     /// Stop every server: cancel their services, wait for their tasks, and
     /// let the launcher's on-drop kill end each process group.
     pub async fn shutdown(&self) {
@@ -673,7 +681,7 @@ async fn sleep_until_deadline(window: Option<Instant>, deadline: Instant) {
 }
 
 mod views;
-pub(crate) use views::instructions_block;
+pub(crate) use views::{instructions_block, name_in_scope};
 
 #[cfg(test)]
 pub(crate) mod tests;

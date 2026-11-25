@@ -60,6 +60,9 @@ struct FilteredSource {
     /// empty list mounts none, so a lightweight child does not carry an
     /// external server's tools and instructions.
     allowed_servers: Option<Vec<String>>,
+    /// True for a child limited to reading: only external tools that declare
+    /// themselves read-only are exposed.
+    read_only_tools: bool,
 }
 
 impl FilteredSource {
@@ -75,6 +78,9 @@ impl FilteredSource {
             .iter()
             .any(|entry| entry.eq_ignore_ascii_case(name) || entry.eq_ignore_ascii_case(leaf))
         {
+            return false;
+        }
+        if self.read_only_tools && !self.inner.get(name).is_some_and(|tool| tool.is_read_only()) {
             return false;
         }
         let Some(allowed) = &self.allowed_servers else {
@@ -201,12 +207,14 @@ impl ToolRegistry {
     /// variants (the disallowed list is authored data, not a dispatch key).
     /// The source is narrowed the same way, so a restriction on a server
     /// tool holds for both the declarations and the dispatch; a server list
-    /// narrows which servers the child mounts, and an empty list mounts
-    /// none.
+    /// narrows which servers the child mounts, an empty list mounts none,
+    /// and a read-only child receives only tools that declare themselves
+    /// read-only.
     pub fn narrow(
         &self,
         disallowed: &[String],
         allowed_servers: Option<&[String]>,
+        read_only_tools: bool,
     ) -> ToolRegistry {
         let mut out = ToolRegistry::new();
         for (name, tool) in &self.tools {
@@ -220,6 +228,7 @@ impl ToolRegistry {
                 inner: Arc::clone(source),
                 disallowed: disallowed.to_vec(),
                 allowed_servers: allowed_servers.map(<[String]>::to_vec),
+                read_only_tools,
             }) as Arc<dyn ToolSource>
         });
         out

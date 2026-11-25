@@ -7,7 +7,7 @@ use houyicoder_core::agent::multi_agent::registry::{
 
 use super::*;
 
-fn definition(mcp_servers: Vec<String>, disallowed: Vec<String>) -> AgentDefinition {
+fn definition(mcp_servers: Option<Vec<String>>, disallowed: Vec<String>) -> AgentDefinition {
     AgentDefinition {
         subagent_type: "probe".into(),
         when_to_use: String::new(),
@@ -30,16 +30,26 @@ fn definition(mcp_servers: Vec<String>, disallowed: Vec<String>) -> AgentDefinit
     }
 }
 
-/// A child withholds its authored names and both host resource tools, and its
-/// server list travels to the source filter; an empty list is still a list.
+/// A child keeps its authored names, inherits the parent's servers when the
+/// definition names none, mounts only a named list, and reads only when it
+/// withholds the writing tools.
 #[test]
 fn test_child_scope_names_servers() {
-    let (disallowed, servers) = child_tool_scope(&definition(Vec::new(), vec!["write".into()]));
+    let (disallowed, servers, read_only) =
+        child_tool_scope(&definition(None, vec!["write".to_string()]));
     assert!(disallowed.contains(&"write".to_string()));
-    assert!(disallowed.contains(&LIST_RESOURCES_TOOL.to_string()));
-    assert!(disallowed.contains(&READ_RESOURCE_TOOL.to_string()));
-    assert_eq!(servers, Some(Vec::new()), "an empty list mounts no server");
+    assert_eq!(servers, None, "an absent list inherits the parent servers");
+    assert!(read_only, "a child that cannot write reads only");
 
-    let (_, named) = child_tool_scope(&definition(vec!["alpha".into()], Vec::new()));
+    let (_, empty, _) = child_tool_scope(&definition(Some(Vec::new()), Vec::new()));
+    assert_eq!(
+        empty,
+        Some(Vec::new()),
+        "an explicit empty list mounts none"
+    );
+
+    let (_, named, read_only) =
+        child_tool_scope(&definition(Some(vec!["alpha".to_string()]), Vec::new()));
     assert_eq!(named, Some(vec!["alpha".to_string()]));
+    assert!(!read_only, "a child without write restrictions may write");
 }

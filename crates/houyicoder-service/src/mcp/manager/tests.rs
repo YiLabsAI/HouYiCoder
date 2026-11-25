@@ -552,6 +552,27 @@ async fn test_resource_tools_over_peer() {
     assert!(preview.get("preview").is_some(), "saw {preview}");
     assert!(preview.get("block_ref").is_none());
 
+    // A scoped tool reaches only the servers its definition mounts.
+    let scoped = ListMcpResourcesTool::new(Arc::clone(&manager), None)
+        .with_allowed_servers(Some(vec!["other".to_string()]));
+    let error = scoped
+        .execute(ToolCtx::new("c1"), serde_json::json!({"server": "srv"}))
+        .await
+        .expect_err("a server outside the scope is refused");
+    assert!(error.to_string().contains("mounts"), "{error}");
+    let bounded = ReadMcpResourceTool::new(Arc::clone(&manager), None)
+        .with_allowed_servers(Some(vec!["alpha".to_string()]));
+    assert!(
+        bounded
+            .execute(
+                ToolCtx::new("c1"),
+                serde_json::json!({"server": "srv", "uri": "file:///a"})
+            )
+            .await
+            .is_err(),
+        "a read outside the scope is refused"
+    );
+
     manager.shutdown().await;
     peer_task.abort();
     drop(service.cancel());

@@ -80,7 +80,11 @@ pub struct AgentDefinition {
     pub permission_mode: Option<String>,
     pub max_turns: Option<u32>,
     pub skills: Vec<String>,
-    pub mcp_servers: Vec<String>,
+    /// The external servers this definition mounts. None inherits the
+    /// parent's servers (a read-only child receives only their read-only
+    /// tools); an explicit empty list mounts none; a list mounts exactly
+    /// those servers.
+    pub mcp_servers: Option<Vec<String>>,
     pub hooks: Vec<String>,
     pub initial_prompt: Option<String>,
     pub memory: MemoryScope,
@@ -336,7 +340,7 @@ pub fn built_in_general_purpose() -> AgentDefinition {
         // stops visibly rather than spending a session's tokens on nothing.
         max_turns: Some(200),
         skills: Vec::new(),
-        mcp_servers: Vec::new(),
+        mcp_servers: None,
         hooks: Vec::new(),
         initial_prompt: None,
         memory: MemoryScope::Project,
@@ -367,7 +371,7 @@ pub fn built_in_explore() -> AgentDefinition {
         // session, while leaving room for a real multi-file sweep.
         max_turns: Some(100),
         skills: Vec::new(),
-        mcp_servers: Vec::new(),
+        mcp_servers: None,
         hooks: Vec::new(),
         initial_prompt: None,
         memory: MemoryScope::Disabled,
@@ -398,7 +402,7 @@ pub fn built_in_plan() -> AgentDefinition {
         // session, while leaving room for a real multi-file sweep.
         max_turns: Some(100),
         skills: Vec::new(),
-        mcp_servers: Vec::new(),
+        mcp_servers: None,
         hooks: Vec::new(),
         initial_prompt: None,
         memory: MemoryScope::Disabled,
@@ -429,7 +433,7 @@ pub fn built_in_verify() -> AgentDefinition {
         // session, while leaving room for a real multi-file sweep.
         max_turns: Some(100),
         skills: Vec::new(),
-        mcp_servers: Vec::new(),
+        mcp_servers: None,
         hooks: Vec::new(),
         initial_prompt: None,
         memory: MemoryScope::Disabled,
@@ -460,7 +464,7 @@ pub fn built_in_code_guide() -> AgentDefinition {
         // session, while leaving room for a real multi-file sweep.
         max_turns: Some(100),
         skills: Vec::new(),
-        mcp_servers: Vec::new(),
+        mcp_servers: None,
         hooks: Vec::new(),
         initial_prompt: None,
         memory: MemoryScope::Disabled,

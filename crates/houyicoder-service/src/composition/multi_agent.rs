@@ -28,6 +28,8 @@ use houyicoder_core::agent::multi_agent::concurrency_gate::ConcurrencyGate;
 use houyicoder_core::agent::multi_agent::ending::EndingClaim;
 use houyicoder_core::agent::multi_agent::record_subagent_return_with_metrics;
 use houyicoder_core::agent::multi_agent::registry::AgentRegistry;
+
+use crate::mcp::McpConnections;
 use houyicoder_core::agent::multi_agent::registry::delegatable_agents;
 use houyicoder_core::agent::multi_agent::spawn::{ChildHandle, RunnerInheritance, TriggerSource};
 use houyicoder_core::agent::runner_config::RunnerConfig;
@@ -113,6 +115,10 @@ pub struct MultiAgentDeps {
     /// permission ask is intercepted. None leaves interception to the fence
     /// and the bus alone.
     pub mode_gate: Option<Arc<dyn ModeGate>>,
+    /// The parent's external tool servers, when the session runs any. A
+    /// child that may read resources is handed tools scoped to the servers
+    /// its definition mounts.
+    pub mcp: Option<Arc<McpConnections>>,
 }
 
 #[derive(Clone)]
@@ -141,6 +147,8 @@ pub struct MultiAgentRuntime {
     launcher: Arc<dyn ProcessLauncher>,
     /// The parent's permission gate for intercepting external child asks.
     mode_gate: Option<Arc<dyn ModeGate>>,
+    /// The parent's external tool servers, when the session started any.
+    mcp: Option<Arc<McpConnections>>,
     /// Live external children, so a fleet stop reaches a process child the
     /// in-process registry cannot hold.
     pub(super) external_children: ExternalChildren,
@@ -179,6 +187,7 @@ impl MultiAgentRuntime {
             hooks: deps.hooks,
             launcher: deps.launcher,
             mode_gate: deps.mode_gate,
+            mcp: deps.mcp,
             external_children: ExternalChildren::default(),
             inherited: RunnerInheritance::default(),
             delegation_wait_ms: 0,

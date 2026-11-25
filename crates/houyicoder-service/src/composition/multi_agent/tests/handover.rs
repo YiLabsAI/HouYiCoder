@@ -355,6 +355,10 @@ impl Tool for PanicsOnRelease {
             panic!("the tool blew up");
         })
     }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }
 
 /// A child that dies after the turn released it still reaches the parent.

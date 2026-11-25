@@ -16,6 +16,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::manager::McpConnections;
+use super::manager::name_in_scope;
 use super::tools::INLINE_RESULT_BYTES;
 use super::tools::exceeds_inline;
 use super::tools::externalize_result;
@@ -32,6 +33,9 @@ pub struct ListMcpResourcesTool {
     manager: Arc<McpConnections>,
     log: Option<Arc<dyn SessionLog>>,
     inline_budget: usize,
+    /// The servers a child definition mounts; None keeps every connected
+    /// server, an empty list reaches none.
+    allowed_servers: Option<Vec<String>>,
 }
 
 impl ListMcpResourcesTool {
@@ -42,6 +46,7 @@ impl ListMcpResourcesTool {
             manager,
             log,
             inline_budget: INLINE_RESULT_BYTES,
+            allowed_servers: None,
         }
     }
 
@@ -51,6 +56,19 @@ impl ListMcpResourcesTool {
         self.inline_budget = budget;
         self
     }
+
+    /// Restrict the listing to the servers a child definition mounts.
+    pub(crate) fn with_allowed_servers(mut self, servers: Option<Vec<String>>) -> Self {
+        self.allowed_servers = servers;
+        self
+    }
+}
+
+/// Whether a server is inside the tool's scope. None keeps every server, and
+/// a name matches ignoring case: the list is authored data, not a dispatch
+/// key.
+fn scope_allows(allowed: Option<&[String]>, server: &str) -> bool {
+    allowed.is_none_or(|list| name_in_scope(list, server))
 }
 
 impl Tool for ListMcpResourcesTool {
@@ -95,11 +113,19 @@ impl Tool for ListMcpResourcesTool {
                     )));
                 }
             };
-            let resources = self
+            if let Some(name) = &server
+                && !scope_allows(self.allowed_servers.as_deref(), name)
+            {
+                return Err(ToolError::InvalidInput(format!(
+                    "{name} is not among the servers this agent mounts"
+                )));
+            }
+            let mut resources = self
                 .manager
                 .resources_for(server.as_deref())
                 .await
                 .map_err(ToolError::Failed)?;
+            resources.retain(|(name, _)| scope_allows(self.allowed_servers.as_deref(), name));
             let payload = render_resources(&resources);
             let rendered = payload.to_string();
             if !exceeds_inline(&rendered, self.inline_budget) {
@@ -123,6 +149,9 @@ pub struct ReadMcpResourceTool {
     manager: Arc<McpConnections>,
     log: Option<Arc<dyn SessionLog>>,
     inline_budget: usize,
+    /// The servers a child definition mounts; None keeps every connected
+    /// server, an empty list reaches none.
+    allowed_servers: Option<Vec<String>>,
 }
 
 impl ReadMcpResourceTool {
@@ -133,6 +162,7 @@ impl ReadMcpResourceTool {
             manager,
             log,
             inline_budget: INLINE_RESULT_BYTES,
+            allowed_servers: None,
         }
     }
 
@@ -140,6 +170,12 @@ impl ReadMcpResourceTool {
     /// without holding a huge resource.
     pub(crate) fn with_inline_budget(mut self, budget: usize) -> Self {
         self.inline_budget = budget;
+        self
+    }
+
+    /// Restrict the read to the servers a child definition mounts.
+    pub(crate) fn with_allowed_servers(mut self, servers: Option<Vec<String>>) -> Self {
+        self.allowed_servers = servers;
         self
     }
 }
@@ -184,6 +220,11 @@ impl Tool for ReadMcpResourceTool {
                 .get("uri")
                 .and_then(Value::as_str)
                 .ok_or_else(|| ToolError::InvalidInput("uri is required".into()))?;
+            if !scope_allows(self.allowed_servers.as_deref(), server) {
+                return Err(ToolError::InvalidInput(format!(
+                    "{server} is not among the servers this agent mounts"
+                )));
+            }
             let contents = self
                 .manager
                 .read_resource(server, uri)

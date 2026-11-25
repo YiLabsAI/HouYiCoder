@@ -2,6 +2,10 @@
 //! from a resolved entry, the helper that supplies request headers, and the
 //! reconnect delays the transport applies.
 
+mod throttle;
+
+use throttle::ThrottledHttpClient;
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,10 +17,9 @@ use houyicoder_api::launcher::FenceConfig;
 use houyicoder_api::launcher::ProcessLauncher;
 use houyicoder_api::launcher::SpawnPolicy;
 use houyicoder_api::launcher::SpawnRequest;
-use houyicoder_platform::host::helper_program;
+use houyicoder_platform::host::default_helper_program;
 use houyicoder_platform::host::net::ProxyConfig;
 use houyicoder_platform::host::net::ProxyConfigCache;
-use houyicoder_platform::host::shell::HelperShell;
 use houyicoder_platform::tls::install_tls_provider;
 use houyicoder_protocol::mcp::McpTransportConfig;
 use reqwest::Client;
@@ -80,10 +83,17 @@ async fn http_client_for(
     launcher: &Arc<dyn ProcessLauncher>,
     transport: &McpTransportConfig,
     workspace: &Path,
-) -> Result<(Client, StreamableHttpClientTransportConfig, Option<String>), McpClientError> {
+) -> Result<
+    (
+        ThrottledHttpClient<Client>,
+        StreamableHttpClientTransportConfig,
+        Option<String>,
+    ),
+    McpClientError,
+> {
     install_tls_provider();
     let (headers, helper_note) = request_headers(launcher, transport, workspace).await;
-    let client = proxy_client().map_err(McpClientError::Launch)?;
+    let client = ThrottledHttpClient::new(proxy_client().map_err(McpClientError::Launch)?);
     let mut config = StreamableHttpClientTransportConfig::with_uri(transport.endpoint.clone());
     config.custom_headers = custom_headers(&headers);
     let mut backoff = ExponentialBackoff::default();
@@ -225,9 +235,7 @@ async fn run_header_helper(
     command: &str,
     workspace: &Path,
 ) -> Result<BTreeMap<String, String>, &'static str> {
-    let Some(program) = helper_program(HelperShell::Sh) else {
-        return Err("the helper shell is not available on this host");
-    };
+    let program = default_helper_program();
     let request = SpawnRequest::new(program.executable().to_string_lossy().into_owned())
         .with_args(program.arguments(command))
         .with_workspace(workspace.to_path_buf())

@@ -477,8 +477,9 @@ impl McpConnections {
     ) -> Arc<McpToolSource> {
         let source = Arc::new(McpToolSource::default());
         let manager = Arc::clone(self);
+        let tracker = Arc::clone(self);
         let shared = Arc::clone(&source);
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut changes = manager.change_receiver();
             let stopping = manager.watch_stop();
             loop {
@@ -525,6 +526,7 @@ impl McpConnections {
                 }
             }
         });
+        tracker.track(task);
         source
     }
 }

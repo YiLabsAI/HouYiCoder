@@ -33,6 +33,7 @@ async fn test_child_prompt_reaches_descriptor() {
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     });
     let parent_sid = SessionId::new();
     let ctx = ToolCtx::new("c1").with_session(parent_sid);

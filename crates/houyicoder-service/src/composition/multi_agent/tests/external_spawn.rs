@@ -76,7 +76,7 @@ fn external_definition(program: &str) -> AgentDefinition {
         permission_mode: None,
         max_turns: None,
         skills: vec![],
-        mcp_servers: vec![],
+        mcp_servers: None,
         hooks: vec![],
         initial_prompt: None,
         memory: Default::default(),
@@ -121,6 +121,7 @@ fn runtime_over_with_launcher(
         hooks: None,
         launcher,
         mode_gate: None,
+        mcp: None,
     })
 }
 

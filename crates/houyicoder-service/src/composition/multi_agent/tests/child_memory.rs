@@ -86,6 +86,7 @@ fn build_test_runtime(
         hooks: None,
         launcher: Arc::new(StdProcessLauncher::new()),
         mode_gate: None,
+        mcp: None,
     })
     .with_inheritance(RunnerInheritance {
         memory_provider: Some(mem as Arc<dyn MemoryProvider>),
