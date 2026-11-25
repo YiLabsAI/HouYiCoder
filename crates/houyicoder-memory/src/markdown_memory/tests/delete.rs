@@ -5,6 +5,7 @@
 //! split file carries its own temp_root + entry helpers.
 
 use super::super::*;
+use houyicoder_context::MemoryOrigin;
 use houyicoder_context::MemoryScope;
 use houyicoder_context::MemoryType;
 use std::env::temp_dir;
@@ -24,7 +25,7 @@ fn temp_root() -> PathBuf {
 }
 
 fn entry(key: &str, content: &str, source: MemoryType) -> MemoryEntry {
-    MemoryEntry::new(key, content, source)
+    MemoryEntry::new(key, content, source).with_origin(MemoryOrigin::Extractor)
 }
 
 /// delete_memory removes the topic file and regenerates the index so the
@@ -174,5 +175,40 @@ fn test_delete_survives_broken_index() {
     p.delete_memory("doomed")
         .expect("the delete succeeds despite the broken index");
     assert!(!root.join("doomed.md").exists(), "topic removed");
+    remove_dir_all(&root).ok();
+}
+
+/// The consolidation dream's prune path (delete_memory) must not delete
+/// memories authored by the user or the primary agent.
+#[test]
+fn test_delete_origin_guard() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    p.add(
+        MemoryEntry::new("user-note", "user text", MemoryType::User)
+            .with_origin(MemoryOrigin::User),
+    )
+    .unwrap();
+    p.add(
+        MemoryEntry::new("agent-note", "agent text", MemoryType::Feedback)
+            .with_origin(MemoryOrigin::PrimaryAgent),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        p.delete_memory("user-note"),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    assert!(root.join("user-note.md").is_file());
+
+    assert!(matches!(
+        p.delete_memory("agent-note"),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    assert!(root.join("agent-note.md").is_file());
+
+    p.delete_memory_in_scope("user-note", MemoryScope::Auto)
+        .expect("scoped delete succeeds");
+    assert!(!root.join("user-note.md").exists());
     remove_dir_all(&root).ok();
 }

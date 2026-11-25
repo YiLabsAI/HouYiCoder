@@ -269,6 +269,33 @@ fn test_demote_and_user_guard() {
         fx.provider.show_memory("hand-note").unwrap().content,
         "User authored."
     );
+
+    // Background writer can update a PrimaryAgent file, but preserves its origin.
+    fx.provider
+        .add(
+            MemoryEntry::new("agent-note", "Agent v1.", MemoryType::Feedback)
+                .with_origin(MemoryOrigin::PrimaryAgent),
+        )
+        .expect("seed primary agent origin");
+    let bg_update = fx.provider.add_if_changed(
+        MemoryEntry::new(
+            "agent-note",
+            "Extractor updated text.",
+            MemoryType::Feedback,
+        )
+        .with_origin(MemoryOrigin::Extractor),
+    );
+    assert_eq!(
+        bg_update.expect("update succeeds"),
+        MemoryWriteOutcome::Updated
+    );
+    let updated = fx.provider.show_memory("agent-note").expect("found");
+    assert_eq!(updated.content, "Extractor updated text.");
+    assert_eq!(
+        updated.origin,
+        MemoryOrigin::PrimaryAgent,
+        "background update preserves the stored PrimaryAgent origin"
+    );
 }
 
 #[test]

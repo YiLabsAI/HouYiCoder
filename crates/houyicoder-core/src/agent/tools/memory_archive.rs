@@ -6,7 +6,7 @@ use std::sync::Arc;
 use houyicoder_api::agent_event::MemoryOperation;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_async::PFut;
-use houyicoder_context::{MemoryError, MemoryScope};
+use houyicoder_context::{MemoryError, MemoryOrigin, MemoryScope};
 use serde_json::{Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
@@ -17,6 +17,7 @@ pub struct MemoryArchiveTool {
     provider: Arc<dyn MemoryProvider>,
     recorder: Option<Arc<MutationLog>>,
     pinned_scope: Option<MemoryScope>,
+    origin: MemoryOrigin,
 }
 
 impl MemoryArchiveTool {
@@ -26,6 +27,7 @@ impl MemoryArchiveTool {
             provider,
             recorder: None,
             pinned_scope: None,
+            origin: MemoryOrigin::PrimaryAgent,
         }
     }
 
@@ -35,12 +37,19 @@ impl MemoryArchiveTool {
             provider,
             recorder: None,
             pinned_scope: Some(scope),
+            origin: MemoryOrigin::PrimaryAgent,
         }
     }
 
     /// Attach a mutation recorder.
     pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
+        self
+    }
+
+    /// Tag every archive call with the given writer origin.
+    pub fn with_origin(mut self, origin: MemoryOrigin) -> Self {
+        self.origin = origin;
         self
     }
 }
@@ -89,6 +98,7 @@ impl Tool for MemoryArchiveTool {
         let provider = Arc::clone(&self.provider);
         let recorder = self.recorder.clone();
         let pinned_scope = self.pinned_scope;
+        let origin = self.origin;
         Box::pin(async move {
             let key = input
                 .get("key")
@@ -119,6 +129,17 @@ impl Tool for MemoryArchiveTool {
                     None => MemoryScope::Auto,
                 },
             };
+            if origin.is_background()
+                && let Some(entry) = provider.show_memory_in_scope(key, scope)
+                && matches!(
+                    entry.origin,
+                    MemoryOrigin::User | MemoryOrigin::PrimaryAgent
+                )
+            {
+                return Err(ToolError::Failed(format!(
+                    "memory_archive: background writer cannot archive protected memory '{key}'"
+                )));
+            }
             match provider.archive_memory(key, scope) {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {

@@ -34,7 +34,7 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 fn entry(key: &str, content: &str) -> MemoryEntry {
-    MemoryEntry::new(key, content, MemoryType::Project)
+    MemoryEntry::new(key, content, MemoryType::Project).with_origin(MemoryOrigin::Extractor)
 }
 
 fn index_text(root: &Path) -> String {

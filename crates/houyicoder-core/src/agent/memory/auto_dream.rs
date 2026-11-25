@@ -393,10 +393,13 @@ pub(crate) fn build_forked_dream_runner(
     tools.register(Arc::new(MemoryReadTool::new(memory.clone())));
     tools.register(Arc::new(
         MemoryDeleteTool::new_pinned(memory.clone(), MemoryScope::Auto)
-            .with_recorder(recorder.clone()),
+            .with_recorder(recorder.clone())
+            .with_origin(MemoryOrigin::Dream),
     ));
     tools.register(Arc::new(
-        MemoryArchiveTool::new_pinned(memory.clone(), MemoryScope::Auto).with_recorder(recorder),
+        MemoryArchiveTool::new_pinned(memory.clone(), MemoryScope::Auto)
+            .with_recorder(recorder)
+            .with_origin(MemoryOrigin::Dream),
     ));
     Runner::new(store, provider, tools, config).with_cwd(cwd.to_path_buf())
 }

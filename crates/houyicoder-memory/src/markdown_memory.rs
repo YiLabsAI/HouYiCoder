@@ -453,56 +453,13 @@ impl MemoryProvider for MarkdownMemoryProvider {
     /// Delete a topic from the auto scope. Topic removal is authoritative;
     /// derived-index repair is best-effort and self-heals later.
     fn delete_memory(&self, key: &str) -> Result<(), MemoryError> {
-        // Delegate to the scoped form so there is one delete path
-        // (root_for_scope(Auto) is the write root).
-        self.delete_memory_in_scope(key, MemoryScope::Auto)
+        self.delete_memory_impl(key)
     }
 
     /// Delete a topic from one scope, prune its global stats, and rebuild the
     /// derived indexes.
     fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
-        let key = sanitize_key(key)?;
-        let topic_root = self.root_for_scope(scope).to_path_buf();
-        let topic_path = topic_root.join(format!("{key}.md"));
-        let _guard = self.write_lock.lock().expect("write lock poisoned");
-        let _root_locks = self.lock_roots()?;
-        // The marker goes down before the topic does. A delete whose index
-        // rebuild then fails leaves the marker for the next session, rather
-        // than a row naming a file already gone.
-        let index_was_dirty = Self::index_marked_dirty(&topic_root);
-        Self::mark_index_dirty(&topic_root)?;
-        let removed = fs::remove_file(&topic_path);
-        if removed.is_err() && !index_was_dirty {
-            // Nothing changed, so the marker this call added would only cost
-            // the next session a rebuild it does not need.
-            Self::clear_index_dirty(&topic_root);
-        }
-        match removed {
-            Ok(()) => {}
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                return Err(MemoryError::NotFound);
-            }
-            Err(_) => return Err(MemoryError::Io),
-        }
-        // Prune the stats sidecar entry so it does not grow monotonically
-        // with deleted memories (advisory: a missed prune leaves a stale
-        // stats row, not an invariant violation — load_stats treats a
-        // corrupt sidecar as empty). Under the root locks so it cannot race
-        // a concurrent rebuild on the same root.
-        let mut stats = self.load_stats();
-        if stats.remove(key.as_str()).is_some() {
-            self.save_stats(&stats);
-        }
-        // Best-effort index rebuild: the topic is already gone, and recall
-        // scans topic files (not the index), so a rebuild failure leaves only
-        // cosmetic drift in MEMORY.md healed by the next rebuild_if_stale.
-        // Surfacing the rebuild error to the caller would mislabel a
-        // successful delete as a failure — a retry would then return NotFound
-        // for a key whose topic is already removed.
-        if let Err(e) = self.rebuild_index_impl_locked() {
-            tracing::warn!("memory delete: index rebuild failed (heals next session): {e}");
-        }
-        Ok(())
+        self.delete_memory_in_scope_impl(key, scope)
     }
 
     fn read_recall_stats(&self) -> Vec<MemoryRecallStats> {
@@ -715,17 +672,22 @@ impl MarkdownMemoryProvider {
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(_) => return Err(MemoryError::Io),
         };
+        let mut entry = entry.clone();
         if entry.origin.is_background()
             && let Some(prev_bytes) = previous.as_deref()
             && let Ok(prev_text) = from_utf8(prev_bytes)
             && let Ok((fm, _)) = parse_topic_file(prev_text)
-            && fm.origin == MemoryOrigin::User
         {
-            return Err(MemoryError::InvalidPath(
-                "background writer cannot overwrite user-authored memory".into(),
-            ));
+            if fm.origin == MemoryOrigin::User {
+                return Err(MemoryError::InvalidPath(
+                    "background writer cannot overwrite user-authored memory".into(),
+                ));
+            }
+            if fm.origin == MemoryOrigin::PrimaryAgent {
+                entry.origin = MemoryOrigin::PrimaryAgent;
+            }
         }
-        let payload = serialize_topic_file(entry).into_bytes();
+        let payload = serialize_topic_file(&entry).into_bytes();
         if previous.as_deref() == Some(payload.as_slice()) {
             return Ok(MemoryWriteOutcome::Unchanged);
         }
@@ -737,7 +699,7 @@ impl MarkdownMemoryProvider {
         let index_was_dirty = Self::index_marked_dirty(root);
         Self::mark_index_dirty(root)?;
         write_bytes_atomic(&topic_path, &payload)?;
-        match self.append_index_pointer_in(root, entry) {
+        match self.append_index_pointer_in(root, &entry) {
             Ok(()) if !index_was_dirty => Self::clear_index_dirty(root),
             Ok(()) => {}
             Err(error) => tracing::warn!(

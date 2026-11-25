@@ -139,6 +139,53 @@ impl MarkdownMemoryProvider {
         Ok(())
     }
 
+    pub(super) fn delete_memory_impl(&self, key: &str) -> Result<(), MemoryError> {
+        let key = sanitize_key(key)?;
+        let topic_root = self.root_for_scope(MemoryScope::Auto).to_path_buf();
+        let topic_path = topic_root.join(format!("{key}.md"));
+        if let Ok(fm) = self.read_frontmatter(&topic_path)
+            && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
+        {
+            return Err(MemoryError::InvalidPath(
+                "background writer cannot delete user or primary agent memory".into(),
+            ));
+        }
+        self.delete_memory_in_scope_impl(&key, MemoryScope::Auto)
+    }
+
+    pub(super) fn delete_memory_in_scope_impl(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+    ) -> Result<(), MemoryError> {
+        let key = sanitize_key(key)?;
+        let topic_root = self.root_for_scope(scope).to_path_buf();
+        let topic_path = topic_root.join(format!("{key}.md"));
+        let _guard = self.write_lock.lock().expect("write lock poisoned");
+        let _root_locks = self.lock_roots()?;
+        let index_was_dirty = Self::index_marked_dirty(&topic_root);
+        Self::mark_index_dirty(&topic_root)?;
+        let removed = fs::remove_file(&topic_path);
+        if removed.is_err() && !index_was_dirty {
+            Self::clear_index_dirty(&topic_root);
+        }
+        match removed {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                return Err(MemoryError::NotFound);
+            }
+            Err(_) => return Err(MemoryError::Io),
+        }
+        let mut stats = self.load_stats();
+        if stats.remove(key.as_str()).is_some() {
+            self.save_stats(&stats);
+        }
+        if let Err(e) = self.rebuild_index_impl_locked() {
+            tracing::warn!("memory delete: index rebuild failed (heals next session): {e}");
+        }
+        Ok(())
+    }
+
     pub(super) fn archive_impl(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
         let _guard = self.write_lock.lock().expect("write lock poisoned");

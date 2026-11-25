@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use houyicoder_api::agent_event::MemoryOperation;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::tool::{Tool, ToolCtx};
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemoryType};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemoryType};
 use serde_json::json;
 
 use super::MemoryArchiveTool;
@@ -40,6 +40,13 @@ impl MemoryProvider for StubArchiveMemory {
         } else {
             Err(MemoryError::NotFound)
         }
+    }
+    fn show_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Option<MemoryEntry> {
+        self.active
+            .lock()
+            .expect("lock")
+            .get(&(key.to_string(), scope.as_label().to_string()))
+            .cloned()
     }
 }
 
@@ -97,4 +104,40 @@ async fn test_pinned_archive_hides_scope() {
         .await
         .expect("pinned archive");
     assert_eq!(out, json!({"archived": "auto-item", "scope": "auto"}));
+}
+
+/// A background consolidation writer must not archive memories authored by
+/// the user or the primary agent.
+#[tokio::test]
+async fn test_background_archive_guard() {
+    let mem = Arc::new(StubArchiveMemory::default());
+    mem.active.lock().expect("lock").insert(
+        ("user-fact".into(), "auto".into()),
+        MemoryEntry::new("user-fact", "body", MemoryType::Feedback).with_origin(MemoryOrigin::User),
+    );
+    mem.active.lock().expect("lock").insert(
+        ("agent-fact".into(), "auto".into()),
+        MemoryEntry::new("agent-fact", "body", MemoryType::Feedback)
+            .with_origin(MemoryOrigin::PrimaryAgent),
+    );
+
+    let dream_tool = MemoryArchiveTool::new_pinned(
+        Arc::clone(&mem) as Arc<dyn MemoryProvider>,
+        MemoryScope::Auto,
+    )
+    .with_origin(MemoryOrigin::Dream);
+
+    let err_user = dream_tool
+        .execute(ToolCtx::new("c4"), json!({"key": "user-fact"}))
+        .await
+        .expect_err("dream cannot archive user memory");
+    assert!(err_user.to_string().contains("protected memory"));
+
+    let err_agent = dream_tool
+        .execute(ToolCtx::new("c5"), json!({"key": "agent-fact"}))
+        .await
+        .expect_err("dream cannot archive primary agent memory");
+    assert!(err_agent.to_string().contains("protected memory"));
+
+    assert!(mem.archived.lock().expect("archived").is_empty());
 }

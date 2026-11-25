@@ -1,11 +1,12 @@
 //! Unit tests for MemoryDeleteTool (explicit scope and pinned scope).
 
 use super::*;
-use houyicoder_context::MemoryEntry;
+use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryType};
 use std::sync::Mutex;
 
 struct RecordingMemory {
     deleted: Mutex<Vec<(String, MemoryScope)>>,
+    entries: Mutex<std::collections::HashMap<(String, &'static str), MemoryEntry>>,
 }
 
 impl MemoryProvider for RecordingMemory {
@@ -26,11 +27,19 @@ impl MemoryProvider for RecordingMemory {
             .push((key.to_string(), scope));
         Ok(())
     }
+    fn show_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Option<MemoryEntry> {
+        self.entries
+            .lock()
+            .expect("entries")
+            .get(&(key.to_string(), scope.as_label()))
+            .cloned()
+    }
 }
 
 fn provider() -> Arc<RecordingMemory> {
     Arc::new(RecordingMemory {
         deleted: Mutex::new(Vec::new()),
+        entries: Mutex::new(std::collections::HashMap::new()),
     })
 }
 
@@ -94,4 +103,36 @@ async fn test_delete_missing_errors() {
         .expect_err("not found errors");
     assert!(err.to_string().contains("no memory with key 'absent'"));
     assert!(recorder.take().is_empty());
+}
+
+/// A background consolidation writer must not delete memories authored by
+/// the user or the primary agent.
+#[tokio::test]
+async fn test_background_delete_guard() {
+    let p = provider();
+    p.entries.lock().expect("entries").insert(
+        ("user-fact".to_string(), MemoryScope::Auto.as_label()),
+        MemoryEntry::new("user-fact", "body", MemoryType::Feedback).with_origin(MemoryOrigin::User),
+    );
+    p.entries.lock().expect("entries").insert(
+        ("agent-fact".to_string(), MemoryScope::Auto.as_label()),
+        MemoryEntry::new("agent-fact", "body", MemoryType::Feedback)
+            .with_origin(MemoryOrigin::PrimaryAgent),
+    );
+
+    let dream_tool =
+        MemoryDeleteTool::new_pinned(Arc::clone(&p) as Arc<dyn MemoryProvider>, MemoryScope::Auto)
+            .with_origin(MemoryOrigin::Dream);
+
+    let err_user = run(&dream_tool, json!({"key": "user-fact"}))
+        .await
+        .expect_err("dream cannot delete user memory");
+    assert!(err_user.to_string().contains("protected memory"));
+
+    let err_agent = run(&dream_tool, json!({"key": "agent-fact"}))
+        .await
+        .expect_err("dream cannot delete primary agent memory");
+    assert!(err_agent.to_string().contains("protected memory"));
+
+    assert!(p.deleted.lock().expect("deleted").is_empty());
 }
