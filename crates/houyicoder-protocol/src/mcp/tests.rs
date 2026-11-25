@@ -131,3 +131,27 @@ fn test_state_round_trips() {
         assert_eq!(back, state);
     }
 }
+
+/// A status view written before the detail field existed still parses, with
+/// the detail reading as the empty view: an old host's reply renders the
+/// list row and a detail page that carries nothing, not a decode failure.
+#[test]
+fn test_status_without_detail_parses() {
+    let old_payload = serde_json::json!({
+        "name": "codegraph",
+        "scope": "project",
+        "state": {"kind": "connected"},
+        "serverVersion": "1.0.0",
+        "toolCount": 3,
+        "resourceCount": 1,
+        "hasInstructions": true,
+        "recentStderr": ["one line"]
+    });
+    let view: McpServerStatusView =
+        serde_json::from_value(old_payload).expect("the old payload parses");
+    assert_eq!(view.name, "codegraph");
+    assert_eq!(view.tool_count, 3);
+    assert_eq!(view.detail, McpServerDetailView::default());
+    assert!(!view.detail.untrusted_lock);
+    assert!(view.detail.tools.is_empty());
+}

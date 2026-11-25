@@ -34,6 +34,7 @@ use crate::agents_state::AgentsPaneState;
 use crate::fleet::strip_state::FleetStripState;
 use crate::hooks_state::HooksPaneState;
 use crate::input::Input;
+use crate::mcp_pane_state::McpPaneState;
 use crate::memory_state::MemoryPaneState;
 use crate::notifications::NotificationState;
 use crate::permission_pane_state::PermissionPaneState;
@@ -109,6 +110,11 @@ pub struct Ui {
     /// key handler and render path step a field directly; the level and the
     /// selection move together on enter and return.
     pub(crate) hooks_pane: HooksPaneState,
+    /// The /mcp pane's interaction state: the list cursor and the open
+    /// detail level. The status rows the host returned are the session's
+    /// capability; the cursor and the drill-down are where the user is
+    /// looking. Resets with its pane peers on a session switch.
+    pub(crate) mcp_pane: McpPaneState,
     /// The /memory pane's interaction state: the scope tab, the list cursor
     /// and search query, and the detail drill-down. The entry list and the
     /// toggle states these index are the session's memory capability; the
@@ -239,6 +245,7 @@ impl Ui {
         self.skills_pane = Default::default();
         self.tasks_pane = Default::default();
         self.hooks_pane = Default::default();
+        self.mcp_pane = Default::default();
         self.memory = Default::default();
         self.model = Default::default();
         self.notification_wake = Default::default();

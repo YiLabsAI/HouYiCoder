@@ -51,6 +51,7 @@ pub fn app() -> App {
             skills_pane: SkillsPaneState::default(),
             tasks_pane: Default::default(),
             hooks_pane: HooksPaneState::default(),
+            mcp_pane: Default::default(),
             memory: MemoryPaneState::default(),
             agents_pane: AgentsPaneState::default(),
             fleet: FleetStripState::default(),

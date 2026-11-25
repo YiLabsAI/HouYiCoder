@@ -104,7 +104,7 @@ async fn test_codegraph_handshake_and_tool() {
     let server = server_config(&node, &entry);
 
     let cold = Instant::now();
-    manager.start_all(vec![server]).await;
+    manager.start_all(vec![server], true).await;
     let connected = wait_connected(&manager, Duration::from_secs(15)).await;
     let cold = cold.elapsed();
     if !connected {

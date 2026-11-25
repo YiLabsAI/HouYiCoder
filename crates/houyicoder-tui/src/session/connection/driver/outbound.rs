@@ -98,6 +98,15 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
             request(req_id, FrontendRequest::ChildTranscript { child_sid })
         }
         ClientCommand::HooksQuery { req_id } => request(req_id, FrontendRequest::Hooks),
+        ClientCommand::McpStatusQuery { req_id } => request(req_id, FrontendRequest::McpStatusList),
+        ClientCommand::McpReconnectQuery { req_id, name } => {
+            request(req_id, FrontendRequest::McpReconnect { name })
+        }
+        ClientCommand::McpSetEnabledQuery {
+            req_id,
+            name,
+            enabled,
+        } => request(req_id, FrontendRequest::McpSetEnabled { name, enabled }),
         ClientCommand::SkillBodyQuery { req_id, name } => {
             request(req_id, FrontendRequest::SkillBody { name })
         }

@@ -22,6 +22,7 @@ use std::path::PathBuf;
 
 mod agents;
 mod debug;
+mod mcp;
 mod memory;
 mod model;
 mod resume;
@@ -77,7 +78,8 @@ impl App {
             | SlashCommand::Tools
             | SlashCommand::Skills
             | SlashCommand::Hooks
-            | SlashCommand::Memory => self.open_pane_command(cmd),
+            | SlashCommand::Memory
+            | SlashCommand::Mcp => self.open_pane_command(cmd),
             SlashCommand::Model => self.open_model_pane(),
             SlashCommand::Tasks => self.open_tasks_pane(),
             SlashCommand::Sandbox => self.open_sandbox_pane(SandboxTab::Sandbox),
@@ -207,6 +209,13 @@ impl App {
             SlashCommand::Hooks => {
                 self.ui.navigation.pane = Pane::Hooks;
                 self.refresh_query(|req_id| ClientCommand::HooksQuery { req_id });
+            }
+            SlashCommand::Mcp => {
+                self.ui.navigation.pane = Pane::Mcp;
+                if let Some(req_id) = self.claim_request_id() {
+                    self.ui.mcp_pane.mark_pending(req_id);
+                    self.enqueue_refresh(ClientCommand::McpStatusQuery { req_id });
+                }
             }
             SlashCommand::Memory => {
                 self.ui.navigation.pane = Pane::Memory;

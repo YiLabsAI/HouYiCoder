@@ -512,13 +512,16 @@ async fn test_source_task_ends() {
         McpTimings::default(),
     ));
     manager
-        .start_all(vec![ScopedMcpServerConfig {
-            name: "quiet".into(),
-            scope: McpConfigScope::Project,
-            transport: McpTransportConfig::stdio("fake", vec![]),
-            disabled: true,
-            tool_timeout_ms: 5_000,
-        }])
+        .start_all(
+            vec![ScopedMcpServerConfig {
+                name: "quiet".into(),
+                scope: McpConfigScope::Project,
+                transport: McpTransportConfig::stdio("fake", vec![]),
+                disabled: true,
+                tool_timeout_ms: 5_000,
+            }],
+            true,
+        )
         .await;
     let gate: Arc<dyn ModeGate> = Arc::new(DefaultModeGate::new());
     let source = manager.tool_source(gate, None);

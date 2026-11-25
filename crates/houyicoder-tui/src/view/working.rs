@@ -427,6 +427,7 @@ fn draw_focus_main(f: &mut Frame, area: Rect, app: &App) {
         Pane::Hooks => panes::draw_hooks_pane(f, area, app),
         Pane::Skills => panes::draw_skills_pane(f, area, app),
         Pane::Tasks => panes::draw_tasks_pane(f, area, app),
+        Pane::Mcp => panes::draw_mcp_pane(f, area, app),
         Pane::Model => panes::draw_model_pane(f, area, app),
         Pane::Agents => panes::draw_agents_pane(f, area, app),
         Pane::Queue => panes::draw_queue_pane(f, area, app),
@@ -515,6 +516,12 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     // tail above, the background-command list or the open detail below.
     if matches!(app.ui.navigation.pane, Pane::Tasks) {
         panes::draw_tasks_pane(f, area, app);
+        return;
+    }
+    // The /mcp pane renders inline through the same template: transcript
+    // tail above, the server list or the open detail below.
+    if matches!(app.ui.navigation.pane, Pane::Mcp) {
+        panes::draw_mcp_pane(f, area, app);
         return;
     }
     // The /model pane renders inline (the Pane primitive): transcript tail

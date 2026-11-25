@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::composition::multi_agent::permission_request_from;
 use crate::consent::DelegatedAskReceiver;
+use crate::mcp::McpConnections;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
 
 use tokio::sync::Notify;
@@ -74,6 +75,7 @@ use crate::server::recap::job::run as run_recap;
 mod capability_handler;
 mod checkpoint_handler;
 mod context_handler;
+mod mcp_handler;
 mod memory_handler;
 mod notification_handler;
 mod permission_handler;
@@ -151,6 +153,8 @@ pub struct Server {
     /// detaches the client, so a closed connection cannot keep a summary
     /// waiting for nobody.
     recap_client: Option<RecapAttachment>,
+    /// The session's external tool servers, for the /mcp handler.
+    pub(super) mcp: Option<Arc<McpConnections>>,
 }
 
 pub(crate) mod child_permission;
@@ -198,6 +202,7 @@ impl Server {
             child_perm_rx: Arc::new(DelegatedAskReceiver::default()),
             recap: None,
             recap_client: None,
+            mcp: None,
             background_tasks: None,
         }
     }
@@ -267,6 +272,13 @@ impl Server {
     /// a test that must reject /debug.
     pub fn with_diagnostics(mut self, handle: Option<DiagnosticsHandle>) -> Self {
         self.diagnostics = handle;
+        self
+    }
+
+    /// Attach the session's external tool servers, so the /mcp pane and the
+    /// reconnect/toggle requests reach the manager the session started.
+    pub fn with_mcp(mut self, mcp: Option<Arc<McpConnections>>) -> Self {
+        self.mcp = mcp;
         self
     }
 

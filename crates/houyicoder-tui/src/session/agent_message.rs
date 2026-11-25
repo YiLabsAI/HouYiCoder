@@ -12,6 +12,7 @@ use houyicoder_protocol::frontend::run::{
 };
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 use houyicoder_protocol::llm::EffortLevel;
+use houyicoder_protocol::mcp::McpServerStatusView;
 
 use crate::transcript::SequencedFrame;
 use crate::transcript::frame::TranscriptFrame;
@@ -276,6 +277,8 @@ pub enum ServerResponse {
     /// The registered hooks the /hooks command requested (read-only
     /// visibility).
     Hooks { hooks: Vec<HookEntry> },
+    /// The external tool servers the /mcp command requested.
+    McpStatus { servers: Vec<McpServerStatusView> },
     /// The discovered skills the /skills command requested.
     Skills { skills: Vec<SkillEntry> },
     /// One skill's body for the detail view, None when it does not resolve.
@@ -411,6 +414,23 @@ pub enum ClientCommand {
     /// Read-only visibility: which hook events are registered, name + source.
     HooksQuery {
         req_id: RequestId,
+    },
+    /// Request the external tool server status list (the /mcp command).
+    /// Read-only: every configured server's state, scope, transport, and
+    /// counts.
+    McpStatusQuery {
+        req_id: RequestId,
+    },
+    /// Request one server's reconnect over the wire.
+    McpReconnectQuery {
+        req_id: RequestId,
+        name: String,
+    },
+    /// Request one server's enabled toggle over the wire.
+    McpSetEnabledQuery {
+        req_id: RequestId,
+        name: String,
+        enabled: bool,
     },
     /// Request the discovered skills list over the wire (the /skills
     /// command). Read-only: name, description, source, body token

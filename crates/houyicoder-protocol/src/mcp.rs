@@ -188,6 +188,37 @@ pub enum McpConnectionState {
     Disabled { reason: String },
 }
 
+/// One tool as the /mcp detail page renders it: its name, whether its
+/// annotations claim it safe to run without asking, and its description.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolSummary {
+    pub name: String,
+    pub read_only: bool,
+    pub description: String,
+}
+
+/// The fields one server's detail page renders beyond its list row: the
+/// transport endpoint, the header names it was configured with, the loaded
+/// tools, a preview of its instructions, and whether an untrusted workspace
+/// holds the server off. Header values never cross this boundary, so a
+/// secret one configures cannot reach a view that renders it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerDetailView {
+    /// The command the host launches, or the endpoint URL it calls.
+    pub endpoint: String,
+    /// The header names an HTTP server was configured with. The pane renders
+    /// each as a masked name-value pair.
+    pub header_names: Vec<String>,
+    pub tools: Vec<McpToolSummary>,
+    /// The first characters of the instructions the server exported.
+    pub instructions_preview: Option<String>,
+    /// True when the server is off because its workspace is not trusted, so
+    /// enabling it is refused rather than merely undoable.
+    pub untrusted_lock: bool,
+}
+
 /// A read-only snapshot of one server, shared by the status surfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,6 +231,8 @@ pub struct McpServerStatusView {
     pub resource_count: usize,
     pub has_instructions: bool,
     pub recent_stderr: Vec<String>,
+    #[serde(default)]
+    pub detail: McpServerDetailView,
 }
 
 /// The default tool call timeout: long enough for a real tool to work, short

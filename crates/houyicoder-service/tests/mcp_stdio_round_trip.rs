@@ -180,7 +180,7 @@ async fn test_mcp_stdio_full_round_trip() {
         tool_timeout_ms: 5000,
     };
 
-    manager.start_all(vec![server_cfg]).await;
+    manager.start_all(vec![server_cfg], true).await;
 
     let ok = eventually(|| source.names().len() == 2).await;
     if !ok {

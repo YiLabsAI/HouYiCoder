@@ -84,7 +84,7 @@ async fn test_disabled_never_spawns() {
     gated[1].transport =
         houyicoder_protocol::mcp::McpTransportConfig::http("https://example.invalid/mcp");
     let gated = houyicoder_config::apply_trust_gate(gated, false);
-    manager.start_all(gated).await;
+    manager.start_all(gated, false).await;
     let statuses = manager.statuses().await;
     assert_eq!(statuses.len(), 2);
     for status in &statuses {
@@ -103,7 +103,7 @@ async fn test_disabled_never_spawns() {
 #[tokio::test]
 async fn test_stderr_accessors() {
     let manager = manager(Arc::new(NoSpawn));
-    manager.start_all(vec![config("quiet", true)]).await;
+    manager.start_all(vec![config("quiet", true)], true).await;
     assert!(manager.stderr_tail("quiet").await.is_empty());
     assert!(manager.stderr_tail("nobody").await.is_empty());
     assert_eq!(manager.stderr_limit(), STDERR_TAIL_LINES);
@@ -115,7 +115,7 @@ async fn test_stderr_accessors() {
 #[tokio::test]
 async fn test_reconnect_disabled_is_quiet() {
     let manager = manager(Arc::new(NoSpawn));
-    manager.start_all(vec![config("off", true)]).await;
+    manager.start_all(vec![config("off", true)], true).await;
     manager.reconnect("off").await;
     manager.reconnect("unknown").await;
     let statuses = manager.statuses().await;
@@ -131,7 +131,7 @@ async fn test_reconnect_disabled_is_quiet() {
 #[tokio::test]
 async fn test_reconnect_unknown_is_quiet() {
     let manager = manager(Arc::new(NoSpawn));
-    manager.start_all(Vec::new()).await;
+    manager.start_all(Vec::new(), true).await;
     manager.reconnect("unknown").await;
     assert!(manager.statuses().await.is_empty());
     manager.shutdown().await;
@@ -162,7 +162,7 @@ async fn any_state(
 #[tokio::test]
 async fn test_launch_refused_reports_failed() {
     let manager = manager(Arc::new(NoSpawn));
-    manager.start_all(vec![config("broken", false)]).await;
+    manager.start_all(vec![config("broken", false)], true).await;
     assert!(
         any_state(&manager, |state| matches!(
             state,
@@ -179,7 +179,7 @@ async fn test_launch_refused_reports_failed() {
 #[tokio::test]
 async fn test_call_timeout_names_config() {
     let manager = manager(Arc::new(NoSpawn));
-    manager.start_all(vec![config("timed", true)]).await;
+    manager.start_all(vec![config("timed", true)], true).await;
     assert_eq!(
         manager.call_timeout_of("timed").await,
         Duration::from_millis(5_000)
@@ -248,6 +248,8 @@ async fn test_source_exposes_tools() {
                 stderr: StderrTail::default(),
                 peer: Some(service.peer().clone()),
                 wake: None,
+                enabled: true,
+                locked: false,
             },
         );
     }
@@ -286,6 +288,8 @@ fn slot(name: &str, state: McpConnectionState, instructions: &str) -> super::Ser
         stderr: StderrTail::default(),
         peer: None,
         wake: None,
+        enabled: true,
+        locked: false,
     }
 }
 
@@ -658,4 +662,154 @@ async fn test_instructions_ordering_and_cap() {
         .expect("has filtered instructions");
     assert!(!filtered.contains("alpha instructions"));
     assert!(filtered.contains("zeta instructions"));
+}
+
+/// Turning a server off drops what it served and names the user as the
+/// reason, so the status view and the tool source stop advertising it on
+/// the same flip.
+#[tokio::test]
+async fn test_disable_clears_served() {
+    let manager = manager(Arc::new(NoSpawn));
+    {
+        let mut slots = manager.slots.write().await;
+        let mut served = slot("srv", McpConnectionState::Connected, "use the graph");
+        served.tools = vec![DeclaredTool::new("probe", "a probe", Map::new())];
+        slots.insert("srv".into(), served);
+    }
+    manager
+        .set_enabled("srv", false)
+        .await
+        .expect("the flip applies");
+    let statuses = manager.statuses().await;
+    assert!(
+        matches!(&statuses[0].state, McpConnectionState::Disabled { reason }
+            if reason.contains("user")),
+        "the reason names the user, saw {:?}",
+        statuses[0].state
+    );
+    assert_eq!(statuses[0].tool_count, 0, "the tools are gone");
+    assert!(!statuses[0].has_instructions, "the instructions are gone");
+    assert!(statuses[0].detail.tools.is_empty());
+    manager.shutdown().await;
+}
+
+/// A server an untrusted workspace locked refuses to be enabled, whatever
+/// the request says, and stays disabled with the lock still visible.
+#[tokio::test]
+async fn test_set_enabled_locked_refused() {
+    let manager = manager(Arc::new(NoSpawn));
+    manager.start_all(vec![config("gated", true)], false).await;
+    let error = manager
+        .set_enabled("gated", true)
+        .await
+        .expect_err("the lock refuses the enable");
+    assert!(
+        error.contains("trusted"),
+        "the refusal names the trust gate, saw {error}"
+    );
+    let statuses = manager.statuses().await;
+    assert!(
+        matches!(&statuses[0].state, McpConnectionState::Disabled { .. }),
+        "the server stays off"
+    );
+    assert!(statuses[0].detail.untrusted_lock, "the lock stays visible");
+    manager.shutdown().await;
+}
+
+/// A server the map does not hold is an error, not a silent success, so a
+/// pane acting on a stale row hears that the row is gone.
+#[tokio::test]
+async fn test_set_enabled_unknown_refused() {
+    let manager = manager(Arc::new(NoSpawn));
+    let error = manager
+        .set_enabled("nobody", true)
+        .await
+        .expect_err("an unknown name is an error");
+    assert!(
+        error.contains("no server named nobody"),
+        "the error names the server, saw {error}"
+    );
+    manager.shutdown().await;
+}
+
+/// Enabling a disabled server wakes the supervisor that parked on the
+/// switch, which is what makes the flip take effect rather than only
+/// changing a flag.
+#[tokio::test]
+async fn test_set_enabled_wakes_supervisor() {
+    let manager = manager(Arc::new(NoSpawn));
+    manager.start_all(vec![config("off", true)], true).await;
+    manager
+        .set_enabled("off", true)
+        .await
+        .expect("the flip applies");
+    assert!(
+        any_state(&manager, |state| matches!(
+            state,
+            McpConnectionState::Failed { error } if error.contains("no process may start")
+        ))
+        .await,
+        "the parked supervisor launched and reported the refusal"
+    );
+    manager.shutdown().await;
+}
+
+/// A flip to the state the slot already holds changes nothing and reports
+/// success, so a double press is not an error.
+#[tokio::test]
+async fn test_repeat_flip_is_quiet() {
+    let manager = manager(Arc::new(NoSpawn));
+    manager.start_all(vec![config("off", true)], true).await;
+    manager
+        .set_enabled("off", false)
+        .await
+        .expect("the repeat applies");
+    let statuses = manager.statuses().await;
+    assert!(
+        matches!(&statuses[0].state, McpConnectionState::Disabled { reason }
+            if reason.contains("configuration")),
+        "a disabled-at-start server keeps its own reason, saw {:?}",
+        statuses[0].state
+    );
+    manager.shutdown().await;
+}
+
+/// The status view carries the detail the pane renders: the endpoint, the
+/// header names without their values, the tools with their safety, and the
+/// instruction preview.
+#[tokio::test]
+async fn test_statuses_carry_detail() {
+    let manager = manager(Arc::new(NoSpawn));
+    {
+        let mut slots = manager.slots.write().await;
+        let mut served = slot("srv", McpConnectionState::Connected, "use the graph");
+        let mut annotations = ToolAnnotations::default();
+        annotations.read_only_hint = Some(true);
+        served.tools = vec![
+            DeclaredTool::new("read.file", "a probe", Map::new()).with_annotations(annotations),
+        ];
+        served.config.transport =
+            houyicoder_protocol::mcp::McpTransportConfig::http("https://example.test/mcp");
+        served
+            .config
+            .transport
+            .headers
+            .insert("Authorization".into(), "secret-token".into());
+        slots.insert("srv".into(), served);
+    }
+    let statuses = manager.statuses().await;
+    let detail = &statuses[0].detail;
+    assert_eq!(detail.endpoint, "https://example.test/mcp");
+    assert_eq!(detail.header_names, vec!["Authorization".to_string()]);
+    assert_eq!(detail.tools.len(), 1);
+    assert_eq!(detail.tools[0].name, "read.file");
+    assert!(detail.tools[0].read_only);
+    assert!(detail.instructions_preview.is_some());
+    assert!(!detail.untrusted_lock);
+    let wire = serde_json::to_string(&statuses).expect("the view serializes");
+    assert!(
+        !wire.contains("secret-token"),
+        "a header value never crosses the boundary"
+    );
+    manager.shutdown().await;
 }

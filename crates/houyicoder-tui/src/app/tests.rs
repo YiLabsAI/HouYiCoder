@@ -636,6 +636,23 @@ fn test_clear_ships_session_reset() {
     }
 }
 
+/// /mcp opens the pane and ships the status query the pane waits on, so the
+/// first reply lands in a pane that is already listening for it.
+#[test]
+fn test_mcp_command_ships_query() {
+    let (mut app, events) = live_session();
+    app.run_command(SlashCommand::Mcp);
+    assert_eq!(app.ui.navigation.pane, Pane::Mcp, "the pane opens");
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::McpStatusList));
+    assert!(
+        app.ui
+            .mcp_pane
+            .pending
+            .is_some_and(|p| p.request == req.req_id),
+        "the pane waits on the query it shipped"
+    );
+}
+
 /// When the request-id sequence is exhausted, each user command surfaces its
 /// own precise "request ids exhausted" line (never the shared "not
 /// connected"), and the auto refreshes share one connection-level notice:

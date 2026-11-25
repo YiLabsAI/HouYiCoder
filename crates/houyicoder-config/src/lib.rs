@@ -53,7 +53,7 @@ pub mod trust;
 pub use mcp_servers::{
     PROJECT_FILE, SETTINGS_KEY, apply_trust_gate, expand_references, parse_env_servers,
     parse_project_servers, parse_settings_servers, remove_user_server, resolve_scoped_mcp_servers,
-    upsert_user_server,
+    set_user_server_disabled, upsert_user_server,
 };
 use serde_json::Value;
 use std::env::temp_dir;

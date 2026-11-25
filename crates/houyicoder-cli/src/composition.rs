@@ -238,6 +238,9 @@ pub(crate) fn start_local_server(
         background_tasks,
         mcp,
     } = assembled;
+    // The manager travels to the server before the runtime moves into the
+    // shutdown arm, so the /mcp pane reaches a live connection.
+    let mcp_manager = mcp.as_ref().map(|runtime| Arc::clone(&runtime.manager));
     // The server's rename and model writes touch the same descriptor the
     // runner records prompts through, so it takes the runner's own store
     // rather than one handed in here. The read-modify-write lock lives in the
@@ -334,6 +337,7 @@ pub(crate) fn start_local_server(
         server = server.with_descriptor_store(store);
     }
     server = server.with_settings_path(settings_path);
+    server = server.with_mcp(mcp_manager);
     let server = server;
     let runtime = shared_runtime();
     // The serve task is pure serve: it returns when its client drops, and

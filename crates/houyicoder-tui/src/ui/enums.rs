@@ -282,6 +282,12 @@ pub enum Pane {
     /// Esc returns to the list before it closes. Down on an empty input
     /// opens the same pane.
     Tasks,
+    /// The /mcp pane: external tool server management. Lists every
+    /// configured server with its state, scope, transport, and counts;
+    /// Enter opens a detail with its tools, instructions, and stderr; r
+    /// reconnects; t toggles enabled. Esc returns from the detail, and Esc
+    /// at the list closes the pane.
+    Mcp,
     /// The queue pane: queued user inputs submitted while a run was in
     /// flight. Up / Down navigate, Enter recalls the selected item, Esc
     /// closes. A collapsed +N more strip click opens this pane rather than
@@ -379,6 +385,7 @@ impl Pane {
             Self::Model => "model",
             Self::Tools => "tools",
             Self::Tasks => "tasks",
+            Self::Mcp => "mcp",
             Self::Queue => "queue",
         }
     }

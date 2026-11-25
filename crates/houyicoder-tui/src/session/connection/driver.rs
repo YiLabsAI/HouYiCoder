@@ -445,6 +445,9 @@ async fn drive_connection(
                             })
                         }
                         ResponsePayload::Hooks(hooks) => Some(ServerResponse::Hooks { hooks }),
+                        ResponsePayload::McpStatus(servers) => {
+                            Some(ServerResponse::McpStatus { servers })
+                        }
                         ResponsePayload::Skills(skills) => {
                             Some(ServerResponse::Skills { skills })
                         }

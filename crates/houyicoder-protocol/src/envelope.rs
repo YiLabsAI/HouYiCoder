@@ -44,6 +44,7 @@ use crate::frontend::trust::TrustPrompt;
 use crate::frontend::worktree::WorktreeEnterView;
 use crate::frontend::worktree::WorktreePreviewView;
 use crate::frontend::worktree::WorktreeRemoveOutcome;
+use crate::mcp::McpServerStatusView;
 
 /// A caller-minted request id. Unique within a session; the response echoes it
 /// so the caller pairs reply to request.
@@ -221,6 +222,9 @@ pub enum ResponsePayload {
     Agents(Vec<AgentEntry>),
     /// The /hooks reply: the registered hooks (read-only visibility).
     Hooks(Vec<HookEntry>),
+    /// The /mcp reply: every configured server's status, so the TUI renders
+    /// the management pane without importing the service crate.
+    McpStatus(Vec<McpServerStatusView>),
     /// The /skills reply: the discovered skills (name, description,
     /// source, body token estimate).
     Skills(Vec<SkillEntry>),

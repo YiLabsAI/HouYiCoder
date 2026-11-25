@@ -5,6 +5,7 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::model::EffectiveFrom;
 use houyicoder_protocol::frontend::{BackgroundTaskId, FrontendRequest, SessionId};
 
+use super::mcp_handler;
 use super::model_apply::ModelSelection;
 use super::turn_loop::OnClose;
 use super::{Server, frame_carrier::FrameCarrier};
@@ -149,6 +150,10 @@ impl Server {
     /// Route a read-only or state-scoped request: panes, catalog listings,
     /// model selection, memory, and permission management. Separated from the
     /// run verbs so each router stays a readable dispatch table.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "the dispatch table is one match over every read-only request the server answers"
+    )]
     async fn dispatch_query(
         &mut self,
         io: &mut FrameCarrier,
@@ -173,6 +178,11 @@ impl Server {
                 .await
             }
             FrontendRequest::Hooks => self.dispatch_hooks(io, req_id).await,
+            FrontendRequest::McpStatusList
+            | FrontendRequest::McpReconnect { .. }
+            | FrontendRequest::McpSetEnabled { .. } => {
+                mcp_handler::handle(self, io, req_id, payload).await
+            }
             FrontendRequest::WorktreePreview { path } => {
                 self.handle_worktree_preview(io, req_id, path).await
             }
@@ -664,6 +674,9 @@ fn does_not_wait_for_turn(payload: &FrontendRequest) -> bool {
             | FrontendRequest::WorktreePreview { .. }
             | FrontendRequest::ToolList
             | FrontendRequest::Hooks
+            | FrontendRequest::McpStatusList
+            | FrontendRequest::McpReconnect { .. }
+            | FrontendRequest::McpSetEnabled { .. }
             | FrontendRequest::Skills
             | FrontendRequest::SkillBody { .. }
             | FrontendRequest::MemoryList

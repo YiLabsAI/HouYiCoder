@@ -19,6 +19,7 @@ use houyicoder_protocol::mcp::{
 use serde_json::Map;
 use serde_json::Value;
 
+use crate::SettingsWriteError;
 use crate::read_settings_value;
 use crate::update_settings;
 
@@ -251,7 +252,7 @@ pub fn apply_trust_gate(
 
 /// Remove one server from the user settings file. A server the caller wants
 /// gone stays gone across reloads.
-pub fn remove_user_server(path: &Path, name: &str) -> Result<(), crate::SettingsWriteError> {
+pub fn remove_user_server(path: &Path, name: &str) -> Result<(), SettingsWriteError> {
     update_settings(path, |value| remove_named_server(value, name), 8)
 }
 
@@ -261,7 +262,7 @@ pub fn upsert_user_server(
     path: &Path,
     name: &str,
     transport: &McpTransportConfig,
-) -> Result<(), crate::SettingsWriteError> {
+) -> Result<(), SettingsWriteError> {
     let body = transport_body(transport);
     update_settings(
         path,
@@ -278,6 +279,48 @@ pub fn upsert_user_server(
         },
         8,
     )
+}
+
+/// Record one named user server's disabled flag, so a toggle made from the
+/// /mcp pane survives the next session. An entry the file does not hold is
+/// an error rather than a silent no-write: the caller told the user the
+/// toggle applied, so the file and the session must be shown to disagree.
+pub fn set_user_server_disabled(
+    path: &Path,
+    name: &str,
+    disabled: bool,
+) -> Result<(), SettingsWriteError> {
+    update_settings(
+        path,
+        |value| {
+            if let Some(entry) = value
+                .get_mut(SETTINGS_KEY)
+                .and_then(Value::as_object_mut)
+                .and_then(|map| map.get_mut(name))
+                .and_then(Value::as_object_mut)
+            {
+                entry.insert("disabled".into(), Value::Bool(disabled));
+            }
+        },
+        8,
+    )?;
+    // The mutator runs under CAS retries, so whether it changed anything is
+    // read back from the file the write produced rather than tracked in a
+    // closure the signature cannot carry.
+    let applied = crate::settings_merge::read_settings_value(path)
+        .get(SETTINGS_KEY)
+        .and_then(Value::as_object)
+        .and_then(|map| map.get(name))
+        .and_then(Value::as_object)
+        .and_then(|entry| entry.get("disabled"))
+        == Some(&Value::Bool(disabled));
+    if applied {
+        Ok(())
+    } else {
+        Err(SettingsWriteError::Io(format!(
+            "no server named {name} is in the settings file"
+        )))
+    }
 }
 
 /// Serialize one transport in the standard file shape.

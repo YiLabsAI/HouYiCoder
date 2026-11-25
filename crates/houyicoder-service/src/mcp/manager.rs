@@ -87,7 +87,19 @@ pub(crate) struct ServerSlot {
     pub(crate) server_version: Option<String>,
     pub(crate) stderr: StderrTail,
     pub(crate) peer: Option<Peer<RoleClient>>,
-    wake: Option<mpsc::Sender<()>>,
+    /// The signal a control entry pokes the supervisor with: reconnect, an
+    /// enable, or a disable. Unbounded so a disable raised while the
+    /// supervisor is inside a handshake can never be dropped — a dropped
+    /// disable would leave a server the user turned off still advertising
+    /// its tools until the transport died on its own.
+    wake: Option<mpsc::UnboundedSender<()>>,
+    /// The runtime switch the user flips from the /mcp pane. Starts as the
+    /// configuration's own answer, so a disabled entry parks its supervisor
+    /// instead of launching.
+    enabled: bool,
+    /// True when an untrusted workspace holds a project-scope entry off, so
+    /// enabling it is refused rather than merely undoable.
+    locked: bool,
 }
 
 /// The manager itself. Cloning shares the slots and the cancellation token,
@@ -136,70 +148,6 @@ impl McpConnections {
         self.generation.send_modify(|generation| *generation += 1);
     }
 
-    /// Start every configured server as its own supervised task. A disabled
-    /// server is recorded as disabled and never launched: the trust gate
-    /// marks an untrusted workspace's servers this way, and no process or
-    /// request may follow from one.
-    pub async fn start_all(&self, servers: Vec<ScopedMcpServerConfig>) {
-        for config in servers {
-            let name = config.name.clone();
-            if config.disabled {
-                let mut slots = self.slots.write().await;
-                slots.insert(
-                    name,
-                    ServerSlot {
-                        config,
-                        state: McpConnectionState::Disabled {
-                            reason: "disabled by configuration or workspace trust".into(),
-                        },
-                        tools: Vec::new(),
-                        resources: Vec::new(),
-                        instructions: None,
-                        server_version: None,
-                        stderr: StderrTail::default(),
-                        peer: None,
-                        wake: None,
-                    },
-                );
-                continue;
-            }
-            let (wake_tx, wake_rx) = mpsc::channel(4);
-            {
-                let mut slots = self.slots.write().await;
-                slots.insert(
-                    name.clone(),
-                    ServerSlot {
-                        config,
-                        state: McpConnectionState::Pending,
-                        tools: Vec::new(),
-                        resources: Vec::new(),
-                        instructions: None,
-                        server_version: None,
-                        stderr: StderrTail::default(),
-                        peer: None,
-                        wake: Some(wake_tx),
-                    },
-                );
-            }
-            let manager = self.clone();
-            let task = tokio::spawn(async move {
-                manager.supervise(name, wake_rx).await;
-            });
-            if let Ok(mut tasks) = self.tasks.lock() {
-                tasks.push(task);
-            }
-        }
-    }
-
-    /// Ask one server to reconnect now, whether it failed or the user wants a
-    /// fresh handshake.
-    pub async fn reconnect(&self, name: &str) {
-        let slots = self.slots.read().await;
-        if let Some(wake) = slots.get(name).and_then(|slot| slot.wake.clone()) {
-            let _ = wake.try_send(());
-        }
-    }
-
     /// Track a task the manager owns, so shutdown waits for it like the
     /// supervisors.
     pub(crate) fn track(&self, task: JoinHandle<()>) {
@@ -222,12 +170,25 @@ impl McpConnections {
     }
 
     /// The supervisor for one server.
-    async fn supervise(&self, name: String, mut wake: mpsc::Receiver<()>) {
+    async fn supervise(&self, name: String, mut wake: mpsc::UnboundedReceiver<()>) {
         let mut attempt = 0u32;
         loop {
             let Some(config) = self.slot_config(&name).await else {
                 return;
             };
+            // A server the configuration or the user turned off parks here
+            // rather than launching: the switch flipping back wakes it, and
+            // a shutdown ends it. Signals queued while the slot was live are
+            // drained first, so a stale reconnect does not undo the park it
+            // no longer has anything to do with.
+            if !self.slot_enabled(&name).await {
+                while wake.try_recv().is_ok() {}
+                if !self.wait_wake(&mut wake).await {
+                    return;
+                }
+                attempt = 0;
+                continue;
+            }
             self.set_state(&name, McpConnectionState::Pending).await;
             let mut live = match self.connect(&config).await {
                 Ok(live) => live,
@@ -335,8 +296,14 @@ impl McpConnections {
     }
 
     /// Fetch the server's identity, instructions, tools, and resources, and
-    /// publish them to the shared view.
+    /// publish them to the shared view. A disable that landed while the
+    /// handshake ran is not undone by the connection it raced: nothing is
+    /// published, so the slot keeps the switch's own answer and the wake the
+    /// disable queued tears the fresh connection down on the next loop.
     async fn mark_connected(&self, name: &str, live: &mut LaunchedMcpServer) {
+        if !self.slot_enabled(name).await {
+            return;
+        }
         let info = live.service.peer_info();
         let peer = live.peer().clone();
         let budget = self.timings.handshake_timeout;
@@ -374,7 +341,7 @@ impl McpConnections {
         &self,
         name: &str,
         live: &mut LaunchedMcpServer,
-        wake: &mut mpsc::Receiver<()>,
+        wake: &mut mpsc::UnboundedReceiver<()>,
     ) -> ServeEnd {
         let mut pending: BTreeSet<NoticeKind> = BTreeSet::new();
         let mut window = None;
@@ -478,7 +445,7 @@ impl McpConnections {
         self.announce_change();
     }
 
-    async fn wait_wake(&self, wake: &mut mpsc::Receiver<()>) -> bool {
+    async fn wait_wake(&self, wake: &mut mpsc::UnboundedReceiver<()>) -> bool {
         tokio::select! {
             biased;
             _ = self.cancel.cancelled() => false,
@@ -680,6 +647,7 @@ async fn sleep_until_deadline(window: Option<Instant>, deadline: Instant) {
     }
 }
 
+mod control;
 mod views;
 pub(crate) use views::{instructions_block, name_in_scope};
 

@@ -48,7 +48,7 @@ fn config(name: &str, disabled: bool) -> ScopedMcpServerConfig {
 #[tokio::test]
 async fn test_empty_list_yields_none() {
     let handle = Handle::current();
-    assert!(start_resolved(&handle, Vec::new(), None, auto_gate(), session_log()).is_none());
+    assert!(start_resolved(&handle, Vec::new(), true, None, auto_gate(), session_log()).is_none());
 }
 
 /// A configured entry that is disabled still yields the runtime a status view
@@ -59,6 +59,7 @@ async fn test_disabled_entry_yields_runtime() {
     let runtime = start_resolved(
         &handle,
         vec![config("quiet", true)],
+        true,
         None,
         auto_gate(),
         session_log(),

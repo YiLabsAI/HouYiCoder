@@ -13,6 +13,10 @@ mod tools;
 
 pub use liveness::RestartPolicy;
 pub use manager::{McpConnections, McpTimings};
+// The no-spawn launcher a unit test builds a manager with, shared by the
+// manager, tool, and server-handler test modules.
+#[cfg(test)]
+pub(crate) use manager::tests::NoSpawn;
 pub(crate) use resources::{
     LIST_RESOURCES_TOOL, ListMcpResourcesTool, READ_RESOURCE_TOOL, ReadMcpResourceTool,
 };
@@ -72,7 +76,7 @@ pub fn start_servers(
         }
         return None;
     };
-    start_resolved(handle, servers, workspace, gate, log)
+    start_resolved(handle, servers, trusted, workspace, gate, log)
 }
 
 /// Start a runtime over an already resolved server list, or None when the
@@ -82,6 +86,7 @@ pub fn start_servers(
 fn start_resolved(
     handle: &Handle,
     servers: Vec<ScopedMcpServerConfig>,
+    trusted: bool,
     workspace: Option<&Path>,
     gate: Arc<dyn ModeGate>,
     log: Arc<dyn SessionLog>,
@@ -111,7 +116,7 @@ fn start_resolved(
     let source = manager.tool_source(gate, Some(log));
     let start = Arc::clone(&manager);
     handle.spawn(async move {
-        start.start_all(servers).await;
+        start.start_all(servers, trusted).await;
     });
     Some(McpRuntime { manager, source })
 }

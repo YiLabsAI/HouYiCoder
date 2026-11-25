@@ -68,6 +68,7 @@ impl Server {
             diagnostics: handle(),
             recap: Some(recap),
             recap_client: None,
+            mcp: None,
             // Set by serve_session from the host, which is where the
             // process-scoped bus lives for a detached session.
             bus: None,

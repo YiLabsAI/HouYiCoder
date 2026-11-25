@@ -21,6 +21,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState, McpServerStatusView};
 use std::sync::atomic::Ordering;
 
 /// The resolved target carried by a queued /resume Command at the head.
@@ -1094,4 +1095,40 @@ fn test_switch_drains_carried_queue() {
         app.ui.input.queue.is_empty(),
         "carried message drained via the switched gate, not a forged last_run_final"
     );
+}
+
+/// The /mcp pane resets with its pane peers on a session switch: the old
+/// session's rows, cursor, and pending request do not survive into the new
+/// session, where they would render another session's servers and a stale
+/// pending id could swallow the new session's first reply.
+#[test]
+fn test_switch_resets_mcp_pane() {
+    let mut app = test_app();
+    app.ui.mcp_pane.mark_pending(RequestId(5));
+    app.ui.mcp_pane.rows = vec![McpServerStatusView {
+        name: "old-session-server".into(),
+        scope: McpConfigScope::User,
+        state: McpConnectionState::Connected,
+        server_version: None,
+        tool_count: 1,
+        resource_count: 0,
+        has_instructions: false,
+        recent_stderr: Vec::new(),
+        detail: Default::default(),
+    }];
+    app.ui.mcp_pane.cursor = 0;
+    app.ui.mcp_pane.level = 1;
+    let (new_bundle, new_startup) = test_handoff();
+    app.switch_session(new_bundle);
+    app.apply_frontend_startup(new_startup);
+    assert!(
+        app.ui.mcp_pane.rows.is_empty(),
+        "the old session's server rows do not carry over"
+    );
+    assert!(
+        app.ui.mcp_pane.pending.is_none(),
+        "the old session's pending reply does not carry over"
+    );
+    assert_eq!(app.ui.mcp_pane.level, 0, "the detail level resets");
+    assert_eq!(app.ui.mcp_pane.cursor, 0, "the cursor resets");
 }

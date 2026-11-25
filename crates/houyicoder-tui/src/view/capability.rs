@@ -67,6 +67,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         | Pane::Skills
         | Pane::Tasks
         | Pane::Model
+        | Pane::Mcp
         | Pane::Queue => {}
     }
 }

@@ -5,10 +5,21 @@
 use std::collections::BTreeMap;
 
 use houyicoder_protocol::mcp::McpConnectionState;
+use houyicoder_protocol::mcp::McpServerDetailView;
 use houyicoder_protocol::mcp::McpServerStatusView;
+use houyicoder_protocol::mcp::McpToolSummary;
 
 use super::McpConnections;
 use super::STDERR_TAIL_LINES;
+use crate::mcp::tools::interpret_hints;
+
+/// How many characters of a server's instructions the detail preview carries.
+/// The pane renders a bounded window; the prompt block carries the full text.
+const INSTRUCTIONS_PREVIEW_CHARS: usize = 480;
+
+/// How many characters of one tool's description the detail carries. The
+/// tool's full description stays with the tool definition the model reads.
+const TOOL_DESCRIPTION_CHARS: usize = 100;
 
 impl McpConnections {
     /// The servers as the status views render them, ordered by name.
@@ -28,6 +39,7 @@ impl McpConnections {
                     .as_deref()
                     .is_some_and(|text| !text.is_empty()),
                 recent_stderr: slot.stderr.lines(),
+                detail: detail_view(slot),
             })
             .collect()
     }
@@ -82,6 +94,45 @@ impl McpConnections {
         }
         sections
     }
+}
+
+/// Build one slot's detail page view. Header values are dropped on this
+/// side of the boundary: only the names cross, because anything that
+/// renders a value is a place a configured secret can leak from.
+fn detail_view(slot: &super::ServerSlot) -> McpServerDetailView {
+    let mut tools = Vec::with_capacity(slot.tools.len());
+    for tool in &slot.tools {
+        tools.push(McpToolSummary {
+            name: tool.name.to_string(),
+            read_only: interpret_hints(tool.annotations.as_ref()).read_only,
+            description: bounded(
+                tool.description.as_deref().unwrap_or_default(),
+                TOOL_DESCRIPTION_CHARS,
+            ),
+        });
+    }
+    McpServerDetailView {
+        endpoint: slot.config.transport.endpoint.clone(),
+        header_names: slot.config.transport.headers.keys().cloned().collect(),
+        tools,
+        instructions_preview: slot
+            .instructions
+            .as_deref()
+            .map(|text| bounded(text, INSTRUCTIONS_PREVIEW_CHARS)),
+        untrusted_lock: slot.locked,
+    }
+}
+
+/// The first budget characters of a text, with an ellipsis when more
+/// follows. Character-count, so a multi-byte rune is never split.
+fn bounded(text: &str, budget: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= budget {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(budget.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
 }
 
 /// One prompt block of server tags from the raw sections. Server text is

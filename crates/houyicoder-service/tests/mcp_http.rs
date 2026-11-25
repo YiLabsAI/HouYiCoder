@@ -102,7 +102,9 @@ fn remote_config(endpoint: &str) -> ScopedMcpServerConfig {
 async fn test_http_auth_challenge_reported() {
     let endpoint = challenge_server();
     let manager = remote_manager();
-    manager.start_all(vec![remote_config(&endpoint)]).await;
+    manager
+        .start_all(vec![remote_config(&endpoint)], true)
+        .await;
     let reason = wait_auth(&manager, Duration::from_secs(10))
         .await
         .expect("the challenge reaches the status view");
@@ -119,7 +121,7 @@ async fn test_http_auth_challenge_reported() {
 async fn test_refused_endpoint_fails() {
     let manager = remote_manager();
     manager
-        .start_all(vec![remote_config("http://127.0.0.1:1/mcp")])
+        .start_all(vec![remote_config("http://127.0.0.1:1/mcp")], true)
         .await;
     let error = wait_failed(&manager, Duration::from_secs(10))
         .await

@@ -543,3 +543,101 @@ fn test_loss_settles_restore() {
         "the restore stops waiting on an answer that cannot arrive"
     );
 }
+
+fn mcp_row(name: &str, state: McpConnectionState) -> McpServerStatusView {
+    McpServerStatusView {
+        name: name.into(),
+        scope: McpConfigScope::User,
+        state,
+        server_version: None,
+        tool_count: 0,
+        resource_count: 0,
+        has_instructions: false,
+        recent_stderr: Vec::new(),
+        detail: Default::default(),
+    }
+}
+
+/// A status reply the pane waits on stores its rows and clears the pending
+/// mark; a stale reply the pane does not wait on changes nothing.
+#[test]
+fn test_mcp_status_stores_rows() {
+    let mut app = app();
+    app.ui.mcp_pane.mark_pending(RequestId(21));
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(21),
+        response: ServerResponse::McpStatus {
+            servers: vec![mcp_row("alpha", McpConnectionState::Connected)],
+        },
+    });
+    assert_eq!(app.ui.mcp_pane.rows.len(), 1);
+    assert!(app.ui.mcp_pane.pending.is_none());
+
+    app.ui.mcp_pane.mark_pending(RequestId(22));
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(99),
+        response: ServerResponse::McpStatus {
+            servers: vec![mcp_row("stale", McpConnectionState::Connected)],
+        },
+    });
+    assert_eq!(
+        app.ui.mcp_pane.rows.len(),
+        1,
+        "a stale reply changes nothing"
+    );
+    assert!(app.ui.mcp_pane.pending.is_some(), "the wait stands");
+}
+
+/// A toggle's confirmation writes one receipt line to the transcript on the
+/// same reply that refreshes the rows, so the line and the list cannot move
+/// on different frames.
+#[test]
+fn test_mcp_toggle_receipt_written() {
+    let mut app = app();
+    app.ui
+        .mcp_pane
+        .mark_pending_toggle(RequestId(30), "srv".into(), false);
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(30),
+        response: ServerResponse::McpStatus {
+            servers: vec![mcp_row(
+                "srv",
+                McpConnectionState::Disabled {
+                    reason: "disabled by the user".into(),
+                },
+            )],
+        },
+    });
+    assert_eq!(app.ui.mcp_pane.rows.len(), 1, "the rows refreshed");
+    assert!(
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s == "mcp: srv disabled"))
+    );
+}
+
+/// A refused toggle settles the pane's wait without leaving it reading on a
+/// reply that cannot arrive, and the refusal itself reaches the transcript.
+#[test]
+fn test_mcp_error_settles_pending() {
+    let mut app = app();
+    app.ui
+        .mcp_pane
+        .mark_pending_toggle(RequestId(31), "gated".into(), true);
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(31),
+        response: ServerResponse::Error {
+            message: "gated stays off until its workspace is trusted".into(),
+        },
+    });
+    assert!(app.ui.mcp_pane.pending.is_none(), "the wait settled");
+    assert!(
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s) if s.contains("trusted")))
+    );
+}

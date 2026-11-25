@@ -20,6 +20,7 @@ use houyicoder_protocol::frontend::session_update::{
 };
 use houyicoder_protocol::frontend::skills::SkillEntry;
 use houyicoder_protocol::llm::Usage;
+use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState, McpServerStatusView};
 
 #[path = "tests/frames.rs"]
 mod frames;

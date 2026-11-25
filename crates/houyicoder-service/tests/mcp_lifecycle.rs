@@ -98,7 +98,7 @@ async fn test_untrusted_never_spawns() {
     let mut gated = vec![config("spawny", false), config("remote", false)];
     gated[1].transport = McpTransportConfig::http("https://example.invalid/mcp");
     let gated = houyicoder_config::apply_trust_gate(gated, false);
-    manager.start_all(gated).await;
+    manager.start_all(gated, false).await;
     let statuses = manager.statuses().await;
     assert_eq!(statuses.len(), 2);
     for status in &statuses {
@@ -123,7 +123,7 @@ async fn test_untrusted_never_spawns() {
 #[tokio::test]
 async fn test_list_changed_coalesced() {
     let (manager, counters) = manager_with(vec![Behavior::Burst], fast_timings());
-    manager.start_all(vec![config("chatty", false)]).await;
+    manager.start_all(vec![config("chatty", false)], true).await;
     assert!(
         eventually(|| counters.tool_lists.load(Ordering::SeqCst) == 2).await,
         "the burst produced one refetch, saw {} listings",
@@ -144,7 +144,7 @@ async fn test_list_changed_coalesced() {
 async fn test_restart_bounded() {
     let behaviors = vec![Behavior::CloseNow, Behavior::CloseNow, Behavior::CloseNow];
     let (manager, counters) = manager_with(behaviors, fast_timings());
-    manager.start_all(vec![config("flaky", false)]).await;
+    manager.start_all(vec![config("flaky", false)], true).await;
     assert!(
         status_is(&manager, |state| matches!(
             state,
@@ -167,7 +167,7 @@ async fn test_restart_bounded() {
 async fn test_reconnect_after_failure() {
     let behaviors = vec![Behavior::CloseNow, Behavior::CloseNow, Behavior::CloseNow];
     let (manager, counters) = manager_with(behaviors, fast_timings());
-    manager.start_all(vec![config("flaky", false)]).await;
+    manager.start_all(vec![config("flaky", false)], true).await;
     assert!(
         eventually(|| counters.spawns.load(Ordering::SeqCst) == 3).await,
         "the retries ran"
@@ -197,7 +197,7 @@ async fn test_tools_ordered_and_gated() {
     let (manager, _counters) = manager_with(Vec::new(), fast_timings());
     let source = manager.tool_source(auto_gate(), None);
     manager
-        .start_all(vec![config("beta", false), config("alpha", false)])
+        .start_all(vec![config("beta", false), config("alpha", false)], true)
         .await;
     assert!(
         eventually(|| source.names().len() == 4).await,
@@ -235,7 +235,7 @@ async fn test_tools_ordered_and_gated() {
 async fn test_call_returns_text() {
     let (manager, counters) = manager_with(Vec::new(), fast_timings());
     let source = manager.tool_source(auto_gate(), None);
-    manager.start_all(vec![config("graph", false)]).await;
+    manager.start_all(vec![config("graph", false)], true).await;
     assert!(
         eventually(|| source.names().len() == 2).await,
         "the server connects and its tools appear"
@@ -263,7 +263,7 @@ async fn test_reconnect_swaps_tools() {
     let (manager, counters) =
         manager_with(vec![Behavior::CloseNow, Behavior::Calm], fast_timings());
     let source = manager.tool_source(auto_gate(), None);
-    manager.start_all(vec![config("flaky", false)]).await;
+    manager.start_all(vec![config("flaky", false)], true).await;
     assert!(
         eventually(|| counters.spawns.load(Ordering::SeqCst) == 2).await,
         "the dropped server was restarted"
@@ -304,7 +304,7 @@ async fn test_reconnect_swaps_tools() {
 async fn test_shutdown_bounded() {
     let (manager, counters) = manager_with(vec![Behavior::HangCall], fast_timings());
     let source = manager.tool_source(auto_gate(), None);
-    manager.start_all(vec![config("slow", false)]).await;
+    manager.start_all(vec![config("slow", false)], true).await;
     assert!(
         eventually(|| source.names().len() == 2).await,
         "the server connects and its tools appear"
