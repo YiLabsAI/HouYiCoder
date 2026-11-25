@@ -31,6 +31,7 @@ pub mod framing;
 pub mod frontend;
 pub mod handshake;
 pub mod llm;
+pub mod lsp;
 pub mod maybe_undefined;
 pub mod mcp;
 pub mod result_catalog;
