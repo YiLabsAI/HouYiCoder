@@ -18,7 +18,8 @@ use houyicoder_context::{
 
 use super::MarkdownMemoryProvider;
 use super::io::{
-    StatRecord, list_memories_impl, relocate_record, sanitize_key, validate_index_key,
+    StatRecord, list_memories_impl, relocate_record, sanitize_key, stored_origin_at,
+    validate_index_key,
 };
 
 const ARCHIVE_DIR: &str = "archive";
@@ -26,6 +27,26 @@ const ARCHIVE_DIR: &str = "archive";
 fn move_topic(src: &Path, dst: &Path) -> Result<(), MemoryError> {
     if fs::rename(src, dst).is_err() {
         relocate_record(src, dst)?;
+    }
+    Ok(())
+}
+
+/// Refuse background deletion or archival of a topic authored by the user or
+/// the primary agent, including hand-written files without frontmatter.
+fn guard_background_target(
+    requester: MemoryOrigin,
+    topic_path: &Path,
+    action: &str,
+) -> Result<(), MemoryError> {
+    if requester.is_background()
+        && matches!(
+            stored_origin_at(topic_path)?,
+            Some(MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
+        )
+    {
+        return Err(MemoryError::InvalidPath(format!(
+            "background writer cannot {action} user or primary agent memory"
+        )));
     }
     Ok(())
 }
@@ -153,14 +174,7 @@ impl MarkdownMemoryProvider {
         let topic_path = topic_root.join(format!("{key}.md"));
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let _root_locks = self.lock_roots()?;
-        if requester.is_background()
-            && let Ok(fm) = self.read_frontmatter(&topic_path)
-            && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
-        {
-            return Err(MemoryError::InvalidPath(
-                "background writer cannot delete user or primary agent memory".into(),
-            ));
-        }
+        guard_background_target(requester, &topic_path, "delete")?;
         let index_was_dirty = Self::index_marked_dirty(&topic_root);
         Self::mark_index_dirty(&topic_root)?;
         let removed = fs::remove_file(&topic_path);
@@ -184,7 +198,16 @@ impl MarkdownMemoryProvider {
         Ok(())
     }
 
-    pub(super) fn archive_impl(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+    /// Move one topic into the scope's archive directory under the provider
+    /// and root locks. The origin check runs after the locks are held, so
+    /// another process cannot swap a protected topic in between the check and
+    /// the move.
+    pub(super) fn archive_impl(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+        requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let _root_locks = self.lock_roots()?;
@@ -193,6 +216,7 @@ impl MarkdownMemoryProvider {
         if !topic_path.is_file() {
             return Err(MemoryError::NotFound);
         }
+        guard_background_target(requester, &topic_path, "archive")?;
         let archive_dir = topic_root.join(ARCHIVE_DIR);
         fs::create_dir_all(&archive_dir).map_err(|_| MemoryError::Io)?;
         Self::mark_index_dirty(&topic_root)?;
@@ -356,8 +380,10 @@ impl MarkdownMemoryProvider {
                     continue;
                 }
                 if entry.origin.is_background()
-                    && let Ok(fm) = self.read_frontmatter(&cand_path)
-                    && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
+                    && !matches!(
+                        stored_origin_at(&cand_path),
+                        Ok(Some(MemoryOrigin::Extractor | MemoryOrigin::Dream))
+                    )
                 {
                     continue;
                 }

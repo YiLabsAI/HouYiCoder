@@ -13,18 +13,16 @@ impl MemoryProvider for RecordingMemory {
     fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
         Ok(())
     }
-    fn delete_memory(&self, key: &str, requester: MemoryOrigin) -> Result<(), MemoryError> {
+    fn delete_memory_in_scope(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+        requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
         self.requesters.lock().expect("requesters").push(requester);
         if key == "protected" {
             return Err(MemoryError::InvalidPath("protected topic".into()));
         }
-        self.deleted
-            .lock()
-            .expect("deleted")
-            .push((key.to_string(), MemoryScope::Auto));
-        Ok(())
-    }
-    fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
         self.deleted
             .lock()
             .expect("deleted")

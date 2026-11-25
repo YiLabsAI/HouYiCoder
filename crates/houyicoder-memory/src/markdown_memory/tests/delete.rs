@@ -109,7 +109,7 @@ fn test_delete_routes_by_scope() {
         "seeded in project root"
     );
     // Forgetting with the project scope deletes the project-root file.
-    p.delete_memory_in_scope("proj-fact", MemoryScope::Project)
+    p.delete_memory_in_scope("proj-fact", MemoryScope::Project, MemoryOrigin::User)
         .expect("scoped delete succeeds");
     assert!(
         !project_dir.join("proj-fact.md").exists(),
@@ -120,7 +120,7 @@ fn test_delete_routes_by_scope() {
     // missing explicit original — the bug this routing fixes.
     assert!(
         matches!(
-            p.delete_memory_in_scope("proj-fact", MemoryScope::Auto),
+            p.delete_memory_in_scope("proj-fact", MemoryScope::Auto, MemoryOrigin::User),
             Err(MemoryError::NotFound)
         ),
         "auto-scope delete of a project-only key must NotFound, not silently no-op"
@@ -217,7 +217,11 @@ fn test_delete_origin_guard() {
     p.delete_memory("agent-note", MemoryOrigin::PrimaryAgent)
         .expect("a foreground requester deletes its own topic");
     assert!(!root.join("agent-note.md").exists());
-    p.delete_memory_in_scope("user-note", MemoryScope::Auto)
+    assert!(matches!(
+        p.delete_memory_in_scope("user-note", MemoryScope::Auto, MemoryOrigin::Dream),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    p.delete_memory_in_scope("user-note", MemoryScope::Auto, MemoryOrigin::User)
         .expect("scoped delete succeeds");
     assert!(!root.join("user-note.md").exists());
     remove_dir_all(&root).ok();

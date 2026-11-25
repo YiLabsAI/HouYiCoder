@@ -124,12 +124,7 @@ impl Tool for MemoryDeleteTool {
                     })?
                 }
             };
-            let result = if pinned_scope == Some(MemoryScope::Auto) {
-                provider.delete_memory(key, origin)
-            } else {
-                provider.delete_memory_in_scope(key, scope)
-            };
-            match result {
+            match provider.delete_memory_in_scope(key, scope, origin) {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {
                         recorder.record(key, MemoryOperation::Deleted, scope);

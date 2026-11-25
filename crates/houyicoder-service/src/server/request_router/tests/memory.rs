@@ -9,7 +9,7 @@ use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::session::SessionLog;
 use houyicoder_config::recap::load_recap_from;
 use houyicoder_context::SessionId;
-use houyicoder_context::{MemoryEntry, MemoryError, MemoryScope, MemorySummary};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySummary};
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryRuntime, Runner, ToolRegistry};
 use houyicoder_memory::InMemoryBackend;
@@ -45,7 +45,12 @@ impl MemoryProvider for MockMemory {
     fn list_memories(&self) -> Vec<MemorySummary> {
         Vec::new()
     }
-    fn delete_memory_in_scope(&self, key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
+    fn delete_memory_in_scope(
+        &self,
+        key: &str,
+        _scope: MemoryScope,
+        _requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
         if key == "fail" {
             Err(MemoryError::Io)
         } else {

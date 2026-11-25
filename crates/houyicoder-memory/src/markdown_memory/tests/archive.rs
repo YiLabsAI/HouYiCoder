@@ -1,14 +1,14 @@
 //! Archive, restore, scoped replacement, and batch scope reconciliation tests.
 
 use std::env::temp_dir;
-use std::fs::{File, FileTimes, create_dir_all, remove_dir_all};
+use std::fs::{File, FileTimes, create_dir_all, read_to_string, remove_dir_all, write};
 use std::path::PathBuf;
 use std::process::id;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::memory::{MemoryProvider, MemoryWriteOutcome};
-use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryScope, MemoryType};
+use houyicoder_context::{MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemoryType};
 
 use super::super::MarkdownMemoryProvider;
 
@@ -63,7 +63,7 @@ fn test_archive_restore_keeps_stats() {
     fx.provider.record_gate_violation("lesson-a");
 
     fx.provider
-        .archive_memory("lesson-a", MemoryScope::Auto)
+        .archive_memory("lesson-a", MemoryScope::Auto, MemoryOrigin::PrimaryAgent)
         .expect("archive");
     assert!(!fx.auto.join("lesson-a.md").exists());
     assert!(fx.auto.join("archive").join("lesson-a.md").is_file());
@@ -96,7 +96,7 @@ fn test_archive_restore_keeps_stats() {
     assert_eq!(row.occurrences, 1);
 
     fx.provider
-        .archive_memory("lesson-a", MemoryScope::Auto)
+        .archive_memory("lesson-a", MemoryScope::Auto, MemoryOrigin::PrimaryAgent)
         .expect("archive again");
     fx.provider
         .delete_archived("lesson-a", MemoryScope::Auto)
@@ -342,4 +342,91 @@ fn test_project_type_promotes() {
 fn test_provider_expire_builder() {
     let p = MarkdownMemoryProvider::new(temp_dir().join("expire-bld")).with_auto_expire(true);
     assert!(p.auto_expire());
+}
+
+/// A background requester cannot archive a topic authored by the user or the
+/// primary agent, while a foreground requester on the same path can.
+#[test]
+fn test_archive_origin_guard() {
+    let fx = MultiFixture::new("archive-guard");
+    fx.provider
+        .add(
+            MemoryEntry::new("user-note", "User body.", MemoryType::User)
+                .with_origin(MemoryOrigin::User),
+        )
+        .expect("seed user");
+    fx.provider
+        .add(
+            MemoryEntry::new("agent-note", "Agent body.", MemoryType::Feedback)
+                .with_origin(MemoryOrigin::PrimaryAgent),
+        )
+        .expect("seed agent");
+
+    assert!(matches!(
+        fx.provider
+            .archive_memory("user-note", MemoryScope::Auto, MemoryOrigin::Dream),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    assert!(fx.auto.join("user-note.md").is_file());
+
+    assert!(matches!(
+        fx.provider
+            .archive_memory("agent-note", MemoryScope::Auto, MemoryOrigin::Dream),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    assert!(fx.auto.join("agent-note.md").is_file());
+    assert!(fx.provider.list_archived().is_empty());
+
+    fx.provider
+        .archive_memory("agent-note", MemoryScope::Auto, MemoryOrigin::PrimaryAgent)
+        .expect("foreground requester archives its own topic");
+    assert!(!fx.auto.join("agent-note.md").exists());
+    assert!(fx.auto.join("archive").join("agent-note.md").is_file());
+}
+
+/// A hand-written file without frontmatter parses as corrupt and defaults to
+/// User provenance, so background passes cannot overwrite, supersede, archive,
+/// or delete it, while the user can still forget it explicitly.
+#[test]
+fn test_corrupt_note_fail_closed() {
+    let fx = MultiFixture::new("corrupt-guard");
+    let raw_path = fx.auto.join("plain-note.md");
+    write(&raw_path, "hand-written plain markdown\n").expect("seed raw note");
+
+    let overwrite = fx.provider.add_if_changed(
+        MemoryEntry::new("plain-note", "machine replacement", MemoryType::Project)
+            .with_origin(MemoryOrigin::Extractor),
+    );
+    assert!(matches!(overwrite, Err(MemoryError::InvalidPath(_))));
+    assert_eq!(
+        read_to_string(&raw_path).expect("read raw note"),
+        "hand-written plain markdown\n"
+    );
+
+    fx.provider
+        .replace_in_scope(
+            MemoryEntry::new("merged-auto", "Consolidated.", MemoryType::Feedback)
+                .with_origin(MemoryOrigin::Dream),
+            MemoryScope::Auto,
+            &["plain-note".to_string()],
+        )
+        .expect("merged write lands without superseding the raw note");
+    assert!(raw_path.is_file());
+    assert!(!fx.auto.join("archive").join("plain-note.md").exists());
+
+    assert!(matches!(
+        fx.provider
+            .archive_memory("plain-note", MemoryScope::Auto, MemoryOrigin::Dream),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    assert!(matches!(
+        fx.provider.delete_memory("plain-note", MemoryOrigin::Dream),
+        Err(MemoryError::InvalidPath(_))
+    ));
+    assert!(raw_path.is_file());
+
+    fx.provider
+        .delete_memory_in_scope("plain-note", MemoryScope::Auto, MemoryOrigin::User)
+        .expect("the user can forget a hand-written note");
+    assert!(!raw_path.exists());
 }

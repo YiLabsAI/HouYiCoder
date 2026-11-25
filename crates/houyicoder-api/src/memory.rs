@@ -129,7 +129,15 @@ pub trait MemoryProvider: Send + Sync {
     }
     /// Move an active memory in the named scope into its archive directory so
     /// it leaves the active index and recall scan while remaining restorable.
-    fn archive_memory(&self, _key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
+    /// The requester names the writer asking for the archive; a background
+    /// requester must be refused when the stored topic was authored by the
+    /// user or the primary agent.
+    fn archive_memory(
+        &self,
+        _key: &str,
+        _scope: MemoryScope,
+        _requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
     }
     /// Restore an archived memory in the named scope back into active use.
@@ -238,18 +246,20 @@ pub trait MemoryProvider: Send + Sync {
     fn delete_memory(&self, _key: &str, _requester: MemoryOrigin) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
     }
-    /// Delete one memory by key from a specific scope. The /memory pane calls
-    /// this so pressing forget on a user/project row deletes the file in that
-    /// scope's root, not just the auto-scope copy (which would leave the
-    /// explicit original in place and the list would still show it). Default
+    /// Delete one memory by key from a specific scope. The /memory pane and
+    /// the memory_delete tool call this so a scoped delete removes the file in
+    /// that scope's root rather than falling back to the auto root. Default
     /// delegates to delete_memory: single-root providers treat every scope as
-    /// the one root. Multi-scope filesystem backends override to route by
-    /// root_for_scope, returning NotFound for a key absent in the chosen root
-    /// (no silent auto fallback that would mask the missing explicit copy).
-    /// Only foreground callers reach this form: the user's pane and the
-    /// primary agent acting on an explicit scope.
-    fn delete_memory_in_scope(&self, key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
-        self.delete_memory(key, MemoryOrigin::User)
+    /// the one root. The requester names the writer asking for the delete; a
+    /// background requester must be refused when the stored topic was authored
+    /// by the user or the primary agent.
+    fn delete_memory_in_scope(
+        &self,
+        key: &str,
+        _scope: MemoryScope,
+        requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
+        self.delete_memory(key, requester)
     }
     /// Read the advisory recall-frequency counters for every key. The
     /// consolidation dream reads this to nominate stale (low recall hits +

@@ -16,6 +16,7 @@ use crate::agent::memory::MutationLog;
 struct StubArchiveMemory {
     active: Mutex<HashMap<(String, String), MemoryEntry>>,
     archived: Mutex<Vec<(String, MemoryScope)>>,
+    requesters: Mutex<Vec<MemoryOrigin>>,
 }
 
 impl MemoryProvider for StubArchiveMemory {
@@ -26,7 +27,16 @@ impl MemoryProvider for StubArchiveMemory {
             .insert((entry.key.clone(), "auto".into()), entry);
         Ok(())
     }
-    fn archive_memory(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+    fn archive_memory(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+        requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
+        self.requesters.lock().expect("requesters").push(requester);
+        if key == "protected" {
+            return Err(MemoryError::InvalidPath("protected topic".into()));
+        }
         let mut active = self.active.lock().expect("lock");
         if active
             .remove(&(key.to_string(), scope.as_label().to_string()))
@@ -40,13 +50,6 @@ impl MemoryProvider for StubArchiveMemory {
         } else {
             Err(MemoryError::NotFound)
         }
-    }
-    fn show_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Option<MemoryEntry> {
-        self.active
-            .lock()
-            .expect("lock")
-            .get(&(key.to_string(), scope.as_label().to_string()))
-            .cloned()
     }
 }
 
@@ -106,38 +109,28 @@ async fn test_pinned_archive_hides_scope() {
     assert_eq!(out, json!({"archived": "auto-item", "scope": "auto"}));
 }
 
-/// A background consolidation writer must not archive memories authored by
-/// the user or the primary agent.
+/// The pinned consolidation tool names its own writer on every archive call,
+/// so the provider can refuse a protected topic, and a refusal records nothing.
 #[tokio::test]
 async fn test_background_archive_guard() {
     let mem = Arc::new(StubArchiveMemory::default());
-    mem.active.lock().expect("lock").insert(
-        ("user-fact".into(), "auto".into()),
-        MemoryEntry::new("user-fact", "body", MemoryType::Feedback).with_origin(MemoryOrigin::User),
-    );
-    mem.active.lock().expect("lock").insert(
-        ("agent-fact".into(), "auto".into()),
-        MemoryEntry::new("agent-fact", "body", MemoryType::Feedback)
-            .with_origin(MemoryOrigin::PrimaryAgent),
-    );
-
+    let log = Arc::new(MutationLog::new());
     let dream_tool = MemoryArchiveTool::new_pinned(
         Arc::clone(&mem) as Arc<dyn MemoryProvider>,
         MemoryScope::Auto,
     )
+    .with_recorder(Arc::clone(&log))
     .with_origin(MemoryOrigin::Dream);
 
-    let err_user = dream_tool
-        .execute(ToolCtx::new("c4"), json!({"key": "user-fact"}))
+    let err = dream_tool
+        .execute(ToolCtx::new("c4"), json!({"key": "protected"}))
         .await
-        .expect_err("dream cannot archive user memory");
-    assert!(err_user.to_string().contains("protected memory"));
-
-    let err_agent = dream_tool
-        .execute(ToolCtx::new("c5"), json!({"key": "agent-fact"}))
-        .await
-        .expect_err("dream cannot archive primary agent memory");
-    assert!(err_agent.to_string().contains("protected memory"));
-
+        .expect_err("a provider refusal surfaces as a tool error");
+    assert!(err.to_string().contains("protected topic"));
+    assert_eq!(
+        *mem.requesters.lock().expect("requesters"),
+        vec![MemoryOrigin::Dream]
+    );
+    assert!(log.take().is_empty());
     assert!(mem.archived.lock().expect("archived").is_empty());
 }

@@ -35,7 +35,7 @@ use houyicoder_api::agent_event::{
 use houyicoder_api::memory::{MemoryProvider, MemoryReranker};
 use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
-    EventId, MemoryEntry, MemoryError, MemoryScope, MemorySummary, SessionId,
+    EventId, MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemorySummary, SessionId,
 };
 
 pub use gates::{MemoryGateState, MemoryGates};
@@ -395,7 +395,7 @@ impl MemoryRuntime {
             return Ok(());
         };
         let scope = MemoryScope::from_label(scope).unwrap_or(MemoryScope::Auto);
-        let res = match memory.delete_memory_in_scope(key, scope) {
+        let res = match memory.delete_memory_in_scope(key, scope, MemoryOrigin::User) {
             Err(MemoryError::NotFound) => memory.delete_archived(key, scope),
             other => other,
         };

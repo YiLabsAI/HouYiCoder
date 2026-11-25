@@ -129,18 +129,7 @@ impl Tool for MemoryArchiveTool {
                     None => MemoryScope::Auto,
                 },
             };
-            if origin.is_background()
-                && let Some(entry) = provider.show_memory_in_scope(key, scope)
-                && matches!(
-                    entry.origin,
-                    MemoryOrigin::User | MemoryOrigin::PrimaryAgent
-                )
-            {
-                return Err(ToolError::Failed(format!(
-                    "memory_archive: background writer cannot archive protected memory '{key}'"
-                )));
-            }
-            match provider.archive_memory(key, scope) {
+            match provider.archive_memory(key, scope, origin) {
                 Ok(()) => {
                     if let Some(recorder) = &recorder {
                         recorder.record(key, MemoryOperation::Archived, scope);

@@ -17,7 +17,9 @@ use houyicoder_api::skill::SkillDescriptor;
 use houyicoder_api::skill::SkillError;
 use houyicoder_api::skill::SkillRegistry;
 use houyicoder_api::skill::SkillSnapshot;
-use houyicoder_context::{CachedBlockDecision, MemoryEntry, MemoryError, MemoryScope, MemoryType};
+use houyicoder_context::{
+    CachedBlockDecision, MemoryEntry, MemoryError, MemoryOrigin, MemoryScope, MemoryType,
+};
 use houyicoder_protocol::llm::EffortLevel;
 use std::collections::HashSet;
 use std::path::Path;
@@ -650,7 +652,12 @@ fn test_memory_forget_routes_scope() {
         fn add(&self, _: MemoryEntry) -> Result<(), MemoryError> {
             Ok(())
         }
-        fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
+        fn delete_memory_in_scope(
+            &self,
+            key: &str,
+            scope: MemoryScope,
+            _requester: MemoryOrigin,
+        ) -> Result<(), MemoryError> {
             self.deletes.lock().unwrap().push((key.to_string(), scope));
             Ok(())
         }

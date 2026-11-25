@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_api::path::home_directory;
-use houyicoder_context::{MemoryScope, MemoryType, is_cjk, tokens_for};
+use houyicoder_context::{MemoryOrigin, MemoryScope, MemoryType, is_cjk, tokens_for};
 use houyicoder_core::agent::render_child_memory;
 use houyicoder_memory::MarkdownMemoryProvider;
 
@@ -475,7 +475,13 @@ fn verify_reconcile_and_archive(roots: &[PathBuf], provider: &MarkdownMemoryProv
     assert_eq!(promo_changes.len(), 3);
     let promoted_key = &auto_feedback_keys[0];
     assert!(roots[1].join(format!("{promoted_key}.md")).is_file());
-    MemoryProvider::archive_memory(provider, promoted_key, MemoryScope::Project).expect("archive");
+    MemoryProvider::archive_memory(
+        provider,
+        promoted_key,
+        MemoryScope::Project,
+        MemoryOrigin::User,
+    )
+    .expect("archive");
     MemoryProvider::restore_memory(provider, promoted_key, MemoryScope::Project).expect("restore");
     assert!(roots[1].join(format!("{promoted_key}.md")).is_file());
 }

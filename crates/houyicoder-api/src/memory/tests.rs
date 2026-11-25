@@ -30,7 +30,7 @@ fn test_default_delete_in_scope() {
     let stub = Stub;
     assert!(
         matches!(
-            stub.delete_memory_in_scope("any", MemoryScope::Project),
+            stub.delete_memory_in_scope("any", MemoryScope::Project, MemoryOrigin::User),
             Err(MemoryError::NotFound)
         ),
         "default delegates to delete_memory (NotFound for the Stub)"
@@ -41,7 +41,7 @@ fn test_default_delete_in_scope() {
         Ok(MemoryWriteOutcome::Created)
     );
     assert_eq!(
-        stub.archive_memory("k", MemoryScope::Auto),
+        stub.archive_memory("k", MemoryScope::Auto, MemoryOrigin::User),
         Err(MemoryError::NotFound)
     );
     assert_eq!(

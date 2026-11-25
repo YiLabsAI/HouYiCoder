@@ -289,7 +289,7 @@ fn test_runtime_archived_flow() {
         .add(MemoryEntry::new("arc-k", "Arc body.", MemoryType::Project))
         .expect("seed");
     provider
-        .archive_memory("arc-k", MemoryScope::Auto)
+        .archive_memory("arc-k", MemoryScope::Auto, MemoryOrigin::User)
         .expect("archive");
 
     assert_eq!(runtime.list_archived().len(), 1);
@@ -302,7 +302,7 @@ fn test_runtime_archived_flow() {
     assert_eq!(runtime.list().len(), 1);
 
     provider
-        .archive_memory("arc-k", MemoryScope::Auto)
+        .archive_memory("arc-k", MemoryScope::Auto, MemoryOrigin::User)
         .expect("re-archive");
     runtime.forget("arc-k", "auto").expect("forget archived");
     assert!(runtime.list_archived().is_empty());
@@ -327,7 +327,7 @@ fn test_restore_searches_scopes() {
         )
         .expect("seed project memory");
     provider
-        .archive_memory("proj-arc", MemoryScope::Project)
+        .archive_memory("proj-arc", MemoryScope::Project, MemoryOrigin::User)
         .expect("archive into project");
 
     assert_eq!(runtime.list_archived().len(), 1);

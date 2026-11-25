@@ -20,12 +20,14 @@ use std::fs::rename;
 #[cfg(not(unix))]
 use std::fs::write;
 use std::io;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::id;
+use std::str::from_utf8;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -143,6 +145,30 @@ pub(super) fn parse_topic_slice(text: &str) -> Result<(Frontmatter, &str), Memor
 pub(super) fn parse_topic_file(text: &str) -> Result<(Frontmatter, String), MemoryError> {
     let (fm, body) = parse_topic_slice(text)?;
     Ok((fm, body.to_string()))
+}
+
+/// Resolve the stored writer provenance from raw topic bytes, defaulting an
+/// unparseable or frontmatter-less file to User so background passes cannot
+/// overwrite, archive, or delete hand-written notes.
+pub(super) fn stored_origin_from_bytes(bytes: &[u8]) -> MemoryOrigin {
+    match from_utf8(bytes)
+        .ok()
+        .and_then(|text| parse_topic_slice(text).ok())
+    {
+        Some((fm, _)) => fm.origin,
+        None => MemoryOrigin::User,
+    }
+}
+
+/// Read the stored writer provenance at path, returning None only when the
+/// path is absent and surfacing I/O errors so an unreadable record fails
+/// closed.
+pub(super) fn stored_origin_at(path: &Path) -> Result<Option<MemoryOrigin>, MemoryError> {
+    match read(path) {
+        Ok(bytes) => Ok(Some(stored_origin_from_bytes(&bytes))),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(MemoryError::Io),
+    }
 }
 
 /// Serialize a memory entry into a topic record (frontmatter plus body).

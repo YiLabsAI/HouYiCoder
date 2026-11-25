@@ -33,14 +33,13 @@ use crate::secret_scan::first_match;
 use io::{
     CachedTopic, Frontmatter, INDEX_FILE, ScannedTopic, count_new_since_impl, list_memories_impl,
     parse_topic_file, parse_topic_slice, sanitize_key, scopes_for_key_impl, serialize_topic_file,
-    show_memory_in_scope_impl, validate_index_key, write_bytes_atomic,
+    show_memory_in_scope_impl, stored_origin_from_bytes, validate_index_key, write_bytes_atomic,
 };
 use lock::RootLock;
 use roots::canonical_identity;
 #[cfg(test)]
 use stats::STATS_FILE;
 use std::io::ErrorKind;
-use std::str::from_utf8;
 use std::time::UNIX_EPOCH;
 
 /// Cap on lines in the derived MEMORY index so it never grows past a
@@ -458,8 +457,13 @@ impl MemoryProvider for MarkdownMemoryProvider {
 
     /// Delete a topic from one scope, prune its global stats, and rebuild the
     /// derived indexes.
-    fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
-        self.delete_memory_in_scope_impl(key, scope, MemoryOrigin::User)
+    fn delete_memory_in_scope(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+        requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
+        self.delete_memory_in_scope_impl(key, scope, requester)
     }
 
     fn read_recall_stats(&self) -> Vec<MemoryRecallStats> {
@@ -623,8 +627,13 @@ impl MemoryProvider for MarkdownMemoryProvider {
         self.replace_in_scope_impl(entry, scope, replaces)
     }
 
-    fn archive_memory(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
-        self.archive_impl(key, scope)
+    fn archive_memory(
+        &self,
+        key: &str,
+        scope: MemoryScope,
+        requester: MemoryOrigin,
+    ) -> Result<(), MemoryError> {
+        self.archive_impl(key, scope, requester)
     }
 
     fn restore_memory(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
@@ -675,16 +684,17 @@ impl MarkdownMemoryProvider {
         let mut entry = entry.clone();
         if entry.origin.is_background()
             && let Some(prev_bytes) = previous.as_deref()
-            && let Ok(prev_text) = from_utf8(prev_bytes)
-            && let Ok((fm, _)) = parse_topic_file(prev_text)
         {
-            if fm.origin == MemoryOrigin::User {
-                return Err(MemoryError::InvalidPath(
-                    "background writer cannot overwrite user-authored memory".into(),
-                ));
-            }
-            if fm.origin == MemoryOrigin::PrimaryAgent {
-                entry.origin = MemoryOrigin::PrimaryAgent;
+            match stored_origin_from_bytes(prev_bytes) {
+                MemoryOrigin::User => {
+                    return Err(MemoryError::InvalidPath(
+                        "background writer cannot overwrite user-authored memory".into(),
+                    ));
+                }
+                MemoryOrigin::PrimaryAgent => {
+                    entry.origin = MemoryOrigin::PrimaryAgent;
+                }
+                MemoryOrigin::Extractor | MemoryOrigin::Dream => {}
             }
         }
         let payload = serialize_topic_file(&entry).into_bytes();
