@@ -17,11 +17,23 @@ use crate::common::{self, Key, PtySession, RENDER_TIMEOUT};
 use common::{make_temp_repo, run_slash_command};
 use std::fs::{create_dir_all, write};
 
-/// A minimal external tool server: it answers the handshake, lists one
-/// tool, and lists no resources, over newline-delimited JSON on its
-/// standard streams. Enough for the pane's whole surface to render.
+/// A minimal external tool server: it answers the handshake, lists one tool
+/// per handshake, and lists no resources, over newline-delimited JSON on its
+/// standard streams. A reconnect starts a fresh process, so the handshake
+/// count is kept in the state file named as the second argument; the tool
+/// count it drives is what lets the test prove a reconnect really ran
+/// rather than that the pane kept rendering.
 const SERVER_SCRIPT: &str = r#"
 import json, sys
+state_path = sys.argv[1]
+try:
+    with open(state_path) as handle:
+        generation = int(handle.read().strip() or "0")
+except (OSError, ValueError):
+    generation = 0
+generation += 1
+with open(state_path, "w") as handle:
+    handle.write(str(generation))
 for line in sys.stdin:
     try:
         req = json.loads(line)
@@ -34,17 +46,22 @@ for line in sys.stdin:
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "pty-probe", "version": "1.0.0"},
+            "serverInfo": {"name": "pty-probe", "version": "1.0.%d" % generation},
             "instructions": "probe instructions",
         }
     elif method == "tools/list":
-        result = {
-            "tools": [{
-                "name": "probe_tool",
-                "description": "a probe tool",
+        tools = [{
+            "name": "probe_tool",
+            "description": "a probe tool",
+            "inputSchema": {"type": "object"},
+        }]
+        for extra in range(1, generation + 1):
+            tools.append({
+                "name": "probe_gen_%d" % extra,
+                "description": "handshake %d" % extra,
                 "inputSchema": {"type": "object"},
-            }]
-        }
+            })
+        result = {"tools": tools}
     elif method == "resources/list":
         result = {"resources": []}
     else:
@@ -61,12 +78,13 @@ fn launch_with_server() -> PtySession {
     create_dir_all(&config_dir).expect("create config dir");
     let script_path = home.join("probe_server.py");
     write(&script_path, SERVER_SCRIPT).expect("write the server script");
+    let state_path = home.join("probe_generation.txt");
     let settings = config_dir.join("settings.json");
     let settings_json = serde_json::json!({
         "mcpServers": {
             "probe": {
                 "command": "python3",
-                "args": [script_path.to_string_lossy()]
+                "args": [script_path.to_string_lossy(), state_path.to_string_lossy()]
             }
         }
     });
@@ -147,16 +165,18 @@ fn test_pty_mcp_pane_lifecycle() {
         s.screen().contents()
     );
 
-    // r asks for a fresh handshake. The pane's row refreshes only on a
-    // reply, and the reconnect itself is asynchronous, so this key's
-    // observable proof is that it routes: the pane stays live with its
-    // connected row and no error line. The full disconnect-and-reconnect
-    // cycle is proven discriminatingly by the toggle below, whose enable
-    // is the same relaunch path.
+    // r asks for a fresh handshake. Each handshake makes the stub list one
+    // more tool, so the tool count on the row is the proof the reconnect
+    // really ran: it moves only when a new connection answered.
+    assert!(
+        s.wait_for_screen("2 tools", RENDER_TIMEOUT),
+        "the first handshake's tool list shows:\n{}",
+        s.screen().contents()
+    );
     s.send_key(&Key::Char('r'));
     assert!(
-        s.wait_for_screen("1 servers · 1 connected", RENDER_TIMEOUT),
-        "the pane should stay live with its connected row:\n{}",
+        s.wait_for_screen("3 tools", RENDER_TIMEOUT),
+        "the reconnect's fresh handshake shows through the new tool:\n{}",
         s.screen().contents()
     );
 

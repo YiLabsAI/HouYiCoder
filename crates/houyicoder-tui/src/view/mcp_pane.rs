@@ -104,10 +104,15 @@ fn draw_list(f: &mut Frame, inner: Rect, app: &App) {
     );
 }
 
-/// The list's key hints, trimmed to what the selected row accepts: a locked
-/// row offers neither action key, and a disabled one offers no reconnect.
+/// The list's key hints, trimmed to what the selected row accepts: an empty
+/// list has nothing to open, a locked row offers neither action key, and a
+/// disabled one offers no reconnect.
 fn list_hint(pane: &McpPaneState) -> Line<'static> {
-    let mut pairs: Vec<(&str, &str)> = vec![("Up/Down", "select"), ("Enter", "open")];
+    let mut pairs: Vec<(&str, &str)> = Vec::new();
+    if !pane.rows.is_empty() {
+        pairs.push(("Up/Down", "select"));
+        pairs.push(("Enter", "open"));
+    }
     if pane.allows_reconnect() {
         pairs.push(("r", "reconnect"));
     }

@@ -306,6 +306,35 @@ fn test_mcp_list_states() {
     assert!(!graph.disabled, "the trusted project entry is enabled");
 }
 
+/// The connected report states the roots outcome the connection observed:
+/// served when the server asked for the session's directories, not
+/// requested when it never did. Either way the counts and the time to the
+/// report are there, and a sub-second span prints in milliseconds.
+#[test]
+fn test_doctor_roots_outcome() {
+    let served = connected_line("probe", Duration::from_millis(120), 2, 1, true);
+    assert!(
+        served.contains("roots served"),
+        "a server that asked is reported served: {served}"
+    );
+    assert!(served.contains("2 tools"), "{served}");
+    assert!(served.contains("1 resources"), "{served}");
+    assert!(
+        served.contains("120 ms"),
+        "a short span reads in ms: {served}"
+    );
+
+    let unasked = connected_line("probe", Duration::from_millis(1_400), 0, 0, false);
+    assert!(
+        unasked.contains("roots not requested"),
+        "a server that never asked is reported so: {unasked}"
+    );
+    assert!(
+        unasked.contains("1.4 s"),
+        "a long span reads in seconds: {unasked}"
+    );
+}
+
 /// A transport spelling builds the entry it names: a URL is HTTP with no
 /// arguments, a command is stdio with the program first.
 #[test]

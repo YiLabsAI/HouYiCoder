@@ -3,6 +3,9 @@
 //! Everything here changes what runs; the views read, the supervisor owns
 //! the loop these entries poke.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState, ScopedMcpServerConfig};
 use tokio::sync::mpsc;
 
@@ -47,6 +50,7 @@ impl McpConnections {
                         stderr: StderrTail::default(),
                         peer: None,
                         wake: Some(wake_tx),
+                        roots_served: Arc::new(AtomicBool::new(false)),
                         enabled: !disabled,
                         locked,
                     },

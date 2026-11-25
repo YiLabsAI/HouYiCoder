@@ -329,3 +329,46 @@ async fn test_shutdown_bounded() {
         "a call cut short by shutdown reports an error, saw {outcome:?}"
     );
 }
+
+/// A disable that lands while the connect path waits on the tools listing
+/// is not undone when the listing gives up: the switch is read again under
+/// the write lock, so the slot stays Disabled and the source keeps
+/// advertising nothing. Without that second read the abandoned listing
+/// publishes Connected and puts the tools back on the model's list.
+#[tokio::test]
+async fn test_disable_during_listing_sticks() {
+    let listing_budget = Duration::from_millis(150);
+    let timings = McpTimings {
+        handshake_timeout: listing_budget,
+        ..fast_timings()
+    };
+    let (manager, counters) = manager_with(vec![Behavior::HangList], timings);
+    let source = manager.tool_source(auto_gate(), None);
+    manager.start_all(vec![config("slow", false)], true).await;
+    // The server accepted the listing and never answers it: the connect
+    // path is inside the wait the disable will race.
+    assert!(
+        eventually(|| counters.tool_lists.load(Ordering::SeqCst) == 1).await,
+        "the listing request reached the server"
+    );
+    manager
+        .set_enabled("slow", false)
+        .await
+        .expect("the disable applies");
+    // Wait out the abandoned listing's own timeout, the longest the publish
+    // step can be outstanding, plus the notice window around it. Longer is
+    // strictly safer: a wrong publish inside this span would be caught.
+    sleep(listing_budget + Duration::from_millis(150)).await;
+    let statuses = manager.statuses().await;
+    assert!(
+        matches!(statuses[0].state, McpConnectionState::Disabled { .. }),
+        "the disable keeps its answer, saw {:?}",
+        statuses[0].state
+    );
+    assert!(
+        source.names().is_empty(),
+        "nothing is advertised after the disable, saw {:?}",
+        source.names()
+    );
+    manager.shutdown().await;
+}

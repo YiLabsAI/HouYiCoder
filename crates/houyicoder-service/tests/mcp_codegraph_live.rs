@@ -1,8 +1,10 @@
 //! Live integration with the local code graph server, run only by the live
 //! suite. It needs the checkout built and a Node runtime the server accepts
-//! (it refuses Node 25 and newer). HOUYICODER_CODEGRAPH_NODE,
-//! HOUYICODER_CODEGRAPH_HOME, and HOUYICODER_CODEGRAPH_WORKSPACE override the
-//! machine defaults, and a missing prerequisite skips with the reason.
+//! (it refuses Node 25 and newer). HOUYICODER_CODEGRAPH_NODE and
+//! HOUYICODER_CODEGRAPH_HOME name the prerequisites, and
+//! HOUYICODER_CODEGRAPH_WORKSPACE names the project to index; a missing
+//! prerequisite skips with the reason, and nothing machine-specific lives in
+//! this file.
 
 use std::env;
 use std::path::Path;
@@ -23,25 +25,33 @@ use serde_json::json;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
-/// The Node runtime and code graph checkout this machine provides. The server
-/// refuses Node 25 because its WebAssembly engine crashes on the grammars, so
-/// the known 24.x binary is the default rather than the PATH one.
-const NODE: &str = "/Users/von/.local/share/cursor-agent/versions/2026.01.28-fd13201/node";
-const CODEGRAPH_HOME: &str = "/Users/von/workspace/codegraph";
-
+/// The Node runtime the live run uses. The server refuses Node 25 because
+/// its WebAssembly engine crashes on the grammars, so the runtime is named
+/// by the environment rather than taken from PATH.
 fn node_path() -> Option<PathBuf> {
-    let candidate = env::var_os("HOUYICODER_CODEGRAPH_NODE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(NODE));
+    let candidate = env::var_os("HOUYICODER_CODEGRAPH_NODE").map(PathBuf::from)?;
     candidate.is_file().then_some(candidate)
 }
 
+/// The built code graph checkout the live run launches.
 fn entry_path() -> Option<PathBuf> {
-    let root = env::var_os("HOUYICODER_CODEGRAPH_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(CODEGRAPH_HOME));
+    let root = env::var_os("HOUYICODER_CODEGRAPH_HOME").map(PathBuf::from)?;
     let entry = root.join("dist").join("bin").join("codegraph.js");
     entry.is_file().then_some(entry)
+}
+
+/// The project the live run indexes: the named directory, or this
+/// repository's root derived from the crate's own location so the default
+/// names a real tree on any checkout.
+fn index_workspace() -> PathBuf {
+    env::var_os("HOUYICODER_CODEGRAPH_WORKSPACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .to_path_buf()
+        })
 }
 
 fn live_timings() -> McpTimings {
@@ -89,11 +99,7 @@ async fn test_codegraph_handshake_and_tool() {
         );
         return;
     };
-    let workspace: Arc<Path> = Arc::from(
-        env::var_os("HOUYICODER_CODEGRAPH_WORKSPACE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(CODEGRAPH_HOME)),
-    );
+    let workspace: Arc<Path> = Arc::from(index_workspace());
     let manager = Arc::new(McpConnections::new(
         Arc::new(StdProcessLauncher::new()),
         workspace,
@@ -200,11 +206,9 @@ async fn assert_explore(source: &McpToolSource) {
     eprintln!("explore returned {} bytes", rendered.len());
 }
 
-/// The workspace the call queries: the main checkout unless the environment
-/// names another, and only when that checkout carries an index.
+/// The workspace the call queries: the named project or this repository's
+/// root, and only when that tree carries an index.
 fn indexed_project() -> Option<PathBuf> {
-    let project = env::var_os("HOUYICODER_CODEGRAPH_WORKSPACE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/Users/von/workspace/hicoder"));
+    let project = index_workspace();
     project.join(".codegraph").is_dir().then_some(project)
 }

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use super::*;
 use tokio::io::AsyncReadExt;
@@ -82,7 +83,7 @@ fn test_spawn_request_shape() {
 #[test]
 fn test_handler_info_declares_roots() {
     let (events, _rx) = unbounded_channel();
-    let handler = McpClientHandler::new(Arc::from(Path::new("/work")), events);
+    let (handler, _roots) = McpClientHandler::new(Arc::from(Path::new("/work")), events);
     let info = ClientHandler::get_info(&handler);
     assert_eq!(info.client_info.name, "houyicoder");
     assert!(
@@ -96,7 +97,7 @@ fn test_handler_info_declares_roots() {
 #[test]
 fn test_handler_root_is_workspace() {
     let (events, _rx) = unbounded_channel();
-    let handler = McpClientHandler::new(Arc::from(Path::new("/work/src")), events);
+    let (handler, _roots) = McpClientHandler::new(Arc::from(Path::new("/work/src")), events);
     #[allow(deprecated)]
     let roots = handler.roots();
     assert_eq!(roots.roots.len(), 1);
@@ -108,7 +109,7 @@ fn test_handler_root_is_workspace() {
 #[tokio::test]
 async fn test_change_notices_reach_channel() {
     let (events, mut rx) = unbounded_channel();
-    let handler = McpClientHandler::new(Arc::from(Path::new("/work")), events);
+    let (handler, _roots) = McpClientHandler::new(Arc::from(Path::new("/work")), events);
     handler.report(ClientEvent::ToolListChanged);
     handler.report(ClientEvent::ResourceListChanged);
     assert_eq!(rx.recv().await, Some(ClientEvent::ToolListChanged));
@@ -132,7 +133,7 @@ fn test_error_display_names_stage() {
 fn test_notice_after_close_quiet() {
     let (events, rx) = unbounded_channel();
     drop(rx);
-    let handler = McpClientHandler::new(Arc::from(Path::new("/work")), events);
+    let (handler, _roots) = McpClientHandler::new(Arc::from(Path::new("/work")), events);
     handler.report(ClientEvent::ToolListChanged);
 }
 
@@ -313,7 +314,7 @@ async fn test_handshake_over_memory() {
     let (server_read, client_write) = duplex(BUF);
     let (roots_seen, mut roots_rx) = unbounded_channel::<String>();
     let peer = fake_peer(server_read, server_write, roots_seen);
-    let (service, mut events) =
+    let (service, mut events, roots_served) =
         serve_over(client_read, client_write, Arc::from(Path::new("/work")))
             .await
             .expect("the handshake completes");
@@ -329,6 +330,10 @@ async fn test_handshake_over_memory() {
     assert!(
         roots_answer.contains("file:///work"),
         "the server learned the workspace: {roots_answer}"
+    );
+    assert!(
+        roots_served.load(Ordering::Relaxed),
+        "the answer the server received is recorded as roots served"
     );
     let mut seen = Vec::new();
     for _ in 0..3 {

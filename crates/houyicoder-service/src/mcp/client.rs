@@ -15,6 +15,7 @@ use std::fmt::{Display, Formatter};
 use std::future::ready;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use houyicoder_api::launcher::{
     LauncherChild, ProcessLauncher, SpawnPolicy, SpawnRequest, StdioConfig, StdioMode, StdioPipes,
@@ -82,16 +83,28 @@ pub enum ClientEvent {
 pub struct McpClientHandler {
     workspace_root: Arc<Path>,
     events: Option<UnboundedSender<ClientEvent>>,
+    /// Set the first time a server asks which directories this session
+    /// works in. The status views report it, so a diagnosis says whether
+    /// the server actually leaned on roots instead of guessing.
+    roots_served: Arc<AtomicBool>,
 }
 
 impl McpClientHandler {
     /// A handler that answers for this workspace and reports changes on the
-    /// given channel.
-    pub fn new(workspace_root: Arc<Path>, events: UnboundedSender<ClientEvent>) -> Self {
-        Self {
-            workspace_root,
-            events: Some(events),
-        }
+    /// given channel, with the roots flag the caller keeps to read later.
+    pub fn new(
+        workspace_root: Arc<Path>,
+        events: UnboundedSender<ClientEvent>,
+    ) -> (Self, Arc<AtomicBool>) {
+        let roots_served = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                workspace_root,
+                events: Some(events),
+                roots_served: Arc::clone(&roots_served),
+            },
+            roots_served,
+        )
     }
 
     /// The client identity and capabilities sent in the handshake.
@@ -136,6 +149,7 @@ impl ClientHandler for McpClientHandler {
         &self,
         _context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<ListRootsResult, ErrorData>> + Send + '_ {
+        self.roots_served.store(true, Ordering::Relaxed);
         ready(Ok(self.roots()))
     }
 
@@ -173,6 +187,10 @@ pub struct LaunchedMcpServer {
     pub child: Option<LauncherChild>,
     pub stderr: StderrTail,
     pub events: UnboundedReceiver<ClientEvent>,
+    /// Set once this connection's server asked which directories the
+    /// session works in. The manager publishes it so a diagnosis can say
+    /// whether roots were used rather than assert it.
+    pub roots_served: Arc<AtomicBool>,
 }
 
 impl LaunchedMcpServer {
@@ -209,12 +227,14 @@ pub async fn launch_stdio(
         stdout,
         stderr,
     });
-    let (service, events) = serve_over(bridge.reader, bridge.writer, workspace_root).await?;
+    let (service, events, roots_served) =
+        serve_over(bridge.reader, bridge.writer, workspace_root).await?;
     Ok(LaunchedMcpServer {
         service,
         child: Some(child),
         stderr: stderr_tail,
         events,
+        roots_served,
     })
 }
 
@@ -228,16 +248,17 @@ pub(crate) async fn serve_over(
     (
         RunningService<RoleClient, McpClientHandler>,
         UnboundedReceiver<ClientEvent>,
+        Arc<AtomicBool>,
     ),
     McpClientError,
 > {
     let (events_tx, events) = mpsc::unbounded_channel();
-    let handler = McpClientHandler::new(workspace_root, events_tx);
+    let (handler, roots_served) = McpClientHandler::new(workspace_root, events_tx);
     let service = handler
         .serve(AsyncRwTransport::new_client(reader, writer))
         .await
         .map_err(|error| McpClientError::Serve(error.to_string()))?;
-    Ok((service, events))
+    Ok((service, events, roots_served))
 }
 
 /// The spawn request one stdio server runs under: the launcher's policy, the

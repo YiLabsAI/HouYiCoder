@@ -21,19 +21,40 @@ pub(crate) const MCP_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) const MCP_REFRESH_BUDGET: u16 = 60;
 
 /// The receipt one toggle writes to the transcript once the host confirms
-/// it: which server moved and to which state.
+/// it: which server moved, to which state, and whether the answer outlives
+/// the session. Only a user-scope entry persists; a project or env entry
+/// comes back the way its file spells it on the next start, so the receipt
+/// must say the choice lasts this session.
 #[derive(Debug, Clone)]
 pub(crate) struct McpToggleReceipt {
     pub name: String,
     pub enabled: bool,
+    pub session_only: bool,
 }
 
-/// What the pane is waiting on one reply for: the request it must match, and
-/// the toggle whose confirmation the reply also reports.
+impl McpToggleReceipt {
+    /// The one-line transcript form: the change, plus the lifetime when the
+    /// change does not outlive the session.
+    pub(crate) fn line(&self) -> String {
+        let state = if self.enabled { "enabled" } else { "disabled" };
+        if self.session_only {
+            format!("mcp: {} {state} (this session only)", self.name)
+        } else {
+            format!("mcp: {} {state}", self.name)
+        }
+    }
+}
+
+/// What the pane is waiting on one reply for: the request it must match, the
+/// toggle whose confirmation the reply also reports, and whether the reply
+/// cannot be final even when every row reads settled. A reconnect request
+/// is answered before the fresh handshake runs, so its reply shows the old
+/// state and the pane must ask again to see the new one.
 #[derive(Debug, Clone)]
 pub(crate) struct McpPending {
     pub request: RequestId,
     pub toggle: Option<McpToggleReceipt>,
+    pub expect_settle: bool,
 }
 
 /// The pane's interaction state. Level 0 is the list; level 1 is one
@@ -79,20 +100,25 @@ impl McpPaneState {
         if self.pending.as_ref().is_none_or(|p| p.request != request) {
             return None;
         }
-        let receipt = self.pending.take().and_then(|p| p.toggle);
+        let settled = self.pending.take();
+        let receipt = settled.as_ref().and_then(|p| p.toggle.clone());
+        let expect_settle = settled.is_some_and(|p| p.expect_settle);
         self.rows = servers;
         if self.cursor >= self.rows.len() {
             self.cursor = self.rows.len().saturating_sub(1);
         }
         // A row the host still reports as settling finishes later with no
         // reply of its own, so arm a follow-up ask for the states a
-        // handshake or relaunch is heading through.
-        let settling = self.rows.iter().any(|row| {
-            matches!(
-                row.state,
-                McpConnectionState::Pending | McpConnectionState::Reconnecting { .. }
-            )
-        });
+        // handshake or relaunch is heading through. A reconnect's reply is
+        // answered before its fresh handshake runs, so that action asks
+        // again even when the reply reads settled.
+        let settling = expect_settle
+            || self.rows.iter().any(|row| {
+                matches!(
+                    row.state,
+                    McpConnectionState::Pending | McpConnectionState::Reconnecting { .. }
+                )
+            });
         self.refresh_at = settling
             .then(|| Instant::now() + MCP_REFRESH_INTERVAL)
             .filter(|_| self.refresh_left > 0);
@@ -106,16 +132,40 @@ impl McpPaneState {
         self.pending = Some(McpPending {
             request,
             toggle: None,
+            expect_settle: false,
+        });
+        self.refresh_left = MCP_REFRESH_BUDGET;
+    }
+
+    /// Mark a reconnect as pending. Its reply is answered before the fresh
+    /// handshake runs, so the pane asks again once even if the reply reads
+    /// settled, which is what makes the new connection observable.
+    pub(crate) fn mark_pending_reconnect(&mut self, request: RequestId) {
+        self.pending = Some(McpPending {
+            request,
+            toggle: None,
+            expect_settle: true,
         });
         self.refresh_left = MCP_REFRESH_BUDGET;
     }
 
     /// Mark a toggle as pending, remembering what its confirmation should
     /// tell the transcript.
-    pub(crate) fn mark_pending_toggle(&mut self, request: RequestId, name: String, enabled: bool) {
+    pub(crate) fn mark_pending_toggle(
+        &mut self,
+        request: RequestId,
+        name: String,
+        enabled: bool,
+        session_only: bool,
+    ) {
         self.pending = Some(McpPending {
             request,
-            toggle: Some(McpToggleReceipt { name, enabled }),
+            toggle: Some(McpToggleReceipt {
+                name,
+                enabled,
+                session_only,
+            }),
+            expect_settle: false,
         });
         self.refresh_left = MCP_REFRESH_BUDGET;
     }
@@ -127,6 +177,7 @@ impl McpPaneState {
         self.pending = Some(McpPending {
             request,
             toggle: None,
+            expect_settle: false,
         });
     }
 

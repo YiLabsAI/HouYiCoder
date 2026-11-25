@@ -590,13 +590,16 @@ fn test_mcp_status_stores_rows() {
 
 /// A toggle's confirmation writes one receipt line to the transcript on the
 /// same reply that refreshes the rows, so the line and the list cannot move
-/// on different frames.
+/// on different frames. A user-scope entry persists its answer, so the
+/// receipt reads plainly; a project or env entry comes back the way its
+/// file spells it on the next start, so its receipt says the choice lasts
+/// this session.
 #[test]
 fn test_mcp_toggle_receipt_written() {
     let mut app = app();
     app.ui
         .mcp_pane
-        .mark_pending_toggle(RequestId(30), "srv".into(), false);
+        .mark_pending_toggle(RequestId(30), "srv".into(), false, false);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(30),
         response: ServerResponse::McpStatus {
@@ -616,6 +619,25 @@ fn test_mcp_toggle_receipt_written() {
             .iter()
             .any(|l| matches!(l, TranscriptLine::System(s) if s == "mcp: srv disabled"))
     );
+
+    app.ui
+        .mcp_pane
+        .mark_pending_toggle(RequestId(32), "scoped".into(), true, true);
+    app.handle_agent_message(SessionMessage::Response {
+        request: RequestId(32),
+        response: ServerResponse::McpStatus {
+            servers: vec![mcp_row("scoped", McpConnectionState::Connected)],
+        },
+    });
+    assert!(
+        app.sessions
+            .current
+            .transcript
+            .iter()
+            .any(|l| matches!(l, TranscriptLine::System(s)
+                if s == "mcp: scoped enabled (this session only)")),
+        "a scope the settings file does not own carries the lifetime"
+    );
 }
 
 /// A refused toggle settles the pane's wait without leaving it reading on a
@@ -625,7 +647,7 @@ fn test_mcp_error_settles_pending() {
     let mut app = app();
     app.ui
         .mcp_pane
-        .mark_pending_toggle(RequestId(31), "gated".into(), true);
+        .mark_pending_toggle(RequestId(31), "gated".into(), true, true);
     app.handle_agent_message(SessionMessage::Response {
         request: RequestId(31),
         response: ServerResponse::Error {

@@ -66,7 +66,7 @@ fn test_apply_status_stale_ignored() {
 #[test]
 fn test_apply_status_settles() {
     let mut pane = McpPaneState::default();
-    pane.mark_pending_toggle(RequestId(7), "alpha".into(), false);
+    pane.mark_pending_toggle(RequestId(7), "alpha".into(), false, false);
     pane.cursor = 9;
     let receipt = pane.apply_status(RequestId(7), rows());
     let receipt = receipt.expect("the toggle's receipt comes back");
@@ -84,7 +84,7 @@ fn test_fail_pending_keeps_rows() {
     let mut pane = McpPaneState::default();
     pane.mark_pending(RequestId(3));
     pane.apply_status(RequestId(3), rows());
-    pane.mark_pending_toggle(RequestId(4), "beta".into(), true);
+    pane.mark_pending_toggle(RequestId(4), "beta".into(), true, false);
     assert!(pane.fail_pending(RequestId(4)));
     assert!(pane.pending.is_none());
     assert_eq!(pane.rows.len(), 3, "the rows stand");
@@ -222,6 +222,23 @@ fn test_settling_poll_arms() {
         vec![row("alpha", McpConnectionState::Connected, false)],
     );
     assert!(!pane.refresh_armed(), "a settled row disarms the follow-up");
+}
+
+/// A reconnect's reply is answered before the fresh handshake runs, so the
+/// pane asks once more even though the reply reads settled; only that
+/// follow-up can show the new connection's contents.
+#[test]
+fn test_reconnect_expects_settle() {
+    let mut pane = McpPaneState::default();
+    pane.mark_pending_reconnect(RequestId(9));
+    pane.apply_status(
+        RequestId(9),
+        vec![row("alpha", McpConnectionState::Connected, false)],
+    );
+    assert!(
+        pane.refresh_armed(),
+        "a reconnect arms one follow-up despite a settled reply"
+    );
 }
 
 /// The follow-up budget bounds one action: a row that never settles spends

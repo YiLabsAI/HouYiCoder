@@ -241,12 +241,12 @@ async fn settled_line(
     // duration.
     let elapsed = started.elapsed();
     match &status.state {
-        McpConnectionState::Connected => Some(format!(
-            "{}  connected after {}  roots negotiated  {} tools  {} resources",
-            status.name,
-            report_duration(elapsed),
+        McpConnectionState::Connected => Some(connected_line(
+            &status.name,
+            elapsed,
             status.tool_count,
-            status.resource_count
+            status.resource_count,
+            manager.roots_served(&status.name).await,
         )),
         McpConnectionState::NeedsAuth { reason } => Some(format!(
             "{}  needs auth: {reason}\n  fix: the endpoint rejected the credentials; \
@@ -267,6 +267,27 @@ async fn settled_line(
         }
         _ => None,
     }
+}
+
+/// One connected server's report line. The roots phrase follows what the
+/// connection observed — served or never requested — so the diagnosis never
+/// claims a negotiation the server did not make.
+fn connected_line(
+    name: &str,
+    elapsed: Duration,
+    tools: usize,
+    resources: usize,
+    roots_served: bool,
+) -> String {
+    let roots = if roots_served {
+        "roots served"
+    } else {
+        "roots not requested"
+    };
+    format!(
+        "{name}  connected after {}  {roots}  {tools} tools  {resources} resources",
+        report_duration(elapsed)
+    )
 }
 
 /// One elapsed span as a person reads it: milliseconds under a second,

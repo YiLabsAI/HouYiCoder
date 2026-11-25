@@ -59,6 +59,7 @@ fn external_definition(args: Vec<String>) -> AgentDefinition {
         when_to_use: "external reviewer".into(),
         tools: None,
         disallowed_tools: vec![],
+        read_only: false,
         model: None,
         effort: None,
         permission_mode: None,

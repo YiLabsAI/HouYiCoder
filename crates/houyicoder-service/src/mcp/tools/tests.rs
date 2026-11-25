@@ -188,9 +188,10 @@ async fn connected() -> (RunningService<RoleClient, McpClientHandler>, JoinHandl
     let (server_read, client_write) = duplex(BUF);
     let (roots_seen, _roots_rx) = unbounded_channel::<String>();
     let peer_task = fake_peer(server_read, server_write, roots_seen);
-    let (service, _events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
-        .await
-        .expect("the handshake completes");
+    let (service, _events, _roots) =
+        serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+            .await
+            .expect("the handshake completes");
     (service, peer_task)
 }
 

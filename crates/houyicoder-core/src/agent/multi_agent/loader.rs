@@ -109,6 +109,9 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
     let omit_project_context = get("omit_project_context")
         .or_else(|| get("omitProjectContext"))
         .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    let read_only = get("read_only")
+        .or_else(|| get("readOnly"))
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
     let color = get("color").map(str::to_string);
     let backend = parse_backend(&fields)?;
 
@@ -128,6 +131,7 @@ pub fn parse_agent_definition(text: &str) -> Result<AgentDefinition, LoadError> 
         max_turns,
         skills,
         mcp_servers,
+        read_only,
         hooks,
         initial_prompt,
         memory,

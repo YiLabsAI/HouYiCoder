@@ -15,6 +15,8 @@ use std::iter::once;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use houyicoder_api::launcher::ProcessLauncher;
@@ -100,6 +102,10 @@ pub(crate) struct ServerSlot {
     /// True when an untrusted workspace holds a project-scope entry off, so
     /// enabling it is refused rather than merely undoable.
     locked: bool,
+    /// The connection's roots flag, set once the server asked which
+    /// directories the session works in. Replaced with the fresh
+    /// connection's flag on every publish.
+    roots_served: Arc<AtomicBool>,
 }
 
 /// The manager itself. Cloning shares the slots and the cancellation token,
@@ -297,9 +303,11 @@ impl McpConnections {
 
     /// Fetch the server's identity, instructions, tools, and resources, and
     /// publish them to the shared view. A disable that landed while the
-    /// handshake ran is not undone by the connection it raced: nothing is
-    /// published, so the slot keeps the switch's own answer and the wake the
-    /// disable queued tears the fresh connection down on the next loop.
+    /// handshake ran is not undone by the connection it raced: the switch is
+    /// read once before the listing and once again under the write lock,
+    /// after the listing can have waited a whole handshake window, so a
+    /// disable that lands anywhere in that span keeps its answer and
+    /// nothing is published.
     async fn mark_connected(&self, name: &str, live: &mut LaunchedMcpServer) {
         if !self.slot_enabled(name).await {
             return;
@@ -316,19 +324,28 @@ impl McpConnections {
             _ => Vec::new(),
         };
         let mut slots = self.slots.write().await;
-        if let Some(slot) = slots.get_mut(name) {
-            slot.state = McpConnectionState::Connected;
-            slot.peer = Some(peer);
-            slot.tools = tools;
-            // A fresh connection is a new server identity, so an unanswered
-            // resource listing starts empty rather than carrying the previous
-            // connection's list.
-            slot.resources = resources.unwrap_or_default();
-            slot.instructions = info.as_ref().and_then(|i| i.instructions.clone());
-            slot.server_version = info
-                .as_ref()
-                .and_then(|i| i.server_info.as_ref().map(|s| s.version.clone()));
+        let Some(slot) = slots.get_mut(name) else {
+            return;
+        };
+        // The second read of the switch closes the window between the
+        // pre-listing check and this write: a disable during the listing
+        // already wrote Disabled, and publishing over it would re-advertise
+        // the tools the user just turned off.
+        if !slot.enabled {
+            return;
         }
+        slot.state = McpConnectionState::Connected;
+        slot.peer = Some(peer);
+        slot.roots_served = Arc::clone(&live.roots_served);
+        slot.tools = tools;
+        // A fresh connection is a new server identity, so an unanswered
+        // resource listing starts empty rather than carrying the previous
+        // connection's list.
+        slot.resources = resources.unwrap_or_default();
+        slot.instructions = info.as_ref().and_then(|i| i.instructions.clone());
+        slot.server_version = info
+            .as_ref()
+            .and_then(|i| i.server_info.as_ref().map(|s| s.version.clone()));
         drop(slots);
         // A reconnect hands out a new peer, so the tools must be rebuilt
         // even when the names are unchanged.
@@ -466,6 +483,18 @@ impl McpConnections {
         if let Some(slot) = slots.get_mut(name) {
             slot.state = state;
         }
+    }
+
+    /// Whether a server asked this session which directories it works in.
+    /// False for a name the manager does not hold, and false for a
+    /// connection that has not served the request: the answer is what the
+    /// connection observed, never an assumption.
+    pub async fn roots_served(&self, name: &str) -> bool {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .is_some_and(|slot| slot.roots_served.load(Ordering::Relaxed))
     }
 
     /// How long one call on this server may run.

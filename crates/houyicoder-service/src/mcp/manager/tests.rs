@@ -220,9 +220,10 @@ async fn test_source_exposes_tools() {
     let (server_read, client_write) = duplex(BUF);
     let (roots_seen, _roots_rx) = unbounded_channel::<String>();
     let peer_task = fake_peer(server_read, server_write, roots_seen);
-    let (service, _events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
-        .await
-        .expect("the handshake completes");
+    let (service, _events, _roots) =
+        serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+            .await
+            .expect("the handshake completes");
     let manager = Arc::new(McpConnections::new(
         Arc::new(NoSpawn),
         Arc::from(Path::new("/work")),
@@ -250,6 +251,7 @@ async fn test_source_exposes_tools() {
                 wake: None,
                 enabled: true,
                 locked: false,
+                roots_served: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
         );
     }
@@ -290,6 +292,7 @@ fn slot(name: &str, state: McpConnectionState, instructions: &str) -> super::Ser
         wake: None,
         enabled: true,
         locked: false,
+        roots_served: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 
@@ -343,9 +346,10 @@ async fn test_resources_list_and_read() {
     let (server_read, client_write) = duplex(BUF);
     let (roots_seen, _roots_rx) = unbounded_channel::<String>();
     let peer_task = fake_peer(server_read, server_write, roots_seen);
-    let (service, _events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
-        .await
-        .expect("the handshake completes");
+    let (service, _events, _roots) =
+        serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+            .await
+            .expect("the handshake completes");
     let manager = Arc::new(McpConnections::new(
         Arc::new(NoSpawn),
         Arc::from(Path::new("/work")),
@@ -414,9 +418,10 @@ async fn test_resources_follow_connection() {
     let (server_read, client_write) = duplex(BUF);
     let (roots_seen, _roots_rx) = unbounded_channel::<String>();
     let peer_task = fake_peer(server_read, server_write, roots_seen);
-    let (service, events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
-        .await
-        .expect("the handshake completes");
+    let (service, events, _roots) =
+        serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+            .await
+            .expect("the handshake completes");
     let manager = Arc::new(McpConnections::new(
         Arc::new(NoSpawn),
         Arc::from(Path::new("/work")),
@@ -434,6 +439,7 @@ async fn test_resources_follow_connection() {
         child: None,
         stderr: StderrTail::default(),
         events,
+        roots_served: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     manager.mark_connected("srv", &mut live).await;
     assert_eq!(manager.resources_for(None).await.expect("listed").len(), 2);
@@ -487,9 +493,10 @@ async fn test_resource_tools_over_peer() {
     let (server_read, client_write) = duplex(BUF);
     let (roots_seen, _roots_rx) = unbounded_channel::<String>();
     let peer_task = fake_peer(server_read, server_write, roots_seen);
-    let (service, _events) = serve_over(client_read, client_write, Arc::from(Path::new("/work")))
-        .await
-        .expect("the handshake completes");
+    let (service, _events, _roots) =
+        serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+            .await
+            .expect("the handshake completes");
     let manager = Arc::new(McpConnections::new(
         Arc::new(NoSpawn),
         Arc::from(Path::new("/work")),
@@ -812,4 +819,60 @@ async fn test_statuses_carry_detail() {
         "a header value never crosses the boundary"
     );
     manager.shutdown().await;
+}
+
+/// The roots answer is evidence, not a declaration: a server that asked
+/// which directories the session works in reads as served, and one that
+/// never asked stays unserved.
+#[tokio::test]
+async fn test_roots_served_follows_request() {
+    const BUF: usize = 8192;
+    let (client_read, server_write) = duplex(BUF);
+    let (server_read, client_write) = duplex(BUF);
+    let (roots_seen, _roots_rx) = unbounded_channel::<String>();
+    let peer_task = fake_peer(server_read, server_write, roots_seen);
+    let (service, events, roots_flag) =
+        serve_over(client_read, client_write, Arc::from(Path::new("/work")))
+            .await
+            .expect("the handshake completes");
+    let manager = Arc::new(McpConnections::new(
+        Arc::new(NoSpawn),
+        Arc::from(Path::new("/work")),
+        McpTimings::default(),
+    ));
+    manager.start_all(vec![config("quiet", true)], true).await;
+    assert!(
+        !manager.roots_served("quiet").await,
+        "a server that never asked reads as unserved"
+    );
+    assert!(
+        !manager.roots_served("nobody").await,
+        "an unknown name reads as unserved"
+    );
+    {
+        let mut slots = manager.slots.write().await;
+        slots.insert(
+            "srv".into(),
+            slot("srv", McpConnectionState::Pending, "use it"),
+        );
+    }
+    let mut live = LaunchedMcpServer {
+        service,
+        child: None,
+        stderr: StderrTail::default(),
+        events,
+        roots_served: Arc::clone(&roots_flag),
+    };
+    manager.mark_connected("srv", &mut live).await;
+    let started = Instant::now();
+    while !manager.roots_served("srv").await && started.elapsed() < Duration::from_secs(2) {
+        sleep(Duration::from_millis(2)).await;
+    }
+    assert!(
+        manager.roots_served("srv").await,
+        "the server asked and the answer is recorded"
+    );
+    manager.shutdown().await;
+    peer_task.abort();
+    drop(live.service.cancel());
 }

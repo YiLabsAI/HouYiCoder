@@ -30,6 +30,9 @@ pub enum Behavior {
     Calm,
     /// Accept a call and never answer it, so a test can cut it short.
     HangCall,
+    /// Accept the tools listing and never answer it, so a test can act
+    /// while the connect path waits on the listing.
+    HangList,
 }
 
 /// What the manager launched and what the servers were asked for.
@@ -143,23 +146,27 @@ fn serve_fake(
             })),
             "tools/list" => {
                 counters.tool_lists.fetch_add(1, Ordering::SeqCst);
-                Some(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {"tools": [
-                        {
-                            "name": "probe",
-                            "description": "a probe",
-                            "inputSchema": {"type": "object"},
-                            "annotations": {"readOnlyHint": true}
-                        },
-                        {
-                            "name": "wipe",
-                            "description": "wipes everything",
-                            "inputSchema": {"type": "object"}
-                        }
-                    ]}
-                }))
+                if behavior == Behavior::HangList {
+                    None
+                } else {
+                    Some(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"tools": [
+                            {
+                                "name": "probe",
+                                "description": "a probe",
+                                "inputSchema": {"type": "object"},
+                                "annotations": {"readOnlyHint": true}
+                            },
+                            {
+                                "name": "wipe",
+                                "description": "wipes everything",
+                                "inputSchema": {"type": "object"}
+                            }
+                        ]}
+                    }))
+                }
             }
             "tools/call" => {
                 counters.tool_calls.fetch_add(1, Ordering::SeqCst);
@@ -194,7 +201,7 @@ fn serve_fake(
                         }
                     }
                     Behavior::CloseNow => return,
-                    Behavior::Calm | Behavior::HangCall => {}
+                    Behavior::Calm | Behavior::HangCall | Behavior::HangList => {}
                 }
                 None
             }

@@ -85,6 +85,11 @@ pub struct AgentDefinition {
     /// tools); an explicit empty list mounts none; a list mounts exactly
     /// those servers.
     pub mcp_servers: Option<Vec<String>>,
+    /// Whether this child may only read. Declared by the definition rather
+    /// than inferred from the tool list: a definition that disallows one
+    /// writing tool and forgets its siblings is still a writer, and a
+    /// reader's external tools stay limited to the ones that cannot write.
+    pub read_only: bool,
     pub hooks: Vec<String>,
     pub initial_prompt: Option<String>,
     pub memory: MemoryScope,
@@ -327,6 +332,7 @@ impl AgentRegistry for BuiltInRegistry {
 pub fn built_in_general_purpose() -> AgentDefinition {
     AgentDefinition {
         subagent_type: "general-purpose".to_string(),
+        read_only: false,
         when_to_use: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. Delegate here when you are unsure where a keyword or file lives, or when no specialized agent fits.".to_string(),
         tools: None,
         disallowed_tools: once("agent".to_string())
@@ -363,6 +369,7 @@ pub fn built_in_explore() -> AgentDefinition {
         when_to_use: "Fast read-only agent for exploring a codebase: finding files by pattern, searching code for keywords, answering how parts of the system work. Caller specifies thoroughness: quick / medium / very thorough.".to_string(),
         tools: None,
         disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
+        read_only: true,
         model: Some("Flash".into()),
         effort: None,
         permission_mode: None,
@@ -394,6 +401,7 @@ pub fn built_in_plan() -> AgentDefinition {
         when_to_use: "Read-only architect agent: explores the codebase and designs a step-by-step implementation plan for a task, identifying critical files and trade-offs. Use before writing code when the approach is not obvious.".to_string(),
         tools: None,
         disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
+        read_only: true,
         model: Some("Max".into()),
         effort: None,
         permission_mode: None,
@@ -425,6 +433,7 @@ pub fn built_in_verify() -> AgentDefinition {
         when_to_use: "Adversarial verification agent that tries to break an implementation rather than confirm it. Runs real commands, checks outputs, probes edge cases. Returns a machine-parsed VERDICT. Use before claiming work done, especially for security- or correctness-critical changes.".to_string(),
         tools: None,
         disallowed_tools: vec!["write".into(), "edit".into(), "multiedit".into(), "agent".into()],
+        read_only: true,
         model: Some("Max".into()),
         effort: None,
         permission_mode: None,
@@ -453,6 +462,7 @@ pub fn built_in_verify() -> AgentDefinition {
 pub fn built_in_code_guide() -> AgentDefinition {
     AgentDefinition {
         subagent_type: "code-guide".to_string(),
+        read_only: false,
         when_to_use: "Guide agent for the tool itself: configuration, hooks, skills, slash commands, settings, model selection. Fetches the docs map for authoritative answers.".to_string(),
         tools: Some(vec!["read".into(), "grep".into(), "glob".into(), "WebFetch".into(), "web_search".into()]),
         disallowed_tools: Vec::new(),

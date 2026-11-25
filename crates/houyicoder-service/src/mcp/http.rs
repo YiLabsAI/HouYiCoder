@@ -161,7 +161,7 @@ where
     C: StreamableHttpClient,
 {
     let (events_tx, events) = unbounded_channel();
-    let handler = McpClientHandler::new(workspace_root, events_tx);
+    let (handler, roots_served) = McpClientHandler::new(workspace_root, events_tx);
     let service = handler
         .serve(StreamableHttpClientTransport::with_client(client, config))
         .await
@@ -171,6 +171,7 @@ where
         child: None,
         stderr: StderrTail::default(),
         events,
+        roots_served,
     })
 }
 

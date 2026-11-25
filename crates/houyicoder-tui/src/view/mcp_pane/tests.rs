@@ -86,7 +86,7 @@ fn test_list_renders_rows() {
 }
 
 /// An empty list says so, and the hints offer no action keys that have no
-/// row to act on.
+/// row to act on — including Enter, which would open nothing.
 #[test]
 fn test_list_empty_message() {
     let app = pane_app(Vec::new());
@@ -94,6 +94,10 @@ fn test_list_empty_message() {
     assert!(
         out.contains("no servers configured"),
         "the empty state shows: {out}"
+    );
+    assert!(
+        !out.contains("Enter to open"),
+        "no row, nothing to open: {out}"
     );
     assert!(
         !out.contains("r to reconnect"),

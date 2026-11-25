@@ -391,12 +391,7 @@ impl App {
     /// receipt and the refreshed list render on the same frame.
     fn apply_mcp_status(&mut self, request: RequestId, servers: Vec<McpServerStatusView>) {
         if let Some(receipt) = self.ui.mcp_pane.apply_status(request, servers) {
-            let state = if receipt.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            };
-            self.system_line(format!("mcp: {} {state}", receipt.name));
+            self.system_line(receipt.line());
         }
     }
 

@@ -10,6 +10,7 @@ fn definition() -> AgentDefinition {
         when_to_use: "designs a plan".into(),
         tools: None,
         disallowed_tools: vec!["write".into()],
+        read_only: false,
         model: Some("Max".into()),
         effort: Some(EffortLevel::High),
         permission_mode: Some("manual".into()),

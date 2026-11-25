@@ -50,33 +50,18 @@ impl PartialTranscript for ChildTranscript {
     }
 }
 
-/// Build the child's spawn request from the resolved definition: the child
-/// prompt, the restricted tool set, and the parent's shared components. One
-/// builder for both run modes so the foreground and background paths cannot
-/// drift apart on what a child carries.
-///
-/// A resume id the caller cannot parse is refused here, before the spawn has
-/// any side effect: silently starting a fresh child would report success for a
-/// continuation that never happened.
 /// The tool scope a child runs with: the definition's disallowed names, the
 /// servers it mounts, and whether it may only read. An absent server list
-/// inherits the parent's; an explicit empty list mounts none.
-/// The tool scope a child runs with: the definition's disallowed names, the
-/// servers it mounts, and whether it may only read. An absent server list
-/// inherits the parent's; an explicit empty list mounts none. A child that
-/// withholds the writing tools is treated as a reader, so external tools
-/// that can write stay out of its reach.
+/// inherits the parent's; an explicit empty list mounts none. A child the
+/// definition declares read-only keeps external tools that can write out of
+/// its reach; the flag is the definition's own statement, never inferred
+/// from the tool list, because a definition that names one writing tool and
+/// forgets its siblings is still a writer.
 fn child_tool_scope(def: &AgentDefinition) -> (Vec<String>, Option<Vec<String>>, bool) {
-    let read_only = def.disallowed_tools.iter().any(|entry| {
-        let leaf = entry.rsplit("__").next().unwrap_or(entry);
-        ["write", "edit", "multiedit"]
-            .iter()
-            .any(|writing| leaf.eq_ignore_ascii_case(writing))
-    });
     (
         def.disallowed_tools.clone(),
         def.mcp_servers.clone(),
-        read_only,
+        def.read_only,
     )
 }
 
@@ -117,6 +102,14 @@ fn child_tools(
     tools
 }
 
+/// Build the child's spawn request from the resolved definition: the child
+/// prompt, the restricted tool set, and the parent's shared components. One
+/// builder for both run modes so the foreground and background paths cannot
+/// drift apart on what a child carries.
+///
+/// A resume id the caller cannot parse is refused here, before the spawn has
+/// any side effect: silently starting a fresh child would report success for
+/// a continuation that never happened.
 pub(super) fn build_spawn_request(
     this: &MultiAgentRuntime,
     parent_sid: SessionId,
@@ -180,7 +173,7 @@ pub(super) fn build_spawn_request(
         parent_sid,
         parent_store: this.store.clone(),
         provider: this.provider.clone(),
-tools: child_tools(this, def, child_registry, disallowed),
+        tools: child_tools(this, def, child_registry, disallowed),
         config: child_config,
         subagent_type: args.subagent_type.clone(),
         prompt: args.prompt.clone(),

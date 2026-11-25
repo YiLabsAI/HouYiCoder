@@ -13,6 +13,7 @@ fn definition(mcp_servers: Option<Vec<String>>, disallowed: Vec<String>) -> Agen
         when_to_use: String::new(),
         tools: None,
         disallowed_tools: disallowed,
+        read_only: false,
         model: None,
         effort: None,
         permission_mode: None,
@@ -31,15 +32,23 @@ fn definition(mcp_servers: Option<Vec<String>>, disallowed: Vec<String>) -> Agen
 }
 
 /// A child keeps its authored names, inherits the parent's servers when the
-/// definition names none, mounts only a named list, and reads only when it
-/// withholds the writing tools.
+/// definition names none, and mounts only a named list. The read-only flag
+/// is the definition's declaration, not a reading of its tool list.
 #[test]
 fn test_child_scope_names_servers() {
     let (disallowed, servers, read_only) =
         child_tool_scope(&definition(None, vec!["write".to_string()]));
     assert!(disallowed.contains(&"write".to_string()));
     assert_eq!(servers, None, "an absent list inherits the parent servers");
-    assert!(read_only, "a child that cannot write reads only");
+    assert!(
+        !read_only,
+        "a writer that names one writing tool is still a writer"
+    );
+
+    let mut declared = definition(None, vec!["write".to_string()]);
+    declared.read_only = true;
+    let (_, _, read_only) = child_tool_scope(&declared);
+    assert!(read_only, "a declared reader reads only");
 
     let (_, empty, _) = child_tool_scope(&definition(Some(Vec::new()), Vec::new()));
     assert_eq!(
@@ -48,8 +57,17 @@ fn test_child_scope_names_servers() {
         "an explicit empty list mounts none"
     );
 
-    let (_, named, read_only) =
-        child_tool_scope(&definition(Some(vec!["alpha".to_string()]), Vec::new()));
+    let (_, named, _) = child_tool_scope(&definition(Some(vec!["alpha".to_string()]), Vec::new()));
     assert_eq!(named, Some(vec!["alpha".to_string()]));
-    assert!(!read_only, "a child without write restrictions may write");
+}
+
+/// The counterexample the inference got wrong: disallowing only edit leaves
+/// write usable, so such a definition is not a reader unless it says so.
+#[test]
+fn test_edit_only_is_writer() {
+    let (_, _, read_only) = child_tool_scope(&definition(None, vec!["edit".to_string()]));
+    assert!(
+        !read_only,
+        "a definition that disallows edit alone can still write"
+    );
 }

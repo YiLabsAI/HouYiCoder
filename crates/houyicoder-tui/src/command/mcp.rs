@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use houyicoder_protocol::mcp::McpConnectionState;
+use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState};
 
 use crate::agent_message::ClientCommand;
 use crate::state::App;
@@ -44,7 +44,7 @@ impl App {
             return;
         };
         if let Some(req_id) = self.claim_request_id() {
-            self.ui.mcp_pane.mark_pending(req_id);
+            self.ui.mcp_pane.mark_pending_reconnect(req_id);
             self.enqueue_refresh(ClientCommand::McpReconnectQuery { req_id, name });
         }
     }
@@ -59,12 +59,15 @@ impl App {
         };
         let name = row.name.clone();
         // A disabled row's toggle is an enable request, and a live row's is
-        // a disable request: the key flips the state the row shows.
+        // a disable request: the key flips the state the row shows. Only a
+        // user-scope entry persists its answer, so the receipt of any other
+        // scope says the choice lasts this session.
         let enabled = matches!(row.state, McpConnectionState::Disabled { .. });
+        let session_only = row.scope != McpConfigScope::User;
         if let Some(req_id) = self.claim_request_id() {
             self.ui
                 .mcp_pane
-                .mark_pending_toggle(req_id, name.clone(), enabled);
+                .mark_pending_toggle(req_id, name.clone(), enabled, session_only);
             self.enqueue_refresh(ClientCommand::McpSetEnabledQuery {
                 req_id,
                 name,
