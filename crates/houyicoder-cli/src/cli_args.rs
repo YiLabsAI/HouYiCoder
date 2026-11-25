@@ -69,6 +69,31 @@ pub(crate) enum CliCommand {
         verbose: bool,
         yes: bool,
     },
+    /// Manage the external tool servers: list what the scopes resolve to,
+    /// add or remove one entry in the user settings or the workspace's
+    /// project file, or probe the enabled ones with a real handshake.
+    Mcp { action: McpCommand },
+}
+
+/// One mcp subcommand's verb and operands.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum McpCommand {
+    /// Print every resolved server: name, scope, transport, enabled state.
+    List,
+    /// Upsert one server. Exactly one transport spelling is taken: an
+    /// endpoint URL, or a command with its arguments after --.
+    Add {
+        name: String,
+        /// user writes the settings file; project writes the workspace file.
+        project: bool,
+        url: Option<String>,
+        command: Vec<String>,
+    },
+    /// Remove one server from the scope that holds it.
+    Remove { name: String, project: bool },
+    /// Probe the enabled servers with a real handshake and report each
+    /// outcome, its timing, and its diagnostics.
+    Doctor,
 }
 
 impl CliCommand {
@@ -185,6 +210,121 @@ fn validate_and_build(flags: Flags) -> Result<CliCommand, String> {
     }
 }
 
+/// Parse the mcp subcommand's arguments: the verb plus its operands. Pure,
+/// like the top-level parse, so the matrix is unit-testable.
+fn parse_mcp_args(args: Vec<String>) -> Result<CliCommand, String> {
+    let mut iter = args.into_iter();
+    let Some(verb) = iter.next() else {
+        return Err(
+            "mcp needs a verb: list, add, remove, or doctor (see houyi --help)".to_string(),
+        );
+    };
+    let rest: Vec<String> = iter.collect();
+    match verb.as_str() {
+        "list" => {
+            if !rest.is_empty() {
+                return Err("mcp list takes no arguments".to_string());
+            }
+            Ok(CliCommand::Mcp {
+                action: McpCommand::List,
+            })
+        }
+        "doctor" => {
+            if !rest.is_empty() {
+                return Err("mcp doctor takes no arguments".to_string());
+            }
+            Ok(CliCommand::Mcp {
+                action: McpCommand::Doctor,
+            })
+        }
+        "add" => parse_mcp_add(rest),
+        "remove" => parse_mcp_remove(rest),
+        other => Err(format!(
+            "mcp: unknown verb {other} (use list, add, remove, or doctor)"
+        )),
+    }
+}
+
+/// Parse mcp add: a name, the --project scope flag, and exactly one
+/// transport spelling — a --url endpoint or a command with its arguments
+/// after --.
+fn parse_mcp_add(args: Vec<String>) -> Result<CliCommand, String> {
+    let mut name: Option<String> = None;
+    let mut project = false;
+    let mut url: Option<String> = None;
+    let mut command: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--project" {
+            project = true;
+        } else if arg == "--url" {
+            if url.is_some() {
+                return Err("mcp add takes one --url, not several".into());
+            }
+            let endpoint = args.get(i + 1).ok_or("mcp add: --url needs an endpoint")?;
+            // A following flag is not an endpoint: swallowing it would
+            // quietly turn the scope flag into a nonsense URL.
+            if endpoint.starts_with("--") {
+                return Err("mcp add: --url needs an endpoint".into());
+            }
+            url = Some(endpoint.clone());
+            i += 1;
+        } else if arg == "--" {
+            command = args[i + 1..].to_vec();
+            break;
+        } else if name.is_none() && url.is_none() && command.is_empty() {
+            name = Some(arg.to_string());
+        } else {
+            return Err(format!(
+                "mcp add: unexpected argument {arg} (a name, --project, --url <endpoint>, or -- <command> [args...])"
+            ));
+        }
+        i += 1;
+    }
+    let name = name.ok_or("mcp add needs a server name")?;
+    if name.is_empty() {
+        return Err("mcp add needs a server name".into());
+    }
+    if url.is_none() && command.is_empty() {
+        return Err(
+            "mcp add needs a transport: --url <endpoint> or -- <command> [args...]".to_string(),
+        );
+    }
+    if url.is_some() && !command.is_empty() {
+        return Err("mcp add takes one transport: --url or a command, not both".into());
+    }
+    Ok(CliCommand::Mcp {
+        action: McpCommand::Add {
+            name,
+            project,
+            url,
+            command,
+        },
+    })
+}
+
+/// Parse mcp remove: a name and the --project scope flag.
+fn parse_mcp_remove(args: Vec<String>) -> Result<CliCommand, String> {
+    let mut name: Option<String> = None;
+    let mut project = false;
+    for arg in args {
+        if arg == "--project" {
+            project = true;
+        } else if name.is_none() {
+            name = Some(arg);
+        } else {
+            return Err(format!(
+                "mcp remove: unexpected argument {arg} (a name and optionally --project)"
+            ));
+        }
+    }
+    let name = name.ok_or("mcp remove needs a server name")?;
+    Ok(CliCommand::Mcp {
+        action: McpCommand::Remove { name, project },
+    })
+}
+
 pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
     let mut iter = args.into_iter();
     let first = iter.next();
@@ -222,6 +362,9 @@ pub(crate) fn parse_args(args: Vec<String>) -> Result<CliCommand, String> {
     }
     if first.as_deref() == Some("ps") {
         return Ok(CliCommand::Ps);
+    }
+    if first.as_deref() == Some("mcp") {
+        return parse_mcp_args(iter.collect());
     }
     if first.as_deref() == Some("cleanup") {
         let mut apply = false;
@@ -275,6 +418,6 @@ pub(crate) fn print_help() {
     eprintln!(
         "houyi [--project <path>] [--model <id>] [--no-sandbox] [--acp | --detached | --serve <endpoint> | --resume <file|sid> | --continue]\n  --project <path>   sandbox workspace = <path>\n  --model <id>      run with this model id for the session (overrides settings.json; fresh sessions only — a resumed session restores its own model)\n  --no-sandbox      run without operating system sandbox fence\n  --acp             launch the ACP server over stdio instead of the TUI\n  --detached        run detached: bind the conventional per-user endpoint\n                    (prints session_id + pid to stderr); ps lists sessions.\n  --serve <endpoint>  run detached at a custom endpoint (ps uses the\n                    conventional dir, so prefer --detached for discoverability).\n  --resume <file>   resume from an exported transcript file (one-time bootstrap).\n  --resume <sid>   resume a session already on disk by its session id.\n  -c, --continue    resume the most-recently-active session (no sid needed).\n  --fork-session    with --resume/--continue: mint a new sid seeded from the\n                    source so the original is untouched (non-destructive branch).\n  attach <endpoint> <session_id>  connect a TUI to a detached session\n  ps                             list detached session ids + pids (kill <pid> to stop)\n  cleanup [--apply] [--verbose] [--yes]
                    review (or --apply to execute) the prune plan; --verbose lists
-                   every entry; --yes skips the prompt (non-interactive)"
+                   every entry; --yes skips the prompt (non-interactive)\n  mcp list\n  mcp add <name> [--project] (--url <url> | -- <command> [args...])\n  mcp remove <name> [--project]\n  mcp doctor\n                   manage the external tool servers: list what the scopes\n                   resolve to, add or remove an entry, or probe the enabled\n                   ones with a real handshake"
     );
 }

@@ -31,7 +31,7 @@ mod sandbox_shell;
 pub use sandbox_shell::{
     SandboxShellConfig, ShellSetting, load_sandbox_shell, load_sandbox_shell_from,
 };
-pub use settings_store::{SettingsWriteError, update_settings};
+pub use settings_store::{SettingsWriteError, update_settings, update_shared_settings};
 pub mod model_section;
 use houyicoder_protocol::frontend::model::ModelChoice;
 pub use houyicoder_protocol::llm::EffortLevel;
@@ -52,8 +52,9 @@ pub mod mcp_servers;
 pub mod trust;
 pub use mcp_servers::{
     PROJECT_FILE, SETTINGS_KEY, apply_trust_gate, expand_references, parse_env_servers,
-    parse_project_servers, parse_settings_servers, remove_user_server, resolve_scoped_mcp_servers,
-    set_user_server_disabled, upsert_user_server,
+    parse_project_servers, parse_settings_servers, remove_project_server, remove_user_server,
+    resolve_scoped_mcp_servers, set_user_server_disabled, upsert_project_server,
+    upsert_user_server,
 };
 use serde_json::Value;
 use std::env::temp_dir;

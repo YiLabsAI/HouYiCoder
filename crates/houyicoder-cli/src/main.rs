@@ -43,6 +43,7 @@ mod composition;
 mod detach;
 mod export_view;
 mod local_host;
+mod mcp;
 mod session;
 mod trajectory;
 
@@ -175,6 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             verbose,
             yes,
         } => run_cleanup(apply, verbose, yes),
+        CliCommand::Mcp { action } => mcp::run(action),
     }
 }
 

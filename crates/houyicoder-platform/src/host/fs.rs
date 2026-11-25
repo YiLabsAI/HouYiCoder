@@ -7,17 +7,39 @@
 //! over their inputs so a host with no Windows kernel can still exercise every
 //! branch.
 
+use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 use std::time::Duration;
 #[cfg(not(target_os = "windows"))]
 use std::{
-    fs::{OpenOptions, remove_file, rename},
+    fs::{remove_file, rename},
     io::Write,
     os::unix::fs::OpenOptionsExt,
     process::id,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+/// The mode a newly created file lands at when only its owner may read it.
+pub const OWNER_ONLY_FILE_MODE: u32 = 0o600;
+
+/// The mode a newly created file lands at when its readers include
+/// teammates working from the same checkout.
+pub const SHARED_FILE_MODE: u32 = 0o644;
+
+/// Ask the host for the creation mode of a file this writer opens. A posix
+/// host honors the mode; a host without file modes ignores it, so an upper
+/// layer states its intent once and carries no platform conditional.
+pub fn set_creation_mode(opts: &mut OpenOptions, mode: u32) {
+    #[cfg(not(target_os = "windows"))]
+    {
+        opts.mode(mode);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (opts, mode);
+    }
+}
 
 #[cfg(test)]
 mod tests;

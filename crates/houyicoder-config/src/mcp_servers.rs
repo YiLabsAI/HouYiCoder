@@ -22,6 +22,7 @@ use serde_json::Value;
 use crate::SettingsWriteError;
 use crate::read_settings_value;
 use crate::update_settings;
+use crate::update_shared_settings;
 
 /// The filename of the project-scope server list, at the workspace root.
 pub const PROJECT_FILE: &str = ".mcp.json";
@@ -258,27 +259,83 @@ pub fn remove_user_server(path: &Path, name: &str) -> Result<(), SettingsWriteEr
 
 /// Upsert one server into the user settings file. The entry is written in
 /// the standard file shape so a hand-edit and a programmatic write agree.
+/// A file whose root is not an object takes no entry; the write is read
+/// back and an entry that did not land is an error, not a silent success.
 pub fn upsert_user_server(
     path: &Path,
     name: &str,
     transport: &McpTransportConfig,
 ) -> Result<(), SettingsWriteError> {
     let body = transport_body(transport);
-    update_settings(
-        path,
-        |value| {
-            let Some(obj) = value.as_object_mut() else {
-                return;
-            };
-            let servers = obj
-                .entry(SETTINGS_KEY)
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(map) = servers.as_object_mut() {
-                map.insert(name.to_string(), body.clone());
-            }
-        },
-        8,
-    )
+    update_settings(path, |value| insert_server_entry(value, name, &body), 8)?;
+    verify_landed(path, name, transport)
+}
+
+/// Upsert one server into the workspace's project file. The entry is
+/// written in the same shape the resolver reads, so a server added here is
+/// the same server a session in that workspace mounts. The write shares the
+/// settings writer's lock-and-rename discipline, so a hand-edit racing the
+/// add does not lose either side's entry, and it lands at the shared file
+/// mode because the project file is committed for teammates, not held as
+/// the owner's private state. A file whose root is not an object takes no
+/// entry; the read-back makes that an error rather than a silent success.
+pub fn upsert_project_server(
+    workspace: &Path,
+    name: &str,
+    transport: &McpTransportConfig,
+) -> Result<(), SettingsWriteError> {
+    let body = transport_body(transport);
+    let path = workspace.join(PROJECT_FILE);
+    update_shared_settings(&path, |value| insert_server_entry(value, name, &body), 8)?;
+    verify_landed(&path, name, transport)
+}
+
+/// Remove one server from the workspace's project file. An entry the file
+/// does not hold is a quiet no-op: the outcome the caller wanted is the one
+/// the file already shows.
+pub fn remove_project_server(workspace: &Path, name: &str) -> Result<(), SettingsWriteError> {
+    let path = workspace.join(PROJECT_FILE);
+    update_shared_settings(&path, |value| remove_named_server(value, name), 8)
+}
+
+/// Place one entry in a file value's server map. A root that is not an
+/// object holds no map, so the entry is not placed — the caller's read-back
+/// turns that into the error it is.
+fn insert_server_entry(value: &mut Value, name: &str, body: &Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    let servers = obj
+        .entry(SETTINGS_KEY)
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(map) = servers.as_object_mut() {
+        map.insert(name.to_string(), body.clone());
+    }
+}
+
+/// Confirm one upsert landed: the file reads back the named server with
+/// the transport that was written. A non-object root or a map that would
+/// not take the entry reads back nothing, and the caller told the user the
+/// entry was added.
+fn verify_landed(
+    path: &Path,
+    name: &str,
+    transport: &McpTransportConfig,
+) -> Result<(), SettingsWriteError> {
+    let landed = crate::settings_merge::read_settings_value(path)
+        .get(SETTINGS_KEY)
+        .and_then(Value::as_object)
+        .and_then(|map| map.get(name))
+        .and_then(|body| serde_json::from_value::<McpTransportConfig>(body.clone()).ok())
+        .is_some_and(|read| read == *transport);
+    if landed {
+        Ok(())
+    } else {
+        Err(SettingsWriteError::Io(format!(
+            "the server map in {} did not take the {name} entry",
+            path.display()
+        )))
+    }
 }
 
 /// Record one named user server's disabled flag, so a toggle made from the

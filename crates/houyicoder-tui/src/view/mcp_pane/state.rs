@@ -2,10 +2,23 @@
 //! the status rows the host returned, and the reply each action waits on.
 
 use std::cell::Cell;
+use std::time::Duration;
+use std::time::Instant;
 
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::mcp::McpConnectionState;
 use houyicoder_protocol::mcp::McpServerStatusView;
+
+/// How often the pane asks again while a row the host reported is still
+/// settling (starting, reconnecting). A reply reflects the manager's state
+/// at the instant it was read, and a handshake or a relaunch finishes later
+/// with nothing pushing it back, so the pane polls until the rows settle.
+pub(crate) const MCP_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How many follow-up asks one action may spend before the pane stops
+/// polling. The host's own handshake window is the horizon a row can stay
+/// pending inside; past that a wedged server stays as the host reported it.
+pub(crate) const MCP_REFRESH_BUDGET: u16 = 60;
 
 /// The receipt one toggle writes to the transcript once the host confirms
 /// it: which server moved and to which state.
@@ -37,6 +50,10 @@ pub(crate) struct McpPaneState {
     pub rows: Vec<McpServerStatusView>,
     /// The reply being waited on, so a late or stale one changes nothing.
     pub pending: Option<McpPending>,
+    /// When the next settling poll is due, while one is armed.
+    refresh_at: Option<Instant>,
+    /// How many settling polls one action may still spend.
+    refresh_left: u16,
     /// The detail body's scroll position, clamped by the last render's
     /// published maximum.
     detail_offset: Cell<u16>,
@@ -67,15 +84,30 @@ impl McpPaneState {
         if self.cursor >= self.rows.len() {
             self.cursor = self.rows.len().saturating_sub(1);
         }
+        // A row the host still reports as settling finishes later with no
+        // reply of its own, so arm a follow-up ask for the states a
+        // handshake or relaunch is heading through.
+        let settling = self.rows.iter().any(|row| {
+            matches!(
+                row.state,
+                McpConnectionState::Pending | McpConnectionState::Reconnecting { .. }
+            )
+        });
+        self.refresh_at = settling
+            .then(|| Instant::now() + MCP_REFRESH_INTERVAL)
+            .filter(|_| self.refresh_left > 0);
         receipt
     }
 
-    /// Mark a read-only status query as pending.
+    /// Mark a read-only status query as pending. Each user action gets a
+    /// fresh settling budget, so a new request is not starved by a spent
+    /// one.
     pub(crate) fn mark_pending(&mut self, request: RequestId) {
         self.pending = Some(McpPending {
             request,
             toggle: None,
         });
+        self.refresh_left = MCP_REFRESH_BUDGET;
     }
 
     /// Mark a toggle as pending, remembering what its confirmation should
@@ -85,6 +117,39 @@ impl McpPaneState {
             request,
             toggle: Some(McpToggleReceipt { name, enabled }),
         });
+        self.refresh_left = MCP_REFRESH_BUDGET;
+    }
+
+    /// Mark a settling follow-up ask as pending without refilling its
+    /// budget: a poll the budget charged for must not pay itself back, or
+    /// the cap would never bind.
+    pub(crate) fn mark_settling_pending(&mut self, request: RequestId) {
+        self.pending = Some(McpPending {
+            request,
+            toggle: None,
+        });
+    }
+
+    /// Whether a settling follow-up ask is still armed: some row is settling
+    /// and the budget has not run out. The event loop reads this to keep its
+    /// wake cadence; a settled pane arms nothing.
+    pub(crate) fn refresh_armed(&self) -> bool {
+        self.refresh_at.is_some() && self.refresh_left > 0
+    }
+
+    /// Whether a settling follow-up ask is due at this instant, spending one
+    /// of the action's budget when it is. False once the budget is spent or
+    /// no row is still settling, so an idle pane polls nothing.
+    pub(crate) fn take_due_refresh(&mut self, now: Instant) -> bool {
+        if self.refresh_left == 0 {
+            return false;
+        }
+        if self.refresh_at.is_none_or(|at| now < at) {
+            return false;
+        }
+        self.refresh_left -= 1;
+        self.refresh_at = None;
+        true
     }
 
     /// Settle a pending action the host refused, keeping the rows the pane
@@ -92,6 +157,7 @@ impl McpPaneState {
     pub(crate) fn fail_pending(&mut self, request: RequestId) -> bool {
         if self.pending.as_ref().is_some_and(|p| p.request == request) {
             self.pending = None;
+            self.refresh_at = None;
             true
         } else {
             false
@@ -167,6 +233,8 @@ impl McpPaneState {
         self.cursor = 0;
         self.rows.clear();
         self.pending = None;
+        self.refresh_at = None;
+        self.refresh_left = 0;
         self.detail_offset.set(0);
         self.detail_max.set(0);
     }

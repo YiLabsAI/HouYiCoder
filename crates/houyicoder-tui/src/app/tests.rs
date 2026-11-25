@@ -5,7 +5,7 @@ use super::*;
 mod lifecycle;
 
 use crate::agent_message::fleet::FleetEntry;
-use crate::agent_message::{ConnectionEvent, SessionMessage};
+use crate::agent_message::{ConnectionEvent, ServerResponse, SessionMessage};
 use crate::app::handle_key;
 use crate::composition::app;
 use crate::composition::shared_runtime;
@@ -28,6 +28,7 @@ use houyicoder_client::Client;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
+use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState, McpServerStatusView};
 use ratatui::style::Color;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -651,6 +652,39 @@ fn test_mcp_command_ships_query() {
             .is_some_and(|p| p.request == req.req_id),
         "the pane waits on the query it shipped"
     );
+}
+
+/// A reply that leaves a row settling makes the loop ask again on its tick,
+/// so a handshake that finishes after the reply still reaches the pane.
+#[test]
+fn test_mcp_settling_polls() {
+    let (mut app, events) = live_session();
+    app.run_command(SlashCommand::Mcp);
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::McpStatusList));
+    app.handle_agent_message(SessionMessage::Response {
+        request: req.req_id,
+        response: ServerResponse::McpStatus {
+            servers: vec![McpServerStatusView {
+                name: "probe".into(),
+                scope: McpConfigScope::User,
+                state: McpConnectionState::Pending,
+                server_version: None,
+                tool_count: 0,
+                resource_count: 0,
+                has_instructions: false,
+                recent_stderr: Vec::new(),
+                detail: Default::default(),
+            }],
+        },
+    });
+    let now = Instant::now();
+    assert!(
+        !app.tick_mcp_refresh(now),
+        "the follow-up waits out its interval"
+    );
+    let later = now + crate::mcp_pane_state::MCP_REFRESH_INTERVAL;
+    assert!(app.tick_mcp_refresh(later), "the due tick asks again");
+    wait_for_request(&events, |p| matches!(p, FrontendRequest::McpStatusList));
 }
 
 /// When the request-id sequence is exhausted, each user command surfaces its

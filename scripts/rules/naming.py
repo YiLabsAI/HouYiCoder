@@ -53,7 +53,7 @@ ALLOWED_TOP_MODULES: dict[str, frozenset[str]] = {
     }),
     "crates/houyicoder-cli/src": frozenset({
         "main", "acp", "cli_args", "composition", "detach", "export_view",
-        "local_host", "session", "tests", "trajectory",
+        "local_host", "mcp", "session", "tests", "trajectory",
     }),
 }
 

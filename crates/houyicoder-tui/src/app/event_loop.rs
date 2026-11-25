@@ -230,6 +230,9 @@ pub(crate) fn run(
         if app.tick_auto_approve(now) {
             dirty = true;
         }
+        if app.tick_mcp_refresh(now) {
+            dirty = true;
+        }
         app.tick_tasks(now);
         if app.sessions.current.todos.prune(now) {
             dirty = true;
@@ -389,6 +392,9 @@ fn wake_needed(app: &App) -> bool {
         || app.ask_question().is_some()
         || app.pending_trust().is_some()
         || app.ui.navigation.pane == Pane::Tasks
+        // The /mcp pane asks again while a row is still settling, so an
+        // idle pane has its own clock until the rows come to rest.
+        || (app.ui.navigation.pane == Pane::Mcp && app.ui.mcp_pane.refresh_armed())
 }
 
 /// Whether something on screen advances on a clock of its own, so a frame has

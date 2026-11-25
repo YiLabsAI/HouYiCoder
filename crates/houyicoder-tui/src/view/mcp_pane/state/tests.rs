@@ -7,6 +7,10 @@ use houyicoder_protocol::mcp::{
     McpConfigScope, McpConnectionState, McpServerDetailView, McpServerStatusView,
 };
 
+use std::time::Instant;
+
+use super::MCP_REFRESH_BUDGET;
+use super::MCP_REFRESH_INTERVAL;
 use super::McpPaneState;
 
 fn row(name: &str, state: McpConnectionState, locked: bool) -> McpServerStatusView {
@@ -189,4 +193,69 @@ fn test_reset_clears() {
     assert_eq!(pane.cursor, 0);
     assert_eq!(pane.level, 0);
     assert_eq!(pane.detail_offset(), 0);
+    assert!(!pane.refresh_armed(), "no settling poll survives a reset");
+}
+
+/// A reply that leaves a row settling arms one follow-up ask, not before the
+/// interval; the ask recomputes the armed state from the next reply, and a
+/// reply with every row at rest disarms it.
+#[test]
+fn test_settling_poll_arms() {
+    let mut pane = McpPaneState::default();
+    pane.mark_pending(RequestId(1));
+    pane.apply_status(
+        RequestId(1),
+        vec![row("alpha", McpConnectionState::Pending, false)],
+    );
+    assert!(pane.refresh_armed(), "a starting row arms the follow-up");
+    let now = Instant::now();
+    assert!(
+        !pane.take_due_refresh(now),
+        "the follow-up waits out its interval"
+    );
+    let later = now + MCP_REFRESH_INTERVAL;
+    assert!(pane.take_due_refresh(later), "the due ask fires once");
+    assert!(!pane.refresh_armed(), "one ask at a time");
+    pane.mark_settling_pending(RequestId(2));
+    pane.apply_status(
+        RequestId(2),
+        vec![row("alpha", McpConnectionState::Connected, false)],
+    );
+    assert!(!pane.refresh_armed(), "a settled row disarms the follow-up");
+}
+
+/// The follow-up budget bounds one action: a row that never settles spends
+/// the asks and stops, so a wedged server is not polled forever.
+#[test]
+fn test_settling_poll_budget() {
+    let mut pane = McpPaneState::default();
+    pane.mark_pending(RequestId(1));
+    pane.apply_status(
+        RequestId(1),
+        vec![row(
+            "wedged",
+            McpConnectionState::Reconnecting { attempt: 1 },
+            false,
+        )],
+    );
+    let mut now = Instant::now() + MCP_REFRESH_INTERVAL;
+    for _ in 0..MCP_REFRESH_BUDGET {
+        assert!(pane.take_due_refresh(now));
+        now += MCP_REFRESH_INTERVAL;
+        // Every poll's reply still shows the row settling.
+        pane.mark_settling_pending(RequestId(2));
+        pane.apply_status(
+            RequestId(2),
+            vec![row(
+                "wedged",
+                McpConnectionState::Reconnecting { attempt: 1 },
+                false,
+            )],
+        );
+    }
+    assert!(!pane.refresh_armed(), "the budget is spent");
+    assert!(
+        !pane.take_due_refresh(now + MCP_REFRESH_INTERVAL),
+        "a spent budget asks nothing"
+    );
 }

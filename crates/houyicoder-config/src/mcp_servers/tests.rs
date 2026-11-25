@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::env::temp_dir;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::id;
 
@@ -371,4 +373,99 @@ fn test_stdio_body_omits_empty() {
             .and_then(|v| v.as_str()),
         Some("v")
     );
+}
+
+/// A project upsert writes the standard file shape the resolver reads, and
+/// a following remove clears it: the entry a session in that workspace
+/// mounts is the entry the command wrote. Keys the file already carried
+/// survive the write.
+#[test]
+fn test_project_upsert_round_trips() {
+    let root = scratch("project-upsert");
+    write(&root.join(PROJECT_FILE), r#"{"other": 1}"#);
+    let transport = McpTransportConfig::http("https://example.test/mcp");
+    upsert_project_server(&root, "remote", &transport).expect("upsert");
+    let read = parse_project_servers(&root);
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].name, "remote");
+    assert_eq!(read[0].transport, transport);
+    let raw = fs::read_to_string(root.join(PROJECT_FILE)).expect("read back");
+    assert!(
+        raw.contains("\"other\""),
+        "the file's other keys survive, saw {raw}"
+    );
+    remove_project_server(&root, "remote").expect("remove");
+    assert!(parse_project_servers(&root).is_empty());
+    // The project file is committed for teammates, so a programmatic write
+    // must not lock it down to the owner the way the private settings file
+    // is locked down.
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(root.join(PROJECT_FILE))
+            .expect("the file exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o644, "the project file stays teammate-readable");
+    }
+    drop(fs::remove_dir_all(&root));
+}
+
+/// A remove for a name the project file does not hold is a quiet no-op: the
+/// outcome the caller wanted is the one the file already shows.
+#[test]
+fn test_project_remove_absent() {
+    let root = scratch("project-remove");
+    write(&root.join(PROJECT_FILE), r#"{"mcpServers":{}}"#);
+    remove_project_server(&root, "nobody").expect("remove");
+    assert!(parse_project_servers(&root).is_empty());
+    drop(fs::remove_dir_all(&root));
+}
+
+/// The disabled flag lands on the named entry and survives a re-read, and a
+/// name the file does not hold is an error rather than a silent no-write.
+#[test]
+fn test_disabled_flag_persists() {
+    let root = scratch("disabled-flag");
+    let settings = root.join("settings.json");
+    let transport = McpTransportConfig::stdio("codegraph", vec![]);
+    upsert_user_server(&settings, "graph", &transport).expect("upsert");
+    set_user_server_disabled(&settings, "graph", true).expect("the flag lands");
+    let read = parse_settings_servers(&settings);
+    assert!(read[0].disabled, "the flag survives a re-read");
+    set_user_server_disabled(&settings, "graph", false).expect("the flag lifts");
+    assert!(!parse_settings_servers(&settings)[0].disabled);
+
+    let error = set_user_server_disabled(&settings, "nobody", true)
+        .expect_err("an absent name is an error");
+    assert!(
+        error.to_string().contains("no server named nobody"),
+        "the error names the entry, saw {error}"
+    );
+    drop(fs::remove_dir_all(&root));
+}
+
+/// A file whose root is valid JSON but not an object takes no server entry:
+/// the upsert errors instead of reporting a write that never happened, and
+/// the file's value is unchanged.
+#[test]
+fn test_upsert_needs_object_root() {
+    let root = scratch("non-object");
+    let transport = McpTransportConfig::stdio("codegraph", vec![]);
+    for path in [root.join("settings.json"), root.join(PROJECT_FILE)] {
+        write(&path, "[1, 2]");
+        let error = upsert_user_server(&path, "graph", &transport).expect_err("no entry can land");
+        assert!(
+            error.to_string().contains("did not take the graph entry"),
+            "the error names the entry, saw {error}"
+        );
+        let raw = fs::read_to_string(&path).expect("read back");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("stays json");
+        assert_eq!(
+            value,
+            serde_json::json!([1, 2]),
+            "the file's value is unchanged"
+        );
+    }
+    drop(fs::remove_dir_all(&root));
 }

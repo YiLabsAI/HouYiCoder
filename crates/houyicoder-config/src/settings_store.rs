@@ -29,8 +29,6 @@ use std::fs::write;
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::id;
 #[cfg(test)]
@@ -40,6 +38,10 @@ use std::sync::atomic::Ordering;
 use std::thread::current;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+
+use houyicoder_platform::host::fs::OWNER_ONLY_FILE_MODE;
+use houyicoder_platform::host::fs::SHARED_FILE_MODE as PLATFORM_SHARED_FILE_MODE;
+use houyicoder_platform::host::fs::set_creation_mode;
 
 /// Error from a merge-preserving settings write. Separate from ConfigError
 /// (provider resolution) so a settings failure never masquerades as an auth
@@ -66,6 +68,14 @@ impl fmt::Display for SettingsWriteError {
 }
 
 impl Error for SettingsWriteError {}
+
+/// The file mode a per-user settings write lands at: the file carries the
+/// user's own secrets, so no one else on the machine reads it.
+const PRIVATE_FILE_MODE: u32 = OWNER_ONLY_FILE_MODE;
+
+/// The file mode a shared artifact lands at: the workspace's project file
+/// is committed for teammates, so the group and everyone else read it.
+const SHARED_FILE_MODE: u32 = PLATFORM_SHARED_FILE_MODE;
 
 /// Merge-preserving, atomic, CAS-guarded settings write. Reads the file as
 /// a JSON Value (preserving all unknown keys — serde's default is passthrough,
@@ -95,6 +105,28 @@ pub fn update_settings(
     path: &Path,
     mutator: impl Fn(&mut Value),
     max_retries: usize,
+) -> Result<(), SettingsWriteError> {
+    write_settings_file(path, mutator, max_retries, PRIVATE_FILE_MODE)
+}
+
+/// The same merge-preserving write for an artifact the owner is not the
+/// only reader of. A shared file (the workspace's project server list,
+/// committed for teammates) lands at the shared mode instead of the
+/// private one; everything else about the write is identical, so the two
+/// artifact classes cannot drift apart.
+pub fn update_shared_settings(
+    path: &Path,
+    mutator: impl Fn(&mut Value),
+    max_retries: usize,
+) -> Result<(), SettingsWriteError> {
+    write_settings_file(path, mutator, max_retries, SHARED_FILE_MODE)
+}
+
+fn write_settings_file(
+    path: &Path,
+    mutator: impl Fn(&mut Value),
+    max_retries: usize,
+    mode: u32,
 ) -> Result<(), SettingsWriteError> {
     let parent = path
         .parent()
@@ -133,10 +165,7 @@ pub fn update_settings(
         {
             let mut opts = OpenOptions::new();
             opts.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                opts.mode(0o600);
-            }
+            set_creation_mode(&mut opts, mode);
             let mut f = match opts.open(&temp) {
                 Ok(f) => f,
                 Err(_) => {

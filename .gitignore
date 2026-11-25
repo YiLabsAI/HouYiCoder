@@ -80,3 +80,7 @@ CLAUDE.local.md
 .codegraph/
 
 
+
+# The advisory lock a project-scope mcp write takes; deleting an flock path
+# breaks inter-process serialization, so it stays.
+.mcp.json.lock
