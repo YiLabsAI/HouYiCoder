@@ -1022,7 +1022,7 @@ async fn test_forked_extract_receives_manifest() {
             memory_type: MemoryType::Project,
             mtime_secs: 0,
             scope: MemoryScope::Auto,
-            origin: MemoryOrigin::Unknown,
+            origin: MemoryOrigin::User,
         }],
         written: StdMutex::new(Vec::new()),
     });

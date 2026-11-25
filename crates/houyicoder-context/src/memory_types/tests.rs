@@ -81,6 +81,7 @@ fn test_with_meta_description_mtime() {
 
 /// Files written before the primary agent label existed carry main_agent;
 /// both labels read as the same writer and new files carry primary_agent.
+/// Unrecognized and legacy labels default to User so they stay protected.
 #[test]
 fn test_origin_reads_previous_label() {
     assert_eq!(
@@ -92,4 +93,7 @@ fn test_origin_reads_previous_label() {
         MemoryOrigin::PrimaryAgent
     );
     assert_eq!(MemoryOrigin::PrimaryAgent.as_label(), "primary_agent");
+    assert_eq!(MemoryOrigin::from_label("unknown"), MemoryOrigin::User);
+    assert_eq!(MemoryOrigin::from_label(""), MemoryOrigin::User);
+    assert_eq!(MemoryOrigin::from_label("custom"), MemoryOrigin::User);
 }

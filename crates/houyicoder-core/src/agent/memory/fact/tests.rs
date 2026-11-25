@@ -8,6 +8,7 @@ fn test_extract_single_save() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].key, "my-key");
     assert_eq!(entries[0].memory_type, MemoryType::User);
+    assert_eq!(entries[0].origin, MemoryOrigin::User);
     assert!(entries[0].content.contains("Always run tests"));
 }
 

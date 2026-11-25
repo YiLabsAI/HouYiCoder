@@ -974,7 +974,8 @@ async fn test_dream_pins_save_scope() {
                 "promoted-rule",
                 "explicit project entry body",
                 MemoryType::Feedback,
-            ),
+            )
+            .with_origin(MemoryOrigin::PrimaryAgent),
             MemoryScope::Project,
         )
         .expect("seed the project copy");

@@ -92,7 +92,7 @@ pub(super) fn parse_topic_slice(text: &str) -> Result<(Frontmatter, &str), Memor
     let mut name = String::new();
     let mut description: &str = "";
     let mut memory_type = MemoryType::Project;
-    let mut origin = MemoryOrigin::Unknown;
+    let mut origin = MemoryOrigin::User;
     let mut offset = 0usize;
     let mut body_start = None;
 

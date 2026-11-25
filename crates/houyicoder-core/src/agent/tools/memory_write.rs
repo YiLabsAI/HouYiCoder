@@ -37,7 +37,7 @@ impl MemoryWriteTool {
         Self {
             provider,
             recorder: None,
-            origin: MemoryOrigin::Unknown,
+            origin: MemoryOrigin::PrimaryAgent,
             scope: None,
             requires_evidence: false,
             evidence: Arc::from(Vec::new()),

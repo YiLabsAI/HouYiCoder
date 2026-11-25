@@ -48,10 +48,9 @@ impl MemoryType {
 /// type says what kind of knowledge it is, the origin says whose claim
 /// it is. Injected by the host at tool-construction time, never accepted
 /// from the LLM — a model-provided origin would let a dream self-promote.
-/// Old files with no origin frontmatter parse as Unknown (machine-
-/// writable); the Unknown set only ratchets down as new writes carry a
-/// real origin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Every memory has a known origin; unclassified or hand-edited files
+/// default to User so they receive protective treatment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryOrigin {
     /// Explicitly authored by the user. Protected from background overwrites
     /// and automatic archival.
@@ -62,9 +61,6 @@ pub enum MemoryOrigin {
     Extractor,
     /// The consolidation dream fork.
     Dream,
-    /// Pre-origin files, or an unknown writer. Machine-writable.
-    #[default]
-    Unknown,
 }
 
 impl MemoryOrigin {
@@ -75,18 +71,17 @@ impl MemoryOrigin {
             Self::PrimaryAgent => "primary_agent",
             Self::Extractor => "extractor",
             Self::Dream => "dream",
-            Self::Unknown => "unknown",
         }
     }
 
-    /// Parse a frontmatter label; any unrecognized value is Unknown.
+    /// Parse a frontmatter label. Any unrecognized or legacy value defaults
+    /// to User so unclassified entries receive protective treatment.
     pub fn from_label(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
-            "user" => Self::User,
             "primary_agent" | "main_agent" => Self::PrimaryAgent,
             "extractor" => Self::Extractor,
             "dream" => Self::Dream,
-            _ => Self::Unknown,
+            _ => Self::User,
         }
     }
 
@@ -207,7 +202,7 @@ impl MemoryEntry {
             memory_type,
             description: String::new(),
             mtime_secs: 0,
-            origin: MemoryOrigin::Unknown,
+            origin: MemoryOrigin::User,
         }
     }
 
@@ -254,7 +249,7 @@ impl MemorySummary {
             memory_type,
             scope,
             mtime_secs,
-            origin: MemoryOrigin::Unknown,
+            origin: MemoryOrigin::User,
         }
     }
 

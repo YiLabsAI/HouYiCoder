@@ -127,11 +127,10 @@ fn test_replace_preserves_scope() {
         )
         .expect("seed user");
     fx.provider
-        .add(MemoryEntry::new(
-            "old-auto",
-            "Old auto rule.",
-            MemoryType::Feedback,
-        ))
+        .add(
+            MemoryEntry::new("old-auto", "Old auto rule.", MemoryType::Feedback)
+                .with_origin(MemoryOrigin::Extractor),
+        )
         .expect("seed auto");
     fx.provider.record_recall_hits(&["old-auto".to_string()]);
     fx.provider.record_gate_violation("old-auto");
@@ -190,11 +189,10 @@ fn test_reconcile_batch_moves_once() {
     fx.provider.record_gate_violation("hot-feedback");
 
     fx.provider
-        .add(MemoryEntry::new(
-            "stale-proj",
-            "Finished task.",
-            MemoryType::Project,
-        ))
+        .add(
+            MemoryEntry::new("stale-proj", "Finished task.", MemoryType::Project)
+                .with_origin(MemoryOrigin::Extractor),
+        )
         .expect("add stale project");
     let stale_path = fx.auto.join("stale-proj.md");
     let old_time = SystemTime::now() - Duration::from_secs(40 * 86_400);

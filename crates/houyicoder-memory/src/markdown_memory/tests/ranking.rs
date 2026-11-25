@@ -77,7 +77,7 @@ fn test_cache_cap_evicts() {
                         name: String::new(),
                         description: String::new(),
                         memory_type: MemoryType::Project,
-                        origin: MemoryOrigin::Unknown,
+                        origin: MemoryOrigin::User,
                     },
                     lower_body: "".into(),
                 },
@@ -493,7 +493,7 @@ fn test_index_cap_char_boundary() {
             memory_type: MemoryType::Project,
             description: String::new(),
             mtime_secs: 0,
-            origin: MemoryOrigin::Unknown,
+            origin: MemoryOrigin::User,
         })
         .unwrap();
     }

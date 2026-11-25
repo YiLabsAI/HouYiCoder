@@ -13,7 +13,7 @@
 //! When no source tag is present the default is User. The content is the
 //! remainder of the line after the key (and optional source tag).
 
-use houyicoder_context::{MemoryEntry, MemoryType};
+use houyicoder_context::{MemoryEntry, MemoryOrigin, MemoryType};
 
 /// Extract save facts from user input. Scans each line for the /save
 /// prefix. Returns one MemoryEntry per matching line. Lines without the
@@ -61,7 +61,7 @@ fn parse_save_line(rest: &str) -> Option<MemoryEntry> {
     if key.contains('/') || key.contains('\\') {
         return None;
     }
-    Some(MemoryEntry::new(key, content, memory_type))
+    Some(MemoryEntry::new(key, content, memory_type).with_origin(MemoryOrigin::User))
 }
 
 #[cfg(test)]

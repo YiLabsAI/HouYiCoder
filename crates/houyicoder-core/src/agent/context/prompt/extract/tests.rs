@@ -97,7 +97,7 @@ fn test_build_prompt_appends_manifest() {
         memory_type: MemoryType::Project,
         mtime_secs: 0,
         scope: MemoryScope::Auto,
-        origin: MemoryOrigin::Unknown,
+        origin: MemoryOrigin::User,
     };
     let p = build_extraction_prompt(&[mem]);
     assert!(p.contains("## Existing memory files"));
