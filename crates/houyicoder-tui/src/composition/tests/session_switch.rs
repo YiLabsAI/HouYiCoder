@@ -21,6 +21,7 @@ use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::run::ContentBlock;
 use houyicoder_protocol::frontend::session_update::ContentChunk;
 use houyicoder_protocol::frontend::session_update::SessionUpdate;
+use houyicoder_protocol::lsp::{LspConfigScope, LspServerState, LspServerStatusView};
 use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState, McpServerStatusView};
 use std::sync::atomic::Ordering;
 
@@ -1131,4 +1132,40 @@ fn test_switch_resets_mcp_pane() {
     );
     assert_eq!(app.ui.mcp_pane.level, 0, "the detail level resets");
     assert_eq!(app.ui.mcp_pane.cursor, 0, "the cursor resets");
+}
+
+/// The /lsp pane resets with its pane peers on a session switch: the old
+/// session's rows, cursor, and pending request do not survive into the new
+/// session, where they would render another session's servers and a stale
+/// pending id could swallow the new session's first reply.
+#[test]
+fn test_switch_resets_lsp_pane() {
+    let mut app = test_app();
+    app.ui.lsp_pane.mark_pending(RequestId(6));
+    app.ui.lsp_pane.rows = vec![LspServerStatusView {
+        name: "old-session-server".into(),
+        scope: LspConfigScope::User,
+        state: LspServerState::Running,
+        locked: false,
+        command_line: "rust-analyzer".into(),
+        extensions: vec!["rs".into()],
+        open_documents: 2,
+        diagnostic_count: 1,
+        recent_stderr: Vec::new(),
+    }];
+    app.ui.lsp_pane.cursor = 0;
+    app.ui.lsp_pane.level = 1;
+    let (new_bundle, new_startup) = test_handoff();
+    app.switch_session(new_bundle);
+    app.apply_frontend_startup(new_startup);
+    assert!(
+        app.ui.lsp_pane.rows.is_empty(),
+        "the old session's server rows do not carry over"
+    );
+    assert!(
+        app.ui.lsp_pane.pending.is_none(),
+        "the old session's pending reply does not carry over"
+    );
+    assert_eq!(app.ui.lsp_pane.level, 0, "the detail level resets");
+    assert_eq!(app.ui.lsp_pane.cursor, 0, "the cursor resets");
 }

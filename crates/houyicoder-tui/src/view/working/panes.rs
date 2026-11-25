@@ -14,7 +14,7 @@ use crate::view::agents_pane::{AGENTS_PANE_HEIGHT, draw_content};
 use crate::view::pane::render;
 use crate::view::status::pane::{STATUS_PANE_HEIGHT, draw_content as status_draw_content};
 use crate::view::{
-    capability, hooks_pane, mcp_pane, memory_pane, model_pane, queue_pane, resume_picker,
+    capability, hooks_pane, lsp_pane, mcp_pane, memory_pane, model_pane, queue_pane, resume_picker,
     sandbox_pane, skills_pane, tasks_pane, trajectory_pane, worktree_pane,
 };
 
@@ -207,6 +207,12 @@ pub(super) fn draw_mcp_pane(f: &mut Frame, area: Rect, app: &App) {
 }
 
 const MCP_PANE_HEIGHT: u16 = 20;
+
+pub(super) fn draw_lsp_pane(f: &mut Frame, area: Rect, app: &App) {
+    draw_command_pane(f, area, app, LSP_PANE_HEIGHT, lsp_pane::draw_content);
+}
+
+const LSP_PANE_HEIGHT: u16 = 20;
 
 pub(super) fn draw_model_pane(f: &mut Frame, area: Rect, app: &App) {
     draw_command_pane(

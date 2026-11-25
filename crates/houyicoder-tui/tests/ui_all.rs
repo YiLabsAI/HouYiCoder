@@ -30,6 +30,8 @@ mod ui_history;
 mod ui_hooks;
 #[path = "ui_input.rs"]
 mod ui_input;
+#[path = "ui_lsp.rs"]
+mod ui_lsp;
 #[path = "ui_mcp.rs"]
 mod ui_mcp;
 #[path = "ui_memory.rs"]

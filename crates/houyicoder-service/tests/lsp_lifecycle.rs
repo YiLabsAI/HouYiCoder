@@ -236,3 +236,61 @@ async fn test_shutdown_closes_connection() {
         "the connection ended with the manager"
     );
 }
+
+/// A switch turned off while a launch is in flight wins: the fresh
+/// connection is closed instead of stored, the row reads disabled, and the
+/// next ask refuses.
+#[tokio::test]
+async fn test_disable_during_launch_sticks() {
+    let (manager, counters) = manager_with(vec![Behavior::SlowInit]);
+    manager.start_all(vec![config("rust")]).await;
+    let launch = {
+        let manager = Arc::clone(&manager);
+        tokio::spawn(async move {
+            manager
+                .ensure_document(Path::new("/work/src/lib.rs"), "fn a() {}")
+                .await
+        })
+    };
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(5)
+        && manager.statuses().await[0].state != LspServerState::Starting
+    {
+        sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(
+        manager.statuses().await[0].state,
+        LspServerState::Starting,
+        "the launch is in flight"
+    );
+    manager
+        .set_enabled("rust", false)
+        .await
+        .expect("the switch flips");
+    let outcome = launch.await.expect("the launch task joins");
+    assert!(
+        outcome.is_err(),
+        "the switch wins over the in-flight launch: {outcome:?}"
+    );
+    assert!(
+        matches!(
+            manager.statuses().await[0].state,
+            LspServerState::Disabled { .. }
+        ),
+        "the row stays off"
+    );
+    assert!(
+        eventually(|| counters.live.load(Ordering::SeqCst) == 0).await,
+        "the fresh connection was closed"
+    );
+    let refused = manager
+        .ensure_document(Path::new("/work/src/lib.rs"), "fn a() {}")
+        .await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|error| error.contains("disabled")),
+        "the next ask refuses the disabled server: {refused:?}"
+    );
+    manager.shutdown().await;
+}

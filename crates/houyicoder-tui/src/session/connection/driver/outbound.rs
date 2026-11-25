@@ -107,6 +107,15 @@ pub(super) fn frame_for(command: ClientCommand) -> Outbound {
             name,
             enabled,
         } => request(req_id, FrontendRequest::McpSetEnabled { name, enabled }),
+        ClientCommand::LspStatusQuery { req_id } => request(req_id, FrontendRequest::LspStatusList),
+        ClientCommand::LspRestartQuery { req_id, name } => {
+            request(req_id, FrontendRequest::LspRestart { name })
+        }
+        ClientCommand::LspSetEnabledQuery {
+            req_id,
+            name,
+            enabled,
+        } => request(req_id, FrontendRequest::LspSetEnabled { name, enabled }),
         ClientCommand::SkillBodyQuery { req_id, name } => {
             request(req_id, FrontendRequest::SkillBody { name })
         }

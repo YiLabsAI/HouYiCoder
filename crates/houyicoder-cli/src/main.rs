@@ -43,6 +43,7 @@ mod composition;
 mod detach;
 mod export_view;
 mod local_host;
+mod lsp;
 mod mcp;
 mod session;
 mod trajectory;
@@ -177,6 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             yes,
         } => run_cleanup(apply, verbose, yes),
         CliCommand::Mcp { action } => mcp::run(action),
+        CliCommand::Lsp { action } => lsp::run(action),
     }
 }
 
@@ -370,14 +372,17 @@ fn run_detached_host(
         .mcp
         .take()
         .map(|runtime| Arc::clone(&runtime.manager));
+    let lsp_manager = bundle.lsp.clone();
     let background_tasks = bundle.background_tasks.clone();
-    let host = Arc::new(
-        SessionHost::new(SessionLeaseStore::new())
-            .with_provider_facts(facts)
-            .with_bus(bundle.bus.clone())
-            .with_file_transaction(bundle.file_transaction.clone())
-            .with_background_tasks(background_tasks.clone()),
-    );
+    let mut host = SessionHost::new(SessionLeaseStore::new())
+        .with_provider_facts(facts)
+        .with_bus(bundle.bus.clone())
+        .with_file_transaction(bundle.file_transaction.clone())
+        .with_background_tasks(background_tasks.clone());
+    if let Some(manager) = &lsp_manager {
+        host = host.with_lsp(Arc::clone(manager));
+    }
+    let host = Arc::new(host);
     let event_sequencer = EventSequencer::new();
     event_sequencer.install_on(&mut bundle.runner);
     let relay_cancel = CancellationToken::new();
@@ -437,6 +442,11 @@ fn run_detached_host(
         // The session's servers end with the session they served, so no
         // child process outlives the host that started it.
         if let Some(manager) = mcp_manager {
+            manager.shutdown().await;
+        }
+        // The language servers end with the session too: a detached host
+        // that exits without this leaves their children behind.
+        if let Some(manager) = lsp_manager {
             manager.shutdown().await;
         }
         Ok::<(), Box<dyn Error>>(())

@@ -43,7 +43,7 @@ case "$SUITE" in
             set +a
         fi
         ensure_nextest
-        run "$CARGO" nextest run --workspace --run-ignored only -E 'binary(/live_agent/) or binary(/openai_compat_real/) or binary(/mcp_codegraph_live/) or binary(/recall_benchmark/)'
+        run "$CARGO" nextest run --workspace --run-ignored only -E 'binary(/live_agent/) or binary(/openai_compat_real/) or binary(/mcp_codegraph_live/) or binary(/lsp_rust_analyzer_live/) or binary(/recall_benchmark/)'
         ;;
     "")
         echo "suite name required: ui | sandbox | live" >&2

@@ -52,10 +52,10 @@ pub mod lsp_servers;
 pub mod mcp_servers;
 pub mod trust;
 pub use lsp_servers::{
-    language_for_extension, parse_settings_servers as parse_settings_lsp_servers,
-    remove_project_lsp_server, remove_user_lsp_server, resolve_scoped_lsp_servers,
-    scope_label as lsp_scope_label, set_user_lsp_disabled, upsert_project_lsp_server,
-    upsert_user_lsp_server,
+    FRONTEND_CONFIG_DIR_ENV, frontend_config_dir, language_for_extension,
+    parse_settings_servers as parse_settings_lsp_servers, remove_project_lsp_server,
+    remove_user_lsp_server, resolve_scoped_lsp_servers, scope_label as lsp_scope_label,
+    set_user_lsp_disabled, upsert_project_lsp_server, upsert_user_lsp_server,
 };
 pub use mcp_servers::{
     PROJECT_FILE, SETTINGS_KEY, apply_trust_gate, expand_references, parse_env_servers,

@@ -260,6 +260,14 @@ pub enum FrontendRequest {
         name: String,
         enabled: bool,
     },
+    LspStatusList,
+    LspRestart {
+        name: String,
+    },
+    LspSetEnabled {
+        name: String,
+        enabled: bool,
+    },
     Skills,
     /// Fetch the body of one skill by name for the /skills detail view.
     SkillBody {

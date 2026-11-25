@@ -44,6 +44,7 @@ use crate::frontend::trust::TrustPrompt;
 use crate::frontend::worktree::WorktreeEnterView;
 use crate::frontend::worktree::WorktreePreviewView;
 use crate::frontend::worktree::WorktreeRemoveOutcome;
+use crate::lsp::LspServerStatusView;
 use crate::mcp::McpServerStatusView;
 
 /// A caller-minted request id. Unique within a session; the response echoes it
@@ -225,6 +226,9 @@ pub enum ResponsePayload {
     /// The /mcp reply: every configured server's status, so the TUI renders
     /// the management pane without importing the service crate.
     McpStatus(Vec<McpServerStatusView>),
+    /// The /lsp reply: every configured language server's status, so the
+    /// pane renders without importing the service crate.
+    LspStatus(Vec<LspServerStatusView>),
     /// The /skills reply: the discovered skills (name, description,
     /// source, body token estimate).
     Skills(Vec<SkillEntry>),

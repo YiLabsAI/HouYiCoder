@@ -13,6 +13,7 @@ use crate::view::skill_origin::display_order;
 
 use super::approval::handle_approval;
 use super::ask_question::handle_ask_question;
+use super::lsp_pane;
 use super::mcp_pane;
 use super::pane_predicates::{
     artifact_editing, pane_approvable, pane_navigable, pane_rejectable, pane_replaces_input,
@@ -329,6 +330,8 @@ fn handle_generic_input(app: &mut App, k: KeyEvent) {
         _ if app.ui.navigation.pane == Pane::Sandbox && sandbox_pane::handle(app, k) => {}
         // /mcp pane: delegated to keys/mcp_pane.rs.
         _ if app.ui.navigation.pane == Pane::Mcp && mcp_pane::handle(app, k) => {}
+        // /lsp pane: delegated to keys/lsp_pane.rs.
+        _ if app.ui.navigation.pane == Pane::Lsp && lsp_pane::handle(app, k) => {}
         // /status pane: Left/Right (or Tab) cycle the sub-tab (Status,
         // Config, Usage), Esc dismisses back to the transcript. A
         // Settings-modal-style tabbed status.

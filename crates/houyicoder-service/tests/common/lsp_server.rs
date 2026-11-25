@@ -38,6 +38,9 @@ pub enum Behavior {
     /// Open one indexing progress token after the handshake and close it a
     /// moment later.
     ProgressThenEnd,
+    /// Delay the handshake answer, so a test can act while a launch is in
+    /// flight.
+    SlowInit,
 }
 
 /// What the launcher started and what the servers were asked.
@@ -174,6 +177,9 @@ fn serve_fake(stream: TcpStream, counters: Arc<Counters>, behavior: Behavior) {
         match method.as_str() {
             "initialize" => {
                 counters.initializes.fetch_add(1, Ordering::SeqCst);
+                if behavior == Behavior::SlowInit {
+                    sleep(Duration::from_millis(150));
+                }
                 reply(
                     &out,
                     id,

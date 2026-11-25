@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::composition::multi_agent::permission_request_from;
 use crate::consent::DelegatedAskReceiver;
+use crate::lsp::LspConnections;
 use crate::mcp::McpConnections;
 use houyicoder_core::agent::multi_agent::bus_types::{AgentBus, BusMessage};
 
@@ -75,6 +76,7 @@ use crate::server::recap::job::run as run_recap;
 mod capability_handler;
 mod checkpoint_handler;
 mod context_handler;
+mod lsp_handler;
 mod mcp_handler;
 mod memory_handler;
 mod notification_handler;
@@ -155,6 +157,8 @@ pub struct Server {
     recap_client: Option<RecapAttachment>,
     /// The session's external tool servers, for the /mcp handler.
     pub(super) mcp: Option<Arc<McpConnections>>,
+    /// The session's language servers, for the /lsp handler.
+    pub(super) lsp: Option<Arc<LspConnections>>,
 }
 
 pub(crate) mod child_permission;
@@ -203,6 +207,7 @@ impl Server {
             recap: None,
             recap_client: None,
             mcp: None,
+            lsp: None,
             background_tasks: None,
         }
     }
@@ -279,6 +284,13 @@ impl Server {
     /// reconnect/toggle requests reach the manager the session started.
     pub fn with_mcp(mut self, mcp: Option<Arc<McpConnections>>) -> Self {
         self.mcp = mcp;
+        self
+    }
+
+    /// Attach the session's language servers, so the /lsp pane and the
+    /// restart/toggle requests reach the manager the session started.
+    pub fn with_lsp(mut self, lsp: Option<Arc<LspConnections>>) -> Self {
+        self.lsp = lsp;
         self
     }
 

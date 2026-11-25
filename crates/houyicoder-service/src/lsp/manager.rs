@@ -275,7 +275,32 @@ impl LspConnections {
                     return Err("the language server manager is shut down".to_string());
                 }
                 let (launched, connection) = client;
-                *slot.live.lock().await = Some(connection);
+                // A switch turned off mid-handshake wins the same way a
+                // shutdown does: the store decision and the switch's take
+                // share the live lock, so a fresh connection cannot be
+                // stored after a disable already looked and found none.
+                let mut pending = Some(connection);
+                let accepted = {
+                    let mut live = slot.live.lock().await;
+                    if slot.enabled.load(Ordering::Relaxed) {
+                        *live = pending.take();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !accepted {
+                    if let Some(connection) = pending {
+                        launched
+                            .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
+                            .await;
+                        drop(connection.child);
+                    }
+                    *slot.state.write().await = LspServerState::Disabled {
+                        reason: "disabled by the user".into(),
+                    };
+                    return Err(format!("{name} is disabled"));
+                }
                 *slot.state.write().await = LspServerState::Running;
                 self.spawn_watcher(&slot, Arc::clone(&launched));
                 Ok(launched)

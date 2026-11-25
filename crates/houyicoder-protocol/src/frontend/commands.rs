@@ -72,6 +72,8 @@ pub enum SlashCommand {
     Hooks,
     /// /mcp: manage external tool servers (list, reconnect, toggle).
     Mcp,
+    /// /lsp: manage language servers (list, restart, toggle).
+    Lsp,
     /// /debug [path | off]: toggle runtime debug logging without restarting.
     /// Registered in the palette (discoverable when the user types /) so the
     /// runtime-logging surface is visible like /status and /context, not a
@@ -264,6 +266,11 @@ const COMMANDS: &[CommandDescriptor] = &[
         help: "Manage external tool servers",
     },
     CommandDescriptor {
+        variant: SlashCommand::Lsp,
+        name: "/lsp",
+        help: "Manage language servers",
+    },
+    CommandDescriptor {
         variant: SlashCommand::Debug,
         name: "/debug",
         help: "toggle runtime debug logging [/path | off]",
@@ -272,10 +279,10 @@ const COMMANDS: &[CommandDescriptor] = &[
 
 /// Build the ALL array from the command table at compile time so ALL and
 /// COMMANDS cannot drift apart. Const-eval reads the table by index.
-const fn all_variants() -> [SlashCommand; 35] {
-    let mut out = [SlashCommand::Login; 35];
+const fn all_variants() -> [SlashCommand; 36] {
+    let mut out = [SlashCommand::Login; 36];
     let mut i = 0;
-    while i < 35 {
+    while i < 36 {
         out[i] = COMMANDS[i].variant;
         i += 1;
     }
@@ -285,7 +292,7 @@ const fn all_variants() -> [SlashCommand; 35] {
 impl SlashCommand {
     /// All commands in palette order. Derived from the COMMANDS table at
     /// compile time, so the array and the table stay in sync.
-    pub const ALL: [SlashCommand; 35] = all_variants();
+    pub const ALL: [SlashCommand; 36] = all_variants();
 
     /// Parse a /foo input line. None if not a recognized command. Linear
     /// search over the COMMANDS table by name.

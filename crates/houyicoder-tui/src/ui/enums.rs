@@ -288,6 +288,12 @@ pub enum Pane {
     /// reconnects; t toggles enabled. Esc returns from the detail, and Esc
     /// at the list closes the pane.
     Mcp,
+    /// The /lsp pane: language server management. Lists every configured
+    /// server with its state, scope, and owned suffixes; Enter opens a
+    /// detail with its command, open documents, diagnostics, and stderr; r
+    /// restarts; t toggles enabled. Esc returns from the detail, and Esc at
+    /// the list closes the pane.
+    Lsp,
     /// The queue pane: queued user inputs submitted while a run was in
     /// flight. Up / Down navigate, Enter recalls the selected item, Esc
     /// closes. A collapsed +N more strip click opens this pane rather than
@@ -386,6 +392,7 @@ impl Pane {
             Self::Tools => "tools",
             Self::Tasks => "tasks",
             Self::Mcp => "mcp",
+            Self::Lsp => "lsp",
             Self::Queue => "queue",
         }
     }

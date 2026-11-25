@@ -448,6 +448,9 @@ async fn drive_connection(
                         ResponsePayload::McpStatus(servers) => {
                             Some(ServerResponse::McpStatus { servers })
                         }
+                        ResponsePayload::LspStatus(servers) => {
+                            Some(ServerResponse::LspStatus { servers })
+                        }
                         ResponsePayload::Skills(skills) => {
                             Some(ServerResponse::Skills { skills })
                         }

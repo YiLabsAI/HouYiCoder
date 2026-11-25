@@ -83,6 +83,7 @@ CRATES = ROOT / "crates"
 # cli entry point, which prints its exit line for the same reason.
 _CONSOLE_OK: dict[str, int] = {
     "crates/houyicoder-cli/src/cli_args.rs": 1,
+    "crates/houyicoder-cli/src/lsp.rs": 9,
     "crates/houyicoder-cli/src/mcp.rs": 9,
     "crates/houyicoder-cli/src/session/cleanup.rs": 15,
     "crates/houyicoder-cli/src/main.rs": 13,

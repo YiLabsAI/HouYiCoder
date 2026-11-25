@@ -12,6 +12,7 @@ use houyicoder_protocol::frontend::run::{
 };
 use houyicoder_protocol::frontend::{PendingInputId, QueuedInput, SessionId as FrontendSessionId};
 use houyicoder_protocol::llm::EffortLevel;
+use houyicoder_protocol::lsp::LspServerStatusView;
 use houyicoder_protocol::mcp::McpServerStatusView;
 
 use crate::transcript::SequencedFrame;
@@ -279,6 +280,8 @@ pub enum ServerResponse {
     Hooks { hooks: Vec<HookEntry> },
     /// The external tool servers the /mcp command requested.
     McpStatus { servers: Vec<McpServerStatusView> },
+    /// The language servers the /lsp command requested.
+    LspStatus { servers: Vec<LspServerStatusView> },
     /// The discovered skills the /skills command requested.
     Skills { skills: Vec<SkillEntry> },
     /// One skill's body for the detail view, None when it does not resolve.
@@ -428,6 +431,22 @@ pub enum ClientCommand {
     },
     /// Request one server's enabled toggle over the wire.
     McpSetEnabledQuery {
+        req_id: RequestId,
+        name: String,
+        enabled: bool,
+    },
+    /// Request the language server status list (the /lsp command).
+    /// Read-only: every configured server's state, scope, and counts.
+    LspStatusQuery {
+        req_id: RequestId,
+    },
+    /// Request one language server's restart over the wire.
+    LspRestartQuery {
+        req_id: RequestId,
+        name: String,
+    },
+    /// Request one language server's enabled toggle over the wire.
+    LspSetEnabledQuery {
         req_id: RequestId,
         name: String,
         enabled: bool,

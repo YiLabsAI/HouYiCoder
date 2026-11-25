@@ -4,13 +4,13 @@
 //! starts a server.
 
 use std::env;
-use std::env::var_os;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::executor::block_on;
 use houyicoder_api::launcher::StdProcessLauncher;
+use houyicoder_config::frontend_config_dir;
 use houyicoder_config::resolve_scoped_lsp_servers;
 use houyicoder_config::settings_path;
 use houyicoder_config::settings_path_in;
@@ -19,9 +19,6 @@ use houyicoder_protocol::lsp::LspTransportKind;
 
 use crate::lsp::LspConnections;
 use crate::lsp::LspTimings;
-
-/// The environment variable that names the frontend's config directory.
-const FRONTEND_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 /// Resolve and register the language servers one session may use. None when
 /// the scopes resolve to nothing routable, so a session with no language
@@ -71,16 +68,6 @@ pub(super) fn start(home: Option<&Path>, workspace: Option<&Path>) -> Option<Arc
     // this point, so the block is the registration itself, not a wait.
     block_on(manager.start_all(servers));
     Some(manager)
-}
-
-/// The compatible frontend's config directory: an explicit override wins,
-/// and the conventional per-user directory is the fallback. None when the
-/// session was built without a home and the override is absent.
-fn frontend_config_dir(home: Option<&Path>) -> Option<PathBuf> {
-    if let Some(dir) = var_os(FRONTEND_CONFIG_DIR_ENV) {
-        return Some(PathBuf::from(dir));
-    }
-    home.map(|home| home.join(".claude"))
 }
 
 #[cfg(test)]

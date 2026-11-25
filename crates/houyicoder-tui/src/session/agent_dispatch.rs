@@ -23,6 +23,7 @@ use houyicoder_protocol::frontend::SessionId as FrontendSessionId;
 use houyicoder_protocol::frontend::compact::CompactReply;
 use houyicoder_protocol::frontend::context::ContextBreakdown;
 use houyicoder_protocol::frontend::session_update::{SessionUpdate, ToolCallStatus};
+use houyicoder_protocol::lsp::LspServerStatusView;
 use houyicoder_protocol::mcp::McpServerStatusView;
 
 use crate::agent_message::fleet::FleetEntry;
@@ -334,6 +335,9 @@ impl App {
             ServerResponse::McpStatus { servers } => {
                 self.apply_mcp_status(request, servers);
             }
+            ServerResponse::LspStatus { servers } => {
+                self.apply_lsp_status(request, servers);
+            }
             ServerResponse::Skills { skills } => {
                 self.sessions.current.capabilities.skills.entries = skills;
             }
@@ -395,6 +399,15 @@ impl App {
         }
     }
 
+    /// Store the status rows the /lsp pane asked for. A toggle's
+    /// confirmation and the rows it changed arrive on one reply, so the
+    /// receipt and the refreshed list render on the same frame.
+    fn apply_lsp_status(&mut self, request: RequestId, servers: Vec<LspServerStatusView>) {
+        if let Some(receipt) = self.ui.lsp_pane.apply_status(request, servers) {
+            self.system_line(receipt.line());
+        }
+    }
+
     /// Route a per-request protocol error: the active run's own error
     /// resolves its Done; a memory pane mutation's error keeps the action
     /// context; anything else becomes a plain system line.
@@ -442,6 +455,7 @@ impl App {
             self.ui.skills_pane.fail_detail(request);
             self.ui.tasks_pane.fail_read(request);
             self.ui.mcp_pane.fail_pending(request);
+            self.ui.lsp_pane.fail_pending(request);
             self.system_line(format!("error: {message}"));
         }
     }

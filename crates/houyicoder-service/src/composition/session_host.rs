@@ -15,6 +15,7 @@ use houyicoder_permission::ModeGate;
 use houyicoder_provider::ProviderFacts;
 
 use crate::lifecycle::SessionLeaseStore;
+use crate::lsp::LspConnections;
 use crate::server::EventSequencer;
 use crate::server::recap::RecapSession;
 
@@ -66,6 +67,10 @@ pub struct SessionHost {
     /// connection needs it to list and restore the writes the detached run
     /// made; without it the pane has no record to show.
     file_transaction: Option<Arc<FileTransaction>>,
+    /// The process's language servers. A reattached connection needs the
+    /// same manager the tools query, or its /lsp pane lists nothing while
+    /// the detached session's servers keep running.
+    lsp: Option<Arc<LspConnections>>,
 }
 
 impl SessionHost {
@@ -80,6 +85,7 @@ impl SessionHost {
             background_tasks: None,
             bus: None,
             file_transaction: None,
+            lsp: None,
         }
     }
 
@@ -95,6 +101,13 @@ impl SessionHost {
     /// is still running instead of starting from an empty pane.
     pub fn with_background_tasks(mut self, tasks: Arc<BackgroundTasks>) -> Self {
         self.background_tasks = Some(tasks);
+        self
+    }
+
+    /// Attach the language server manager, so a reattached connection's pane
+    /// reads the servers the detached session started.
+    pub fn with_lsp(mut self, lsp: Arc<LspConnections>) -> Self {
+        self.lsp = Some(lsp);
         self
     }
 
@@ -132,6 +145,12 @@ impl SessionHost {
     /// or None when the host was built without one.
     pub(crate) fn background_tasks(&self) -> Option<&Arc<BackgroundTasks>> {
         self.background_tasks.as_ref()
+    }
+
+    /// The language server manager a reattaching connection's pane reads,
+    /// or None when the host was built without one.
+    pub(crate) fn lsp(&self) -> Option<&Arc<LspConnections>> {
+        self.lsp.as_ref()
     }
 
     /// Register a runner, its session-scoped event sequencer, and its recap

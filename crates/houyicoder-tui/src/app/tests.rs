@@ -28,6 +28,7 @@ use houyicoder_client::Client;
 use houyicoder_protocol::envelope::RequestId;
 use houyicoder_protocol::frontend::memory::MemoryToggleWhich;
 use houyicoder_protocol::frontend::{FrontendRequest, LoginMode, SessionId, SlashCommand};
+use houyicoder_protocol::lsp::{LspConfigScope, LspServerState, LspServerStatusView};
 use houyicoder_protocol::mcp::{McpConfigScope, McpConnectionState, McpServerStatusView};
 use ratatui::style::Color;
 use std::sync::mpsc::channel;
@@ -685,6 +686,57 @@ fn test_mcp_settling_polls() {
     let later = now + crate::mcp_pane_state::MCP_REFRESH_INTERVAL;
     assert!(app.tick_mcp_refresh(later), "the due tick asks again");
     wait_for_request(&events, |p| matches!(p, FrontendRequest::McpStatusList));
+}
+
+/// /lsp opens the pane and ships the status query the pane waits on, so the
+/// first reply lands in a pane that is already listening for it.
+#[test]
+fn test_lsp_command_ships_query() {
+    let (mut app, events) = live_session();
+    app.run_command(SlashCommand::Lsp);
+    assert_eq!(app.ui.navigation.pane, Pane::Lsp, "the pane opens");
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::LspStatusList));
+    assert!(
+        app.ui
+            .lsp_pane
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.request == req.req_id),
+        "the pane waits on the query it shipped"
+    );
+}
+
+/// A reply that leaves a row starting makes the loop ask again on its tick,
+/// so a launch that finishes after the reply still reaches the pane.
+#[test]
+fn test_lsp_settling_polls() {
+    let (mut app, events) = live_session();
+    app.run_command(SlashCommand::Lsp);
+    let req = wait_for_request(&events, |p| matches!(p, FrontendRequest::LspStatusList));
+    app.handle_agent_message(SessionMessage::Response {
+        request: req.req_id,
+        response: ServerResponse::LspStatus {
+            servers: vec![LspServerStatusView {
+                name: "probe".into(),
+                scope: LspConfigScope::User,
+                state: LspServerState::Starting,
+                locked: false,
+                command_line: "rust-analyzer".into(),
+                extensions: vec!["rs".into()],
+                open_documents: 0,
+                diagnostic_count: 0,
+                recent_stderr: Vec::new(),
+            }],
+        },
+    });
+    let now = Instant::now();
+    assert!(
+        !app.tick_lsp_refresh(now),
+        "the follow-up waits out its interval"
+    );
+    let later = now + crate::lsp_pane_state::LSP_REFRESH_INTERVAL;
+    assert!(app.tick_lsp_refresh(later), "the due tick asks again");
+    wait_for_request(&events, |p| matches!(p, FrontendRequest::LspStatusList));
 }
 
 /// When the request-id sequence is exhausted, each user command surfaces its

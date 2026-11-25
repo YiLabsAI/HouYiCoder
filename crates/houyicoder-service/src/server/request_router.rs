@@ -5,6 +5,7 @@ use houyicoder_protocol::error::{ErrorCategory, ProtocolError};
 use houyicoder_protocol::frontend::model::EffectiveFrom;
 use houyicoder_protocol::frontend::{BackgroundTaskId, FrontendRequest, SessionId};
 
+use super::lsp_handler;
 use super::mcp_handler;
 use super::model_apply::ModelSelection;
 use super::turn_loop::OnClose;
@@ -180,8 +181,11 @@ impl Server {
             FrontendRequest::Hooks => self.dispatch_hooks(io, req_id).await,
             FrontendRequest::McpStatusList
             | FrontendRequest::McpReconnect { .. }
-            | FrontendRequest::McpSetEnabled { .. } => {
-                mcp_handler::handle(self, io, req_id, payload).await
+            | FrontendRequest::McpSetEnabled { .. }
+            | FrontendRequest::LspStatusList
+            | FrontendRequest::LspRestart { .. }
+            | FrontendRequest::LspSetEnabled { .. } => {
+                self.dispatch_management(io, req_id, payload).await
             }
             FrontendRequest::WorktreePreview { path } => {
                 self.handle_worktree_preview(io, req_id, path).await
@@ -258,6 +262,30 @@ impl Server {
                     .await
             }
             _ => self.send_response(io, req_id, ResponsePayload::Ack).await,
+        }
+    }
+
+    /// Route one management-pane request: the external tool servers and the
+    /// language servers both answer with a fresh status list, so their
+    /// handlers share one dispatch.
+    async fn dispatch_management(
+        &mut self,
+        io: &mut FrameCarrier,
+        req_id: RequestId,
+        payload: FrontendRequest,
+    ) -> Result<(), ProtocolError> {
+        match payload {
+            FrontendRequest::McpStatusList
+            | FrontendRequest::McpReconnect { .. }
+            | FrontendRequest::McpSetEnabled { .. } => {
+                mcp_handler::handle(self, io, req_id, payload).await
+            }
+            FrontendRequest::LspStatusList
+            | FrontendRequest::LspRestart { .. }
+            | FrontendRequest::LspSetEnabled { .. } => {
+                lsp_handler::handle(self, io, req_id, payload).await
+            }
+            _ => unreachable!("the caller matched the management variants"),
         }
     }
 
@@ -677,6 +705,9 @@ fn does_not_wait_for_turn(payload: &FrontendRequest) -> bool {
             | FrontendRequest::McpStatusList
             | FrontendRequest::McpReconnect { .. }
             | FrontendRequest::McpSetEnabled { .. }
+            | FrontendRequest::LspStatusList
+            | FrontendRequest::LspRestart { .. }
+            | FrontendRequest::LspSetEnabled { .. }
             | FrontendRequest::Skills
             | FrontendRequest::SkillBody { .. }
             | FrontendRequest::MemoryList

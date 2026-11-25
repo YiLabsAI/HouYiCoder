@@ -160,6 +160,10 @@ path = "tests/mcp_http.rs"
 name = "lsp_lifecycle"
 path = "tests/lsp_lifecycle.rs"
 
+[[test]]
+name = "lsp_rust_analyzer_live"
+path = "tests/lsp_rust_analyzer_live.rs"
+
 [dev-dependencies]
 # test-util drives the recap deadline and the away window on a paused clock,
 # so their tests prove the timing without waiting for it.

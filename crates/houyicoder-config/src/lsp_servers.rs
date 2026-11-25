@@ -7,9 +7,11 @@
 //! repository cannot launch a command by shipping a config file.
 
 use std::collections::BTreeMap;
+use std::env::var_os;
 use std::fs::read_dir;
 use std::fs::read_to_string;
 use std::path::Path;
+use std::path::PathBuf;
 
 use houyicoder_protocol::lsp::{LspConfigScope, ScopedLspServerConfig};
 use serde_json::Value;
@@ -26,6 +28,21 @@ pub const PROJECT_FILE: &str = ".lsp.json";
 
 /// The settings key the user scope reads.
 pub const SETTINGS_KEY: &str = "lspServers";
+
+/// The environment variable that names the compatible frontend's config
+/// directory.
+pub const FRONTEND_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+
+/// The compatible frontend's config directory: an explicit override wins,
+/// and the conventional per-user directory is the fallback. Every caller
+/// that reads the frontend's plugin cache resolves it here, so a session
+/// and a shell subcommand cannot disagree about which tree they read.
+pub fn frontend_config_dir(home: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = var_os(FRONTEND_CONFIG_DIR_ENV) {
+        return Some(PathBuf::from(dir));
+    }
+    home.map(|home| home.join(".claude"))
+}
 
 /// Read every source's servers, merge them by precedence, refuse a project
 /// entry from an untrusted workspace, and expand the variable references in

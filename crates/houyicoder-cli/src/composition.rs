@@ -356,6 +356,9 @@ pub(crate) fn start_local_server(
     }
     server = server.with_settings_path(settings_path);
     server = server.with_mcp(mcp_manager);
+    // The language manager reaches the pane through the server, the same
+    // instance the tools query and the shutdown arm stops.
+    server = server.with_lsp(lsp);
     let server = server;
     let runtime = shared_runtime();
     // The serve task is pure serve: it returns when its client drops, and

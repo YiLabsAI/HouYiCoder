@@ -69,6 +69,7 @@ impl Server {
             recap: Some(recap),
             recap_client: None,
             mcp: None,
+            lsp: None,
             // Set by serve_session from the host, which is where the
             // process-scoped bus lives for a detached session.
             bus: None,
@@ -376,6 +377,11 @@ pub(crate) async fn serve_session(
     // running the commands it took over, and this connection must list them.
     if let Some(tasks) = host.background_tasks() {
         server = server.with_background_tasks(Arc::clone(tasks));
+    }
+    // The language manager is process-scoped too: a reattaching connection's
+    // pane must read the servers the detached session is already running.
+    if let Some(lsp) = host.lsp() {
+        server = server.with_lsp(Some(Arc::clone(lsp)));
     }
     let result = server.serve(io).await;
     // Release the lease: a clean exit or a disconnect both leave the session
