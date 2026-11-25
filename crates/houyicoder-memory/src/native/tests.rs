@@ -55,14 +55,14 @@ fn test_rank_recency_breaks_tie() {
 }
 
 #[test]
-fn test_rank_skips_surfaced() {
+fn test_rank_skips_injected() {
     let provider = KeywordRecallProvider::with_entries(vec![
         entry("a", "alpha fox", MemoryType::Project),
         entry("b", "bravo fox", MemoryType::Project),
     ]);
-    let mut surfaced = HashSet::new();
-    surfaced.insert("a".to_string());
-    let out = provider.rank_candidates("fox", &surfaced);
+    let mut injected = HashSet::new();
+    injected.insert("a".to_string());
+    let out = provider.rank_candidates("fox", &injected);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].key, "b");
 }

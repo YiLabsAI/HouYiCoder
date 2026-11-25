@@ -97,7 +97,7 @@ async fn test_promote_demote_share_recorder() {
     );
 }
 
-/// A missing key is surfaced as a NotFound error the model can act on
+/// A missing key is returned as a NotFound error the model can act on
 /// (the rule sentence is not there to promote / demote).
 #[tokio::test]
 async fn test_promote_missing_key_errors() {

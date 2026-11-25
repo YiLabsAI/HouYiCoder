@@ -11,15 +11,15 @@ use std::process;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A provider that records the surfaced set it was called with, so a test
-/// can prove the search does not inherit the turn's surfaced filter.
+/// A provider that records the injected set it was called with, so a test
+/// can prove the search does not inherit the turn's injected filter.
 struct RecordingMemory {
     seen: Mutex<Vec<String>>,
 }
 
 impl MemoryProvider for RecordingMemory {
-    fn rank_candidates(&self, _q: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
-        *self.seen.lock().expect("seen") = surfaced.iter().cloned().collect();
+    fn rank_candidates(&self, _q: &str, injected: &HashSet<String>) -> Vec<MemoryRankHit> {
+        *self.seen.lock().expect("seen") = injected.iter().cloned().collect();
         Vec::new()
     }
     fn add(&self, _e: MemoryEntry) -> Result<(), MemoryError> {
@@ -190,7 +190,7 @@ async fn test_search_ignores_surfaced() {
         .expect("search");
     assert!(
         memory.seen.lock().expect("seen").is_empty(),
-        "the search passes an empty surfaced set to the rank"
+        "the search passes an empty injected set to the rank"
     );
 }
 

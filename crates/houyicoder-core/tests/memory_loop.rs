@@ -3,9 +3,9 @@
 //! user turn, not the system prompt, so the system prompt stays byte-frozen
 //! for prompt-cache across turns), write persists facts from /save signals,
 //! and compaction folds old memory-recall events out of the assembled context so
-//! the surfaced de-dup set naturally empties and entries re-surface.
+//! the injected-key de-dup set naturally empties and entries become eligible again.
 //!
-//! Uses a custom MemoryProvider that records calls and honors the surfaced
+//! Uses a custom MemoryProvider that records calls and honors the injected_keys
 //! param so the de-dup lifecycle is verifiable without a filesystem.
 
 use std::env::temp_dir;
@@ -33,9 +33,9 @@ use houyicoder_core::agent::{MemoryGates, MemoryRuntime, RunOutcome, Runner, Too
 use houyicoder_memory::{InMemoryBackend, MarkdownMemoryProvider};
 
 /// A memory provider that ranks every stored entry as a confident lexical
-/// hit (skipping any key in surfaced, the caller-built de-dup set) so the
+/// hit (skipping any key in injected_keys, the caller-built de-dup set) so the
 /// loop injects without a semantic stage, and records every call so the
-/// surfaced-state lifecycle is verifiable without a filesystem.
+/// injected-state lifecycle is verifiable without a filesystem.
 struct RecordingMemory {
     entries: Mutex<Vec<MemoryEntry>>,
     recall_count: Mutex<usize>,
@@ -65,13 +65,13 @@ impl RecordingMemory {
 }
 
 impl MemoryProvider for RecordingMemory {
-    fn rank_candidates(&self, _query: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
+    fn rank_candidates(&self, _query: &str, injected_keys: &HashSet<String>) -> Vec<MemoryRankHit> {
         *self.recall_count.lock().expect("recall count") += 1;
         self.entries
             .lock()
             .expect("entries")
             .iter()
-            .filter(|e| !surfaced.contains(&e.key))
+            .filter(|e| !injected_keys.contains(&e.key))
             .map(|e| {
                 // Score 2 is the confident-lexical floor, so recall settles
                 // synchronously and never reaches a semantic stage.
@@ -331,7 +331,7 @@ async fn test_save_signal_writes_memory() {
 }
 
 /// Compress does not call recall — recall fires only at the run-entry turn
-/// boundary (per user query), never on the compaction path. The surfaced
+/// boundary (per user query), never on the compaction path. The injected-key
 /// reset is now an assembly-level effect (old memory-recall events fold
 /// out), not a provider-side clear, so compress must not touch recall.
 #[tokio::test]
@@ -362,12 +362,12 @@ async fn test_compress_does_not_recall() {
 }
 
 /// After compaction folds the oldest turn (its memory-recall attachment with
-/// it) out of the assembled context, the surfaced scan empties and the next run
-/// re-surfaces the entry. This is the full closed loop: recall → inject →
+/// it) out of the assembled context, the injected-key scan empties and the next run
+/// re-injects the entry. This is the full closed loop: recall → inject →
 /// compress (folds memory-recall) → recall again. Needs enough assistant
 /// turns that the default compress policy actually folds the oldest turn.
 #[tokio::test]
-async fn test_post_compress_recall_surfaces() {
+async fn test_post_compress_recall_injects() {
     let memory = Arc::new(RecordingMemory::new());
     memory.seed(MemoryEntry::new(
         "cycled-fact",
@@ -405,8 +405,8 @@ async fn test_post_compress_recall_surfaces() {
         "compress must make progress (fold the oldest turn)"
     );
 
-    // Turn after compress: surfaced scan is empty (memory-recall folded),
-    // so recall re-surfaces the entry.
+    // Turn after compress: injected-key scan is empty (memory-recall folded),
+    // so recall re-injects the entry.
     let _result = runner
         .run(session, "tell me about memory again".into())
         .await;
@@ -414,7 +414,7 @@ async fn test_post_compress_recall_surfaces() {
     let latest = captured.last().expect("at least one more turn ran");
     assert!(
         latest.user_text.contains("cycled-fact"),
-        "memory must re-surface post-compress in the latest turn: {}",
+        "memory must re-inject post-compress in the latest turn: {}",
         latest.user_text
     );
 }

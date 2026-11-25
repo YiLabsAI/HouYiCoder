@@ -11,8 +11,18 @@
 //! Collapsing them hides the real cause from the caller.
 
 use std::collections::HashSet;
+use std::iter::once;
 
 use houyicoder_protocol::llm::EffortLevel;
+
+/// The mutating memory tools that must never be accessible to any child runner.
+pub const MUTATING_MEMORY_TOOLS: &[&str] = &[
+    "memory_write",
+    "memory_delete",
+    "memory_archive",
+    "memory_promote",
+    "memory_demote",
+];
 
 /// Where a sub-agent runs relative to the parent's working tree.
 ///
@@ -315,14 +325,9 @@ pub fn built_in_general_purpose() -> AgentDefinition {
         subagent_type: "general-purpose".to_string(),
         when_to_use: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. Delegate here when you are unsure where a keyword or file lives, or when no specialized agent fits.".to_string(),
         tools: None,
-        disallowed_tools: vec![
-            "agent".to_string(),
-            "memory_write".to_string(),
-            "memory_delete".to_string(),
-            "memory_archive".to_string(),
-            "memory_promote".to_string(),
-            "memory_demote".to_string(),
-        ],
+        disallowed_tools: once("agent".to_string())
+            .chain(MUTATING_MEMORY_TOOLS.iter().map(|s| s.to_string()))
+            .collect(),
         model: None,
         effort: None,
         permission_mode: None,

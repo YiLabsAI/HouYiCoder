@@ -85,14 +85,10 @@ pub(super) fn build_spawn_request(
         ..this.config.clone()
     };
     let mut disallowed = def.disallowed_tools.clone();
-    for tool in [
-        "memory_write",
-        "memory_delete",
-        "memory_archive",
-        "memory_promote",
-        "memory_demote",
-    ] {
-        disallowed.push(tool.to_string());
+    for tool in MUTATING_MEMORY_TOOLS {
+        if !disallowed.iter().any(|d| d == *tool) {
+            disallowed.push(tool.to_string());
+        }
     }
     if !memory_allowed {
         disallowed.push("memory_read".to_string());

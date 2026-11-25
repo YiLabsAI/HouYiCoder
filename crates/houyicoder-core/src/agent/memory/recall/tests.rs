@@ -1,4 +1,4 @@
-//! Recall selection, surfaced scan, and injection tests.
+//! Recall selection, injected key scan, and injection tests.
 
 use super::*;
 use crate::agent::manifest::{CompressPolicy, HeuristicSummarizer, build_manifest};
@@ -125,11 +125,11 @@ fn test_scan_excludes_folded() {
     let (keys, bytes) = injected_key_scan(&events, Some(&manifest), None);
     assert!(
         !keys.contains("folded"),
-        "a Summarized memory-recall must drop out of the surfaced set"
+        "a Summarized memory-recall must drop out of the injected set"
     );
     assert!(
         keys.contains("kept"),
-        "a Verbatim memory-recall must stay in the surfaced set"
+        "a Verbatim memory-recall must stay in the injected set"
     );
     let one = "<system-reminder>...</system-reminder>".len();
     assert_eq!(bytes, one, "a folded recall's bytes drop out of the total");
@@ -178,10 +178,10 @@ impl StubProvider {
 }
 
 impl MemoryProvider for StubProvider {
-    fn rank_candidates(&self, _q: &str, surfaced: &HashSet<String>) -> Vec<MemoryRankHit> {
+    fn rank_candidates(&self, _q: &str, injected: &HashSet<String>) -> Vec<MemoryRankHit> {
         self.rows
             .iter()
-            .filter(|h| !surfaced.contains(&h.key))
+            .filter(|h| !injected.contains(&h.key))
             .cloned()
             .collect()
     }

@@ -47,6 +47,9 @@ use std::time::UNIX_EPOCH;
 /// bounded number of entries even with short lines.
 const MAX_ENTRYPOINT_LINES: usize = 200;
 
+/// Maximum parsed topic records kept in the in-process cache before a clear.
+const TOPIC_CACHE_CAP: usize = 512;
+
 /// Markdown directory memory provider with a derived index. Holds an
 /// ordered list of roots (user, project, auto); recall scans every root
 /// and merges, write lands in the last root (the auto/write scope).
@@ -54,6 +57,7 @@ pub struct MarkdownMemoryProvider {
     roots: Vec<PathBuf>,
     write_lock: Mutex<()>,
     max_lines: usize,
+    auto_expire: bool,
     topic_cache: Mutex<HashMap<PathBuf, CachedTopic>>,
 }
 
@@ -93,8 +97,25 @@ impl MarkdownMemoryProvider {
             roots,
             write_lock: Mutex::new(()),
             max_lines,
+            auto_expire: false,
             topic_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Enable or disable time-based decay expiration of auto memories into
+    /// archive/. Disabled by default so memories are only archived on
+    /// explicit replacement or manual tool deletion.
+    pub fn with_auto_expire(mut self, enabled: bool) -> Self {
+        self.auto_expire = enabled;
+        self
+    }
+
+    pub fn set_auto_expire(&mut self, enabled: bool) {
+        self.auto_expire = enabled;
+    }
+
+    pub fn auto_expire(&self) -> bool {
+        self.auto_expire
     }
 
     /// The write target root (the last root, i.e. the auto scope).
@@ -520,6 +541,9 @@ impl MemoryProvider for MarkdownMemoryProvider {
         let query_has_words = !prepared.is_empty();
         let multi_word_query = prepared.len() >= 2;
         let mut cache = self.topic_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= TOPIC_CACHE_CAP {
+            cache.clear();
+        }
         for t in fresh {
             let entry = if let Some(hit) = cache.get(&t.path)
                 && hit.mtime_nanos == t.mtime_nanos

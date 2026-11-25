@@ -40,7 +40,8 @@ use houyicoder_async::CancellationToken;
 use houyicoder_core::agent::multi_agent::SpawnError;
 use houyicoder_core::agent::multi_agent::child_prompt::build_child_prompt;
 use houyicoder_core::agent::multi_agent::registry::{
-    AgentBackend, AgentDefinition, AgentError, MemoryScope as AgentMemoryScope, PromptSource,
+    AgentBackend, AgentDefinition, AgentError, MUTATING_MEMORY_TOOLS,
+    MemoryScope as AgentMemoryScope, PromptSource,
 };
 use houyicoder_core::agent::runner_config::RunnerConfig;
 use houyicoder_core::agent::{MemoryGates, MemoryReadTool, MemorySearchTool, render_child_memory};

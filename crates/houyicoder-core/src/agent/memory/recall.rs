@@ -1,6 +1,6 @@
 //! Recalls memory once per user query.
 //!
-//! Surfaced keys come from the assembled context, so compaction naturally
+//! Injected keys come from the assembled context, so compaction naturally
 //! permits relevant memories to appear again. A confident lexical selection
 //! injects synchronously; a weak signal runs the semantic stage alongside
 //! the main model call and appends its recall on completion, so the first
@@ -176,7 +176,7 @@ async fn execute_recall(
         .log();
         return Ok(());
     }
-    // Candidates a still-running selection holds are treated as surfaced,
+    // Candidates a still-running selection holds are treated as already injected,
     // so a second recall in the same turn neither re-selects nor
     // double-injects them.
     injected_keys.extend(reserved);
@@ -316,9 +316,9 @@ async fn inject_selected(
 
 /// Memory tool names whose key the model has already seen. A successful
 /// write or read of a key puts its text in the model's view, so a recall of
-/// that key only repeats it. Both the current name and the planned new name
-/// are recognized so suppression works across tool configuration changes.
-const SEEN_KEY_TOOLS: [&str; 4] = ["save_memory", "show_memory", "memory_write", "memory_read"];
+/// that key only repeats it. Both canonical memory_* names and legacy aliases
+/// are recognized so resumed historical sessions correctly detect seen keys.
+const SEEN_KEY_TOOLS: [&str; 4] = ["memory_write", "memory_read", "save_memory", "show_memory"];
 
 /// Keys this session successfully wrote or read. A call whose result failed
 /// or has not completed yet is excluded, so only completed, successful

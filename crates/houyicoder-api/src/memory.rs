@@ -1,5 +1,5 @@
 //! Memory ports: the engine-facing MemoryProvider trait plus the pluggable
-//! MemoryStore backend seam. Signatures reference context payload types
+//! MemoryStore backend interface. Signatures reference context payload types
 //! (MemoryEntry, MemoryError). The concrete providers (markdown directory,
 //! in-process keyword, Python sidecar) live in the memory crate; the engine
 //! depends on these traits so it does not depend on any impl crate.
@@ -24,11 +24,11 @@
 //! rather than tracking them in provider state — the reset is a natural
 //! consequence of the assembly, not a separate cleanup step.
 //!
-//! MemoryStore is a thin backend seam: markdown is the default impl, a future
-//! SqliteStore can impl the same seam with zero change to the recall engine
+//! MemoryStore is a thin backend interface: markdown is the default impl, a future
+//! SqliteStore can impl the same interface with zero change to the recall engine
 //! (the engine holds a provider trait object; the markdown provider wraps a
 //! store trait object). No Sqlite/PG impl is built — markdown-only is
-//! intentional; the seam is left open for million-scale later.
+//! intentional; the interface is left open for million-scale later.
 
 use crate::agent_event::MemoryChange;
 use houyicoder_async::PFut;
@@ -256,7 +256,7 @@ pub trait MemoryProvider: Send + Sync {
         Vec::new()
     }
     /// Increment recall_hits and update last_access_ts for the given keys
-    /// (the keys a recall just surfaced). The write is best-effort, so a
+    /// (the keys a recall just returned). The write is best-effort, so a
     /// failure logs and the counters re-accumulate next time, never failing
     /// the recall path. Default no-op for providers without a sidecar.
     fn record_recall_hits(&self, _keys: &[String]) {}
@@ -299,12 +299,12 @@ pub trait MemoryReranker: Send + Sync {
     ) -> PFut<'_, RerankOutcome>;
 }
 
-/// Pluggable backend seam. markdown is the default impl; a future SqliteStore
-/// impls the same seam with zero change to the recall engine. scan returns
+/// Pluggable backend interface. markdown is the default impl; a future SqliteStore
+/// impls the same interface with zero change to the recall engine. scan returns
 /// entries (a lighter header-only type is a future refinement, deferred);
 /// read returns the full entry body for a key; write lands the topic file
 /// plus derived index pointer atomically; rebuild regenerates the index.
-/// De-dup is caller-driven (surfaced on the provider seam), so the store
+/// De-dup is caller-driven (injected keys on the provider boundary), so the store
 /// carries no de-dup state.
 pub trait MemoryStore: Send + Sync {
     /// Phase1 scan: entry summaries (frontmatter plus light metadata, no

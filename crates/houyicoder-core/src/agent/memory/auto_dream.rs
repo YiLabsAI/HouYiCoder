@@ -16,11 +16,12 @@
 //! sees a clean store on entry and the derived index regenerates from the
 //! final topic set on exit — no hand-maintained index that can drift.
 //!
-//! Scope promote/demote: the forked agent calls promote_memory / demote_memory
-//! to move a topic between the auto and project scopes. save_memory is pinned
-//! to the auto root for the dream, with one host-side exception: refreshing a
-//! key that already lives in the project root writes that root in place, so
-//! the explicit entry is updated rather than shadowed.
+//! Scope promote/demote runs as host-side deterministic maintenance: auto
+//! memories with repeated signals promote to project scope, while explicit
+//! memory_promote / memory_demote tools remain available to the main agent.
+//! memory_write is pinned to the auto root for the dream, with one host-side
+//! exception: refreshing a key that already lives in the project root writes
+//! that root in place, so the explicit entry is updated rather than shadowed.
 
 use std::fs::File;
 use std::fs::FileTimes;
@@ -305,9 +306,8 @@ fn format_recall_stats(stats: &[MemoryRecallStats], now: u64) -> String {
 /// Build the consolidation prompt for the forked dream agent. Four phases:
 /// Orient (scan the memory store + recall-frequency stats), Consolidate
 /// (merge near-duplicates, resolve contradictions), Prune (drop dead weight
-/// surfaced by the recall-frequency stats via delete_memory), and Scope-flow
-/// (promote high-recall entries into the project scope so the rule no
-/// longer relies on recall luck).
+/// indicated by recall-frequency stats via memory_delete), and Scope-flow
+/// (promote high-recall entries into the project scope via host maintenance).
 pub(crate) fn build_consolidation_prompt(
     memory_root: &str,
     listing: &[MemorySummary],

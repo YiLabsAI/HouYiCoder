@@ -44,7 +44,7 @@ impl MemoryWriteTool {
         }
     }
 
-    /// The forked-extraction seam in one step: recorder, extractor origin,
+    /// The forked-extraction tool setup in one step: recorder, extractor origin,
     /// the auto-root pin, and the evidence window every save must quote. A
     /// scope choice offered to the extraction model gets taken, and the write
     /// then lands outside the isolated auto root — the pinned tool exposes no
@@ -75,8 +75,8 @@ impl MemoryWriteTool {
     }
 
     /// Thread a write recorder so a successful save bumps it. The forked
-    /// extraction seam resets before a pass and reads after to fire one
-    /// AutoMemory notice; the main-agent seam leaves the recorder for the
+    /// extraction pass resets before a run and reads after to fire one
+    /// AutoMemory notice; the main-agent tool leaves the recorder for the
     /// runtime to drain when the turn settles into a PrimaryAgent notice.
     pub(crate) fn with_recorder(mut self, recorder: Arc<MutationLog>) -> Self {
         self.recorder = Some(recorder);
@@ -138,7 +138,7 @@ impl Tool for MemoryWriteTool {
             "additionalProperties": false
         });
         if self.requires_evidence {
-            // The extraction seam grounds every save in window evidence: one
+            // Extraction grounds every save in window evidence: one
             // to three quotes the forked agent copies from the conversation it
             // saw, validated host-side as a substring of a window event's body
             // so a manifest-only fact (no window quote) is rejected.
@@ -322,7 +322,7 @@ fn parse_replaces(input: &Value) -> Vec<String> {
 /// where the save refreshes that root in place. Writing the refresh into
 /// the pinned root would create a competing copy that shadows the explicit
 /// entry by newest-mtime and the refresh would be lost on the next
-/// reconcile. Other roots stay closed to the pinned seam.
+/// reconcile. Other roots stay closed to the pinned tool.
 fn refresh_root(provider: &dyn MemoryProvider, key: &str, pinned: MemoryScope) -> MemoryScope {
     let refreshes_project = provider.scopes_for_key(key).contains(&MemoryScope::Project);
     if refreshes_project && pinned != MemoryScope::Project {

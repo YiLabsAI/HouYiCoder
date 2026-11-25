@@ -281,7 +281,7 @@ async fn test_save_rejects_missing_field() {
     );
 }
 
-/// Auto-approve is required by the forked-extract write seam because a
+/// Auto-approve is required by the forked-extract write tool because a
 /// true gate would queue approvals with no responder.
 #[test]
 fn test_save_memory_auto_approves() {
@@ -369,7 +369,7 @@ fn test_extraction_schema_hides_scope() {
     let req = schema["required"].as_array().expect("required array");
     assert!(
         req.contains(&json!("evidence")),
-        "evidence is required on the extraction seam"
+        "evidence is required on the extraction tool"
     );
 }
 
@@ -410,13 +410,13 @@ async fn test_extraction_pin_ignores_input() {
     assert_eq!(
         writes[0].origin,
         MemoryOrigin::Extractor,
-        "the seam stamps the writer"
+        "the host stamps the writer"
     );
     assert_eq!(recorder.take().len(), 1, "the save notifies once");
 }
 
 /// A save without evidence is rejected before any write: the extraction
-/// seam grounds every save in a window quote. Pre-fix this was accepted.
+/// tool grounds every save in a window quote. Pre-fix this was accepted.
 #[tokio::test]
 async fn test_extraction_rejects_no_evidence() {
     let p = provider();
@@ -517,7 +517,7 @@ async fn test_extraction_accepts_normalized_quote() {
     assert_eq!(recorder.take().len(), 1, "a grounded save notifies once");
 }
 
-/// Evidence with more than three quotes is rejected: the seam caps the
+/// Evidence with more than three quotes is rejected: the host caps the
 /// citation count so a save cannot pad with decoy quotes.
 #[tokio::test]
 async fn test_extraction_rejects_too_many() {

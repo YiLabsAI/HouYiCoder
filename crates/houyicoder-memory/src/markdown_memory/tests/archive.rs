@@ -178,7 +178,7 @@ fn test_replace_preserves_scope() {
 
 #[test]
 fn test_reconcile_batch_moves_once() {
-    let fx = MultiFixture::new("reconcile");
+    let mut fx = MultiFixture::new("reconcile");
     fx.provider
         .add(MemoryEntry::new(
             "hot-feedback",
@@ -205,13 +205,22 @@ fn test_reconcile_batch_moves_once() {
         .set_times(FileTimes::new().set_modified(old_time))
         .expect("stamp old mtime");
 
+    assert!(!fx.provider.auto_expire());
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let changes = fx.provider.reconcile_scopes(now);
-    assert_eq!(changes.len(), 2);
+    // By default auto_expire is false, so stale-proj is spared while hot-feedback promotes.
+    let default_changes = fx.provider.reconcile_scopes(now);
+    assert_eq!(default_changes.len(), 1);
     assert!(fx.project.join("hot-feedback.md").is_file());
+    assert!(fx.auto.join("stale-proj.md").is_file());
+
+    // When auto_expire is enabled, stale-proj expires into archive/.
+    fx.provider.set_auto_expire(true);
+    assert!(fx.provider.auto_expire());
+    let changes = fx.provider.reconcile_scopes(now);
+    assert_eq!(changes.len(), 1);
     assert!(fx.auto.join("archive").join("stale-proj.md").is_file());
 }
 
@@ -262,4 +271,50 @@ fn test_demote_and_user_guard() {
         fx.provider.show_memory("hand-note").unwrap().content,
         "User authored."
     );
+}
+
+#[test]
+fn test_project_type_promotes() {
+    let fx = MultiFixture::new("proj-promo");
+    fx.provider
+        .add(MemoryEntry::new(
+            "arch-decision",
+            "Project architecture fact.",
+            MemoryType::Project,
+        ))
+        .expect("add project memory");
+    fx.provider.record_recall_hits(&["arch-decision".into()]);
+    // Simulate 8 recall hits
+    for _ in 0..7 {
+        fx.provider.record_recall_hits(&["arch-decision".into()]);
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let changes = fx.provider.reconcile_scopes(now);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].key, "arch-decision");
+    assert_eq!(changes[0].scope, MemoryScope::Project);
+    assert!(fx.project.join("arch-decision.md").is_file());
+
+    // Reference type in auto scope is not promoted even with hits
+    fx.provider
+        .add(MemoryEntry::new(
+            "ref-book",
+            "Reference material.",
+            MemoryType::Reference,
+        ))
+        .expect("add reference memory");
+    for _ in 0..8 {
+        fx.provider.record_recall_hits(&["ref-book".into()]);
+    }
+    let ref_changes = fx.provider.reconcile_scopes(now);
+    assert!(ref_changes.is_empty());
+}
+
+#[test]
+fn test_provider_expire_builder() {
+    let p = MarkdownMemoryProvider::new(temp_dir().join("expire-bld")).with_auto_expire(true);
+    assert!(p.auto_expire());
 }

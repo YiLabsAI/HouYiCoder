@@ -80,7 +80,7 @@ impl ModelProvider for StubGateProvider {
     }
 }
 
-/// The cumulative byte cap skips recall once the session has surfaced enough
+/// The cumulative byte cap skips recall once the session has injected enough
 /// memory. A pre-populated memory-recall event over the 60KB cap means the
 /// next inject does not call recall, so no new memory-recall event is
 /// appended. Calls memory.recall directly (no run) — the gate reads
@@ -182,7 +182,7 @@ async fn test_recall_records_bytes() {
 
 /// auto_memory off skips turn-entry recall even when the store has a matching
 /// entry + the query is multi-word: the toggle gate is the first check, before
-/// the surfaced/byte-cap/query gates. Covers the toggle gate line.
+/// the byte-cap/query gates. Covers the toggle gate line.
 #[tokio::test]
 async fn test_toggle_off_skips_recall() {
     let provider: Arc<dyn ModelProvider> = Arc::new(StubGateProvider);

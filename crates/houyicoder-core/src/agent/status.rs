@@ -83,13 +83,13 @@ pub struct StatusSnapshot {
     pub context_used_tokens: Option<u32>,
     /// The resolved context window for the active model — the value
     /// resolve_capabilities returns (a learned enforced limit, the catalog,
-    /// or the provider caps fallback). Surfaced so the host can render
+    /// or the provider caps fallback). Exposed so the host can render
     /// last_input / window (XX%) without importing provider types. Reads
-    /// the live active_model so a /model switch surfaces immediately.
+    /// the live active_model so a /model switch appears immediately.
     pub context_window: u32,
     /// Total tool calls the model asked for. Each one is either an execution
     /// (success or error), a refusal, or a call answered without running.
-    /// Surfaces how chatty the agent is.
+    /// Shows how chatty the agent is.
     pub tool_calls: u32,
     /// Tool executions that returned a value (not an error payload).
     pub tool_success: u32,
@@ -111,7 +111,7 @@ pub struct UsageAccumulator {
     last_input_tokens: u32,
     /// Total tool calls the model asked for this session: executions,
     /// refusals, and calls answered without running. Counted in
-    /// resolve_turn after each batch; surfaced in /context so the user sees
+    /// resolve_turn after each batch; presented in /context so the user sees
     /// how chatty the agent is.
     tool_calls: u32,
     /// Tool executions that returned a value (not an {"error": ..} payload).

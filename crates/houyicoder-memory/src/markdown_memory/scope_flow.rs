@@ -360,12 +360,14 @@ impl MarkdownMemoryProvider {
         let project_root = self.root_for_scope(MemoryScope::Project).to_path_buf();
         let mut changes = Vec::new();
 
+        let auto_expire = self.auto_expire;
         for s in &summaries {
             if let Some(change) = Self::reconcile_entry(
                 s,
                 stats.get(&s.key),
                 now_secs,
                 multi_scope,
+                auto_expire,
                 &auto_root,
                 &project_root,
             ) {
@@ -390,6 +392,7 @@ impl MarkdownMemoryProvider {
         stat: Option<&StatRecord>,
         now_secs: u64,
         multi_scope: bool,
+        auto_expire: bool,
         auto_root: &Path,
         project_root: &Path,
     ) -> Option<MemoryChange> {
@@ -409,11 +412,18 @@ impl MarkdownMemoryProvider {
             now_secs.saturating_sub(last_access) / 86_400
         };
 
-        if multi_scope
-            && effective_scope == MemoryScope::Auto
-            && s.memory_type == MemoryType::Feedback
-            && (violations >= 2 || occurrences >= 2 || hits >= 8)
-        {
+        // Promotion:
+        // Auto-scoped feedback rules with repeated violations/hits/occurrences promote to project scope.
+        // Auto-scoped project facts with repeated recall hits (>= 8) or occurrences (>= 2) also promote
+        // to project scope, ensuring high-frequency durable project facts survive and prioritize in the memory index
+        // without crowding out active rules (which exclusively admits feedback rules).
+        let eligible_for_promotion = match s.memory_type {
+            MemoryType::Feedback => violations >= 2 || occurrences >= 2 || hits >= 8,
+            MemoryType::Project => hits >= 8 || occurrences >= 2,
+            _ => false,
+        };
+
+        if multi_scope && effective_scope == MemoryScope::Auto && eligible_for_promotion {
             let src = auto_root.join(format!("{}.md", s.key));
             let dst = project_root.join(format!("{}.md", s.key));
             if src.is_file() && fs::create_dir_all(project_root).is_ok() {
@@ -464,7 +474,11 @@ impl MarkdownMemoryProvider {
             }
         }
 
-        if effective_scope == MemoryScope::Auto
+        // Time-based decay expiration:
+        // Gated on auto_expire (default false) to prevent silent data loss based on unproven day thresholds.
+        // Replaces in write_or_replace_in_scope always deterministically archives superseded copies.
+        if auto_expire
+            && effective_scope == MemoryScope::Auto
             && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
         {
             let expired = match s.memory_type {

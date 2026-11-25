@@ -1,5 +1,7 @@
 //! Markdown memory ranking, atomic writes, index repair, and boundary behavior.
 
+use super::super::io::CachedTopic;
+use super::super::io::Frontmatter;
 use super::super::io::INDEX_BYTE_CAP;
 use super::super::io::MAX_KEY_BYTES;
 use super::super::*;
@@ -58,6 +60,37 @@ fn test_rank_orders_frontmatter_hits() {
 }
 
 #[test]
+fn test_cache_cap_evicts() {
+    let root = temp_root();
+    let p = MarkdownMemoryProvider::new(root.clone());
+    p.add(entry("fox", "fox text", MemoryType::Project))
+        .unwrap();
+    {
+        let mut cache = p.topic_cache.lock().unwrap();
+        for i in 0..520 {
+            cache.insert(
+                root.join(format!("dummy_{i}.md")),
+                CachedTopic {
+                    mtime_nanos: 0,
+                    byte_len: 0,
+                    frontmatter: Frontmatter {
+                        name: String::new(),
+                        description: String::new(),
+                        memory_type: MemoryType::Project,
+                        origin: MemoryOrigin::Unknown,
+                    },
+                    lower_body: "".into(),
+                },
+            );
+        }
+    }
+    let out = p.rank_candidates("fox", &HashSet::new());
+    assert!(!out.is_empty());
+    assert!(p.topic_cache.lock().unwrap().len() <= 2);
+    remove_dir_all(&root).ok();
+}
+
+#[test]
 fn test_rank_dedups_already_surfaced() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
@@ -67,27 +100,27 @@ fn test_rank_dedups_already_surfaced() {
         MemoryType::Project,
     ))
     .unwrap();
-    // First rank with an empty surfaced set returns the entry; the caller
-    // records its key as surfaced for the next call.
+    // First rank with an empty injected set returns the entry; the caller
+    // records its key as injected for the next call.
     let first = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(first.len(), 1);
-    let mut surfaced: HashSet<String> = first.iter().map(|e| e.key.clone()).collect();
-    // Second rank with the surfaced set must not return the entry.
-    let second = p.rank_candidates("fox", &surfaced);
-    assert!(second.is_empty(), "a surfaced entry must be skipped");
-    // After a compaction-style reset (empty surfaced set), the entry is
+    let mut injected: HashSet<String> = first.iter().map(|e| e.key.clone()).collect();
+    // Second rank with the injected set must not return the entry.
+    let second = p.rank_candidates("fox", &injected);
+    assert!(second.is_empty(), "an injected entry must be skipped");
+    // After a compaction-style reset (empty injected set), the entry is
     // eligible again — the natural reset the assembly scan produces.
-    surfaced.clear();
-    let third = p.rank_candidates("fox", &surfaced);
+    injected.clear();
+    let third = p.rank_candidates("fox", &injected);
     assert_eq!(third.len(), 1);
     remove_dir_all(&root).ok();
 }
 
-/// A key in the surfaced set passed to the rank suppresses that entry;
-/// clearing the set re-surfaces it. Pins the caller-driven surfaced contract
-/// that replaces the old in-provider mutable de-dup seam.
+/// A key in the injected set passed to the rank suppresses that entry;
+/// clearing the set returns it again. Pins the caller-driven injected contract
+/// that replaces in-provider mutable de-dup state.
 #[test]
-fn test_surfaced_param_suppresses() {
+fn test_injected_param_suppresses() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     p.add(entry(
@@ -96,19 +129,19 @@ fn test_surfaced_param_suppresses() {
         MemoryType::Project,
     ))
     .unwrap();
-    // surfaced = {fox-facts}: the rank skips it.
-    let mut surfaced = HashSet::new();
-    surfaced.insert("fox-facts".to_string());
+    // injected = {fox-facts}: the rank skips it.
+    let mut injected = HashSet::new();
+    injected.insert("fox-facts".to_string());
     assert!(
-        p.rank_candidates("fox", &surfaced).is_empty(),
-        "surfaced key must be suppressed"
+        p.rank_candidates("fox", &injected).is_empty(),
+        "injected key must be suppressed"
     );
-    // Empty surfaced set: fox re-surfaces.
-    surfaced.clear();
+    // Empty injected set: fox returns.
+    injected.clear();
     assert_eq!(
-        p.rank_candidates("fox", &surfaced).len(),
+        p.rank_candidates("fox", &injected).len(),
         1,
-        "cleared surfaced set must re-surface the entry"
+        "cleared injected set must return the entry again"
     );
     remove_dir_all(&root).ok();
 }
@@ -377,39 +410,38 @@ fn test_round_trip_preserves_fields() {
     remove_dir_all(&root).ok();
 }
 
-/// Successive ranks with an accumulating surfaced set shrink until
+/// Successive ranks with an accumulating injected set shrink until
 /// exhausted: the second call skips what the first returned; once all
-/// matches are surfaced, the rank is empty. Pins the caller-driven surfaced
-/// contract at the provider boundary.
+/// matches are injected, the rank is empty.
 #[test]
-fn test_surfaced_set_exhausts() {
+fn test_injected_set_exhausts() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     p.add(entry("fox-a", "alpha fox", MemoryType::Project))
         .unwrap();
     p.add(entry("fox-b", "bravo fox", MemoryType::Project))
         .unwrap();
-    let mut surfaced = HashSet::new();
+    let mut injected = HashSet::new();
     // First rank lists both fox entries.
-    let first = p.rank_candidates("fox", &surfaced);
+    let first = p.rank_candidates("fox", &injected);
     assert_eq!(first.len(), 2);
-    surfaced.extend(first.iter().map(|e| e.key.clone()));
-    // Both surfaced: the rank is empty.
+    injected.extend(first.iter().map(|e| e.key.clone()));
+    // Both injected: the rank is empty.
     assert!(
-        p.rank_candidates("fox", &surfaced).is_empty(),
-        "all matches surfaced must return empty"
+        p.rank_candidates("fox", &injected).is_empty(),
+        "all matches injected must return empty"
     );
-    // Clear the set: both entries surface again.
-    surfaced.clear();
-    assert_eq!(p.rank_candidates("fox", &surfaced).len(), 2);
+    // Clear the set: both entries return again.
+    injected.clear();
+    assert_eq!(p.rank_candidates("fox", &injected).len(), 2);
     remove_dir_all(&root).ok();
 }
 
-/// The rank carries no result cap and the surfaced filter runs before
+/// The rank carries no result cap and the injected filter runs before
 /// ranking, so entries already in context never crowd out fresh candidates:
-/// with five of six surfaced, the sixth still ranks.
+/// with five of six injected, the sixth still ranks.
 #[test]
-fn test_rank_fresh_after_surfaced() {
+fn test_rank_fresh_after_injected() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     for i in 0..6 {
@@ -420,22 +452,22 @@ fn test_rank_fresh_after_surfaced() {
         ))
         .unwrap();
     }
-    let mut surfaced = HashSet::new();
+    let mut injected = HashSet::new();
     // First rank lists every candidate; the host caps the selection later.
-    let first = p.rank_candidates("fox", &surfaced);
+    let first = p.rank_candidates("fox", &injected);
     assert_eq!(first.len(), 6, "the rank lists every candidate");
-    surfaced.extend(first.iter().take(5).map(|e| e.key.clone()));
+    injected.extend(first.iter().take(5).map(|e| e.key.clone()));
     // Second rank must return the one fresh entry, not empty.
-    let second = p.rank_candidates("fox", &surfaced);
+    let second = p.rank_candidates("fox", &injected);
     assert_eq!(
         second.len(),
         1,
-        "the fresh entry still ranks after five are surfaced"
+        "the fresh entry still ranks after five are injected"
     );
-    surfaced.extend(second.iter().map(|e| e.key.clone()));
-    // Third rank: all surfaced, returns empty.
-    let third = p.rank_candidates("fox", &surfaced);
-    assert!(third.is_empty(), "all surfaced must return empty");
+    injected.extend(second.iter().map(|e| e.key.clone()));
+    // Third rank: all injected, returns empty.
+    let third = p.rank_candidates("fox", &injected);
+    assert!(third.is_empty(), "all injected must return empty");
     remove_dir_all(&root).ok();
 }
 

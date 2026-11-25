@@ -135,10 +135,10 @@ pub enum SessionEvent {
     },
     /// A per-turn recall of memory entries the runner injects as a user-role
     /// system-reminder attachment at the conversation tail, not authored by
-    /// the human. The keys field carries the surfaced memory file stems so the
+    /// the human. The keys field carries the injected memory file stems so the
     /// next turn recall can dedup-scan the transcript. The checkpoint
     /// planner disposes this as Summarized so compaction folds it out of the
-    /// assembled context, which makes surfaced scanning naturally reset with
+    /// assembled context, which makes injected-key scanning naturally reset with
     /// no explicit clear.
     #[serde(rename = "MemoryRecall")]
     MemoryRecall {

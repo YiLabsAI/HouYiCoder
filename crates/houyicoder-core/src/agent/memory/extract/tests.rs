@@ -257,7 +257,7 @@ async fn test_forked_extract_clones_prefix() {
 /// install_memory registers the memory tool set on the runner: the write
 /// tool plus the two read-only tools an agent needs to find a memory again
 /// and read one body back. A read tool registered only on the dream fork
-/// leaves the main agent unable to inspect what recall surfaced.
+/// leaves the main agent unable to inspect what recall injected.
 #[test]
 fn test_install_memory_registers_tool() {
     let store: Arc<dyn SessionLog> = Arc::new(SessionStore::new(Box::new(InMemoryBackend::new())));

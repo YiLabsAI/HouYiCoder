@@ -434,7 +434,7 @@ fn advance_cursor(cursor: &Mutex<Option<EventId>>, messages: &[SessionLogEntry])
     }
 }
 
-/// Whether the tail holds a memory_write call that succeeded.
+/// Whether the tail holds a memory_write (or legacy save_memory in historical replays) call that succeeded.
 fn primary_saved_in(tail: &[SessionLogEntry]) -> bool {
     let save_call_ids: Vec<&str> = tail
         .iter()

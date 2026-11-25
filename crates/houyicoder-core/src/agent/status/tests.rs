@@ -417,7 +417,7 @@ fn test_snapshot_reports_breaker() {
         .record(&usage(12_400, 9_100, 10_000));
     let snap = runner.status_snapshot();
     assert_eq!(snap.model, "stub-model");
-    // The breaker state is surfaced as a render label, not the resilience
+    // The breaker state is rendered as a status label, not the resilience
     // enum — the host never names the type. Trip reason arrives as a
     // pre-rendered string carrying the AggregateCpuExceeded figures.
     assert_eq!(snap.breaker_state, Some("Open"));
@@ -425,7 +425,7 @@ fn test_snapshot_reports_breaker() {
         snap.breaker_reason.as_deref(),
         Some(s) if s.contains("AggregateCpuExceeded") && s.contains("11s") && s.contains("10s")
     ));
-    // Open with cool-down unelapsed: a remaining duration is surfaced.
+    // Open with cool-down unelapsed: a remaining duration is reported.
     assert!(snap.breaker_cool_down.is_some());
     assert_eq!(snap.cumulative_usage.input_tokens, 12_400);
     assert_eq!(snap.last_input_tokens, 12_400);

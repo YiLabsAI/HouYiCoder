@@ -677,7 +677,7 @@ async fn test_claim_skips_body() {
 /// A reward snapshot with only redundant clusters (no blind retries) does
 /// NOT fire the reward-dream gate — the gate keys on retry_after_error
 /// (agent decision), not redundant clusters (context loss is a different
-/// signal, surfaced separately in the snapshot).
+/// signal, reported separately in the snapshot).
 #[tokio::test]
 async fn test_reward_skip_redundant_only() {
     let root = temp_dir("reward-redundant");

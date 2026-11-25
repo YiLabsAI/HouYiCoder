@@ -20,12 +20,12 @@ use crate::observability::evolution::RedundancyKind;
 use houyicoder_context::SessionEvent;
 use std::cmp::Reverse;
 
-/// Maximum tools surfaced by fail count, so a pathological tool storm does
+/// Maximum tools listed by fail count, so a pathological tool storm does
 /// not bloat the dream prompt.
 const FAILURE_HOTSPOT_TOP: usize = 5;
 /// Maximum distinct reasons kept per hotspot.
 const FAILURE_REASONS_PER_HOTSPOT: usize = 3;
-/// Maximum redundant clusters surfaced.
+/// Maximum redundant clusters listed.
 const REDUNDANT_CLUSTER_TOP: usize = 10;
 
 /// One failure hotspot worth dreaming about.
@@ -60,10 +60,10 @@ pub struct CostWaste {
 }
 
 /// Typed read-only reward snapshot. Taken under short locks at the
-/// FinalOutput seam, cloned out, then handed to the dream. The dream agent
+/// FinalOutput boundary, cloned out, then handed to the dream. The dream agent
 /// sees this alongside the recall_stats + gate_violations it already had —
 /// two reward channels (observability structured + memory gate-violations)
-/// merged at the single prompt-assembly seam, each with one producer.
+/// merged at the single prompt-assembly stage, each with one producer.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RewardSnapshot {
     pub failures: Vec<FailureHotspot>,

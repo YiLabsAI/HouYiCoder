@@ -228,7 +228,7 @@ impl RecallTelemetry {
 /// main model call and appends its recall on completion, so the first token
 /// never waits on the semantic stage. While a selection runs, its candidate
 /// keys stay reserved for the session so a second recall in the same turn
-/// treats them as surfaced instead of spawning a duplicate selection. The
+/// treats them as already injected instead of spawning a duplicate selection. The
 /// drain gives the appends a bounded window at shutdown.
 #[derive(Default)]
 pub(crate) struct RecallTasks {
@@ -264,7 +264,7 @@ impl RecallTasks {
 
     /// Candidate keys reserved by still-running selections for one session.
     /// A finished selection needs no reservation because its append is in
-    /// the assembly, so the surfaced scan takes over from there.
+    /// the assembly, so the injected-key scan takes over from there.
     pub(crate) fn pending_keys(&self, session: SessionId) -> HashSet<String> {
         self.running
             .lock()

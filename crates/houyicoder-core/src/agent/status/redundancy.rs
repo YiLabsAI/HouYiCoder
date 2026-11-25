@@ -50,7 +50,8 @@ const LEDGER_CAP: usize = 512;
 /// call after one of these is NOT redundant (the state changed). Tracked via
 /// the global last-write seq — coarse (a write to file X exempts a re-read
 /// of file Y) but false-negative-safe: it can only miss a redundant flag,
-/// never raise a false one. Per-path precision is a later refinement.
+/// never raise a false one. Legacy save_memory and delete_memory are included
+/// so resumed historical session logs correctly register state transitions.
 const WRITE_TOOLS: &[&str] = &[
     "write",
     "edit",

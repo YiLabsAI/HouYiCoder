@@ -232,7 +232,7 @@ async fn test_tasks_drain_awaits() {
 }
 
 /// A running selection reserves its candidate keys for its own session;
-/// finishing releases them, since the surfaced scan then sees the
+/// finishing releases them, since the injected-key scan then sees the
 /// append.
 #[tokio::test]
 async fn test_pending_keys_reserve() {
