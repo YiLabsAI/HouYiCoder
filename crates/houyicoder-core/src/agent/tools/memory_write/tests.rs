@@ -764,7 +764,7 @@ async fn test_save_replaces_and_refreshes() {
         auto.clone(),
     ]));
     mp.add_in_scope(
-        MemoryEntry::new("user-key", "v1", MemoryType::User),
+        MemoryEntry::new("user-key", "v1", MemoryType::User).with_origin(MemoryOrigin::User),
         MemoryScope::User,
     )
     .expect("seed user");
@@ -786,7 +786,9 @@ async fn test_save_replaces_and_refreshes() {
     .await
     .expect("refresh user");
     assert!(!auto.join("user-key.md").exists());
-    assert_eq!(mp.show_memory("user-key").unwrap().content, "v2");
+    let reloaded = mp.show_memory("user-key").unwrap();
+    assert_eq!(reloaded.content, "v2");
+    assert_eq!(reloaded.origin, MemoryOrigin::MainAgent);
 
     // Explicit project save with replaces moves old-auto to archive.
     run(
@@ -804,5 +806,32 @@ async fn test_save_replaces_and_refreshes() {
     .expect("replace in project");
     assert!(proj.join("merged-proj.md").is_file());
     assert!(auto.join("archive").join("old-auto.md").is_file());
+
+    // Extraction tool targeting an existing user key routes to user scope and refuses background rewrite.
+    let background_tool = MemoryWriteTool::new(Arc::clone(&mp) as Arc<dyn MemoryProvider>)
+        .with_pinned_scope(MemoryScope::Auto)
+        .with_origin(MemoryOrigin::Extractor);
+    let err = run(
+        &background_tool,
+        json!({
+            "key": "user-key",
+            "description": "attempt background overwrite of user key",
+            "type": "user",
+            "content": "v3"
+        }),
+    )
+    .await
+    .expect_err("pinned background save against user key must be refused");
+    assert!(
+        err.to_string()
+            .contains("background writer cannot target user scope")
+            || err.to_string().contains("user-authored"),
+        "error must explain protected user scope/origin: {err}"
+    );
+    assert!(
+        !auto.join("user-key.md").exists(),
+        "no shadowing copy in auto root must be created"
+    );
+
     remove_dir_all(&dir).ok();
 }

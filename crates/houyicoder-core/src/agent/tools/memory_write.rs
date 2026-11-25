@@ -318,14 +318,16 @@ fn parse_replaces(input: &Value) -> Vec<String> {
 }
 
 /// Resolve the write root for a pinned save. The pin names the default
-/// root; the one exception is a key already living in the project root,
+/// root; the exception is a key already living in the user or project root,
 /// where the save refreshes that root in place. Writing the refresh into
 /// the pinned root would create a competing copy that shadows the explicit
 /// entry by newest-mtime and the refresh would be lost on the next
-/// reconcile. Other roots stay closed to the pinned tool.
+/// reconcile.
 fn refresh_root(provider: &dyn MemoryProvider, key: &str, pinned: MemoryScope) -> MemoryScope {
-    let refreshes_project = provider.scopes_for_key(key).contains(&MemoryScope::Project);
-    if refreshes_project && pinned != MemoryScope::Project {
+    let existing = provider.scopes_for_key(key);
+    if existing.contains(&MemoryScope::User) && pinned != MemoryScope::User {
+        MemoryScope::User
+    } else if existing.contains(&MemoryScope::Project) && pinned != MemoryScope::Project {
         MemoryScope::Project
     } else {
         pinned

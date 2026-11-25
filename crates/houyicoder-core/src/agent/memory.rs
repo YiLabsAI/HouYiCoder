@@ -21,6 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::time::timeout_at;
+use tokio_util::sync::CancellationToken;
 
 /// How long a turn's background pipeline waits for the extraction pass before
 /// starting the dream. The dream only consolidates what the store holds, so a
@@ -78,7 +79,7 @@ pub struct MemoryRuntime {
     reranker: Option<Arc<dyn MemoryReranker>>,
     gates: MemoryGates,
     background: BackgroundMemory,
-    index_snapshot: Mutex<CachedPromptMemory>,
+    index_snapshot: Arc<Mutex<CachedPromptMemory>>,
     primary_recorder: Option<Arc<MutationLog>>,
     memory_changed: Mutex<Option<Arc<dyn EventHandler<MemoryChangedEvent>>>>,
     recall_tasks: RecallTasks,
@@ -104,7 +105,7 @@ impl MemoryRuntime {
             reranker: None,
             gates: MemoryGates::new(true, true),
             background: BackgroundMemory::none(),
-            index_snapshot: Mutex::new(CachedPromptMemory::default()),
+            index_snapshot: Arc::new(Mutex::new(CachedPromptMemory::default())),
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
@@ -128,7 +129,7 @@ impl MemoryRuntime {
             reranker: None,
             gates,
             background: BackgroundMemory { extractor, dream },
-            index_snapshot: Mutex::new(CachedPromptMemory::default()),
+            index_snapshot: Arc::new(Mutex::new(CachedPromptMemory::default())),
             primary_recorder: None,
             memory_changed: Mutex::new(None),
             recall_tasks: RecallTasks::default(),
@@ -206,9 +207,13 @@ impl MemoryRuntime {
 
     /// Recall relevant memory for the turn about to start. No-op when
     /// auto_memory is off, no provider is configured, or the selection
-    /// settles on nothing. A triggered semantic stage runs beside the model
-    /// call and appends its recall on completion.
-    pub(crate) async fn recall(&self, session: SessionId) -> Result<(), RunError> {
+    /// settles on nothing. A session's initial turn awaits semantic selection
+    /// under a bounded deadline; later turns run it beside the model call.
+    pub(crate) async fn recall(
+        &self,
+        session: SessionId,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<(), RunError> {
         // A new user turn re-arms failure recall: the same error may happen
         // again in the next task and deserves its lesson then.
         self.failure_signatures
@@ -222,6 +227,7 @@ impl MemoryRuntime {
             &self.recall_tasks,
             &self.gates,
             session,
+            cancel,
         )
         .await
     }
@@ -404,8 +410,18 @@ impl MemoryRuntime {
         let Some(memory) = &self.provider else {
             return Ok(());
         };
-        let scope = MemoryScope::from_label(scope).unwrap_or(MemoryScope::Auto);
-        let res = memory.restore_memory(key, scope);
+        let scope = MemoryScope::from_label(scope);
+        let res = match scope {
+            Some(sc) => memory.restore_memory(key, sc),
+            None => [MemoryScope::Auto, MemoryScope::Project, MemoryScope::User]
+                .into_iter()
+                .find_map(|sc| match memory.restore_memory(key, sc) {
+                    Ok(()) => Some(Ok(())),
+                    Err(MemoryError::NotFound) => None,
+                    Err(other) => Some(Err(other)),
+                })
+                .unwrap_or(Err(MemoryError::NotFound)),
+        };
         if res.is_ok() {
             self.invalidate_index_snapshot();
         }
@@ -463,6 +479,7 @@ impl MemoryRuntime {
         let wait_extractor = self.background.extractor.clone();
         let track_extractor = extractor.clone();
         let serial = Arc::clone(&self.background_lock);
+        let snapshot_cache = Arc::clone(&self.index_snapshot);
         let handler = self.memory_changed.lock().expect("memory_changed").clone();
         let handle = tokio::spawn(async move {
             let _serial = serial.lock().await;
@@ -486,6 +503,13 @@ impl MemoryRuntime {
                 false
             };
             let changes = pipeline_log.take_merged();
+            let scope_changed = reconciled
+                || changes
+                    .iter()
+                    .any(|c| matches!(c.scope, MemoryScope::User | MemoryScope::Project));
+            if scope_changed && let Ok(mut snap) = snapshot_cache.lock() {
+                *snap = CachedPromptMemory::default();
+            }
             emit_background_changes(
                 handler.as_deref(),
                 changes,
@@ -558,6 +582,12 @@ impl MemoryRuntime {
         let changes = recorder.take();
         if changes.is_empty() {
             return;
+        }
+        if changes
+            .iter()
+            .any(|c| matches!(c.scope, MemoryScope::User | MemoryScope::Project))
+        {
+            self.invalidate_index_snapshot();
         }
         let handler = self.memory_changed.lock().expect("memory_changed").clone();
         if let Some(handler) = handler {

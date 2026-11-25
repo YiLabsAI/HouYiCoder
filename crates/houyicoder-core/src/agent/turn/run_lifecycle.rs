@@ -211,7 +211,7 @@ impl Runner {
                 return result;
             }
         }
-        if let Err(e) = self.memory.recall(session).await {
+        if let Err(e) = self.memory.recall(session, Some(&token)).await {
             let failed: Result<RunResult, RunError> = Err(e);
             self.settle_turn(session, None, &failed).await;
             return failed;

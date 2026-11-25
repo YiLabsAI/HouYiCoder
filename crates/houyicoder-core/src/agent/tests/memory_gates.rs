@@ -122,7 +122,7 @@ async fn test_byte_cap_skips_recall() {
             .await
             .unwrap();
     }
-    runner.memory.recall(session).await.unwrap();
+    runner.memory.recall(session, None).await.unwrap();
     let events = runner.store().replay(session).await.unwrap();
     let recall_events = events
         .iter()
@@ -163,7 +163,7 @@ async fn test_recall_records_bytes() {
         })
         .await
         .unwrap();
-    runner.memory.recall(session).await.unwrap();
+    runner.memory.recall(session, None).await.unwrap();
     let events = runner.store().replay(session).await.unwrap();
     let recalled = events
         .iter()
@@ -209,7 +209,7 @@ async fn test_toggle_off_skips_recall() {
         })
         .await
         .unwrap();
-    runner.memory.recall(session).await.unwrap();
+    runner.memory.recall(session, None).await.unwrap();
     let events = runner.store().replay(session).await.unwrap();
     assert!(
         events

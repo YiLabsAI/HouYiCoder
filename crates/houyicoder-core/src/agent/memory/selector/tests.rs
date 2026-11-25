@@ -210,6 +210,25 @@ async fn test_rerank_within_deadline() {
     assert_eq!(out, RerankOutcome::Selected(vec!["k0".into()]));
 }
 
+#[tokio::test]
+async fn test_selection_custom_timeout() {
+    struct Instant;
+    impl MemoryReranker for Instant {
+        fn rerank(&self, _q: &str, _c: &[MemoryRankHit], _limit: usize) -> PFut<'_, RerankOutcome> {
+            Box::pin(async { RerankOutcome::Selected(vec!["k0".into()]) })
+        }
+    }
+    let (keys, fallback) = super::run_semantic_selection(
+        Arc::new(Instant),
+        "query".into(),
+        &ranked(&[2]),
+        INITIAL_STEP_RERANK_TIMEOUT,
+    )
+    .await;
+    assert_eq!(keys, vec!["k0"]);
+    assert_eq!(fallback, None);
+}
+
 /// The drain awaits a tracked task to completion, so a spawned recall
 /// append lands before shutdown proceeds.
 #[tokio::test]

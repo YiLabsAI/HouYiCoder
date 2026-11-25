@@ -741,3 +741,48 @@ fn test_long_row_heals() {
     );
     remove_dir_all(&root).ok();
 }
+
+/// An index whose rows sit under the wrong type heading heals on rebuild_if_stale.
+#[test]
+fn test_wrong_type_heading_heals() {
+    let root = temp_root("wrong-heading");
+    let provider = MarkdownMemoryProvider::new(root.clone());
+    let feedback_topic = "---\nname: fb-rule\ndescription: fb rule\ntype: feedback\n---\nbody\n";
+    write(root.join("fb-rule.md"), feedback_topic).expect("seed feedback topic");
+    let index_time = metadata(root.join("fb-rule.md"))
+        .expect("metadata")
+        .modified()
+        .expect("mtime");
+
+    // Wrongly place the feedback topic under a project heading
+    let bad_index = "### project\n- fb-rule: fb rule\n";
+    write(root.join("MEMORY.md"), bad_index).expect("write bad index");
+    File::options()
+        .write(true)
+        .open(root.join("MEMORY.md"))
+        .expect("open index")
+        .set_modified(index_time)
+        .expect("set mtime equal");
+
+    assert!(index_text(&root).contains("### project"));
+    provider
+        .rebuild_if_stale()
+        .expect("misplaced heading heals");
+    let healed = index_text(&root);
+    assert!(
+        healed.contains("### feedback"),
+        "healed index must group under the true type heading:\n{healed}"
+    );
+    assert!(!healed.contains("### project"));
+
+    // A bare legacy header with no rows also heals once.
+    let empty_root = temp_root("legacy-header");
+    let empty_provider = MarkdownMemoryProvider::new(empty_root.clone());
+    write(empty_root.join("MEMORY.md"), "# Memory index\n").expect("write legacy header");
+    empty_provider
+        .rebuild_if_stale()
+        .expect("legacy header heals");
+    assert!(!index_text(&empty_root).contains("# Memory index"));
+    remove_dir_all(&empty_root).ok();
+    remove_dir_all(&root).ok();
+}

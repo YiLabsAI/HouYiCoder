@@ -275,7 +275,7 @@ async fn test_cjk_query_reaches_recall() {
     ));
     let gates = MemoryGates::new(true, false);
     let tasks = RecallTasks::default();
-    super::recall(&store, Some(&provider), None, &tasks, &gates, session)
+    super::recall(&store, Some(&provider), None, &tasks, &gates, session, None)
         .await
         .expect("recall ok");
     assert!(
@@ -303,6 +303,7 @@ async fn test_confident_skips_rerank() {
         &tasks,
         &gates,
         session,
+        None,
     )
     .await
     .expect("recall ok");
@@ -314,12 +315,10 @@ async fn test_confident_skips_rerank() {
     );
 }
 
-/// A zero-hit rank must reach the semantic selector; this test goes red
-/// if the selector stops firing when the lexical stage finds nothing.
-/// The selection runs beside the model call, so the test drains the
-/// tracked task before asserting the append landed.
+/// A zero-hit rank on the initial turn selects synchronously, so the
+/// first action receives recalled memory without waiting for step 1.
 #[tokio::test]
-async fn test_zero_hits_rerank_selects() {
+async fn test_initial_zero_hits_sync() {
     let (store, session) = session_with_query("kettle whistle").await;
     let provider: Arc<dyn MemoryProvider> = Arc::new(StubProvider::new(
         vec![hit("tea-order", 0)],
@@ -335,6 +334,46 @@ async fn test_zero_hits_rerank_selects() {
         &tasks,
         &gates,
         session,
+        None,
+    )
+    .await
+    .expect("recall ok");
+    // No drain needed: synchronous execution completes before recall returns.
+    assert_eq!(
+        call_count(&calls),
+        1,
+        "an initial zero-hit rank must fire the semantic selector synchronously"
+    );
+    assert!(
+        has_recall(&store, session).await,
+        "the selected body lands synchronously in the initial turn"
+    );
+}
+
+/// A zero-hit rank on a non-initial turn must reach the semantic selector in
+/// the background; this test asserts the append lands once drained.
+#[tokio::test]
+async fn test_zero_hits_rerank_selects() {
+    let (store, session) = session_with_query("kettle whistle").await;
+    store
+        .append(new_event(session, assistant("earlier assistant turn")))
+        .await
+        .expect("append assistant");
+    let provider: Arc<dyn MemoryProvider> = Arc::new(StubProvider::new(
+        vec![hit("tea-order", 0)],
+        vec![body("tea-order")],
+    ));
+    let (reranker, calls) = stub_reranker(RerankOutcome::Selected(vec!["tea-order".into()]));
+    let gates = MemoryGates::new(true, false);
+    let tasks = RecallTasks::default();
+    super::recall(
+        &store,
+        Some(&provider),
+        Some(&reranker),
+        &tasks,
+        &gates,
+        session,
+        None,
     )
     .await
     .expect("recall ok");
@@ -369,6 +408,7 @@ async fn test_semantic_empty_no_inject() {
         &tasks,
         &gates,
         session,
+        None,
     )
     .await
     .expect("recall ok");
@@ -391,7 +431,7 @@ async fn test_no_reranker_falls_back() {
     ));
     let gates = MemoryGates::new(true, false);
     let tasks = RecallTasks::default();
-    super::recall(&store, Some(&provider), None, &tasks, &gates, session)
+    super::recall(&store, Some(&provider), None, &tasks, &gates, session, None)
         .await
         .expect("recall ok");
     assert!(
@@ -404,9 +444,17 @@ async fn test_no_reranker_falls_back() {
         vec![hit("tea-order", 0)],
         vec![body("tea-order")],
     ));
-    super::recall(&store2, Some(&provider2), None, &tasks, &gates, session2)
-        .await
-        .expect("recall ok");
+    super::recall(
+        &store2,
+        Some(&provider2),
+        None,
+        &tasks,
+        &gates,
+        session2,
+        None,
+    )
+    .await
+    .expect("recall ok");
     assert!(
         !has_recall(&store2, session2).await,
         "a zero-hit rank without a reranker injects nothing"
@@ -429,6 +477,7 @@ async fn test_no_candidates_no_rerank() {
         &tasks,
         &gates,
         session,
+        None,
     )
     .await
     .expect("recall ok");
@@ -466,6 +515,11 @@ impl MemoryReranker for LatchReranker {
 #[tokio::test]
 async fn test_second_recall_skips_reserved() {
     let (store, session) = session_with_query("kettle whistle").await;
+    // Seed an earlier assistant turn so this recall exercises the non-initial asynchronous path.
+    store
+        .append(new_event(session, assistant("prior response")))
+        .await
+        .expect("append assistant");
     let provider: Arc<dyn MemoryProvider> = Arc::new(StubProvider::new(
         vec![hit("tea-order", 0)],
         vec![body("tea-order")],
@@ -486,6 +540,7 @@ async fn test_second_recall_skips_reserved() {
         &tasks,
         &gates,
         session,
+        None,
     )
     .await
     .expect("first recall ok");
@@ -496,6 +551,7 @@ async fn test_second_recall_skips_reserved() {
         &tasks,
         &gates,
         session,
+        None,
     )
     .await
     .expect("second recall ok");
@@ -663,4 +719,39 @@ async fn test_recall_after_compaction_summary() {
         has_recall(&store_todo, session_todo).await,
         "todo section extracted keywords"
     );
+}
+
+/// Cancelling an initial turn aborts synchronous semantic selection immediately
+/// without appending a recall event.
+#[tokio::test]
+async fn test_initial_cancel_aborts_sync() {
+    let (store, session) = session_with_query("kettle whistle").await;
+    let provider: Arc<dyn MemoryProvider> = Arc::new(StubProvider::new(
+        vec![hit("tea-order", 0)],
+        vec![body("tea-order")],
+    ));
+    let release = Arc::new(Notify::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reranker: Arc<dyn MemoryReranker> = Arc::new(LatchReranker {
+        release,
+        calls: Arc::clone(&calls),
+        outcome: RerankOutcome::Selected(vec!["tea-order".into()]),
+    });
+    let gates = MemoryGates::new(true, false);
+    let tasks = RecallTasks::default();
+    let token = CancellationToken::new();
+    token.cancel();
+    super::recall(
+        &store,
+        Some(&provider),
+        Some(&reranker),
+        &tasks,
+        &gates,
+        session,
+        Some(&token),
+    )
+    .await
+    .expect("cancelled recall returns cleanly");
+    assert_eq!(call_count(&calls), 0, "pre-cancelled token skips waiting");
+    assert!(!has_recall(&store, session).await);
 }

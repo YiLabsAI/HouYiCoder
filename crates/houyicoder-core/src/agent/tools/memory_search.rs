@@ -10,7 +10,9 @@ use houyicoder_context::{MemoryRankHit, memory_age_days, memory_age_label};
 use serde_json::{Map, Value, json};
 
 use super::{Tool, ToolCtx, ToolError};
-use crate::agent::memory::selector::{RECALL_SELECT_CAP, classify, run_semantic_selection};
+use crate::agent::memory::selector::{
+    RECALL_SELECT_CAP, RERANK_TIMEOUT, classify, run_semantic_selection,
+};
 
 /// Structured memory search tool.
 pub struct MemorySearchTool {
@@ -82,8 +84,13 @@ impl Tool for MemorySearchTool {
             if classify(&scored).needs_rerank()
                 && let Some(reranker) = reranker.as_ref()
             {
-                let (selected, fallback) =
-                    run_semantic_selection(Arc::clone(reranker), query.to_string(), &scored).await;
+                let (selected, fallback) = run_semantic_selection(
+                    Arc::clone(reranker),
+                    query.to_string(),
+                    &scored,
+                    RERANK_TIMEOUT,
+                )
+                .await;
                 if fallback.is_none() {
                     semantic_rows = Some(
                         selected

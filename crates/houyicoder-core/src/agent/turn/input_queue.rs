@@ -321,7 +321,7 @@ impl Runner {
                 .record_wrap_up_event(id);
         }
         if had_pending {
-            self.memory.recall(session).await?;
+            self.memory.recall(session, None).await?;
             self.inject_skill_listing_and_body(session).await?;
         }
         Ok(had_pending)

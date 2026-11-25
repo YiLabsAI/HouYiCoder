@@ -51,19 +51,31 @@ fn rule_card_text(body: &str) -> String {
     let mut cjk = 0usize;
     let mut other = 0usize;
     let mut end_byte = compact.len();
+    let mut last_char = None;
+    let mut next_char = None;
     for (idx, c) in compact.char_indices() {
         let next_cjk = cjk + usize::from(is_cjk(c));
         let next_other = other + usize::from(!is_cjk(c));
         if next_cjk + next_other.div_ceil(4) > RULE_CARD_TOKEN_BUDGET {
             end_byte = idx;
+            next_char = Some(c);
             break;
         }
         cjk = next_cjk;
         other = next_other;
+        last_char = Some(c);
     }
-    compact.truncate(end_byte);
-    let trimmed_len = compact.trim_end().len();
-    compact.truncate(trimmed_len);
+    if end_byte < compact.len() {
+        if last_char.is_some_and(|c| c.is_ascii_alphanumeric())
+            && next_char.is_some_and(|c| c.is_ascii_alphanumeric())
+            && let Some(space) = compact[..end_byte].rfind(' ')
+        {
+            end_byte = space;
+        }
+        compact.truncate(end_byte);
+        let trimmed_len = compact.trim_end().len();
+        compact.truncate(trimmed_len);
+    }
     compact
 }
 

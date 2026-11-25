@@ -132,6 +132,8 @@ impl MarkdownMemoryProvider {
         };
         Self::index_has_dangling(root, &text)
             || Self::index_has_long_row(&text)
+            || self.index_has_wrong_group(root, &text)
+            || Self::index_has_legacy_header(&text)
             || self.index_misses_topic(root, &text)
     }
 
@@ -145,11 +147,42 @@ impl MarkdownMemoryProvider {
         })
     }
 
+    /// Whether the index carries the legacy top-level heading.
+    fn index_has_legacy_header(text: &str) -> bool {
+        text.lines().any(|l| l.trim_start().starts_with("# "))
+    }
+
     /// Whether a published row names a topic file that is not in this root.
     fn index_has_dangling(root: &Path, text: &str) -> bool {
         text.lines()
             .filter_map(index_row_key)
             .any(|key| !key.is_empty() && !root.join(format!("{key}.md")).is_file())
+    }
+
+    /// Whether any published row sits under the wrong type heading, as in an
+    /// index produced by an older binary that dumped all entries under a single section.
+    fn index_has_wrong_group(&self, root: &Path, text: &str) -> bool {
+        let mut current_section: Option<MemoryType> = None;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(heading) = trimmed
+                .strip_prefix("### ")
+                .or_else(|| trimmed.strip_prefix("## "))
+                .or_else(|| trimmed.strip_prefix("# "))
+            {
+                current_section = MemoryType::from_label(heading);
+                continue;
+            }
+            if let Some(key) = index_row_key(trimmed) {
+                let topic_path = root.join(format!("{key}.md"));
+                if let Ok(fm) = self.read_frontmatter(&topic_path)
+                    && (current_section.is_none() || current_section != Some(fm.memory_type))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Whether a topic the rebuild would publish has no row. A complete index

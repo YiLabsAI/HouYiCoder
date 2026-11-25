@@ -638,6 +638,11 @@ impl MemoryProvider for MarkdownMemoryProvider {
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         entry.key = sanitize_key(&entry.key)?;
         validate_index_key(&entry.key)?;
+        if entry.origin.is_background() && scope == MemoryScope::User && self.roots.len() > 1 {
+            return Err(MemoryError::InvalidPath(
+                "background writer cannot target user scope".into(),
+            ));
+        }
         let root = self.root_for_scope(scope).to_path_buf();
         self.add_if_changed_in_root(&root, &entry)
     }

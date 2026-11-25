@@ -2,9 +2,10 @@
 //!
 //! Injected keys come from the assembled context, so compaction naturally
 //! permits relevant memories to appear again. A confident lexical selection
-//! injects synchronously; a weak signal runs the semantic stage alongside
-//! the main model call and appends its recall on completion, so the first
-//! token never waits on a model-backed selection.
+//! injects synchronously. On a weak lexical signal, a session's initial turn
+//! awaits semantic selection under a short deadline so step zero receives
+//! relevant memories, whereas later turns run the semantic stage alongside
+//! the main model call and append its recall on completion.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -14,11 +15,12 @@ use houyicoder_api::session::SessionLog;
 use houyicoder_context::{
     CheckpointManifest, ContextBackend, MemoryRankHit, SessionEvent, SessionId, SessionLogEntry,
 };
+use tokio_util::sync::CancellationToken;
 
 use super::gates::MemoryGates;
 use super::selector::{
-    RecallFallback, RecallTasks, RecallTelemetry, RecallVerdict, classify, lexical_keys,
-    materialize, run_semantic_selection,
+    INITIAL_STEP_RERANK_TIMEOUT, RERANK_TIMEOUT, RecallFallback, RecallTasks, RecallTelemetry,
+    RecallVerdict, classify, lexical_keys, materialize, run_semantic_selection,
 };
 use crate::agent::RunError;
 use crate::agent::append::new_event;
@@ -58,6 +60,7 @@ pub(crate) async fn recall_after_compaction(
         gates,
         session,
         hint.as_deref(),
+        None,
     )
     .await
 }
@@ -137,8 +140,12 @@ pub(crate) async fn recall(
     tasks: &RecallTasks,
     gates: &MemoryGates,
     session: SessionId,
+    cancel: Option<&CancellationToken>,
 ) -> Result<(), RunError> {
-    execute_recall(store, provider, reranker, tasks, gates, session, None).await
+    execute_recall(
+        store, provider, reranker, tasks, gates, session, None, cancel,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -150,6 +157,7 @@ async fn execute_recall(
     gates: &MemoryGates,
     session: SessionId,
     extra_query: Option<&str>,
+    cancel: Option<&CancellationToken>,
 ) -> Result<(), RunError> {
     if !gates.auto_memory_enabled() {
         return Ok(());
@@ -203,9 +211,27 @@ async fn execute_recall(
     let scored = memory.rank_candidates(&query, &injected_keys);
     let verdict = classify(&scored);
     let lexical_hits = scored.iter().filter(|h| h.score > 0).count();
+    let is_initial_turn = extra_query.is_none()
+        && !view
+            .events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::AssistantMessage { .. }));
     if verdict.needs_rerank()
         && let Some(reranker) = reranker
     {
+        if is_initial_turn {
+            return recall_initial_step(
+                store,
+                memory,
+                reranker,
+                query,
+                scored,
+                lexical_hits,
+                session,
+                cancel,
+            )
+            .await;
+        }
         spawn_selection(
             Arc::clone(store),
             Arc::clone(memory),
@@ -247,6 +273,47 @@ async fn execute_recall(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "forwards resolved recall state to the initial-turn branch"
+)]
+async fn recall_initial_step(
+    store: &Arc<dyn SessionLog>,
+    memory: &Arc<dyn MemoryProvider>,
+    reranker: &Arc<dyn MemoryReranker>,
+    query: String,
+    scored: Vec<MemoryRankHit>,
+    lexical_hits: usize,
+    session: SessionId,
+    cancel: Option<&CancellationToken>,
+) -> Result<(), RunError> {
+    let selection = run_semantic_selection(
+        Arc::clone(reranker),
+        query,
+        &scored,
+        INITIAL_STEP_RERANK_TIMEOUT,
+    );
+    let (keys, fallback) = match cancel {
+        Some(token) => tokio::select! {
+            biased;
+            () = token.cancelled() => return Ok(()),
+            res = selection => res,
+        },
+        None => selection.await,
+    };
+    let (injected, bytes) = inject_selected(store, memory, session, &keys).await?;
+    RecallTelemetry {
+        candidate_count: scored.len(),
+        lexical_hits,
+        rerank_triggered: true,
+        selected_keys: injected,
+        fallback,
+        injected_bytes: bytes,
+    }
+    .log();
+    Ok(())
+}
+
 /// Run the semantic selection beside the main model call and append its
 /// recall on completion. The per-step view assembly picks the append up at
 /// the next model step of the same turn.
@@ -264,7 +331,8 @@ fn spawn_selection(
     let candidate_count = scored.len();
     let reserved: HashSet<String> = scored.iter().map(|h| h.key.clone()).collect();
     let handle = tokio::spawn(async move {
-        let (keys, fallback) = run_semantic_selection(reranker, query, &scored).await;
+        let (keys, fallback) =
+            run_semantic_selection(reranker, query, &scored, RERANK_TIMEOUT).await;
         let (injected, bytes) = match inject_selected(&store, &memory, session, &keys).await {
             Ok(pair) => pair,
             Err(error) => {

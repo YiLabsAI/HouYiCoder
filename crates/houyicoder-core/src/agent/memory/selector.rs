@@ -33,6 +33,9 @@ pub(crate) const RERANK_CANDIDATE_CAP: usize = 50;
 /// typed timeout the host falls back from, never a hung recall.
 pub(crate) const RERANK_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Bound on initial-turn synchronous semantic selection, keeping step zero responsive.
+pub(crate) const INITIAL_STEP_RERANK_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// What the lexical rank says about a query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecallVerdict {
@@ -183,17 +186,11 @@ pub(crate) async fn run_semantic_selection(
     reranker: Arc<dyn MemoryReranker>,
     query: String,
     scored: &[MemoryRankHit],
+    budget: Duration,
 ) -> (Vec<String>, Option<RecallFallback>) {
     let candidates: Vec<MemoryRankHit> =
         scored.iter().take(RERANK_CANDIDATE_CAP).cloned().collect();
-    let outcome = rerank_with_timeout(
-        reranker,
-        query,
-        candidates,
-        RECALL_SELECT_CAP,
-        RERANK_TIMEOUT,
-    )
-    .await;
+    let outcome = rerank_with_timeout(reranker, query, candidates, RECALL_SELECT_CAP, budget).await;
     resolve(outcome, scored)
 }
 
