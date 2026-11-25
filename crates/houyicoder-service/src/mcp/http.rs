@@ -40,7 +40,7 @@ use tokio::time::timeout;
 use super::client::LaunchedMcpServer;
 use super::client::McpClientError;
 use super::client::McpClientHandler;
-use super::stdio::StderrTail;
+use crate::child_process::StderrTail;
 
 /// How long a header helper may run before the server starts without its
 /// headers.

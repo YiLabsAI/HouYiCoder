@@ -7,8 +7,6 @@
 // ask for yet; this module answers the handshake they do send.
 #![allow(deprecated)]
 
-use std::collections::BTreeMap;
-use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -35,7 +33,10 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::stdio::{Pipes, StderrTail, start};
+use crate::child_process::child_environment;
+use crate::child_process::file_uri;
+use crate::child_process::host_environment;
+use crate::child_process::{Pipes, StderrTail, start};
 
 /// Why a server could not be launched or handed to the transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +126,7 @@ impl McpClientHandler {
 
     /// The roots this session declares: the workspace it was opened on.
     pub fn roots(&self) -> ListRootsResult {
-        let root = Root::new(file_uri_for(self.workspace_root.as_ref())).with_name("workspace");
+        let root = Root::new(file_uri(self.workspace_root.as_ref())).with_name("workspace");
         ListRootsResult::new(vec![root])
     }
 
@@ -277,66 +278,6 @@ pub fn stdio_spawn_request(
     request.stdio = StdioConfig::piped_output();
     request.stdio.stdin = StdioMode::Piped;
     request
-}
-
-/// Variables a child process needs to function regardless of configuration.
-const BASE_VARS: &[&str] = &[
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "LANG",
-    "LC_ALL",
-    "TMPDIR",
-    "SYSTEMROOT",
-    "COMSPEC",
-];
-
-/// The environment one child receives: the base runtime set from the host,
-/// plus the variables the configuration sets, which win over the host's.
-pub fn child_environment(
-    configured: &BTreeMap<String, String>,
-    host: &[(String, String)],
-) -> Vec<(String, String)> {
-    let mut env: Vec<(String, String)> = host
-        .iter()
-        .filter(|(key, value)| {
-            BASE_VARS.contains(&key.as_str()) && !value.is_empty() && !configured.contains_key(key)
-        })
-        .cloned()
-        .collect();
-    for (key, value) in configured {
-        env.retain(|(existing, _)| existing != key);
-        env.push((key.clone(), value.clone()));
-    }
-    env
-}
-
-/// The host environment, read once per launch.
-fn host_environment() -> Vec<(String, String)> {
-    env::vars().collect()
-}
-
-/// The standard file URI for one directory, with the drive spelling a
-/// Windows client expects.
-pub fn file_uri_for(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
-    let encoded: String = text
-        .chars()
-        .map(|c| match c {
-            ' ' => "%20".to_string(),
-            '#' => "%23".to_string(),
-            '?' => "%3F".to_string(),
-            other => other.to_string(),
-        })
-        .collect();
-    if encoded.starts_with('/') {
-        format!("file://{encoded}")
-    } else {
-        // A Windows drive path has no leading slash; the URI adds one after
-        // the authority, so the result reads file:///C:/...
-        format!("file:///{encoded}")
-    }
 }
 
 // Visible to the sibling test modules that build a peer to call through,

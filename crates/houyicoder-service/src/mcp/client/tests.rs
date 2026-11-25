@@ -16,9 +16,9 @@ use tokio::time::timeout;
 /// doubled slash.
 #[test]
 fn test_file_uri_unix_shape() {
-    assert_eq!(file_uri_for(Path::new("/work/src")), "file:///work/src");
+    assert_eq!(file_uri(Path::new("/work/src")), "file:///work/src");
     assert_eq!(
-        file_uri_for(Path::new("/work/my repo")),
+        file_uri(Path::new("/work/my repo")),
         "file:///work/my%20repo"
     );
 }
@@ -27,10 +27,7 @@ fn test_file_uri_unix_shape() {
 /// backslashes are normalized rather than escaped.
 #[test]
 fn test_file_uri_windows_shape() {
-    assert_eq!(
-        file_uri_for(Path::new("C:\\work\\src")),
-        "file:///C:/work/src"
-    );
+    assert_eq!(file_uri(Path::new("C:\\work\\src")), "file:///C:/work/src");
 }
 
 /// The environment a child receives is the base set plus the configured

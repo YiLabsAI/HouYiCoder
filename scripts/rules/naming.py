@@ -47,9 +47,9 @@ ALLOWED_TOP_MODULES: dict[str, frozenset[str]] = {
         "status", "tests", "tools", "turn", "worktree",
     }),
     "crates/houyicoder-service/src": frozenset({
-        "lib", "acp", "agent_registry", "composition", "consent", "diagnostics",
-        "lifecycle", "local_ipc", "mcp", "protocol_adapter", "sandbox_policy",
-        "server", "turn_events",
+        "lib", "acp", "agent_registry", "child_process", "composition", "consent",
+        "diagnostics", "lifecycle", "local_ipc", "lsp", "mcp", "protocol_adapter",
+        "sandbox_policy", "server", "turn_events",
     }),
     "crates/houyicoder-cli/src": frozenset({
         "main", "acp", "cli_args", "composition", "detach", "export_view",

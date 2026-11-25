@@ -40,7 +40,7 @@ use tokio::time::timeout;
 use super::client::{ClientEvent, LaunchedMcpServer, McpClientError, launch_stdio};
 use super::http;
 use super::liveness::RestartPolicy;
-use super::stdio::{STDERR_TAIL_LINES, StderrTail};
+use crate::child_process::{STDERR_TAIL_LINES, StderrTail};
 
 /// The windows and limits one manager runs with. Production uses the
 /// defaults; a test injects millisecond values so no assertion waits on a

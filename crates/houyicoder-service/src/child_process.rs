@@ -1,18 +1,17 @@
-//! The byte channels between a launched child's blocking pipes and the
-//! asynchronous transport the protocol client speaks, plus the bounded tail
-//! of the child's diagnostic stream.
-//!
-//! The launcher hands back operating-system pipes, which block when read.
-//! A thread per direction moves bytes between those pipes and an in-memory
-//! channel; two small tasks move the same bytes between the channels and the
-//! duplex streams the client reads and writes asynchronously. The stderr
-//! pipe gets its own thread and a fixed ring, so a child that writes
-//! diagnostics it cannot flush never blocks on a full pipe and its output
-//! can never grow without bound.
+//! What a launched child shares across every protocol this host speaks.
+//! The launcher hands back blocking operating-system pipes; a thread per
+//! direction moves bytes between them and an in-memory channel, and two
+//! tasks carry the same bytes to the asynchronous streams the client reads
+//! and writes. The stderr pipe gets its own thread and a fixed ring, so a
+//! child that writes diagnostics it cannot flush never blocks on a full
+//! pipe and its output can never grow without bound.
 
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::env::vars;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::spawn;
@@ -189,3 +188,63 @@ pub fn start(pipes: Pipes) -> (StdioChannels, StderrTail) {
 
 #[cfg(test)]
 mod tests;
+
+/// Variables a child process needs to function regardless of configuration.
+const BASE_VARS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "SYSTEMROOT",
+    "COMSPEC",
+];
+
+/// The environment one child receives: the base runtime set from the host,
+/// plus the variables the configuration sets, which win over the host's.
+pub(crate) fn child_environment(
+    configured: &BTreeMap<String, String>,
+    host: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = host
+        .iter()
+        .filter(|(key, value)| {
+            BASE_VARS.contains(&key.as_str()) && !value.is_empty() && !configured.contains_key(key)
+        })
+        .cloned()
+        .collect();
+    for (key, value) in configured {
+        env.retain(|(existing, _)| existing != key);
+        env.push((key.clone(), value.clone()));
+    }
+    env
+}
+
+/// The host environment, read once per launch.
+pub(crate) fn host_environment() -> Vec<(String, String)> {
+    vars().collect()
+}
+
+/// The standard file URI for one path, with the drive spelling a Windows
+/// client expects.
+pub(crate) fn file_uri(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let encoded: String = text
+        .chars()
+        .map(|c| match c {
+            ' ' => "%20".to_string(),
+            '#' => "%23".to_string(),
+            '?' => "%3F".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    if encoded.starts_with('/') {
+        format!("file://{encoded}")
+    } else {
+        // A Windows drive path has no leading slash; the URI adds one after
+        // the authority, so the result reads file:///C:/...
+        format!("file:///{encoded}")
+    }
+}

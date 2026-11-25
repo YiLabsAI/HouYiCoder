@@ -8,7 +8,6 @@ mod http;
 mod liveness;
 mod manager;
 mod resources;
-mod stdio;
 mod tools;
 
 pub use liveness::RestartPolicy;

@@ -1,0 +1,750 @@
+//! The language server manager: one slot per configured server, the suffix
+//! routing table, lazy starts, document synchronization, and the bounded
+//! relaunch a crashed server earns.
+//!
+//! Settling builds the routing table and starts nothing: a session pays
+//! zero processes until a routed file is asked about. The first ask
+//! launches behind one lock, so concurrent asks share one handshake, and
+//! every opened document carries a strictly increasing version.
+
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::iter::once;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
+
+use houyicoder_api::launcher::LauncherChild;
+use houyicoder_api::launcher::ProcessLauncher;
+use houyicoder_api::launcher::SpawnPolicy;
+use houyicoder_api::launcher::SpawnRequest;
+use houyicoder_api::launcher::StdioConfig;
+use houyicoder_api::launcher::StdioMode;
+use houyicoder_config as config;
+use houyicoder_protocol::lsp::LspConfigScope;
+use houyicoder_protocol::lsp::LspDiagnostic;
+use houyicoder_protocol::lsp::LspPublishDiagnostics;
+use houyicoder_protocol::lsp::LspServerState;
+use houyicoder_protocol::lsp::LspServerStatusView;
+use houyicoder_protocol::lsp::LspTransportKind;
+use houyicoder_protocol::lsp::ScopedLspServerConfig;
+use serde_json::Value;
+#[cfg(test)]
+use tokio::io::DuplexStream;
+use tokio::sync::Notify;
+use tokio::sync::RwLock;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+use tokio::time::timeout;
+
+use super::client::DEFAULT_RETRY_DELAYS;
+use super::client::LspClient;
+use super::client::RetryDelays;
+use super::client::ServerNotification;
+use super::client::initialize_params;
+use crate::child_process::Pipes;
+use crate::child_process::StderrTail;
+use crate::child_process::child_environment;
+use crate::child_process::file_uri;
+use crate::child_process::host_environment;
+use crate::child_process::start;
+
+/// The windows and cadences one manager runs with. Production uses the
+/// defaults; a test injects millisecond values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspTimings {
+    /// The retry schedule after a transient request error.
+    pub retry_delays: RetryDelays,
+    /// The first relaunch delay after a crash; later attempts double it.
+    pub restart_base: Duration,
+    /// How often a waiting ask re-reads the indexing state.
+    pub index_poll: Duration,
+    /// How long a connection must stay up before its crash count resets.
+    pub stable_after: Duration,
+}
+
+impl Default for LspTimings {
+    fn default() -> Self {
+        Self {
+            retry_delays: DEFAULT_RETRY_DELAYS,
+            restart_base: Duration::from_millis(500),
+            index_poll: Duration::from_millis(50),
+            stable_after: Duration::from_secs(30),
+        }
+    }
+}
+
+/// One live connection and the documents opened on it.
+struct Connection {
+    client: Arc<LspClient>,
+    child: Option<LauncherChild>,
+    /// Document URI to the version last sent; every change increments it.
+    open_docs: HashMap<String, i32>,
+    started_at: Instant,
+}
+
+/// One configured server.
+struct ServerSlot {
+    config: ScopedLspServerConfig,
+    /// True when an untrusted workspace holds a project entry off.
+    locked: bool,
+    enabled: AtomicBool,
+    /// Coarse lifecycle; indexing overlays on read.
+    state: RwLock<LspServerState>,
+    /// Serializes first launches so concurrent asks share one handshake;
+    /// held only by a launcher, never by a reader.
+    start_gate: tokio::sync::Mutex<()>,
+    live: tokio::sync::Mutex<Option<Connection>>,
+    diagnostics: Mutex<HashMap<String, Vec<LspDiagnostic>>>,
+    /// Wakes a waiter watching a file's diagnostics.
+    diag_notify: Notify,
+    stderr: Mutex<StderrTail>,
+    restarts: AtomicU32,
+}
+
+/// The manager itself. Cloning shares the slots, so every handle sees one
+/// state.
+#[derive(Clone)]
+pub struct LspConnections {
+    launcher: Arc<dyn ProcessLauncher>,
+    workspace_root: Arc<Path>,
+    timings: LspTimings,
+    slots: Arc<RwLock<BTreeMap<String, Arc<ServerSlot>>>>,
+    routing: Arc<RwLock<BTreeMap<String, String>>>,
+    /// Set by shutdown; no launch may follow it, so a watcher waking from a
+    /// backoff sleep cannot resurrect a server the session ended.
+    closed: Arc<AtomicBool>,
+}
+
+impl LspConnections {
+    /// A manager over one launcher and one workspace, with the given
+    /// windows. Nothing is launched here.
+    pub fn new(
+        launcher: Arc<dyn ProcessLauncher>,
+        workspace_root: Arc<Path>,
+        timings: LspTimings,
+    ) -> Self {
+        Self {
+            launcher,
+            workspace_root,
+            timings,
+            slots: Arc::new(RwLock::new(BTreeMap::new())),
+            routing: Arc::new(RwLock::new(BTreeMap::new())),
+            closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Register every resolved server and build the suffix routing table.
+    /// Disabled entries are recorded and never launched. No process starts
+    /// here: the launch waits for the first ask.
+    pub async fn start_all(&self, servers: Vec<ScopedLspServerConfig>) {
+        let mut slots = self.slots.write().await;
+        let mut routing = self.routing.write().await;
+        for config in servers {
+            if config.transport != LspTransportKind::Stdio {
+                tracing::warn!(
+                    server = %config.name,
+                    "a language server entry names a transport this host does not launch; it stays idle"
+                );
+            }
+            let name = config.name.clone();
+            for extension in config.extension_to_language.keys() {
+                routing
+                    .entry(extension.clone())
+                    .or_insert_with(|| name.clone());
+            }
+            let locked = config.locked;
+            let state = if config.disabled {
+                LspServerState::Disabled {
+                    reason: if locked {
+                        "the workspace is not trusted".into()
+                    } else {
+                        "disabled by configuration".into()
+                    },
+                }
+            } else {
+                LspServerState::Idle
+            };
+            slots.insert(
+                name,
+                Arc::new(ServerSlot {
+                    enabled: AtomicBool::new(!config.disabled),
+                    config,
+                    locked,
+                    state: RwLock::new(state),
+                    start_gate: tokio::sync::Mutex::new(()),
+                    live: tokio::sync::Mutex::new(None),
+                    diagnostics: Mutex::new(HashMap::new()),
+                    diag_notify: Notify::new(),
+                    stderr: Mutex::new(StderrTail::default()),
+                    restarts: AtomicU32::new(0),
+                }),
+            );
+        }
+    }
+
+    /// The server that owns one path's suffix, if the table routes it.
+    pub async fn server_for_path(&self, path: &Path) -> Option<String> {
+        let extension = format!(
+            ".{}",
+            path.extension()
+                .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default()
+        );
+        self.routing.read().await.get(&extension).cloned()
+    }
+
+    /// The status rows the surfaces render, ordered by name.
+    pub async fn statuses(&self) -> Vec<LspServerStatusView> {
+        let slots = self.slots.read().await;
+        let mut rows = Vec::with_capacity(slots.len());
+        for (name, slot) in slots.iter() {
+            let base = slot.state.read().await.clone();
+            let live = slot.live.lock().await;
+            let state = match (&base, live.as_ref()) {
+                (LspServerState::Running, Some(connection)) if connection.client.is_indexing() => {
+                    LspServerState::Indexing {
+                        message: connection.client.index_message(),
+                    }
+                }
+                _ => base,
+            };
+            let open_documents = live
+                .as_ref()
+                .map(|connection| connection.open_docs.len())
+                .unwrap_or(0);
+            let diagnostic_count = slot
+                .diagnostics
+                .lock()
+                .map(|diagnostics| diagnostics.values().map(Vec::len).sum())
+                .unwrap_or(0);
+            rows.push(LspServerStatusView {
+                name: name.clone(),
+                scope: slot.config.scope,
+                state,
+                command_line: once(slot.config.command.clone())
+                    .chain(slot.config.args.iter().cloned())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                extensions: slot.config.extensions(),
+                open_documents,
+                diagnostic_count,
+                recent_stderr: slot
+                    .stderr
+                    .lock()
+                    .map(|tail| tail.lines())
+                    .unwrap_or_default(),
+            });
+        }
+        rows
+    }
+
+    /// The scope one server was configured from, for a receipt that must say
+    /// whether a change outlives the session.
+    pub async fn config_scope(&self, name: &str) -> Option<LspConfigScope> {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .map(|slot| slot.config.scope)
+    }
+
+    /// Start one server if it is not running, or return the live connection.
+    /// The start gate spans the handshake so concurrent asks share one
+    /// launch, while readers of the live slot never wait on it: a status
+    /// read during a slow handshake sees Starting and returns.
+    pub(crate) async fn ensure_started(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<Arc<LspClient>, String> {
+        let slot = self
+            .slots
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no language server named {name} is configured"))?;
+        if let Some(client) = Self::current_client(&slot).await {
+            return Ok(client);
+        }
+        let _gate = slot.start_gate.lock().await;
+        if let Some(client) = Self::current_client(&slot).await {
+            return Ok(client);
+        }
+        if self.closed.load(Ordering::Relaxed) {
+            return Err("the language server manager is shut down".to_string());
+        }
+        if !slot.enabled.load(Ordering::Relaxed) {
+            return Err(format!("{name} is disabled"));
+        }
+        if slot.config.transport != LspTransportKind::Stdio {
+            return Err(format!(
+                "{name} names a transport this host does not launch"
+            ));
+        }
+        *slot.state.write().await = LspServerState::Starting;
+        // A caller cancelled mid-handshake (its own timeout fired) must not
+        // leave the slot reading Starting with nothing behind it.
+        let mut guard = watch::StateGuard {
+            slot: Arc::clone(&slot),
+            armed: true,
+        };
+        let outcome = self.launch(&slot).await;
+        guard.armed = false;
+        match outcome {
+            Ok(client) => {
+                // A shutdown that landed mid-handshake wins: the session
+                // asked for no servers, so the fresh connection is closed
+                // rather than stored.
+                if self.closed.load(Ordering::Relaxed) {
+                    client
+                        .0
+                        .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
+                        .await;
+                    drop(client.1.child);
+                    *slot.state.write().await = LspServerState::Idle;
+                    return Err("the language server manager is shut down".to_string());
+                }
+                let (launched, connection) = client;
+                *slot.live.lock().await = Some(connection);
+                *slot.state.write().await = LspServerState::Running;
+                self.spawn_watcher(&slot, Arc::clone(&launched));
+                Ok(launched)
+            }
+            Err(error) => {
+                *slot.state.write().await = LspServerState::Failed {
+                    error: error.clone(),
+                };
+                Err(error)
+            }
+        }
+    }
+
+    /// The live client of one slot, when one exists.
+    async fn current_client(slot: &Arc<ServerSlot>) -> Option<Arc<LspClient>> {
+        slot.live
+            .lock()
+            .await
+            .as_ref()
+            .map(|connection| Arc::clone(&connection.client))
+    }
+
+    /// Launch one server and run its handshake, returning the client and
+    /// the connection the caller stores.
+    async fn launch(
+        self: &Arc<Self>,
+        slot: &Arc<ServerSlot>,
+    ) -> Result<(Arc<LspClient>, Connection), String> {
+        let config = &slot.config;
+        let workspace: PathBuf = config
+            .workspace_folder
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.workspace_root.to_path_buf());
+        let mut request = SpawnRequest::new(config.command.clone())
+            .with_args(config.args.clone())
+            .with_workspace(workspace.clone())
+            .with_env(child_environment(&config.env, &host_environment()))
+            .interactive();
+        request.stdio = StdioConfig::piped_output();
+        request.stdio.stdin = StdioMode::Piped;
+        let mut child = self
+            .launcher
+            .spawn(request, SpawnPolicy::default().sandboxed())
+            .map_err(|error| format!("the server did not start: {error}"))?;
+        let pipes = child
+            .take_pipes()
+            .ok_or_else(|| "the launcher returned no pipes".to_string())?;
+        let (Some(stdin), Some(stdout)) = (pipes.stdin, pipes.stdout) else {
+            return Err("the launcher returned an incomplete pipe pair".into());
+        };
+        let (bridge, stderr) = start(Pipes {
+            stdin,
+            stdout,
+            stderr: pipes.stderr,
+        });
+        if let Ok(mut tail) = slot.stderr.lock() {
+            *tail = stderr;
+        }
+        let (client, notices) =
+            LspClient::spawn(bridge.reader, bridge.writer, self.timings.retry_delays);
+        let params = initialize_params(&workspace, config.initialization_options.as_ref());
+        let budget = Duration::from_millis(config.startup_timeout_ms);
+        client.initialize(params, budget).await?;
+        if let Some(settings) = &config.settings
+            && let Err(error) = client.notify(
+                "workspace/didChangeConfiguration",
+                serde_json::json!({"settings": settings}),
+            )
+        {
+            tracing::warn!(
+                server = %config.name,
+                %error,
+                "the server's settings could not be sent"
+            );
+        }
+        spawn_drain(Arc::clone(slot), notices);
+        let connection = Connection {
+            client: Arc::clone(&client),
+            child: Some(child),
+            open_docs: HashMap::new(),
+            started_at: Instant::now(),
+        };
+        Ok((client, connection))
+    }
+
+    /// Watch one connection: when it ends on its own, mark the slot and
+    /// relaunch within the slot's configured bounds.
+    fn spawn_watcher(self: &Arc<Self>, slot: &Arc<ServerSlot>, client: Arc<LspClient>) {
+        let manager = self.clone();
+        let slot = Arc::clone(slot);
+        tokio::spawn(async move {
+            client.wait_closed().await;
+            let mut live = slot.live.lock().await;
+            let Some(connection) = live.as_ref() else {
+                return;
+            };
+            if !Arc::ptr_eq(&connection.client, &client) {
+                return;
+            }
+            let stable = connection.started_at.elapsed() >= manager.timings.stable_after;
+            live.take();
+            drop(live);
+            clear_diagnostics(&slot);
+            if manager.closed.load(Ordering::Relaxed) {
+                return;
+            }
+            if stable {
+                slot.restarts.store(0, Ordering::Relaxed);
+            }
+            if !slot.enabled.load(Ordering::Relaxed) || !slot.config.restart_on_crash {
+                if slot.enabled.load(Ordering::Relaxed) {
+                    *slot.state.write().await = LspServerState::Failed {
+                        error: "the server exited".into(),
+                    };
+                }
+                return;
+            }
+            let attempt = slot.restarts.fetch_add(1, Ordering::Relaxed) + 1;
+            if attempt > slot.config.max_restarts {
+                *slot.state.write().await = LspServerState::Failed {
+                    error: "the server kept exiting".into(),
+                };
+                return;
+            }
+            *slot.state.write().await = LspServerState::Failed {
+                error: "the server exited; relaunching".into(),
+            };
+            // Each later attempt doubles the wait, bounded so an exponent
+            // cannot overflow the base.
+            let factor = 1u32 << (attempt - 1).min(5);
+            sleep(manager.timings.restart_base * factor).await;
+            if manager.closed.load(Ordering::Relaxed) {
+                return;
+            }
+            drop(manager.ensure_started(&slot.config.name).await);
+        });
+    }
+
+    /// Stop every server gracefully and join their children.
+    pub async fn shutdown(&self) {
+        // Set before anything is taken, so a watcher waking from a backoff
+        // sleep cannot launch a replacement for a session that ended.
+        self.closed.store(true, Ordering::Relaxed);
+        let slots: Vec<Arc<ServerSlot>> = self.slots.read().await.values().cloned().collect();
+        for slot in slots {
+            clear_diagnostics(&slot);
+            let connection = slot.live.lock().await.take();
+            if let Some(connection) = connection {
+                connection
+                    .client
+                    .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
+                    .await;
+                drop(connection.child);
+            }
+            *slot.state.write().await = LspServerState::Idle;
+        }
+    }
+
+    /// Flip one server's switch. Disabling stops the live connection; the
+    /// next ask starts a fresh one only when the switch is back on.
+    pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        let slot = self
+            .slots
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no language server named {name} is configured"))?;
+        if enabled && slot.locked {
+            return Err(format!("{name} stays off until its workspace is trusted"));
+        }
+        if slot.enabled.load(Ordering::Relaxed) == enabled {
+            return Ok(());
+        }
+        slot.enabled.store(enabled, Ordering::Relaxed);
+        if enabled {
+            *slot.state.write().await = LspServerState::Idle;
+            return Ok(());
+        }
+        clear_diagnostics(&slot);
+        let connection = slot.live.lock().await.take();
+        if let Some(connection) = connection {
+            connection
+                .client
+                .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
+                .await;
+            drop(connection.child);
+        }
+        *slot.state.write().await = LspServerState::Disabled {
+            reason: "disabled by the user".into(),
+        };
+        Ok(())
+    }
+
+    /// Stop one server and start it again.
+    pub async fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let slot = self
+            .slots
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no language server named {name} is configured"))?;
+        clear_diagnostics(&slot);
+        let connection = slot.live.lock().await.take();
+        if let Some(connection) = connection {
+            connection
+                .client
+                .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
+                .await;
+            drop(connection.child);
+        }
+        *slot.state.write().await = LspServerState::Idle;
+        drop(self.ensure_started(name).await?);
+        Ok(())
+    }
+
+    /// Wait briefly for a server that reports indexing to settle. True means
+    /// it is still indexing when the budget runs out; the caller marks its
+    /// answer as possibly partial.
+    pub async fn wait_indexing_briefly(&self, name: &str, budget: Duration) -> bool {
+        let Some(slot) = self.slots.read().await.get(name).cloned() else {
+            return false;
+        };
+        let deadline = Instant::now() + budget;
+        loop {
+            let live = slot.live.lock().await;
+            let indexing = live
+                .as_ref()
+                .is_some_and(|connection| connection.client.is_indexing());
+            drop(live);
+            if !indexing {
+                return false;
+            }
+            if Instant::now() >= deadline {
+                return true;
+            }
+            sleep(self.timings.index_poll).await;
+        }
+    }
+
+    /// Synchronize one just-written file with the server that owns its
+    /// suffix: open it with version one the first time, then send a change
+    /// with the next version, then a save. Returns the server name, or None
+    /// when no server routes the suffix.
+    pub async fn sync_file_saved(
+        self: &Arc<Self>,
+        path: &Path,
+        content: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(name) = self.server_for_path(path).await else {
+            return Ok(None);
+        };
+        drop(self.ensure_started(&name).await?);
+        let slot = self.slots.read().await.get(&name).cloned();
+        let Some(slot) = slot else {
+            return Ok(None);
+        };
+        let extension = watch::extension_of(path);
+        let language = config::language_for_extension(&slot.config, &extension)
+            .unwrap_or("plaintext")
+            .to_string();
+        let uri = file_uri(path);
+        let mut live = slot.live.lock().await;
+        let Some(connection) = live.as_mut() else {
+            return Ok(None);
+        };
+        // The notification goes through the connection held under this
+        // lock, and the version is recorded only after the frame was
+        // accepted, so a replaced connection cannot claim a delivery it
+        // never made.
+        match connection.open_docs.get(&uri).copied() {
+            Some(version) => {
+                let next = version + 1;
+                connection.client.notify(
+                    "textDocument/didChange",
+                    serde_json::json!({
+                        "textDocument": {"uri": uri.clone(), "version": next},
+                        "contentChanges": [{"text": content}],
+                    }),
+                )?;
+                connection.open_docs.insert(uri.clone(), next);
+            }
+            None => {
+                connection.client.notify(
+                    "textDocument/didOpen",
+                    serde_json::json!({
+                        "textDocument": {
+                            "uri": uri.clone(),
+                            "languageId": language,
+                            "version": 1,
+                            "text": content,
+                        },
+                    }),
+                )?;
+                connection.open_docs.insert(uri.clone(), 1);
+            }
+        }
+        connection.client.notify(
+            "textDocument/didSave",
+            serde_json::json!({"textDocument": {"uri": uri}}),
+        )?;
+        Ok(Some(name))
+    }
+
+    /// The diagnostics currently held for one file on one server.
+    pub async fn file_diagnostics(&self, name: &str, uri: &str) -> Vec<LspDiagnostic> {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .and_then(|slot| {
+                slot.diagnostics
+                    .lock()
+                    .ok()
+                    .and_then(|map| map.get(uri).cloned())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Ask one file-scoped question: route the suffix, start its server if
+    /// needed, ensure the document is open, and forward the request.
+    pub async fn request_for_file(
+        self: &Arc<Self>,
+        path: &Path,
+        method: &str,
+        params: Value,
+        content: Option<&str>,
+        budget: Duration,
+    ) -> Result<Value, String> {
+        let name = match self.server_for_path(path).await {
+            Some(name) => name,
+            None => return Err(format!("no language server routes {}", path.display())),
+        };
+        if let Some(content) = content {
+            self.sync_file_saved(path, content).await?;
+        }
+        // The request addresses the connection live at this instant; a
+        // swap between the open and the ask is a crash the request reports.
+        let Some(slot) = self.slots.read().await.get(&name).cloned() else {
+            return Err(format!("no language server named {name} is configured"));
+        };
+        let Some(client) = Self::current_client(&slot).await else {
+            return Err(format!("{name} is not connected"));
+        };
+        timeout(budget, client.request(method, params))
+            .await
+            .map_err(|_| "the language server did not answer inside its budget".to_string())?
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Drop the diagnostics a previous connection published: its findings
+/// describe a server that is no longer running, and keeping them would
+/// serve stale errors as current.
+fn clear_diagnostics(slot: &ServerSlot) {
+    if let Ok(mut map) = slot.diagnostics.lock() {
+        map.clear();
+    }
+    slot.diag_notify.notify_one();
+}
+
+/// Drain one connection's notifications into its slot's diagnostic store
+/// until the stream ends. An empty publish clears the file: the server says
+/// the problems are fixed, and the store must stop holding them.
+fn spawn_drain(slot: Arc<ServerSlot>, mut notices: mpsc::UnboundedReceiver<ServerNotification>) {
+    tokio::spawn(async move {
+        while let Some(notification) = notices.recv().await {
+            if notification.method != "textDocument/publishDiagnostics" {
+                continue;
+            }
+            let Ok(params) = serde_json::from_value::<LspPublishDiagnostics>(notification.params)
+            else {
+                tracing::warn!("a diagnostics notification did not parse; ignored");
+                continue;
+            };
+            if let Ok(mut map) = slot.diagnostics.lock() {
+                if params.diagnostics.is_empty() {
+                    map.remove(&params.uri);
+                } else {
+                    map.insert(params.uri, params.diagnostics);
+                }
+            }
+            slot.diag_notify.notify_waiters();
+        }
+    });
+}
+
+impl LspConnections {
+    /// Attach an in-memory peer as one server's live connection, so a test
+    /// drives the manager's rules without a launcher. The peer answers the
+    /// handshake; the caller keeps its other half.
+    #[cfg(test)]
+    pub(crate) async fn attach_for_test(
+        self: &Arc<Self>,
+        name: &str,
+        reader: DuplexStream,
+        writer: DuplexStream,
+    ) -> Result<Arc<LspClient>, String> {
+        let slot = self
+            .slots
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no language server named {name} is configured"))?;
+        let (client, notices) = LspClient::spawn(reader, writer, self.timings.retry_delays);
+        let params = initialize_params(
+            &self.workspace_root,
+            slot.config.initialization_options.as_ref(),
+        );
+        client
+            .initialize(
+                params,
+                Duration::from_millis(slot.config.startup_timeout_ms),
+            )
+            .await?;
+        spawn_drain(Arc::clone(&slot), notices);
+        *slot.live.lock().await = Some(Connection {
+            client: Arc::clone(&client),
+            child: None,
+            open_docs: HashMap::new(),
+            started_at: Instant::now(),
+        });
+        *slot.state.write().await = LspServerState::Running;
+        self.spawn_watcher(&slot, Arc::clone(&client));
+        Ok(client)
+    }
+}
+
+mod watch;
+
+#[cfg(test)]
+mod tests;
