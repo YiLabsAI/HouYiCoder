@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::iter::once;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,11 +26,9 @@ use houyicoder_api::launcher::SpawnRequest;
 use houyicoder_api::launcher::StdioConfig;
 use houyicoder_api::launcher::StdioMode;
 use houyicoder_config as config;
-use houyicoder_protocol::lsp::LspConfigScope;
 use houyicoder_protocol::lsp::LspDiagnostic;
 use houyicoder_protocol::lsp::LspPublishDiagnostics;
 use houyicoder_protocol::lsp::LspServerState;
-use houyicoder_protocol::lsp::LspServerStatusView;
 use houyicoder_protocol::lsp::LspTransportKind;
 use houyicoder_protocol::lsp::ScopedLspServerConfig;
 use serde_json::Value;
@@ -63,6 +60,14 @@ pub struct LspTimings {
     pub retry_delays: RetryDelays,
     /// The first relaunch delay after a crash; later attempts double it.
     pub restart_base: Duration,
+    /// How long a write waits for a fresh diagnostics publish before
+    /// reporting none.
+    pub diagnostics_grace: Duration,
+    /// The longest that wait may run when the publish is slow to arrive.
+    pub diagnostics_cap: Duration,
+    /// How long a query waits for a server still reporting indexing before
+    /// its answer is marked partial.
+    pub index_wait: Duration,
     /// How often a waiting ask re-reads the indexing state.
     pub index_poll: Duration,
     /// How long a connection must stay up before its crash count resets.
@@ -74,6 +79,9 @@ impl Default for LspTimings {
         Self {
             retry_delays: DEFAULT_RETRY_DELAYS,
             restart_base: Duration::from_millis(500),
+            diagnostics_grace: Duration::from_millis(150),
+            diagnostics_cap: Duration::from_millis(500),
+            index_wait: Duration::from_secs(3),
             index_poll: Duration::from_millis(50),
             stable_after: Duration::from_secs(30),
         }
@@ -89,6 +97,16 @@ struct Connection {
     started_at: Instant,
 }
 
+/// The findings one publish left for one file, with the generation that
+/// publish produced. An empty publish keeps its entry, because a file that
+/// was checked and found clean is a fact a waiter may return; only a
+/// connection that ends clears the store.
+#[derive(Clone)]
+struct PublishedDiagnostics {
+    generation: u64,
+    findings: Vec<LspDiagnostic>,
+}
+
 /// One configured server.
 struct ServerSlot {
     config: ScopedLspServerConfig,
@@ -101,8 +119,8 @@ struct ServerSlot {
     /// held only by a launcher, never by a reader.
     start_gate: tokio::sync::Mutex<()>,
     live: tokio::sync::Mutex<Option<Connection>>,
-    diagnostics: Mutex<HashMap<String, Vec<LspDiagnostic>>>,
-    /// Wakes a waiter watching a file's diagnostics.
+    diagnostics: Mutex<HashMap<String, PublishedDiagnostics>>,
+    /// Wakes the waiters watching a file's diagnostics.
     diag_notify: Notify,
     stderr: Mutex<StderrTail>,
     restarts: AtomicU32,
@@ -189,70 +207,15 @@ impl LspConnections {
         }
     }
 
-    /// The server that owns one path's suffix, if the table routes it.
-    pub async fn server_for_path(&self, path: &Path) -> Option<String> {
-        let extension = format!(
-            ".{}",
-            path.extension()
-                .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
-                .unwrap_or_default()
-        );
-        self.routing.read().await.get(&extension).cloned()
-    }
-
-    /// The status rows the surfaces render, ordered by name.
-    pub async fn statuses(&self) -> Vec<LspServerStatusView> {
-        let slots = self.slots.read().await;
-        let mut rows = Vec::with_capacity(slots.len());
-        for (name, slot) in slots.iter() {
-            let base = slot.state.read().await.clone();
-            let live = slot.live.lock().await;
-            let state = match (&base, live.as_ref()) {
-                (LspServerState::Running, Some(connection)) if connection.client.is_indexing() => {
-                    LspServerState::Indexing {
-                        message: connection.client.index_message(),
-                    }
-                }
-                _ => base,
-            };
-            let open_documents = live
-                .as_ref()
-                .map(|connection| connection.open_docs.len())
-                .unwrap_or(0);
-            let diagnostic_count = slot
-                .diagnostics
-                .lock()
-                .map(|diagnostics| diagnostics.values().map(Vec::len).sum())
-                .unwrap_or(0);
-            rows.push(LspServerStatusView {
-                name: name.clone(),
-                scope: slot.config.scope,
-                state,
-                command_line: once(slot.config.command.clone())
-                    .chain(slot.config.args.iter().cloned())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                extensions: slot.config.extensions(),
-                open_documents,
-                diagnostic_count,
-                recent_stderr: slot
-                    .stderr
-                    .lock()
-                    .map(|tail| tail.lines())
-                    .unwrap_or_default(),
-            });
+    /// One path resolved against the workspace when it is relative, so the
+    /// file URI and the server's view agree.
+    pub(crate) fn resolve_path(&self, path_text: &str) -> PathBuf {
+        let given = Path::new(path_text);
+        if given.is_absolute() {
+            given.to_path_buf()
+        } else {
+            self.workspace_root.join(given)
         }
-        rows
-    }
-
-    /// The scope one server was configured from, for a receipt that must say
-    /// whether a change outlives the session.
-    pub async fn config_scope(&self, name: &str) -> Option<LspConfigScope> {
-        self.slots
-            .read()
-            .await
-            .get(name)
-            .map(|slot| slot.config.scope)
     }
 
     /// Start one server if it is not running, or return the live connection.
@@ -452,83 +415,11 @@ impl LspConnections {
         });
     }
 
-    /// Stop every server gracefully and join their children.
-    pub async fn shutdown(&self) {
-        // Set before anything is taken, so a watcher waking from a backoff
-        // sleep cannot launch a replacement for a session that ended.
-        self.closed.store(true, Ordering::Relaxed);
-        let slots: Vec<Arc<ServerSlot>> = self.slots.read().await.values().cloned().collect();
-        for slot in slots {
-            clear_diagnostics(&slot);
-            let connection = slot.live.lock().await.take();
-            if let Some(connection) = connection {
-                connection
-                    .client
-                    .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
-                    .await;
-                drop(connection.child);
-            }
-            *slot.state.write().await = LspServerState::Idle;
-        }
-    }
-
-    /// Flip one server's switch. Disabling stops the live connection; the
-    /// next ask starts a fresh one only when the switch is back on.
-    pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
-        let slot = self
-            .slots
-            .read()
+    /// Whether a server is still indexing after a short wait, so a query
+    /// answer can say its results may be partial.
+    pub async fn indexing_after_wait(&self, name: &str) -> bool {
+        self.wait_indexing_briefly(name, self.timings.index_wait)
             .await
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("no language server named {name} is configured"))?;
-        if enabled && slot.locked {
-            return Err(format!("{name} stays off until its workspace is trusted"));
-        }
-        if slot.enabled.load(Ordering::Relaxed) == enabled {
-            return Ok(());
-        }
-        slot.enabled.store(enabled, Ordering::Relaxed);
-        if enabled {
-            *slot.state.write().await = LspServerState::Idle;
-            return Ok(());
-        }
-        clear_diagnostics(&slot);
-        let connection = slot.live.lock().await.take();
-        if let Some(connection) = connection {
-            connection
-                .client
-                .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
-                .await;
-            drop(connection.child);
-        }
-        *slot.state.write().await = LspServerState::Disabled {
-            reason: "disabled by the user".into(),
-        };
-        Ok(())
-    }
-
-    /// Stop one server and start it again.
-    pub async fn restart(self: &Arc<Self>, name: &str) -> Result<(), String> {
-        let slot = self
-            .slots
-            .read()
-            .await
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("no language server named {name} is configured"))?;
-        clear_diagnostics(&slot);
-        let connection = slot.live.lock().await.take();
-        if let Some(connection) = connection {
-            connection
-                .client
-                .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
-                .await;
-            drop(connection.child);
-        }
-        *slot.state.write().await = LspServerState::Idle;
-        drop(self.ensure_started(name).await?);
-        Ok(())
     }
 
     /// Wait briefly for a server that reports indexing to settle. True means
@@ -555,36 +446,62 @@ impl LspConnections {
         }
     }
 
-    /// Synchronize one just-written file with the server that owns its
-    /// suffix: open it with version one the first time, then send a change
-    /// with the next version, then a save. Returns the server name, or None
-    /// when no server routes the suffix.
+    /// Synchronize one changed file with the server that owns its suffix:
+    /// open it with version one the first time, then send a change with the
+    /// next version. Nothing is announced as saved, so a read-only query on
+    /// the file does not trigger the server's check-on-save work.
+    pub async fn sync_file_content(
+        self: &Arc<Self>,
+        path: &Path,
+        content: &str,
+    ) -> Result<Option<String>, String> {
+        self.sync_content(path, content, false).await
+    }
+
+    /// Synchronize one just-written file and announce the save, so a
+    /// check-on-save server runs its diagnostics for the new content. The
+    /// read decorator waits for that publish; a query path uses
+    /// sync_file_content and never announces a save it did not make.
     pub async fn sync_file_saved(
         self: &Arc<Self>,
         path: &Path,
         content: &str,
     ) -> Result<Option<String>, String> {
+        self.sync_content(path, content, true).await
+    }
+
+    /// The shared body of the two syncs. The notification goes through the
+    /// connection held under this lock, and the version is recorded only
+    /// after the frame was accepted, so a replaced connection cannot claim a
+    /// delivery it never made. None means no server routes the suffix; an
+    /// error names a routed server whose connection went away between the
+    /// start and the send.
+    async fn sync_content(
+        self: &Arc<Self>,
+        path: &Path,
+        content: &str,
+        announce_save: bool,
+    ) -> Result<Option<String>, String> {
         let Some(name) = self.server_for_path(path).await else {
             return Ok(None);
         };
         drop(self.ensure_started(&name).await?);
-        let slot = self.slots.read().await.get(&name).cloned();
-        let Some(slot) = slot else {
-            return Ok(None);
-        };
+        let slot = self
+            .slots
+            .read()
+            .await
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| format!("no language server named {name} is configured"))?;
         let extension = watch::extension_of(path);
         let language = config::language_for_extension(&slot.config, &extension)
             .unwrap_or("plaintext")
             .to_string();
         let uri = file_uri(path);
         let mut live = slot.live.lock().await;
-        let Some(connection) = live.as_mut() else {
-            return Ok(None);
-        };
-        // The notification goes through the connection held under this
-        // lock, and the version is recorded only after the frame was
-        // accepted, so a replaced connection cannot claim a delivery it
-        // never made.
+        let connection = live
+            .as_mut()
+            .ok_or_else(|| format!("{name} is not connected"))?;
         match connection.open_docs.get(&uri).copied() {
             Some(version) => {
                 let next = version + 1;
@@ -612,14 +529,16 @@ impl LspConnections {
                 connection.open_docs.insert(uri.clone(), 1);
             }
         }
-        connection.client.notify(
-            "textDocument/didSave",
-            serde_json::json!({"textDocument": {"uri": uri}}),
-        )?;
+        if announce_save {
+            connection.client.notify(
+                "textDocument/didSave",
+                serde_json::json!({"textDocument": {"uri": uri}}),
+            )?;
+        }
         Ok(Some(name))
     }
 
-    /// The diagnostics currently held for one file on one server.
+    /// The diagnostics the last publish left for one file on one server.
     pub async fn file_diagnostics(&self, name: &str, uri: &str) -> Vec<LspDiagnostic> {
         self.slots
             .read()
@@ -629,13 +548,15 @@ impl LspConnections {
                 slot.diagnostics
                     .lock()
                     .ok()
-                    .and_then(|map| map.get(uri).cloned())
+                    .and_then(|map| map.get(uri).map(|entry| entry.findings.clone()))
             })
             .unwrap_or_default()
     }
 
-    /// Ask one file-scoped question: route the suffix, start its server if
-    /// needed, ensure the document is open, and forward the request.
+    /// Ask one file-scoped question: route the suffix, start its server,
+    /// synchronize the given content without announcing a save, and forward
+    /// the request. The caller opens the document through ensure_document;
+    /// this path drains a dropped connection instead of claiming a delivery.
     pub async fn request_for_file(
         self: &Arc<Self>,
         path: &Path,
@@ -649,7 +570,7 @@ impl LspConnections {
             None => return Err(format!("no language server routes {}", path.display())),
         };
         if let Some(content) = content {
-            self.sync_file_saved(path, content).await?;
+            self.sync_file_content(path, content).await?;
         }
         // The request addresses the connection live at this instant; a
         // swap between the open and the ask is a crash the request reports.
@@ -659,8 +580,16 @@ impl LspConnections {
         let Some(client) = Self::current_client(&slot).await else {
             return Err(format!("{name} is not connected"));
         };
-        timeout(budget, client.request(method, params))
-            .await
+        let started = Instant::now();
+        let outcome = timeout(budget, client.request(method, params)).await;
+        tracing::debug!(
+            server = %name,
+            method,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            answered = outcome.is_ok(),
+            "the language server request settled"
+        );
+        outcome
             .map_err(|_| "the language server did not answer inside its budget".to_string())?
             .map_err(|error| error.to_string())
     }
@@ -673,12 +602,13 @@ fn clear_diagnostics(slot: &ServerSlot) {
     if let Ok(mut map) = slot.diagnostics.lock() {
         map.clear();
     }
-    slot.diag_notify.notify_one();
+    slot.diag_notify.notify_waiters();
 }
 
 /// Drain one connection's notifications into its slot's diagnostic store
-/// until the stream ends. An empty publish clears the file: the server says
-/// the problems are fixed, and the store must stop holding them.
+/// until the stream ends. An empty publish keeps the file's entry with no
+/// findings: the server checked the file and found it clean, which is what
+/// lets a waiter report "no problems" rather than "no publish".
 fn spawn_drain(slot: Arc<ServerSlot>, mut notices: mpsc::UnboundedReceiver<ServerNotification>) {
     tokio::spawn(async move {
         while let Some(notification) = notices.recv().await {
@@ -691,11 +621,14 @@ fn spawn_drain(slot: Arc<ServerSlot>, mut notices: mpsc::UnboundedReceiver<Serve
                 continue;
             };
             if let Ok(mut map) = slot.diagnostics.lock() {
-                if params.diagnostics.is_empty() {
-                    map.remove(&params.uri);
-                } else {
-                    map.insert(params.uri, params.diagnostics);
-                }
+                let entry = map
+                    .entry(params.uri)
+                    .or_insert_with(|| PublishedDiagnostics {
+                        generation: 0,
+                        findings: Vec::new(),
+                    });
+                entry.generation += 1;
+                entry.findings = params.diagnostics;
             }
             slot.diag_notify.notify_waiters();
         }
@@ -744,7 +677,10 @@ impl LspConnections {
     }
 }
 
+mod control;
+mod documents;
+mod status;
 mod watch;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

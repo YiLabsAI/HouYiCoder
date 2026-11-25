@@ -1537,6 +1537,7 @@ dependencies = [
  "houyicoder-sandbox",
  "houyicoder-session",
  "houyicoder-skill",
+ "ignore",
  "notify",
  "reqwest",
  "rmcp",

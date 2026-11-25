@@ -28,6 +28,9 @@ fn fast_timings() -> LspTimings {
             Duration::from_millis(4),
         ],
         restart_base: Duration::from_millis(10),
+        diagnostics_grace: Duration::from_millis(2),
+        diagnostics_cap: Duration::from_millis(10),
+        index_wait: Duration::from_millis(5),
         index_poll: Duration::from_millis(2),
         stable_after: Duration::from_millis(20),
     }

@@ -105,3 +105,19 @@ async fn test_tail_reads_partial_line() {
     }
     assert_eq!(lines, vec!["last words"]);
 }
+
+/// A URI escapes the bytes a server would otherwise re-spell: a percentage
+/// sign, a space, and a non-ASCII name all decode back to the same path.
+#[test]
+fn test_file_uri_escapes_bytes() {
+    assert_eq!(
+        file_uri(Path::new("/work/a b#c?.rs")),
+        "file:///work/a%20b%23c%3F.rs"
+    );
+    assert_eq!(
+        file_uri(Path::new("/work/100%.rs")),
+        "file:///work/100%25.rs"
+    );
+    let non_ascii = file_uri(Path::new("/work/\u{6d4b}\u{8bd5}.rs"));
+    assert_eq!(non_ascii, "file:///work/%E6%B5%8B%E8%AF%95.rs");
+}

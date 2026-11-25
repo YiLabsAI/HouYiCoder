@@ -25,7 +25,7 @@ use crate::lsp::client::tests::spawn_peer;
 
 /// A launcher that refuses to start anything, so a test can prove the
 /// manager never asked.
-struct NoSpawn;
+pub(crate) struct NoSpawn;
 
 impl ProcessLauncher for NoSpawn {
     fn spawn(&self, _req: SpawnRequest, _policy: SpawnPolicy) -> Result<LauncherChild, SpawnError> {
@@ -41,6 +41,9 @@ fn fast_timings() -> LspTimings {
             Duration::from_millis(4),
         ],
         restart_base: Duration::from_millis(5),
+        diagnostics_grace: Duration::from_millis(2),
+        diagnostics_cap: Duration::from_millis(10),
+        index_wait: Duration::from_millis(5),
         index_poll: Duration::from_millis(2),
         stable_after: Duration::from_millis(20),
     }
@@ -279,7 +282,8 @@ async fn test_sync_versions() {
     );
 }
 
-/// A published diagnostic lands in the store, an empty publish clears it,
+/// A published diagnostic lands in the store, a later empty publish clears
+/// the findings while keeping the file's entry and bumping its generation,
 /// and the status row counts what is held.
 #[tokio::test]
 async fn test_diagnostics_store() {
@@ -316,6 +320,7 @@ async fn test_diagnostics_store() {
         .find(|r| r.name == "rust")
         .expect("rust");
     assert_eq!(row.diagnostic_count, 1);
+    let generation = manager.publish_generation("rust", &uri).await;
     peer.out
         .send(
             json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
@@ -326,10 +331,14 @@ async fn test_diagnostics_store() {
     while !manager.file_diagnostics("rust", &uri).await.is_empty() {
         assert!(
             started.elapsed() < Duration::from_secs(5),
-            "an empty publish clears the file"
+            "an empty publish clears the findings"
         );
         sleep(Duration::from_millis(2)).await;
     }
+    assert!(
+        manager.publish_generation("rust", &uri).await > generation,
+        "the clean publish bumps the file's generation"
+    );
     manager.shutdown().await;
 }
 

@@ -18,6 +18,10 @@ use houyicoder_core::agent::{
 use houyicoder_core::snapshot::file_transaction::FileTransaction;
 use houyicoder_core::snapshot::{SnapshotStore, UndoStack};
 use houyicoder_permission::{GuardedTool, ModeGate};
+
+use crate::lsp::LspConnections;
+use crate::lsp::LspTool;
+use crate::lsp::SaveDiagnosticsTool;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -38,6 +42,10 @@ pub(super) struct BuiltInToolProvider {
     /// The host that takes a shell command over once it outlives the
     /// foreground budget, and how long it may hold the foreground first.
     background: Option<(Arc<dyn BackgroundCommandLauncher>, Duration)>,
+    /// The language servers this session configured, when any routable one
+    /// exists: the query tool registers against it and the writing tools
+    /// report their post-write diagnostics through it.
+    lsp: Option<Arc<LspConnections>>,
 }
 
 impl BuiltInToolProvider {
@@ -78,7 +86,18 @@ impl BuiltInToolProvider {
             active_skill: None,
             transaction: None,
             background: None,
+            lsp: None,
         }
+    }
+
+    /// Wire the session's language servers: the query tool registers
+    /// against them, and the writing tools carry their post-write
+    /// diagnostics. A session with no routable server passes None and
+    /// registers neither, so the tool list pays nothing for the absent
+    /// capability.
+    pub(super) fn with_lsp(mut self, lsp: Option<Arc<LspConnections>>) -> Self {
+        self.lsp = lsp;
+        self
     }
 
     /// Connect the host that finishes a shell command the foreground gives up,
@@ -91,6 +110,20 @@ impl BuiltInToolProvider {
     ) -> Self {
         self.background = Some((launcher, foreground_budget));
         self
+    }
+
+    /// Wrap one writing tool so its answer carries the diagnostics the
+    /// file has after the write. A session with no language servers passes
+    /// the tool through untouched.
+    fn with_diagnostics(&self, inner: Arc<dyn Tool>) -> Arc<dyn Tool> {
+        match (&self.lsp, &self.session) {
+            (Some(manager), Some(session)) => Arc::new(SaveDiagnosticsTool::new(
+                inner,
+                Arc::clone(manager),
+                Arc::clone(session),
+            )),
+            _ => inner,
+        }
     }
 
     /// Wire the write journal into the file-touch tools, so every file they
@@ -157,21 +190,21 @@ impl ToolProvider for BuiltInToolProvider {
                 .with_activator(self.activator.clone())
                 .with_transaction(self.transaction.clone());
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(write),
+                self.with_diagnostics(Arc::new(write)),
                 self.gate.clone(),
             )));
             let edit = EditTool::new(session.clone())
                 .with_activator(self.activator.clone())
                 .with_transaction(self.transaction.clone());
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(edit),
+                self.with_diagnostics(Arc::new(edit)),
                 self.gate.clone(),
             )));
             let multiedit = MultiEditTool::new(session.clone())
                 .with_activator(self.activator.clone())
                 .with_transaction(self.transaction.clone());
             v.push(Arc::new(GuardedTool::new(
-                Arc::new(multiedit),
+                self.with_diagnostics(Arc::new(multiedit)),
                 self.gate.clone(),
             )));
             v.push(Arc::new(GuardedTool::new(
@@ -186,6 +219,12 @@ impl ToolProvider for BuiltInToolProvider {
                 Arc::new(WebFetchTool::new()),
                 self.gate.clone(),
             )));
+            if let Some(manager) = &self.lsp {
+                v.push(Arc::new(GuardedTool::new(
+                    Arc::new(LspTool::new(Arc::clone(manager), Arc::clone(session))),
+                    self.gate.clone(),
+                )));
+            }
         }
         v
     }

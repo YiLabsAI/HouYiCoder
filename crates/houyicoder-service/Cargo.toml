@@ -41,6 +41,9 @@ workspace = true
 # declare their contracts first; the build_runner migration wires them.
 
 [dependencies]
+# The workspace already locks this matcher for the search path; the language
+# tool reuses it to drop ignored locations from answers.
+ignore = "0.4"
 houyicoder-core = { path = "../houyicoder-core" }
 houyicoder-context = { path = "../houyicoder-context" }
 houyicoder-api = { path = "../houyicoder-api" }

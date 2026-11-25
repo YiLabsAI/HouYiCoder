@@ -17,6 +17,7 @@ use catalog_resolver::SettingsCatalogResolver;
 pub use catalog_resolver::{effort_to_persist, persist_model_pick};
 mod built_in_tools;
 mod hook_compose;
+mod lsp_wiring;
 mod memory;
 pub mod multi_agent;
 mod recap;
@@ -37,6 +38,7 @@ mod containment;
 mod paths;
 mod session_host;
 mod session_servers;
+use crate::lsp::LspConnections;
 use crate::mcp;
 pub(crate) use containment::ContainmentAdapter;
 use containment::build_session_fences;
@@ -164,6 +166,10 @@ pub struct AssembledRunner {
     /// The external tool servers this session started, when it started any.
     /// Held so a caller that owns the session's lifetime can end them.
     pub mcp: Option<mcp::McpRuntime>,
+    /// The language servers this session configured, when any routable one
+    /// exists. Registering starts nothing; the manager launches on first use
+    /// and is held so a caller that owns the session's lifetime can end it.
+    pub lsp: Option<Arc<LspConnections>>,
 }
 
 /// An assembled runner plus the model restored from a resumed session's
@@ -350,14 +356,19 @@ pub(crate) fn assemble(
     let background_tasks = Arc::new(BackgroundTasks::with_max_running(
         runner_settings.max_background_tasks,
     ));
+    let lsp = lsp_wiring::start(home.as_deref(), fences.workspace.as_deref());
+    let capabilities = ToolCapabilities {
+        background_tasks: background_tasks.clone(),
+        foreground_budget: Duration::from_millis(runner_settings.bash_foreground_budget_ms),
+        lsp: lsp.clone(),
+    };
     let builtin = register_builtin_tools(
         &mut tools,
         &fences,
         &skills,
         Arc::clone(&gate_dyn),
         &store,
-        background_tasks.clone(),
-        Duration::from_millis(runner_settings.bash_foreground_budget_ms),
+        capabilities,
     );
     // The external tool servers start in the background and attach through a
     // live source, so a slow server never delays the session.
@@ -487,6 +498,7 @@ pub(crate) fn assemble(
         recap,
         background_tasks,
         mcp,
+        lsp,
     }
 }
 
@@ -626,6 +638,14 @@ struct BuiltInSetup {
     undo_handles: Option<(Arc<Mutex<UndoStack>>, Arc<SnapshotStore>)>,
 }
 
+/// The optional capabilities wired into the built-in tool set after its
+/// base shape: the background shell host and the session's language servers.
+struct ToolCapabilities {
+    background_tasks: Arc<BackgroundTasks>,
+    foreground_budget: Duration,
+    lsp: Option<Arc<LspConnections>>,
+}
+
 /// Register the sandbox-backed built-in tools over the write journal this call
 /// also builds, and hand back the journal so the host lists the writes those
 /// tools made. The two come from one call because a tool registered without
@@ -636,8 +656,7 @@ fn register_builtin_tools(
     skills: &SkillRuntime,
     gate_dyn: Arc<dyn ModeGate>,
     store: &SessionStore,
-    background_tasks: Arc<BackgroundTasks>,
-    foreground_budget: Duration,
+    capabilities: ToolCapabilities,
 ) -> BuiltInSetup {
     let file_transaction = file_write_journal(store);
     // The home comes from the skill runtime the assembly resolved it into:
@@ -651,7 +670,11 @@ fn register_builtin_tools(
     .with_activator(Some(Arc::clone(&skills.conditional)))
     .with_active_skill(skills.discovery_skill())
     .with_transaction(file_transaction.clone())
-    .with_background_commands(background_tasks, foreground_budget);
+    .with_background_commands(
+        capabilities.background_tasks,
+        capabilities.foreground_budget,
+    )
+    .with_lsp(capabilities.lsp);
     let undo_handles = builtin.undo_handles();
     tool_registration::register_provider_tools(tools, builtin);
     BuiltInSetup {

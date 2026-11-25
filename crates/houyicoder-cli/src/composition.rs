@@ -19,6 +19,7 @@ use houyicoder_service::composition::{
     AssembledRunner, ProviderResolution, build_runner, build_runner_for_resume_export,
     fleet_status_relay, notification_drain, session_log_root,
 };
+use houyicoder_service::lsp::LspConnections;
 use houyicoder_service::mcp::McpRuntime;
 use houyicoder_service::server::{EventSequencer, FrameCarrier, Server};
 use houyicoder_tui::agent_message::SessionMessage;
@@ -127,6 +128,7 @@ pub(crate) fn assemble_bundle(
         recap,
         background_tasks,
         mcp,
+        lsp,
     } = assembled;
     // Grab the SessionLog BEFORE the runner moves into the server task — the
     // trajectory view reads it for the /trajectory pane, and the prompt
@@ -168,6 +170,7 @@ pub(crate) fn assemble_bundle(
             recap,
             background_tasks,
             mcp,
+            lsp,
         },
         houyicoder_config::settings_path(),
         session_log_root(),
@@ -211,6 +214,19 @@ fn arm_mcp_shutdown(host: &mut HostLifecycle, mcp: Option<McpRuntime>) {
     }
 }
 
+/// End the session's language servers with the host that owns it: a
+/// shutdown that lands waits out each server's bounded stop, so no
+/// language server child outlives the session.
+fn arm_lsp_shutdown(host: &mut HostLifecycle, lsp: Option<Arc<LspConnections>>) {
+    if let Some(manager) = lsp {
+        let stop = host.cancel_token();
+        host.track(shared_runtime().spawn(async move {
+            stop.cancelled().await;
+            manager.shutdown().await;
+        }));
+    }
+}
+
 /// Pair an in-memory protocol server and client around a runner. The session
 /// event sequencer receives runtime events before the runner is shared, then
 /// becomes the sole ordering authority for durable event frames, model
@@ -237,6 +253,7 @@ pub(crate) fn start_local_server(
         recap,
         background_tasks,
         mcp,
+        lsp,
     } = assembled;
     // The manager travels to the server before the runtime moves into the
     // shutdown arm, so the /mcp pane reaches a live connection.
@@ -253,6 +270,7 @@ pub(crate) fn start_local_server(
     let backfill_store = descriptor_store.clone();
     let mut host = HostLifecycle::new();
     arm_mcp_shutdown(&mut host, mcp);
+    arm_lsp_shutdown(&mut host, lsp.clone());
     let (c2s_tx, c2s_rx) = futures::channel::mpsc::channel(16);
     let (s2c_tx, s2c_rx) = futures::channel::mpsc::channel(16);
     let event_sequencer = EventSequencer::new();

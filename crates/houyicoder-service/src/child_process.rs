@@ -228,18 +228,20 @@ pub(crate) fn host_environment() -> Vec<(String, String)> {
 }
 
 /// The standard file URI for one path, with the drive spelling a Windows
-/// client expects.
+/// client expects. Every byte outside the unreserved set is escaped, so a
+/// path carrying a percentage sign or a non-ASCII name round-trips through
+/// the server's own URI spelling instead of desynchronizing the document.
 pub(crate) fn file_uri(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
-    let encoded: String = text
-        .chars()
-        .map(|c| match c {
-            ' ' => "%20".to_string(),
-            '#' => "%23".to_string(),
-            '?' => "%3F".to_string(),
-            other => other.to_string(),
-        })
-        .collect();
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                encoded.push(byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
     if encoded.starts_with('/') {
         format!("file://{encoded}")
     } else {

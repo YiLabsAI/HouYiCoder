@@ -134,6 +134,7 @@ fn test_status_round_trips() {
         state: LspServerState::Indexing {
             message: Some("indexing 3/10".into()),
         },
+        locked: true,
         command_line: "rust-analyzer".into(),
         extensions: vec!["rs".into()],
         open_documents: 2,

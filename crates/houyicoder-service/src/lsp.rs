@@ -4,7 +4,13 @@
 //! workspace's own types, a status view, or a formatted answer.
 
 pub(crate) mod client;
+pub(crate) mod diagnostics;
 mod framing;
 mod manager;
+mod tool;
 
+pub(crate) use diagnostics::SaveDiagnosticsTool;
+#[cfg(test)]
+pub(crate) use manager::tests::NoSpawn;
 pub use manager::{LspConnections, LspTimings};
+pub(crate) use tool::LspTool;

@@ -161,6 +161,10 @@ pub struct LspServerStatusView {
     pub name: String,
     pub scope: LspConfigScope,
     pub state: LspServerState,
+    /// Whether the trust gate holds the switch, so a surface hides the
+    /// toggle instead of offering one that cannot act.
+    #[serde(default)]
+    pub locked: bool,
     /// The command and arguments as configured, for the detail page.
     pub command_line: String,
     /// The extensions this server owns, without the leading dot.
