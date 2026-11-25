@@ -573,7 +573,7 @@ impl MemoryRuntime {
     }
 
     /// Drain the primary recorder and emit a PrimaryAgent change event for
-    /// every save the main agent landed since the last drain. The drain is
+    /// every save the primary agent landed since the last drain. The drain is
     /// best-effort: no handler or no recorder means no emission.
     pub(crate) fn drain_primary_changes(&self) {
         let Some(recorder) = self.primary_recorder.as_ref() else {

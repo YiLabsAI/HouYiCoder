@@ -152,7 +152,7 @@ impl Runner {
             let recorder = runtime.install_primary_recorder();
             self.tools.register(Arc::new(
                 MemoryWriteTool::new(provider.clone())
-                    .with_origin(MemoryOrigin::MainAgent)
+                    .with_origin(MemoryOrigin::PrimaryAgent)
                     .with_recorder(recorder.clone()),
             ));
             self.tools.register(Arc::new(

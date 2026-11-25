@@ -56,8 +56,8 @@ pub enum MemoryOrigin {
     /// Explicitly authored by the user. Protected from background overwrites
     /// and automatic archival.
     User,
-    /// The main agent's memory_write call.
-    MainAgent,
+    /// The primary agent's memory_write call.
+    PrimaryAgent,
     /// The extractor fork observing the conversation.
     Extractor,
     /// The consolidation dream fork.
@@ -72,7 +72,7 @@ impl MemoryOrigin {
     pub fn as_label(self) -> &'static str {
         match self {
             Self::User => "user",
-            Self::MainAgent => "main_agent",
+            Self::PrimaryAgent => "primary_agent",
             Self::Extractor => "extractor",
             Self::Dream => "dream",
             Self::Unknown => "unknown",
@@ -83,7 +83,7 @@ impl MemoryOrigin {
     pub fn from_label(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "user" => Self::User,
-            "main_agent" => Self::MainAgent,
+            "primary_agent" | "main_agent" => Self::PrimaryAgent,
             "extractor" => Self::Extractor,
             "dream" => Self::Dream,
             _ => Self::Unknown,

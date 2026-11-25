@@ -772,7 +772,7 @@ async fn test_save_replaces_and_refreshes() {
         .expect("seed auto");
 
     let tool = MemoryWriteTool::new(Arc::clone(&mp) as Arc<dyn MemoryProvider>)
-        .with_origin(MemoryOrigin::MainAgent);
+        .with_origin(MemoryOrigin::PrimaryAgent);
     // Omitted scope refreshes existing User copy instead of creating Auto copy.
     run(
         &tool,
@@ -788,7 +788,7 @@ async fn test_save_replaces_and_refreshes() {
     assert!(!auto.join("user-key.md").exists());
     let reloaded = mp.show_memory("user-key").unwrap();
     assert_eq!(reloaded.content, "v2");
-    assert_eq!(reloaded.origin, MemoryOrigin::MainAgent);
+    assert_eq!(reloaded.origin, MemoryOrigin::PrimaryAgent);
 
     // Explicit project save with replaces moves old-auto to archive.
     run(

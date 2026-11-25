@@ -312,7 +312,7 @@ impl MarkdownMemoryProvider {
                 }
                 if entry.origin.is_background()
                     && let Ok(fm) = self.read_frontmatter(&cand_path)
-                    && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
+                    && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
                 {
                     continue;
                 }
@@ -450,7 +450,7 @@ impl MarkdownMemoryProvider {
 
         if multi_scope
             && effective_scope == MemoryScope::Project
-            && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
+            && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
             && unmodified_days >= 60
             && unrecalled_days >= 60
             && violations == 0
@@ -482,7 +482,7 @@ impl MarkdownMemoryProvider {
         // Replaces in write_or_replace_in_scope always deterministically archives superseded copies.
         if auto_expire
             && effective_scope == MemoryScope::Auto
-            && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::MainAgent)
+            && !matches!(s.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
         {
             let expired = match s.memory_type {
                 MemoryType::Project => unmodified_days >= 21 && unrecalled_days >= 30,

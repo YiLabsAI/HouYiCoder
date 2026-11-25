@@ -37,7 +37,7 @@ use std::pin::Pin;
 pub enum ExtractOutcome {
     /// The forked agent ran to completion.
     Extracted(RunResult),
-    /// The fork was skipped: the main agent already saved a memory in this
+    /// The fork was skipped: the primary agent already saved a memory in this
     /// range, the unconsumed tail held no complete query turn, or the cursor
     /// could not be located in the snapshot.
     Skipped(ExtractSkip),
@@ -46,7 +46,7 @@ pub enum ExtractOutcome {
 /// Why a pass wrote nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractSkip {
-    /// The main agent already saved a memory in this range.
+    /// The primary agent already saved a memory in this range.
     PrimaryWrote,
     /// The unconsumed tail holds no complete query turn.
     NoQueryTurn,

@@ -18,7 +18,7 @@
 //!
 //! Scope promote/demote runs as host-side deterministic maintenance: auto
 //! memories with repeated signals promote to project scope, while explicit
-//! memory_promote / memory_demote tools remain available to the main agent.
+//! memory_promote / memory_demote tools remain available to the primary agent.
 //! memory_write is pinned to the auto root for the dream, with one host-side
 //! exception: refreshing a key that already lives in the project root writes
 //! that root in place, so the explicit entry is updated rather than shadowed.

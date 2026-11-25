@@ -290,7 +290,7 @@ fn test_esc_closes_pane() {
 #[ignore]
 fn test_notice_label_and_scope() {
     let home = fresh_home("notice-scope");
-    // The main agent's save_memory tool is unpinned, so the input carries a
+    // The primary agent's save_memory tool is unpinned, so the input carries a
     // scope field the model picks per call. A project scope lands the write
     // in the project root and the notice names it.
     let script = r#"[

@@ -395,8 +395,10 @@ fn test_round_trip_preserves_fields() {
     let root = temp_root();
     let p = MarkdownMemoryProvider::new(root.clone());
     let src = MemoryType::Feedback;
-    p.add(entry("round-trip", "the fox feedback here", src).with_origin(MemoryOrigin::MainAgent))
-        .unwrap();
+    p.add(
+        entry("round-trip", "the fox feedback here", src).with_origin(MemoryOrigin::PrimaryAgent),
+    )
+    .unwrap();
     let out = p.rank_candidates("fox", &HashSet::new());
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].key, "round-trip");
@@ -406,7 +408,7 @@ fn test_round_trip_preserves_fields() {
         .show_memory("round-trip")
         .expect("a ranked key reads back");
     assert_eq!(body.content, "the fox feedback here");
-    assert_eq!(body.origin, MemoryOrigin::MainAgent);
+    assert_eq!(body.origin, MemoryOrigin::PrimaryAgent);
     remove_dir_all(&root).ok();
 }
 

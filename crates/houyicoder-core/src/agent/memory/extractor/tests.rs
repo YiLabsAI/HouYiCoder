@@ -490,7 +490,7 @@ async fn test_unrelated_turn_stays_silent() {
     remove_dir_all(memory_root).ok();
 }
 
-/// When the main agent already emitted a save_memory call in this turn
+/// When the primary agent already emitted a save_memory call in this turn
 /// range, the fork is skipped and the cursor still advances past the
 /// range so the next run does not re-scan it.
 #[tokio::test]
@@ -500,7 +500,7 @@ async fn test_extract_skips_main_saved() {
     }));
     let (sink, recording) = RecordingChanges::new();
     ext.set_memory_changed_handler(sink.memory_changed_handler());
-    // The prefix already contains a save_memory tool call (the main agent
+    // The prefix already contains a save_memory tool call (the primary agent
     // saved this turn) — mutual exclusion must skip the fork.
     let mut msgs = conversation();
     msgs.push(SessionLogEntry {
@@ -531,7 +531,7 @@ async fn test_extract_skips_main_saved() {
     let outcome = ext.run_extraction_once(&msgs).await.expect("run ok");
     assert!(
         matches!(outcome, ExtractOutcome::Skipped(_)),
-        "must skip when main agent already saved"
+        "must skip when primary agent already saved"
     );
     assert!(
         memory.written.lock().expect("w").is_empty(),

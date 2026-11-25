@@ -78,3 +78,18 @@ fn test_with_meta_description_mtime() {
     assert!(bare.description.is_empty());
     assert_eq!(bare.mtime_secs, 0);
 }
+
+/// Files written before the primary agent label existed carry main_agent;
+/// both labels read as the same writer and new files carry primary_agent.
+#[test]
+fn test_origin_reads_previous_label() {
+    assert_eq!(
+        MemoryOrigin::from_label("main_agent"),
+        MemoryOrigin::PrimaryAgent
+    );
+    assert_eq!(
+        MemoryOrigin::from_label(MemoryOrigin::PrimaryAgent.as_label()),
+        MemoryOrigin::PrimaryAgent
+    );
+    assert_eq!(MemoryOrigin::PrimaryAgent.as_label(), "primary_agent");
+}

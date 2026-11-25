@@ -1,4 +1,4 @@
-//! Structured memory-write tool used by the main agent, extractor, and dream.
+//! Structured memory-write tool used by the primary agent, extractor, and dream.
 //!
 //! Callers pass key, description, type, and content fields; the tool routes
 //! them through the memory provider under its write lock and path validation.
@@ -84,7 +84,7 @@ impl MemoryWriteTool {
     }
 
     /// Tag every save with the given writer origin. The host calls this at
-    /// tool construction (main agent / extractor / dream each inject one).
+    /// tool construction (primary agent / extractor / dream each inject one).
     pub fn with_origin(mut self, origin: MemoryOrigin) -> Self {
         self.origin = origin;
         self
@@ -286,7 +286,7 @@ fn parse_type(input: &Value) -> Result<MemoryType, ToolError> {
 
 /// Parse the optional scope field. Defaults to Auto (the documented default
 /// scope — writes land in the auto-extracted root). Accepts user and project
-/// so the main agent or the dream can pick a root per call. An unknown value
+/// so the primary agent or the dream can pick a root per call. An unknown value
 /// falls back to auto rather than rejecting: the field is advisory and the
 /// call's intent was to save, so a typo must not starve the write.
 fn parse_scope(input: &Value, provider: &dyn MemoryProvider, key: &str) -> MemoryScope {
