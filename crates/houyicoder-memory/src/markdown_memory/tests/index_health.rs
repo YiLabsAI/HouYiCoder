@@ -206,7 +206,7 @@ fn test_marker_failure_blocks_write() {
         "the add refuses before writing the topic"
     );
 
-    let deleted = provider.delete_memory("alpha");
+    let deleted = provider.delete_memory("alpha", MemoryOrigin::Dream);
     assert!(matches!(deleted, Err(MemoryError::Io)));
     assert!(
         root.join("alpha.md").exists(),
@@ -261,7 +261,7 @@ fn test_delete_failure_leaves_marker() {
     fail_next_index_write();
 
     provider
-        .delete_memory("prune-me")
+        .delete_memory("prune-me", MemoryOrigin::Dream)
         .expect("the delete lands");
 
     assert!(!root.join("prune-me.md").exists(), "the topic is gone");
@@ -547,7 +547,7 @@ fn test_delete_marker_survives() {
     fail_marker_after(1);
 
     provider
-        .delete_memory("alpha")
+        .delete_memory("alpha", MemoryOrigin::Dream)
         .expect("the topic removal succeeds");
 
     assert!(!root.join("alpha.md").exists(), "the topic is gone");

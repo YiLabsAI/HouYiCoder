@@ -452,14 +452,14 @@ impl MemoryProvider for MarkdownMemoryProvider {
 
     /// Delete a topic from the auto scope. Topic removal is authoritative;
     /// derived-index repair is best-effort and self-heals later.
-    fn delete_memory(&self, key: &str) -> Result<(), MemoryError> {
-        self.delete_memory_impl(key)
+    fn delete_memory(&self, key: &str, requester: MemoryOrigin) -> Result<(), MemoryError> {
+        self.delete_memory_in_scope_impl(key, MemoryScope::Auto, requester)
     }
 
     /// Delete a topic from one scope, prune its global stats, and rebuild the
     /// derived indexes.
     fn delete_memory_in_scope(&self, key: &str, scope: MemoryScope) -> Result<(), MemoryError> {
-        self.delete_memory_in_scope_impl(key, scope)
+        self.delete_memory_in_scope_impl(key, scope, MemoryOrigin::User)
     }
 
     fn read_recall_stats(&self) -> Vec<MemoryRecallStats> {

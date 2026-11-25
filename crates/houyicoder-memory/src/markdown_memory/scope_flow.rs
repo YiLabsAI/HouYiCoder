@@ -139,30 +139,28 @@ impl MarkdownMemoryProvider {
         Ok(())
     }
 
-    pub(super) fn delete_memory_impl(&self, key: &str) -> Result<(), MemoryError> {
-        let key = sanitize_key(key)?;
-        let topic_root = self.root_for_scope(MemoryScope::Auto).to_path_buf();
-        let topic_path = topic_root.join(format!("{key}.md"));
-        if let Ok(fm) = self.read_frontmatter(&topic_path)
-            && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
-        {
-            return Err(MemoryError::InvalidPath(
-                "background writer cannot delete user or primary agent memory".into(),
-            ));
-        }
-        self.delete_memory_in_scope_impl(&key, MemoryScope::Auto)
-    }
-
+    /// Delete one topic under the provider and root locks. The origin check
+    /// runs after the locks are held, so another process cannot swap a
+    /// protected topic in between the check and the removal.
     pub(super) fn delete_memory_in_scope_impl(
         &self,
         key: &str,
         scope: MemoryScope,
+        requester: MemoryOrigin,
     ) -> Result<(), MemoryError> {
         let key = sanitize_key(key)?;
         let topic_root = self.root_for_scope(scope).to_path_buf();
         let topic_path = topic_root.join(format!("{key}.md"));
         let _guard = self.write_lock.lock().expect("write lock poisoned");
         let _root_locks = self.lock_roots()?;
+        if requester.is_background()
+            && let Ok(fm) = self.read_frontmatter(&topic_path)
+            && matches!(fm.origin, MemoryOrigin::User | MemoryOrigin::PrimaryAgent)
+        {
+            return Err(MemoryError::InvalidPath(
+                "background writer cannot delete user or primary agent memory".into(),
+            ));
+        }
         let index_was_dirty = Self::index_marked_dirty(&topic_root);
         Self::mark_index_dirty(&topic_root)?;
         let removed = fs::remove_file(&topic_path);

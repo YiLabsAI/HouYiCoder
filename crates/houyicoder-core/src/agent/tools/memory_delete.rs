@@ -124,19 +124,8 @@ impl Tool for MemoryDeleteTool {
                     })?
                 }
             };
-            if origin.is_background()
-                && let Some(entry) = provider.show_memory_in_scope(key, scope)
-                && matches!(
-                    entry.origin,
-                    MemoryOrigin::User | MemoryOrigin::PrimaryAgent
-                )
-            {
-                return Err(ToolError::Failed(format!(
-                    "memory_delete: background writer cannot delete protected memory '{key}'"
-                )));
-            }
             let result = if pinned_scope == Some(MemoryScope::Auto) {
-                provider.delete_memory(key)
+                provider.delete_memory(key, origin)
             } else {
                 provider.delete_memory_in_scope(key, scope)
             };

@@ -33,7 +33,8 @@
 use crate::agent_event::MemoryChange;
 use houyicoder_async::PFut;
 use houyicoder_context::{
-    MemoryEntry, MemoryError, MemoryRankHit, MemoryRecallStats, MemoryScope, MemorySummary,
+    MemoryEntry, MemoryError, MemoryOrigin, MemoryRankHit, MemoryRecallStats, MemoryScope,
+    MemorySummary,
 };
 use std::collections::HashSet;
 
@@ -231,8 +232,10 @@ pub trait MemoryProvider: Send + Sync {
     /// file and regenerate the derived index. The index rebuild happens once
     /// per delete (under the provider lock), so a batch prune pays one rebuild
     /// per call rather than one rebuild per dream. This form deletes from the
-    /// auto scope (the dream's consolidation target).
-    fn delete_memory(&self, _key: &str) -> Result<(), MemoryError> {
+    /// auto scope (the dream's consolidation target). The requester names the
+    /// writer asking for the delete; a background requester must be refused
+    /// when the stored topic was authored by the user or the primary agent.
+    fn delete_memory(&self, _key: &str, _requester: MemoryOrigin) -> Result<(), MemoryError> {
         Err(MemoryError::NotFound)
     }
     /// Delete one memory by key from a specific scope. The /memory pane calls
@@ -243,8 +246,10 @@ pub trait MemoryProvider: Send + Sync {
     /// the one root. Multi-scope filesystem backends override to route by
     /// root_for_scope, returning NotFound for a key absent in the chosen root
     /// (no silent auto fallback that would mask the missing explicit copy).
+    /// Only foreground callers reach this form: the user's pane and the
+    /// primary agent acting on an explicit scope.
     fn delete_memory_in_scope(&self, key: &str, _scope: MemoryScope) -> Result<(), MemoryError> {
-        self.delete_memory(key)
+        self.delete_memory(key, MemoryOrigin::User)
     }
     /// Read the advisory recall-frequency counters for every key. The
     /// consolidation dream reads this to nominate stale (low recall hits +

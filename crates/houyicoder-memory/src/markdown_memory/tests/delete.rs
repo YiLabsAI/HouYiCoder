@@ -48,7 +48,8 @@ fn test_delete_removes_topic_index() {
         2,
         "both entries listed before delete"
     );
-    p.delete_memory("prune-me").expect("delete succeeds");
+    p.delete_memory("prune-me", MemoryOrigin::Dream)
+        .expect("delete succeeds");
     assert!(!root.join("prune-me.md").exists(), "topic file removed");
     assert!(
         root.join("keep-me.md").exists(),
@@ -68,12 +69,15 @@ fn test_delete_removes_topic_index() {
         "deleted key no longer readable"
     );
     assert!(
-        matches!(p.delete_memory("prune-me"), Err(MemoryError::NotFound)),
+        matches!(
+            p.delete_memory("prune-me", MemoryOrigin::Dream),
+            Err(MemoryError::NotFound)
+        ),
         "deleting an absent key returns NotFound"
     );
     assert!(
         matches!(
-            p.delete_memory("../escape"),
+            p.delete_memory("../escape", MemoryOrigin::Dream),
             Err(MemoryError::InvalidPath(_))
         ),
         "traversal key rejected before any fs op"
@@ -140,7 +144,7 @@ fn test_delete_prunes_stats_sidecar() {
         p.read_recall_stats().iter().any(|s| s.key == "doomed"),
         "stats recorded before delete"
     );
-    p.delete_memory("doomed").unwrap();
+    p.delete_memory("doomed", MemoryOrigin::Dream).unwrap();
     assert!(
         !p.read_recall_stats().iter().any(|s| s.key == "doomed"),
         "stats entry pruned on delete (no monotonic growth)"
@@ -156,7 +160,10 @@ fn test_delete_reports_unexpected_error() {
     let p = MarkdownMemoryProvider::new(root.clone());
     create_dir_all(root.join("blocked.md")).expect("plant a directory at the topic path");
     assert!(
-        matches!(p.delete_memory("blocked"), Err(MemoryError::Io)),
+        matches!(
+            p.delete_memory("blocked", MemoryOrigin::Dream),
+            Err(MemoryError::Io)
+        ),
         "a topic path that is not a regular file must report Io"
     );
     remove_dir_all(&root).ok();
@@ -172,14 +179,14 @@ fn test_delete_survives_broken_index() {
         .unwrap();
     remove_file(root.join(INDEX_FILE)).unwrap();
     create_dir_all(root.join(INDEX_FILE)).expect("plant a directory at the index path");
-    p.delete_memory("doomed")
+    p.delete_memory("doomed", MemoryOrigin::Dream)
         .expect("the delete succeeds despite the broken index");
     assert!(!root.join("doomed.md").exists(), "topic removed");
     remove_dir_all(&root).ok();
 }
 
-/// The consolidation dream's prune path (delete_memory) must not delete
-/// memories authored by the user or the primary agent.
+/// A background requester cannot delete a topic the user or the primary
+/// agent wrote, while a foreground requester on the same path can.
 #[test]
 fn test_delete_origin_guard() {
     let root = temp_root();
@@ -196,17 +203,20 @@ fn test_delete_origin_guard() {
     .unwrap();
 
     assert!(matches!(
-        p.delete_memory("user-note"),
+        p.delete_memory("user-note", MemoryOrigin::Dream),
         Err(MemoryError::InvalidPath(_))
     ));
     assert!(root.join("user-note.md").is_file());
 
     assert!(matches!(
-        p.delete_memory("agent-note"),
+        p.delete_memory("agent-note", MemoryOrigin::Dream),
         Err(MemoryError::InvalidPath(_))
     ));
     assert!(root.join("agent-note.md").is_file());
 
+    p.delete_memory("agent-note", MemoryOrigin::PrimaryAgent)
+        .expect("a foreground requester deletes its own topic");
+    assert!(!root.join("agent-note.md").exists());
     p.delete_memory_in_scope("user-note", MemoryScope::Auto)
         .expect("scoped delete succeeds");
     assert!(!root.join("user-note.md").exists());

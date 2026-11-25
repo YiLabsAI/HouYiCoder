@@ -38,6 +38,7 @@ use std::time::UNIX_EPOCH;
 use houyicoder_api::memory::MemoryProvider;
 use houyicoder_context::MemoryEntry;
 use houyicoder_context::MemoryError;
+use houyicoder_context::MemoryOrigin;
 use houyicoder_context::MemoryType;
 use houyicoder_memory::MarkdownMemoryProvider;
 
@@ -350,7 +351,7 @@ fn test_delete_waits_for_lock() {
     }
     let root = temp_root("delete-lock");
     MarkdownMemoryProvider::new(root.clone())
-        .add(entry("alpha", "alpha body"))
+        .add(entry("alpha", "alpha body").with_origin(MemoryOrigin::Dream))
         .expect("seed the topic");
     let provider = MarkdownMemoryProvider::new(root.clone());
     assert_waits_for_lock(
@@ -358,7 +359,7 @@ fn test_delete_waits_for_lock() {
         "delete",
         provider,
         &root,
-        |p| p.delete_memory("alpha"),
+        |p| p.delete_memory("alpha", MemoryOrigin::Dream),
     );
     assert!(
         !root.join("alpha.md").exists(),
