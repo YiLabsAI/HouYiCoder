@@ -325,10 +325,13 @@ impl MarkdownMemoryProvider {
                     }
                 }
             }
-            if moved_this_key && let Some(st) = stats.remove(&clean) {
-                acc_hits = acc_hits.saturating_add(st.recall_hits);
-                acc_violations = acc_violations.saturating_add(st.gate_violations);
-                acc_occurrences = acc_occurrences.saturating_add(st.occurrences);
+            if moved_this_key {
+                let st = stats.remove(&clean);
+                acc_hits = acc_hits.saturating_add(st.as_ref().map_or(0, |s| s.recall_hits));
+                acc_violations =
+                    acc_violations.saturating_add(st.as_ref().map_or(0, |s| s.gate_violations));
+                acc_occurrences =
+                    acc_occurrences.saturating_add(st.as_ref().map_or(1, |s| s.occurrences.max(1)));
             }
         }
         if acc_hits > 0 || acc_violations > 0 || acc_occurrences > 0 {

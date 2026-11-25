@@ -391,10 +391,19 @@ pub struct MemoryToggles {
     /// extractor still runs (it is the cheaper, deterministic half).
     #[serde(default = "default_true")]
     pub auto_dream: bool,
+    /// When true, older memories in auto scope decay into archive/ after
+    /// elapsed inactivity. Disabled by default so memories are only archived
+    /// on explicit replacement or manual tool deletion.
+    #[serde(default = "default_false")]
+    pub auto_expire: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 impl Default for MemoryToggles {
@@ -402,6 +411,7 @@ impl Default for MemoryToggles {
         Self {
             auto_memory: true,
             auto_dream: true,
+            auto_expire: false,
         }
     }
 }
@@ -438,10 +448,12 @@ pub fn load_toggles_from(path: &Path) -> (MemoryToggles, Vec<ConfigWarning>) {
     let mut warnings = Vec::new();
     let auto_memory = extract_bool_field(&value, "auto_memory", &mut warnings);
     let auto_dream = extract_bool_field(&value, "auto_dream", &mut warnings);
+    let auto_expire = extract_bool_field(&value, "auto_expire", &mut warnings);
     (
         MemoryToggles {
             auto_memory,
             auto_dream,
+            auto_expire,
         },
         warnings,
     )
@@ -455,11 +467,13 @@ pub fn load_toggles_from(path: &Path) -> (MemoryToggles, Vec<ConfigWarning>) {
 pub fn save_toggles_to(path: &Path, toggles: &MemoryToggles) -> Result<(), SettingsWriteError> {
     let auto_memory = toggles.auto_memory;
     let auto_dream = toggles.auto_dream;
+    let auto_expire = toggles.auto_expire;
     update_settings(
         path,
         |v| {
             v["auto_memory"] = auto_memory.into();
             v["auto_dream"] = auto_dream.into();
+            v["auto_expire"] = auto_expire.into();
         },
         3,
     )

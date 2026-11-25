@@ -36,6 +36,7 @@ pub(super) fn memory_provider_for(
     ws: &Path,
     home_override: Option<&Path>,
 ) -> MarkdownMemoryProvider {
+    let (toggles, _) = houyicoder_config::load_toggles();
     let config_root = memory_config_root(
         ws,
         home_override,
@@ -53,7 +54,8 @@ pub(super) fn memory_provider_for(
         .join(".houyicoder")
         .join("memory");
     let auto_root = config_root.join("projects").join(&slug).join("memory");
-    let provider = MarkdownMemoryProvider::new_multi(vec![user_root, project_root, auto_root]);
+    let provider = MarkdownMemoryProvider::new_multi(vec![user_root, project_root, auto_root])
+        .with_auto_expire(toggles.auto_expire);
     heal_memory_index(&provider);
     provider
 }

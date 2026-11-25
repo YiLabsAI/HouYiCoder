@@ -184,6 +184,7 @@ fn test_save_load_round_trips() {
     let toggles = MemoryToggles {
         auto_memory: false,
         auto_dream: true,
+        auto_expire: true,
     };
     save_toggles_to(&path, &toggles).expect("save succeeds");
     let (loaded, _w) = load_toggles_from(&path);

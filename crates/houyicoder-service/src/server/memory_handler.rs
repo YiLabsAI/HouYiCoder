@@ -177,26 +177,28 @@ impl Server {
             MemoryToggleWhich::Auto => (!current.auto_memory, current.auto_dream),
             MemoryToggleWhich::Dream => (current.auto_memory, !current.auto_dream),
         };
-        if let Some(path) = self.settings_path.as_deref()
-            && let Err(e) = houyicoder_config::save_toggles_to(
+        if let Some(path) = self.settings_path.as_deref() {
+            let (existing, _) = houyicoder_config::load_toggles_from(path);
+            if let Err(e) = houyicoder_config::save_toggles_to(
                 path,
                 &houyicoder_config::MemoryToggles {
                     auto_memory,
                     auto_dream,
+                    auto_expire: existing.auto_expire,
                 },
-            )
-        {
-            return self
-                .send_response(
-                    io,
-                    req_id,
-                    ResponsePayload::Error(ProtocolError::new(
-                        ErrorCategory::Internal,
-                        format!("failed to save settings: {e}"),
-                        false,
-                    )),
-                )
-                .await;
+            ) {
+                return self
+                    .send_response(
+                        io,
+                        req_id,
+                        ResponsePayload::Error(ProtocolError::new(
+                            ErrorCategory::Internal,
+                            format!("failed to save settings: {e}"),
+                            false,
+                        )),
+                    )
+                    .await;
+            }
         }
         match which {
             MemoryToggleWhich::Auto => self.runner.set_auto_memory(auto_memory),

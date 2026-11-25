@@ -549,7 +549,8 @@ impl DreamRunner {
         let watermark = !base
             && !early
             && !reward_path
-            && now.saturating_sub(last_scan) >= 1_800
+            && elapsed >= 3_600
+            && new_count >= MIN_NEW_MEMORIES
             && self.memory.count_new_since(0) > 120;
         if !base && !early && !reward_path && !watermark {
             return None;
