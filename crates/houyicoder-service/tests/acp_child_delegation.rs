@@ -15,11 +15,15 @@ mod acp_agent;
 mod common;
 
 use std::env::current_exe;
+use std::env::temp_dir;
 use std::env::vars;
 use std::fs::read_dir;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::id;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::Instant;
 
 use houyicoder_api::launcher::{ProcessLauncher, StdProcessLauncher};
 use houyicoder_api::provider::ModelProvider;
@@ -77,7 +81,19 @@ fn external_definition(args: Vec<String>) -> AgentDefinition {
             program: program.display().to_string(),
             args,
             passthrough_env: vec![],
-            env: Vec::new(),
+            // An instrumented test binary writes its coverage sample to the
+            // working directory by default, and the child works inside the
+            // worktree this test expects to be reclaimed: the sample turns
+            // the tree dirty and the conservative reclaim keeps it. Pointing
+            // the sample at the temp directory keeps the worktree clean; a
+            // plain binary ignores the variable.
+            env: vec![(
+                "LLVM_PROFILE_FILE".into(),
+                temp_dir()
+                    .join(format!("houyi-acp-child-{}-%m.profraw", id()))
+                    .display()
+                    .to_string(),
+            )],
             handshake_timeout_ms: 10_000,
         }),
     }
@@ -176,10 +192,36 @@ async fn test_acp_child_round_trip() {
         text.contains("hello from stub"),
         "the child's streamed reply is folded into its own log: {text:?}"
     );
-    let leftovers = read_dir(repo.join(".houyicoder").join("worktrees"))
-        .map(|entries| entries.filter_map(Result::ok).count())
-        .unwrap_or(0);
+    // The reclaim runs on a detached blocking task, so the directory can
+    // trail the turn's end under load. Poll the discovery instead of
+    // sampling it once: a one-shot check is the flake, not the cleanup.
+    let worktrees = repo.join(".houyicoder").join("worktrees");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut leftovers = count_worktrees(&worktrees);
+    while leftovers != 0 && Instant::now() < deadline {
+        sleep(Duration::from_millis(20)).await;
+        leftovers = count_worktrees(&worktrees);
+    }
+    if leftovers != 0 {
+        let names: Vec<String> = read_dir(&worktrees)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        eprintln!("leftover worktrees: {names:?}");
+    }
     assert_eq!(leftovers, 0, "the child worktree was reclaimed");
+}
+
+/// How many entries the managed worktrees directory holds, zero when it
+/// does not exist yet.
+fn count_worktrees(dir: &Path) -> usize {
+    read_dir(dir)
+        .map(|entries| entries.filter_map(Result::ok).count())
+        .unwrap_or(0)
 }
 
 /// A child asking to write outside its own root is refused without the

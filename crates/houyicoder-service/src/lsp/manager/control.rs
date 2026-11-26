@@ -8,7 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use futures::executor::block_on;
 use houyicoder_protocol::lsp::LspServerState;
+use tokio::task::spawn_blocking;
+use tokio::time::timeout;
 
 use super::LspConnections;
 use super::ServerSlot;
@@ -72,15 +75,24 @@ impl LspConnections {
 }
 
 /// Drop the diagnostics a connection published and stop it inside the
-/// server's own shutdown timeout.
+/// server's own shutdown timeout. After the exit notification the protocol
+/// asks the client to wait for the server to stop on its own; the bounded
+/// wait gives a well-behaved server that chance before the handle drop
+/// terminates its group.
 async fn stop_connection(slot: &ServerSlot) {
     clear_diagnostics(slot);
     let connection = slot.live.lock().await.take();
     if let Some(connection) = connection {
-        connection
-            .client
-            .shutdown(Duration::from_millis(slot.config.shutdown_timeout_ms))
-            .await;
-        drop(connection.child);
+        let budget = Duration::from_millis(slot.config.shutdown_timeout_ms);
+        connection.client.shutdown(budget).await;
+        if let Some(child) = connection.child {
+            // The launcher's exit waiter calls a blocking process wait, and
+            // the exit notification it is waiting on is flushed by a task on
+            // this same runtime. Waiting on a worker thread would starve that
+            // task and deadlock a single-threaded runtime, so the wait runs
+            // on the blocking pool.
+            let waiter = child.wait();
+            drop(timeout(budget, spawn_blocking(move || block_on(waiter))).await);
+        }
     }
 }

@@ -4,7 +4,13 @@
 
 // The harness launches the product binary, which is not an engine spawn.
 #![allow(clippy::disallowed_methods)]
+// The stub language server runs on python3, which a Windows CI host does not
+// guarantee on PATH. The contract this test pins is platform-neutral, so the
+// probe lives on unix rather than carrying a second interpreter path.
+#![cfg(unix)]
 
+use houyicoder_config::ENV_HOUYICODER_CONFIG_HOME;
+use houyicoder_config::ENV_HOUYICODER_MCP_SERVERS;
 use serde_json::Value;
 use serde_json::json;
 use std::env::temp_dir;
@@ -70,6 +76,8 @@ record("start")
 while True:
     message = read_message()
     if message is None:
+        # The client's connection ended, which is the process's cue to stop.
+        record("exit")
         break
     method = message.get("method", "")
     if "id" not in message:
@@ -102,6 +110,12 @@ fn spawn_agent(launch: &Path, home: &Path) -> (Child, Receiver<Value>) {
         .current_dir(launch)
         .env("HOME", home)
         .env("USERPROFILE", home)
+        // The gate runner injects a config home for every test process, and
+        // the child would read its settings from there instead of the file
+        // this test writes. The child reads the same tree the test writes.
+        .env(ENV_HOUYICODER_CONFIG_HOME, home.join(".houyicoder"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove(ENV_HOUYICODER_MCP_SERVERS)
         .env("HOUYICODER_SESSIONS_DIR", home.join("sessions"))
         .env("HOUYICODER_TEST_STUB_RESPONSE_SCRIPT", SCRIPT)
         .stdin(Stdio::piped())
@@ -215,7 +229,11 @@ fn test_acp_close_stops_server() {
     // Closing the client ends the serve loop, which ends the session's
     // language servers before the process exits.
     drop(child.stdin.take());
-    drop(child.wait());
+    let status = child.wait().expect("wait for the agent to exit");
+    assert!(
+        status.success(),
+        "the agent process exits cleanly after the session ends: {status:?}"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -230,9 +248,18 @@ fn test_acp_close_stops_server() {
         thread::sleep(Duration::from_millis(50));
     }
     let state = read_to_string(&state_path).expect("state file");
+    let starts = state.lines().filter(|line| *line == "start").count();
+    assert_eq!(
+        starts, 1,
+        "the session started the server exactly once, with no relaunch: {state}"
+    );
     assert!(
-        state.lines().any(|line| line == "start"),
-        "the language server started during the session: {state}"
+        state.lines().any(|line| line == "shutdown"),
+        "the server received the shutdown request: {state}"
+    );
+    assert!(
+        state.lines().any(|line| line == "exit"),
+        "the server process exited after the shutdown: {state}"
     );
     drop(remove_dir_all(&base));
 }

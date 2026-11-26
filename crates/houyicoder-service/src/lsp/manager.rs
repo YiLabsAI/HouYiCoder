@@ -623,12 +623,13 @@ fn spawn_drain(slot: Arc<ServerSlot>, mut notices: mpsc::UnboundedReceiver<Serve
                 tracing::warn!("a diagnostics notification did not parse; ignored");
                 continue;
             };
+            // The key resolves a path on disk, which is not work to hold a
+            // std mutex for: compute it before the lock.
+            let key = diagnostic_key(&params.uri);
             if let Ok(mut map) = slot.diagnostics.lock() {
-                let entry = map.entry(diagnostic_key(&params.uri)).or_insert_with(|| {
-                    PublishedDiagnostics {
-                        generation: 0,
-                        findings: Vec::new(),
-                    }
+                let entry = map.entry(key).or_insert_with(|| PublishedDiagnostics {
+                    generation: 0,
+                    findings: Vec::new(),
                 });
                 entry.generation += 1;
                 entry.findings = params.diagnostics;

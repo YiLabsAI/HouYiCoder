@@ -35,15 +35,18 @@ pub(super) fn diagnostic_key(uri: &str) -> String {
 impl LspConnections {
     /// The diagnostics the last publish left for one file on one server.
     pub async fn file_diagnostics(&self, name: &str, uri: &str) -> Vec<LspDiagnostic> {
+        // The key resolves a path on disk, which is not work to hold a
+        // std mutex for.
+        let key = diagnostic_key(uri);
         self.slots
             .read()
             .await
             .get(name)
             .and_then(|slot| {
-                slot.diagnostics.lock().ok().and_then(|map| {
-                    map.get(&diagnostic_key(uri))
-                        .map(|entry| entry.findings.clone())
-                })
+                slot.diagnostics
+                    .lock()
+                    .ok()
+                    .and_then(|map| map.get(&key).map(|entry| entry.findings.clone()))
             })
             .unwrap_or_default()
     }
@@ -99,6 +102,7 @@ impl LspConnections {
     /// wait, so only a publish for that same file after the write can
     /// satisfy it; a publish for another open file changes nothing here.
     pub async fn publish_generation(&self, name: &str, uri: &str) -> u64 {
+        let key = diagnostic_key(uri);
         self.slots
             .read()
             .await
@@ -107,7 +111,7 @@ impl LspConnections {
                 slot.diagnostics
                     .lock()
                     .ok()
-                    .and_then(|map| map.get(&diagnostic_key(uri)).map(|entry| entry.generation))
+                    .and_then(|map| map.get(&key).map(|entry| entry.generation))
             })
             .unwrap_or(0)
     }
@@ -126,6 +130,9 @@ impl LspConnections {
         since: u64,
     ) -> Option<Vec<LspDiagnostic>> {
         let slot = self.slots.read().await.get(name).cloned()?;
+        // The key resolves a path on disk, which is not work to hold a
+        // std mutex for, and the same file keys every iteration.
+        let key = diagnostic_key(uri);
         let grace_deadline = Instant::now() + self.timings.diagnostics_grace;
         let cap_deadline = Instant::now() + self.timings.diagnostics_cap;
         loop {
@@ -135,7 +142,7 @@ impl LspConnections {
             // is guaranteed the wake.
             let notified = slot.diag_notify.notified();
             tokio::pin!(notified);
-            if let Some(entry) = Self::published(&slot, uri)
+            if let Some(entry) = Self::published(&slot, &key)
                 && entry.generation > since
             {
                 return Some(entry.findings);
@@ -161,11 +168,12 @@ impl LspConnections {
         }
     }
 
-    /// One file's current entry, cloned out from under the store lock.
-    fn published(slot: &super::ServerSlot, uri: &str) -> Option<PublishedDiagnostics> {
+    /// One file's current entry, cloned out from under the store lock. The key
+    /// is resolved by the caller so no path work happens under the lock.
+    fn published(slot: &super::ServerSlot, key: &str) -> Option<PublishedDiagnostics> {
         slot.diagnostics
             .lock()
             .ok()
-            .and_then(|map| map.get(&diagnostic_key(uri)).cloned())
+            .and_then(|map| map.get(key).cloned())
     }
 }
