@@ -20,6 +20,7 @@ pub mod input_bar;
 pub mod login;
 pub mod logo;
 pub mod lsp_pane;
+pub(crate) mod management_pane;
 pub mod markers;
 pub mod mcp_pane;
 pub mod memory_pane;

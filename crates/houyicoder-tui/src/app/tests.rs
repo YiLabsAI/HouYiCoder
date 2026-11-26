@@ -650,6 +650,7 @@ fn test_mcp_command_ships_query() {
         app.ui
             .mcp_pane
             .pending
+            .as_ref()
             .is_some_and(|p| p.request == req.req_id),
         "the pane waits on the query it shipped"
     );

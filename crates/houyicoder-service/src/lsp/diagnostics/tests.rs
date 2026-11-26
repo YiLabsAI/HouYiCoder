@@ -7,6 +7,8 @@ use std::fs::read;
 use std::fs::remove_dir_all;
 use std::fs::write;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use houyicoder_api::sandbox::SandboxSession;
 use houyicoder_api::tool::Tool;
@@ -18,6 +20,9 @@ use houyicoder_protocol::lsp::{LspConfigScope, LspDiagnostic, ScopedLspServerCon
 use serde_json::Value;
 use serde_json::json;
 use tokio::io::duplex;
+use tokio::task::yield_now;
+use tokio::time::advance;
+use tokio::time::pause;
 use tokio::time::sleep;
 
 use super::*;
@@ -453,6 +458,169 @@ async fn test_clean_publish_reports_none() {
         .as_str()
         .expect("the clean block attached");
     assert!(block.contains("no problems"), "{block}");
+    manager.shutdown().await;
+    drop(remove_dir_all(&root));
+}
+
+/// A file over the read window is not synchronized at all: the pass reports
+/// the check as pending and never tells the server a truncated body is the
+/// whole document.
+#[tokio::test]
+async fn test_oversized_write_skips_sync() {
+    let root = temp_dir().join(format!("houyi-lsp-diag-big-{}", std::process::id()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("root");
+    let file = root.join("a.rs");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    let handler = move |frame: &Value| -> Vec<Value> {
+        if let Ok(mut log) = log.lock() {
+            log.push(frame.clone());
+        }
+        let id = frame.get("id").cloned();
+        match frame.get("method").and_then(Value::as_str) {
+            Some("initialize") => {
+                vec![json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {}}})]
+            }
+            Some("shutdown") => vec![json!({"jsonrpc": "2.0", "id": id, "result": null})],
+            _ => vec![],
+        }
+    };
+    let (manager, _peer) = attach(&root, handler).await;
+    let decorator = SaveDiagnosticsTool::new(
+        Arc::new(FakeWrite {
+            path: file.to_string_lossy().into_owned(),
+        }),
+        Arc::clone(&manager),
+        session(&root),
+    )
+    .with_max_read_bytes(4);
+    let value = decorator
+        .execute(ToolCtx::new("t"), json!({"path": file.to_string_lossy()}))
+        .await
+        .expect("write runs");
+    let block = value["lsp_diagnostics"]
+        .as_str()
+        .expect("the pending block attached");
+    assert!(block.contains("not published yet"), "{block}");
+    let methods: Vec<String> = seen
+        .lock()
+        .expect("seen")
+        .iter()
+        .filter_map(|frame| frame.get("method").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        !methods
+            .iter()
+            .any(|method| method == "textDocument/didSave"),
+        "an over-limit file is not synchronized: {methods:?}"
+    );
+    manager.shutdown().await;
+    drop(remove_dir_all(&root));
+}
+
+/// A publish that arrives after the grace mark but inside the cap still
+/// answers a wait while the server reports indexing, so a busy check does
+/// not read as "not published".
+#[tokio::test]
+async fn test_indexing_extends_wait() {
+    let root = temp_dir().join(format!("houyi-lsp-diag-index-{}", std::process::id()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("root");
+    let file = root.join("a.rs");
+    let uri = file_uri(&file);
+    let handler = |frame: &Value| -> Vec<Value> {
+        let id = frame.get("id").cloned();
+        match frame.get("method").and_then(Value::as_str) {
+            Some("initialize") => vec![
+                json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {}}}),
+                json!({"jsonrpc": "2.0", "method": "$/progress",
+                    "params": {"token": "index", "value": {"kind": "begin", "message": "indexing"}}}),
+            ],
+            Some("shutdown") => vec![json!({"jsonrpc": "2.0", "id": id, "result": null})],
+            _ => vec![],
+        }
+    };
+    let (manager, peer) = attach(&root, handler).await;
+    // Let the indexing report reach the client before the clock is pinned.
+    sleep(Duration::from_millis(10)).await;
+    pause();
+    let waiter = {
+        let manager = Arc::clone(&manager);
+        let uri = uri.clone();
+        tokio::spawn(async move { manager.wait_for_diagnostics("rust", &uri, 0).await })
+    };
+    yield_now().await;
+    // Past the grace mark, still inside the cap.
+    advance(Duration::from_millis(5)).await;
+    peer.out
+        .send(
+            json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+            "params": {"uri": uri, "diagnostics": [
+                {"range": {"start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 1}},
+                 "severity": 1, "message": "the check finished"}
+            ]}}),
+        )
+        .expect("sent");
+    for _ in 0..20 {
+        yield_now().await;
+    }
+    let outcome = waiter.await.expect("the wait task joins");
+    assert!(
+        outcome.as_ref().is_some_and(|found| found
+            .iter()
+            .any(|diagnostic| diagnostic.message == "the check finished")),
+        "the indexing server keeps the wait open to the cap: {outcome:?}"
+    );
+    manager.shutdown().await;
+    drop(remove_dir_all(&root));
+}
+
+/// The same delayed publish without any indexing report times out at the
+/// grace mark, which is the behavior the indexing extension replaces.
+#[tokio::test]
+async fn test_quiet_server_times_out() {
+    let root = temp_dir().join(format!("houyi-lsp-diag-quiet-{}", std::process::id()));
+    drop(remove_dir_all(&root));
+    create_dir_all(&root).expect("root");
+    let file = root.join("a.rs");
+    let uri = file_uri(&file);
+    let handler = |frame: &Value| -> Vec<Value> {
+        let id = frame.get("id").cloned();
+        match frame.get("method").and_then(Value::as_str) {
+            Some("initialize") => {
+                vec![json!({"jsonrpc": "2.0", "id": id, "result": {"capabilities": {}}})]
+            }
+            Some("shutdown") => vec![json!({"jsonrpc": "2.0", "id": id, "result": null})],
+            _ => vec![],
+        }
+    };
+    let (manager, peer) = attach(&root, handler).await;
+    pause();
+    let waiter = {
+        let manager = Arc::clone(&manager);
+        let uri = uri.clone();
+        tokio::spawn(async move { manager.wait_for_diagnostics("rust", &uri, 0).await })
+    };
+    yield_now().await;
+    advance(Duration::from_millis(5)).await;
+    peer.out
+        .send(
+            json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+            "params": {"uri": uri, "diagnostics": [
+                {"range": {"start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 1}},
+                 "severity": 1, "message": "too late"}
+            ]}}),
+        )
+        .expect("sent");
+    let outcome = waiter.await.expect("the wait task joins");
+    assert!(
+        outcome.is_none(),
+        "without indexing the wait ends at the grace mark: {outcome:?}"
+    );
     manager.shutdown().await;
     drop(remove_dir_all(&root));
 }

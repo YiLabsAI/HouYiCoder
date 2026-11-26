@@ -207,7 +207,7 @@ fn test_project_toggle_receipt() {
         .lsp_pane
         .pending
         .as_ref()
-        .and_then(|pending| pending.toggle.as_ref())
+        .and_then(|pending| pending.receipt.as_ref())
         .expect("the toggle records its receipt");
     assert_eq!(receipt.line(), "lsp: shared disabled (this session only)");
 }

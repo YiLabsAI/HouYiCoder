@@ -116,6 +116,8 @@ pub(crate) struct SaveDiagnosticsTool {
     inner: Arc<dyn Tool>,
     manager: Arc<LspConnections>,
     session: Arc<dyn SandboxSession>,
+    /// The read-back window this instance accepts.
+    max_read_bytes: usize,
 }
 
 impl SaveDiagnosticsTool {
@@ -129,7 +131,16 @@ impl SaveDiagnosticsTool {
             inner,
             manager,
             session,
+            max_read_bytes: MAX_READ_BYTES,
         }
+    }
+
+    /// The largest file this decorator reads back. Production keeps the
+    /// analysis window; a test lowers it so the over-limit branch runs on a
+    /// tiny fixture instead of a ten-megabyte file.
+    pub(crate) fn with_max_read_bytes(mut self, max: usize) -> Self {
+        self.max_read_bytes = max;
+        self
     }
 }
 
@@ -236,10 +247,8 @@ impl SaveDiagnosticsTool {
             // told apart from one that exactly fills the window: syncing a
             // truncated body would leave the server believing the file is
             // shorter than it is.
-            let Ok(bytes) = session
-                .read_file(&path.to_string_lossy(), MAX_READ_BYTES + 1)
-                .await
-            else {
+            let max = self.max_read_bytes;
+            let Ok(bytes) = session.read_file(&path.to_string_lossy(), max + 1).await else {
                 tracing::warn!(
                     path = %path.display(),
                     "the written file could not be read back for diagnostics"
@@ -247,10 +256,10 @@ impl SaveDiagnosticsTool {
                 stalled(&mut value);
                 return Ok(value);
             };
-            if bytes.len() > MAX_READ_BYTES {
+            if bytes.len() > max {
                 tracing::warn!(
                     path = %path.display(),
-                    max = MAX_READ_BYTES,
+                    max,
                     "the written file is too large to synchronize for diagnostics"
                 );
                 stalled(&mut value);
