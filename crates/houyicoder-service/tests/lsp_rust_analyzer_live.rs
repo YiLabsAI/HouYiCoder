@@ -10,7 +10,6 @@
 
 #![allow(clippy::unwrap_in_result)]
 
-use std::collections::BTreeMap;
 use std::env;
 use std::env::var_os;
 use std::fs::canonicalize;
@@ -26,7 +25,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use houyicoder_api::launcher::StdProcessLauncher;
-use houyicoder_protocol::lsp::{LspConfigScope, LspDiagnostic, ScopedLspServerConfig};
+use houyicoder_protocol::lsp::{LspDiagnostic, ScopedLspServerConfig};
 use houyicoder_service::lsp::{LspConnections, LspTimings};
 use serde_json::Value;
 use serde_json::json;
@@ -36,8 +35,10 @@ use tokio::time::sleep;
 /// outside PATH.
 const ANALYZER_ENV: &str = "HOUYICODER_RUST_ANALYZER";
 
-/// How long one request waits for the server before the test fails.
-const REQUEST_BUDGET: Duration = Duration::from_secs(30);
+/// How long the probe waits for a cold server to finish its loading pass and
+/// report. The first run against a cold analyzer can take half a minute
+/// before its diagnostics arrive, so the budget spans that.
+const REQUEST_BUDGET: Duration = Duration::from_secs(60);
 
 /// How often an answer the server has not produced yet is asked again.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -119,9 +120,12 @@ async fn test_live_queries_and_diagnostics() {
         println!("skipped: no rust-analyzer found (set {ANALYZER_ENV} or put it on PATH)");
         return;
     };
-    let root = env::temp_dir().join(format!("houyi-lsp-live-{}", id()));
-    drop(remove_dir_all(&root));
+    let base = env::temp_dir().join(format!("houyi-lsp-live-{}", id()));
+    drop(remove_dir_all(&base));
+    let root = base.join("crate");
+    let home = base.join("home");
     create_dir_all(root.join("src")).expect("the crate tree is created");
+    create_dir_all(home.join(".houyicoder/plugins")).expect("the plugin tree is created");
     write(
         root.join("Cargo.toml"),
         "[package]\nname = \"lsp-live-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
@@ -129,8 +133,9 @@ async fn test_live_queries_and_diagnostics() {
     .expect("the manifest is written");
     let file = root.join("src/main.rs");
     write(&file, SOURCE).expect("the source is written");
+    let servers = plugin_servers(&home, &analyzer);
 
-    let manager = open_manager(&root, &analyzer).await;
+    let manager = open_manager(&root, servers).await;
     let name = match manager.ensure_document(&file, SOURCE).await {
         Ok(Some(name)) => name,
         Ok(None) => panic!("no server routes the probe file"),
@@ -147,7 +152,10 @@ async fn test_live_queries_and_diagnostics() {
             );
         }
     };
-    assert_eq!(name, "rust-analyzer");
+    assert_eq!(
+        name, "plugin:rust-analyzer-lsp:rust",
+        "the server came from the plugin declaration, saw {name}"
+    );
 
     let uri = file_uri(&file);
     let deadline = Instant::now() + REQUEST_BUDGET;
@@ -167,11 +175,46 @@ async fn test_live_queries_and_diagnostics() {
     assert!(!diagnostics.is_empty());
 
     manager.shutdown().await;
-    drop(remove_dir_all(&root));
+    drop(remove_dir_all(&base));
 }
 
-/// The manager over one probe crate with a rust-analyzer entry registered.
-async fn open_manager(root: &Path, analyzer: &Path) -> Arc<LspConnections> {
+/// The servers one real plugin declaration resolves to. The analyzer is
+/// wired through the same resolver a production session runs, so the live
+/// contract covers the plugin directory path rather than a hand-built entry.
+fn plugin_servers(home: &Path, analyzer: &Path) -> Vec<ScopedLspServerConfig> {
+    let plugin = home.join(".houyicoder/plugins/rust-analyzer-lsp");
+    create_dir_all(&plugin).expect("the plugin directory is created");
+    let declaration = json!({
+        "rust": {
+            "command": analyzer.to_string_lossy(),
+            "extensionToLanguage": {".rs": "rust"},
+        }
+    });
+    write(
+        plugin.join(".lsp.json"),
+        serde_json::to_string_pretty(&declaration).expect("the declaration encodes"),
+    )
+    .expect("the declaration is written");
+    let settings = home.join(".houyicoder/settings.json");
+    write(&settings, "{}").expect("the settings file is written");
+    let lookup = |name: &str| env::var(name).ok();
+    let servers = houyicoder_config::resolve_scoped_lsp_servers(
+        &settings,
+        None,
+        true,
+        Some(&home.join(".houyicoder/plugins")),
+        None,
+        &lookup,
+    );
+    assert!(
+        !servers.is_empty(),
+        "the plugin declaration resolves to a server"
+    );
+    servers
+}
+
+/// The manager over one probe crate with the resolved servers registered.
+async fn open_manager(root: &Path, servers: Vec<ScopedLspServerConfig>) -> Arc<LspConnections> {
     let timings = LspTimings {
         diagnostics_grace: Duration::from_secs(10),
         diagnostics_cap: Duration::from_secs(20),
@@ -183,14 +226,12 @@ async fn open_manager(root: &Path, analyzer: &Path) -> Arc<LspConnections> {
         Arc::from(root),
         timings,
     ));
-    let mut mapping = BTreeMap::new();
-    mapping.insert(".rs".to_string(), "rust".to_string());
-    let mut server = ScopedLspServerConfig::stdio(analyzer.to_string_lossy(), mapping);
-    server.name = "rust-analyzer".into();
-    server.scope = LspConfigScope::User;
-    server.startup_timeout_ms = 30_000;
-    server.shutdown_timeout_ms = 5_000;
-    manager.start_all(vec![server]).await;
+    let mut servers = servers;
+    for server in &mut servers {
+        server.startup_timeout_ms = 30_000;
+        server.shutdown_timeout_ms = 5_000;
+    }
+    manager.start_all(servers).await;
     manager
 }
 

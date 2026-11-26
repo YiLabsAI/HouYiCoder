@@ -106,9 +106,9 @@ const INSTRUCTION_FILES: &[&str] = &["agents.md", "claude.md", "skill.md"];
 
 /// Root-level configuration files that decide what external processes the
 /// agent may spawn. A silent write to one plants a command the agent runs at
-/// the next startup, which is a privilege escalation: the file is protected
-/// so the model cannot add its own tool server.
-const ROOT_CONFIG_FILES: &[&str] = &[".mcp.json"];
+/// the next startup, which is a privilege escalation: the files are
+/// protected so the model cannot add its own tool or language server.
+const ROOT_CONFIG_FILES: &[&str] = &[".mcp.json", ".lsp.json"];
 
 /// Shell startup files, which are also credential files: a write to one runs
 /// code at every later shell start, and a read can expose the exports they

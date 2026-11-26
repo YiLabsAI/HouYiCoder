@@ -1,17 +1,26 @@
-//! What the status views read: the routing table's answers and the
+//! What the status views read: the route one suffix resolves to and the
 //! per-server rows the pane and the CLI render.
 
 use std::iter::once;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use houyicoder_protocol::lsp::LspConfigScope;
 use houyicoder_protocol::lsp::LspServerState;
 use houyicoder_protocol::lsp::LspServerStatusView;
+use houyicoder_protocol::lsp::LspTransportKind;
 
 use super::LspConnections;
+use super::ServerSlot;
 
 impl LspConnections {
-    /// The server that owns one path's suffix, if the table routes it.
+    /// The server one path's suffix resolves to. The answer is computed from
+    /// the slots at this instant, so a switch or a disable changes the route
+    /// without a table rebuild. Only an enabled stdio slot
+    /// that declares the suffix is a candidate; ties follow the explicit
+    /// scope order (project, user, product plugin, frontend plugin cache)
+    /// and then the server name, so the user's own entry always outranks a
+    /// plugin's and a locked project entry can never hijack a suffix.
     pub async fn server_for_path(&self, path: &Path) -> Option<String> {
         let extension = format!(
             ".{}",
@@ -19,7 +28,23 @@ impl LspConnections {
                 .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
                 .unwrap_or_default()
         );
-        self.routing.read().await.get(&extension).cloned()
+        let slots = self.slots.read().await;
+        slots
+            .values()
+            .filter(|slot| Self::routes(slot, &extension))
+            .min_by_key(|slot| (scope_rank(slot.config.scope), slot.config.name.clone()))
+            .map(|slot| slot.config.name.clone())
+    }
+
+    /// Whether one slot may answer a query for this suffix.
+    fn routes(slot: &ServerSlot, extension: &str) -> bool {
+        slot.enabled.load(Ordering::Relaxed)
+            && slot.config.transport == LspTransportKind::Stdio
+            && slot
+                .config
+                .extension_to_language
+                .keys()
+                .any(|known| known.eq_ignore_ascii_case(extension))
     }
 
     /// The status rows the views render, ordered by name.
@@ -76,5 +101,18 @@ impl LspConnections {
             .await
             .get(name)
             .map(|slot| slot.config.scope)
+    }
+}
+
+/// The route precedence of one scope: the workspace's own file wins, then
+/// the user's settings, then a product plugin, then the frontend's plugin
+/// cache. Spelled out rather than derived from the enum's declaration order,
+/// which lists the user scope first.
+fn scope_rank(scope: LspConfigScope) -> u8 {
+    match scope {
+        LspConfigScope::Project => 0,
+        LspConfigScope::User => 1,
+        LspConfigScope::Plugin => 2,
+        LspConfigScope::ClaudePlugin => 3,
     }
 }

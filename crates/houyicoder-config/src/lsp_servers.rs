@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::read_settings_value;
 use crate::update_settings;
 use crate::update_shared_settings;
-use crate::{SettingsWriteError, expand_references};
+use crate::{ENV_HOUYICODER_CONFIG_HOME, SettingsWriteError, expand_references};
 
 mod plugin_cache;
 
@@ -42,6 +42,35 @@ pub fn frontend_config_dir(home: Option<&Path>) -> Option<PathBuf> {
         return Some(PathBuf::from(dir));
     }
     home.map(|home| home.join(".claude"))
+}
+
+/// The product's plugin directory. A session assembled for production has
+/// no home at hand, so it resolves the tree from the same config root the
+/// settings file comes from; a caller that supplies a home gets that
+/// home's tree, which is what the tests isolate against.
+pub fn plugin_dir(home: Option<&Path>) -> PathBuf {
+    match home {
+        Some(home) => home.join(".houyicoder").join("plugins"),
+        None => crate::config_home().join("plugins"),
+    }
+}
+
+/// The compatible frontend's plugin cache for one session. A supplied home
+/// resolves against it; the production shape falls back to the real user
+/// home, while the isolated environment (a config home with no explicit
+/// frontend override) reads no cache at all, so a gate run never touches
+/// the developer's own tree.
+pub fn session_frontend_dir(home: Option<&Path>) -> Option<PathBuf> {
+    if let Some(home) = home {
+        return frontend_config_dir(Some(home));
+    }
+    if let Some(explicit) = frontend_config_dir(None) {
+        return Some(explicit);
+    }
+    if var_os(ENV_HOUYICODER_CONFIG_HOME).is_some() {
+        return None;
+    }
+    frontend_config_dir(crate::user_home_dir().as_deref())
 }
 
 /// Read every source's servers, merge them by precedence, refuse a project

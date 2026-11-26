@@ -100,8 +100,8 @@ async fn attach(
     (peer, seen)
 }
 
-/// Registering servers starts nothing, builds the suffix routing, and reads
-/// the initial states.
+/// Registering servers starts nothing, records the slots, and reads the
+/// initial states.
 #[tokio::test]
 async fn test_settle_routes_without_start() {
     let manager = manager();
@@ -699,5 +699,146 @@ async fn test_shutdown_stops_backoff() {
     assert!(
         manager.ensure_started("rust").await.is_err(),
         "a closed manager refuses"
+    );
+}
+
+/// A locked project entry never hijacks a suffix: an enabled plugin server
+/// still owns .rs even when the locked entry's name sorts first, which is
+/// the shape an untrusted repository's config file has.
+#[tokio::test]
+async fn test_route_skips_locked() {
+    let manager = manager();
+    manager
+        .start_all(vec![
+            config("aaa", LspConfigScope::Project, true),
+            config("plugin:rust-analyzer", LspConfigScope::ClaudePlugin, false),
+        ])
+        .await;
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("plugin:rust-analyzer"),
+        "the locked entry cannot take the suffix from the plugin"
+    );
+}
+
+/// Precedence follows the scope, not the name: a project entry beats a user
+/// entry, a user entry beats a plugin, and a plugin named to sort first does
+/// not win.
+#[tokio::test]
+async fn test_route_scope_priority() {
+    let manager = manager();
+    manager
+        .start_all(vec![
+            config("zzz", LspConfigScope::User, false),
+            config("plugin:aaa", LspConfigScope::ClaudePlugin, false),
+        ])
+        .await;
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("zzz"),
+        "the user's entry outranks a plugin entry"
+    );
+    manager
+        .start_all(vec![config("0project", LspConfigScope::Project, false)])
+        .await;
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("0project"),
+        "the workspace's own entry outranks the user's"
+    );
+}
+
+/// A product plugin outranks the frontend plugin cache even when the
+/// frontend's name sorts first, which is the precedence tier the scope rank
+/// spells out.
+#[tokio::test]
+async fn test_route_plugin_beats_cache() {
+    let manager = manager();
+    manager
+        .start_all(vec![
+            config("plugin:cache-aaa", LspConfigScope::ClaudePlugin, false),
+            config("plugin:aaa", LspConfigScope::Plugin, false),
+        ])
+        .await;
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("plugin:aaa"),
+        "the product plugin outranks the frontend cache"
+    );
+}
+
+/// A switch at runtime re-routes the suffix: disabling the preferred server
+/// hands .rs to the enabled fallback, and re-enabling takes it back without
+/// a restart.
+#[tokio::test]
+async fn test_route_follows_switch() {
+    let manager = manager();
+    manager
+        .start_all(vec![
+            config("primary", LspConfigScope::User, false),
+            config("fallback", LspConfigScope::Plugin, false),
+        ])
+        .await;
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("primary")
+    );
+    manager
+        .set_enabled("primary", false)
+        .await
+        .expect("the switch flips");
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("fallback"),
+        "the enabled fallback takes over"
+    );
+    manager
+        .set_enabled("primary", true)
+        .await
+        .expect("the switch flips back");
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("primary"),
+        "the preferred server takes the suffix back"
+    );
+}
+
+/// An entry naming a transport this host cannot launch never routes, so a
+/// socket entry cannot shadow a stdio one.
+#[tokio::test]
+async fn test_route_skips_socket() {
+    let manager = manager();
+    let mut socket = config("socket", LspConfigScope::User, false);
+    socket.transport = LspTransportKind::Socket;
+    manager
+        .start_all(vec![socket, config("stdio", LspConfigScope::Plugin, false)])
+        .await;
+    assert_eq!(
+        manager
+            .server_for_path(Path::new("/work/a.rs"))
+            .await
+            .as_deref(),
+        Some("stdio")
     );
 }

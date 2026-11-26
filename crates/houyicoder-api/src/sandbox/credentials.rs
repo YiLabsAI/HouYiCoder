@@ -15,6 +15,7 @@ pub const CREDENTIAL_FILES: &[&str] = &[
     ".profile",
     ".credentials.json",
     ".mcp.json",
+    ".lsp.json",
     ".netrc",
     ".npmrc",
     ".pypirc",

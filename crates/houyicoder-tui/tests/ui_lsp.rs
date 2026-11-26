@@ -82,21 +82,23 @@ fn launch_with_server() -> (PtySession, PathBuf) {
     let script_path = home.join("probe_lsp.py");
     write(&script_path, SERVER_SCRIPT).expect("write the server script");
     let state_path = home.join("launches.txt");
-    let settings = config_dir.join("settings.json");
-    let settings_json = serde_json::json!({
-        "lspServers": {
-            "probe": {
-                "command": "python3",
-                "args": [script_path.to_string_lossy(), state_path.to_string_lossy()],
-                "extensionToLanguage": {".rs": "rust"}
-            }
+    // The server is declared as a plugin, not in the settings file: a real
+    // session assembles without a home in hand, so this is the shape that
+    // proves the plugin tree is read on the production path.
+    let plugin = config_dir.join("plugins/probe");
+    create_dir_all(&plugin).expect("the plugin directory is created");
+    let declaration = serde_json::json!({
+        "rust": {
+            "command": "python3",
+            "args": [script_path.to_string_lossy(), state_path.to_string_lossy()],
+            "extensionToLanguage": {".rs": "rust"}
         }
     });
     write(
-        &settings,
-        serde_json::to_string_pretty(&settings_json).unwrap(),
+        plugin.join(".lsp.json"),
+        serde_json::to_string_pretty(&declaration).unwrap(),
     )
-    .expect("write settings");
+    .expect("write the plugin declaration");
     let cwd = make_temp_repo("lsp");
     let script = r#"
         [
@@ -195,7 +197,7 @@ fn test_pty_lsp_pane_lifecycle() {
     // on the same reply.
     s.send_key(&Key::Char('t'));
     assert!(
-        s.wait_for_screen("lsp: probe disabled", RENDER_TIMEOUT),
+        s.wait_for_screen("lsp: plugin:probe:rust disabled", RENDER_TIMEOUT),
         "the disable receipt should reach the transcript:\n{}",
         s.screen().contents()
     );
@@ -211,7 +213,7 @@ fn test_pty_lsp_pane_lifecycle() {
     // configured server at once.
     s.send_key(&Key::Char('t'));
     assert!(
-        s.wait_for_screen("lsp: probe enabled", RENDER_TIMEOUT),
+        s.wait_for_screen("lsp: plugin:probe:rust enabled", RENDER_TIMEOUT),
         "the enable receipt should reach the transcript:\n{}",
         s.screen().contents()
     );

@@ -6,6 +6,7 @@ fn test_mandatory_deny_home_paths() {
     assert!(p.contains("(subpath \"/Users/alice/.ssh\")"));
     assert!(p.contains("(subpath \"/Users/alice/.gitconfig\")"));
     assert!(p.contains("(subpath \"/Users/alice/.mcp.json\")"));
+    assert!(p.contains("(subpath \"/Users/alice/.lsp.json\")"));
     assert!(p.contains("(subpath \"/Users/alice/.bashrc\")"));
     assert!(p.contains("(subpath \"/Users/alice/.zshrc\")"));
     assert!(p.contains("(subpath \"/Users/alice/.profile\")"));

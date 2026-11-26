@@ -32,6 +32,9 @@ fn test_families_reported_apart() {
     // writing one plants a tool server the agent runs, which is a privilege
     // escalation the model must not perform silently.
     assert!(protected_path_hits("echo x > .mcp.json").instruction);
+    // A root-level language server config decides which program runs just as
+    // the external tool config does, so it is protected at the same tier.
+    assert!(protected_path_hits("echo x > .lsp.json").instruction);
 }
 
 /// A file whose name merely ends in a protected name is not that file, and a

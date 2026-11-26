@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use houyicoder_api::launcher::StdProcessLauncher;
-use houyicoder_config::frontend_config_dir;
+use houyicoder_config::plugin_dir;
 use houyicoder_config::resolve_scoped_lsp_servers;
+use houyicoder_config::session_frontend_dir;
 use houyicoder_config::settings_path;
 use houyicoder_config::settings_path_in;
 use houyicoder_config::trust::is_path_trusted;
@@ -28,16 +29,36 @@ pub(super) fn start(home: Option<&Path>, workspace: Option<&Path>) -> Option<Arc
         Some(home) => settings_path_in(home),
         None => settings_path(),
     };
+    start_with(
+        workspace,
+        SessionDirs {
+            settings_file,
+            plugin_dir: Some(plugin_dir(home)),
+            frontend_dir: session_frontend_dir(home),
+        },
+    )
+}
+
+/// The directories one resolution reads, separated from the environment so a
+/// test can drive the production shape without touching the developer's
+/// home. The settings file is included so a production-shaped call (no home)
+/// still reads the fixture's settings instead of the process config home.
+struct SessionDirs {
+    settings_file: PathBuf,
+    plugin_dir: Option<PathBuf>,
+    frontend_dir: Option<PathBuf>,
+}
+
+fn start_with(workspace: Option<&Path>, dirs: SessionDirs) -> Option<Arc<LspConnections>> {
+    let settings_file = dirs.settings_file;
     let trusted = workspace.is_none_or(|workspace| is_path_trusted(&settings_file, workspace));
-    let plugin_dir: Option<PathBuf> = home.map(|home| home.join(".houyicoder").join("plugins"));
-    let frontend_dir = frontend_config_dir(home);
     let lookup = |name: &str| env::var(name).ok();
     let servers = resolve_scoped_lsp_servers(
         &settings_file,
         workspace,
         trusted,
-        plugin_dir.as_deref(),
-        frontend_dir.as_deref(),
+        dirs.plugin_dir.as_deref(),
+        dirs.frontend_dir.as_deref(),
         &lookup,
     );
     // A disabled entry routes nothing, an entry naming no suffix is invisible
@@ -61,11 +82,11 @@ pub(super) fn start(home: Option<&Path>, workspace: Option<&Path>) -> Option<Arc
         root,
         LspTimings::default(),
     ));
-    // Registration only fills the routing table, and it must finish before
-    // the call returns: the tool registers against the routes this call
-    // writes, so a tool that existed before its routes would answer every
-    // query with "no server routes this file". The locks are uncontended at
-    // this point, so the block is the registration itself, not a wait.
+    // Registration only records the slots, and it must finish before the call
+    // returns: the tool registers against the routes those slots answer, so a
+    // tool that existed before its slots would answer every query with "no
+    // server routes this file". The locks are uncontended at this point, so
+    // the block is the registration itself, not a wait.
     block_on(manager.start_all(servers));
     Some(manager)
 }

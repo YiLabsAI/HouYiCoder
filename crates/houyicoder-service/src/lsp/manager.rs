@@ -1,11 +1,11 @@
-//! The language server manager: one slot per configured server, the suffix
-//! routing table, lazy starts, document synchronization, and the bounded
+//! The language server manager: one slot per configured server, per-query
+//! suffix routing, lazy starts, document synchronization, and the bounded
 //! relaunch a crashed server earns.
 //!
-//! Settling builds the routing table and starts nothing: a session pays
-//! zero processes until a routed file is asked about. The first ask
-//! launches behind one lock, so concurrent asks share one handshake, and
-//! every opened document carries a strictly increasing version.
+//! Registering starts nothing: a session pays zero processes until a routed
+//! file is asked about. The first ask launches behind one lock, so
+//! concurrent asks share one handshake, and every opened document carries a
+//! strictly increasing version.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -134,7 +134,6 @@ pub struct LspConnections {
     workspace_root: Arc<Path>,
     timings: LspTimings,
     slots: Arc<RwLock<BTreeMap<String, Arc<ServerSlot>>>>,
-    routing: Arc<RwLock<BTreeMap<String, String>>>,
     /// Set by shutdown; no launch may follow it, so a watcher waking from a
     /// backoff sleep cannot resurrect a server the session ended.
     closed: Arc<AtomicBool>,
@@ -153,17 +152,16 @@ impl LspConnections {
             workspace_root,
             timings,
             slots: Arc::new(RwLock::new(BTreeMap::new())),
-            routing: Arc::new(RwLock::new(BTreeMap::new())),
             closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Register every resolved server and build the suffix routing table.
-    /// Disabled entries are recorded and never launched. No process starts
-    /// here: the launch waits for the first ask.
+    /// Register every resolved server. Disabled entries are recorded and never
+    /// launched. No process starts here: the launch waits for the first ask,
+    /// and the route a suffix takes is decided per query, so a switch or a
+    /// re-registered entry changes it without a rebuild.
     pub async fn start_all(&self, servers: Vec<ScopedLspServerConfig>) {
         let mut slots = self.slots.write().await;
-        let mut routing = self.routing.write().await;
         for config in servers {
             if config.transport != LspTransportKind::Stdio {
                 tracing::warn!(
@@ -172,11 +170,6 @@ impl LspConnections {
                 );
             }
             let name = config.name.clone();
-            for extension in config.extension_to_language.keys() {
-                routing
-                    .entry(extension.clone())
-                    .or_insert_with(|| name.clone());
-            }
             let locked = config.locked;
             let state = if config.disabled {
                 LspServerState::Disabled {

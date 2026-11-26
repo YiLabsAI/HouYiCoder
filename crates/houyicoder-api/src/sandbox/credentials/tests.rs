@@ -12,6 +12,7 @@ fn test_names_credential_file() {
         "cat ~/.ssh/id_rsa",
         "ls ~/.aws",
         "echo x > .mcp.json",
+        "echo x > .lsp.json",
         "cat ~/.claude/.credentials.json",
     ] {
         assert!(names_credential_path(text), "{text}");
