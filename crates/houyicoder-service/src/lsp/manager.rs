@@ -556,21 +556,6 @@ impl LspConnections {
         Ok(Some(name))
     }
 
-    /// The diagnostics the last publish left for one file on one server.
-    pub async fn file_diagnostics(&self, name: &str, uri: &str) -> Vec<LspDiagnostic> {
-        self.slots
-            .read()
-            .await
-            .get(name)
-            .and_then(|slot| {
-                slot.diagnostics
-                    .lock()
-                    .ok()
-                    .and_then(|map| map.get(uri).map(|entry| entry.findings.clone()))
-            })
-            .unwrap_or_default()
-    }
-
     /// Ask one file-scoped question: route the suffix, start its server,
     /// synchronize the given content without announcing a save, and forward
     /// the request. The caller opens the document through ensure_document;
@@ -639,12 +624,12 @@ fn spawn_drain(slot: Arc<ServerSlot>, mut notices: mpsc::UnboundedReceiver<Serve
                 continue;
             };
             if let Ok(mut map) = slot.diagnostics.lock() {
-                let entry = map
-                    .entry(params.uri)
-                    .or_insert_with(|| PublishedDiagnostics {
+                let entry = map.entry(diagnostic_key(&params.uri)).or_insert_with(|| {
+                    PublishedDiagnostics {
                         generation: 0,
                         findings: Vec::new(),
-                    });
+                    }
+                });
                 entry.generation += 1;
                 entry.findings = params.diagnostics;
             }
@@ -699,6 +684,8 @@ mod control;
 mod documents;
 mod status;
 mod watch;
+
+use self::documents::diagnostic_key;
 
 #[cfg(test)]
 pub(crate) mod tests;

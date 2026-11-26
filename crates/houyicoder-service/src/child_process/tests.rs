@@ -121,3 +121,23 @@ fn test_file_uri_escapes_bytes() {
     let non_ascii = file_uri(Path::new("/work/\u{6d4b}\u{8bd5}.rs"));
     assert_eq!(non_ascii, "file:///work/%E6%B5%8B%E8%AF%95.rs");
 }
+
+/// A file URI decodes back to the path it was built from, so a caller that
+/// keys a store by the decoded path and a server that publishes the encoded
+/// spelling meet on one value.
+#[test]
+fn test_uri_round_trip() {
+    for text in [
+        "/work/a b#c?.rs",
+        "/work/100%.rs",
+        "/work/\u{6d4b}\u{8bd5}.rs",
+    ] {
+        let uri = file_uri(Path::new(text));
+        assert_eq!(
+            path_from_uri(&uri).as_deref(),
+            Some(Path::new(text)),
+            "{uri}"
+        );
+    }
+    assert!(path_from_uri("https://example.test/x").is_none());
+}

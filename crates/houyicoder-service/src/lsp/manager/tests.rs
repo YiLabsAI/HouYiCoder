@@ -2,12 +2,25 @@
 //! attach seam: routing, statuses, document versions, diagnostics, the
 //! switch, and the refusal paths.
 
+#[cfg(unix)]
+use std::env::temp_dir;
+#[cfg(unix)]
+use std::fs::create_dir_all;
+#[cfg(unix)]
+use std::fs::remove_dir_all;
+#[cfg(unix)]
+use std::fs::write;
 use std::io::BufRead;
 use std::io::Read;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::id;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use houyicoder_api::launcher::{
     LauncherChild, ProcessLauncher, SpawnError, SpawnPolicy, SpawnRequest,
@@ -841,4 +854,54 @@ async fn test_route_skips_socket() {
             .as_deref(),
         Some("stdio")
     );
+}
+
+/// A workspace reached through a symlink can produce two spellings of the
+/// same file. The caller waits on the symlink spelling while the server
+/// publishes on the resolved one; the store key resolves both, so the wait
+/// finds the publish instead of reporting unknown.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_symlink_uri_reaches_diagnostics() {
+    let base = temp_dir().join(format!("houyi-lsp-symlink-{}", id()));
+    drop(remove_dir_all(&base));
+    create_dir_all(base.join("real")).expect("real dir");
+    let real_file = base.join("real/a.rs");
+    write(&real_file, "fn a() {}\n").expect("source file");
+    let link = base.join("link");
+    symlink(base.join("real"), &link).expect("symlink");
+    let manager = manager();
+    manager
+        .start_all(vec![config("rust", LspConfigScope::User, false)])
+        .await;
+    let (peer, _seen) = attach(&manager, "rust").await;
+    let waited = file_uri(&link.join("a.rs"));
+    let published = file_uri(&real_file);
+    assert_ne!(waited, published, "the two spellings differ");
+    let since = manager.publish_generation("rust", &waited).await;
+    peer.out
+        .send(
+            json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+            "params": {"uri": published, "diagnostics": [
+                {"range": {"start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 1}},
+                 "severity": 1, "message": "type mismatch"}
+            ]}}),
+        )
+        .expect("sent");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while manager.publish_generation("rust", &waited).await <= since {
+        assert!(
+            Instant::now() < deadline,
+            "the publish on the resolved spelling reaches the symlink key"
+        );
+        sleep(Duration::from_millis(2)).await;
+    }
+    assert_eq!(
+        manager.file_diagnostics("rust", &waited).await.len(),
+        1,
+        "the wait finds the findings under the resolved key"
+    );
+    manager.shutdown().await;
+    drop(remove_dir_all(&base));
 }

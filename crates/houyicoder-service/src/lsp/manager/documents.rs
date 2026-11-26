@@ -14,8 +14,40 @@ use super::LspConnections;
 use super::PublishedDiagnostics;
 use super::watch;
 use crate::child_process::file_uri;
+use crate::child_process::path_from_uri;
+
+/// The diagnostics-store key for one file URI. A workspace opened through a
+/// symlink can produce two spellings of the same file: the caller's and the
+/// server's resolved one (macOS /var to /private/var). The key resolves the
+/// path behind the URI when it exists, so both sides land in one entry; a
+/// URI whose path cannot be resolved keeps its spelling. The protocol URIs
+/// sent to the server are untouched.
+pub(super) fn diagnostic_key(uri: &str) -> String {
+    let Some(path) = path_from_uri(uri) else {
+        return uri.to_string();
+    };
+    match dunce::canonicalize(&path) {
+        Ok(resolved) => file_uri(&resolved),
+        Err(_) => uri.to_string(),
+    }
+}
 
 impl LspConnections {
+    /// The diagnostics the last publish left for one file on one server.
+    pub async fn file_diagnostics(&self, name: &str, uri: &str) -> Vec<LspDiagnostic> {
+        self.slots
+            .read()
+            .await
+            .get(name)
+            .and_then(|slot| {
+                slot.diagnostics.lock().ok().and_then(|map| {
+                    map.get(&diagnostic_key(uri))
+                        .map(|entry| entry.findings.clone())
+                })
+            })
+            .unwrap_or_default()
+    }
+
     /// Open one document if it is not open yet, without touching the
     /// version of a document already synchronized. A read-only query on an
     /// unchanged file has nothing to report to the server. None means no
@@ -75,7 +107,7 @@ impl LspConnections {
                 slot.diagnostics
                     .lock()
                     .ok()
-                    .and_then(|map| map.get(uri).map(|entry| entry.generation))
+                    .and_then(|map| map.get(&diagnostic_key(uri)).map(|entry| entry.generation))
             })
             .unwrap_or(0)
     }
@@ -134,6 +166,6 @@ impl LspConnections {
         slot.diagnostics
             .lock()
             .ok()
-            .and_then(|map| map.get(uri).cloned())
+            .and_then(|map| map.get(&diagnostic_key(uri)).cloned())
     }
 }

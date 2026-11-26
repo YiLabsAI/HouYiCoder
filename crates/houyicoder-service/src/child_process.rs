@@ -12,6 +12,8 @@ use std::env::vars;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
+use std::str::from_utf8;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::spawn;
@@ -249,4 +251,42 @@ pub(crate) fn file_uri(path: &Path) -> String {
         // the authority, so the result reads file:///C:/...
         format!("file:///{encoded}")
     }
+}
+
+/// The path one file URI names, percent-decoded as bytes so a multi-byte
+/// glyph survives and an escape naming a byte over 0x7f never becomes a
+/// character of its own. None when the URI is not a file URI.
+pub(crate) fn path_from_uri(uri: &str) -> Option<PathBuf> {
+    let mut trimmed = uri.strip_prefix("file://")?;
+    // A Windows file URI carries the drive after the authority's slash,
+    // which the path itself does not have; every other path keeps it.
+    if trimmed.starts_with('/')
+        && trimmed
+            .chars()
+            .nth(1)
+            .zip(trimmed.chars().nth(2))
+            .is_some_and(|(letter, colon)| letter.is_ascii_alphabetic() && colon == ':')
+    {
+        trimmed = &trimmed[1..];
+    }
+    let raw = trimmed.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut index = 0;
+    while index < raw.len() {
+        // An escape is kept as written unless it is a complete pair of hex
+        // digits, so a stray percentage sign does not eat its neighbour.
+        if raw[index] == b'%'
+            && index + 2 < raw.len()
+            && let Some(decoded) = from_utf8(&raw[index + 1..index + 3])
+                .ok()
+                .and_then(|text| u8::from_str_radix(text, 16).ok())
+        {
+            bytes.push(decoded);
+            index += 3;
+            continue;
+        }
+        bytes.push(raw[index]);
+        index += 1;
+    }
+    Some(PathBuf::from(String::from_utf8_lossy(&bytes).into_owned()))
 }

@@ -743,6 +743,49 @@ fn test_scratch_settings_file_writable() {
     );
 }
 
+/// The project configuration files that name commands are read-denied at
+/// the kernel everywhere, with one narrow exception: a fixture under the
+/// session scratch directory can be read back. The require-all scoping is
+/// what keeps that exception from leaking to the workspace.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_config_read_scope() {
+    if !fence_is_bindable() {
+        eprintln!("skipped: already inside a sandbox, cannot bind another");
+        return;
+    }
+    let f = Fence::new("config-read");
+    write(f.workspace.join(".mcp.json"), "{\"secret\":\"workspace\"}").expect("workspace mcp");
+    write(f.workspace.join(".lsp.json"), "{\"secret\":\"workspace\"}").expect("workspace lsp");
+    create_dir_all(f.tmpdir.join("fixture")).expect("scratch fixture dir");
+    write(
+        f.tmpdir.join("fixture/.mcp.json"),
+        "{\"probe\":\"scratch\"}",
+    )
+    .expect("scratch mcp");
+    write(
+        f.tmpdir.join("fixture/.lsp.json"),
+        "{\"probe\":\"scratch\"}",
+    )
+    .expect("scratch lsp");
+    for file in [".mcp.json", ".lsp.json"] {
+        let workspace = f.probe("workspace-config", &format!("cat {file}"));
+        assert!(
+            !workspace.allowed() && workspace.denied_by_fence(),
+            "reading the workspace {file} stays refused by the kernel: it may \
+             carry a token. {}",
+            workspace.detail()
+        );
+        let scratch = f.probe("scratch-config", &format!("cat \"$TMPDIR/fixture/{file}\""));
+        assert!(
+            scratch.allowed() && scratch.stdout.contains("scratch"),
+            "a fixture {file} under the session scratch directory is readable \
+             back, so a sandboxed test can assert its own file. {}",
+            scratch.detail()
+        );
+    }
+}
+
 /// Git must work inside the fence with no environment workaround. It reads its
 /// system and home config on every invocation and treats a denied read as
 /// fatal, so this exercises both allow-backs at once.
