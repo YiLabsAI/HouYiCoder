@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::id;
 
 use super::*;
+use houyicoder_protocol::lsp::LspTransportKind;
 
 fn scratch(tag: &str) -> PathBuf {
     let dir = temp_dir().join(format!("houyi-lsp-cc-{tag}-{}", id()));
@@ -261,9 +262,83 @@ fn test_reference_spelling_reads() {
     let servers = servers(&claude, None, true);
     assert_eq!(servers[0].startup_timeout_ms, 60_000);
     assert_eq!(servers[0].shutdown_timeout_ms, 5_000);
-    assert_eq!(
-        servers[0].transport,
-        houyicoder_protocol::lsp::LspTransportKind::Stdio
+    assert_eq!(servers[0].transport, LspTransportKind::Stdio);
+    drop(fs::remove_dir_all(&root));
+}
+
+/// An official marketplace plugin whose cache directory carries only its
+/// license and readme is still found: its servers live in the marketplace
+/// manifest's plugins array, both as an inline declaration and as a source
+/// subdirectory the manifest names.
+#[test]
+fn test_marketplace_fallback() {
+    let root = scratch("marketplace");
+    let claude = root.join("claude");
+    let cache = claude.join("plugins/cache/market/ra/1.0.0");
+    fs::create_dir_all(&cache).expect("cache dir");
+    write(&cache.join("LICENSE"), "MIT");
+    write(&cache.join("README.md"), "probe");
+    let installed = claude.join("plugins/installed_plugins.json");
+    write(
+        &installed,
+        &serde_json::to_string_pretty(&serde_json::json!({
+            "version": 2,
+            "plugins": {
+                "ra@market": [{
+                    "scope": "user",
+                    "installPath": cache.to_string_lossy(),
+                }],
+            },
+        }))
+        .expect("encode"),
+    );
+    let market = claude.join("plugins/marketplaces/market");
+    let manifest_dir = market.join(".claude-plugin");
+    fs::create_dir_all(&manifest_dir).expect("manifest dir");
+    let source = market.join("plugins/ra");
+    write(
+        &source.join(".lsp.json"),
+        r#"{"ra-src": {"command": "rust-analyzer-src", "extensionToLanguage": {".rs": "rust"}}}"#,
+    );
+    write(
+        &manifest_dir.join("marketplace.json"),
+        &serde_json::to_string_pretty(&serde_json::json!({
+            "name": "market",
+            "plugins": [{
+                "name": "ra",
+                "source": "./plugins/ra",
+                "lspServers": {
+                    "ra-inline": {
+                        "command": "rust-analyzer-inline",
+                        "extensionToLanguage": {".rs": "rust"},
+                    },
+                },
+            }],
+        }))
+        .expect("encode"),
+    );
+    write(
+        &claude.join("plugins/known_marketplaces.json"),
+        &serde_json::to_string_pretty(&serde_json::json!({
+            "market": {
+                "installLocation": market.to_string_lossy(),
+            },
+        }))
+        .expect("encode"),
+    );
+    write(
+        &claude.join("settings.json"),
+        r#"{"enabledPlugins": {"ra@market": true}}"#,
+    );
+    let servers = servers(&claude, None, true);
+    let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains(&"plugin:ra@market:ra-inline"),
+        "the marketplace inline declaration is found: {names:?}"
+    );
+    assert!(
+        names.contains(&"plugin:ra@market:ra-src"),
+        "the source subdirectory file is found: {names:?}"
     );
     drop(fs::remove_dir_all(&root));
 }

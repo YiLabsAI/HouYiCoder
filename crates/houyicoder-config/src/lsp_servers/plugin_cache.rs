@@ -48,7 +48,7 @@ pub(super) fn servers(
             else {
                 continue;
             };
-            for (name, server) in read_plugin_servers(&install) {
+            for (name, server) in read_plugin_servers(&install, key, config_dir) {
                 let mut server = server;
                 server.name = format!("plugin:{key}:{name}");
                 rewrite_plugin_root(&mut server, &install);
@@ -73,7 +73,7 @@ fn enabled_map(
     for (path, allowed) in [
         (Some(config_dir.join("settings.json")), true),
         (
-            workspace.map(|w| w.join(".claude").join("settings.json")),
+            workspace.map(|w| w.join(super::FRONTEND_HOME_DIR).join("settings.json")),
             trusted,
         ),
     ] {
@@ -128,14 +128,70 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 /// One plugin's servers: the file at its install root plus whatever its
-/// manifest declares, later entries winning on a name collision.
-fn read_plugin_servers(install: &Path) -> Vec<(String, ScopedLspServerConfig)> {
+/// manifest declares, later entries winning on a name collision. When the
+/// install root carries no declaration (an official marketplace plugin whose
+/// cache directory holds only its license and readme), the marketplace's own
+/// manifest is read for the plugin's inline declaration and source subdirectory.
+fn read_plugin_servers(
+    install: &Path,
+    key: &str,
+    config_dir: &Path,
+) -> Vec<(String, ScopedLspServerConfig)> {
     let lsp_file = install.join(super::PROJECT_FILE);
     let mut servers = read_root_file(&lsp_file);
     let manifest_path = install.join(".claude-plugin").join("plugin.json");
     let manifest = super::read_json(&manifest_path);
     if let Some(declaration) = manifest.get("lspServers") {
         servers.extend(read_declaration(declaration, install));
+    }
+    if servers.is_empty() {
+        servers.extend(read_marketplace_servers(key, config_dir));
+    }
+    servers
+}
+
+/// The servers a marketplace declares for one plugin. The plugin key splits
+/// into a plugin name and a marketplace name; the marketplace's install
+/// location carries a manifest whose plugins array names the plugin, and
+/// that entry may hold an inline lspServers map or a source subdirectory
+/// whose own files declare the servers.
+fn read_marketplace_servers(key: &str, config_dir: &Path) -> Vec<(String, ScopedLspServerConfig)> {
+    let Some((plugin_name, marketplace)) = key.split_once('@') else {
+        return Vec::new();
+    };
+    let marketplaces =
+        read_settings_value(&config_dir.join("plugins").join("known_marketplaces.json"));
+    let Some(location) = marketplaces
+        .get(marketplace)
+        .and_then(|entry| entry.get("installLocation"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+    else {
+        return Vec::new();
+    };
+    let manifest = super::read_json(&location.join(".claude-plugin").join("marketplace.json"));
+    let Some(plugins) = manifest.get("plugins").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let entry = plugins
+        .iter()
+        .find(|item| item.get("name").and_then(Value::as_str) == Some(plugin_name));
+    let Some(entry) = entry else {
+        return Vec::new();
+    };
+    let mut servers = Vec::new();
+    if let Some(declaration) = entry.get("lspServers") {
+        servers.extend(read_declaration(declaration, &location));
+    }
+    if let Some(source) = entry.get("source").and_then(Value::as_str)
+        && let Some(subdir) = safe_join(&location, source)
+    {
+        let lsp_file = subdir.join(super::PROJECT_FILE);
+        servers.extend(read_root_file(&lsp_file));
+        let plugin_manifest = super::read_json(&subdir.join(".claude-plugin").join("plugin.json"));
+        if let Some(declaration) = plugin_manifest.get("lspServers") {
+            servers.extend(read_declaration(declaration, &subdir));
+        }
     }
     servers
 }

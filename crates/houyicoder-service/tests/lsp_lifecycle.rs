@@ -283,14 +283,15 @@ async fn test_disable_during_launch_sticks() {
         eventually(|| counters.live.load(Ordering::SeqCst) == 0).await,
         "the fresh connection was closed"
     );
-    let refused = manager
+    // A disabled server no longer routes the suffix, so the document path
+    // reports no route rather than an error: the user asked for a file
+    // nothing serves.
+    let routed = manager
         .ensure_document(Path::new("/work/src/lib.rs"), "fn a() {}")
         .await;
     assert!(
-        refused
-            .as_ref()
-            .is_err_and(|error| error.contains("disabled")),
-        "the next ask refuses the disabled server: {refused:?}"
+        routed.as_ref().is_ok_and(|outcome| outcome.is_none()),
+        "a disabled server routes no suffix: {routed:?}"
     );
     manager.shutdown().await;
 }

@@ -29,6 +29,11 @@ pub const PROJECT_FILE: &str = ".lsp.json";
 /// The settings key the user scope reads.
 pub const SETTINGS_KEY: &str = "lspServers";
 
+/// The directory name the compatible frontend stores its user-level state
+/// under. The name is a compatibility fact the frontend owns, not this
+/// product's own spelling.
+const FRONTEND_HOME_DIR: &str = ".claude";
+
 /// The environment variable that names the compatible frontend's config
 /// directory.
 pub const FRONTEND_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
@@ -41,7 +46,7 @@ pub fn frontend_config_dir(home: Option<&Path>) -> Option<PathBuf> {
     if let Some(dir) = var_os(FRONTEND_CONFIG_DIR_ENV) {
         return Some(PathBuf::from(dir));
     }
-    home.map(|home| home.join(".claude"))
+    home.map(|home| home.join(FRONTEND_HOME_DIR))
 }
 
 /// The product's plugin directory. A session assembled for production has

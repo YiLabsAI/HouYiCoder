@@ -167,6 +167,10 @@ async fn test_live_queries_and_diagnostics() {
     let hover = hover_until(&manager, &file, &uri, deadline).await;
     assert!(hover.to_string().contains("u32"), "{hover}");
 
+    // The broken source must reach disk before the save is announced: the
+    // server's type check reads the file from disk, so syncing a body the
+    // disk never held leaves the checker looking at the clean original.
+    write(&file, BROKEN_SOURCE).expect("the broken source is written");
     manager
         .sync_file_saved(&file, BROKEN_SOURCE)
         .await
