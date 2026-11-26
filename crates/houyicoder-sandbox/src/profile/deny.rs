@@ -37,8 +37,6 @@ const MANDATORY_DENY_SETTINGS_FILES: &[&str] = &[
     ".houyicoder/settings.local.json",
     ".claude/settings.json",
     ".claude/settings.local.json",
-    ".mcp.json",
-    ".lsp.json",
 ];
 
 /// Skill definition directories denied for write only: the agent must not

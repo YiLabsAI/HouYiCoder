@@ -3,6 +3,8 @@
 use super::names_credential_path;
 
 /// A home path, an absolute path, and a nested one all name the credential.
+/// Project configuration files that name commands and may carry tokens are
+/// credentials too: their reads and writes are both judged separately.
 #[test]
 fn test_names_credential_file() {
     for text in [
@@ -11,18 +13,12 @@ fn test_names_credential_file() {
         "head -n 1 .pypirc",
         "cat ~/.ssh/id_rsa",
         "ls ~/.aws",
+        "echo x > .mcp.json",
+        "echo x > .lsp.json",
         "cat ~/.claude/.credentials.json",
     ] {
         assert!(names_credential_path(text), "{text}");
     }
-}
-
-/// Project configuration files that name commands are not credentials: they
-/// carry no secret, and a sandboxed session reads them to list servers.
-#[test]
-fn test_config_files_not_credentials() {
-    assert!(!names_credential_path("cat .mcp.json"));
-    assert!(!names_credential_path("cat .lsp.json"));
 }
 
 /// A name that merely contains a longer name is a different file, so it does

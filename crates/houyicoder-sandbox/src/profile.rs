@@ -249,6 +249,7 @@ pub fn render(spec: &ProfileSpec<'_>) -> String {
     s.push_str(&deny_settings_files(home, tag));
     s.push_str(&deny_snapshot_stores_anywhere(tag));
     s.push_str(&allow_tmpdir_writes(tmpdir, workspace));
+    s.push_str(&allow_scratch_config_reads(tmpdir, workspace));
     s.push_str(&allow_temp_entries());
     s.push_str(&deny_permission_stores(home, tag));
     s.push_str(&deny_snapshot_store(workspace, tag));
@@ -487,6 +488,26 @@ fn allow_tmpdir_writes(tmpdir: &str, workspace: &Path) -> String {
         return String::new();
     }
     format!("(allow file-write* (subpath \"{trimmed}\"))\n")
+}
+
+/// Allow reading project configuration files (.mcp.json, .lsp.json) inside
+/// the session scratch directory only. These files are read-denied
+/// everywhere else because they may carry authentication headers or
+/// environment values in plaintext, but a sandboxed test that writes its
+/// own fixture needs to read it back. The require-all is load-bearing:
+/// without it the subpath and regex conditions are OR'd in seatbelt, which
+/// would open these files everywhere.
+///
+/// Empty when the scratch directory is unset or contains the workspace, so
+/// a workspace inside a shared temp root keeps its own denies.
+fn allow_scratch_config_reads(tmpdir: &str, workspace: &Path) -> String {
+    let trimmed = tmpdir.trim_end_matches('/');
+    if trimmed.is_empty() || workspace.starts_with(Path::new(trimmed)) {
+        return String::new();
+    }
+    format!(
+        "(allow file-read* (require-all (subpath \"{trimmed}\") (regex #\".*/\\.(mcp|lsp)\\.json$\")))\n"
+    )
 }
 
 /// Allow creating and using one temporary entry directly under the user's

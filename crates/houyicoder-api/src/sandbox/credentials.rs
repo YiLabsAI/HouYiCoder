@@ -7,9 +7,10 @@
 /// until value redaction exists, so reading or writing one is always judged
 /// separately. A workspace .env file stays readable as a development input,
 /// which is why it is not listed. Project configuration files that name
-/// commands (.mcp.json, .lsp.json) are not credentials: they carry no
-/// secret, and reading them stays open so a sandboxed session can list the
-/// servers it mounts. Their writes are denied at the kernel layer instead.
+/// commands (.mcp.json, .lsp.json) are credentials too: they specify
+/// programs the agent runs and may carry authentication headers or
+/// environment values in plaintext, so reading or writing one is always
+/// judged separately.
 pub const CREDENTIAL_FILES: &[&str] = &[
     ".bashrc",
     ".bash_profile",
@@ -17,6 +18,8 @@ pub const CREDENTIAL_FILES: &[&str] = &[
     ".zprofile",
     ".profile",
     ".credentials.json",
+    ".mcp.json",
+    ".lsp.json",
     ".netrc",
     ".npmrc",
     ".pypirc",

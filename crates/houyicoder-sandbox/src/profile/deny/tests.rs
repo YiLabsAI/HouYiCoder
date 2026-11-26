@@ -1,10 +1,14 @@
+use super::super::allow_scratch_config_reads;
 use super::*;
+use std::path::Path;
 
 #[test]
 fn test_mandatory_deny_home_paths() {
     let p = mandatory_deny("/Users/alice", "tag-x");
     assert!(p.contains("(subpath \"/Users/alice/.ssh\")"));
     assert!(p.contains("(subpath \"/Users/alice/.gitconfig\")"));
+    assert!(p.contains("(subpath \"/Users/alice/.mcp.json\")"));
+    assert!(p.contains("(subpath \"/Users/alice/.lsp.json\")"));
     assert!(p.contains("(subpath \"/Users/alice/.bashrc\")"));
     assert!(p.contains("(subpath \"/Users/alice/.zshrc\")"));
     assert!(p.contains("(subpath \"/Users/alice/.profile\")"));
@@ -12,27 +16,51 @@ fn test_mandatory_deny_home_paths() {
     assert!(p.contains("(subpath \"/Users/alice/.claude/agents\")"));
 }
 
-/// Project configuration files are write-denied but not read-denied: a
-/// sandboxed session reads them to list servers, but cannot plant a
-/// command through a silent write.
+/// Project configuration files are read-denied and write-denied at the
+/// kernel, the same tier as other credentials: they name commands and may
+/// carry authentication headers or environment values in plaintext.
 #[test]
-fn test_config_files_write_only() {
-    let p = deny_settings_files("/Users/alice", "tag-x");
+fn test_config_files_denied() {
+    let p = mandatory_deny("/Users/alice", "tag-x");
     for file in [".mcp.json", ".lsp.json"] {
         let subpath = format!("\"/Users/alice/{file}\"");
         assert!(
-            p.contains(&subpath),
-            "{file} appears in the settings deny: {p}"
-        );
-        assert!(
-            p.contains(&format!("file-write* (subpath {subpath})")),
-            "{file} is write-denied: {p}"
-        );
-        assert!(
-            !p.contains(&format!("file-read* file-write* (subpath {subpath})")),
-            "{file} is not read-denied (reads stay open): {p}"
+            p.contains(&format!("file-read* file-write* (subpath {subpath})")),
+            "{file} is read-denied and write-denied: {p}"
         );
     }
+}
+
+/// A sandboxed test can read its own .mcp.json or .lsp.json fixture inside
+/// the session scratch directory, because the read allow-back there is
+/// scoped with require-all so it cannot leak outside the scratch tree.
+#[test]
+fn test_scratch_config_reads() {
+    let p = allow_scratch_config_reads("/tmp/scratch-1", Path::new("/work/project"));
+    assert!(
+        p.contains("require-all"),
+        "the scratch read allow must scope with require-all: {p}"
+    );
+    assert!(
+        p.contains("(subpath \"/tmp/scratch-1\")"),
+        "the scratch read allow names the scratch directory: {p}"
+    );
+    assert!(
+        p.contains(r"\.(mcp|lsp)\.json"),
+        "the scratch read allow matches the config file pattern: {p}"
+    );
+}
+
+/// When the workspace itself sits inside the scratch directory, the read
+/// allow-back is not emitted, so the workspace's own config files stay
+/// read-denied.
+#[test]
+fn test_scratch_reads_omitted() {
+    let p = allow_scratch_config_reads("/tmp/scratch-1", Path::new("/tmp/scratch-1/project"));
+    assert!(
+        p.is_empty(),
+        "no scratch read allow when the workspace is inside the scratch dir"
+    );
 }
 
 /// All three skill directories are write-only-denied: reads are allowed so
