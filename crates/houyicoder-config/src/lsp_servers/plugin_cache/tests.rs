@@ -13,7 +13,7 @@ use super::*;
 use houyicoder_protocol::lsp::LspTransportKind;
 
 fn scratch(tag: &str) -> PathBuf {
-    let dir = temp_dir().join(format!("houyi-lsp-cc-{tag}-{}", id()));
+    let dir = temp_dir().join(format!("houyi-lsp-cache-{tag}-{}", id()));
     drop(fs::remove_dir_all(&dir));
     fs::create_dir_all(&dir).expect("scratch");
     dir
@@ -51,7 +51,7 @@ fn install(
     if let Some(path) = project {
         entry["projectPath"] = serde_json::Value::String(path.to_string_lossy().into_owned());
     }
-    let installed = root.join("claude/plugins/installed_plugins.json");
+    let installed = root.join("frontend/plugins/installed_plugins.json");
     let existing = fs::read_to_string(&installed).unwrap_or_else(|_| r#"{"plugins":{}}"#.into());
     let mut value: serde_json::Value = serde_json::from_str(&existing).expect("installed json");
     value["plugins"][key] = serde_json::json!([entry]);
@@ -69,12 +69,12 @@ fn test_enable_filter() {
     let root = scratch("enable");
     install(&root, "ra@market", "user", None, "ra");
     install(&root, "off@market", "user", None, "off");
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"ra@market": true, "off@market": false}}"#,
     );
-    let servers = servers(&claude, None, true);
+    let servers = servers(&frontend, None, true);
     assert_eq!(servers.len(), 1);
     assert_eq!(servers[0].name, "plugin:ra@market:rust");
     drop(fs::remove_dir_all(&root));
@@ -86,9 +86,9 @@ fn test_enable_filter() {
 fn test_missing_enable_skips() {
     let root = scratch("missing-enable");
     install(&root, "ra@market", "user", None, "ra");
-    let claude = root.join("claude");
-    write(&claude.join("settings.json"), "{}");
-    assert!(servers(&claude, None, true).is_empty());
+    let frontend = root.join("frontend");
+    write(&frontend.join("settings.json"), "{}");
+    assert!(servers(&frontend, None, true).is_empty());
     drop(fs::remove_dir_all(&root));
 }
 
@@ -100,16 +100,16 @@ fn test_project_scope_match() {
     let work = root.join("work");
     fs::create_dir_all(&work).expect("workspace");
     install(&root, "ra@market", "project", Some(&work), "ra");
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"ra@market": true}}"#,
     );
-    assert_eq!(servers(&claude, Some(&work), true).len(), 1);
+    assert_eq!(servers(&frontend, Some(&work), true).len(), 1);
     let elsewhere = root.join("elsewhere");
     fs::create_dir_all(&elsewhere).expect("other workspace");
-    assert!(servers(&claude, Some(&elsewhere), true).is_empty());
-    assert!(servers(&claude, None, true).is_empty());
+    assert!(servers(&frontend, Some(&elsewhere), true).is_empty());
+    assert!(servers(&frontend, None, true).is_empty());
     drop(fs::remove_dir_all(&root));
 }
 
@@ -119,18 +119,20 @@ fn test_project_scope_match() {
 fn test_workspace_enable_needs_trust() {
     let root = scratch("ws-enable");
     install(&root, "ra@market", "user", None, "ra");
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     let work = root.join("work");
-    write(&claude.join("settings.json"), "{}");
+    write(&frontend.join("settings.json"), "{}");
     write(
-        &work.join(".claude/settings.json"),
+        &work
+            .join(super::super::FRONTEND_HOME_DIR)
+            .join("settings.json"),
         r#"{"enabledPlugins": {"ra@market": true}}"#,
     );
     assert!(
-        servers(&claude, Some(&work), false).is_empty(),
+        servers(&frontend, Some(&work), false).is_empty(),
         "an untrusted workspace cannot switch a plugin on"
     );
-    assert_eq!(servers(&claude, Some(&work), true).len(), 1);
+    assert_eq!(servers(&frontend, Some(&work), true).len(), 1);
     drop(fs::remove_dir_all(&root));
 }
 
@@ -146,7 +148,9 @@ fn test_manifest_declarations() {
         r#"{"ts": {"command": "typescript-language-server", "extensionToLanguage": {".ts": "typescript"}}}"#,
     );
     write(
-        &install_root.join(".claude-plugin/plugin.json"),
+        &install_root
+            .join(super::COMPAT_MANIFEST_DIR)
+            .join("plugin.json"),
         r#"{"lspServers": [
             "extra.json",
             {"inline": {"command": "inline-ls", "extensionToLanguage": {".py": "python"}}},
@@ -157,12 +161,12 @@ fn test_manifest_declarations() {
         &root.join("escape.json"),
         r#"{"escape": {"command": "evil", "extensionToLanguage": {".x": "x"}}}"#,
     );
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"mix@market": true}}"#,
     );
-    let servers = servers(&claude, None, true);
+    let servers = servers(&frontend, None, true);
     let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
     assert!(names.contains(&"plugin:mix@market:rust"), "{names:?}");
     assert!(names.contains(&"plugin:mix@market:ts"), "{names:?}");
@@ -188,12 +192,12 @@ fn test_plugin_root_expansion() {
             "env": {"RA_ROOT": "${CLAUDE_PLUGIN_ROOT}"},
             "extensionToLanguage": {".rs": "rust"}}}"#,
     );
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"ra@market": true}}"#,
     );
-    let servers = servers(&claude, None, true);
+    let servers = servers(&frontend, None, true);
     let install_text = install_root.to_string_lossy().into_owned();
     assert_eq!(servers[0].command, format!("{install_text}/bin/ra"));
     assert_eq!(servers[0].args, vec![format!("--root={install_text}")]);
@@ -219,19 +223,21 @@ fn test_declarations_cannot_escape() {
         symlink(&outside, install_root.join("linked.json")).expect("symlink");
     }
     write(
-        &install_root.join(".claude-plugin/plugin.json"),
+        &install_root
+            .join(super::COMPAT_MANIFEST_DIR)
+            .join("plugin.json"),
         &serde_json::json!({"lspServers": [
             outside.to_string_lossy(),
             "linked.json"
         ]})
         .to_string(),
     );
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"mix@market": true}}"#,
     );
-    let servers = servers(&claude, None, true);
+    let servers = servers(&frontend, None, true);
     assert!(
         !servers.iter().any(|server| server.name.contains("evil")),
         "neither an absolute path nor a symlink out of the root loads"
@@ -254,12 +260,12 @@ fn test_reference_spelling_reads() {
             "shutdownTimeout": 5000,
             "extensionToLanguage": {".rs": "rust"}}}"#,
     );
-    let claude = root.join("claude");
+    let frontend = root.join("frontend");
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"ra@market": true}}"#,
     );
-    let servers = servers(&claude, None, true);
+    let servers = servers(&frontend, None, true);
     assert_eq!(servers[0].startup_timeout_ms, 60_000);
     assert_eq!(servers[0].shutdown_timeout_ms, 5_000);
     assert_eq!(servers[0].transport, LspTransportKind::Stdio);
@@ -273,12 +279,12 @@ fn test_reference_spelling_reads() {
 #[test]
 fn test_marketplace_fallback() {
     let root = scratch("marketplace");
-    let claude = root.join("claude");
-    let cache = claude.join("plugins/cache/market/ra/1.0.0");
+    let frontend = root.join("frontend");
+    let cache = frontend.join("plugins/cache/market/ra/1.0.0");
     fs::create_dir_all(&cache).expect("cache dir");
     write(&cache.join("LICENSE"), "MIT");
     write(&cache.join("README.md"), "probe");
-    let installed = claude.join("plugins/installed_plugins.json");
+    let installed = frontend.join("plugins/installed_plugins.json");
     write(
         &installed,
         &serde_json::to_string_pretty(&serde_json::json!({
@@ -292,8 +298,8 @@ fn test_marketplace_fallback() {
         }))
         .expect("encode"),
     );
-    let market = claude.join("plugins/marketplaces/market");
-    let manifest_dir = market.join(".claude-plugin");
+    let market = frontend.join("plugins/marketplaces/market");
+    let manifest_dir = market.join(super::COMPAT_MANIFEST_DIR);
     fs::create_dir_all(&manifest_dir).expect("manifest dir");
     let source = market.join("plugins/ra");
     write(
@@ -318,7 +324,7 @@ fn test_marketplace_fallback() {
         .expect("encode"),
     );
     write(
-        &claude.join("plugins/known_marketplaces.json"),
+        &frontend.join("plugins/known_marketplaces.json"),
         &serde_json::to_string_pretty(&serde_json::json!({
             "market": {
                 "installLocation": market.to_string_lossy(),
@@ -327,10 +333,10 @@ fn test_marketplace_fallback() {
         .expect("encode"),
     );
     write(
-        &claude.join("settings.json"),
+        &frontend.join("settings.json"),
         r#"{"enabledPlugins": {"ra@market": true}}"#,
     );
-    let servers = servers(&claude, None, true);
+    let servers = servers(&frontend, None, true);
     let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
     assert!(
         names.contains(&"plugin:ra@market:ra-inline"),

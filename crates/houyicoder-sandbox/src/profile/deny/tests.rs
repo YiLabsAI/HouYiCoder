@@ -5,13 +5,34 @@ fn test_mandatory_deny_home_paths() {
     let p = mandatory_deny("/Users/alice", "tag-x");
     assert!(p.contains("(subpath \"/Users/alice/.ssh\")"));
     assert!(p.contains("(subpath \"/Users/alice/.gitconfig\")"));
-    assert!(p.contains("(subpath \"/Users/alice/.mcp.json\")"));
-    assert!(p.contains("(subpath \"/Users/alice/.lsp.json\")"));
     assert!(p.contains("(subpath \"/Users/alice/.bashrc\")"));
     assert!(p.contains("(subpath \"/Users/alice/.zshrc\")"));
     assert!(p.contains("(subpath \"/Users/alice/.profile\")"));
     assert!(p.contains("(subpath \"/Users/alice/.claude/commands\")"));
     assert!(p.contains("(subpath \"/Users/alice/.claude/agents\")"));
+}
+
+/// Project configuration files are write-denied but not read-denied: a
+/// sandboxed session reads them to list servers, but cannot plant a
+/// command through a silent write.
+#[test]
+fn test_config_files_write_only() {
+    let p = deny_settings_files("/Users/alice", "tag-x");
+    for file in [".mcp.json", ".lsp.json"] {
+        let subpath = format!("\"/Users/alice/{file}\"");
+        assert!(
+            p.contains(&subpath),
+            "{file} appears in the settings deny: {p}"
+        );
+        assert!(
+            p.contains(&format!("file-write* (subpath {subpath})")),
+            "{file} is write-denied: {p}"
+        );
+        assert!(
+            !p.contains(&format!("file-read* file-write* (subpath {subpath})")),
+            "{file} is not read-denied (reads stay open): {p}"
+        );
+    }
 }
 
 /// All three skill directories are write-only-denied: reads are allowed so

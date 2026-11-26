@@ -124,7 +124,7 @@ fn test_state_labels_render() {
         row(
             "quiet",
             LspServerState::Indexing { message: None },
-            LspConfigScope::ClaudePlugin,
+            LspConfigScope::PluginCache,
             false,
         ),
         row(

@@ -711,7 +711,7 @@ async fn test_route_skips_locked() {
     manager
         .start_all(vec![
             config("aaa", LspConfigScope::Project, true),
-            config("plugin:rust-analyzer", LspConfigScope::ClaudePlugin, false),
+            config("plugin:rust-analyzer", LspConfigScope::PluginCache, false),
         ])
         .await;
     assert_eq!(
@@ -733,7 +733,7 @@ async fn test_route_scope_priority() {
     manager
         .start_all(vec![
             config("zzz", LspConfigScope::User, false),
-            config("plugin:aaa", LspConfigScope::ClaudePlugin, false),
+            config("plugin:aaa", LspConfigScope::PluginCache, false),
         ])
         .await;
     assert_eq!(
@@ -765,7 +765,7 @@ async fn test_route_plugin_beats_cache() {
     let manager = manager();
     manager
         .start_all(vec![
-            config("plugin:cache-aaa", LspConfigScope::ClaudePlugin, false),
+            config("plugin:cache-aaa", LspConfigScope::PluginCache, false),
             config("plugin:aaa", LspConfigScope::Plugin, false),
         ])
         .await;

@@ -14,8 +14,13 @@ use serde_json::Value;
 
 use crate::read_settings_value;
 
-/// The variable a plugin config uses to name its own install root.
-const PLUGIN_ROOT_VAR: &str = "CLAUDE_PLUGIN_ROOT";
+/// The manifest directory name the compatible frontend's plugin layout
+/// uses. The name is a compatibility fact the frontend owns.
+const COMPAT_MANIFEST_DIR: &str = ".claude-plugin";
+
+/// The variable a plugin config uses to name its own install root. The
+/// name is a compatibility fact the frontend owns.
+const COMPAT_PLUGIN_ROOT_VAR: &str = "CLAUDE_PLUGIN_ROOT";
 
 /// Every server the enabled, scope-matching plugins declare, named
 /// key-prefixed so two plugins can ship one server name.
@@ -139,7 +144,7 @@ fn read_plugin_servers(
 ) -> Vec<(String, ScopedLspServerConfig)> {
     let lsp_file = install.join(super::PROJECT_FILE);
     let mut servers = read_root_file(&lsp_file);
-    let manifest_path = install.join(".claude-plugin").join("plugin.json");
+    let manifest_path = install.join(COMPAT_MANIFEST_DIR).join("plugin.json");
     let manifest = super::read_json(&manifest_path);
     if let Some(declaration) = manifest.get("lspServers") {
         servers.extend(read_declaration(declaration, install));
@@ -169,7 +174,7 @@ fn read_marketplace_servers(key: &str, config_dir: &Path) -> Vec<(String, Scoped
     else {
         return Vec::new();
     };
-    let manifest = super::read_json(&location.join(".claude-plugin").join("marketplace.json"));
+    let manifest = super::read_json(&location.join(COMPAT_MANIFEST_DIR).join("marketplace.json"));
     let Some(plugins) = manifest.get("plugins").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -188,7 +193,8 @@ fn read_marketplace_servers(key: &str, config_dir: &Path) -> Vec<(String, Scoped
     {
         let lsp_file = subdir.join(super::PROJECT_FILE);
         servers.extend(read_root_file(&lsp_file));
-        let plugin_manifest = super::read_json(&subdir.join(".claude-plugin").join("plugin.json"));
+        let plugin_manifest =
+            super::read_json(&subdir.join(COMPAT_MANIFEST_DIR).join("plugin.json"));
         if let Some(declaration) = plugin_manifest.get("lspServers") {
             servers.extend(read_declaration(declaration, &subdir));
         }
@@ -249,7 +255,7 @@ fn read_inline_map(
     map: &serde_json::Map<String, Value>,
     install: &Path,
 ) -> Vec<(String, ScopedLspServerConfig)> {
-    let source = install.join(".claude-plugin").join("plugin.json");
+    let source = install.join(COMPAT_MANIFEST_DIR).join("plugin.json");
     super::parse_server_entries(map, &source)
         .into_iter()
         .map(|server| (server.name.clone(), server))
@@ -282,7 +288,7 @@ fn safe_join(root: &Path, relative: &str) -> Option<PathBuf> {
 /// launches the same program here.
 fn rewrite_plugin_root(server: &mut ScopedLspServerConfig, install: &Path) {
     let root = install.to_string_lossy().into_owned();
-    let replace = |text: &str| text.replace(&format!("${{{PLUGIN_ROOT_VAR}}}"), &root);
+    let replace = |text: &str| text.replace(&format!("${{{COMPAT_PLUGIN_ROOT_VAR}}}"), &root);
     server.command = replace(&server.command);
     for argument in &mut server.args {
         *argument = replace(argument);

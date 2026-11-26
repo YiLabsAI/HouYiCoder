@@ -130,7 +130,7 @@ fn test_operations_parse() {
 fn test_status_round_trips() {
     let view = LspServerStatusView {
         name: "rust".into(),
-        scope: LspConfigScope::ClaudePlugin,
+        scope: LspConfigScope::PluginCache,
         state: LspServerState::Indexing {
             message: Some("indexing 3/10".into()),
         },

@@ -23,7 +23,7 @@ pub enum LspConfigScope {
     /// A plugin installed under the product's own plugin directory.
     Plugin,
     /// A plugin discovered through a compatible frontend's plugin cache.
-    ClaudePlugin,
+    PluginCache,
 }
 
 /// How one server is reached. The standard-stream transport is the only

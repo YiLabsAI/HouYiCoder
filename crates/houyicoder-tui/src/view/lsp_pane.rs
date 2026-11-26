@@ -253,7 +253,7 @@ fn scope_label(scope: LspConfigScope) -> &'static str {
         LspConfigScope::User => "user",
         LspConfigScope::Project => "project",
         LspConfigScope::Plugin => "plugin",
-        LspConfigScope::ClaudePlugin => "plugin cache",
+        LspConfigScope::PluginCache => "plugin cache",
     }
 }
 

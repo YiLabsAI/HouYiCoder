@@ -97,7 +97,7 @@ pub fn resolve_scoped_lsp_servers(
         .map(|dir| plugin_cache::servers(dir, workspace, trusted))
         .unwrap_or_default();
     for (scope, servers) in [
-        (LspConfigScope::ClaudePlugin, cached),
+        (LspConfigScope::PluginCache, cached),
         (LspConfigScope::Plugin, plugins),
         (LspConfigScope::User, parse_settings_servers(settings_path)),
         (LspConfigScope::Project, project),
@@ -440,7 +440,7 @@ pub fn scope_label(scope: LspConfigScope) -> &'static str {
         LspConfigScope::User => "user",
         LspConfigScope::Project => "project",
         LspConfigScope::Plugin => "plugin",
-        LspConfigScope::ClaudePlugin => "claude-plugin",
+        LspConfigScope::PluginCache => "plugin cache",
     }
 }
 

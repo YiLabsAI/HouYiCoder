@@ -113,6 +113,6 @@ fn scope_rank(scope: LspConfigScope) -> u8 {
         LspConfigScope::Project => 0,
         LspConfigScope::User => 1,
         LspConfigScope::Plugin => 2,
-        LspConfigScope::ClaudePlugin => 3,
+        LspConfigScope::PluginCache => 3,
     }
 }
