@@ -7,14 +7,31 @@
 #[path = "common/lsp_server.rs"]
 mod lsp_server;
 
+#[cfg(unix)]
+use houyicoder_api::launcher::StdProcessLauncher;
+use houyicoder_protocol::lsp::{LspConfigScope, LspServerState, ScopedLspServerConfig};
+use serde_json::json;
+#[cfg(unix)]
+use std::env::temp_dir;
+#[cfg(unix)]
+use std::fs::create_dir_all;
+#[cfg(unix)]
+use std::fs::read_to_string;
+#[cfg(unix)]
+use std::fs::remove_dir_all;
+#[cfg(unix)]
+use std::fs::write;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
+#[cfg(unix)]
+use std::process::Stdio;
+#[cfg(unix)]
+use std::process::id;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
-
-use houyicoder_protocol::lsp::{LspConfigScope, LspServerState, ScopedLspServerConfig};
-use serde_json::json;
 use tokio::time::sleep;
 
 use houyicoder_service::lsp::{LspConnections, LspTimings};
@@ -294,4 +311,123 @@ async fn test_disable_during_launch_sticks() {
         "a disabled server routes no suffix: {routed:?}"
     );
     manager.shutdown().await;
+}
+
+/// A language server that completes the handshake, then ignores both the
+/// shutdown request and the exit notification. It is the wedged process the
+/// manager's stop must terminate rather than leave behind.
+#[cfg(unix)]
+const HANG_SERVER: &str = r#"
+import json, os, sys, time
+
+pidfile = sys.argv[1]
+with open(pidfile, "w") as handle:
+    handle.write(str(os.getpid()))
+
+def read_message():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            if length is None:
+                continue
+            return json.loads(sys.stdin.buffer.read(length))
+        if line.lower().startswith(b"content-length:"):
+            length = int(line.split(b":", 1)[1])
+
+def send(payload):
+    body = json.dumps(payload).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read_message()
+    if message is None:
+        # Ignore the closed stream too: this server never stops on its own.
+        time.sleep(3600)
+        continue
+    method = message.get("method", "")
+    if "id" not in message:
+        continue
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": message["id"], "result": {"capabilities": {}}})
+    # Every other request is deliberately unanswered: the server wedges.
+"#;
+
+/// Whether one process is still present. A reaped process answers failure.
+#[cfg(unix)]
+#[allow(clippy::disallowed_methods)]
+fn process_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// A wedged server ignores shutdown and exit. The stop stays bounded, and
+/// dropping the child handle runs the launcher's kill-on-drop, which ends the
+/// process group instead of leaking it.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_wedged_server_is_killed() {
+    let base = temp_dir().join(format!("houyi-lsp-wedged-{}", id()));
+    drop(remove_dir_all(&base));
+    create_dir_all(&base).expect("probe dir");
+    let script = base.join("hang_server.py");
+    write(&script, HANG_SERVER).expect("hang server script");
+    let pidfile = base.join("pid");
+    let file = base.join("a.rs");
+    write(&file, "fn a() {}\n").expect("source file");
+    let mut server = config("rust");
+    server.command = "python3".into();
+    server.args = vec![
+        script.to_string_lossy().into_owned(),
+        pidfile.to_string_lossy().into_owned(),
+    ];
+    server.shutdown_timeout_ms = 150;
+    server.restart_on_crash = false;
+    let manager = Arc::new(LspConnections::new(
+        Arc::new(StdProcessLauncher::new()),
+        Arc::from(base.as_path()),
+        fast_timings(),
+    ));
+    manager.start_all(vec![server]).await;
+    manager
+        .ensure_document(&file, "fn a() {}\n")
+        .await
+        .expect("the wedged server handshakes")
+        .expect("a server routes the suffix");
+    let started = Instant::now();
+    while !pidfile.exists() && started.elapsed() < Duration::from_secs(5) {
+        sleep(Duration::from_millis(5)).await;
+    }
+    let pid: u32 = read_to_string(&pidfile)
+        .expect("the server writes its pid")
+        .trim()
+        .parse()
+        .expect("a numeric pid");
+    assert!(process_alive(pid), "the wedged server runs before the stop");
+    let stopped = Instant::now();
+    manager.shutdown().await;
+    assert!(
+        stopped.elapsed() < Duration::from_secs(3),
+        "the stop is bounded by the shutdown budget: {:?}",
+        stopped.elapsed()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while process_alive(pid) && Instant::now() < deadline {
+        sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !process_alive(pid),
+        "the wedged server was killed, not left as an orphan"
+    );
+    drop(remove_dir_all(&base));
 }

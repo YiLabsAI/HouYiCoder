@@ -76,8 +76,6 @@ record("start")
 while True:
     message = read_message()
     if message is None:
-        # The client's connection ended, which is the process's cue to stop.
-        record("exit")
         break
     method = message.get("method", "")
     if "id" not in message:

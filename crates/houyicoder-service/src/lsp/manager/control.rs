@@ -8,9 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use futures::executor::block_on;
 use houyicoder_protocol::lsp::LspServerState;
-use tokio::task::spawn_blocking;
 use tokio::time::timeout;
 
 use super::LspConnections;
@@ -75,24 +73,20 @@ impl LspConnections {
 }
 
 /// Drop the diagnostics a connection published and stop it inside the
-/// server's own shutdown timeout. After the exit notification the protocol
-/// asks the client to wait for the server to stop on its own; the bounded
-/// wait gives a well-behaved server that chance before the handle drop
-/// terminates its group.
+/// server's own shutdown timeout. After the exit notification a healthy
+/// server closes its output stream, which ends the connection without
+/// touching the child handle. A wedged server keeps the stream open: the
+/// bounded wait gives up, and dropping the handle runs the launcher's
+/// kill-on-drop, which terminates the whole process group. Waiting on the
+/// handle itself would take the child out of that guard and leak the
+/// process, so the wait is on the connection closing, never on the child.
 async fn stop_connection(slot: &ServerSlot) {
     clear_diagnostics(slot);
     let connection = slot.live.lock().await.take();
     if let Some(connection) = connection {
         let budget = Duration::from_millis(slot.config.shutdown_timeout_ms);
         connection.client.shutdown(budget).await;
-        if let Some(child) = connection.child {
-            // The launcher's exit waiter calls a blocking process wait, and
-            // the exit notification it is waiting on is flushed by a task on
-            // this same runtime. Waiting on a worker thread would starve that
-            // task and deadlock a single-threaded runtime, so the wait runs
-            // on the blocking pool.
-            let waiter = child.wait();
-            drop(timeout(budget, spawn_blocking(move || block_on(waiter))).await);
-        }
+        drop(timeout(budget, connection.client.wait_closed()).await);
+        drop(connection.child);
     }
 }

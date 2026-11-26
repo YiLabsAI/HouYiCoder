@@ -196,13 +196,23 @@ impl LspClient {
     }
 
     /// The graceful stop: shutdown bounded by its budget, then exit. A
-    /// server that does not answer in time is dropped by the caller.
+    /// server that does not answer in time is dropped by the caller. The
+    /// exit frame waits for room in the queue rather than being tried once,
+    /// so a busy queue cannot silently drop the notification that tells the
+    /// server to stop.
     pub(crate) async fn shutdown(&self, budget: Duration) {
         if self.state.closed.load(Ordering::Relaxed) {
             return;
         }
         drop(timeout(budget, self.request("shutdown", Value::Null)).await);
-        drop(self.notify("exit", Value::Null));
+        // A static JSON object always serializes, so the encode cannot fail
+        // here; the only failure the send can see is a closed connection,
+        // which the bounded send reports by dropping the result.
+        let body = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "method": "exit", "params": Value::Null,
+        }))
+        .expect("a static JSON object always serializes");
+        drop(timeout(budget, self.outbound.send(body)).await);
     }
 
     /// Whether the server reports background work in progress.
