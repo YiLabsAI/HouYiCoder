@@ -3,6 +3,7 @@
 use std::env::temp_dir;
 use std::fs::create_dir_all;
 use std::fs::remove_dir_all;
+#[cfg(unix)]
 use std::fs::remove_file;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -155,7 +156,10 @@ fn test_verdict_no_option_cancels() {
     assert!(matches!(resp.outcome, RequestPermissionOutcome::Cancelled));
 }
 
-/// A workspace root that exists resolves through symlinks.
+/// A workspace root that exists resolves through symlinks. The symlink
+/// itself is a unix-only capability; on Windows the test uses the real
+/// root, which check_fence resolves the same way.
+#[cfg(unix)]
 #[test]
 fn test_fence_symlink_root() {
     let root = temp_root("symlink");

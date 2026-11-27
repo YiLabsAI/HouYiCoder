@@ -6,6 +6,7 @@ use std::time::Duration;
 use houyicoder_platform::host::net::{
     ProxyConfig, ProxyConfigCache, ProxyResolution, ProxySnapshot, ProxySource,
 };
+use houyicoder_platform::tls::install_tls_provider;
 use reqwest::Client;
 
 use super::{FetchClient, ProxyClient, PublicResolver, build_proxy_client, loopback_only};
@@ -27,6 +28,7 @@ fn resolver() -> Arc<PublicResolver> {
 /// a plain-HTTP test never completes a TLS handshake, and loading the store
 /// per client is what made these tests contend on the platform keychain.
 fn test_client() -> Client {
+    install_tls_provider();
     Client::builder()
         .tls_certs_only([])
         .no_proxy()
