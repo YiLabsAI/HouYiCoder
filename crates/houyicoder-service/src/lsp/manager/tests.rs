@@ -35,6 +35,7 @@ use super::*;
 use crate::child_process::file_uri;
 use crate::lsp::client::tests::Peer;
 use crate::lsp::client::tests::spawn_peer;
+use crate::lsp::fast_server_config;
 
 /// A launcher that refuses to start anything, so a test can prove the
 /// manager never asked.
@@ -71,14 +72,10 @@ fn manager() -> Arc<LspConnections> {
 }
 
 fn config(name: &str, scope: LspConfigScope, disabled: bool) -> ScopedLspServerConfig {
-    let mut server = ScopedLspServerConfig::stdio("fake", Default::default());
-    server.name = name.into();
+    let mut server = fast_server_config(name);
     server.scope = scope;
     server.disabled = disabled;
     server.locked = disabled && scope == LspConfigScope::Project;
-    server
-        .extension_to_language
-        .insert(".rs".into(), "rust".into());
     server
 }
 

@@ -9,6 +9,10 @@ autotests = false
 name = "sandbox_all"
 path = "tests/sandbox_all.rs"
 
+[[test]]
+name = "sandbox_exec"
+path = "tests/sandbox_exec.rs"
+
 [lib]
 path = "src/lib.rs"
 

@@ -31,6 +31,7 @@ use crate::lsp::LspTimings;
 use crate::lsp::NoSpawn;
 use crate::lsp::client::tests::Peer;
 use crate::lsp::client::tests::spawn_peer;
+use crate::lsp::fast_server_config;
 
 /// A sandbox that reads through the host filesystem, enough for the
 /// decorator's read-back.
@@ -269,13 +270,7 @@ fn test_block_escapes_server_text() {
 }
 
 fn config() -> ScopedLspServerConfig {
-    let mut server = ScopedLspServerConfig::stdio("fake", Default::default());
-    server.name = "rust".into();
-    server.scope = LspConfigScope::User;
-    server
-        .extension_to_language
-        .insert(".rs".into(), "rust".into());
-    server
+    fast_server_config("rust")
 }
 
 /// One manager with an attached peer over the given handler.

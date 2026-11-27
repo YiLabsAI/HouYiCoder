@@ -157,6 +157,17 @@ impl MacSeatbeltSession {
     }
 
     /// Guarded mode (default): the workspace IS the user's project directory.
+    /// The workspace path the session fences and uses as the command cwd.
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    /// The per-session temp directory the profile allow-lists for reads and
+    /// writes and exports as TMPDIR.
+    pub fn tmpdir(&self) -> &Path {
+        &self.tmpdir
+    }
+
     /// The agent edits the real tree directly (changes immediate), and the
     /// seatbelt fences it: no writes outside the project, and no network unless
     /// a policy opens it. The

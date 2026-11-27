@@ -13,7 +13,7 @@ use std::time::Duration;
 use houyicoder_api::tool::ToolCtx;
 use houyicoder_async::CancellationToken;
 use houyicoder_context::{ExecConfig, ExecResult, SandboxError};
-use houyicoder_protocol::lsp::{LspConfigScope, ScopedLspServerConfig};
+use houyicoder_protocol::lsp::ScopedLspServerConfig;
 use serde_json::json;
 use tokio::io::duplex;
 use tokio::time::sleep;
@@ -22,6 +22,7 @@ use super::*;
 use crate::lsp::LspTimings;
 use crate::lsp::NoSpawn;
 use crate::lsp::client::tests::spawn_peer;
+use crate::lsp::fast_server_config;
 
 /// A sandbox that only reads files, for tests that never run a command.
 struct StubSession {
@@ -68,13 +69,7 @@ fn fast_timings() -> LspTimings {
 }
 
 fn config() -> ScopedLspServerConfig {
-    let mut server = ScopedLspServerConfig::stdio("fake", Default::default());
-    server.name = "rust".into();
-    server.scope = LspConfigScope::User;
-    server
-        .extension_to_language
-        .insert(".rs".into(), "rust".into());
-    server
+    fast_server_config("rust")
 }
 
 /// One manager over a temp workspace, with a peer answering the handshake

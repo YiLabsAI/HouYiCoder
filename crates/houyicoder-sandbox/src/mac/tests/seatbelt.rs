@@ -56,22 +56,6 @@ async fn test_breaker_open_refuses_spawn() {
     );
 }
 
-#[tokio::test]
-async fn test_clean_command_closed() {
-    // A clean fast command under a default breaker records success and
-    // never trips: the tree CPU is ~0 (echo exits before ps sees it) and exceeded_budget is false. Confirms the wiring does not false-trip on normal commands.
-    let breaker = Arc::new(ResourceBreaker::new(ResourceBreakerConfig::default()));
-    let s = MacSeatbeltSession::new()
-        .unwrap()
-        .with_breaker(breaker.clone());
-    let r = s
-        .exec_with_config("echo breaker-clean", ExecConfig::default())
-        .await;
-    assert!(r.is_ok(), "clean command should succeed, got {r:?}");
-    assert_eq!(breaker.state(), BreakerState::Closed);
-    assert!(breaker.trip_reason().is_none());
-}
-
 #[test]
 fn test_span_guard_records_end() {
     // The guard pairs Start with End on the normal path: finish() sets the
