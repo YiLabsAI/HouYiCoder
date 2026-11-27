@@ -371,7 +371,10 @@ async fn test_awaited_spawn_spares_group() {
 }
 
 /// A spawn given an environment receives exactly that one: the host's own
-/// variables do not cross the boundary with it.
+/// variables do not cross the boundary with it. The leak probe names a
+/// variable no shell synthesizes at startup: the Windows shell sets HOME
+/// from the user profile even when it is absent from the environment, so
+/// HOME would read as leaked when the boundary actually held.
 #[tokio::test]
 async fn test_capture_env_replaces_host() {
     let launcher = StdProcessLauncher::new();
@@ -387,7 +390,7 @@ async fn test_capture_env_replaces_host() {
         "the named variable reaches the child"
     );
     let leaked = SpawnRequest::new("sh")
-        .with_args(["-c", "echo ${HOME:-unset}"])
+        .with_args(["-c", "echo ${HOYI_PROBE_UNSET:-unset}"])
         .with_env(vec![("ONLY_THIS".into(), "named".into())])
         .piped_output();
     let child = launcher.spawn(leaked, SpawnPolicy::default()).unwrap();
@@ -399,13 +402,13 @@ async fn test_capture_env_replaces_host() {
     );
 }
 
-/// The interactive path applies the same whitelist: a long-lived child sees
+/// The interactive path applies the same boundary: a long-lived child sees
 /// the named variable and not the host's.
 #[tokio::test]
 async fn test_interactive_env_replaces_host() {
     let launcher = StdProcessLauncher::new();
     let mut req = SpawnRequest::new("sh")
-        .with_args(["-c", "echo \"$ONLY_THIS $HOME\"; sleep 1"])
+        .with_args(["-c", "echo \"$ONLY_THIS $HOYI_PROBE_UNSET\"; sleep 1"])
         .with_env(vec![("ONLY_THIS".into(), "named".into())])
         .interactive();
     req.stdio = StdioConfig::piped_output();
