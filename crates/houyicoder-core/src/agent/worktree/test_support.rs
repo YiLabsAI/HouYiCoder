@@ -8,6 +8,7 @@
 use std::env::temp_dir;
 use std::fmt::Display;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,6 +56,10 @@ pub(crate) fn make_repo(tag: impl Display) -> PathBuf {
 
 /// Copy a directory tree. The template holds only small files, so a plain
 /// recursive copy is faster than any spawn and needs no extra dependency.
+/// A file that vanishes between the directory listing and the copy is
+/// skipped rather than failing: a CI runner's temp cleanup or a git
+/// housekeeping pass can remove a packed object between the two calls, and
+/// the fixture only needs the working tree and the refs the copy carries.
 fn copy_tree(from: &Path, to: &Path) {
     fs::create_dir_all(to).expect("create the copy dir");
     for entry in fs::read_dir(from).expect("read the template") {
@@ -63,7 +68,11 @@ fn copy_tree(from: &Path, to: &Path) {
         if entry.file_type().expect("template file type").is_dir() {
             copy_tree(&entry.path(), &target);
         } else {
-            fs::copy(entry.path(), &target).expect("copy a template file");
+            match fs::copy(entry.path(), &target) {
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => panic!("copy a template file: {error}"),
+            }
         }
     }
 }
